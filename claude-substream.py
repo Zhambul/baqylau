@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# claude-substream.py AGENT_ID TRANSCRIPT_PATH MIRROR_LOG WIDTH SLOT AGENT_TYPE
+# claude-substream.py AGENT_ID TRANSCRIPT_PATH MIRROR_LOG SLOT AGENT_TYPE [PALETTE]
 #
 # Detached streamer for a SUBAGENT (Task/Agent tool). A subagent fires real hooks
 # for each tool it runs, but those alone can't show its *messages* (assistant text)
@@ -20,24 +20,21 @@ import errno, glob, json, os, re, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_render as R
+import claude_ops as O
 
 AGENT   = sys.argv[1]
 TPATH   = sys.argv[2]
 LOG     = sys.argv[3]
-WIDTH   = max(16, int(sys.argv[4]))
-SLOT    = int(sys.argv[5])
-ATYPE   = sys.argv[6] if len(sys.argv) > 6 else "agent"
+SLOT    = int(sys.argv[4])
+ATYPE   = sys.argv[5] if len(sys.argv) > 5 else "agent"
 # Which palette to colour this block with. An in-process agent-team TEAMMATE rides
 # the very same machinery as an ordinary subagent (same "sub" slot + sub.* markers,
 # same transcript layout) — only the colour family differs, so it's "team" instead
 # of "sub". Everything else (slot index, completion sentinel, footer) is identical.
-PALETTE = sys.argv[7] if len(sys.argv) > 7 else "sub"
+PALETTE = sys.argv[6] if len(sys.argv) > 6 else "sub"
 
 SUB_RGB = claude_slots.color(PALETTE, SLOT)
 RST  = R.RST
-RULE = R.rule(WIDTH)
-GUT  = R.fg(*SUB_RGB) + "│ " + RST            # single subagent gutter (messages / output)
-GW   = 2
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 # Where the subagent's transcript + completion sentinel live.
@@ -60,20 +57,8 @@ TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-mess
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 
-def append(text):
-    try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(text)
-    except Exception:
-        pass
-
-
-def fit(s):
-    return s if len(s) <= WIDTH - 2 else s[:WIDTH - 3] + "…"
-
-
 def chip(glyph, kind):
-    return R.label(fit(f"{ATYPE} {glyph} {kind}"), SUB_RGB)
+    return O.label(f"{ATYPE} {glyph} {kind}", SUB_RGB)
 
 
 def cap(text, n):
@@ -85,7 +70,7 @@ def cap(text, n):
 
 
 def gutter(text):
-    return R.wrap_gutter(R.unescape(text), WIDTH, GUT, GW)
+    return O.gut(R.unescape(text), SUB_RGB)
 
 
 def result_text(content):
@@ -135,7 +120,7 @@ def alive(pid):
 def spawn_tailer(kind, taskid, cmd=""):
     # Stream a subagent's background/monitor job with a DOUBLE gutter (outer = this
     # subagent's colour, inner = the job's own palette slot). claude-stream.py argv:
-    #   KIND TASKID LOG WIDTH SLOT SIG OUTER
+    #   KIND TASKID LOG SLOT SIG OUTER
     streamer = os.path.join(HERE, "claude-stream.py")
     if not (taskid and os.path.exists(streamer)):
         return
@@ -147,7 +132,7 @@ def spawn_tailer(kind, taskid, cmd=""):
     outer = ",".join(str(x) for x in SUB_RGB)
     try:
         proc = subprocess.Popen(
-            [sys.executable, streamer, kind, taskid, LOG, str(WIDTH), str(slot), sig, outer],
+            [sys.executable, streamer, kind, taskid, LOG, str(slot), sig, outer],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
         claude_slots.set_owner(marker, proc.pid)
@@ -167,19 +152,19 @@ def flush_msg(is_result=False):
     if pending_msg is None:
         return
     glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
-    append(chip(glyph, kind) + "\n" + gutter(cap(pending_msg, 40)) + "\n")
+    O.emit(LOG, chip(glyph, kind), gutter(cap(pending_msg, 40)))
     pending_msg = None
 
 
 def render_prompt(text):
     flush_msg()
-    append(chip("⇢", "prompt") + "\n" + gutter(cap(text.strip(), 24)) + "\n")
+    O.emit(LOG, chip("⇢", "prompt"), gutter(cap(text.strip(), 24)))
 
 
 def render_teammsg(sender, body):
     # An incoming agent-team message (mail from another teammate or the lead).
     flush_msg()
-    append(chip("✉", "from " + (sender or "?")) + "\n" + gutter(cap(body.strip(), 24)) + "\n")
+    O.emit(LOG, chip("✉", "from " + (sender or "?")), gutter(cap(body.strip(), 24)))
 
 
 def render_message(text):
@@ -197,7 +182,7 @@ def render_file(name_tool, inp):
     name = os.path.basename(path.rstrip("/")) or path or "?"
     col = FILE_COL.get(label, R.COL["def"])
     line = col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
-    append(R.fg(*SUB_RGB) + "│ " + RST + line + "\n")
+    O.emit(LOG, O.gut(line, SUB_RGB))
 
 
 def on_tool_use(b):
@@ -208,17 +193,17 @@ def on_tool_use(b):
     if name == "Bash":
         cmd = inp.get("command", "")
         if inp.get("run_in_background"):
-            append(chip("▷", "background") + "\n" + R.render(cmd, WIDTH) + "\n")
+            O.emit(LOG, chip("▷", "background"), O.code(cmd))
             pend[tid] = ("bg", cmd)
         else:
-            append(chip("▶", "foreground") + "\n" + R.render(cmd, WIDTH) + "\n")
+            O.emit(LOG, chip("▶", "foreground"), O.code(cmd))
             pend[tid] = ("fg", cmd)
     elif name in FILE_LABEL:
         render_file(name, inp)
         pend[tid] = ("file", "")
     elif name == "Monitor":
         cmd = inp.get("command", "")
-        append(chip("◉", "monitor") + "\n" + R.render(cmd, WIDTH) + "\n")
+        O.emit(LOG, chip("◉", "monitor"), O.code(cmd))
         pend[tid] = ("monitor", cmd)
     elif name == "SendMessage":
         # Mail this teammate sends to another teammate / the lead. Show recipient +
@@ -226,18 +211,18 @@ def on_tool_use(b):
         # so it's suppressed in on_tool_result.
         to = inp.get("to") or inp.get("recipient") or "?"
         text = inp.get("message") or inp.get("content") or inp.get("summary") or ""
-        append(chip("✉", "to " + to) + "\n" + gutter(cap(text.strip(), 12)) + "\n")
+        O.emit(LOG, chip("✉", "to " + to), gutter(cap(text.strip(), 12)))
         pend[tid] = ("sendmsg", "")
     elif name in ("Task", "Agent"):
         # A nested subagent gets its OWN block via its own SubagentStart/Stop hooks.
         sub = (inp.get("subagent_type") or "subagent")
-        append(R.fg(*SUB_RGB) + "│ " + RST + R.DIM + "⊂ spawns " + sub + RST + "\n")
+        O.emit(LOG, O.gut(R.DIM + "⊂ spawns " + sub + RST, SUB_RGB))
         pend[tid] = ("agent", "")
     else:
-        append(chip("·", name or "tool") + "\n")
+        O.emit(LOG, chip("·", name or "tool"))
         req = input_summary(inp)                 # show the request (e.g. the query/url)
         if req:
-            append(gutter(cap(req, 10)) + "\n")
+            O.emit(LOG, gutter(cap(req, 10)))
         pend[tid] = ("other", "")
 
 
@@ -253,16 +238,16 @@ def on_tool_result(b):
         if m:
             spawn_tailer(kind, m.group(1), cmd)
         elif txt.strip():
-            append(gutter(cap(txt.strip(), 8)) + "\n")
+            O.emit(LOG, gutter(cap(txt.strip(), 8)))
         return
     # fg / other: show the command's output
     body = txt.rstrip("\n")
     if body:
-        append(gutter(cap(body, 60)) + "\n")
+        O.emit(LOG, gutter(cap(body, 60)))
     else:
-        append(GUT + R.DIM + "(no output)" + RST + "\n")
+        O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB))
     if b.get("is_error"):
-        append(GUT + R.fg(224, 108, 117) + "■ failed" + RST + "\n")
+        O.emit(LOG, O.gut(R.fg(224, 108, 117) + "■ failed" + RST, SUB_RGB))
 
 
 def handle_line(s):
@@ -301,7 +286,7 @@ def main():
     while not os.path.exists(JSONL) and time.time() < start + 15:
         time.sleep(0.2)
     if not os.path.exists(JSONL):
-        append(RULE + "\n" + R.label(fit(f"■ {ATYPE} (no transcript)"), SUB_RGB) + "\n" + RULE + "\n")
+        O.emit(LOG, O.rule(), O.label(f"■ {ATYPE} (no transcript)", SUB_RGB), O.rule())
         return
 
     pos, pending = 0, b""
@@ -345,7 +330,7 @@ def main():
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
     dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
-    append(RULE + "\n" + R.label(fit(f"■ {ATYPE} ended · {dur}"), SUB_RGB) + "\n" + RULE + "\n")
+    O.emit(LOG, O.rule(), O.label(f"■ {ATYPE} ended · {dur}", SUB_RGB), O.rule())
 
 
 def cleanup():

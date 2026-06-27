@@ -7,10 +7,12 @@
 # ONLY place a foreground command's output is available (it is never written to
 # the tasks/*.output files). So this is how foreground commands get mirrored.
 #
-# The actual formatting/highlighting/wrapping lives in claude-cmd-fmt.py (its own
-# file so its regexes can use both quote chars without bash-quoting hazards). For
-# a background command it also spawns claude-stream.py to tail the live output.
-# This wrapper just finds the pane width and hands the hook payload to it.
+# The actual formatting/highlighting lives in claude-cmd-fmt.py (its own file so
+# its regexes can use both quote chars without bash-quoting hazards). For a
+# background command it also spawns claude-stream.py to tail the live output.
+# This wrapper just hands the hook payload to it. The pane width is no longer
+# needed here — producers emit width-independent paint ops and claude-mirror.py
+# wraps them at the pane's live width.
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fmt="$here/claude-cmd-fmt.py"
@@ -19,8 +21,5 @@ fmt="$here/claude-cmd-fmt.py"
 slug="$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"
 [ -n "$slug" ] || exit 0
 
-width="$("$here/claude-pane-width.sh" 2>/dev/null)"
-[ -n "$width" ] || width=53
-
-python3 "$fmt" "/tmp/claude-mirror-$slug.log" "$width" 2>/dev/null
+python3 "$fmt" "/tmp/claude-mirror-$slug.log" 2>/dev/null
 exit 0

@@ -6,8 +6,9 @@
 # a subagent makes are mirrored by the SAME PostToolUse hooks as the main agent
 # (claude-cmd-log.sh / claude-file-log.sh) — those detect the payload's agent_id
 # and render in the subagent's colour — so this wrapper only handles the frame.
-# Like the other mirror hooks it just resolves the pane width + log path and hands
-# the payload to its Python formatter on stdin.
+# Like the other mirror hooks it just resolves the log path and hands the payload
+# to its Python formatter on stdin (the pane width is applied at paint time by
+# claude-mirror.py, so it isn't needed here).
 
 phase="${1:-start}"
 
@@ -18,8 +19,5 @@ fmt="$here/claude-subagent-fmt.py"
 slug="$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"
 [ -n "$slug" ] || exit 0
 
-width="$("$here/claude-pane-width.sh" 2>/dev/null)"
-[ -n "$width" ] || width=53
-
-python3 "$fmt" "/tmp/claude-mirror-$slug.log" "$width" "$phase" 2>/dev/null
+python3 "$fmt" "/tmp/claude-mirror-$slug.log" "$phase" 2>/dev/null
 exit 0

@@ -13,8 +13,5 @@ fmt="$here/claude-task-fmt.py"
 slug="$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"
 [ -n "$slug" ] || exit 0
 
-width="$("$here/claude-pane-width.sh" 2>/dev/null)"
-[ -n "$width" ] || width=53
-
-python3 "$fmt" "/tmp/claude-mirror-$slug.log" "$width" 2>/dev/null
+python3 "$fmt" "/tmp/claude-mirror-$slug.log" 2>/dev/null
 exit 0

@@ -15,9 +15,9 @@ import json, os, subprocess, sys, re
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_render as R
+import claude_ops as O
 
-WIDTH = max(16, int(sys.argv[2]))
-RULE  = R.rule(WIDTH)
+LOG = sys.argv[1]
 
 LBL_FG   = (170, 185, 210)  # slate   — foreground OK (neutral, distinct from the vivid palettes)
 LBL_BG   = (209, 154, 102)  # orange  — background header chip / foreground "interrupted"
@@ -34,7 +34,7 @@ def _spawn_stream(kind, taskid, slot):
         return None
     try:
         return subprocess.Popen(
-            [sys.executable, streamer, kind, taskid, sys.argv[1], str(WIDTH), str(slot)],
+            [sys.executable, streamer, kind, taskid, LOG, str(slot)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
     except Exception:
@@ -63,19 +63,17 @@ def main():
         # parallel jobs differ. The streamer (passed the slot) does gutter + finish.
         taskid = tr.get("backgroundTaskId") if isinstance(tr, dict) else None
         if taskid:
-            slot, marker = claude_slots.claim("bg", sys.argv[1])
+            slot, marker = claude_slots.claim("bg", LOG)
             head_rgb = claude_slots.color("bg", slot)
         else:
             slot, marker, head_rgb = None, None, LBL_BG
-        block = ["", RULE, R.label("▷ background", head_rgb), R.render(cmd, WIDTH), RULE]
-        with open(sys.argv[1], "a", encoding="utf-8") as f:
-            f.write("\n".join(block) + "\n")
+        O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
         if taskid:
             proc = _spawn_stream("bg", taskid, slot)
             if proc is not None:
                 claude_slots.set_owner(marker, proc.pid)
             else:
-                claude_slots.release("bg", sys.argv[1], slot, os.getpid())
+                claude_slots.release("bg", LOG, slot, os.getpid())
         return
 
     ms  = d.get("duration_ms")
@@ -107,13 +105,9 @@ def main():
     # One colour for the whole block — header, gutter, and finish chip all use it
     # (slate ok / red failed / orange interrupted), so the finish line matches the
     # gutter and you can tell which stream finished.
-    body = R.unescape(body)
-    GUT_FG = R.fg(*col) + "│ " + R.RST
-    gbody = R.wrap_gutter(body, WIDTH, GUT_FG, 2) if body else GUT_FG + R.DIM + "(no output)" + R.RST
-    block = ["", RULE, R.label("▶ foreground", col), R.render(cmd, WIDTH), RULE,
-             gbody, RULE, R.label(chip_txt, col), RULE]
-    with open(sys.argv[1], "a", encoding="utf-8") as f:
-        f.write("\n".join(block) + "\n")
+    gut_body = R.unescape(body) if body else R.DIM + "(no output)" + R.RST
+    O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
+           O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
 
 
 if __name__ == "__main__":

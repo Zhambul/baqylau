@@ -15,17 +15,12 @@
 import json, os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import claude_render as R
+import claude_ops as O
 
-LOG   = sys.argv[1]
-WIDTH = max(16, int(sys.argv[2]))
+LOG = sys.argv[1]
 
 CREATED_RGB = (214, 153, 92)    # warm amber — a task entering the list
 DONE_RGB    = (152, 195, 121)   # green — a task finished
-
-
-def fit(s):
-    return s if len(s) <= WIDTH - 2 else s[:WIDTH - 3] + "…"
 
 
 def main():
@@ -41,11 +36,7 @@ def main():
     else:                                    # TaskCreated (or anything task-ish)
         glyph, rgb = "✚", CREATED_RGB
     text = f"{glyph} task #{tid} · {subj}" if subj else f"{glyph} task #{tid}"
-    try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write("\n" + R.label(fit(text), rgb) + "\n")
-    except Exception:
-        pass
+    O.emit(LOG, O.blank(), O.label(text, rgb))
 
 
 if __name__ == "__main__":

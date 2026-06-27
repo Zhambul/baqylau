@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
-# claude-stream.py KIND TASKID MIRROR_LOG WIDTH
+# claude-stream.py KIND TASKID MIRROR_LOG SLOT [SIG] [OUTER]
 #
 # Detached tailer for the kitty command-mirror pane. Background Bash jobs and
 # Monitor streams both write their output to a …/tasks/<id>.output file, but no
 # hook fires while they run — so this process (spawned detached by the launch
-# hook) tails that file and appends each new line to the mirror log, then a
-# closing rule + finish line when the job ends.
+# hook) tails that file and appends each new line to the mirror log (as structured
+# paint ops via claude_ops), then a closing rule + finish chip when the job ends.
 #
 #   KIND  "bg" | "monitor"  — only changes the gutter colour + finish label
 #   TASKID                  — backgroundTaskId / Monitor taskId (globally unique)
 #   MIRROR_LOG              — /tmp/claude-mirror-<slug>.log
-#   WIDTH                   — pane columns (for the closing rule)
+#   SLOT                    — palette slot index claimed by the launcher
+#   SIG                     — monitor: signature token to find its process
+#   OUTER                   — "r,g,b" subagent colour -> double gutter (nested job)
 #
 # Completion is detected the same way claude-tab-status.sh detects a running
 # background job: the writing process holds the output file open the whole time,
@@ -20,104 +22,41 @@ import errno, glob, os, re, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
+import claude_render as R
+import claude_ops as O
 
 KIND   = sys.argv[1] if len(sys.argv) > 1 else "bg"
 TASKID = sys.argv[2] if len(sys.argv) > 2 else ""
 LOG    = sys.argv[3] if len(sys.argv) > 3 else ""
-WIDTH  = max(16, int(sys.argv[4])) if len(sys.argv) > 4 else 53
-SIG    = sys.argv[6] if len(sys.argv) > 6 else ""   # monitor: signature to find its process
-OUTER  = sys.argv[7] if len(sys.argv) > 7 else ""   # "r,g,b" subagent colour -> double gutter
-
-
-def fg(r, g, b):
-    return f"\033[38;2;{r};{g};{b}m"
-
-
-DIM  = fg(92, 99, 112)
-RST  = "\033[0m"
-RULE = DIM + ("─" * WIDTH) + RST
+SIG    = sys.argv[5] if len(sys.argv) > 5 else ""   # monitor: signature to find its process
+OUTER  = sys.argv[6] if len(sys.argv) > 6 else ""   # "r,g,b" subagent colour -> double gutter
 
 # The launcher (claude-cmd-fmt / claude-monitor-fmt) claims a palette slot, colours
 # the header chip with it, and passes the index here so the gutter + finish chip
 # match — header, gutter, and finish all share one colour, and parallel jobs differ.
 # (If no slot is passed we claim our own, as a fallback.)
-if len(sys.argv) > 5 and sys.argv[5].lstrip("-").isdigit():
-    SLOT, _MARKER = int(sys.argv[5]), None
+if len(sys.argv) > 4 and sys.argv[4].lstrip("-").isdigit():
+    SLOT, _MARKER = int(sys.argv[4]), None
 else:
     SLOT, _MARKER = claude_slots.claim(KIND, LOG)
 SLOT_RGB = claude_slots.color(KIND, SLOT)
-GUT  = fg(*SLOT_RGB) + "│ " + RST
-GW   = 2
-# When this background/monitor job was launched *by a subagent*, prefix a second
-# gutter bar in the subagent's colour (outer = which subagent, inner = which bg/
-# monitor job) so nested parallel jobs stay distinguishable. claude-substream.py
-# passes the subagent colour as "r,g,b".
-OUTER_BAR = ""
+# When this background/monitor job was launched *by a subagent*, a second gutter bar
+# in the subagent's colour (outer = which subagent, inner = which bg/monitor job)
+# keeps nested parallel jobs distinguishable. claude-substream.py passes "r,g,b".
+OUTER_RGB = None
 if OUTER:
     try:
-        _o = tuple(int(x) for x in OUTER.split(","))
-        OUTER_BAR = fg(*_o) + "│ " + RST
-        GUT = OUTER_BAR + fg(*SLOT_RGB) + "│ " + RST
-        GW = 4
+        OUTER_RGB = tuple(int(x) for x in OUTER.split(","))
     except Exception:
-        OUTER_BAR = ""
+        OUTER_RGB = None
 
 
 def release_slot():
     claude_slots.release(KIND, LOG, SLOT, os.getpid())
 
 
-def label(text, rgb):
-    r, g, b = rgb
-    return f"\033[1;38;2;24;26;30;48;2;{r};{g};{b}m {text} {RST}"
-
-
-# ANSI-aware hard-wrap so the gutter repeats on every visual row of a wide line
-# (a plain prefix would vanish on soft-wrapped continuations). Escapes are copied
-# verbatim and the active SGR colour is re-asserted after each wrap.
-_ANSI = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
-
-
-def wrap_gutter(text, width, gut, gw):
-    cw = max(1, width - gw)
-    pieces, lines = [], text.split("\n")
-    for li, line in enumerate(lines):
-        if li:
-            pieces.append("\n")
-        pieces.append(gut)
-        col, active, i, n = 0, "", 0, len(line)
-        while i < n:
-            m = _ANSI.match(line, i)
-            if m:
-                seq = m.group(0)
-                pieces.append(seq)
-                if seq.endswith("m"):
-                    active = "" if seq in ("\x1b[0m", "\x1b[m") else active + seq
-                i = m.end()
-                continue
-            if col >= cw:
-                pieces.append(RST + "\n" + gut + active); col = 0
-            pieces.append(line[i]); col += 1; i += 1
-        pieces.append(RST)
-    return "".join(pieces)
-
-
-# Render escape sequences a job printed as text ("^[[…m", "\033[…m", …) back to
-# real ESC bytes so the pane interprets them. Unescapes ALL sequences, not just
-# colours — cursor/clear escapes will then execute in the pane too.
-_ESC_UNESC = re.compile(r"\^\[|\\0?33|\\x1[bB]|\\e|\\u001[bB]|<[Ee][Ss][Cc]>")
-
-
 def unescape(s):
-    return _ESC_UNESC.sub("\x1b", s)
-
-
-def append(text):
-    try:
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write(text)
-    except Exception:
-        pass
+    return R.unescape(s)
 
 
 def find_file(deadline):
@@ -186,7 +125,7 @@ def main():
     start = time.time()
     path = find_file(start + 12)
     if not path:
-        append(RULE + "\n" + label("■ output not found", SLOT_RGB) + "\n")
+        O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
         return
 
     pos, pending, last_active, last_size = 0, b"", start, -1
@@ -205,8 +144,8 @@ def main():
                 return size
             *lines, pending = pending.split(b"\n")
             if lines:
-                append("".join(wrap_gutter(unescape(ln.decode("utf-8", "replace")), WIDTH, GUT, GW) + "\n"
-                               for ln in lines))
+                O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
+                                  SLOT_RGB, outer=OUTER_RGB))
         if size > last_size:
             last_active = time.time()
         last_size = size
@@ -239,19 +178,19 @@ def main():
 
     pump()                                                   # final catch-up read
     if pending.strip():
-        append(wrap_gutter(unescape(pending.decode("utf-8", "replace")), WIDTH, GUT, GW) + "\n")
+        O.emit(LOG, O.gut(unescape(pending.decode("utf-8", "replace")), SLOT_RGB, outer=OUTER_RGB))
     elapsed = max(0.0, last_active - start)      # active duration, excluding any idle wait
     dur = f"{elapsed:.1f}s" if elapsed < 60 else f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
     text = "background finished" if KIND == "bg" else "monitor ended"
     # Finish chip uses this stream's slot colour (same as its gutter) so you can
     # tell which stream finished. Top-level jobs get a RULE-bracketed finish; a
-    # subagent's nested job gets just the chip behind its double gutter (the
-    # subagent block already frames it), so it stays visually contained.
-    chip = label("■ " + text + " · " + dur, SLOT_RGB)
-    if OUTER_BAR:
-        append(OUTER_BAR + chip + "\n")
+    # subagent's nested job gets just the chip behind its single outer gutter bar
+    # (the subagent block already frames it), so it stays visually contained.
+    chip_txt = "■ " + text + " · " + dur
+    if OUTER_RGB:
+        O.emit(LOG, O.label(chip_txt, SLOT_RGB, outer=OUTER_RGB))
     else:
-        append(RULE + "\n" + chip + "\n" + RULE + "\n")
+        O.emit(LOG, O.rule(), O.label(chip_txt, SLOT_RGB), O.rule())
 
     # Release this job's slot marker BEFORE the recheck below — bg_command_running
     # now detects running jobs via live slot markers, so the recheck must not see

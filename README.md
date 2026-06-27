@@ -246,17 +246,18 @@ hook fires at *launch* with no output, but the live output **is** written to a
 foreground block, and a detached tailer for background/monitor streams (below).
 The mirror is driven by the hook:
 
-- **`claude-cmd-log.sh`** (a `PostToolUse` Bash hook) is a thin wrapper: it
-  finds the live mirror-pane width (pipes `kitten @ ls` through
-  **`claude-mirror-width.py`**, fallback 53) and hands the hook payload to the
-  formatter.
+- **`claude-cmd-log.sh`** (a `PostToolUse` Bash hook) is a thin wrapper that hands
+  the hook payload to the formatter. It no longer needs the pane width — producers
+  emit width-independent paint ops and the renderer wraps them at paint time.
 - **`claude-cmd-fmt.py`** does the work — reads the payload
-  (`tool_input.command`, `tool_response.stdout`/`stderr`, `duration_ms`), pretty-
-  prints + syntax-highlights the command (pygments `BashLexer` + `PythonLexer`
-  for embedded python), word-wraps to the given width, and appends the formatted
-  block to `/tmp/claude-mirror-<slug>.log`. It lives in its own file (not an
-  inline `python3 -c '…'`) so its regexes can use both quote characters without
-  bash-quoting hazards. For a **background** command it writes a single
+  (`tool_input.command`, `tool_response.stdout`/`stderr`, `duration_ms`),
+  syntax-highlights the command (pygments `BashLexer` + `PythonLexer` for embedded
+  python), and appends a block of **paint ops** (via `claude_ops`) to
+  `/tmp/claude-mirror-<slug>.log` — the command as a `code` op, the output as a
+  `gut` op, framed by `rule`/`label` ops; the renderer wraps them to the live
+  width. It lives in its own file (not an inline `python3 -c '…'`) so its regexes
+  can use both quote characters without bash-quoting hazards. For a **background**
+  command it writes a single
   `▷ background` chip + the command and spawns the tailer below (which appends
   the live output directly under it).
 - **`claude-stream.py`** (spawned detached, in its own session, by the launch
@@ -356,13 +357,12 @@ The mirror is driven by the hook:
   - Out of scope: **split-pane** teammate mode (tmux/iTerm2) runs each teammate as
     its own process/session rather than an in-process subagent, so it wouldn't flow
     through these hooks; the default in-process mode is what's supported here.
-- **`claude-pane-width.sh`** prints the mirror pane's current column width
-  (`kitten @ ls` → `claude-mirror-width.py`, fallback 53); shared by the Bash and
-  Monitor hook wrappers.
-- **`claude-mirror.sh [slug]`** runs inside the pane and simply `tail -F`s that
-  log (truncating it on open for a fresh start). One `tail` — no file-switching,
-  byte-offsets, `lsof`, birth-time selection, or orphaned tails (all of which
-  earlier designs needed and which caused interleaving/stale-replay bugs).
+- **`claude-mirror.sh [slug]`** runs inside the pane and execs the renderer
+  **`claude-mirror.py`** (replacing the old `tail -F`). The renderer reads the
+  structured paint-op log (JSONL, see *Reflow* below), paints each op at the pane's
+  **current** width, and re-renders everything on resize (`SIGWINCH`) so content
+  **reflows**. It truncates the log on open for a fresh start. One process — no
+  file-switching, byte-offsets, `lsof`, birth-time selection, or orphaned tails.
 - **`claude-file-log.sh`** (a `PostToolUse` hook for `Read`/`Edit`/`Write`/
   `MultiEdit`/`NotebookEdit`) logs file operations as compact one-liners showing
   just the verb + basename — `Read(README.md)`, `Update(README.md)`,
@@ -437,8 +437,16 @@ Behaviour & limits:
   gibberish (`claude-cmd-fmt.py` / `claude-stream.py` `unescape()`). This covers
   **all** sequences, not just colour: a command that emits an escaped cursor-move
   or clear-screen (e.g. `^[[2J`) will have it execute in the pane.
-- **Divider** spans the pane's current width (read live from `kitten @ ls`),
-  matching the command's wrap width so nothing wraps to a second line.
+- **Reflow on resize.** Producers write width-INDEPENDENT **paint ops** (JSONL via
+  `claude_ops.py`) — `rule` / `label` / `code` / `gut` / `line`, each carrying its
+  colours + pre-highlighted text but no baked width. The renderer
+  (`claude-mirror.py`, running in the pane) paints them at the pane's **live** width
+  (`os.get_terminal_size`, no `kitten @ ls` round-trip), and on resize the pane's
+  pty delivers `SIGWINCH` → it clears and **re-renders every op** at the new width,
+  so dividers, gutters, and wrapped code/output all re-fit. (Earlier the width was
+  baked at write time, so resizing left old blocks frozen.) Cost: a resize
+  re-renders the whole history (re-highlighting code) — fine for interactive use.
+- **Divider** spans the pane's current width and reflows with everything else.
 - **Pretty-print needs `pygments`** (already present); without it the command
   still shows with its line structure intact, just uncoloured.
 - **Cost**: the tab uses the `splits` layout, leaving the Claude pane at ~75%

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# claude-subagent-fmt.py MIRROR_LOG WIDTH PHASE
+# claude-subagent-fmt.py MIRROR_LOG PHASE
 #
 # Drives a subagent's block in the kitty command mirror. PHASE is:
 #   push  — PreToolUse(Task/Agent): stash the task description for the upcoming
@@ -15,29 +15,11 @@ import json, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
+import claude_ops as O
 
 LOG   = sys.argv[1]
-WIDTH = max(16, int(sys.argv[2]))
-PHASE = sys.argv[3] if len(sys.argv) > 3 else "start"
+PHASE = sys.argv[2] if len(sys.argv) > 2 else "start"
 HERE  = os.path.dirname(os.path.abspath(__file__))
-
-
-def fg(r, g, b):
-    return f"\033[38;2;{r};{g};{b}m"
-
-
-DIM  = fg(92, 99, 112)
-RST  = "\033[0m"
-RULE = DIM + ("─" * WIDTH) + RST
-
-
-def label(text, rgb):
-    r, g, b = rgb
-    return f"\033[1;38;2;24;26;30;48;2;{r};{g};{b}m {text} {RST}"
-
-
-def fit(text):
-    return text if len(text) <= WIDTH - 2 else text[:WIDTH - 3] + "…"
 
 
 def fmt_dur(sec):
@@ -112,16 +94,15 @@ def main():
             head = f"▶ {atype} · teammate · {desc}" if desc else f"▶ {atype} · teammate"
         else:
             head = f"▶ {atype} · {desc}" if desc else f"▶ {atype}"
-        with open(LOG, "a", encoding="utf-8") as f:
-            f.write("\n".join(["", RULE, label(fit(head), rgb), RULE]) + "\n")
+        O.emit(LOG, O.blank(), O.rule(), O.label(head, rgb), O.rule())
         # Spawn the transcript streamer (detached) and record its pid so `stop` can
-        # tell whether it's still running. PALETTE (argv 7) tells it which colour
+        # tell whether it's still running. PALETTE (argv 6) tells it which colour
         # family to use — must match the header colour chosen just above.
         streamer = os.path.join(HERE, "claude-substream.py")
         if tpath and os.path.exists(streamer):
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, streamer, agent_id, tpath, LOG, str(WIDTH), str(slot), atype, pal],
+                    [sys.executable, streamer, agent_id, tpath, LOG, str(slot), atype, pal],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, start_new_session=True)
                 with open(pid_path(agent_id), "w") as f:
@@ -156,8 +137,7 @@ def main():
             dur = fmt_dur(time.time() - got[1]) if got[1] else ""
             chip = f"■ {atype} ended · {dur}" if dur else f"■ {atype} ended"
             pal = "team" if is_teammate(tpath, agent_id) else "sub"
-            with open(LOG, "a", encoding="utf-8") as f:
-                f.write("\n".join([RULE, label(fit(chip), claude_slots.color(pal, got[0])), RULE]) + "\n")
+            O.emit(LOG, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
             claude_slots.release_id("sub", LOG, agent_id)
         for p in (os.path.join(LOG + ".slots", f"sub.done.{agent_id}"), pid_path(agent_id)):
             try:

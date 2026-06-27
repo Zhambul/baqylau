@@ -13,6 +13,9 @@
 # MultiEdit show as "Update", Write as "Write", Read as "Read".
 import json, os, sys
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_ops as O
+
 LABEL = {
     "Read": "Read",
     "Edit": "Update",
@@ -59,8 +62,7 @@ def main():
     else:
         col, mark = COLOR.get(label, DEF), ""
     line = col + label + DIM + "(" + DEF + name + DIM + ")" + RST + mark
-    with open(sys.argv[1], "a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    O.emit(sys.argv[1], O.line(line))
 
 
 if __name__ == "__main__":
