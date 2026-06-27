@@ -55,6 +55,7 @@ def main():
     path = ti.get("file_path") or ti.get("notebook_path") or ""
     if not path:
         return
+    LOG = O.log_path(d)
     name = os.path.basename(path.rstrip("/")) or path
     failed = "Failure" in (d.get("hook_event_name") or "")
     if failed:
@@ -62,7 +63,7 @@ def main():
     else:
         col, mark = COLOR.get(label, DEF), ""
     line = col + label + DIM + "(" + DEF + name + DIM + ")" + RST + mark
-    O.emit(sys.argv[1], O.line(line))
+    O.emit(LOG, O.line(line))
 
 
 if __name__ == "__main__":

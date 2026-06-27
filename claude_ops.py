@@ -19,7 +19,21 @@
 #                             when outer is given), wrapped so the gutter repeats on
 #                             every visual row. s may already contain ANSI (zero-width)
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
-import json
+import json, os, re
+
+
+def log_path(d):
+    """The mirror log for a hook payload, keyed by session_id so PARALLEL Claude
+    sessions get separate logs (separate content). Falls back to a cwd slug if a
+    payload somehow lacks session_id. claude-split.sh derives the SAME path (from
+    the SessionStart payload's session_id, and from the focused pane's
+    claude_session var) so the renderer tails exactly what the producers write."""
+    sid = (d.get("session_id") or "").strip()
+    if sid:
+        key = re.sub(r"[^A-Za-z0-9._-]", "-", sid)
+    else:
+        key = re.sub(r"[/.]", "-", d.get("cwd") or os.getcwd())
+    return "/tmp/claude-mirror-" + key + ".log"
 
 
 def _rgb(c):

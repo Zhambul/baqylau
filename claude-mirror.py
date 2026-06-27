@@ -21,7 +21,12 @@ FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() el
 
 BANNER = "\033[38;5;244m ◧ command mirror — waiting for commands… \033[0m"
 
-OPS = []            # every parsed op, so a resize can repaint without re-reading
+# Keep the last MAX_OPS parsed ops in memory so a resize can repaint without
+# re-reading the file. Bounded so a very long-lived session can't grow memory
+# without limit (the user's concern) — oldest history is dropped past the cap.
+MAX_OPS = 8000
+
+OPS = []            # parsed ops (capped), for repaint-on-resize
 _resized = True     # paint once at startup (and whenever a SIGWINCH arrives)
 
 
@@ -39,7 +44,18 @@ def fit(s, avail):
 
 
 def render(op, w):
-    """One paint op -> ANSI text for the current width (may contain newlines)."""
+    """One paint op -> ANSI text for the current width (may contain newlines).
+    Cached per (op, width) so repeated repaints at the same width — and the common
+    case of re-rendering unchanged ops — don't re-highlight/re-wrap needlessly."""
+    c = op.get("_c")
+    if c is not None and c[0] == w:
+        return c[1]
+    s = _render(op, w)
+    op["_c"] = (w, s)
+    return s
+
+
+def _render(op, w):
     t = op.get("t")
     if t == "blank":
         return ""
@@ -99,11 +115,10 @@ def main():
     global _resized
     if not LOG:
         return
-    # Start fresh each time the pane opens (the old tailer truncated the log too).
-    try:
-        open(LOG, "w").close()
-    except Exception:
-        pass
+    # Do NOT truncate: the log is the session's history (truncated once at
+    # SessionStart by claude-split.sh, removed at SessionEnd). Reading it from the
+    # top means TOGGLING the pane off/on re-shows everything that happened — and
+    # while off there is no process at all, so no resources are used.
     signal.signal(signal.SIGWINCH, _on_winch)
 
     pos, pending = 0, b""
@@ -133,6 +148,9 @@ def main():
                 except Exception:
                     continue
                 OPS.append(op); new.append(op)
+            if len(OPS) > MAX_OPS:                # bound memory on a long session
+                del OPS[:len(OPS) - MAX_OPS]
+                _resized = True                   # repaint the (now-trimmed) history
 
         if _resized:                         # startup or a resize -> full reflow
             _resized = False

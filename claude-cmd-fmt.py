@@ -17,7 +17,7 @@ import claude_slots
 import claude_render as R
 import claude_ops as O
 
-LOG = sys.argv[1]
+LOG = ""   # set in main() from the payload's session_id (per-session log)
 
 LBL_FG   = (170, 185, 210)  # slate   — foreground OK (neutral, distinct from the vivid palettes)
 LBL_BG   = (209, 154, 102)  # orange  — background header chip / foreground "interrupted"
@@ -42,10 +42,12 @@ def _spawn_stream(kind, taskid, slot):
 
 
 def main():
+    global LOG
     try:
         d = json.load(sys.stdin)
     except Exception:
         return
+    LOG = O.log_path(d)
     # A subagent's tool calls are rendered (in transcript order, with messages) by
     # claude-substream.py — skip them here so they aren't rendered twice.
     if d.get("agent_id"):

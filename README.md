@@ -357,12 +357,15 @@ The mirror is driven by the hook:
   - Out of scope: **split-pane** teammate mode (tmux/iTerm2) runs each teammate as
     its own process/session rather than an in-process subagent, so it wouldn't flow
     through these hooks; the default in-process mode is what's supported here.
-- **`claude-mirror.sh [slug]`** runs inside the pane and execs the renderer
-  **`claude-mirror.py`** (replacing the old `tail -F`). The renderer reads the
-  structured paint-op log (JSONL, see *Reflow* below), paints each op at the pane's
-  **current** width, and re-renders everything on resize (`SIGWINCH`) so content
-  **reflows**. It truncates the log on open for a fresh start. One process — no
-  file-switching, byte-offsets, `lsof`, birth-time selection, or orphaned tails.
+- **`claude-mirror.sh LOG`** runs inside the pane and execs the renderer
+  **`claude-mirror.py`** on that session's log (replacing the old `tail -F`). The
+  renderer reads the structured paint-op log (JSONL, see *Reflow* below), paints each
+  op at the pane's **current** width, and re-renders everything on resize (`SIGWINCH`)
+  so content **reflows**. It reads the log from the top and **never truncates** — so
+  toggling the pane off/on re-shows the whole session history (the log is truncated
+  once at SessionStart, removed at SessionEnd), and while off there is no process at
+  all. It keeps at most `MAX_OPS` (8000) ops in memory so a long session can't grow
+  unbounded. One process — no file-switching, byte-offsets, `lsof`, or orphaned tails.
 - **`claude-file-log.sh`** (a `PostToolUse` hook for `Read`/`Edit`/`Write`/
   `MultiEdit`/`NotebookEdit`) logs file operations as compact one-liners showing
   just the verb + basename — `Read(README.md)`, `Update(README.md)`,
@@ -370,18 +373,26 @@ The mirror is driven by the hook:
   running log of what Claude did. Verbs mirror Claude Code's own UI (Edit/
   MultiEdit → **Update**, colour-coded: read blue, update yellow, write green);
   formatting lives in **`claude-file-fmt.py`**.
-- **`claude-split.sh open|close|toggle|grow|shrink|reset|setpct`** manages the pane:
-  `open` switches the tab to the `splits` layout and launches the split at
-  `${CLAUDE_MIRROR_BIAS:-25}` percent
-  (`kitten @ launch --location=vsplit --bias … --keep-focus`), tagged with the
-  window var `claude_mirror=1` so it is reused, never duplicated. `toggle`
-  closes it if present else opens it; `grow`/`shrink [N]` resize by N cells
+- **`claude-split.sh open|close|toggle|grow|shrink|reset|setpct`** manages the pane,
+  **per Claude session**. Everything is keyed by `session_id` so PARALLEL sessions
+  never collide: each mirror pane carries `var:claude_mirror=<sid>`, each Claude pane
+  carries `var:claude_session=<sid>`, and each session's content is its own
+  `/tmp/claude-mirror-<sid>.log`. `open` (SessionStart) reads the `session_id` from
+  its hook payload, truncates that session's log, tags the Claude pane, switches the
+  tab to the `splits` layout, and launches the split at `${CLAUDE_MIRROR_BIAS:-25}`
+  percent. `close` (SessionEnd) closes that session's mirror and removes its log.
+  `toggle` closes the pane if present **without** truncating, so reopening re-shows
+  the whole session history — and while closed there is **no process at all** (no
+  resources, nothing to leak). `grow`/`shrink [N]` resize by N cells
   (default `${CLAUDE_MIRROR_STEP:-4}`); `setpct N` sets an absolute width of N%
   of the tab (the size presets) and `reset` is `setpct ${CLAUDE_MIRROR_BIAS}` —
   both computed from live tab geometry and iterated to the exact target, since
-  kitty's splits layout only resizes by an inexact relative increment. Wired to
+  kitty's splits layout only resizes by an inexact relative increment. `open`/`close`
+  get the sid from their payload (stdin); the **keybindings have no payload, so they
+  recover the sid from the currently focused kitty tab** (`os_window`+`tab` `is_focused`
+  → the tab's `claude_session`/`claude_mirror` var). Wired to
   `SessionStart` (open) and `SessionEnd` (close); `toggle`/`grow`/`shrink`/
-  `reset` are bound to keys (below). When invoked from a keybinding (a
+  `reset`/`setpct` are bound to keys (below). When invoked from a keybinding (a
   background `launch` that doesn't inherit `KITTY_LISTEN_ON`, runs in `$HOME`,
   and has no Claude env), the script makes itself self-sufficient: it resolves
   the kitty socket by walking its ancestor pids to the controlling `kitty`
@@ -475,9 +486,11 @@ Behaviour & limits:
   kitty's splits layout only resizes by a relative increment (and one unit isn't
   exactly one column), so it reads the live geometry and **iterates** toward the
   target until within a cell.
-- Opened on `SessionStart`; if you close it, it reopens next session. Toggle it
-  yourself any time with the key above (or `./claude-split.sh open` / `close` /
-  `toggle`).
+- Opened on `SessionStart`; toggle it off/on any time with the key above (or
+  `./claude-split.sh toggle`) — reopening re-shows the session's full history, and
+  while off nothing runs. **Per session:** each Claude session has its own mirror
+  (own content, own size, independent toggle), so running several sessions in
+  parallel no longer makes one session's toggle close another's pane.
 
 ## Notes / tweaking
 

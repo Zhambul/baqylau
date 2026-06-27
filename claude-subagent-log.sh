@@ -16,8 +16,6 @@ here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fmt="$here/claude-subagent-fmt.py"
 [ -f "$fmt" ] || exit 0
 
-slug="$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"
-[ -n "$slug" ] || exit 0
-
-python3 "$fmt" "/tmp/claude-mirror-$slug.log" "$phase" 2>/dev/null
+# The formatter derives the per-session log path from the payload's session_id.
+python3 "$fmt" "$phase" 2>/dev/null
 exit 0

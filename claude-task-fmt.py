@@ -17,8 +17,6 @@ import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_ops as O
 
-LOG = sys.argv[1]
-
 CREATED_RGB = (214, 153, 92)    # warm amber — a task entering the list
 DONE_RGB    = (152, 195, 121)   # green — a task finished
 
@@ -28,6 +26,7 @@ def main():
         d = json.load(sys.stdin)
     except Exception:
         return
+    LOG = O.log_path(d)
     ev   = d.get("hook_event_name") or ""
     tid  = d.get("task_id") or "?"
     subj = d.get("task_subject") or d.get("task_title") or d.get("task_description") or ""

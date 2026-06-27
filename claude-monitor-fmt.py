@@ -12,8 +12,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_ops as O
 
-LOG = sys.argv[1]
-
 
 def main():
     try:
@@ -22,6 +20,7 @@ def main():
         return
     if (d.get("tool_name") or "") != "Monitor":
         return
+    LOG = O.log_path(d)
     ti = d.get("tool_input") or {}
     tr = d.get("tool_response") or {}
     taskid = tr.get("taskId") if isinstance(tr, dict) else None
