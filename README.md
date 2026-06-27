@@ -370,15 +370,16 @@ The mirror is driven by the hook:
   running log of what Claude did. Verbs mirror Claude Code's own UI (Edit/
   MultiEdit → **Update**, colour-coded: read blue, update yellow, write green);
   formatting lives in **`claude-file-fmt.py`**.
-- **`claude-split.sh open|close|toggle|grow|shrink|reset`** manages the pane:
+- **`claude-split.sh open|close|toggle|grow|shrink|reset|setpct`** manages the pane:
   `open` switches the tab to the `splits` layout and launches the split at
   `${CLAUDE_MIRROR_BIAS:-25}` percent
   (`kitten @ launch --location=vsplit --bias … --keep-focus`), tagged with the
   window var `claude_mirror=1` so it is reused, never duplicated. `toggle`
   closes it if present else opens it; `grow`/`shrink [N]` resize by N cells
-  (default `${CLAUDE_MIRROR_STEP:-4}`); `reset` restores it to the configured
-  `${CLAUDE_MIRROR_BIAS}`% width (computed from the live tab geometry, since
-  kitty's own `--axis reset` only snaps to a 50/50 split). Wired to
+  (default `${CLAUDE_MIRROR_STEP:-4}`); `setpct N` sets an absolute width of N%
+  of the tab (the size presets) and `reset` is `setpct ${CLAUDE_MIRROR_BIAS}` —
+  both computed from live tab geometry and iterated to the exact target, since
+  kitty's splits layout only resizes by an inexact relative increment. Wired to
   `SessionStart` (open) and `SessionEnd` (close); `toggle`/`grow`/`shrink`/
   `reset` are bound to keys (below). When invoked from a keybinding (a
   background `launch` that doesn't inherit `KITTY_LISTEN_ON`, runs in `$HOME`,
@@ -468,6 +469,12 @@ Behaviour & limits:
   | `kitty_mod+m` then `=` / `+` | widen by `CLAUDE_MIRROR_STEP` cells |
   | `kitty_mod+m` then `-` | narrow by `CLAUDE_MIRROR_STEP` cells |
   | `kitty_mod+m` then `0` | reset to `CLAUDE_MIRROR_BIAS`% |
+  | `kitty_mod+m` then `1` / `2` / `3` | size preset: 75% / 50% / 25% of the tab |
+
+  Presets + reset use `claude-split.sh setpct <N>`, which sets an absolute width:
+  kitty's splits layout only resizes by a relative increment (and one unit isn't
+  exactly one column), so it reads the live geometry and **iterates** toward the
+  target until within a cell.
 - Opened on `SessionStart`; if you close it, it reopens next session. Toggle it
   yourself any time with the key above (or `./claude-split.sh open` / `close` /
   `toggle`).

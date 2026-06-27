@@ -117,14 +117,15 @@ resize_mirror() {
     --axis horizontal --increment "$1" >/dev/null 2>&1
 }
 
-# Restore the mirror to its configured width (${BIAS}% of the tab). kitty's own
-# `--axis reset` snaps to an equal split, not our bias, so we compute the delta
-# to the target ourselves and resize by that increment.
-reset_mirror() {
-  local inc
-  inc="$("$kitten" @ ls 2>/dev/null | BIAS="$BIAS" python3 -c '
+# Resize the mirror to an ABSOLUTE width of PCT% of the tab. kitty can only resize
+# by a relative increment (and its own `--axis reset` snaps to an equal split, not
+# our target); worse, in the splits layout one increment unit isn't exactly one
+# column, so a single delta over/undershoots. So we read the live geometry, resize
+# toward the target, and ITERATE — re-measuring each time — until within a cell.
+target_delta() {  # echo (target_cols - current_mirror_cols) for PCT% of the tab
+  "$kitten" @ ls 2>/dev/null | PCT="$1" python3 -c '
 import json,os,sys
-bias=float(os.environ["BIAS"])
+pct=float(os.environ["PCT"])
 # Find the tab that actually contains the mirror window (no reliance on focus,
 # which is unset when the OS window is not frontmost).
 for osw in json.load(sys.stdin):
@@ -134,10 +135,20 @@ for osw in json.load(sys.stdin):
     if not cur: continue
     total=sum(w.get("columns",0) for w in wins)
     if total:
-      print(round(total*bias/100.0)-cur)
-    sys.exit(0)')"
-  case "$inc" in ''|*[!0-9-]*) inc=0 ;; esac
-  [ "$inc" != "0" ] && resize_mirror "$inc"
+      print(round(total*pct/100.0)-cur)
+    sys.exit(0)'
+}
+
+size_to() {
+  local pct="$1" inc i
+  for i in 1 2 3 4 5 6; do
+    inc="$(target_delta "$pct")"
+    case "$inc" in ''|*[!0-9-]*) return ;; esac     # no mirror / unreadable -> stop
+    [ "$inc" = "0" ] && return                       # on target
+    resize_mirror "$inc"
+    [ "$inc" = "1" ] || [ "$inc" = "-1" ] && return  # within a cell -> avoid oscillation
+    sleep 0.08                                        # let kitty apply before re-measuring
+  done
 }
 
 case "$cmd" in
@@ -146,6 +157,7 @@ case "$cmd" in
   toggle) if mirror_exists; then close_mirror; else open_mirror; fi ;;
   grow)   resize_mirror "${2:-$STEP}" ;;
   shrink) resize_mirror "-${2:-$STEP}" ;;
-  reset)  reset_mirror ;;
+  reset)  size_to "$BIAS" ;;
+  setpct) size_to "${2:-$BIAS}" ;;        # set to an absolute PCT% (size presets)
 esac
 exit 0
