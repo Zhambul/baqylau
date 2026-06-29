@@ -148,9 +148,14 @@ def main():
                 except Exception:
                     continue
                 OPS.append(op); new.append(op)
-            if len(OPS) > MAX_OPS:                # bound memory on a long session
+            # Bound memory on a long session by dropping oldest ops from the in-memory
+            # list. This only affects what a FUTURE full repaint (on resize) draws — the
+            # already-printed lines stay in the terminal's scrollback — so we must NOT
+            # repaint here. Repainting on every append once over the cap was the cause of
+            # the per-message flicker on big sessions. Trim with hysteresis to avoid
+            # slicing the list on literally every append.
+            if len(OPS) > MAX_OPS + 1000:
                 del OPS[:len(OPS) - MAX_OPS]
-                _resized = True                   # repaint the (now-trimmed) history
 
         if _resized:                         # startup or a resize -> full reflow
             _resized = False
