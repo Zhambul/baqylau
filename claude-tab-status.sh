@@ -86,6 +86,18 @@ state="${1:-}"
 # Absolute path to this script (for spawning the detached self-healing watcher).
 self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 
+# Spawn ONE detached bg-watch for this window (if not already running) that polls
+# $SLOTS until no background job/agent remains, then flips the stale awaiting-bg
+# blue back to green. Shared by the stop and agent-start dispatches.
+ensure_bgwatch() {
+  [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$self" ] || return 0
+  local wf="/tmp/claude-tab-bgwatch-${KITTY_WINDOW_ID}"
+  if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
+    nohup "$self" bg-watch "$SLOTS" >/dev/null 2>&1 &   # pass this session's slots dir
+    echo $! > "$wf" 2>/dev/null
+  fi
+}
+
 # Stop dispatch: it's your turn (green) — unless a background command/monitor
 # Claude launched is still running, in which case Claude is awaiting that job,
 # not you, so show blue (awaiting-bg). Red is reserved for Claude asking you a
@@ -103,18 +115,24 @@ if [ "$state" = "stop" ]; then
     state="awaiting-bg"
     # There's no "background finished" hook, and the per-job bg-recheck only fires
     # from that job's claude-stream.py tailer — so an UNTRACKED job (tailer died, or
-    # a job with none) finishing would leave the tab stuck blue. Spawn ONE detached
-    # watcher that polls until no bg job remains, then flips this stale blue green.
-    if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$self" ]; then
-      wf="/tmp/claude-tab-bgwatch-${KITTY_WINDOW_ID}"
-      if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
-        nohup "$self" bg-watch "$SLOTS" >/dev/null 2>&1 &   # pass this session's slots dir
-        echo $! > "$wf" 2>/dev/null
-      fi
-    fi
+    # a job with none) finishing would leave the tab stuck blue. The detached watcher
+    # polls until no bg job remains, then flips this stale blue green.
+    ensure_bgwatch
   else
     state="awaiting-response"
   fi
+fi
+
+# agent-start dispatch (called by claude-subagent-fmt.py when a background TEAMMATE
+# begins a task): the main session is now awaiting that teammate, so the tab goes
+# BLUE — even if the lead's turn had already ended (green). Without this, a teammate
+# starting a new task between the lead's turns would leave the tab stuck green while
+# the teammate works (SubagentStart otherwise never touches the tab). We also ensure
+# the watcher is running so the blue clears once the team goes quiet.
+if [ "$state" = "agent-start" ]; then
+  SLOTS="${2:-}"
+  state="awaiting-bg"
+  ensure_bgwatch
 fi
 
 # bg-watch dispatch (the detached watcher spawned above): poll until no background
@@ -125,11 +143,19 @@ if [ "$state" = "bg-watch" ]; then
   win="${KITTY_WINDOW_ID:-}"
   [ -n "$win" ] || exit 0
   trap 'rm -f "/tmp/claude-tab-bgwatch-${win}" 2>/dev/null' EXIT
-  cleared=1
+  cleared=1; misses=0
   for _ in $(seq 1 1800); do
     sleep 2
     [ "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" = "awaiting-bg" ] || exit 0
-    if ! bg_command_running; then cleared=0; break; fi
+    if bg_command_running; then
+      misses=0                       # something running -> reset
+    else
+      # GRACE: a teammate working in bursts drops its marker between tasks. Require
+      # the team to stay quiet across several checks (~8s) before declaring green,
+      # so an inter-task gap doesn't flip the tab green while the team is still going.
+      misses=$((misses + 1))
+      if [ "$misses" -ge 4 ]; then cleared=0; break; fi
+    fi
   done
   [ "$cleared" -eq 0 ] || exit 0
   state="awaiting-response"
@@ -146,6 +172,12 @@ if [ "$state" = "bg-recheck" ]; then
   [ -n "${KITTY_WINDOW_ID:-}" ] && cur="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
   [ "$cur" = "awaiting-bg" ] || exit 0
   bg_command_running && exit 0
+  # GRACE: a teammate finishing one task usually starts the next within a second or
+  # two. Wait briefly and re-check so we don't flip green in that gap; if a new
+  # marker appeared (next task started), stay blue. Also bail if the state changed.
+  sleep 4
+  bg_command_running && exit 0
+  [ -n "${KITTY_WINDOW_ID:-}" ] && [ "$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)" = "awaiting-bg" ] || exit 0
   state="awaiting-response"
 fi
 

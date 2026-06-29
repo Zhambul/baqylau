@@ -111,6 +111,18 @@ def main():
                     f.write(str(proc.pid))
             except Exception:
                 pass
+        # A background TEAMMATE just started a task -> the main session is awaiting it,
+        # so turn the tab BLUE (even if the lead's turn had ended green). SubagentStart
+        # otherwise never touches the tab, so a teammate working between the lead's
+        # turns would leave it stuck green. (Only teammates: a foreground subagent
+        # already keeps the tab blue via the lead's blocked turn.)
+        if team:
+            try:
+                subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "agent-start", LOG + ".slots"],
+                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                               stderr=subprocess.DEVNULL, timeout=10)
+            except Exception:
+                pass
         return
 
     # stop: signal completion to the streamer, which is the SOLE writer of the
