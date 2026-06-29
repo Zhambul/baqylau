@@ -37,13 +37,18 @@ def is_teammate(tpath, agent_id):
     # but its meta.json carries taskKind == "in_process_teammate". (Unlike an ordinary
     # subagent's meta, a teammate's is present at SubagentStart, so reading it here is
     # reliable.) Teammates render in the lighter "team" palette + a "teammate" header.
-    try:
-        base = tpath[:-6] if tpath.endswith(".jsonl") else tpath
-        meta = os.path.join(base, "subagents", f"agent-{agent_id}.meta.json")
-        with open(meta, encoding="utf-8") as f:
-            return json.load(f).get("taskKind") == "in_process_teammate"
-    except Exception:
-        return False
+    base = tpath[:-6] if tpath.endswith(".jsonl") else tpath
+    meta = os.path.join(base, "subagents", f"agent-{agent_id}.meta.json")
+    # The meta.json can lag SubagentStart by a moment, so retry briefly when it's
+    # missing (no delay when it's already there). Without this, the race made real
+    # teammates render in the ordinary subagent palette.
+    for _ in range(6):
+        try:
+            with open(meta, encoding="utf-8") as f:
+                return json.load(f).get("taskKind") == "in_process_teammate"
+        except Exception:
+            time.sleep(0.08)
+    return False
 
 
 def alive(pid):
@@ -111,18 +116,19 @@ def main():
                     f.write(str(proc.pid))
             except Exception:
                 pass
-        # A background TEAMMATE just started a task -> the main session is awaiting it,
-        # so turn the tab BLUE (even if the lead's turn had ended green). SubagentStart
-        # otherwise never touches the tab, so a teammate working between the lead's
-        # turns would leave it stuck green. (Only teammates: a foreground subagent
-        # already keeps the tab blue via the lead's blocked turn.)
-        if team:
-            try:
-                subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "agent-start", LOG + ".slots"],
-                               stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                               stderr=subprocess.DEVNULL, timeout=10)
-            except Exception:
-                pass
+        # A subagent just started -> the main session is awaiting it, so turn the tab
+        # BLUE (even if the lead's turn had ended green). SubagentStart otherwise never
+        # touches the tab, so a TEAMMATE working between the lead's turns would leave it
+        # stuck green. Fire for ANY subagent, not just detected teammates: is_teammate()
+        # is racy (the meta.json can lag SubagentStart), so gating on it dropped real
+        # teammates into green. A foreground subagent is already blue via the lead's
+        # blocked turn, so this is at worst a no-op for them.
+        try:
+            subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "agent-start", LOG + ".slots"],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=10)
+        except Exception:
+            pass
         return
 
     # stop: signal completion to the streamer, which is the SOLE writer of the
