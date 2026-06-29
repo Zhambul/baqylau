@@ -120,6 +120,40 @@ import claude_ops as O
 sys.stdout.write(O.log_path({"session_id": os.environ.get("SID",""), "cwd": os.getcwd()}))' 2>/dev/null
 }
 
+# --- per-project remembered size --------------------------------------------
+# The width you set (grow/shrink/setpct/reset) is remembered PER PROJECT and
+# restored on the next SessionStart. Keyed by the project cwd — $PWD is the project
+# both at SessionStart (runs in it) and for the keybindings (they pass --cwd
+# current). Stored under the Claude config dir so it survives restarts.
+SIZE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/kitty-mirror-sizes"
+size_file() { printf '%s/%s' "$SIZE_DIR" "$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"; }
+
+project_bias() {  # remembered % for this project, or the configured default (BIAS)
+  local b; b="$(cat "$(size_file)" 2>/dev/null)"
+  case "$b" in ''|*[!0-9]*) printf '%s' "$BIAS" ;; *) printf '%s' "$b" ;; esac
+}
+
+current_pct() {  # $1=sid -> the mirror's current width as % of its tab
+  "$kitten" @ ls 2>/dev/null | SID="$1" python3 -c '
+import json,os,sys
+sid=os.environ["SID"]
+for osw in json.load(sys.stdin):
+  for t in osw["tabs"]:
+    wins=t["windows"]
+    cur=next((w.get("columns",0) for w in wins if w.get("user_vars",{}).get("claude_mirror")==sid),0)
+    if not cur: continue
+    total=sum(w.get("columns",0) for w in wins)
+    if total: print(round(100*cur/total))
+    sys.exit(0)'
+}
+
+save_size() {  # $1=sid — remember the mirror's current % for this project
+  local pct; pct="$(current_pct "$1")"
+  case "$pct" in ''|*[!0-9]*) return ;; esac
+  mkdir -p "$SIZE_DIR" 2>/dev/null
+  printf '%s' "$pct" > "$(size_file)" 2>/dev/null
+}
+
 # --- pane ops, all scoped to ONE session's mirror (var:claude_mirror=<sid>) ----
 mirror_exists() {  # $1 = sid
   "$kitten" @ ls 2>/dev/null | SID="$1" python3 -c '
@@ -132,12 +166,12 @@ for osw in json.load(sys.stdin):
 sys.exit(1)'
 }
 
-open_mirror() {  # $1=sid  $2=log  (does NOT truncate — caller decides)
+open_mirror() {  # $1=sid  $2=log  $3=bias%  (does NOT truncate — caller decides)
   mirror_exists "$1" && return 0
   # vsplit sizing only works in the splits layout; switch the active tab to it.
   "$kitten" @ goto-layout splits >/dev/null 2>&1
   "$kitten" @ launch \
-    --location=vsplit --bias "$BIAS" --keep-focus --cwd current \
+    --location=vsplit --bias "${3:-$BIAS}" --keep-focus --cwd current \
     --var "claude_mirror=$1" --title "◧ cmd mirror" \
     "$DIR/claude-mirror.sh" "$2" >/dev/null 2>&1
 }
@@ -193,7 +227,7 @@ case "$cmd" in
     [ -n "$log" ] || exit 0
     : > "$log"                                       # fresh log for this session
     tag_window "$sid"
-    open_mirror "$sid" "$log"
+    open_mirror "$sid" "$log" "$(project_bias)"      # restore this project's remembered size
     ;;
   close)                                             # SessionEnd (payload on stdin)
     sid="$(sid_from_stdin)"
@@ -206,12 +240,14 @@ case "$cmd" in
     if mirror_exists "$sid"; then
       close_mirror "$sid"                            # keep the log -> history preserved
     else
-      open_mirror "$sid" "$(log_for "$sid")"         # no truncation -> re-shows history
+      open_mirror "$sid" "$(log_for "$sid")" "$(project_bias)"   # remembered size, keep history
     fi
     ;;
-  grow)   sid="$(sid_from_focus)"; [ -n "$sid" ] && resize_mirror "${2:-$STEP}" "$sid" ;;
-  shrink) sid="$(sid_from_focus)"; [ -n "$sid" ] && resize_mirror "-${2:-$STEP}" "$sid" ;;
-  reset)  sid="$(sid_from_focus)"; [ -n "$sid" ] && size_to "$BIAS" "$sid" ;;
-  setpct) sid="$(sid_from_focus)"; [ -n "$sid" ] && size_to "${2:-$BIAS}" "$sid" ;;
+  # Resize, then remember the resulting % for this project. grow/shrink settle a
+  # moment after the async resize, so pause briefly before measuring.
+  grow)   sid="$(sid_from_focus)"; [ -n "$sid" ] && { resize_mirror "${2:-$STEP}" "$sid"; sleep 0.2; save_size "$sid"; } ;;
+  shrink) sid="$(sid_from_focus)"; [ -n "$sid" ] && { resize_mirror "-${2:-$STEP}" "$sid"; sleep 0.2; save_size "$sid"; } ;;
+  reset)  sid="$(sid_from_focus)"; [ -n "$sid" ] && { size_to "$BIAS" "$sid"; save_size "$sid"; } ;;
+  setpct) sid="$(sid_from_focus)"; [ -n "$sid" ] && { size_to "${2:-$BIAS}" "$sid"; save_size "$sid"; } ;;
 esac
 exit 0

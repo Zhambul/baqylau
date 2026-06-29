@@ -486,6 +486,12 @@ Behaviour & limits:
   kitty's splits layout only resizes by a relative increment (and one unit isn't
   exactly one column), so it reads the live geometry and **iterates** toward the
   target until within a cell.
+- **Remembered per project.** Any resize (grow/shrink/preset/reset) records the
+  resulting width %, keyed by the project's cwd, under
+  `~/.claude/kitty-mirror-sizes/<slug>`. On the next `SessionStart` the mirror for
+  that project opens at the remembered width instead of `CLAUDE_MIRROR_BIAS` (which
+  is just the fallback when a project has no saved size). So sizing is sticky across
+  restarts, independently per project.
 - Opened on `SessionStart`; toggle it off/on any time with the key above (or
   `./claude-split.sh toggle`) — reopening re-shows the session's full history, and
   while off nothing runs. **Per session:** each Claude session has its own mirror
