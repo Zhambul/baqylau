@@ -84,6 +84,17 @@ slots_for_sid() { printf '/tmp/claude-mirror-%s.log.slots' "$1"; }
 
 state="${1:-}"
 
+# Record the time of every REAL hook event (any dispatch except the internal
+# watchers) so the idle watcher can tell "busy but quiet for a legit reason"
+# (subagent running, long thinking — these still fire SOME hook within a couple
+# minutes) from "interrupted and abandoned" (no hook at all for a long stretch).
+# This must run before the pretool/posttool agent_id early-exits, so a teammate's
+# inner tool calls also count as activity.
+case "$state" in
+  bg-watch|idle-watch|bg-recheck) ;;
+  *) [ -n "${KITTY_WINDOW_ID:-}" ] && date +%s > "/tmp/claude-tab-activity-${KITTY_WINDOW_ID}" 2>/dev/null ;;
+esac
+
 # Absolute path to this script (for spawning the detached self-healing watcher).
 self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 
@@ -95,6 +106,19 @@ ensure_bgwatch() {
   local wf="/tmp/claude-tab-bgwatch-${KITTY_WINDOW_ID}"
   if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
     nohup "$self" bg-watch "$SLOTS" >/dev/null 2>&1 &   # pass this session's slots dir
+    echo $! > "$wf" 2>/dev/null
+  fi
+}
+
+# Spawn ONE detached idle-watch per window (if not already running). It clears a
+# tab stuck in a BUSY colour (thinking/working/executing) after a long quiet
+# stretch — the only way to recover from a user INTERRUPT, since Claude Code fires
+# no hook on interruption (Stop/StopFailure don't fire), so nothing else resets it.
+ensure_idlewatch() {
+  [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$self" ] || return 0
+  local wf="/tmp/claude-tab-idlewatch-${KITTY_WINDOW_ID}"
+  if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
+    nohup "$self" idle-watch "$SLOTS" >/dev/null 2>&1 &
     echo $! > "$wf" 2>/dev/null
   fi
 }
@@ -159,6 +183,35 @@ if [ "$state" = "bg-watch" ]; then
     fi
   done
   [ "$cleared" -eq 0 ] || exit 0
+  state="awaiting-response"
+fi
+
+# idle-watch dispatch (the detached watcher spawned at turn start): recovers a tab
+# stuck in a BUSY colour after a user INTERRUPT (which fires no hook). It does NOT
+# reset while work is happening — any active turn (incl. a running subagent/teammate)
+# fires SOME hook within the window, refreshing the activity timestamp — only after a
+# long fully-quiet stretch with nothing running does it conclude the turn was
+# abandoned and flip to green (your turn). Exits as soon as the turn ends normally.
+if [ "$state" = "idle-watch" ]; then
+  SLOTS="${2:-}"
+  win="${KITTY_WINDOW_ID:-}"
+  [ -n "$win" ] || exit 0
+  trap 'rm -f "/tmp/claude-tab-idlewatch-${win}" 2>/dev/null' EXIT
+  IDLE_SECS="${CLAUDE_TAB_IDLE_SECS:-180}"   # tunable; how long fully-quiet before "your turn"
+  detected=1
+  for _ in $(seq 1 720); do
+    sleep 10
+    case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
+      thinking|working|executing) ;;     # still busy -> keep watching
+      *) exit 0 ;;                        # turn ended / colour changed -> done
+    esac
+    act="$(cat "/tmp/claude-tab-activity-${win}" 2>/dev/null)"
+    case "$act" in ''|*[!0-9]*) continue ;; esac
+    if [ "$(( $(date +%s) - act ))" -ge "$IDLE_SECS" ] && ! bg_command_running; then
+      detected=0; break                   # busy + quiet for IDLE_SECS + nothing running
+    fi
+  done
+  [ "$detected" -eq 0 ] || exit 0
   state="awaiting-response"
 fi
 
@@ -240,6 +293,10 @@ if [ "$state" = "posttool" ]; then
   [ -n "$agent_id" ] && exit 0                # subagent/teammate inner call -> don't touch the tab
   state="working"
 fi
+
+# Whenever the tab enters a BUSY colour, make sure the idle watcher is running so an
+# interrupt (which fires no hook) can't leave it stuck there forever.
+case "$state" in thinking|working|executing) ensure_idlewatch ;; esac
 
 # --- debug log: OFF by default. Set CLAUDE_TAB_DEBUG=1 to append every
 #     invocation (state, window, socket) to claude-tab-status.log — handy for
