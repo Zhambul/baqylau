@@ -204,7 +204,7 @@ def main():
     # process inherited KITTY_LISTEN_ON / KITTY_WINDOW_ID from the launch hook.
     try:
         here = os.path.dirname(os.path.abspath(__file__))
-        subprocess.run([os.path.join(here, "claude-tab-status.sh"), "bg-recheck"],
+        subprocess.run([os.path.join(here, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:

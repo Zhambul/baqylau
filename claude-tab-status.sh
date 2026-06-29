@@ -51,14 +51,21 @@ set -u
 # commands also hold those files while they run — so an async bg-recheck that
 # coincided with a foreground command would mis-count it and refuse to clear the
 # colour. Slot markers are created only by tailers, never by foreground commands,
-# so they can't be fooled.) Scoped to this project via the cwd-derived temp slug
-# (e.g. /Users/x/code/kitty -> -Users-x-code-kitty).
+# so they can't be fooled.) The mirror log — and thus its `.slots` dir — is now
+# keyed PER SESSION (/tmp/claude-mirror-<session_id>.log.slots), so we must scan
+# THIS session's slots, not a cwd-derived one (else a teammate/bg job goes
+# undetected and the tab wrongly turns green). $SLOTS is resolved per dispatch
+# from the session_id (stop payload) or passed in (bg-watch/bg-recheck); it falls
+# back to the cwd slug to stay correct if a session_id is ever unavailable.
+SLOTS=""
 bg_command_running() {
-  local slug slots f pid markers
-  slug="$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"
-  [ -n "$slug" ] || return 1
-  slots="/tmp/claude-mirror-${slug}.log.slots"
-  [ -d "$slots" ] || return 1
+  local slots slug f pid markers
+  slots="$SLOTS"
+  if [ -z "$slots" ]; then
+    slug="$(pwd -P 2>/dev/null | sed 's#[/.]#-#g')"
+    [ -n "$slug" ] && slots="/tmp/claude-mirror-${slug}.log.slots"
+  fi
+  [ -n "$slots" ] && [ -d "$slots" ] || return 1
   shopt -s nullglob
   markers=( "$slots"/bg.[0-9]* "$slots"/monitor.[0-9]* "$slots"/sub.pid.* )
   shopt -u nullglob
@@ -70,6 +77,10 @@ bg_command_running() {
   return 1
 }
 
+# Slots dir for a given session key (sanitised session_id), matching
+# claude_ops.log_path so it points at exactly where the tailers write markers.
+slots_for_sid() { printf '/tmp/claude-mirror-%s.log.slots' "$1"; }
+
 state="${1:-}"
 
 # Absolute path to this script (for spawning the detached self-healing watcher).
@@ -80,6 +91,11 @@ self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
 # not you, so show blue (awaiting-bg). Red is reserved for Claude asking you a
 # question (the notify dispatch), never for the turn merely ending.
 if [ "$state" = "stop" ]; then
+  # The Stop hook pipes its JSON on stdin — read session_id to scan THIS session's
+  # slots (the mirror log is per-session now). Fall back to the cwd slug.
+  _sp="$(cat 2>/dev/null)"
+  _sid="$(printf '%s' "$_sp" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  if [ -n "$_sid" ]; then SLOTS="$(slots_for_sid "$_sid")"; fi
   if bg_command_running; then
     # A background command / monitor is still running — Claude is awaiting it (not
     # waiting on you), shown BLUE (same as a running foreground command), via a
@@ -92,7 +108,7 @@ if [ "$state" = "stop" ]; then
     if [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$self" ]; then
       wf="/tmp/claude-tab-bgwatch-${KITTY_WINDOW_ID}"
       if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
-        nohup "$self" bg-watch >/dev/null 2>&1 &
+        nohup "$self" bg-watch "$SLOTS" >/dev/null 2>&1 &   # pass this session's slots dir
         echo $! > "$wf" 2>/dev/null
       fi
     fi
@@ -105,6 +121,7 @@ fi
 # job remains — or the state is no longer the bg-running blue (a new turn started)
 # — then fall through to set that stale blue green. Self-removes its lock on exit.
 if [ "$state" = "bg-watch" ]; then
+  SLOTS="${2:-}"                         # this session's slots dir (from the stop spawn)
   win="${KITTY_WINDOW_ID:-}"
   [ -n "$win" ] || exit 0
   trap 'rm -f "/tmp/claude-tab-bgwatch-${win}" 2>/dev/null' EXIT
@@ -124,6 +141,7 @@ fi
 # green — but ONLY if the tab is currently in that state (so we never override a
 # working/idle/executing colour) and nothing else is still running.
 if [ "$state" = "bg-recheck" ]; then
+  SLOTS="${2:-}"                         # this session's slots dir (passed by the tailer)
   cur=""
   [ -n "${KITTY_WINDOW_ID:-}" ] && cur="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
   [ "$cur" = "awaiting-bg" ] || exit 0

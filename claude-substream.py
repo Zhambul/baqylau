@@ -345,7 +345,7 @@ def cleanup():
         except Exception:
             pass
     try:
-        subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "bg-recheck"],
+        subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:
