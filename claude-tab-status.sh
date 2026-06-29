@@ -24,7 +24,8 @@
 #             is handled by stop -> awaiting-bg.)
 #   posttool  (PostToolUse/Failure) agent_id present -> IGNORED; else working (magenta)
 #   notify    read the Notification message; permission/approval -> awaiting-command
-#             (red), anything else ("waiting for your input") -> awaiting-response
+#             (red); else "waiting for your input" -> awaiting-response (green), UNLESS
+#             a background job/teammate is still running -> awaiting-bg (blue)
 #   stop      awaiting-response (green), or awaiting-bg (blue) when a background
 #             command / monitor this session launched is still running
 #   bg-recheck / bg-watch   flip the stale bg-running blue back to green when the
@@ -176,7 +177,7 @@ if [ "$state" = "bg-recheck" ]; then
   # two. Wait briefly and re-check so we don't flip green in that gap; if a new
   # marker appeared (next task started), stay blue. Also bail if the state changed.
   sleep 4
-  bg_command_running && exit 0
+  bg_command_running && exit 0           # a new task started in the gap -> stay blue
   [ -n "${KITTY_WINDOW_ID:-}" ] && [ "$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)" = "awaiting-bg" ] || exit 0
   state="awaiting-response"
 fi
@@ -184,16 +185,25 @@ fi
 # Notification dispatch: the hook pipes its JSON on stdin. A notification means
 # Claude wants your attention. If it's asking you for a DECISION (a permission /
 # tool-approval prompt), that's awaiting-command (red). Otherwise it's just
-# "waiting for your input" — i.e. it's your turn — which is awaiting-response
-# (green), NOT red. (Previously this always went red, so finishing a turn and
-# going idle would turn the tab red even with nothing to approve.)
+# "waiting for your input" — your turn — which is awaiting-response (green)... UNLESS
+# a background job / teammate is still running, in which case Claude is awaiting THEM,
+# not you, so it must stay blue (awaiting-bg). In an agent team, teammate messages /
+# idle pings fire notifications constantly, and treating those as "your turn" was
+# what turned the tab green while teammates were clearly still working.
 if [ "$state" = "notify" ]; then
-  msg="$(grep -o '"message"[[:space:]]*:[[:space:]]*"[^"]*"' 2>/dev/null \
-           | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"$/\1/')"
+  _np="$(cat 2>/dev/null)"
+  msg="$(printf '%s' "$_np" | grep -o '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"$/\1/')"
+  _sid="$(printf '%s' "$_np" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  [ -n "$_sid" ] && SLOTS="$(slots_for_sid "$_sid")"
   case "$msg" in
     *[Pp]ermission*|*[Aa]pprov*|*confirmation*)
-      state="awaiting-command" ;;   # a permission / approval prompt -> red
-    *) state="awaiting-response" ;; # waiting for your input / your turn -> green
+      state="awaiting-command" ;;   # a permission / approval prompt -> red (wins over bg)
+    *)
+      if bg_command_running; then
+        state="awaiting-bg"; ensure_bgwatch   # teammates/bg still running -> blue, not green
+      else
+        state="awaiting-response"             # genuinely your turn -> green
+      fi ;;
   esac
 fi
 
