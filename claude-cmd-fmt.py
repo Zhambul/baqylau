@@ -10,7 +10,7 @@
 # Subagent (Task/Agent) tool calls fire this same hook (with an agent_id), but the
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
-import json, os, subprocess, sys, re
+import json, os, shlex, subprocess, sys, re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
@@ -24,19 +24,54 @@ LBL_BG   = (209, 154, 102)  # orange  — background header chip / foreground "i
 LBL_FAIL = (224, 108, 117)  # red     — a failed tool (PostToolUseFailure)
 
 
-def _spawn_stream(kind, taskid, slot):
+def parse_redirect(cmd, cwd):
+    # If the command sends stdout to a file (… > file / &> file / 1>> file), the
+    # background task's own output file stays EMPTY — the bytes go to that file
+    # instead. Return its absolute path so the tailer can follow it live; otherwise
+    # there'd be nothing to show until the job exits. Conservative: only stdout
+    # (or &>) redirects, skip /dev/* and fd-dup targets (&1), give up on anything
+    # we can't tokenise. Last redirect wins (the effective stdout sink).
+    try:
+        toks = shlex.split(cmd, posix=True)
+    except ValueError:
+        return None
+    target, i = None, 0
+    while i < len(toks):
+        t = toks[i]
+        if ">" in t and not t.startswith("2"):
+            m = re.match(r"^(?:&|1)?>>?(.*)$", t)
+            if m:
+                rest = m.group(1)
+                if rest:
+                    target = rest
+                elif i + 1 < len(toks):
+                    target = toks[i + 1]; i += 1
+        i += 1
+    if not target or target.startswith("&") or target.startswith("/dev/"):
+        return None
+    if not os.path.isabs(target):
+        target = os.path.join(cwd or os.getcwd(), target)
+    return target
+
+
+def _spawn_stream(kind, taskid, slot, src=None):
     # Launch claude-stream.py detached (own session) so it keeps tailing the job's
     # output file after this hook exits. Passes the claimed slot so its gutter +
-    # finish chip match the header colour. Returns the Popen (or None).
+    # finish chip match the header colour. If the command redirected stdout to a
+    # file (`src`), hand it to the streamer via env so it tails that instead of the
+    # empty task output file. Returns the Popen (or None).
     here = os.path.dirname(os.path.abspath(__file__))
     streamer = os.path.join(here, "claude-stream.py")
     if not (taskid and os.path.exists(streamer)):
         return None
+    env = dict(os.environ)
+    if src:
+        env["CLAUDE_STREAM_SRC"] = src
     try:
         return subprocess.Popen(
             [sys.executable, streamer, kind, taskid, LOG, str(slot)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
+            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
     except Exception:
         return None
 
@@ -71,7 +106,8 @@ def main():
             slot, marker, head_rgb = None, None, LBL_BG
         O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
         if taskid:
-            proc = _spawn_stream("bg", taskid, slot)
+            src = parse_redirect(cmd, d.get("cwd"))
+            proc = _spawn_stream("bg", taskid, slot, src)
             if proc is not None:
                 claude_slots.set_owner(marker, proc.pid)
             else:

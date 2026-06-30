@@ -59,16 +59,36 @@ def unescape(s):
     return R.unescape(s)
 
 
+# When a background command redirects stdout to a file (… > file), the task's own
+# output file stays empty, so the launch hook passes the redirect target here and we
+# tail THAT instead — live data lands there. We wait for it to appear (a `>` truncate
+# may create it a beat after launch) and fall back to the task output file if it never
+# does. Tailing from offset 0 is right for `>` (the file is freshly truncated).
+SRC = os.environ.get("CLAUDE_STREAM_SRC") or ""
+
+
 def find_file(deadline):
     pats = [f"/private/tmp/claude-*/*/*/tasks/{TASKID}.output",
             f"/private/tmp/claude-*/*/tasks/{TASKID}.output",
             f"/private/tmp/claude-*/*/*/*/tasks/{TASKID}.output"]
     while time.time() < deadline:
-        for p in pats:
-            m = glob.glob(p)
-            if m:
-                return m[0]
+        if SRC:                                   # redirect target preferred while we wait
+            try:
+                if os.path.exists(SRC):
+                    return SRC
+            except Exception:
+                pass
+        else:
+            for p in pats:
+                m = glob.glob(p)
+                if m:
+                    return m[0]
         time.sleep(0.3)
+    # SRC was named but never appeared — fall back to the task output file.
+    for p in pats:
+        m = glob.glob(p)
+        if m:
+            return m[0]
     return None
 
 

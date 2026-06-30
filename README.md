@@ -263,6 +263,15 @@ The mirror is driven by the hook:
 - **`claude-stream.py`** (spawned detached, in its own session, by the launch
   hook) tails a background job's / monitor's `tasks/<id>.output` file — located
   by globbing the unique id — and appends each new line to the mirror log with a
+  **Redirected output.** If a background command sends stdout to a file
+  (`… > deploy.log 2>&1`), the task's own output file stays empty, so there's
+  nothing to tail. `claude-cmd-fmt.py` parses the redirect target out of the
+  command (stdout / `&>` only; skips `2>`, `/dev/*`, fd-dups; last one wins),
+  resolves it against the hook's `cwd`, and passes it to the tailer via
+  `CLAUDE_STREAM_SRC` — which then follows **that** file instead, so the
+  redirected output streams live too. Completion detection (write-holder gone)
+  works unchanged, since the job holds the redirect file open the same way.
+
   `│ ` gutter coloured from its kind's palette slot, then writes a
   `■ background finished · Ns` / `■ monitor ended · Ns` line when done. **Completion
   is detected differently per kind** (there is no hook for it — `TaskCompleted`
