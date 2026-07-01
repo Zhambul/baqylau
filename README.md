@@ -98,6 +98,23 @@ instant a job ends — but it no longer has to wait for the next exchange either
 Each color-set persists the state to `/tmp/claude-tab-state-<window_id>` so
 `bg-recheck`/`bg-watch` can make the "is it currently red?" decision.
 
+> **Known bug — an orphaned FOREGROUND command reads green, not blue.** A foreground
+> shell command *blocks* the turn, so a normal `Stop` only fires after it returns —
+> which is why foreground commands deliberately create **no** slot marker (they'd only
+> ever be gone by `Stop` time, and detecting them via `lsof` caused the false-positive
+> noted above). But an **abnormal** turn-end breaks that assumption: an API error
+> (`StopFailure`, e.g. an intermittent connection dropping the socket) or a user
+> interrupt can end the turn while a foreground command is **still running orphaned**.
+> `StopFailure` maps to the same `stop` dispatch, and `bg_command_running` only counts
+> background/monitor/subagent markers — never foreground — so it finds nothing and the
+> tab goes **green (`awaiting-response`) while a command Claude launched is still
+> executing** (it should be blue). It's transient: the tab corrects on your next turn
+> (or once the orphan finishes, green becomes accurate). Not worth fixing now — the
+> obvious fix (a foreground in-flight marker cleared on `PostToolUse`) has no pid to
+> liveness-check, so an orphan that finishes without a `PostToolUse` would leave the
+> tab **stuck blue** — trading a transient wrong-green for a potentially stickier
+> wrong-blue.
+
 ## Wiring
 
 - **`~/.config/kitty/kitty.conf`** (appended at the end):
