@@ -308,6 +308,30 @@ The mirror is driven by the hook:
     apart from intermediate `✎ message` chatter — then the `■ <type> ended · Ns`
     footer. All in the subagent's colour. (Messages are committed one event late
     so the last one can be tagged `⇠ result`.)
+  - **Per-turn context fill.** Every assistant turn carries a `message.usage`, so the
+    streamer prints a colour-coded `<type> ctx N% · used/max` line once per turn —
+    `input + cache_creation + cache_read` tokens over the window (**< 30% green,
+    < 60% amber, else red**; thresholds tunable via `CLAUDE_MIRROR_CTX_WARN` /
+    `CLAUDE_MIRROR_CTX_CRIT`). The **window is derived from the model**, not a flag or
+    self-correct: Haiku → 200k; `[1m]` / Opus 4.6-4.8 / Sonnet 5 / Fable 5 / Sonnet 4.6
+    → 1M; older/unknown → 200k; `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` caps at 200k. The
+    `■ <type> ended` footer closes with the same fill, upgraded to the **authoritative**
+    window from the parent transcript's Task result (`resolvedModel`) when it's landed.
+    A `compact_boundary` record renders an amber `<type> ⟳ compacted · pre → post
+    (trigger)` line (`post` shown as `?` when absent), so the fill drop on the next
+    turn makes sense.
+  - **`<model>·<effort>` on every op header.** Each operation header (prompt, message,
+    result, command, file op) is tagged, e.g. `opus-4.8·high`. The **model** comes from
+    the agent's own turns (`message.model`); before the first turn lands, the prompt
+    line falls back to the agent's configured model (its `meta.json`) or the parent
+    session's version (tail-read from the parent transcript), so it's precise from line
+    one. **Effort is config-only** — it appears in *no* transcript — resolved in the
+    documented precedence: `CLAUDE_CODE_EFFORT_LEVEL` env > agent-def frontmatter
+    `effort:` > settings `effortLevel` > the model's default (`high` on Opus 4.8/4.6 ·
+    Sonnet 5 · Sonnet 4.6 · Fable 5, `xhigh` on Opus 4.7). A **teammate's** def is found
+    via its `meta.json` `customAgentType` (its short type — `container` — doesn't match
+    the def's `name:`/filename `task-container`). Caveat: a session-only `/effort max` /
+    `ultracode` / `--effort` that never persists to settings can't be seen here.
   - **`claude-subagent-log.sh`** + **`claude-subagent-fmt.py`** drive the frame:
     `SubagentStart` claims the colour slot (keyed by `agent_id` so header, body,
     and footer match; parallel subagents differ), writes the `▶ <type> · <desc>`
@@ -430,7 +454,9 @@ Behaviour & limits:
   then the subagent's **prompt** (`⇢ prompt`), its **text messages** (`✎ message`),
   its **commands** (`<type> ▶ foreground` / `▷ background`), **file ops**
   (`Read(name)` …), and its **final message / result**, then `■ <type> ended · Ns`
-  — all in the subagent's colour. Several subagents in parallel interleave in the
+  — all in the subagent's colour, every op header tagged `<model>·<effort>` and each
+  turn carrying a colour-coded `ctx N% · used/max` fill line. Several subagents in
+  parallel interleave in the
   shared log but stay readable by colour. A subagent's **background command** (or
   monitor) streams with a **double gutter** (`│ │ …`): outer = the subagent's
   colour, inner = that job's own palette colour, so multiple background jobs from
