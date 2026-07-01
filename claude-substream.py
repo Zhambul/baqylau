@@ -37,6 +37,244 @@ SUB_RGB = claude_slots.color(PALETTE, SLOT)
 RST  = R.RST
 HERE = os.path.dirname(os.path.abspath(__file__))
 
+
+def _int_env(name, default):
+    try:
+        return int((os.environ.get(name) or "").strip() or default)
+    except Exception:
+        return default
+
+
+# Context-fill thresholds (percent) for the live per-turn % shown on each turn:
+# < WARN green, < CRIT amber, else red. Tunable per workload via the env, same as
+# CLAUDE_MIRROR_BIAS — e.g. a [1m] session wants higher cutoffs.
+CTX_WARN = _int_env("CLAUDE_MIRROR_CTX_WARN", 30)
+CTX_CRIT = _int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
+CTX_GREEN = R.fg(152, 195, 121)
+CTX_AMBER = R.fg(229, 192, 123)
+CTX_RED   = R.fg(224, 108, 117)
+
+# --- context-window detection -------------------------------------------------
+# There is NO context-size frontmatter field (docs): the window follows the resolved
+# MODEL, which a subagent can pin explicitly (e.g. `model: opus[1m]`). Determining it
+# is messy — Sonnet 5 / Fable 5 / Opus 4.6-4.8 run 1M by default (no suffix), older
+# models are 200k unless [1m], and CLAUDE_CODE_DISABLE_1M_CONTEXT caps everything.
+DISABLE_1M = bool(_int_env("CLAUDE_CODE_DISABLE_1M_CONTEXT", 0))
+KNOWN_1M = ("fable-5", "sonnet-5", "opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6")
+RESOLVED_MODEL = None      # authoritative model id (with [1m]) read from the parent
+
+
+def _window(model):
+    # A model alias / id (with or without [1m]) -> its context window; None if empty.
+    if not model:
+        return None
+    m = model.lower().strip()
+    if "haiku" in m:
+        return 200_000
+    if "[1m]" in m:
+        return 1_000_000
+    if any(tok in m for tok in KNOWN_1M):
+        return 1_000_000
+    if m in ("opus", "sonnet", "fable"):     # current aliases -> latest gen -> 1M
+        return 1_000_000
+    return 200_000                           # older / unknown pinned versions
+
+
+def _fm_field(path, field):
+    # Scalar field from a markdown file's YAML frontmatter (the first --- ... --- block).
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            if fh.readline().strip() != "---":
+                return None
+            for line in fh:
+                if line.strip() == "---":
+                    break
+                k, sep, v = line.partition(":")
+                if sep and k.strip() == field:
+                    return v.strip().strip('"\'') or None
+    except Exception:
+        return None
+    return None
+
+
+def _agent_def_file(atype):
+    # The DEFINITION file for this agent type, if any. Identity is the frontmatter
+    # `name:` (docs); fall back to the filename stem. Project defs shadow user defs.
+    roots = [os.path.join(os.getcwd(), ".claude", "agents"),
+             os.path.expanduser("~/.claude/agents")]
+    stem_hit = None
+    for r in roots:
+        if not os.path.isdir(r):
+            continue
+        for dp, _dirs, files in os.walk(r):
+            for f in files:
+                if not f.endswith(".md"):
+                    continue
+                p = os.path.join(dp, f)
+                if _fm_field(p, "name") == atype:
+                    return p
+                if os.path.splitext(f)[0] == atype and stem_hit is None:
+                    stem_hit = p
+    return stem_hit
+
+
+def _def_field(field):
+    # A frontmatter field from this agent's definition; "inherit"/unset -> None so
+    # resolution falls through to what the agent actually ran / the session default.
+    v = _fm_field(AGENT_DEF_FILE, field) if AGENT_DEF_FILE else None
+    return None if (not v or v == "inherit") else v
+
+
+def _settings_field(field):
+    # A field from the merged settings (project overriding global) — the same layering
+    # claude-split.sh reads. Used for values an agent inherits (model, effortLevel).
+    for p in (os.path.join(os.getcwd(), ".claude", "settings.local.json"),
+              os.path.join(os.getcwd(), ".claude", "settings.json"),
+              os.path.expanduser("~/.claude/settings.json")):
+        try:
+            with open(p, encoding="utf-8") as fh:
+                v = json.load(fh).get(field)
+            if v:
+                return v
+        except Exception:
+            pass
+    return None
+
+
+def _session_model():
+    # The model VERSION the parent session runs (e.g. "claude-opus-4-8"), from the last
+    # assistant turn in its transcript. Gives the prompt line a precise version for
+    # agents that INHERIT, before the agent's own first turn reveals it. Tail-scan only
+    # (the latest turn is near the end) so it stays cheap even on long sessions.
+    try:
+        with open(TPATH, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - 262144))
+            chunk = fh.read().decode("utf-8", "replace")
+        last = None
+        for line in chunk.splitlines():
+            if '"assistant"' in line and '"model"' in line:
+                try:
+                    m = (json.loads(line).get("message") or {}).get("model")
+                except Exception:
+                    continue
+                if m:
+                    last = m
+        return last
+    except Exception:
+        return None
+
+
+def _parent_resolved_model():
+    # The authoritative resolved model (carrying [1m]) is recorded in the PARENT
+    # transcript on this agent's Task result — but only at completion. Best-effort:
+    # scan TPATH for our agentId; returns None if not written yet (footer falls back).
+    try:
+        hit = None
+        with open(TPATH, encoding="utf-8", errors="replace") as fh:
+            for line in fh:
+                if AGENT not in line or "resolvedModel" not in line:
+                    continue
+                try:
+                    tur = (json.loads(line).get("toolUseResult") or {})
+                except Exception:
+                    continue
+                if tur.get("agentId") == AGENT and tur.get("resolvedModel"):
+                    hit = tur["resolvedModel"]
+        return hit
+    except Exception:
+        return None
+
+
+def _meta():
+    # The agent's meta.json sidecar (present at SubagentStart for teammates; may lag a
+    # beat for ordinary subagents, so retry briefly). Carries `customAgentType` — the
+    # DEFINITION's name, which for a teammate differs from its short display type
+    # (agentType "container" vs def "task-container") — and its configured `model`.
+    base = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
+    p = os.path.join(base, "subagents", f"agent-{AGENT}.meta.json")
+    for _ in range(6):
+        try:
+            with open(p, encoding="utf-8") as fh:
+                return json.load(fh)
+        except FileNotFoundError:
+            time.sleep(0.05)
+        except Exception:
+            break
+    return {}
+
+
+META = _meta()
+# Look up the definition by its real name (customAgentType) — the short agentType a
+# teammate reports ("container") won't match the def's `name:`/filename ("task-container").
+DEF_TYPE = META.get("customAgentType") or ATYPE
+AGENT_DEF_FILE  = _agent_def_file(DEF_TYPE)
+AGENT_DEF_MODEL = _def_field("model")
+SETTINGS_MODEL  = _settings_field("model")
+SESSION_MODEL   = _session_model()
+
+# Effort is NOT recorded in any transcript — it's config-only. Resolve it in the order
+# the docs mandate (model-config: "The environment variable takes precedence over all
+# other methods … Frontmatter effort … overriding the session level but not the
+# environment variable"): env > agent-def frontmatter `effort` > session `effortLevel`
+# > the running MODEL's default. A subagent with no explicit effort inherits the session
+# level; with nothing configured it falls to the model default (docs: high on Opus 4.8 /
+# 4.6 / Sonnet 5 / Sonnet 4.6 / Fable 5, xhigh on Opus 4.7). Caveat: a session-only
+# `/effort max`/`ultracode`/`--effort` isn't persisted, so it can't be seen here.
+EFFORT_CFG = ((os.environ.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip()
+              or _def_field("effort") or _settings_field("effortLevel") or "")
+
+
+def _model_default_effort(model):
+    if not model:
+        return ""
+    m = model.lower()
+    if "opus-4-7" in m:
+        return "xhigh"
+    if any(t in m for t in ("opus-4-8", "opus-4-6", "sonnet-5", "sonnet-4-6", "fable-5")):
+        return "high"
+    return ""                                # models without adaptive reasoning
+
+
+def short_model(model):
+    # "claude-opus-4-8" -> "opus-4.8", "claude-haiku-4-5-20251001" -> "haiku-4.5",
+    # "claude-sonnet-5" -> "sonnet-5", alias "opus" -> "opus". [1m] is dropped (the
+    # window already shows in the ctx line).
+    if not model:
+        return ""
+    s = model.lower().replace("[1m]", "").strip()
+    if s.startswith("claude-"):
+        s = s[7:]
+    parts = s.split("-")
+    ver = []
+    for p in parts[1:]:
+        if p.isdigit() and len(p) <= 2:      # version component; skip 8-digit dates
+            ver.append(p)
+        else:
+            break
+    return parts[0] + ("-" + ".".join(ver) if ver else "")
+
+
+def disp_model():
+    # The model to display, best-known-first: the agent's own resolved id > this agent's
+    # configured model (meta) or an explicit frontmatter override > the parent session's
+    # version (for inheriting agents, before the first turn) > footer id > config alias.
+    return (last_model or META.get("model") or AGENT_DEF_MODEL or SESSION_MODEL
+            or RESOLVED_MODEL or SETTINGS_MODEL)
+
+
+def effort():
+    # Configured effort (env > frontmatter > session) if any, else the running model's
+    # default — so an agent that inherits shows the level it actually reasons at.
+    return EFFORT_CFG or _model_default_effort(disp_model())
+
+
+def op_tag():
+    # "opus-4.8·high" — the model this agent is running plus the resolved effort.
+    # Constant per agent; appended to every operation header.
+    return "·".join(x for x in (short_model(disp_model()), effort()) if x)
+
 # Where the subagent's transcript + completion sentinel live.
 BASE = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
 SUBDIR = os.path.join(BASE, "subagents")
@@ -58,7 +296,9 @@ _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 
 def chip(glyph, kind):
-    return O.label(f"{ATYPE} {glyph} {kind}", SUB_RGB)
+    tag = op_tag()
+    s = f"{ATYPE} {glyph} {kind}" + (f"  {tag}" if tag else "")
+    return O.label(s, SUB_RGB)
 
 
 def cap(text, n):
@@ -71,6 +311,62 @@ def cap(text, n):
 
 def gutter(text):
     return O.gut(R.unescape(text), SUB_RGB)
+
+
+def kfmt(n):
+    # Compact token count: 124000 -> "124k", 1000000 -> "1M".
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 1000:
+        return f"{round(n / 1000)}k"
+    return str(n)
+
+
+def model_ctx():
+    # Context window for the fill %, derived purely from config/model — NO empirical
+    # self-correct. Precedence, first that resolves wins:
+    #   0. CLAUDE_CODE_DISABLE_1M_CONTEXT — Claude Code's own kill-switch, caps at 200k
+    #   1. RESOLVED_MODEL — authoritative id from the parent transcript (footer only)
+    #   2. AGENT_DEF_MODEL — an explicit `model:` in this agent's definition frontmatter
+    #   3. last_model — the bare id the agent actually ran (family is reliable; the
+    #      known-1M table covers Opus 4.8 etc. even though the [1m] suffix is stripped)
+    #   4. SETTINGS_MODEL — the session default, for agents that inherit
+    if DISABLE_1M:
+        return 200_000
+    for m in (RESOLVED_MODEL, AGENT_DEF_MODEL, last_model, SETTINGS_MODEL):
+        w = _window(m)
+        if w:
+            return w
+    return 200_000
+
+
+def ctx_used():
+    # The occupied context window for the latest assistant turn: every input token the
+    # model saw — fresh + just-cached + replayed-from-cache. output_tokens is excluded
+    # (that's what it produced back, not context). 0 if no usage seen yet.
+    if not last_usage:
+        return 0
+    return (last_usage.get("input_tokens", 0)
+            + last_usage.get("cache_creation_input_tokens", 0)
+            + last_usage.get("cache_read_input_tokens", 0))
+
+
+def ctx_tag():
+    # Colour-by-threshold "ctx 42% · 84k/200k" for the current turn, or "" if no usage.
+    used = ctx_used()
+    if used <= 0:
+        return ""
+    mx = model_ctx()
+    pct = used * 100 // mx
+    col = CTX_GREEN if pct < CTX_WARN else CTX_AMBER if pct < CTX_CRIT else CTX_RED
+    return f"{col}ctx {pct}% · {kfmt(used)}/{kfmt(mx)}{RST}"
+
+
+def emit_ctx(tag):
+    # One colour-coded context line in this agent's stream colour (the digits carry the
+    # threshold colour via inline ANSI; the gutter bar stays the agent's identity hue).
+    if tag:
+        O.emit(LOG, O.gut(tag, SUB_RGB))
 
 
 def result_text(content):
@@ -143,17 +439,39 @@ def spawn_tailer(kind, taskid, cmd=""):
 # --- rendering of transcript blocks --------------------------------------------
 pend = {}                 # tool_use_id -> (kind, cmd)
 pending_msg = None        # latest assistant text, held so the LAST one (the result) can be labelled
+last_usage = None         # most recent assistant message.usage — drives the context-fill %
+last_model = None         # model id from that message — picks the context-window size
+cur_tag = ""              # colour-coded ctx token for the turn being processed right now
+turn_ctx_shown = False    # have we already emitted the ctx line for the current turn?
+pending_tag = ""          # ctx token snapshotted when the pending_msg was buffered (see below)
 
 
 def flush_msg(is_result=False):
     # Commit the buffered assistant message. The final one before the subagent ends
-    # is its returned *result* (labelled ⇠ result); earlier ones are ✎ message.
-    global pending_msg
+    # is its returned *result* (labelled ⇠ result); earlier ones are ✎ message. The
+    # message's ctx % was snapshotted when it was buffered (last_usage may since have
+    # advanced to the next turn), so emit that, not the live value.
+    global pending_msg, pending_tag
     if pending_msg is None:
         return
+    emit_ctx(pending_tag)
     glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
     O.emit(LOG, chip(glyph, kind), gutter(cap(pending_msg, 40)))
     pending_msg = None
+    pending_tag = ""
+
+
+def render_compact(meta):
+    # A "compact_boundary" system record: the conversation was compacted. Show it
+    # inline (amber) so the gap in history makes sense. preTokens is always present;
+    # postTokens is NOT always there, so degrade to "→ ?" when it's missing.
+    flush_msg()
+    pre, post, trig = meta.get("preTokens"), meta.get("postTokens"), meta.get("trigger") or "?"
+    txt = "⟳ compacted"
+    if pre:
+        txt += f" · {kfmt(pre)} → " + (kfmt(post) if post else "?")
+    txt += f" ({trig})"
+    O.emit(LOG, O.gut(CTX_AMBER + txt + RST, SUB_RGB))
 
 
 def render_prompt(text):
@@ -168,12 +486,16 @@ def render_teammsg(sender, body):
 
 
 def render_message(text):
-    global pending_msg
+    global pending_msg, pending_tag, turn_ctx_shown
     text = text.strip()
     if not text:
         return
     flush_msg()               # commit the previous message; buffer this one
     pending_msg = text
+    # Tie this turn's ctx % to its message (shown at flush). If the turn already
+    # showed it on a tool line, don't repeat it.
+    pending_tag = "" if turn_ctx_shown else cur_tag
+    turn_ctx_shown = True
 
 
 def render_file(name_tool, inp):
@@ -182,11 +504,18 @@ def render_file(name_tool, inp):
     name = os.path.basename(path.rstrip("/")) or path or "?"
     col = FILE_COL.get(label, R.COL["def"])
     line = col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
+    tag = op_tag()
+    if tag:
+        line += "  " + R.DIM + tag + RST
     O.emit(LOG, O.gut(line, SUB_RGB))
 
 
 def on_tool_use(b):
+    global turn_ctx_shown
     flush_msg()
+    if not turn_ctx_shown:        # one ctx line per turn, here if no message led it
+        emit_ctx(cur_tag)
+        turn_ctx_shown = True
     name = b.get("name") or ""
     inp = b.get("input") or {}
     tid = b.get("id")
@@ -216,7 +545,8 @@ def on_tool_use(b):
     elif name in ("Task", "Agent"):
         # A nested subagent gets its OWN block via its own SubagentStart/Stop hooks.
         sub = (inp.get("subagent_type") or "subagent")
-        O.emit(LOG, O.gut(R.DIM + "⊂ spawns " + sub + RST, SUB_RGB))
+        st = "⊂ spawns " + sub + ("  " + op_tag() if op_tag() else "")
+        O.emit(LOG, O.gut(R.DIM + st + RST, SUB_RGB))
         pend[tid] = ("agent", "")
     else:
         O.emit(LOG, chip("·", name or "tool"))
@@ -251,12 +581,17 @@ def on_tool_result(b):
 
 
 def handle_line(s):
+    global last_usage, last_model, cur_tag, turn_ctx_shown
     try:
         o = json.loads(s)
     except Exception:
         return
     t = o.get("type")
-    content = (o.get("message") or {}).get("content")
+    msg = o.get("message") or {}
+    content = msg.get("content")
+    if t == "system" and o.get("subtype") == "compact_boundary":
+        render_compact(o.get("compactMetadata") or {})
+        return
     if t == "user":
         if isinstance(content, str):
             if content.strip():
@@ -270,14 +605,21 @@ def handle_line(s):
             for blk in content:
                 if isinstance(blk, dict) and blk.get("type") == "tool_result":
                     on_tool_result(blk)
-    elif t == "assistant" and isinstance(content, list):
-        for blk in content:
-            if not isinstance(blk, dict):
-                continue
-            if blk.get("type") == "text":
-                render_message(blk.get("text", ""))
-            elif blk.get("type") == "tool_use":
-                on_tool_use(blk)
+    elif t == "assistant":
+        u = msg.get("usage")
+        if isinstance(u, dict):           # refresh the live context fill for this turn
+            last_usage = u
+            last_model = msg.get("model") or last_model
+        cur_tag = ctx_tag()
+        turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
+        if isinstance(content, list):
+            for blk in content:
+                if not isinstance(blk, dict):
+                    continue
+                if blk.get("type") == "text":
+                    render_message(blk.get("text", ""))
+                elif blk.get("type") == "tool_use":
+                    on_tool_use(blk)
 
 
 def main():
@@ -330,7 +672,14 @@ def main():
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
     dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
-    O.emit(LOG, O.rule(), O.label(f"■ {ATYPE} ended · {dur}", SUB_RGB), O.rule())
+    foot = f"■ {ATYPE} ended · {dur}"
+    global RESOLVED_MODEL
+    RESOLVED_MODEL = _parent_resolved_model()   # authoritative window, best-effort
+    used = ctx_used()                    # final context fill (plain — the chip is dark text)
+    if used > 0:
+        mx = model_ctx()
+        foot += f" · ctx {used * 100 // mx}% ({kfmt(used)}/{kfmt(mx)})"
+    O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
 
 
 def cleanup():
