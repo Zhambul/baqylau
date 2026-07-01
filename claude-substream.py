@@ -32,6 +32,13 @@ ATYPE   = sys.argv[5] if len(sys.argv) > 5 else "agent"
 # same transcript layout) — only the colour family differs, so it's "team" instead
 # of "sub". Everything else (slot index, completion sentinel, footer) is identical.
 PALETTE = sys.argv[6] if len(sys.argv) > 6 else "sub"
+# The task description (from the PreToolUse payload), passed through by the start hook.
+DESC    = sys.argv[7] if len(sys.argv) > 7 else ""
+# What each per-operation line labels this agent with. "general-purpose" is a
+# meaningless catch-all in the mirror, so for it we substitute the task description
+# (e.g. "Get Bali weather") when one is known; every other type keeps its own name,
+# and the header ("▶ general-purpose · <desc>") is untouched — this is the body only.
+LABEL = DESC if (ATYPE == "general-purpose" and DESC) else ATYPE
 
 SUB_RGB = claude_slots.color(PALETTE, SLOT)
 RST  = R.RST
@@ -297,7 +304,7 @@ _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 def chip(glyph, kind):
     tag = op_tag()
-    s = f"{ATYPE} {glyph} {kind}" + (f"  {tag}" if tag else "")
+    s = f"{LABEL} {glyph} {kind}" + (f"  {tag}" if tag else "")
     return O.label(s, SUB_RGB)
 
 
@@ -674,7 +681,7 @@ def main():
     while not os.path.exists(JSONL) and time.time() < start + 15:
         time.sleep(0.2)
     if not os.path.exists(JSONL):
-        O.emit(LOG, O.rule(), O.label(f"■ {ATYPE} (no transcript)", SUB_RGB), O.rule())
+        O.emit(LOG, O.rule(), O.label(f"■ {LABEL} (no transcript)", SUB_RGB), O.rule())
         return
 
     pos, pending = 0, b""
@@ -718,7 +725,7 @@ def main():
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
     dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
-    foot = f"■ {ATYPE} ended · {dur}"
+    foot = f"■ {LABEL} ended · {dur}"
     global RESOLVED_MODEL
     RESOLVED_MODEL = _parent_resolved_model()   # authoritative window, best-effort
     used = ctx_used()                    # final context fill (plain — the chip is dark text)

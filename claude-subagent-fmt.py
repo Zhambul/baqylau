@@ -109,7 +109,7 @@ def main():
         if tpath and os.path.exists(streamer):
             try:
                 proc = subprocess.Popen(
-                    [sys.executable, streamer, agent_id, tpath, LOG, str(slot), atype, pal],
+                    [sys.executable, streamer, agent_id, tpath, LOG, str(slot), atype, pal, desc],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, start_new_session=True)
                 with open(pid_path(agent_id), "w") as f:

@@ -29,11 +29,14 @@ import errno, fcntl, os, time
 #               never reads as one of our own subagents/teammates. The codex watcher
 #               round-robins these itself (passing the RGB to the streamer); rarely
 #               >2 concurrent (a normal + an adversarial reviewer), so four suffice.
-BG_PALETTE    = [(247, 222, 119), (62, 184, 109), (119, 123, 247), (184, 62, 117), (137, 247, 119)]
-MON_PALETTE   = [(62, 130, 184), (247, 119, 244), (144, 184, 62), (119, 247, 236), (122, 62, 184)]
-SUB_PALETTE   = [(53, 53, 242), (209, 46, 209), (53, 242, 179), (204, 242, 53), (209, 111, 46)]
-TEAM_PALETTE  = [(244, 143, 177), (255, 183, 77), (190, 150, 255), (120, 230, 200)]
-CODEX_PALETTE = [(0, 200, 150), (0, 160, 255), (170, 60, 255), (255, 200, 0)]
+# All palettes are desaturated (blended ~70% toward gray) so the chip highlights read
+# as muted, not neon — the chip text is near-black, so keep them light enough to stay
+# legible. Each slot keeps a hint of its distinguishing hue.
+BG_PALETTE    = [(211, 204, 173), (101, 138, 116), (150, 151, 188), (140, 103, 120), (159, 192, 153)]
+MON_PALETTE   = [(106, 127, 143), (216, 178, 216), (134, 146, 110), (176, 215, 211), (123, 105, 141)]
+SUB_PALETTE   = [(97, 97, 154), (170, 116, 170), (120, 178, 160), (170, 182, 122), (156, 127, 106)]
+TEAM_PALETTE  = [(205, 175, 185), (197, 175, 143), (196, 184, 215), (164, 197, 188)]
+CODEX_PALETTE = [(82, 142, 127), (97, 145, 173), (164, 131, 190), (183, 166, 106)]
 
 
 def palette(kind):
