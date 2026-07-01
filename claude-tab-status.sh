@@ -312,6 +312,19 @@ fi
 [ -n "${KITTY_WINDOW_ID:-}" ] || exit 0
 [ -n "${KITTY_LISTEN_ON:-}" ] || exit 0
 
+# Skip the work entirely when the tab is ALREADY showing this state. Tool-heavy
+# turns fire many hooks that all resolve to the same colour (a run of Read/Edit/MCP
+# calls all become "working"), and re-applying an identical colour is a wasted
+# `kitten @` socket round-trip. The persisted state file (written at the end of every
+# applied change) is our record of what's currently shown: if it matches, there's
+# nothing to do — bail before locating the kitten binary or touching the socket.
+# (clear/reset removes the file, so an empty prev_state means "already cleared".)
+prev_state="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
+case "$state" in
+  clear|reset|"") [ -z "$prev_state" ] && exit 0 ;;
+  *)              [ "$state" = "$prev_state" ] && exit 0 ;;
+esac
+
 # Locate the kitten binary (PATH first, then the macOS app bundle).
 kitten="${KITTY_KITTEN_BIN:-}"
 if [ -z "$kitten" ]; then
@@ -324,25 +337,29 @@ if [ -z "$kitten" ]; then
   fi
 fi
 
-# $1=background  $2=foreground  — applied to active AND inactive so the status
-# is visible even when this tab isn't focused.
+# $1=active background  $2=active foreground  $3=inactive (dimmed) background.
+# The status hue is shown on BOTH active and inactive tabs (so it's visible even
+# when the tab isn't focused), but the INACTIVE background is a darkened variant
+# of the same hue so the focused tab clearly stands out — otherwise active and
+# inactive tabs share one background and only the bold font-style tells them apart.
+# The inactive foreground is a fixed light grey that reads on every dim background.
 set_color() {
   "$kitten" @ --to "$KITTY_LISTEN_ON" set-tab-color \
     --match "window_id:${KITTY_WINDOW_ID}" \
-    active_bg="$1" active_fg="$2" inactive_bg="$1" inactive_fg="$2" \
+    active_bg="$1" active_fg="$2" inactive_bg="$3" inactive_fg="#c0c4cc" \
     >/dev/null 2>&1
 }
 
 case "$state" in
-  idle)              set_color "#5c6370" "#e6e9ef" ;;  # grey  — ready, nothing running
+  idle)              set_color "#5c6370" "#e6e9ef" "#33373f" ;;  # grey  — ready, nothing running
   # thinking + working are merged: there's no signal to tell reasoning apart
   # from non-shell tool use / reply-writing, so both are one "busy" colour.
-  thinking|working)  set_color "#c678dd" "#1a0620" ;;  # magenta — Claude busy (thinking/working)
+  thinking|working)  set_color "#c678dd" "#1a0620" "#4a2b52" ;;  # magenta — Claude busy (thinking/working)
   # blue — a command is running: a foreground shell command (executing), or a
   # background command / monitor Claude is awaiting (awaiting-bg). Same colour.
-  executing|awaiting-bg) set_color "#61afef" "#06121f" ;;  # blue
-  awaiting-command)  set_color "#e06c75" "#2a0608" ;;  # red — Claude is asking you a question
-  awaiting-response) set_color "#98c379" "#07180a" ;;  # green — done, your turn
+  executing|awaiting-bg) set_color "#61afef" "#06121f" "#2c4a63" ;;  # blue
+  awaiting-command)  set_color "#e06c75" "#2a0608" "#5e2d31" ;;  # red — Claude is asking you a question
+  awaiting-response) set_color "#98c379" "#07180a" "#445733" ;;  # green — done, your turn
   clear|reset|"")
     "$kitten" @ --to "$KITTY_LISTEN_ON" set-tab-color \
       --match "window_id:${KITTY_WINDOW_ID}" \
