@@ -445,6 +445,17 @@ cur_tag = ""              # colour-coded ctx token for the turn being processed 
 turn_ctx_shown = False    # have we already emitted the ctx line for the current turn?
 pending_tag = ""          # ctx token snapshotted when the pending_msg was buffered (see below)
 
+# Cumulative usage over the WHOLE run, for the ended-footer rollup. Distinct from
+# last_usage (a single turn's snapshot, which drives the live ctx %): these sum every
+# assistant turn. tot_in is FRESH billed input (input_tokens + cache_creation) — the
+# tokens actually sent, not replayed; tot_cache is cache_read (cheap replay). So the
+# footer's "cache %" = tot_cache / (tot_in + tot_cache) is the share of all context
+# reads served from cache — a thrash/reuse signal. tool_n counts tool_use blocks.
+tot_in = 0
+tot_out = 0
+tot_cache = 0
+tool_n = 0
+
 
 def flush_msg(is_result=False):
     # Commit the buffered assistant message. The final one before the subagent ends
@@ -498,12 +509,32 @@ def render_message(text):
     turn_ctx_shown = True
 
 
-def render_file(name_tool, inp):
+def render_file(name_tool, inp, result=None):
     label = FILE_LABEL.get(name_tool, "Read")
     path = inp.get("file_path") or inp.get("notebook_path") or ""
     name = os.path.basename(path.rstrip("/")) or path or "?"
     col = FILE_COL.get(label, R.COL["def"])
     line = col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
+    # A read shows how much of the file it took ('' == the whole file); a mutation shows
+    # its added/removed line counts plus the line range(s) it touched. All go before the
+    # model tag so they survive truncation on a narrow pane. Extent/range come from the
+    # tool_result (`result`); counts from the input.
+    if name_tool == "Read":
+        ext = O.read_extent(result.get("file") if isinstance(result, dict) else None, inp)
+        if ext:
+            line += "  " + R.DIM + ext + RST
+    else:
+        added, removed = O.diff_counts(name_tool, inp)
+        d = []
+        if added:
+            d.append(R.fg(152, 195, 121) + f"+{added}" + RST)   # green additions
+        if removed:
+            d.append(R.fg(224, 108, 117) + f"-{removed}" + RST)  # red removals
+        if d:
+            line += "  " + " ".join(d)
+        rng = O.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
+        if rng:
+            line += "  " + R.DIM + rng + RST
     tag = op_tag()
     if tag:
         line += "  " + R.DIM + tag + RST
@@ -511,7 +542,8 @@ def render_file(name_tool, inp):
 
 
 def on_tool_use(b):
-    global turn_ctx_shown
+    global turn_ctx_shown, tool_n
+    tool_n += 1                   # count every tool call, for the ended-footer rollup
     flush_msg()
     if not turn_ctx_shown:        # one ctx line per turn, here if no message led it
         emit_ctx(cur_tag)
@@ -528,8 +560,11 @@ def on_tool_use(b):
             O.emit(LOG, chip("▶", "foreground"), O.code(cmd))
             pend[tid] = ("fg", cmd)
     elif name in FILE_LABEL:
-        render_file(name, inp)
-        pend[tid] = ("file", "")
+        # Defer to the result: absolute line info — a Read's EXTENT
+        # (startLine/numLines/totalLines) and an edit's touched hunks (structuredPatch)
+        # — lives only on the tool_result, which lands in the very next record, so
+        # ordering is preserved. Carry (tool, input) for rendering there.
+        pend[tid] = ("file", (name, inp))
     elif name == "Monitor":
         cmd = inp.get("command", "")
         O.emit(LOG, chip("◉", "monitor"), O.code(cmd))
@@ -556,11 +591,17 @@ def on_tool_use(b):
         pend[tid] = ("other", "")
 
 
-def on_tool_result(b):
+def on_tool_result(b, tur=None):
     flush_msg()
     tid = b.get("tool_use_id")
     kind, cmd = pend.pop(tid, ("other", ""))
-    if kind in ("file", "agent", "sendmsg"):
+    if kind == "file":
+        # Deferred from on_tool_use: render the file op now, with the extent (Read) or
+        # touched range (edit) the result carries. cmd holds the saved (tool, input).
+        name_tool, saved_inp = cmd if isinstance(cmd, tuple) else ("Read", {})
+        render_file(name_tool, saved_inp, tur)
+        return
+    if kind in ("agent", "sendmsg"):
         return                                      # already shown / handled elsewhere
     txt = result_text(b.get("content"))
     if kind in ("bg", "monitor"):
@@ -570,10 +611,11 @@ def on_tool_result(b):
         elif txt.strip():
             O.emit(LOG, gutter(cap(txt.strip(), 8)))
         return
-    # fg / other: show the command's output
+    # fg / other: show the command's output (banners emphasised — this is real
+    # command output, unlike the messages/prompts that share gutter()).
     body = txt.rstrip("\n")
     if body:
-        O.emit(LOG, gutter(cap(body, 60)))
+        O.emit(LOG, O.gut(R.emphasize(R.unescape(cap(body, 60))), SUB_RGB))
     else:
         O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB))
     if b.get("is_error"):
@@ -581,7 +623,7 @@ def on_tool_result(b):
 
 
 def handle_line(s):
-    global last_usage, last_model, cur_tag, turn_ctx_shown
+    global last_usage, last_model, cur_tag, turn_ctx_shown, tot_in, tot_out, tot_cache
     try:
         o = json.loads(s)
     except Exception:
@@ -604,12 +646,16 @@ def handle_line(s):
         elif isinstance(content, list):
             for blk in content:
                 if isinstance(blk, dict) and blk.get("type") == "tool_result":
-                    on_tool_result(blk)
+                    on_tool_result(blk, o.get("toolUseResult"))
     elif t == "assistant":
         u = msg.get("usage")
         if isinstance(u, dict):           # refresh the live context fill for this turn
             last_usage = u
             last_model = msg.get("model") or last_model
+            # Accumulate for the ended-footer rollup (each turn's usage counted once).
+            tot_in += u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
+            tot_cache += u.get("cache_read_input_tokens", 0)
+            tot_out += u.get("output_tokens", 0)
         cur_tag = ctx_tag()
         turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
         if isinstance(content, list):
@@ -679,7 +725,23 @@ def main():
     if used > 0:
         mx = model_ctx()
         foot += f" · ctx {used * 100 // mx}% ({kfmt(used)}/{kfmt(mx)})"
+    # Cumulative rollup: fresh in / generated out / cache-hit share / tool count.
+    if tot_in or tot_out:
+        foot += f" · {kfmt(tot_in)} in · {kfmt(tot_out)} out"
+        reads = tot_in + tot_cache
+        if reads > 0:
+            foot += f" · cache {tot_cache * 100 // reads}%"
+    if tool_n:
+        foot += f" · {tool_n} tool" + ("s" if tool_n != 1 else "")
+    # Cost estimate from the tokens already summed, priced on the resolved model.
+    usd = O.cost_usd(disp_model(), tot_in, tot_out, tot_cache)
+    if usd:
+        foot += " · ≈ " + O.fmt_usd(usd)
     O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
+    # Feed this agent's metered spend into the session scoreboard (the main session has
+    # no token stream of its own, so the scoreboard's "≈ $" reflects agent/codex runs).
+    if usd:
+        O.bump(LOG, cost=usd)
 
 
 def cleanup():

@@ -10,7 +10,7 @@
 # Subagent (Task/Agent) tool calls fire this same hook (with an agent_id), but the
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
-import json, os, shlex, subprocess, sys, re
+import json, os, shlex, subprocess, sys, re, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
@@ -105,6 +105,7 @@ def main():
         else:
             slot, marker, head_rgb = None, None, LBL_BG
         O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
+        O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
         if taskid:
             src = parse_redirect(cmd, d.get("cwd"))
             proc = _spawn_stream("bg", taskid, slot, src)
@@ -143,9 +144,17 @@ def main():
     # One colour for the whole block — header, gutter, and finish chip all use it
     # (slate ok / red failed / orange interrupted), so the finish line matches the
     # gutter and you can tell which stream finished.
-    gut_body = R.unescape(body) if body else R.DIM + "(no output)" + R.RST
+    gut_body = R.emphasize(R.unescape(body)) if body else R.DIM + "(no output)" + R.RST
     O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
            O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
+
+    # Update the session scoreboard, and emit it every N commands (or right after a
+    # failure, so a red result carries its running context). Best-effort — a failed
+    # bump/emit must never break the command block above.
+    st = O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if failed else {}))
+    every = max(1, int(os.environ.get("CLAUDE_MIRROR_SCORE_EVERY", "5") or "5"))
+    if st and (failed or int(st.get("commands") or 0) % every == 0):
+        O.emit(LOG, *O.scoreboard_ops(st, time.time()))
 
 
 if __name__ == "__main__":

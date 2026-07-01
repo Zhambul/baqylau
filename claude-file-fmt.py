@@ -62,8 +62,38 @@ def main():
         col, mark = fg(224, 108, 117), DIM + " ✗" + RST   # red verb + ✗ on failure
     else:
         col, mark = COLOR.get(label, DEF), ""
-    line = col + label + DIM + "(" + DEF + name + DIM + ")" + RST + mark
+    tool = d.get("tool_name") or ""
+    tr = d.get("tool_response")
+    added = removed = 0
+    line = col + label + DIM + "(" + DEF + name + DIM + ")" + RST
+    if not failed:
+        if tool == "Read":
+            # How much of the file it actually read ('' when the whole file). The result
+            # carries startLine/numLines/totalLines; tool_input offset/limit is a fallback.
+            finfo = tr.get("file") if isinstance(tr, dict) else None
+            ext = O.read_extent(finfo, ti)
+            if ext:
+                line += "  " + DIM + ext + RST
+        else:
+            # Added/removed line counts for a mutation (Read returns (0, 0) → no suffix),
+            # then the line range(s) it touched (from the result's structuredPatch).
+            added, removed = O.diff_counts(tool, ti)
+            parts = []
+            if added:
+                parts.append(fg(152, 195, 121) + f"+{added}" + RST)   # green additions
+            if removed:
+                parts.append(fg(224, 108, 117) + f"-{removed}" + RST)  # red removals
+            if parts:
+                line += "  " + " ".join(parts)
+            rng = O.edit_range(tr.get("structuredPatch") if isinstance(tr, dict) else None)
+            if rng:
+                line += "  " + DIM + rng + RST
+    line += mark
     O.emit(LOG, O.line(line))
+    # Feed the session scoreboard (best-effort). The command hook emits it; file ops
+    # only accumulate — one 'files' tick plus the mutation's +/- line counts, keyed by
+    # the raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.
+    O.bump(LOG, tool=tool, files=1, added=added, removed=removed)
 
 
 if __name__ == "__main__":

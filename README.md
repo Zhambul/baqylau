@@ -203,6 +203,7 @@ apart at a glance:
 | **◉ monitor** | a Monitor tool stream — events stream live, `■ monitor ended` | the monitor's slot from a **separate 5-colour palette** |
 | **▶ \<agent-type\>** | a **subagent** (Task/Agent tool) — its prompt, messages, commands, file ops & result stream in, framed by `▶ <type> · <description>` … `■ <type> ended` | the subagent's slot from a **third 5-colour palette** |
 | **▶ \<name\> · teammate** | an **agent-team teammate** — same streaming as a subagent, plus its messages (`✉ from` / `✉ to`), framed by `▶ <name> · teammate · <desc>` … `■ <name> ended` | a **fourth, lighter (pastel) palette** so a teammate reads apart from a subagent |
+| **codex ▶ \<label\>** | **any codex run** — a companion job (`Review` / `Adversarial Review` / `Task` / `Stop Gate Review`) or a raw `codex`/`codex exec` (`cli`) — its commands (`▶ cmd`), reasoning (`⋯ reasoning`), messages (`✎ message`), prompt (`⇢ prompt`) & review/result (`⇠ review` / `⇠ result`) stream in, framed by `codex ▶ <label>` … `■ codex <label> ended` | a **fifth palette** (jade · sky · orchid · gold) so a codex stream never reads as one of our own agents |
 | **✚ / ✓ task #N** | an agent-team **shared-task-list** event — created (`✚`, amber) / completed (`✓`, green) | a fixed one-line accent (not a stream) |
 
 Output lines carry a **colour-coded `│ ` gutter** — a per-**stream** tag — so
@@ -217,7 +218,7 @@ the gutter + finish — so the whole block is one colour and concurrent jobs of 
 same kind never collide. A subagent claims its slot by **`agent_id`** (so its
 `SubagentStart` header, its streamer's body, and its footer all share one colour).
 A subagent's nested background/monitor job carries **two** gutters — the subagent's
-colour outside, the job's own palette colour inside. The colours across all four
+colour outside, the job's own palette colour inside. The colours across all five
 palettes are chosen to be well-separated, so no two look alike. (An agent-team
 **teammate** reuses the subagent slot machinery — same `agent_id`-keyed slot and
 `sub.*` markers, so it keeps the tab blue while it runs — but draws its colour from
@@ -252,6 +253,29 @@ arguments their default colour.
 bash / python segments and each is lexed with its own lexer (so `import`/`def`
 read as keywords, `print` as a builtin, etc.), then merged into one wrapped,
 coloured block.
+
+**Dense one-liners are pretty-printed before highlighting.** A compressed command
+is reflowed into readable multi-line form — **bash** breaks after top-level `&&` /
+`||` / `|` and turns `;` into a line break; **embedded Python** (`-c` args + heredoc
+bodies) is reformatted via `ast`, so `python3 -c "import os;x=1;print(x)"` becomes
+three real lines. It's width-INDEPENDENT (real newlines the renderer still wraps), so
+it runs **once at op creation** (`claude_ops.code` → `claude_render.format_code`), not
+in the paint loop. Best-effort and conservative — operators inside quotes (`git commit
+-m "a && b"`), background `&`, redirections, bash heredocs, `case` bodies, and Python
+that carries comments are all left exactly as written; anything it can't confidently
+reformat passes through untouched. Set **`CLAUDE_MIRROR_FORMAT=0`** to show commands
+verbatim.
+
+**Section banners in output are emphasised.** Lines that scripts (and Claude Code
+itself) print to delimit sections — `=== title ===`, `--- title ---`,
+`### title ###` — are rendered **bold amber** so section boundaries pop out of a
+wall of output. Detection (`claude_render.emphasize`) runs on each line's *visible*
+text and is deliberately conservative: the `=` family needs a run of `==`+ followed
+by a space or end-of-line (so `x == y` and valgrind's `==123==` are left alone),
+and the `-`/`#`/`*`/`~` forms must be **bracketed** on both ends (so a diff header
+`--- a/file` and a bare `-----` rule stay plain). It's applied at every real
+command-output site — foreground, background/monitor tail, and subagent output —
+but *not* to a subagent's messages/prompts (which share the gutter helper).
 
 **Foreground vs background output.** A *foreground* command's output is never
 written to any file an outside process can read — Claude Code streams it back
@@ -337,6 +361,27 @@ The mirror is driven by the hook:
     A `compact_boundary` record renders an amber `<type> ⟳ compacted · pre → post
     (trigger)` line (`post` shown as `?` when absent), so the fill drop on the next
     turn makes sense.
+  - **Cumulative usage rollup in the footer.** After the final ctx fill, the
+    `■ <type> ended` footer appends a whole-run summary: `· <in> in · <out> out ·
+    cache N% · K tools`. Unlike the per-turn ctx fill (a single-turn snapshot), these
+    sum **every** assistant turn: **in** is fresh billed input (`input_tokens +
+    cache_creation` — tokens actually sent, not replayed), **out** is generated
+    (`output_tokens`), and **cache %** is `cache_read / (in + cache_read)` — the share
+    of all context reads served from cache, i.e. a reuse/thrash signal. **tools** counts
+    every `tool_use` block. The rollup is appended last, so on a narrow pane it's the
+    first thing the renderer's `fit()` truncates — duration and ctx always survive.
+  - **Cost estimate in the footer.** After the rollup the footer appends `· ≈ $X`,
+    the summed tokens priced on the resolved model (`claude_ops.PRICES`, per-MTok
+    input/output for the current lineup; `cache_read` billed at ~0.1×). An unknown
+    model shows nothing rather than guess. Being last, it truncates before the rest.
+  - **Session scoreboard (periodic).** A running "so far" summary of the whole session,
+    aggregated across the separate hook processes in a sidecar `…/<mirror-log>.stats.json`
+    (each producer bumps its deltas under an `flock`; removed with the log at SessionEnd).
+    The command hook emits it as a muted `▪ session · 14 cmds (2✗) · 23 files · +340 -120
+    · ⏱ 4m12s · ≈ $1.20` chip **every `CLAUDE_MIRROR_SCORE_EVERY` commands** (default 5)
+    and immediately after any failure, plus a `tools · Bash 12 · Edit 8 · Read 6` breakdown.
+    The `≈ $` is the sum of metered **agent/codex** spend (the main session has no token
+    stream of its own); it's the last field, so `fit()` drops it first on a narrow pane.
   - **`<model>·<effort>` on every op header.** Each operation header (prompt, message,
     result, command, file op) is tagged, e.g. `opus-4.8·high`. The **model** comes from
     the agent's own turns (`message.model`); before the first turn lands, the prompt
@@ -407,8 +452,57 @@ The mirror is driven by the hook:
   - Out of scope: **split-pane** teammate mode (tmux/iTerm2) runs each teammate as
     its own process/session rather than an in-process subagent, so it wouldn't flow
     through these hooks; the default in-process mode is what's supported here.
+- **Codex streams (global — EVERY codex call).** The mirror shows any codex run,
+  however it was launched — a `/codex:review`, an adversarial-review, a `task`, the
+  stop-gate, or a **raw `codex` / `codex exec`** in a shell; fired by the **main
+  agent, a subagent, an agent-team teammate, a foreground OR background command, or a
+  slash subcommand**. Rather than detect the codex *command* at every launch site, a
+  per-session watcher tails **two directories** every codex run funnels through, and
+  spawns a streamer per run. Nothing is wired per-launcher; new codex entry points are
+  covered for free.
+  - **`claude-codex-launch.py` → `claude-codex-watch.py`.** `claude-split.sh open`
+    (SessionStart) runs the tiny **launcher**, whose only job is to `Popen` the watcher
+    with `start_new_session=True` and exit in a few ms. This is load-bearing: launching
+    the long-lived watcher from the hook with a bash `&` left it in the **hook's process
+    group**, which Claude Code waits to drain — so SessionStart hung ("no answer") and
+    the watcher orphaned. Detaching it into its own session (the same way the other
+    streamers are spawned) makes the hook return instantly. The watcher exits on its own
+    when the session's mirror log is removed at SessionEnd; a pid lock
+    (`codex.watch.pid`) guards against a duplicate SessionStart.
+  - **Source A — companion jobs** (`codex-companion.mjs`, the common case). Each job
+    writes a human-readable activity log + a status sidecar to
+    `$CLAUDE_PLUGIN_DATA/state/<slug>/jobs/<jobId>.{log,json}`. The watcher recomputes
+    the `<slug>` exactly as codex does (`basename(git-root)` +
+    `sha256(realpath(git-root))[:16]`) and streams each **new** job matched to this
+    session by the sidecar `sessionId` (started-after-launch time gate as fallback).
+    Completion is the sidecar `status` going `completed`/`failed`/`cancelled`. Labelled
+    by job title — "Review", "Adversarial Review", "Task", "Stop Gate Review".
+  - **Source B — native rollouts** (catches raw codex the companion never saw). EVERY
+    codex run also writes `~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl`. The
+    watcher scans today's + yesterday's dirs, matches a run to this repo by the
+    `session_meta` `cwd`, and streams it — parsing the clean `event_msg` records
+    (`user_message` → `⇢ prompt`, `agent_reasoning` → `⋯`, `agent_message` → `✎`) plus
+    `exec_command` shell calls (`▶ cmd`), labelled `cli`. Completion is a `task_complete`
+    with no follow-up turn. **Dedup:** the rollout filename's `<uuid>` *is* the companion
+    sidecar's `threadId`, so a run already handled by source A is skipped here (after a
+    short grace that lets the sidecar reveal its threadId) — a companion job streams
+    once, with its nicer label, never twice.
+  - **`claude-codex-stream.py`** renders both sources into the codex palette (colour
+    picked round-robin by the watcher and passed as `r,g,b`; it keeps no slot marker, so
+    it never affects the tab colour): `▶ cmd` (syntax-highlighted), `⋯ reasoning`,
+    `✎ message`, `⇠ review` / `⇠ result`, framed by a rule-bracketed `codex ▶ <label>`
+    … `■ codex <label> ended · Ns`. Successful sub-commands are suppressed; a non-zero
+    exit shows a red `■ exit N`.
+  - **Session/cwd-attributed, not nested.** A codex run is keyed to the Claude
+    `sessionId` (source A) or the repo `cwd` (source B), not the launching `agent_id`,
+    so it reads as its own **top-level** stream rather than nested under the teammate
+    that launched it — the deliberate trade for a global, zero-per-launcher design. (Two
+    Claude sessions in the same repo both show a source-B run, the same per-project
+    caveat as background-job detection.)
 - **`claude-mirror.sh LOG`** runs inside the pane and execs the renderer
-  **`claude-mirror.py`** on that session's log (replacing the old `tail -F`). The
+  **`claude-mirror.py`** on that session's log (replacing the old `tail -F`),
+  choosing a `pygments`-capable interpreter so command highlighting works (see
+  *Pretty-print needs pygments* below). The
   renderer reads the structured paint-op log (JSONL, see *Reflow* below), paints each
   op at the pane's **current** width, and re-renders everything on resize (`SIGWINCH`)
   so content **reflows**. It reads the log from the top and **never truncates** — so
@@ -422,7 +516,22 @@ The mirror is driven by the hook:
   `Write(new.py)` — interleaved with the command blocks so the pane reads as a
   running log of what Claude did. Verbs mirror Claude Code's own UI (Edit/
   MultiEdit → **Update**, colour-coded: read blue, update yellow, write green);
-  formatting lives in **`claude-file-fmt.py`**.
+  formatting lives in **`claude-file-fmt.py`**. A mutation also shows its
+  added/removed line counts — green `+N` / red `-M`, e.g. `Update(task-manager.md)
+  +18 -1` — from a real line-level diff of the tool input (`old_string` vs
+  `new_string`, summed over a MultiEdit; the whole body for a Write), the same
+  additions/removals Claude Code reports. Reads and failures show none. The shared
+  counter is `claude_ops.diff_counts()`, used by both this path and the subagent
+  streamer. A mutation also shows the **line range(s) it touched** — a dim
+  `start-end` after the counts, e.g. `Update(README.md) +18 -1 445-462`, comma-joined
+  for a multi-hunk MultiEdit (capped at 3, `+k` for the rest) — read from the result's
+  `structuredPatch` hunks via `claude_ops.edit_range()`; a brand-new Write shows no
+  range (its `+N` already says the size). A **Read** instead shows how much of the file it took: a bare
+  `Read(name)` means the **whole file**, while a dim `start-end/total` (e.g.
+  `Read(big.py) 1-2000/5000`) flags a **partial** read — either an explicit
+  `offset`/`limit` slice or a bare read that hit Claude Code's **2000-line cap** on a
+  larger file. The extent comes from the result's `startLine`/`numLines`/`totalLines`
+  via `claude_ops.read_extent()`.
 - **`claude-split.sh open|close|toggle|grow|shrink|reset|setpct`** manages the pane,
   **per Claude session**. Everything is keyed by `session_id` so PARALLEL sessions
   never collide: each mirror pane carries `var:claude_mirror=<sid>`, each Claude pane
@@ -430,7 +539,10 @@ The mirror is driven by the hook:
   `/tmp/claude-mirror-<sid>.log`. `open` (SessionStart) reads the `session_id` from
   its hook payload, truncates that session's log, tags the Claude pane, switches the
   tab to the `splits` layout, and launches the split at `${CLAUDE_MIRROR_BIAS:-25}`
-  percent. `close` (SessionEnd) closes that session's mirror and removes its log.
+  percent. It also fires **`claude-codex-launch.py`** (see *Codex streams* above),
+  which detaches this session's codex watcher and returns immediately. `close`
+  (SessionEnd) closes that session's mirror and removes its log — which is also what
+  stops the watcher.
   `toggle` closes the pane if present **without** truncating, so reopening re-shows
   the whole session history — and while closed there is **no process at all** (no
   resources, nothing to leak). `grow`/`shrink [N]` resize by N cells
@@ -470,7 +582,11 @@ Behaviour & limits:
 - **Subagents** stream live with full visibility — the `▶ <type> · <desc>` header,
   then the subagent's **prompt** (`⇢ prompt`), its **text messages** (`✎ message`),
   its **commands** (`<type> ▶ foreground` / `▷ background`), **file ops**
-  (`Read(name)` …), and its **final message / result**, then `■ <type> ended · Ns`
+  (`Read(name)` …, mutations carrying the same green `+N` / red `-M` line counts and
+  touched `start-end` range, reads the same `start-end/total` extent as the main
+  session, before the model tag — every file op is deferred to its result so the
+  result-only extent/range is known), and its **final message / result**, then
+  `■ <type> ended · Ns`
   — all in the subagent's colour, every op header tagged `<model>·<effort>` and each
   turn carrying a colour-coded `ctx N% · used/max` fill line. Several subagents in
   parallel interleave in the
@@ -511,8 +627,18 @@ Behaviour & limits:
   baked at write time, so resizing left old blocks frozen.) Cost: a resize
   re-renders the whole history (re-highlighting code) — fine for interactive use.
 - **Divider** spans the pane's current width and reflows with everything else.
-- **Pretty-print needs `pygments`** (already present); without it the command
-  still shows with its line structure intact, just uncoloured.
+- **Pretty-print needs `pygments`**, and highlighting happens **in the renderer
+  process** — so the interpreter `claude-mirror.sh` execs must be one that can
+  `import pygments`. kitty often launches the pane with a `python3` that resolves
+  to the bare macOS/Xcode build (no pygments), which would silently drop *all*
+  highlighting (bash and embedded python, foreground and background alike — they
+  all go through the renderer's `R.render`). So `claude-mirror.sh` **probes** for a
+  pygments-capable interpreter — `$CLAUDE_MIRROR_PYTHON`, then `python3`, then a
+  pyenv shim / newest `~/.pyenv/versions/*`, then Homebrew/local — and falls back
+  to plain `python3` (still runs, just uncoloured) if none has it. Without pygments
+  the command still shows with its line structure intact, just uncoloured. (A
+  change here only takes effect on a **fresh** pane — toggle the mirror off/on, as
+  the running renderer keeps its interpreter.)
 - **Cost**: the tab uses the `splits` layout, leaving the Claude pane at ~75%
   (or `100 − CLAUDE_MIRROR_BIAS`%).
 - **Sizing & on/off — settings + keys.** The default width is `CLAUDE_MIRROR_BIAS`

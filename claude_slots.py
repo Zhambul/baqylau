@@ -24,10 +24,16 @@ import errno, fcntl, os, time
 #               when both run at once. Teammates reuse the subagent slot machinery
 #               (round-robin + sub.* markers); only the render colour differs, so this
 #               is keyed as its own palette but never gets its own slot kind.
-BG_PALETTE   = [(247, 222, 119), (62, 184, 109), (119, 123, 247), (184, 62, 117), (137, 247, 119)]
-MON_PALETTE  = [(62, 130, 184), (247, 119, 244), (144, 184, 62), (119, 247, 236), (122, 62, 184)]
-SUB_PALETTE  = [(53, 53, 242), (209, 46, 209), (53, 242, 179), (204, 242, 53), (209, 111, 46)]
-TEAM_PALETTE = [(244, 143, 177), (255, 183, 77), (190, 150, 255), (120, 230, 200)]
+#   codex:      jade · sky · orchid · gold — a distinct family (jade slot-0 evokes the
+#               OpenAI mark) for codex-plugin / codex-CLI streams, so a codex block
+#               never reads as one of our own subagents/teammates. The codex watcher
+#               round-robins these itself (passing the RGB to the streamer); rarely
+#               >2 concurrent (a normal + an adversarial reviewer), so four suffice.
+BG_PALETTE    = [(247, 222, 119), (62, 184, 109), (119, 123, 247), (184, 62, 117), (137, 247, 119)]
+MON_PALETTE   = [(62, 130, 184), (247, 119, 244), (144, 184, 62), (119, 247, 236), (122, 62, 184)]
+SUB_PALETTE   = [(53, 53, 242), (209, 46, 209), (53, 242, 179), (204, 242, 53), (209, 111, 46)]
+TEAM_PALETTE  = [(244, 143, 177), (255, 183, 77), (190, 150, 255), (120, 230, 200)]
+CODEX_PALETTE = [(0, 200, 150), (0, 160, 255), (170, 60, 255), (255, 200, 0)]
 
 
 def palette(kind):
@@ -37,6 +43,8 @@ def palette(kind):
         return SUB_PALETTE
     if kind == "team":
         return TEAM_PALETTE
+    if kind == "codex":
+        return CODEX_PALETTE
     return MON_PALETTE
 
 

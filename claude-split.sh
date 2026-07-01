@@ -228,12 +228,19 @@ case "$cmd" in
     : > "$log"                                       # fresh log for this session
     tag_window "$sid"
     open_mirror "$sid" "$log" "$(project_bias)"      # restore this project's remembered size
+    # Stream any codex run (companion job OR raw `codex`/`codex exec`) into this
+    # session's mirror. The launcher Popens the watcher DETACHED (start_new_session)
+    # and exits in a few ms, so it can never hang SessionStart — never a bash `&`,
+    # which would leave the long-lived watcher in the hook's process group. The
+    # watcher exits on its own when this log is removed at SessionEnd.
+    [ -f "$DIR/claude-codex-launch.py" ] && \
+      python3 "$DIR/claude-codex-launch.py" "$log" "$PWD" "$sid" >/dev/null 2>&1 || true
     ;;
   close)                                             # SessionEnd (payload on stdin)
     sid="$(sid_from_stdin)"
     [ -n "$sid" ] && close_mirror "$sid"
     log="$(log_for "$sid")"
-    [ -n "$log" ] && rm -f "$log"                    # remove this session's log
+    [ -n "$log" ] && rm -f "$log" "$log.stats.json"  # remove this session's log + scoreboard
     ;;
   toggle)                                            # keybinding
     sid="$(sid_from_focus)"; [ -n "$sid" ] || exit 0

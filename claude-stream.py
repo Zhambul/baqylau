@@ -56,7 +56,10 @@ def release_slot():
 
 
 def unescape(s):
-    return R.unescape(s)
+    # Restore any escape sequences the job printed as text, then highlight section
+    # banners (`=== title ===` …) — this wraps ONLY tailed command output, so it's
+    # the right place to emphasise them.
+    return R.emphasize(R.unescape(s))
 
 
 # When a background command redirects stdout to a file (… > file), the task's own
