@@ -38,10 +38,17 @@
 
 set -u
 
-# Returns 0 if a Claude Code background command / monitor / agent launched from
-# this project is still being streamed. Detection is via the command mirror's live
-# tailer **slot markers**:
+# Returns 0 if a Claude Code background command / monitor / agent — OR a still-
+# running FOREGROUND command (including one Ctrl+B'd into the background, which
+# fires no distinct hook of its own) — launched from this project is still being
+# streamed. Detection is via the command mirror's live tailer **slot markers**:
 #   bg.<n> / monitor.<n>  — a claude-stream.py tailer for a background command/monitor
+#   fg.<n>                — a claude-stream.py tailer for a LIVE-STREAMED FOREGROUND
+#                           command (claude-cmd-pre.py); it keeps tailing for as long
+#                           as the command's process is still writing, Ctrl+B or not,
+#                           so this is what lets idle-watch (and a Ctrl+B conversion)
+#                           correctly stay blue instead of flipping green underneath
+#                           a command that's still running
 #   sub.pid.<agent_id>    — a claude-substream.py tailer for a background SUBAGENT
 # each holds its tailer's pid and is removed when the tailer exits, so a marker
 # with a live pid == that job/agent is still running. (A foreground subagent's
@@ -68,7 +75,7 @@ bg_command_running() {
   fi
   [ -n "$slots" ] && [ -d "$slots" ] || return 1
   shopt -s nullglob
-  markers=( "$slots"/bg.[0-9]* "$slots"/monitor.[0-9]* "$slots"/sub.pid.* )
+  markers=( "$slots"/bg.[0-9]* "$slots"/monitor.[0-9]* "$slots"/fg.[0-9]* "$slots"/sub.pid.* )
   shopt -u nullglob
   for f in "${markers[@]}"; do
     pid="$(cat "$f" 2>/dev/null)"
@@ -215,23 +222,31 @@ if [ "$state" = "idle-watch" ]; then
   state="awaiting-response"
 fi
 
-# bg-recheck dispatch (called by claude-stream.py when a background job/monitor
-# finishes): there's no "background finished" hook, so the bg-running blue would
-# linger until the next exchange. Here we flip that *stale blue* (awaiting-bg) to
-# green — but ONLY if the tab is currently in that state (so we never override a
-# working/idle/executing colour) and nothing else is still running.
+# bg-recheck dispatch (called by claude-stream.py when a background job/monitor/live
+# foreground stream finishes): there's no "background finished" hook, so the
+# bg-running blue would linger until the next exchange. Here we flip that *stale*
+# colour to green — but ONLY if the tab is currently awaiting-bg OR executing (so we
+# never override working/idle/awaiting-command) and nothing else is still running.
+#
+# executing matters for a MANUALLY CANCELLED foreground command: cancelling one fires
+# NO hook at all (same gap idle-watch exists for), so "executing" would otherwise
+# stick until idle-watch's slow ~180s fallback. But the fg tailer (claude-cmd-pre.py)
+# DOES notice its process died (has_writer goes false) and calls bg-recheck right
+# then — a fast, reliable signal for exactly this case, so we honour it here too.
 if [ "$state" = "bg-recheck" ]; then
   SLOTS="${2:-}"                         # this session's slots dir (passed by the tailer)
   cur=""
   [ -n "${KITTY_WINDOW_ID:-}" ] && cur="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
-  [ "$cur" = "awaiting-bg" ] || exit 0
+  case "$cur" in awaiting-bg|executing) ;; *) exit 0 ;; esac
   bg_command_running && exit 0
   # GRACE: a teammate finishing one task usually starts the next within a second or
   # two. Wait briefly and re-check so we don't flip green in that gap; if a new
   # marker appeared (next task started), stay blue. Also bail if the state changed.
   sleep 4
   bg_command_running && exit 0           # a new task started in the gap -> stay blue
-  [ -n "${KITTY_WINDOW_ID:-}" ] && [ "$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)" = "awaiting-bg" ] || exit 0
+  cur2=""
+  [ -n "${KITTY_WINDOW_ID:-}" ] && cur2="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
+  case "$cur2" in awaiting-bg|executing) ;; *) exit 0 ;; esac  # state moved on meanwhile -> leave it alone
   state="awaiting-response"
 fi
 

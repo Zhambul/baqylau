@@ -54,12 +54,15 @@ def parse_redirect(cmd, cwd):
     return target
 
 
-def _spawn_stream(kind, taskid, slot, src=None):
+def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
     # Launch claude-stream.py detached (own session) so it keeps tailing the job's
     # output file after this hook exits. Passes the claimed slot so its gutter +
     # finish chip match the header colour. If the command redirected stdout to a
     # file (`src`), hand it to the streamer via env so it tails that instead of the
-    # empty task output file. Returns the Popen (or None).
+    # empty task output file. `skip_existing` is for a Ctrl+B conversion handoff: the
+    # departing fg tailer already showed whatever came through its own tee copy, so
+    # the replacement bg tailer should skip whatever's already in the task's output
+    # file rather than re-showing it from the start. Returns the Popen (or None).
     here = os.path.dirname(os.path.abspath(__file__))
     streamer = os.path.join(here, "claude-stream.py")
     if not (taskid and os.path.exists(streamer)):
@@ -67,6 +70,8 @@ def _spawn_stream(kind, taskid, slot, src=None):
     env = dict(os.environ)
     if src:
         env["CLAUDE_STREAM_SRC"] = src
+    if skip_existing:
+        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
     try:
         return subprocess.Popen(
             [sys.executable, streamer, kind, taskid, LOG, str(slot)],
@@ -93,24 +98,66 @@ def main():
     if not cmd.strip():
         return
     bg = bool(ti.get("run_in_background"))
+    # Ctrl+B mid-command: the model asked for a plain foreground run, but the USER
+    # backgrounded it before it finished. Claude Code reports this the same way as a
+    # real completion — this Bash call's own PostToolUse fires right away, with a
+    # `duration_ms` covering only the time UP TO the keypress — but tool_response
+    # carries backgroundTaskId (+ backgroundedByUser) so it can be told apart from an
+    # actually-finished command. Confirmed empirically: this is undocumented.
+    taskid = tr.get("backgroundTaskId") if isinstance(tr, dict) else None
+    converted = bool(taskid) and not bg
 
-    if bg:
+    # A foreground command's own live-stream marker (claude-cmd-pre.py), if any — read
+    # it up front since the genuine/converted-background path below and the ordinary
+    # finish path further down both need to know about it.
+    marker = LOG + ".fg-live"
+    live = None
+    if os.path.exists(marker):
+        try:
+            with open(marker) as f:
+                live = json.load(f)
+        except Exception:
+            live = None
+        try:
+            os.remove(marker)
+        except Exception:
+            pass
+
+    if bg or converted:
         # Claim a palette slot now and colour the "▷ background" header with it, so
         # this job's header, gutter, and finish chip all share one colour and the
         # parallel jobs differ. The streamer (passed the slot) does gutter + finish.
-        taskid = tr.get("backgroundTaskId") if isinstance(tr, dict) else None
         if taskid:
-            slot, marker = claude_slots.claim("bg", LOG)
+            slot, slot_marker = claude_slots.claim("bg", LOG)
             head_rgb = claude_slots.color("bg", slot)
         else:
-            slot, marker, head_rgb = None, None, LBL_BG
-        O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
+            slot, slot_marker, head_rgb = None, None, LBL_BG
+
+        if converted and live and live.get("src"):
+            # Our own fg tailer was tee-ing this command's own side file — but once
+            # Ctrl+B hands it off, Claude Code captures further output into its OWN
+            # backgroundTaskId file instead (empirically: our tee file gets nothing
+            # more from this point on), so tell that tailer to bow out quietly (no
+            # finish chip, no fallback body) instead of racing the bg tailer below,
+            # which is about to own the rest of this block.
+            try:
+                with open(live["src"] + ".done", "w") as f:
+                    json.dump({"converted": True}, f)
+            except Exception:
+                pass
+            O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
+        else:
+            O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
+
         O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
         if taskid:
-            src = parse_redirect(cmd, d.get("cwd"))
-            proc = _spawn_stream("bg", taskid, slot, src)
+            # Converted: find_file() locates tasks/<taskid>.output itself, same as any
+            # genuine background command — this cmd string's own redirect (if any) is
+            # irrelevant to where Claude Code is now writing the real output.
+            src = None if converted else parse_redirect(cmd, d.get("cwd"))
+            proc = _spawn_stream("bg", taskid, slot, src, skip_existing=converted)
             if proc is not None:
-                claude_slots.set_owner(marker, proc.pid)
+                claude_slots.set_owner(slot_marker, proc.pid)
             else:
                 claude_slots.release("bg", LOG, slot, os.getpid())
         return
@@ -145,8 +192,24 @@ def main():
     # (slate ok / red failed / orange interrupted), so the finish line matches the
     # gutter and you can tell which stream finished.
     gut_body = R.emphasize(R.unescape(body)) if body else R.DIM + "(no output)" + R.RST
-    O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
-           O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
+
+    # claude-cmd-pre.py (PreToolUse) may already have rendered the header and be
+    # tailing this command's output live (see its module docstring; `live` was read
+    # further up, before the bg/converted branch above). If so, this is the only
+    # place the REAL outcome (duration/exit code/interrupted) is known, so hand it to
+    # that tailer via a sentinel instead of re-rendering the header + body ourselves —
+    # it also carries gut_body as a fallback in case the rewrite never took effect and
+    # nothing was ever streamed.
+    if live and live.get("src"):
+        try:
+            with open(live["src"] + ".done", "w") as f:
+                json.dump({"chip": chip_txt, "color": list(col), "fallback_body": gut_body}, f)
+        except Exception:
+            live = None    # couldn't hand off -> fall through to the normal render below
+
+    if not live:
+        O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
+               O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
 
     # Update the session scoreboard, and emit it every N commands (or right after a
     # failure, so a red result carries its running context). Best-effort — a failed

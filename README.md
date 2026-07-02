@@ -7,7 +7,7 @@ a session's state at a glance — even from another tab.
 |-----------|-------|----------|
 | ⬜ grey `#5c6370`    | **idle** — session ready, nothing running                  | `SessionStart` |
 | 🟪 magenta `#c678dd` | **busy** — thinking / non-shell tool (Read/Edit/Write/MCP) / writing the reply (merged — no signal tells them apart) | `UserPromptSubmit`, `PreToolUse` (main-agent non-Bash), `PostToolUse` (main agent) |
-| 🟦 blue `#61afef`    | **the main session is running / awaiting** — a foreground shell command (`executing`), or the main session **awaiting an agent** (a foreground subagent/teammate keeps the turn blocked → blue; a background one → `awaiting-bg`) or a background command / monitor (`awaiting-bg`) | `PreToolUse` Bash/Task/Agent · `Stop` w/ a bg job/monitor/agent running |
+| 🟦 blue `#61afef`    | **the main session is running / awaiting** — a foreground shell command (`executing`, kept blue for its **whole real duration** even past Ctrl+B or the idle-watch threshold — see below), or the main session **awaiting an agent** (a foreground subagent/teammate keeps the turn blocked → blue; a background one → `awaiting-bg`) or a background command / monitor (`awaiting-bg`) | `PreToolUse` Bash/Task/Agent · `Stop` w/ a bg job/monitor/agent running |
 | 🟥 red `#e06c75`     | **awaiting-command** — Claude is asking *you* a question | `PreToolUse` `AskUserQuestion`/`ExitPlanMode` · `Notification` (permission/approval message) |
 | 🟩 green `#98c379`   | **awaiting-response** — done, your turn                     | `Stop` w/ nothing running · `Notification` ("waiting for your input") |
 | (theme default)      | cleared on exit                                            | `SessionEnd` |
@@ -62,33 +62,39 @@ The main session still goes blue while it *awaits* an agent (see below).
 - **`notify`** — reads the Notification message: a permission/approval prompt →
   `awaiting-command` (red — Claude is asking you); anything else → green.
 
-### Detecting a running background command / agent (`stop`)
+### Detecting a running background command / agent / live foreground command (`stop`)
 
 There is no Claude Code hook for "background command/agent finished," so the
 `stop` dispatch detects it directly — via the command mirror's live tailer **slot
 markers**. Each tailer owns a marker holding its pid, removed when it exits:
 `…/<mirror-log>.slots/bg.<n>` / `monitor.<n>` for a background command/monitor
-(its `claude-stream.py`), and `sub.pid.<agent_id>` for a background **agent** (its
-`claude-substream.py`). So a marker with a **live pid** means that job/agent is
-still running → the tab stays **blue** (`awaiting-bg`). (A foreground agent's
-`sub.pid` marker has already been removed by `Stop` time — the turn blocked on
-it — so only background agents linger.)
+(its `claude-stream.py`), `fg.<n>` for a **live-streamed foreground command**
+(`claude-cmd-pre.py` — see *Live foreground streaming* below), and
+`sub.pid.<agent_id>` for a background **agent** (its `claude-substream.py`). So a
+marker with a **live pid** means that job/command/agent is still running → the tab
+stays **blue** (`awaiting-bg`/`executing`). (A foreground agent's `sub.pid` marker
+has already been removed by `Stop` time — the turn blocked on it — so only
+background agents linger.)
 
 > Earlier this scanned `tasks/<id>.output` write-holders with `lsof`. That turned
 > out to be unreliable: in current Claude Code, **foreground commands also hold a
 > `tasks/<id>.output` file** while they run, so an async `bg-recheck` that happened
 > to fire while a foreground command was running would mis-count it and refuse to
-> clear the blue (a stuck-colour bug). Slot markers are created only by background/
-> monitor tailers — never by foreground commands — so they can't be fooled.
+> clear the blue (a stuck-colour bug). Slot markers are created only by tailers, so
+> they can't be fooled the same way.
 
 There is no "background finished" hook, so the tab can't be flipped back the
 instant a job ends — but it no longer has to wait for the next exchange either:
 - When `claude-stream.py` finishes a job it **releases its slot marker first**,
-  then calls `claude-tab-status.sh bg-recheck`, which flips the **stale blue**
-  (`awaiting-bg`) back to green — but only if the tab is *currently* in that state
-  (so it never overrides a working/idle/executing colour) and no other tailer
-  marker is still live. (Releasing before the recheck is essential, or it would
-  see its own marker.)
+  then calls `claude-tab-status.sh bg-recheck`, which flips a **stale `awaiting-bg`
+  OR `executing`** back to green — but only if the tab is *currently* in one of
+  those states (so it never overrides a working/idle/awaiting-command colour) and
+  no other tailer marker is still live. (Releasing before the recheck is essential,
+  or it would see its own marker.) Recognizing `executing` here (not just
+  `awaiting-bg`) is what makes a **manually cancelled** foreground command flip the
+  tab green promptly instead of waiting on the 180s `idle-watch` fallback below —
+  cancelling fires no hook at all, but the `fg` tailer notices its process died
+  (`has_writer` goes false) and calls `bg-recheck` itself.
 - As a backstop for an *untracked* finished job (a tailer that died without
   rechecking), the `stop` dispatch — when it goes blue — also spawns **one detached
   `bg-watch` watcher** that polls until no live marker remains, then flips the
@@ -97,23 +103,6 @@ instant a job ends — but it no longer has to wait for the next exchange either
 
 Each color-set persists the state to `/tmp/claude-tab-state-<window_id>` so
 `bg-recheck`/`bg-watch` can make the "is it currently red?" decision.
-
-> **Known bug — an orphaned FOREGROUND command reads green, not blue.** A foreground
-> shell command *blocks* the turn, so a normal `Stop` only fires after it returns —
-> which is why foreground commands deliberately create **no** slot marker (they'd only
-> ever be gone by `Stop` time, and detecting them via `lsof` caused the false-positive
-> noted above). But an **abnormal** turn-end breaks that assumption: an API error
-> (`StopFailure`, e.g. an intermittent connection dropping the socket) or a user
-> interrupt can end the turn while a foreground command is **still running orphaned**.
-> `StopFailure` maps to the same `stop` dispatch, and `bg_command_running` only counts
-> background/monitor/subagent markers — never foreground — so it finds nothing and the
-> tab goes **green (`awaiting-response`) while a command Claude launched is still
-> executing** (it should be blue). It's transient: the tab corrects on your next turn
-> (or once the orphan finishes, green becomes accurate). Not worth fixing now — the
-> obvious fix (a foreground in-flight marker cleared on `PostToolUse`) has no pid to
-> liveness-check, so an orphan that finishes without a `PostToolUse` would leave the
-> tab **stuck blue** — trading a transient wrong-green for a potentially stickier
-> wrong-blue.
 
 ## Wiring
 
@@ -130,6 +119,7 @@ Each color-set persists the state to `/tmp/claude-tab-state-<window_id>` so
   | `UserPromptSubmit` | —      | `claude-tab-status.sh thinking` |
   | `PreToolUse`       | `.*`   | `claude-tab-status.sh pretool` |
   | `PreToolUse`       | `Task\|Agent` | `claude-subagent-log.sh push` (stashes the Task description for the upcoming `SubagentStart` header) |
+  | `PreToolUse`       | `Bash` | `claude-cmd-pre.sh` (rewrites the command to stream live — see *Live foreground streaming* below) |
   | `PostToolUse`      | `.*`   | `claude-tab-status.sh posttool` (ignored if the event carries an `agent_id` — a subagent/teammate inner call — else magenta) |
   | `PostToolUse`      | `Bash` | `claude-cmd-log.sh` (writes command + output + elapsed to the mirror log) |
   | `PostToolUse`      | `Read\|Edit\|Write\|MultiEdit\|NotebookEdit` | `claude-file-log.sh` (writes a one-line `Read(name)`/`Update(name)`/`Write(name)` to the mirror log) |
@@ -277,15 +267,15 @@ and the `-`/`#`/`*`/`~` forms must be **bracketed** on both ends (so a diff head
 command-output site — foreground, background/monitor tail, and subagent output —
 but *not* to a subagent's messages/prompts (which share the gutter helper).
 
-**Foreground vs background output.** A *foreground* command's output is never
-written to any file an outside process can read — Claude Code streams it back
-through a private pipe, so the only place it (and the exact duration) is
-available is the **`PostToolUse` hook payload**, which fires when the command
-completes. A *background* command (and a Monitor stream) is the opposite: the
-hook fires at *launch* with no output, but the live output **is** written to a
-`tasks/<id>.output` file. So the mirror uses both routes — the hook for the
-foreground block, and a detached tailer for background/monitor streams (below).
-The mirror is driven by the hook:
+**Foreground vs background output.** A *foreground* command's output used to be
+unavailable anywhere until it finished — Claude Code streamed it back only through
+a private pipe, surfaced to a hook for the first time in the **`PostToolUse`
+payload** once the command completed. A *background* command (and a Monitor
+stream) was always the opposite: the hook fires at *launch* with no output, but
+the live output **is** written to a `tasks/<id>.output` file a detached tailer can
+follow. **Live foreground streaming** (below) closes that gap by making a
+foreground command behave like a background one for mirror purposes, without
+changing what Claude Code itself sees. The mirror is driven by the hook:
 
 - **`claude-cmd-log.sh`** (a `PostToolUse` Bash hook) is a thin wrapper that hands
   the hook payload to the formatter. It no longer needs the pane width — producers
@@ -329,6 +319,51 @@ The mirror is driven by the hook:
     exactly when the monitor ends, so completion is exact at **any cadence** (1s
     or 1h between ticks) with no grace/idle guess. A short idle fallback only
     applies if the process can't be found.
+- **Live foreground streaming (Ctrl+B aware).** `claude-cmd-pre.py` (`PreToolUse`
+  Bash) makes a normal foreground command stream live instead of only appearing
+  once it completes. It rewrites the command via `PreToolUse`'s `updatedInput`
+  (undocumented but confirmed working) to also `tee` its stdout/stderr into a side
+  file — `{ <cmd>; } > >(tee -a "$F") 2> >(tee -a "$F" >&2)`, or the command's own
+  redirect target if it already has one — emits the `▶ foreground` header
+  immediately, claims an `fg.<n>` slot (so the tab tracker sees it, above), and
+  spawns `claude-stream.py fg` to tail `$F` the same way a background job is
+  tailed. `claude-cmd-fmt.py`'s `PostToolUse` handler is the only place the real
+  outcome (duration/exit code/interrupted) is known, so it hands that off to the
+  tailer via a `.done` sentinel next to `$F` instead of re-rendering the block
+  itself; if nothing ever landed in `$F` (e.g. an older Claude Code build ignoring
+  `updatedInput`), the sentinel also carries the real output as a fallback so
+  nothing is silently lost. The `fg` tailer gives up by **writer-liveness**, like
+  `bg`, not a fixed timeout — it keeps the block (and the tab) blue for as long as
+  the command is *actually* still running, not for a guessed duration.
+  - **Ctrl+B (backgrounding a running command).** Confirmed empirically,
+    undocumented anywhere: backgrounding a foreground command with Ctrl+B fires
+    that Bash call's `PostToolUse` immediately, with `duration_ms` covering only
+    time-up-to-the-keypress, but `tool_response` carries `backgroundTaskId` +
+    `backgroundedByUser: true` — and observably, further output stops landing in
+    our own tee file and instead appears in Claude Code's own
+    `tasks/<backgroundTaskId>.output`, the same file a genuine
+    `run_in_background: true` call uses. `claude-cmd-fmt.py` detects this
+    (`backgroundTaskId` present despite `run_in_background` being false) and hands
+    off: tells the departing `fg` tailer to bow out quietly (a `{"converted":
+    true}` sentinel — no chip, no fallback body, so it doesn't race the
+    replacement), prints a `▷ backgrounded (ctrl+b) — continuing below` note, and
+    spawns a genuine `bg` tailer against the real `backgroundTaskId`, reusing the
+    same `_spawn_stream` used for an explicit background command. That tailer
+    starts from the *current size* of the task's output file
+    (`CLAUDE_STREAM_SKIP_EXISTING`), not from 0, so whatever the `fg` tailer's tee
+    copy already showed isn't repeated.
+  - **A manually cancelled command** fires no hook at all (same gap `idle-watch`
+    exists for elsewhere in this doc), so `claude-cmd-fmt.py`'s normal cleanup of
+    the `.fg-live` marker never runs. Left alone, that stale marker would make
+    `claude-cmd-pre.py` think a live block is *already* in flight forever, and
+    silently skip wrapping every later command (the mirror would just stop
+    showing anything new). The marker now stores the tailer's pid, and
+    `claude-cmd-pre.py` liveness-checks it (`os.kill(pid, 0)`, the same pattern
+    `claude_slots` uses for stale slots) before treating an existing marker as
+    genuinely in-flight — a dead pid means abandoned, so it's cleared and the next
+    command streams normally.
+  - Escape hatch: `CLAUDE_MIRROR_LIVE_FG=0` disables the command rewrite entirely
+    if it ever misbehaves on some pathological command's quoting.
 - **`claude-monitor-log.sh`** + **`claude-monitor-fmt.py`** (a `PostToolUse` hook
   for the `Monitor` tool) write a cyan `◉ monitor · <description>` header and
   spawn `claude-stream.py` for the monitor's event stream — so Monitor output
@@ -565,10 +600,13 @@ The mirror is driven by the hook:
   read in one place (`read_setting`), no value hardcoded in the script.
 
 Behaviour & limits:
-- **Foreground commands** show in full (output + accurate elapsed). The block
-  appears when the command **completes**, not live — foreground output doesn't
-  exist anywhere until then. Even instant commands show (the hook fires
-  regardless of speed).
+- **Foreground commands** stream live, same as background: the `▶ foreground`
+  header appears immediately and output lines arrive as the command produces
+  them, closing with an accurate `■ finished · Ns` (or `■ failed`/`■ interrupted`)
+  once the real outcome is known — see *Live foreground streaming* above. Even
+  instant commands show correctly (the block still renders in one shot when
+  there's nothing to stream). Ctrl+B-backgrounding or cancelling one mid-run is
+  also handled (same section).
 - **Background commands** stream live: a single `▷ background` chip + the
   command, then `claude-stream.py` appends each output line (`│ ` gutter in the
   job's palette colour) as it arrives, and a matching-colour `■ background
