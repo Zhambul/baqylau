@@ -433,10 +433,22 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `SubagentStart` claims the colour slot (keyed by `agent_id` so header, body,
     and footer match; parallel subagents differ), writes the `▶ <type> · <desc>`
     header, and launches the streamer; `SubagentStop` writes a sentinel the
-    streamer watches for (its authoritative end signal — *not* `meta.json`, which
-    is written at subagent **start**). The streamer is the **sole footer writer**;
-    `SubagentStop` only closes the block itself as a safety net, and **only when a
-    colour slot is still claimed** (the streamer died mid-run without finalising).
+    streamer watches for (its authoritative end signal for a **normal finish** —
+    *not* `meta.json`, which is written at subagent **start**). The streamer is
+    the **sole footer writer**; `SubagentStop` only closes the block itself as a
+    safety net, and **only when a colour slot is still claimed** (the streamer
+    died mid-run without finalising).
+    - **Manually cancelling/killing a subagent fires no `SubagentStop` at all** —
+      the same no-hook-on-interrupt gap noted throughout this doc (`idle-watch`,
+      the cancelled-foreground-command fix above). Left alone, the streamer would
+      hang on the sentinel until its 6h backstop, leaving the tab **stuck blue**
+      the whole time (`sub.pid.<agent_id>`'s pid stays alive — a subagent has no
+      OS process of its own to go liveness-check). But Claude Code *does* stamp
+      `stoppedByUser: true` onto `meta.json` the moment a cancel happens
+      (confirmed empirically) — so the streamer polls that alongside the sentinel
+      and exits within its next 0.3s tick, releasing the slot and triggering the
+      usual `bg-recheck` handoff to green. The footer reads `■ <type> cancelled ·
+      Ns` instead of `ended` in this case.
     A background agent's `SubagentStop` can fire **more than once** ("may notify
     more than once") — after the first, the streamer has finalised and freed its
     slot, so the duplicate finds no slot and does nothing. (Without that guard a

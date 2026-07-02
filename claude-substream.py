@@ -287,6 +287,22 @@ BASE = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
 SUBDIR = os.path.join(BASE, "subagents")
 JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
 SENT   = os.path.join(LOG + ".slots", f"sub.done.{AGENT}")
+META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
+
+
+def cancelled_by_user():
+    # A manually killed/cancelled subagent fires NO SubagentStop hook — the same
+    # gap documented throughout this codebase for interrupts (claude-tab-status.sh's
+    # idle-watch, claude-cmd-pre.py's cancelled-foreground-command fix) — so SENT
+    # never appears and this tailer would otherwise hang until the 6h backstop
+    # below, leaving the tab stuck blue the whole time. But Claude Code stamps
+    # `stoppedByUser: true` onto this agent's meta.json sidecar the moment that
+    # happens (confirmed empirically), giving a fast, reliable end signal instead.
+    try:
+        with open(META_PATH, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("stoppedByUser"))
+    except Exception:
+        return False
 
 # Verb colours for file ops (match claude-file-fmt.py).
 FILE_LABEL = {"Read": "Read", "Edit": "Update", "MultiEdit": "Update",
@@ -706,11 +722,16 @@ def main():
                     handle_line(s)
 
     # Completion: the SubagentStop sentinel (the authoritative end signal — written
-    # by the stop hook). NOT meta.json: that's written at subagent *start*, so it
-    # can't mark the end. A long cap is a backstop for a stuck/lost streamer.
+    # by the stop hook) for a normal finish, OR meta.json's stoppedByUser for a
+    # manual cancel (see cancelled_by_user() above — no hook fires for that case).
+    # A long cap is a backstop for a stuck/lost streamer either way.
+    cancelled = False
     while True:
         pump()
         if os.path.exists(SENT):
+            break
+        if cancelled_by_user():
+            cancelled = True
             break
         if time.time() - start > 6 * 3600:
             break
@@ -725,7 +746,7 @@ def main():
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
     dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
-    foot = f"■ {LABEL} ended · {dur}"
+    foot = f"■ {LABEL} " + ("cancelled" if cancelled else "ended") + f" · {dur}"
     global RESOLVED_MODEL
     RESOLVED_MODEL = _parent_resolved_model()   # authoritative window, best-effort
     used = ctx_used()                    # final context fill (plain — the chip is dark text)
