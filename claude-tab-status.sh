@@ -98,7 +98,7 @@ state="${1:-}"
 # This must run before the pretool/posttool agent_id early-exits, so a teammate's
 # inner tool calls also count as activity.
 case "$state" in
-  bg-watch|idle-watch|bg-recheck) ;;
+  bg-watch|idle-watch|bg-recheck|interrupt-watch) ;;
   *) [ -n "${KITTY_WINDOW_ID:-}" ] && date +%s > "/tmp/claude-tab-activity-${KITTY_WINDOW_ID}" 2>/dev/null ;;
 esac
 
@@ -126,6 +126,24 @@ ensure_idlewatch() {
   local wf="/tmp/claude-tab-idlewatch-${KITTY_WINDOW_ID}"
   if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
     nohup "$self" idle-watch "$SLOTS" >/dev/null 2>&1 &
+    echo $! > "$wf" 2>/dev/null
+  fi
+}
+
+# Spawn ONE detached interrupt-watch per window (if not already running): a FAST
+# alternative to idle-watch's ~30s fallback for a cancelled turn that never ran a
+# Bash/subagent tool (so has no marker/pid of its own to liveness-check) — a plain
+# text reply or an Edit/Read/MCP tool call killed mid-flight leaves the tab stuck on
+# magenta (thinking/working merged) otherwise. Claude Code appends a synthetic
+# "[Request interrupted by user]" line to the session transcript the instant that
+# happens (confirmed empirically, same as the subagent-cancel case) — this watcher
+# tails the transcript for that line instead of waiting on idle-watch's long timer.
+ensure_interruptwatch() {
+  local transcript="$1"
+  [ -n "${KITTY_WINDOW_ID:-}" ] && [ -x "$self" ] && [ -n "$transcript" ] || return 0
+  local wf="/tmp/claude-tab-interruptwatch-${KITTY_WINDOW_ID}"
+  if ! { [ -e "$wf" ] && kill -0 "$(cat "$wf" 2>/dev/null)" 2>/dev/null; }; then
+    nohup "$self" interrupt-watch "$transcript" >/dev/null 2>&1 &
     echo $! > "$wf" 2>/dev/null
   fi
 }
@@ -199,15 +217,30 @@ fi
 # fires SOME hook within the window, refreshing the activity timestamp — only after a
 # long fully-quiet stretch with nothing running does it conclude the turn was
 # abandoned and flip to green (your turn). Exits as soon as the turn ends normally.
+#
+# This is now the backstop of LAST resort: Bash/background/foreground/subagent
+# cancellation all have their own fast, targeted self-heal elsewhere (writer-
+# liveness, meta.json's stoppedByUser, interrupt-watch's transcript tail below) that
+# don't depend on this timer at all. What's LEFT for idle-watch to catch is
+# cancelling before the model has produced anything (mid-thinking, before the first
+# hook of the turn) — the harness silently rewinds that with no trace whatsoever
+# (confirmed empirically: no transcript line, nothing), so a timeout is the only
+# option. `bg_command_running` still guards it, so a genuinely long-running
+# Bash/bg/fg/subagent job is NEVER a false positive here regardless of IDLE_SECS —
+# the real exposure is narrower: a bare thinking stretch or a slow non-Bash tool
+# (Read/Edit/Write/MCP) with zero hook activity for the whole window. 30s balances
+# "recovers reasonably fast after a cancel" against "an ordinary thinking pause
+# rarely runs long enough to false-positive" — raise CLAUDE_TAB_IDLE_SECS if a
+# slow MCP tool or heavy-effort thinking starts tripping it.
 if [ "$state" = "idle-watch" ]; then
   SLOTS="${2:-}"
   win="${KITTY_WINDOW_ID:-}"
   [ -n "$win" ] || exit 0
   trap 'rm -f "/tmp/claude-tab-idlewatch-${win}" 2>/dev/null' EXIT
-  IDLE_SECS="${CLAUDE_TAB_IDLE_SECS:-180}"   # tunable; how long fully-quiet before "your turn"
+  IDLE_SECS="${CLAUDE_TAB_IDLE_SECS:-30}"   # tunable; how long fully-quiet before "your turn"
   detected=1
-  for _ in $(seq 1 720); do
-    sleep 10
+  for _ in $(seq 1 1440); do
+    sleep 5
     case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
       thinking|working|executing) ;;     # still busy -> keep watching
       *) exit 0 ;;                        # turn ended / colour changed -> done
@@ -222,6 +255,43 @@ if [ "$state" = "idle-watch" ]; then
   state="awaiting-response"
 fi
 
+# interrupt-watch dispatch (the detached watcher spawned at turn start by the
+# thinking dispatch below): a FAST alternative to idle-watch above for a turn
+# cancelled before any Bash/subagent tool ran — those have their own fast self-heal
+# (writer-liveness / meta.json polling) via a marker/pid this watcher doesn't need,
+# but a plain text reply or an Edit/Read/MCP call killed mid-flight has neither, so
+# it would otherwise sit on magenta for idle-watch's whole ~30s. Tails the
+# transcript for the synthetic "[Request interrupted by user]" line Claude Code
+# appends the instant a cancel happens, and flips green within one ~0.5s tick.
+if [ "$state" = "interrupt-watch" ]; then
+  transcript="${2:-}"
+  win="${KITTY_WINDOW_ID:-}"
+  [ -n "$win" ] && [ -n "$transcript" ] || exit 0
+  trap 'rm -f "/tmp/claude-tab-interruptwatch-${win}" 2>/dev/null' EXIT
+  pos="$(wc -c < "$transcript" 2>/dev/null || echo 0)"
+  detected=1
+  for _ in $(seq 1 3600); do
+    sleep 0.5
+    case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
+      thinking|working) ;;                # still busy in the magenta phase -> keep watching
+      *) exit 0 ;;                         # moved to blue/red/green, or turn ended -> nothing to do
+    esac
+    size="$(wc -c < "$transcript" 2>/dev/null || echo "$pos")"
+    if [ "$size" -gt "$pos" ]; then
+      if tail -c "+$((pos + 1))" "$transcript" 2>/dev/null | grep -q '\[Request interrupted by user\]'; then
+        detected=0; break
+      fi
+      pos="$size"
+    fi
+  done
+  [ "$detected" -eq 0 ] || exit 0
+  case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
+    thinking|working) ;;                  # re-check: still stuck busy right now -> safe to flip
+    *) exit 0 ;;
+  esac
+  state="awaiting-response"
+fi
+
 # bg-recheck dispatch (called by claude-stream.py when a background job/monitor/live
 # foreground stream finishes): there's no "background finished" hook, so the
 # bg-running blue would linger until the next exchange. Here we flip that *stale*
@@ -230,7 +300,7 @@ fi
 #
 # executing matters for a MANUALLY CANCELLED foreground command: cancelling one fires
 # NO hook at all (same gap idle-watch exists for), so "executing" would otherwise
-# stick until idle-watch's slow ~180s fallback. But the fg tailer (claude-cmd-pre.py)
+# stick until idle-watch's slow ~30s fallback. But the fg tailer (claude-cmd-pre.py)
 # DOES notice its process died (has_writer goes false) and calls bg-recheck right
 # then — a fast, reliable signal for exactly this case, so we honour it here too.
 if [ "$state" = "bg-recheck" ]; then
@@ -248,6 +318,16 @@ if [ "$state" = "bg-recheck" ]; then
   [ -n "${KITTY_WINDOW_ID:-}" ] && cur2="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
   case "$cur2" in awaiting-bg|executing) ;; *) exit 0 ;; esac  # state moved on meanwhile -> leave it alone
   state="awaiting-response"
+fi
+
+# UserPromptSubmit dispatch ("thinking"): besides the literal colour (handled by
+# the plain case at the bottom, as before), starts this turn's interrupt-watch —
+# see its dispatch above — so a cancel with no Bash/subagent tool involved still
+# clears the tab promptly instead of riding idle-watch's slow fallback.
+if [ "$state" = "thinking" ]; then
+  _up="$(cat 2>/dev/null)"
+  _tp="$(printf '%s' "$_up" | grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  ensure_interruptwatch "$_tp"
 fi
 
 # Notification dispatch: the hook pipes its JSON on stdin. A notification means

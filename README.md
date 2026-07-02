@@ -92,7 +92,7 @@ instant a job ends — but it no longer has to wait for the next exchange either
   no other tailer marker is still live. (Releasing before the recheck is essential,
   or it would see its own marker.) Recognizing `executing` here (not just
   `awaiting-bg`) is what makes a **manually cancelled** foreground command flip the
-  tab green promptly instead of waiting on the 180s `idle-watch` fallback below —
+  tab green promptly instead of waiting on the `idle-watch` fallback below —
   cancelling fires no hook at all, but the `fg` tailer notices its process died
   (`has_writer` goes false) and calls `bg-recheck` itself.
 - As a backstop for an *untracked* finished job (a tailer that died without
@@ -103,6 +103,43 @@ instant a job ends — but it no longer has to wait for the next exchange either
 
 Each color-set persists the state to `/tmp/claude-tab-state-<window_id>` so
 `bg-recheck`/`bg-watch` can make the "is it currently red?" decision.
+
+### Recovering from a cancelled turn (`idle-watch` / `interrupt-watch`)
+
+Claude Code fires **no hook at all** when a turn is cancelled/interrupted — no
+`Stop`, no `StopFailure`, nothing. Every cancellation case in this doc ultimately
+traces back to that one gap; what differs is how fast each case can be *noticed*:
+
+- **Bash / background / foreground / subagent** cancellations each have a live
+  process or file to poll (a tailer's writer-liveness, a subagent's `meta.json`
+  `stoppedByUser`), so they self-heal in about a second — see *Live foreground
+  streaming* and the subagent section above.
+- **Everything else** — cancelling a plain text reply, or a non-Bash tool call
+  (Read/Edit/Write/MCP) — has no such process to poll, but Claude Code *does*
+  append a synthetic `[Request interrupted by user]` line to the session
+  transcript the instant it happens (confirmed empirically, mirroring the
+  subagent case). `claude-tab-status.sh`'s `thinking` dispatch (`UserPromptSubmit`)
+  reads the payload's `transcript_path` and spawns **one detached
+  `interrupt-watch` per window** that tails it for that line, polling every 0.5s —
+  so this case also recovers almost instantly, without waiting on `idle-watch`.
+  It only watches while the tab is in the magenta `thinking`/`working` phase, and
+  re-checks the state right before flipping green so it never clobbers a state
+  that already moved on for a legitimate reason (e.g. a tool call started).
+- **Cancelling before the model has produced anything at all** (mid-thinking,
+  before the turn's first hook) is the one case with **no signal whatsoever** —
+  confirmed empirically: the harness silently rewinds the turn for editing, and
+  *nothing* is written anywhere (no transcript line, no sidecar file). This is
+  the true backstop `idle-watch` (`ensure_idlewatch`, spawned whenever the tab
+  enters a busy colour) exists for: it polls every 5s, and once the tab has sat
+  on `thinking`/`working`/`executing` for `CLAUDE_TAB_IDLE_SECS` (default **30**)
+  with `bg_command_running` false, it declares the turn abandoned and flips green.
+  `bg_command_running` guards it, so a genuinely long-running Bash/bg/fg/subagent
+  job is **never** a false positive here *regardless* of the timeout value — the
+  real exposure is narrower: a bare thinking stretch, or a slow non-Bash tool
+  call, with zero hook activity for the whole window. 30s was chosen to recover
+  reasonably fast after a cancel while an ordinary thinking pause rarely runs
+  that long with nothing else happening; raise `CLAUDE_TAB_IDLE_SECS` if a slow
+  MCP tool or heavy-effort thinking starts tripping it.
 
 ## Wiring
 
