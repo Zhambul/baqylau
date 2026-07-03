@@ -233,54 +233,13 @@ def release_id(kind, log, ident):
 # subagents; for several SAME-TYPE subagents launched in one message the only risk
 # is two descriptions being swapped (cosmetic) if SubagentStart order reverses the
 # launch order — agent_type + colour still identify each correctly.
-def _queue(log):
-    return os.path.join(_dir(log), "desc.queue")
-
-
+# The queue lives in the per-session state DB (claude_state.queue — was an flock'd
+# desc.queue file); the signatures are kept here so callers don't change.
 def desc_push(log, text):
-    text = " ".join((text or "").split())
-    if not text:
-        return
-    try:
-        fd = os.open(_queue(log), os.O_CREAT | os.O_RDWR, 0o644)
-    except Exception:
-        return
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except Exception:
-            pass
-        os.lseek(fd, 0, 2)
-        os.write(fd, (text + "\n").encode())
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
-        os.close(fd)
+    import claude_state
+    claude_state.desc_push(log, text)
 
 
 def desc_pop(log):
-    try:
-        fd = os.open(_queue(log), os.O_RDWR)
-    except Exception:
-        return ""
-    try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except Exception:
-            pass
-        os.lseek(fd, 0, 0)
-        lines = [l for l in os.read(fd, 1 << 20).decode("utf-8", "replace").split("\n") if l]
-        if not lines:
-            return ""
-        first, rest = lines[0], "\n".join(lines[1:])
-        os.lseek(fd, 0, 0); os.ftruncate(fd, 0)
-        os.write(fd, (rest + "\n").encode() if rest else b"")
-        return first
-    finally:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
-        except Exception:
-            pass
-        os.close(fd)
+    import claude_state
+    return claude_state.desc_pop(log)

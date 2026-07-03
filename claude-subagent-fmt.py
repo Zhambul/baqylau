@@ -16,6 +16,7 @@ import json, os, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_ops as O
+import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -65,6 +66,7 @@ def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
+        A.error("", "payload parse (stdin not valid JSON)")
         return
     LOG = O.log_path(d)
 
@@ -89,21 +91,14 @@ def main():
         team = is_teammate(tpath, agent_id)
         pal  = "team" if team else "sub"
         # A resumed teammate (see the `resumed` block below) must keep its ORIGINAL
-        # colour — one hue per agent identity — so its first slot is persisted in
-        # sub.slot.* and pinned on re-claim instead of taking the next round-robin.
-        slot_file = os.path.join(LOG + ".slots", f"sub.slot.{agent_id}")
-        try:
-            prefer = int(open(slot_file).read().strip())
-        except Exception:
-            prefer = None
+        # colour — one hue per agent identity — so its first slot is persisted on the
+        # agent's state-DB record (was a sub.slot.* file) and pinned on re-claim
+        # instead of taking the next round-robin.
+        rec = S.agent_get(LOG, agent_id)
+        prefer = rec.get("slot") if rec.get("slot") is not None else None
         slot, is_new = claude_slots.claim_id("sub", LOG, agent_id, prefer=prefer)
         if is_new and prefer is None:
-            try:
-                os.makedirs(LOG + ".slots", exist_ok=True)
-                with open(slot_file, "w") as f:
-                    f.write(str(slot))
-            except Exception:
-                pass
+            S.agent_set(LOG, agent_id, slot=slot)
         # A background agent (and a teammate in particular) can fire SubagentStart
         # MORE THAN ONCE. If we already claimed this agent's slot and its streamer is
         # still live, this is a duplicate start — don't write a second header or spawn
@@ -118,25 +113,18 @@ def main():
         rgb = claude_slots.color(pal, slot)
         # An idle teammate that wakes on a new message fires SubagentStart AGAIN with
         # the same agent_id after its previous streamer fully finalised. That resume is
-        # recognisable by the streamer's surviving position checkpoint (sub.pos.*). On
-        # resume there was no PreToolUse(Agent) push, so desc_pop() would steal a
-        # description queued for a DIFFERENT agent — reuse the one persisted at first
-        # start instead, and mark the header ↻ so the block reads as a continuation.
-        desc_file = os.path.join(LOG + ".slots", f"sub.desc.{agent_id}")
-        resumed = os.path.exists(os.path.join(LOG + ".slots", f"sub.pos.{agent_id}"))
+        # recognisable by the streamer's surviving position checkpoint (the agent
+        # record's `pos` — was a sub.pos.* file). On resume there was no
+        # PreToolUse(Agent) push, so desc_pop() would steal a description queued for a
+        # DIFFERENT agent — reuse the one persisted at first start instead, and mark
+        # the header ↻ so the block reads as a continuation.
+        resumed = rec.get("pos") is not None
         if resumed:
-            try:
-                desc = open(desc_file).read().strip()
-            except Exception:
-                desc = ""
+            desc = (rec.get("desc") or "").strip()
         else:
             desc = claude_slots.desc_pop(LOG)
             if desc:
-                try:
-                    with open(desc_file, "w") as f:
-                        f.write(desc)
-                except Exception:
-                    pass
+                S.agent_set(LOG, agent_id, desc=desc)
         glyph = "↻" if resumed else "▶"
         if team:
             head = f"{glyph} {atype} · teammate · {desc}" if desc else f"{glyph} {atype} · teammate"
@@ -190,14 +178,11 @@ def main():
     # slot, so a later duplicate stop finds no slot (lookup_id -> None) and we do
     # NOTHING — otherwise it printed a spurious indigo "■ agent ended" (slot 0,
     # no duration). Requiring a still-claimed slot is what suppresses that.
-    slots_dir = LOG + ".slots"
-    try:
-        os.makedirs(slots_dir, exist_ok=True)
-        open(os.path.join(slots_dir, f"sub.done.{agent_id}"), "a").close()
-        A.state_file(LOG, os.path.join(slots_dir, f"sub.done.{agent_id}"), "write",
-                     "stop sentinel for streamer")
-    except Exception:
-        A.error(LOG, "write stop sentinel", {"agent": agent_id})
+    # The stop signal is the agent record's `done` flag (was a sub.done.* sentinel
+    # file) — the streamer polls it and finalises; cleanup clears it back to 0 so a
+    # later RESUME of the same agent_id doesn't finalise its new streamer instantly.
+    S.agent_set(LOG, agent_id, done=1)
+    A.state_file(LOG, "state:agent." + agent_id, "write", "done=1 (stop signal for streamer)")
     try:
         running = alive(int(open(pid_path(agent_id)).read().strip()))
     except Exception:
@@ -213,13 +198,13 @@ def main():
             A.hook_event(d, decision="stop: SAFETY NET footer (streamer died mid-run)")
         else:
             A.hook_event(d, decision="stop: no-op (already finalised / duplicate stop)")
-        for p in (os.path.join(LOG + ".slots", f"sub.done.{agent_id}"), pid_path(agent_id)):
-            try:
-                os.remove(p)
-            except Exception:
-                pass
+        S.agent_set(LOG, agent_id, done=0)        # don't wedge a future resume
+        try:
+            os.remove(pid_path(agent_id))
+        except Exception:
+            pass
     else:
-        A.hook_event(d, decision="stop: sentinel written, streamer will finalise")
+        A.hook_event(d, decision="stop: done flag set, streamer will finalise")
 
 
 if __name__ == "__main__":

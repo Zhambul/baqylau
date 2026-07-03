@@ -27,6 +27,7 @@ def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
+        A.error("", "payload parse (stdin not valid JSON)")
         return
     LOG = O.log_path(d)
     ev   = d.get("hook_event_name") or ""

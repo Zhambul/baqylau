@@ -19,23 +19,23 @@
 # discarding scrolled lines instead of pushing them to scrollback. This window never
 # scrolls (it repaints two rows in place), so the scoreboard is simply always there.
 #
-# Data comes from the stats sidecar (<log>.stats.json) that every producer bumps
-# under an flock (claude_ops.bump); we re-read it on mtime change and repaint once a
-# second regardless so the ⏱ duration ticks. The ⏱ counts ACTIVE time: it pauses
-# while the tab is green (awaiting-response — your turn) and resumes otherwise —
-# see the pause-accounting block below. Reads skip the flock — a torn read just
-# fails to parse and keeps the previous paint for one tick, which beats making hook
-# processes wait on a renderer. Exits when the mirror log disappears (SessionEnd
-# removes it), which auto-closes the window; claude-split.sh close is the safety net.
+# Data comes from the per-session state DB (<log>.state.db — claude_state) that
+# every producer bumps atomically (claude_ops.bump); we re-read it when its change
+# counter moves and repaint once a second regardless so the ⏱ duration ticks. The ⏱
+# counts ACTIVE time: it pauses while the tab is green (awaiting-response — your
+# turn) and resumes otherwise — see the pause-accounting block below. Reads are
+# plain SELECTs (WAL — never block the producers). Exits when the mirror log
+# disappears (SessionEnd removes it), which auto-closes the window;
+# claude-split.sh close is the safety net.
 import json, os, re, shutil, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_render as R
 import claude_ops as O
+import claude_state as St
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
-STATS = O.stats_path(LOG) if LOG else ""
 
 # Muted styling — the scoreboard is ambient context, not an event, so no background
 # chips: dim separators, slate words, slightly brighter numbers, and colour only
@@ -145,7 +145,6 @@ def session_id():
     return b
 
 
-_last_st = None    # last successfully-parsed sidecar — reused on a torn read
 
 
 def compose(w, mparts):
@@ -229,7 +228,7 @@ def main():
         # Only once the sidecar exists — pausing shouldn't create an empty session.
         if win is None and now >= win_retry:
             win, win_retry = _claude_window(), now + 5.0   # tag lands async at start
-        if win and _tab_green(win) and prev_ts is not None and os.path.exists(STATS):
+        if win and _tab_green(win) and prev_ts is not None and St.stats(LOG).get("start"):
             pend += now - prev_ts
             if pend >= 1.0:
                 O.bump(LOG, paused=round(pend, 2))
@@ -238,10 +237,7 @@ def main():
             O.bump(LOG, paused=round(pend, 2))
             pend = 0.0
         prev_ts = now
-        try:
-            mt = os.path.getmtime(STATS)
-        except OSError:
-            mt = None
+        mt = St.version(LOG)                # state-DB change counter (was file mtime)
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
             try:                            # poll inboxes: census parts + mirror events

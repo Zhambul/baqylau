@@ -343,7 +343,9 @@ case "$cmd" in
     [ -n "$sid" ] && close_mirror "$sid"
     audit_pane "$sid" "close" 1 "session end"
     log="$(log_for "$sid")"
-    [ -n "$log" ] && rm -f "$log" "$log.stats.json" "$log.msgs.json"  # log + score + msg sidecars
+    # Remove the log + the per-session runtime state DB (claude_state: scoreboard
+    # counters, message tracker, agent records, hand-offs) incl. its WAL/SHM files.
+    [ -n "$log" ] && rm -f "$log" "$log.state.db" "$log.state.db-wal" "$log.state.db-shm"
     ;;
   toggle)                                            # keybinding
     sid="$(sid_from_focus)"; [ -n "$sid" ] || exit 0

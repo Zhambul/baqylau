@@ -45,6 +45,7 @@ def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
+        A.error("", "payload parse (stdin not valid JSON)")
         return
     # A subagent's file ops are rendered by claude-substream.py (in transcript
     # order, with the subagent's messages) — skip them here to avoid duplication.

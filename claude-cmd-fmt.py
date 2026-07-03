@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_render as R
 import claude_ops as O
+import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -98,6 +99,7 @@ def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
+        A.error("", "payload parse (stdin not valid JSON)")
         return
     LOG = O.log_path(d)
     # A subagent's tool calls are rendered (in transcript order, with messages) by
@@ -121,29 +123,16 @@ def main():
     taskid = tr.get("backgroundTaskId") if isinstance(tr, dict) else None
     converted = bool(taskid) and not bg
 
-    # A foreground command's own live-stream marker (claude-cmd-pre.py), if any — read
-    # it up front since the genuine/converted-background path below and the ordinary
-    # finish path further down both need to know about it.
-    marker = LOG + ".fg-live"
-    live = None
-    if os.path.exists(marker):
-        try:
-            with open(marker) as f:
-                live = json.load(f)
-        except Exception:
-            A.error(LOG, "read .fg-live", {"marker": marker})
-            live = None
-        try:
-            os.remove(marker)
-            A.state_file(LOG, marker, "remove", live)
-        except Exception:
-            pass
-    # Sentinel path for handing the outcome to the fg tailer: the marker's session-
-    # keyed /tmp path ("done"), never a path derived from the command's own redirect
-    # target — that used to litter the project dir with `<target>.done` files (even
-    # literal `$VAR.done` for an unexpanded-variable redirect). `live["src"] + ".done"`
-    # remains only as a fallback for a marker written by a pre-"done" version of
-    # claude-cmd-pre.py still in flight.
+    # A foreground command's own live-stream record (claude-cmd-pre.py), if any —
+    # consumed atomically up front (state-DB handoff, key "fg-live" — was a .fg-live
+    # JSON file read+removed in two racy steps) since the genuine/converted-background
+    # path below and the ordinary finish path further down both need to know about it.
+    live = S.hand_take(LOG, "fg-live")
+    if live:
+        A.state_file(LOG, "state:fg-live", "remove", live)
+    # Hand-off key for giving the outcome to the fg tailer: the session-keyed token
+    # claude-cmd-pre.py agreed on ("done"), never a path derived from the command's
+    # own redirect target. The tailer polls the same key (CLAUDE_STREAM_DONE).
     done = (live.get("done") or (live["src"] + ".done")) if live and live.get("src") else None
 
     if bg or converted:
@@ -163,12 +152,10 @@ def main():
             # more from this point on), so tell that tailer to bow out quietly (no
             # finish chip, no fallback body) instead of racing the bg tailer below,
             # which is about to own the rest of this block.
-            try:
-                with open(done, "w") as f:
-                    json.dump({"converted": True}, f)
-                A.state_file(LOG, done, "write", {"converted": True})
-            except Exception:
-                A.error(LOG, "write converted sentinel", {"done": done})
+            if S.hand_put(LOG, "done:" + done, {"converted": True}):
+                A.state_file(LOG, "state:done:" + done, "write", {"converted": True})
+            else:
+                A.error(LOG, "write converted handoff", {"done": done})
             O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
         else:
             O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
@@ -233,12 +220,11 @@ def main():
     # it also carries gut_body as a fallback in case the rewrite never took effect and
     # nothing was ever streamed.
     if done:
-        try:
-            with open(done, "w") as f:
-                json.dump({"chip": chip_txt, "color": list(col), "fallback_body": gut_body}, f)
-            A.state_file(LOG, done, "write", {"chip": chip_txt})
-        except Exception:
-            A.error(LOG, "write .done sentinel", {"done": done})
+        if S.hand_put(LOG, "done:" + done,
+                      {"chip": chip_txt, "color": list(col), "fallback_body": gut_body}):
+            A.state_file(LOG, "state:done:" + done, "write", {"chip": chip_txt})
+        else:
+            A.error(LOG, "write done handoff", {"done": done})
             live = None    # couldn't hand off -> fall through to the normal render below
 
     if not live:

@@ -19,6 +19,7 @@ def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
+        A.error("", "payload parse (stdin not valid JSON)")
         return
     if (d.get("tool_name") or "") != "Monitor":
         A.hook_event(d, decision="ignored: not the Monitor tool")

@@ -375,17 +375,16 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   spawns `claude-stream.py fg` to tail `$F` the same way a background job is
   tailed. `claude-cmd-fmt.py`'s `PostToolUse` handler is the only place the real
   outcome (duration/exit code/interrupted) is known, so it hands that off to the
-  tailer via a `.done` sentinel instead of re-rendering the block itself. The
-  sentinel path is a **session-keyed /tmp path** chosen by `claude-cmd-pre.py`
-  (stored in the `.fg-live` marker as `done` and passed to the tailer via
-  `CLAUDE_STREAM_DONE`) — deliberately **not** `$F + ".done"`: when `$F` is the
-  command's *own* redirect target, deriving the sentinel from it dropped stray
-  `<target>.done` files (even literal `$VAR.done`, from unexpanded-variable
-  redirects) into the project directory, orphaned whenever the tailer exited
-  before consuming them (fast command, or a tail target that never appeared). If
-  nothing ever landed in `$F` (e.g. an older Claude Code build ignoring
-  `updatedInput`), the sentinel also carries the real output as a fallback so
-  nothing is silently lost. The `fg` tailer gives up by **writer-liveness**, like
+  tailer via a **state-DB hand-off record** (`claude_state` handoffs — was a
+  `.done` sentinel file polled with exists/read/remove; `hand_take` is the same
+  take-once, atomically). The hand-off key is a **session-keyed token** chosen by
+  `claude-cmd-pre.py` (stored in the `fg-live` record as `done` and passed to the
+  tailer via `CLAUDE_STREAM_DONE`) — deliberately **not** derived from `$F`: when
+  `$F` was the command's *own* redirect target, the file-era sentinel derived from
+  it dropped stray `<target>.done` files (even literal `$VAR.done`) into the
+  project directory. If nothing ever landed in `$F` (e.g. an older Claude Code
+  build ignoring `updatedInput`), the hand-off also carries the real output as a
+  fallback so nothing is silently lost. The `fg` tailer gives up by **writer-liveness**, like
   `bg`, not a fixed timeout — it keeps the block (and the tab) blue for as long as
   the command is *actually* still running, not for a guessed duration.
   - **Ctrl+B (backgrounding a running command).** Confirmed empirically,
@@ -406,11 +405,12 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     (`CLAUDE_STREAM_SKIP_EXISTING`), not from 0, so whatever the `fg` tailer's tee
     copy already showed isn't repeated.
   - **A manually cancelled command** fires no hook at all (the
-    no-hook-on-interrupt gap noted throughout this doc), so `claude-cmd-fmt.py`'s normal cleanup of
-    the `.fg-live` marker never runs. Left alone, that stale marker would make
+    no-hook-on-interrupt gap noted throughout this doc), so `claude-cmd-fmt.py`'s normal consume of
+    the `fg-live` record (a state-DB hand-off, key `fg-live` — was a `.fg-live`
+    JSON file) never runs. Left alone, that stale record would make
     `claude-cmd-pre.py` think a live block is *already* in flight forever, and
     silently skip wrapping every later command (the mirror would just stop
-    showing anything new). The marker now stores the tailer's pid, and
+    showing anything new). The record stores the tailer's pid, and
     `claude-cmd-pre.py` liveness-checks it (`os.kill(pid, 0)`, the same pattern
     `claude_slots` uses for stale slots) before treating an existing marker as
     genuinely in-flight — a dead pid means abandoned, so it's cleared and the next
@@ -463,9 +463,10 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     *per content block*, each repeating the message's usage, so summing per line
     inflated the rollup (and the scoreboard bump it feeds) ~2.2× on multi-block
     agents; repeat lines of the same id add only the (output) delta, tracked in
-    `usage_last`. That record is persisted as a second line in the `sub.pos.<agent>`
-    checkpoint so a successor streamer (idle-teammate restart) doesn't recount a
-    message straddling the handoff. The rollup is appended last, so on a narrow pane
+    `usage_last`. That record is persisted in the state DB next to the byte
+    checkpoint (the agent record's `pos` + a `usage_last` kv slot) so a successor
+    streamer (idle-teammate restart) doesn't recount a message straddling the
+    handoff. The rollup is appended last, so on a narrow pane
     it's the first thing the renderer's `fit()` truncates — duration and ctx always
     survive.
   - **Cost estimate in the footer.** After the rollup the footer appends `· ≈ $X`,
@@ -473,12 +474,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     input/output for the current lineup; `cache_read` billed at ~0.1×). An unknown
     model shows nothing rather than guess. Being last, it truncates before the rest.
   - **Session scoreboard (its own window).** A running "so far" summary of the whole
-    session, aggregated across the separate hook processes in a sidecar
-    `…/<mirror-log>.stats.json` (each producer bumps its deltas under an `flock`;
-    removed with the log at SessionEnd). The scorebar's *reads* skip that flock —
-    hook processes must never wait on a renderer — so a read can catch `bump()`'s
-    truncate-then-write mid-flight; a torn read reuses the **last good parse** for
-    that tick instead of blinking the row down to the bare `▪ session` placeholder. **`claude-scorebar.py`** renders it in a
+    session, aggregated across the separate hook processes in the **per-session
+    state DB** `…/<mirror-log>.state.db` (`claude_state.py`; was an flock'd
+    `.stats.json` sidecar — atomic SQL increments replaced the read-modify-write
+    JSON dance, so bumps can neither tear nor clobber and reads never see a torn
+    write; removed with the log at SessionEnd). The scorebar repaints when the
+    state's change counter moves (a `v` counter bumped by every write — WAL commits
+    don't reliably touch the db file's mtime). **`claude-scorebar.py`** renders it in a
     **dedicated ~4-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
     opened/closed with the mirror by `claude-split.sh`) — an always-on session-id
     line, a team-message census, then the session summary:
@@ -495,8 +497,9 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     visibility into the agent-team message flow and is **always shown** (defaults to
     `0 msgs`, even for a non-team session). It comes from `claude_ops.update_messages()`,
     which — since there is **no hook** for a message being read/consumed — tracks state
-    by **stateful polling**: each tick it diffs the team inboxes against a persisted
-    sidecar `…/<mirror-log>.msgs.json` (keyed by `msg_id`) and folds transitions into
+    by **stateful polling**: each tick it diffs the team inboxes against the persisted
+    state (the state DB's `messages` table, keyed by `msg_id` — was a `.msgs.json`
+    sidecar) and folds transitions into
     **cumulative** counters, so counts survive a teammate draining its inbox. A message
     is `read` once it flips `read:true` or disappears from the inbox (draining ⇒
     consumed); `msgs` is the cumulative delivered total. `unread` and `◐ stale` are a
@@ -523,7 +526,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     and resumes on any other colour. The scorebar maps its sid to the Claude pane's
     kitty window (the `claude_session` user-var tagged at SessionStart), polls that
     window's persisted tab state (`/tmp/claude-tab-state-<win>`), and accumulates
-    green ticks into the sidecar's `paused` field (same flock'd `bump()`, so it
+    green ticks into the state's `paused` counter (same atomic `bump()`, so it
     survives a mirror toggle); `scoreboard_parts()` subtracts it from the elapsed
     time. It truncates from the tail on narrow panes (cost goes last,
     so it drops first), and **exits when the mirror log disappears** at SessionEnd,
@@ -539,20 +542,20 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     spend, so they're excluded. Two producers feed it: each **agent's** streamer
     bumps its totals when the run ends, and the **main session's own turns** are
     folded in by `claude_ops.bump_transcript()` — called from the cmd/file hooks, it
-    reads the session transcript JSONL forward from a cursor kept in the sidecar
-    (`txpos`), sums each new assistant turn's usage (skipping sidechain records —
-    their own streamer already counts them), and advances the cursor under the same
-    `flock` so concurrent hooks never double-count. (Before this, cost only moved
+    reads the session transcript JSONL forward from a cursor kept in the state DB
+    (the `txpos` counter), sums each new assistant turn's usage (skipping sidechain
+    records — their own streamer already counts them), and advances the cursor inside
+    one `BEGIN IMMEDIATE` transaction so concurrent hooks never double-count. (Before this, cost only moved
     when an agent run ended and sat "stuck" through plain main-session work.)
     One assistant **message** is written as one JSONL line **per content block**, each
     repeating the message's usage (input/cache identical, `output_tokens` a growing
     snapshot), so usage is deduped by `message.id` — counted once, from the last line.
-    A message whose lines straddle two bump calls is handled by the sidecar's `txlast`
-    (last counted id + what was credited): later lines of the same id add only the
+    A message whose lines straddle two bump calls is handled by the state's `txlast`
+    record (last counted id + what was credited): later lines of the same id add only the
     delta. (Before the dedup, multi-block turns counted 2–3×, inflating a $3.84
     session to a $7.29 scoreboard.) The **agent streamers apply the same dedup** to
     their footer rollup (`usage_last` in `claude-substream.py`, persisted in the
-    `sub.pos.<agent>` checkpoint) — they originally summed per line, which showed up
+    state DB next to the `pos` checkpoint) — they originally summed per line, which showed up
     as a second instance of the same bug: a session whose four review agents really
     billed ~784k tokens bumped 1.75M (×2.24), turning a $18.76 session into a $23
     scoreboard.
@@ -586,9 +589,15 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   - **`claude-subagent-log.sh`** + **`claude-subagent-fmt.py`** drive the frame:
     `SubagentStart` claims the colour slot (keyed by `agent_id` so header, body,
     and footer match; parallel subagents differ), writes the `▶ <type> · <desc>`
-    header, and launches the streamer; `SubagentStop` writes a sentinel the
-    streamer watches for (its authoritative end signal for a **normal finish** —
-    *not* `meta.json`, which is written at subagent **start**). The streamer is
+    header, and launches the streamer; `SubagentStop` sets the agent record's
+    `done` flag in the state DB (was a `sub.done.*` sentinel file), which the
+    streamer polls (its authoritative end signal for a **normal finish** —
+    *not* `meta.json`, which is written at subagent **start**); the flag is
+    cleared again at streamer finalise so a later RESUME of the same agent_id
+    doesn't finalise its new streamer instantly. The agent record also carries the
+    pinned colour `slot`, the `desc`, and the resume checkpoint `pos` (were
+    `sub.slot.*` / `sub.desc.*` / `sub.pos.*` files); the `sub.pid.*` marker
+    deliberately STAYS a file — it is the tab tracker's bash-side liveness signal. The streamer is
     the **sole footer writer**; `SubagentStop` only closes the block itself as a
     safety net, and **only when a colour slot is still claimed** (the streamer
     died mid-run without finalising).
@@ -617,7 +626,8 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `agent-<id>.meta.json` that has it is written at subagent *start* with no end
     marker (so it can't signal completion). So a `PreToolUse` hook on the
     Task/Agent tool (`claude-subagent-log.sh push`) stashes the description in a
-    tiny FIFO and the next `SubagentStart` pops it — exact for sequential
+    tiny FIFO (a `queue` table in the per-session state DB — was an flock'd
+    `desc.queue` file) and the next `SubagentStart` pops it — exact for sequential
     subagents (for several same-type subagents launched at once, the worst case is
     two descriptions swapped, purely cosmetic).
   - Highlighting/wrapping/gutter/unescape primitives live in **`claude_render.py`**
@@ -668,8 +678,9 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     group**, which Claude Code waits to drain — so SessionStart hung ("no answer") and
     the watcher orphaned. Detaching it into its own session (the same way the other
     streamers are spawned) makes the hook return instantly. The watcher exits on its own
-    when the session's mirror log is removed at SessionEnd; a pid lock
-    (`codex.watch.pid`) guards against a duplicate SessionStart.
+    when the session's mirror log is removed at SessionEnd; a pid-liveness claim in
+    the session state DB (key `codex-watch` — was a `codex.watch.pid` lock file)
+    guards against a duplicate SessionStart.
   - **Source A — companion jobs** (`codex-companion.mjs`, the common case). Each job
     writes a human-readable activity log + a status sidecar to
     `$CLAUDE_PLUGIN_DATA/state/<slug>/jobs/<jobId>.{log,json}`. The watcher recomputes
@@ -746,7 +757,8 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   which would otherwise double-count the column it shares with the mirror). It also
   fires **`claude-codex-launch.py`** (see *Codex streams* above),
   which detaches this session's codex watcher and returns immediately. `close`
-  (SessionEnd) closes that session's mirror + bar and removes its log — which is also
+  (SessionEnd) closes that session's mirror + bar and removes its log and the
+  per-session state DB (`<log>.state.db*`) — the log's removal is also
   what stops the watcher (and the bar's renderer, which exits when the log vanishes).
   `toggle` closes the pane if present **without** truncating, so reopening re-shows
   the whole session history — and while closed there is **no process at all** (no
@@ -938,7 +950,7 @@ subscriber's independent record of the same event.
 | `ops` | paint op written to the mirror log — full pane reconstruction, survives SessionEnd |
 | `errors` | **swallowed exception — full traceback + context** (every `except: pass` site records before swallowing) |
 | `spawns` | detached process launch — parent, child pid, argv, purpose |
-| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … — plus the **scoreboard sidecar's evolution**: every `bump` (deltas + resulting totals), every transcript-spend fold (`bump-transcript`: token/cost delta + cursor), and every team-message transition (`msg-transitions`) — so a wrong scoreboard number is traceable to the exact bump that skewed it |
+| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … — plus the **scoreboard sidecar's evolution**: every `bump` (deltas + resulting totals), every agent-spend bump (`bump-agent`: same, plus `meta` with agent_id/kind/model and the in/out/cache/create split `cost_usd` priced — attribution and re-pricing without timestamp correlation), every transcript-spend fold (`bump-transcript`: token/cost delta + cursor), every team-message transition (`msg-transitions`), and each substream streamer's checkpoint bookends (`resume`/`final` on `sub.pos.<agent>`: adopted vs left-behind pos + dedup state — a mismatched pair is a broken idle-restart handoff) — so a wrong scoreboard number is traceable to the exact bump that skewed it. The scorebar's per-second `paused` ticks are deliberately **not** audited (they buried real bumps ~1000:1; the running total rides every other bump row) |
 | `pane_events` | mirror/scoreboard **pane operation** — open / close / toggle / resize with `ok` verified against kitty (a mirror that failed to open, or a resize that changed nothing, is recorded — the kitten calls used to be silent) |
 
 Explore it with the CLI (from the repo root):

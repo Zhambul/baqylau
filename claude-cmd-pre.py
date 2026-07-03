@@ -9,13 +9,13 @@
 # emit the "▶ foreground" header immediately, and spawn a detached claude-stream.py
 # to tail that file — the exact mechanism background commands already use, just
 # triggered a hook earlier. claude-cmd-fmt.py's PostToolUse handler checks the
-# ".fg-live" marker this leaves behind and, if present, hands the finish chip off
+# "fg-live" state record this leaves behind and, if present, hands the finish chip off
 # to the tailer (via a ".done" sentinel next to the tee file) instead of rendering
 # the whole block itself.
 #
 # Only top-level (non-subagent, non-background) commands are wrapped: a subagent
 # can run several foreground Bash calls in parallel, and this session's single
-# ".fg-live" marker only tracks ONE in-flight command at a time. That's safe for
+# "fg-live" record only tracks ONE in-flight command at a time. That's safe for
 # the main loop, which always awaits one Bash call's Pre->exec->Post cycle before
 # starting the next, but not for concurrent subagents — those keep the old bundled
 # rendering (already excluded below via the agent_id check, same as claude-cmd-fmt.py).
@@ -24,6 +24,7 @@ import json, os, re, shlex, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_ops as O
 import claude_slots
+import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -67,6 +68,7 @@ def main():
     try:
         d = json.load(sys.stdin)
     except Exception:
+        A.error("", "payload parse (stdin not valid JSON)")
         return
     if os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") == "0":
         A.hook_event(d, decision="ignored: CLAUDE_MIRROR_LIVE_FG=0")
@@ -82,19 +84,18 @@ def main():
         return
 
     log = O.log_path(d)
-    marker = log + ".fg-live"
-    if os.path.exists(marker):
-        # Normally cleaned up by claude-cmd-fmt.py's PostToolUse handler — but a
+    held = S.hand_peek(log, "fg-live")
+    if held:
+        # Normally consumed by claude-cmd-fmt.py's PostToolUse handler — but a
         # MANUALLY CANCELLED command fires no hook at all (same gap noted throughout
-        # this file), so that never runs and the marker would otherwise wedge every
+        # this file), so that never runs and the record would otherwise wedge every
         # later command out of live-streaming forever. Tell a genuinely-in-flight
-        # marker (its tailer pid still alive) apart from an abandoned one the same way
+        # record (its tailer pid still alive) apart from an abandoned one the same way
         # claude_slots does for slots: a dead pid means it's stale, so clear it and
-        # proceed as if there were no marker.
+        # proceed as if there were none. (The record lives in the per-session state
+        # DB — claude_state handoffs, key "fg-live" — was a .fg-live JSON file.)
         stale = True
         try:
-            with open(marker) as f:
-                held = json.load(f)
             pid = held.get("pid")
             if pid:
                 os.kill(pid, 0)
@@ -104,15 +105,13 @@ def main():
         except PermissionError:
             stale = False                           # exists, owned by someone else -> still alive
         except Exception:
-            stale = True                            # unreadable / no pid recorded -> can't confirm, assume stale
+            stale = True                            # no pid recorded -> can't confirm, assume stale
         if not stale:
             A.hook_event(d, decision="ignored: a live fg block is already in flight")
             return                                  # a live fg block is genuinely still in flight
-        try:
-            os.remove(marker)
-            A.state_file(log, marker, "remove-stale", "dead tailer pid — marker abandoned")
-        except Exception:
-            pass
+        S.hand_del(log, "fg-live")
+        A.state_file(log, "state:fg-live", "remove-stale",
+                     "dead tailer pid — record abandoned")
 
     redirect = parse_redirect(cmd, d.get("cwd"))
     wrapped_cmd, own, append = None, False, False
@@ -173,12 +172,11 @@ def main():
         return
     claude_slots.set_owner(slot_marker, proc.pid)
 
-    try:
-        with open(marker, "w") as f:
-            json.dump({"src": src, "own": own, "pid": proc.pid, "done": done}, f)
-        A.state_file(log, marker, "write", {"src": src, "own": own, "pid": proc.pid, "done": done})
-    except Exception:
-        A.error(log, "write .fg-live marker", {"src": src})
+    rec = {"src": src, "own": own, "pid": proc.pid, "done": done}
+    if S.hand_put(log, "fg-live", rec):
+        A.state_file(log, "state:fg-live", "write", rec)
+    else:
+        A.error(log, "write fg-live record", {"src": src})
         return                                     # tailer will notice via its own backstop eventually
 
     O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG), O.code(cmd), O.rule())

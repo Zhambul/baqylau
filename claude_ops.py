@@ -29,6 +29,7 @@ except Exception:                       # audit must never break a producer
         def __getattr__(self, _):
             return lambda *a, **k: None
     A = _NoAudit()
+import claude_state as S                # per-session runtime state (SQLite, /tmp)
 
 
 def diff_counts(tool_name, inp):
@@ -286,130 +287,116 @@ def fmt_usd(c):
     return f"${c / 1000:.1f}k"
 
 
-def stats_path(log):
-    return log + ".stats.json"
+def bump(log, tool=None, file=None, meta=None, **deltas):
+    """Fold scoreboard deltas into the per-session state DB (claude_state) — was a
+    flock'd read-modify-write of a JSON sidecar, now atomic SQL increments, so
+    concurrent hook processes can't tear or clobber each other. Adds each numeric
+    delta to its counter, increments tools[tool], and stamps 'start' (epoch secs) on
+    first write. `file` records a touched path (unique-file set) and the scoreboard's
+    files figure is its size — re-editing the same file doesn't inflate it. Returns
+    the updated stats dict — {} on any failure (stats are best-effort, never fatal
+    to a hook).
 
-
-def bump(log, tool=None, file=None, **deltas):
-    """Read-modify-write the scoreboard sidecar under an flock so concurrent hook
-    processes don't clobber each other. Adds each numeric delta to its key, increments
-    tools[tool], and stamps 'start' (epoch secs) on first write. `file` records a
-    touched path into the 'file_set' map and keeps 'files' at its size — so the
-    scoreboard's files figure counts UNIQUE files, not file operations (re-editing
-    the same file doesn't inflate it). Returns the updated dict — {} on any failure
-    (stats are best-effort, never fatal to a hook)."""
-    p = stats_path(log)
-    try:
-        f = open(p, "a+", encoding="utf-8")
-    except OSError:
-        return {}
-    try:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        raw = f.read()
-        try:
-            st = json.loads(raw) if raw.strip() else {}
-        except Exception:
-            st = {}
-        if not isinstance(st, dict):
-            st = {}
-        for k, v in deltas.items():
-            st[k] = (st.get(k) or 0) + v
-        if tool:
-            tools = st.get("tools")
-            if not isinstance(tools, dict):
-                tools = {}
-            tools[tool] = (tools.get(tool) or 0) + 1
-            st["tools"] = tools
-        if file:
-            fs = st.get("file_set")
-            if not isinstance(fs, dict):
-                fs = {}
-            fs[file] = 1
-            st["file_set"] = fs
-            st["files"] = len(fs)
-        st.setdefault("start", int(time.time()))
-        f.seek(0)
-        f.truncate()
-        f.write(json.dumps(st, ensure_ascii=False))
-        # Audit the sidecar evolution: the applied deltas + the resulting headline
+    `meta` attributes an AGENT streamer's spend bump: agent_id/kind/model plus the
+    in/out/cache/create split that cost_usd priced. Those rows are audited under the
+    distinct action 'bump-agent', so "which agent inflated the scoreboard" is a
+    column, not a timestamp correlation against `streams`, and the cost math is
+    re-derivable from the DB alone (a wrong PRICES entry shows as right tokens /
+    wrong dollars). A token/cost delta with NO meta on a current build is itself an
+    anomaly — an unattributed producer (see the `anomalies` canned query)."""
+    st = S.incr(log, tool=tool, file=file, **deltas)
+    if st:
+        # Audit the state evolution: the applied deltas + the resulting headline
         # totals, so a wrong scoreboard number can be traced to the exact bump that
-        # skewed it (double count, missed count) instead of manual sidecar digging.
-        A.state_file(log, p, "bump", {
-            "deltas": deltas, "tool": tool, "file": file,
-            "now": {k: st.get(k) for k in
-                    ("commands", "failed", "files", "added", "removed",
-                     "tokens", "cost") if st.get(k)}})
-        return st
-    except Exception:
+        # skewed it (double count, missed count) instead of manual state digging.
+        # Exception: the scorebar's paused-only ticks (one per second while the tab
+        # is green) — pure noise that buried real bumps; their running total rides
+        # in every other bump row's `now`.
+        if set(deltas) == {"paused"}:
+            return st
+        content = {"deltas": deltas, "tool": tool, "file": file,
+                   "now": {k: st.get(k) for k in
+                           ("commands", "failed", "files", "added", "removed",
+                            "tokens", "cost") if st.get(k)}}
+        if meta:
+            content["meta"] = meta
+        A.state_file(log, S.db_path(log), "bump-agent" if meta else "bump", content)
+    else:
         A.error(log, "bump", {"deltas": deltas, "tool": tool})
-        return {}
-    finally:
-        try:
-            fcntl.flock(f, fcntl.LOCK_UN)
-        except Exception:
-            pass
-        f.close()
+    return st
 
 
 def bump_transcript(log, transcript):
-    """Fold the MAIN session's own token spend into the scoreboard sidecar.
+    """Fold the MAIN session's own token spend into the scoreboard state.
 
     Agents/codex bump their spend when their streamer finishes, but the main session
     has no streamer of its own — without this, the scoreboard's tokens/cost only move
     when an agent run ends (they'd sit "stuck" through plain main-session work). Hooks
     call this with the payload's transcript_path: it reads the session JSONL forward
-    from the last position (kept in the sidecar as 'txpos'), sums each new assistant
-    turn's usage into 'tokens' (fresh billed input + output — cache reads are replay,
-    not spend) and 'cost' (cost_usd on that turn's model, cache read/write rates
-    included), and advances the cursor. Runs under the same flock as bump(), so
-    concurrent hooks never double-count a turn. Sidechain (subagent) records are
+    from the last position (the 'txpos' counter), sums each new assistant turn's
+    usage into 'tokens' (fresh billed input + output — cache reads are replay, not
+    spend) and 'cost' (cost_usd on that turn's model, cache read/write rates
+    included), and advances the cursor. The whole read-modify runs inside ONE
+    BEGIN IMMEDIATE transaction on the state DB (was an flock on the JSON sidecar),
+    so concurrent hooks never double-count a turn. Sidechain (subagent) records are
     skipped — their own streamer already bumps them.
 
     One assistant MESSAGE is written as one JSONL line PER CONTENT BLOCK, each line
     repeating that message's usage (input/cache fields identical, output_tokens a
     growing snapshot — the last line has the final count). So usage is counted once
     per message.id, from its last line. Because a message's lines can straddle two
-    bump calls, the sidecar keeps 'txlast' — the last counted id and what was counted
+    bump calls, the state keeps 'txlast' — the last counted id and what was counted
     for it — and later lines of the same id only add the (output) delta. Best-effort:
-    any failure leaves the sidecar unchanged."""
+    any failure rolls the transaction back and leaves the state unchanged."""
     if not log or not transcript:
         return {}
-    p = stats_path(log)
-    try:
-        f = open(p, "a+", encoding="utf-8")
-    except OSError:
+    conn = S.connect(log)
+    if conn is None:
         return {}
+
+    def _get(key, default=0):
+        row = conn.execute("SELECT val FROM counters WHERE key=?", (key,)).fetchone()
+        return row[0] if row else default
+
+    def _add(key, v):
+        conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET val = val + excluded.val",
+                     (key, float(v)))
+
+    def _put(key, v):
+        conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                     (key, float(v)))
+
     try:
-        fcntl.flock(f, fcntl.LOCK_EX)
-        f.seek(0)
-        raw = f.read()
-        try:
-            st = json.loads(raw) if raw.strip() else {}
-        except Exception:
-            st = {}
-        if not isinstance(st, dict):
-            st = {}
-        pos = int(st.get("txpos") or 0)
-        prev = st.get("txlast") if isinstance(st.get("txlast"), dict) else None
+        conn.execute("BEGIN IMMEDIATE")     # serialize concurrent hooks on the cursor
+        pos = int(_get("txpos"))
+        row = conn.execute("SELECT val FROM kv WHERE key='txlast'").fetchone()
+        prev = json.loads(row[0]) if row else None
+        if not isinstance(prev, dict):
+            prev = None
         try:
             size = os.path.getsize(transcript)
         except OSError:
-            return st
+            conn.commit()
+            return stats_now(log)
         if size < pos:                      # transcript rotated/replaced — restart
             pos = 0
             prev = None                     # ids from the old file mustn't dedup the new one
         if size <= pos:
-            return st
+            conn.commit()
+            return stats_now(log)
         try:
             with open(transcript, "rb") as tf:
                 tf.seek(pos)
                 chunk = tf.read(size - pos)
         except OSError:
-            return st
+            conn.commit()
+            return stats_now(log)
         end = chunk.rfind(b"\n")
         if end < 0:                         # no complete new line yet — keep cursor
-            return st
+            conn.commit()
+            return stats_now(log)
         tok, usd = 0, 0.0
         rows = {}                           # message id -> last usage line seen for it
         for ln in chunk[:end].split(b"\n"):
@@ -444,34 +431,41 @@ def bump_transcript(log, transcript):
             usd += max(d_c, 0.0)
             prev = {"id": mid, "tok": full_t, "usd": full_c}
         if tok:
-            st["tokens"] = (st.get("tokens") or 0) + tok
+            _add("tokens", tok)
         if usd:
-            st["cost"] = (st.get("cost") or 0) + usd
-        if prev:
-            st["txlast"] = prev
-        st["txpos"] = pos + end + 1
-        st.setdefault("start", int(time.time()))
-        f.seek(0)
-        f.truncate()
-        f.write(json.dumps(st, ensure_ascii=False))
+            _add("cost", usd)
+        if prev is not None:
+            conn.execute("INSERT INTO kv(key, val) VALUES('txlast', ?) "
+                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                         (json.dumps(prev, ensure_ascii=False),))
+        _put("txpos", pos + end + 1)
+        conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
+                     (int(time.time()),))
+        conn.execute("INSERT INTO counters(key, val) VALUES('v', 1) "
+                     "ON CONFLICT(key) DO UPDATE SET val = val + 1")
+        conn.commit()
+        st = stats_now(log)
         # Audit only when spend actually moved (this is called on every hook; a
         # no-new-turns call is noise). Records the delta, the cursor advance, and
         # the resulting totals — the trail a token/cost inflation bug needs.
         if tok or usd:
-            A.state_file(log, p, "bump-transcript", {
+            A.state_file(log, S.db_path(log), "bump-transcript", {
                 "d_tokens": tok, "d_cost": round(usd, 6),
-                "txpos": st["txpos"], "txlast": st.get("txlast"),
+                "txpos": pos + end + 1, "txlast": prev,
                 "now": {"tokens": st.get("tokens"), "cost": st.get("cost")}})
         return st
     except Exception:
-        A.error(log, "bump_transcript", {"transcript": transcript})
-        return {}
-    finally:
         try:
-            fcntl.flock(f, fcntl.LOCK_UN)
+            conn.rollback()
         except Exception:
             pass
-        f.close()
+        A.error(log, "bump_transcript", {"transcript": transcript})
+        return {}
+
+
+def stats_now(log):
+    """Current scoreboard stats dict (old sidecar shape) from the state DB."""
+    return S.stats(log)
 
 
 def _dur(sec):
@@ -542,7 +536,7 @@ def scoreboard_parts(st, now):
 # PostToolUse, but nothing fires when a teammate drains its inbox), so we can't bump a
 # sidecar event-style. Instead the tracker is STATEFUL POLLING: the one scorebar per
 # session already scans inboxes each tick, so it diffs the current inbox snapshot
-# against a persisted sidecar (msgs_path) keyed by msg_id and folds transitions into
+# against the persisted state (claude_state's messages table) keyed by msg_id and folds transitions into
 # CUMULATIVE counters — which therefore survive a teammate draining its inbox (the
 # whole point; a plain snapshot goes blank the instant a message is consumed).
 #
@@ -561,10 +555,6 @@ def team_dir(log):
         return None
     d = os.path.expanduser("~/.claude/teams/session-" + m.group(1).lower())
     return d if os.path.isdir(d) else None
-
-
-def msgs_path(log):
-    return log + ".msgs.json"
 
 
 STALE_S = 60                    # an unread message sitting longer than this is "stale"
@@ -619,8 +609,8 @@ def _scan_inbox(d):
 
 def update_messages(log):
     """Stateful team-message tracker. Scans inboxes, diffs against the persisted
-    sidecar (msgs_path) keyed by msg_id, updates cumulative counters, and returns
-    (parts, events):
+    state (claude_state's messages table + cumulative counters — was a .msgs.json
+    sidecar) keyed by msg_id, updates the counters, and returns (parts, events):
       parts  — [(kind, text)] census for the ✉ row: msgs / unread / read; always leads
                with a msgs count (0 included) so the row is never blank, even for a
                non-team session.
@@ -631,14 +621,7 @@ def update_messages(log):
     d = team_dir(log)
     if not d:
         return [("msgs", "0 msgs")], []      # non-team: still show a 0 count, no events
-    p = msgs_path(log)
-    try:
-        with open(p, encoding="utf-8") as f:
-            st = json.load(f)
-    except Exception:
-        st = {}
-    delivered0, read0 = int(st.get("delivered") or 0), int(st.get("read") or 0)
-    live = st.get("live") or {}          # {msg_id: [read_bool, from, recipient, summary]}
+    delivered0, read0, live = S.msgs_state(log)
     delivered, read = delivered0, read0
     cur, meta, ts = _scan_inbox(d)
     events = []
@@ -662,16 +645,12 @@ def update_messages(log):
             events.append(("read", frm, to, summ))
     new_live = {mid: [cur[mid], meta[mid][0], meta[mid][1], meta[mid][2]] for mid in cur}
     if delivered != delivered0 or read != read0 or new_live != live:
-        try:
-            with open(p, "w", encoding="utf-8") as f:
-                json.dump({"delivered": delivered, "read": read, "live": new_live}, f)
-        except Exception:
-            A.error(log, "update_messages", {"delivered": delivered, "read": read})
+        S.msgs_write(log, delivered, read, new_live)
     # Audit message-tracker transitions (only when something actually changed —
     # this runs on every scorebar tick). One row per delivery/read event plus the
     # resulting cumulative counters, so a wrong ✉ census is traceable.
     if events:
-        A.state_file(log, p, "msg-transitions", {
+        A.state_file(log, S.db_path(log), "msg-transitions", {
             "events": [{"kind": k, "from": f_, "to": t, "summary": s}
                        for k, f_, t, s in events],
             "now": {"delivered": delivered, "read": read}})

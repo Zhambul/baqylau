@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_render as R
 import claude_ops as O
+import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 STREAM_ID = None   # audit streams-row id (set in main)
@@ -231,7 +232,10 @@ def main():
     #             ends, so we track that process — robust at ANY cadence, no grace.
     # Fallbacks use a short idle so the streamer always terminates.
     mon_pid, find_deadline, GRACE = None, start + 20, (2.0 if KIND in ("bg", "fg") else 8.0)
-    sentinel = (DONE or path + ".done") if KIND == "fg" else None
+    # The outcome hand-off is a state-DB record keyed by the token claude-cmd-pre.py
+    # agreed with claude-cmd-fmt.py on (CLAUDE_STREAM_DONE) — was a .done sentinel
+    # file polled with exists/read/remove; hand_take is the same take-once, atomically.
+    sentinel = ("done:" + (DONE or path + ".done")) if KIND == "fg" else None
     override, FG_BACKSTOP = None, start + 7200   # absolute backstop so a stuck tailer can't run forever
     while True:
         if pump() is None:
@@ -239,19 +243,12 @@ def main():
             break
         now = time.time()
         if KIND == "fg":
-            if sentinel and os.path.exists(sentinel):
-                try:
-                    with open(sentinel) as f:
-                        override = json.load(f)
-                except Exception:
-                    A.error(LOG, "read .done sentinel", {"sentinel": sentinel})
-                    override = {}
-                try:
-                    os.remove(sentinel)
-                except Exception:
-                    pass
-                END_REASON = "sentinel"
-                break
+            if sentinel:
+                taken = S.hand_take(LOG, sentinel)
+                if taken is not None:
+                    override = taken
+                    END_REASON = "sentinel"
+                    break
             # Track the underlying process by writer-liveness, same as "bg" — NOT a
             # fixed timeout. This is what keeps a still-running command's tab BLUE for
             # as long as it's actually running, whether or not PostToolUse ever shows

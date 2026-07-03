@@ -588,6 +588,14 @@ def cli_anomalies(sid):
     section("tab colour applies where kitten @ failed",
             "SELECT ts, dispatch, new_state, reason FROM tab_transitions "
             "WHERE session_id=? AND reason LIKE '%kitten @ failed%' ORDER BY ts", (sid,))
+    # Agent spend must arrive as 'bump-agent' (attributed: agent_id/model/token
+    # split in meta). A plain 'bump' carrying a tokens/cost delta means some
+    # producer bypassed the attribution — the scoreboard number it fed can only be
+    # traced by timestamp correlation, which is the gap bump-agent closed.
+    section("unattributed token/cost bumps (should be bump-agent with meta)",
+            "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
+            "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
+            "OR json_extract(content, '$.deltas.cost') IS NOT NULL) ORDER BY ts", (sid,))
 
 
 def cli_sessions(limit=20):

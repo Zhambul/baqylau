@@ -21,6 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_render as R
 import claude_ops as O
+import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 STREAM_ID = None
@@ -295,25 +296,29 @@ def op_tag():
     # Constant per agent; appended to every operation header.
     return "·".join(x for x in (short_model(disp_model()), effort()) if x)
 
-# Where the subagent's transcript + completion sentinel live.
+# Where the subagent's transcript lives. The completion signal and the resume
+# checkpoint live on this agent's record in the per-session state DB
+# (claude_state.agents — was sub.done.* / sub.pos.* files in the .slots dir):
+#   done      — set to 1 by the SubagentStop hook; this streamer polls it.
+#   pos       — byte offset of the last fully consumed transcript line. An idle
+#               TEAMMATE fires SubagentStop (this streamer finalises and dies) and a
+#               later message fires a fresh SubagentStart, which spawns a NEW streamer
+#               for the SAME transcript — without the checkpoint that streamer would
+#               re-render the whole history. Deliberately NOT cleared in cleanup():
+#               it must outlive the streamer to make the resume seamless.
 BASE = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
 SUBDIR = os.path.join(BASE, "subagents")
 JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
-SENT   = os.path.join(LOG + ".slots", f"sub.done.{AGENT}")
 META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
-# Byte offset of the last fully consumed transcript line. An idle TEAMMATE fires
-# SubagentStop (this streamer finalises and dies) and a later message fires a fresh
-# SubagentStart, which spawns a NEW streamer for the SAME transcript — without a
-# checkpoint that streamer would re-render the whole history. Deliberately NOT
-# removed in cleanup(): it must outlive the streamer to make the resume seamless.
-POS_PATH = os.path.join(LOG + ".slots", f"sub.pos.{AGENT}")
+STATE_KEY = "state:agent." + AGENT          # audit label for checkpoint rows
+USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
 
 
 def cancelled_by_user():
     # A manually killed/cancelled subagent fires NO SubagentStop hook — the same
     # gap documented throughout this codebase for interrupts (claude-tab-status.sh's
-    # idle-watch, claude-cmd-pre.py's cancelled-foreground-command fix) — so SENT
-    # never appears and this tailer would otherwise hang until the 6h backstop
+    # idle-watch, claude-cmd-pre.py's cancelled-foreground-command fix) — so the
+    # done flag never flips and this tailer would otherwise hang until the 6h backstop
     # below, leaving the tab stuck blue the whole time. But Claude Code stamps
     # `stoppedByUser: true` onto this agent's meta.json sidecar the moment that
     # happens (confirmed empirically), giving a fast, reliable end signal instead.
@@ -505,7 +510,7 @@ pending_tag = ""          # ctx token snapshotted when the pending_msg was buffe
 # count). Summing per line inflated the rollup ~2.2× (same bug as the main session's
 # bump_transcript, fixed there first). usage_last remembers the last counted id and
 # what was counted for it, so later lines of the same message only add the delta; it
-# is persisted in POS_PATH next to the byte checkpoint so a successor streamer
+# is persisted in the state DB next to the byte checkpoint so a successor streamer
 # (idle-teammate restart) doesn't recount a message straddling the handoff.
 tot_in = 0
 tot_out = 0
@@ -768,19 +773,27 @@ def main():
     # already-rendered history isn't replayed. Line 2 (optional JSON) is the
     # predecessor's last-counted usage record, restored so a message straddling
     # the handoff isn't recounted from zero. Ignore a checkpoint past EOF (a
-    # rewritten/foreign transcript) and start over.
+    # rewritten/foreign transcript) and start over. The adopted-vs-fresh outcome is
+    # audited (one row per streamer, not per pump — the per-tick writes are too hot):
+    # paired with the predecessor's 'final' row it makes a bad handoff (recounted or
+    # skipped transcript, dropped dedup state) visible in `state_files`.
     global usage_last
+    resume = {"agent": AGENT}
     try:
-        saved_lines = open(POS_PATH).read().splitlines()
-        saved = int((saved_lines[0] if saved_lines else "").strip() or "0")
+        saved = int(S.agent_get(LOG, AGENT).get("pos") or 0)
         if 0 < saved <= os.path.getsize(JSONL):
             pos = saved
-            if len(saved_lines) > 1:
-                lu = json.loads(saved_lines[1])
-                if isinstance(lu, dict) and lu.get("id"):
-                    usage_last = lu
+            lu = S.kv_get(LOG, USAGE_KEY)
+            if isinstance(lu, dict) and lu.get("id"):
+                usage_last = lu
+            resume.update({"adopted_pos": pos, "usage_last": usage_last})
+        elif saved:
+            resume["fresh"] = f"checkpoint {saved} empty or past EOF"
+        else:
+            resume["fresh"] = "no checkpoint (first streamer)"
     except Exception:
-        pass
+        resume["fresh"] = "unreadable checkpoint"
+    A.state_file(LOG, STATE_KEY, "resume", resume)
 
     def pump():
         nonlocal pos, pending
@@ -806,15 +819,11 @@ def main():
                 if s:
                     handle_line(s)
             # Checkpoint only what was fully consumed — a trailing partial line
-            # stays uncounted so a successor re-reads it whole. Line 2 carries the
-            # last-counted usage record for the successor's dedup.
-            try:
-                with open(POS_PATH, "w") as fh:
-                    fh.write(str(pos - len(pending)))
-                    if usage_last:
-                        fh.write("\n" + json.dumps(usage_last))
-            except Exception:
-                pass
+            # stays uncounted so a successor re-reads it whole. The last-counted
+            # usage record rides along for the successor's dedup.
+            S.agent_set(LOG, AGENT, pos=pos - len(pending))
+            if usage_last:
+                S.kv_set(LOG, USAGE_KEY, usage_last)
 
     # Completion: the SubagentStop sentinel (the authoritative end signal — written
     # by the stop hook) for a normal finish, OR meta.json's stoppedByUser for a
@@ -823,7 +832,7 @@ def main():
     cancelled = False
     while True:
         pump()
-        if os.path.exists(SENT):
+        if S.agent_get(LOG, AGENT).get("done"):
             END_REASON = "stop-sentinel"
             break
         if cancelled_by_user():
@@ -865,17 +874,29 @@ def main():
     if usd:
         foot += " · ≈ " + O.fmt_usd(usd)
     O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
+    # Checkpoint-trail bookend to the 'resume' row above: what this streamer
+    # consumed and last counted. A successor whose 'resume' row disagrees with this
+    # 'final' row is the handoff bug the persisted usage_last exists to prevent.
+    A.state_file(LOG, STATE_KEY, "final",
+                 {"agent": AGENT, "pos": pos - len(pending), "usage_last": usage_last,
+                  "in": tot_in, "out": tot_out, "cache": tot_cache, "create": tot_create})
     # Feed this agent's metered spend into the session scoreboard (the main session's
     # own spend is folded in separately by claude_ops.bump_transcript, called from the
     # cmd/file hooks — together they cover the whole session). tokens = fresh billed
     # input + generated output — cache reads are replay, not spend, so they're excluded.
+    # `meta` makes the bump attributable and re-priceable straight from the audit DB
+    # (agent, model priced on, and the four totals cost_usd saw).
     deltas = {}
     if usd:
         deltas["cost"] = usd
     if tot_in or tot_out:
         deltas["tokens"] = tot_in + tot_out
     if deltas:
-        O.bump(LOG, **deltas)
+        O.bump(LOG, meta={"agent_id": AGENT,
+                          "kind": "teammate" if PALETTE == "team" else "subagent",
+                          "model": disp_model(), "in": tot_in, "out": tot_out,
+                          "cache": tot_cache, "create": tot_create, "src": JSONL},
+               **deltas)
 
 
 def cleanup():
@@ -884,11 +905,13 @@ def cleanup():
     # blue back to green — a background agent finishing has no other hook to do it.
     # (No-op unless the tab is currently awaiting-bg and nothing else is running.)
     claude_slots.release_id("sub", LOG, AGENT)
-    for p in (SENT, os.path.join(LOG + ".slots", f"sub.pid.{AGENT}")):
-        try:
-            os.remove(p)
-        except Exception:
-            pass
+    # Clear the done flag (NOT pos — a resumed teammate needs the checkpoint) so a
+    # later SubagentStart for this agent_id doesn't finalise its new streamer at once.
+    S.agent_set(LOG, AGENT, done=0)
+    try:
+        os.remove(os.path.join(LOG + ".slots", f"sub.pid.{AGENT}"))
+    except Exception:
+        pass
     try:
         subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots", "sub"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,

@@ -28,7 +28,7 @@ the bug **from evidence, not guesswork**.
 | `ops` | paint op written to the mirror log | producer (script), op (the JSON paint op — full pane reconstruction, survives SessionEnd) |
 | `errors` | swallowed exception | script, func, **traceback** (full), context (JSON of args in hand) |
 | `spawns` | detached process launch | parent_script, child_pid, argv, purpose |
-| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-transcript/msg-transitions**), content (.done sentinels, .fg-live markers, sub.done sentinels; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs) |
+| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split cost_usd priced — attribution and re-pricing need no timestamp correlation. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff |
 | `pane_events` | mirror/scoreboard pane operation | action (open/close/toggle-on/toggle-off/grow/shrink/reset/setpct), **ok** (verified against kitty — 0 means the pane genuinely isn't there), detail (bias/resulting width). First stop for "frozen/missing pane" reports |
 
 ## Triage order
@@ -69,7 +69,8 @@ the bug **from evidence, not guesswork**.
   file may now disagree with the real tab.
 - **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
-  `state_files` shows whether the `.done` / `sub.done` sentinel was ever written.
+  `state_files` shows whether the outcome hand-off (`state:done:<token>`) / the agent
+  record's done flag (`state:agent.<id>`) was ever written.
 - **Frozen / missing / doubled pane** — `pane_events` first: an `open`/`toggle-on`
   with `ok=0` means the mirror (or the scoreboard bar — see detail) genuinely never
   opened; a resize whose detail shows an unchanged resulting width did nothing. Then
@@ -85,7 +86,7 @@ the bug **from evidence, not guesswork**.
   holder pid) = another session's watcher took it, `steal-stale` = a dead session's
   claim was taken over.
 - **Command never appeared in the mirror** — `hook_events` decision column: was it
-  "ignored: a live fg block is already in flight" (stale `.fg-live`), "ignored:
+  "ignored: a live fg block is already in flight" (stale `fg-live` state record), "ignored:
   agent_id", or did the hook never fire at all?
 - **Double-rendered subagent** — duplicate SubagentStart in `hook_events` where the
   second's decision is NOT "ignored: duplicate".
@@ -99,17 +100,23 @@ the bug **from evidence, not guesswork**.
   `.done` sentinel used to be derived from the command's redirect target (unexpanded,
   cwd-relative). Now a session-keyed /tmp path; `state_files` shows every sentinel
   write path — any non-/tmp sentinel path on a current build is a regression.
-- **Scoreboard tok/cost inflated vs `/cost`** — the trail is `state_files`: `bump`
-  rows with a `tokens`/`cost` delta are agent-streamer bumps (one per `streams` row
-  ending near the same ts), `bump-transcript` rows are the main session's own turns.
-  Recompute ground truth from the named transcript (main: `sessions.transcript_path`;
-  agents: `streams.src_path`) deduped by `message.id` and diff against the bump
-  deltas — whichever producer's delta exceeds its deduped source is the culprit.
-  Two fixed instances of the same shape (usage summed per JSONL *line*, but one
-  message = one line per content block): `bump_transcript()` *(fixed, `message.id`
-  dedup + `txlast`)* and the agent streamers' footer rollup in `claude-substream.py`
-  *(fixed 2026-07-04, `usage_last` + checkpoint line 2 — was ×2.24 on multi-block
-  agents)*. On a current build, a bump delta > its deduped source is a regression.
+- **Scoreboard tok/cost inflated vs `/cost`** — the trail is `state_files`:
+  `bump-agent` rows are agent-streamer bumps (`meta` names the agent, model, and the
+  in/out/cache/create split that was priced — pre-2026-07-04 sessions have plain
+  `bump` rows instead, attributable only by ts against `streams.ended_at`);
+  `bump-transcript` rows are the main session's own turns. Recompute ground truth
+  from the named transcript (main: `sessions.transcript_path`; agents: `meta.src` /
+  `streams.src_path`) deduped by `message.id` and diff against the bump deltas —
+  whichever producer's delta exceeds its deduped source is the culprit. Tokens right
+  but dollars wrong = re-run `cost_usd` on `meta.model` + the meta split: a pricing
+  bug (`PRICES`), not a counting bug. Two fixed instances of the counting shape
+  (usage summed per JSONL *line*, but one message = one line per content block):
+  `bump_transcript()` *(fixed, `message.id` dedup + `txlast`)* and the agent
+  streamers' footer rollup in `claude-substream.py` *(fixed 2026-07-04, `usage_last`
+  + checkpoint line 2 — was ×2.24 on multi-block agents)*. For a suspected handoff
+  double-count, diff the streamer's `resume` row against its predecessor's `final`
+  row (path `sub.pos.<agent>`). The `anomalies` command flags any token/cost delta
+  arriving as plain `bump` (unattributed producer) on a current build.
 
 ## Output contract
 
