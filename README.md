@@ -458,8 +458,16 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     cache_creation` — tokens actually sent, not replayed), **out** is generated
     (`output_tokens`), and **cache %** is `cache_read / (in + cache_read)` — the share
     of all context reads served from cache, i.e. a reuse/thrash signal. **tools** counts
-    every `tool_use` block. The rollup is appended last, so on a narrow pane it's the
-    first thing the renderer's `fit()` truncates — duration and ctx always survive.
+    every `tool_use` block. Usage is deduped by `message.id`, same as the main
+    session's `bump_transcript()` below — one assistant message is one JSONL line
+    *per content block*, each repeating the message's usage, so summing per line
+    inflated the rollup (and the scoreboard bump it feeds) ~2.2× on multi-block
+    agents; repeat lines of the same id add only the (output) delta, tracked in
+    `usage_last`. That record is persisted as a second line in the `sub.pos.<agent>`
+    checkpoint so a successor streamer (idle-teammate restart) doesn't recount a
+    message straddling the handoff. The rollup is appended last, so on a narrow pane
+    it's the first thing the renderer's `fit()` truncates — duration and ctx always
+    survive.
   - **Cost estimate in the footer.** After the rollup the footer appends `· ≈ $X`,
     the summed tokens priced on the resolved model (`claude_ops.PRICES`, per-MTok
     input/output for the current lineup; `cache_read` billed at ~0.1×). An unknown
@@ -542,7 +550,12 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     A message whose lines straddle two bump calls is handled by the sidecar's `txlast`
     (last counted id + what was credited): later lines of the same id add only the
     delta. (Before the dedup, multi-block turns counted 2–3×, inflating a $3.84
-    session to a $7.29 scoreboard.)
+    session to a $7.29 scoreboard.) The **agent streamers apply the same dedup** to
+    their footer rollup (`usage_last` in `claude-substream.py`, persisted in the
+    `sub.pos.<agent>` checkpoint) — they originally summed per line, which showed up
+    as a second instance of the same bug: a session whose four review agents really
+    billed ~784k tokens bumped 1.75M (×2.24), turning a $18.76 session into a $23
+    scoreboard.
   - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-06 list):
     Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet 3/15 · Haiku 4.5 1/5 · legacy
     Opus 4.1/4.0/3 15/75 per MTok in/out; cache reads bill 0.1× input and cache

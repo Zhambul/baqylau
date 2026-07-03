@@ -498,11 +498,21 @@ pending_tag = ""          # ctx token snapshotted when the pending_msg was buffe
 # write premium. So the footer's "cache %" = tot_cache / (tot_in + tot_cache) is the
 # share of all context reads served from cache — a thrash/reuse signal. tool_n counts
 # tool_use blocks.
+#
+# Counted once per MESSAGE, not per line: one assistant message is written as one
+# JSONL line PER CONTENT BLOCK, each repeating that message's usage (input/cache
+# fields identical, output_tokens a growing snapshot — the last line has the final
+# count). Summing per line inflated the rollup ~2.2× (same bug as the main session's
+# bump_transcript, fixed there first). usage_last remembers the last counted id and
+# what was counted for it, so later lines of the same message only add the delta; it
+# is persisted in POS_PATH next to the byte checkpoint so a successor streamer
+# (idle-teammate restart) doesn't recount a message straddling the handoff.
 tot_in = 0
 tot_out = 0
 tot_cache = 0
 tot_create = 0
 tool_n = 0
+usage_last = None         # {"id", "in", "out", "cache", "create"} of the last counted message
 
 
 def flush_msg(is_result=False):
@@ -678,7 +688,7 @@ def on_tool_result(b, tur=None):
 
 
 def handle_line(s):
-    global last_usage, last_model, cur_tag, turn_ctx_shown, tot_in, tot_out, tot_cache, tot_create
+    global last_usage, last_model, cur_tag, turn_ctx_shown, tot_in, tot_out, tot_cache, tot_create, usage_last
     try:
         o = json.loads(s)
     except Exception:
@@ -708,11 +718,26 @@ def handle_line(s):
         if isinstance(u, dict):           # refresh the live context fill for this turn
             last_usage = u
             last_model = msg.get("model") or last_model
-            # Accumulate for the ended-footer rollup (each turn's usage counted once).
-            tot_in += u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
-            tot_cache += u.get("cache_read_input_tokens", 0)
-            tot_create += u.get("cache_creation_input_tokens", 0)
-            tot_out += u.get("output_tokens", 0)
+            # Accumulate for the ended-footer rollup — once per message.id, deltas
+            # only for repeat lines of the same message (see usage_last above).
+            create = int(u.get("cache_creation_input_tokens") or 0)
+            fin = int(u.get("input_tokens") or 0) + create
+            out = int(u.get("output_tokens") or 0)
+            cr = int(u.get("cache_read_input_tokens") or 0)
+            mid = msg.get("id")
+            prev = usage_last if (mid and usage_last and usage_last.get("id") == mid) else None
+            if prev:
+                tot_in += max(fin - int(prev.get("in") or 0), 0)
+                tot_out += max(out - int(prev.get("out") or 0), 0)
+                tot_cache += max(cr - int(prev.get("cache") or 0), 0)
+                tot_create += max(create - int(prev.get("create") or 0), 0)
+            else:
+                tot_in += fin
+                tot_out += out
+                tot_cache += cr
+                tot_create += create
+            if mid:
+                usage_last = {"id": mid, "in": fin, "out": out, "cache": cr, "create": create}
         cur_tag = ctx_tag()
         turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
         if isinstance(content, list):
@@ -740,12 +765,20 @@ def main():
 
     pos, pending = 0, b""
     # Resume from the previous streamer's checkpoint (idle-teammate restart) so
-    # already-rendered history isn't replayed. Ignore a checkpoint past EOF (a
+    # already-rendered history isn't replayed. Line 2 (optional JSON) is the
+    # predecessor's last-counted usage record, restored so a message straddling
+    # the handoff isn't recounted from zero. Ignore a checkpoint past EOF (a
     # rewritten/foreign transcript) and start over.
+    global usage_last
     try:
-        saved = int(open(POS_PATH).read().strip() or "0")
+        saved_lines = open(POS_PATH).read().splitlines()
+        saved = int((saved_lines[0] if saved_lines else "").strip() or "0")
         if 0 < saved <= os.path.getsize(JSONL):
             pos = saved
+            if len(saved_lines) > 1:
+                lu = json.loads(saved_lines[1])
+                if isinstance(lu, dict) and lu.get("id"):
+                    usage_last = lu
     except Exception:
         pass
 
@@ -773,10 +806,13 @@ def main():
                 if s:
                     handle_line(s)
             # Checkpoint only what was fully consumed — a trailing partial line
-            # stays uncounted so a successor re-reads it whole.
+            # stays uncounted so a successor re-reads it whole. Line 2 carries the
+            # last-counted usage record for the successor's dedup.
             try:
                 with open(POS_PATH, "w") as fh:
                     fh.write(str(pos - len(pending)))
+                    if usage_last:
+                        fh.write("\n" + json.dumps(usage_last))
             except Exception:
                 pass
 

@@ -99,6 +99,17 @@ the bug **from evidence, not guesswork**.
   `.done` sentinel used to be derived from the command's redirect target (unexpanded,
   cwd-relative). Now a session-keyed /tmp path; `state_files` shows every sentinel
   write path — any non-/tmp sentinel path on a current build is a regression.
+- **Scoreboard tok/cost inflated vs `/cost`** — the trail is `state_files`: `bump`
+  rows with a `tokens`/`cost` delta are agent-streamer bumps (one per `streams` row
+  ending near the same ts), `bump-transcript` rows are the main session's own turns.
+  Recompute ground truth from the named transcript (main: `sessions.transcript_path`;
+  agents: `streams.src_path`) deduped by `message.id` and diff against the bump
+  deltas — whichever producer's delta exceeds its deduped source is the culprit.
+  Two fixed instances of the same shape (usage summed per JSONL *line*, but one
+  message = one line per content block): `bump_transcript()` *(fixed, `message.id`
+  dedup + `txlast`)* and the agent streamers' footer rollup in `claude-substream.py`
+  *(fixed 2026-07-04, `usage_last` + checkpoint line 2 — was ×2.24 on multi-block
+  agents)*. On a current build, a bump delta > its deduped source is a regression.
 
 ## Output contract
 
