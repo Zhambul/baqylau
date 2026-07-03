@@ -876,6 +876,18 @@ What's recorded (all tables keyed by `session_id`, written by `claude_audit.py`)
 |---|---|
 | `sessions` | Claude session — cwd, transcript, mirror log, window id, start/end, env |
 | `hook_events` | hook invocation — **full stdin payload** + the handler's **decision** ("ignored: agent_id", "handed off to fg tailer: ■ failed (exit 1)", …) |
+
+`hook_events` is fed two ways. The mirror's own handlers record the events they
+process, *with* the decision they took. On top of that, a **universal subscriber**
+(`claude_audit.py hook subscriber`, wired **`async`** — non-blocking — into **all 30
+hook events** in `~/.claude/settings.json`) records **every** event with its full
+payload, `handler = 'subscriber'` — including the ones nothing else listens to:
+`PermissionRequest`/`PermissionDenied`, `PostToolBatch`, `MessageDisplay`,
+`TeammateIdle`, `Pre`/`PostCompact`, `ConfigChange`, `CwdChanged`, `FileChanged`,
+`WorktreeCreate`/`Remove`, `Elicitation`/`ElicitationResult`, `Setup`,
+`UserPromptExpansion`, `InstructionsLoaded`. So nothing that happens in a session is
+invisible to the audit, and a mirror-handler row can be cross-checked against the
+subscriber's independent record of the same event.
 | `tab_transitions` | tab-colour decision — dispatch, prev → new, applied *or skipped*, with the **reason** (replaces the old opt-in `CLAUDE_TAB_DEBUG` flat-file logs) |
 | `slots` | marker-file event — claim / claim-id / steal-stale / claim-denied / release / set-owner |
 | `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / converted-ctrl-b / backstop-timeout / crash) |
