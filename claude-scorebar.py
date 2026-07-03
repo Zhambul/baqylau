@@ -52,7 +52,11 @@ _NUM  = re.compile(r"\d[\d.,]*")
 
 
 def fit(s, avail):
-    return s if len(s) <= avail else (s[:avail - 1] + "…" if avail > 1 else s[:avail])
+    if R.dwidth(s) <= avail:
+        return s
+    if avail > 1:
+        return R.dsplit(s, avail - 1)[0] + "…"
+    return R.dsplit(s, max(0, avail))[0]
 
 
 def style(kind, text):
@@ -141,16 +145,24 @@ def session_id():
     return b
 
 
+_last_st = None    # last successfully-parsed sidecar — reused on a torn read
+
+
 def compose(w, mparts):
     """The scoreboard rows for width w, as styled strings: [session-id, messages,
     session-stats, tools]. Row 0 is the always-on ⬡ session id; row 1 is the ✉ message
     census `mparts` (always shown — defaults to '0 msgs'); rows 2-3 are the ▪ session
     summary + tool tallies. Segments drop from the tail until the plain text fits."""
+    global _last_st
     try:
         with open(STATS, encoding="utf-8") as f:
             st = json.load(f)
+        _last_st = st
     except Exception:
-        st = None
+        # Reads skip the producers' flock, so we can catch bump()'s truncate-then-
+        # write mid-flight. Keep the previous parse instead of blinking the row empty
+        # for a tick (this is the behavior the module docstring promises).
+        st = _last_st
     now = time.time()
 
     # Row 0: session id — always visible, truncated to width (dim glyph, brighter id).

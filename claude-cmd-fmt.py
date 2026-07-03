@@ -29,31 +29,37 @@ LBL_FAIL = (224, 108, 117)  # red     — a failed tool (PostToolUseFailure)
 def parse_redirect(cmd, cwd):
     # If the command sends stdout to a file (… > file / &> file / 1>> file), the
     # background task's own output file stays EMPTY — the bytes go to that file
-    # instead. Return its absolute path so the tailer can follow it live; otherwise
-    # there'd be nothing to show until the job exits. Conservative: only stdout
-    # (or &>) redirects, skip /dev/* and fd-dup targets (&1), give up on anything
-    # we can't tokenise. Last redirect wins (the effective stdout sink).
+    # instead. Return (absolute_path, append) so the tailer can follow it live;
+    # otherwise there'd be nothing to show until the job exits. Conservative: only
+    # stdout (or &>) redirects, skip /dev/* and fd-dup targets (&1), give up on
+    # anything we can't tokenise. Last redirect wins (the effective stdout sink).
     try:
         toks = shlex.split(cmd, posix=True)
     except ValueError:
         return None
-    target, i = None, 0
+    target, append, i = None, False, 0
     while i < len(toks):
         t = toks[i]
         if ">" in t and not t.startswith("2"):
-            m = re.match(r"^(?:&|1)?>>?(.*)$", t)
+            m = re.match(r"^(?:&|1)?(>>?)(.*)$", t)
             if m:
-                rest = m.group(1)
+                rest = m.group(2)
                 if rest:
-                    target = rest
+                    target, append = rest, m.group(1) == ">>"
                 elif i + 1 < len(toks):
-                    target = toks[i + 1]; i += 1
+                    target, append = toks[i + 1], m.group(1) == ">>"
+                    i += 1
         i += 1
     if not target or target.startswith("&") or target.startswith("/dev/"):
         return None
+    # shlex does NO shell expansion: a target holding $vars, backticks, globs, or a
+    # leading ~ is not the path the shell will actually write to (`> "$OUT"` would
+    # have us tail a literal file named $OUT). Fall back to the task output file.
+    if any(c in target for c in "$`*?[") or target.startswith("~"):
+        return None
     if not os.path.isabs(target):
         target = os.path.join(cwd or os.getcwd(), target)
-    return target
+    return target, append
 
 
 def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
@@ -132,6 +138,13 @@ def main():
             A.state_file(LOG, marker, "remove", live)
         except Exception:
             pass
+    # Sentinel path for handing the outcome to the fg tailer: the marker's session-
+    # keyed /tmp path ("done"), never a path derived from the command's own redirect
+    # target — that used to litter the project dir with `<target>.done` files (even
+    # literal `$VAR.done` for an unexpanded-variable redirect). `live["src"] + ".done"`
+    # remains only as a fallback for a marker written by a pre-"done" version of
+    # claude-cmd-pre.py still in flight.
+    done = (live.get("done") or (live["src"] + ".done")) if live and live.get("src") else None
 
     if bg or converted:
         # Claim a palette slot now and colour the "▷ background" header with it, so
@@ -143,7 +156,7 @@ def main():
         else:
             slot, slot_marker, head_rgb = None, None, LBL_BG
 
-        if converted and live and live.get("src"):
+        if converted and done:
             # Our own fg tailer was tee-ing this command's own side file — but once
             # Ctrl+B hands it off, Claude Code captures further output into its OWN
             # backgroundTaskId file instead (empirically: our tee file gets nothing
@@ -151,11 +164,11 @@ def main():
             # finish chip, no fallback body) instead of racing the bg tailer below,
             # which is about to own the rest of this block.
             try:
-                with open(live["src"] + ".done", "w") as f:
+                with open(done, "w") as f:
                     json.dump({"converted": True}, f)
-                A.state_file(LOG, live["src"] + ".done", "write", {"converted": True})
+                A.state_file(LOG, done, "write", {"converted": True})
             except Exception:
-                A.error(LOG, "write converted sentinel", {"src": live.get("src")})
+                A.error(LOG, "write converted sentinel", {"done": done})
             O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
         else:
             O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
@@ -166,8 +179,12 @@ def main():
             # Converted: find_file() locates tasks/<taskid>.output itself, same as any
             # genuine background command — this cmd string's own redirect (if any) is
             # irrelevant to where Claude Code is now writing the real output.
-            src = None if converted else parse_redirect(cmd, d.get("cwd"))
-            proc = _spawn_stream("bg", taskid, slot, src, skip_existing=converted)
+            redirect = None if converted else parse_redirect(cmd, d.get("cwd"))
+            src, src_append = redirect if redirect else (None, False)
+            # skip_existing for a `>>` redirect: tail only what this job appends, or
+            # the target file's entire prior contents would replay into the mirror.
+            proc = _spawn_stream("bg", taskid, slot, src,
+                                 skip_existing=converted or src_append)
             if proc is not None:
                 claude_slots.set_owner(slot_marker, proc.pid)
             else:
@@ -215,13 +232,13 @@ def main():
     # that tailer via a sentinel instead of re-rendering the header + body ourselves —
     # it also carries gut_body as a fallback in case the rewrite never took effect and
     # nothing was ever streamed.
-    if live and live.get("src"):
+    if done:
         try:
-            with open(live["src"] + ".done", "w") as f:
+            with open(done, "w") as f:
                 json.dump({"chip": chip_txt, "color": list(col), "fallback_body": gut_body}, f)
-            A.state_file(LOG, live["src"] + ".done", "write", {"chip": chip_txt})
+            A.state_file(LOG, done, "write", {"chip": chip_txt})
         except Exception:
-            A.error(LOG, "write .done sentinel", {"src": live.get("src")})
+            A.error(LOG, "write .done sentinel", {"done": done})
             live = None    # couldn't hand off -> fall through to the normal render below
 
     if not live:

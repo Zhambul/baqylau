@@ -6,6 +6,36 @@
 # claude-substream.py (which renders a subagent's transcript). Everything here is
 # width-parameterised (no module-level WIDTH) so it imports cleanly.
 import re
+import unicodedata
+
+
+# --- display width ---------------------------------------------------------------
+# All column accounting below counts TERMINAL CELLS, not code points: CJK and most
+# emoji occupy 2 cells, combining marks / ZWJ / variation selectors occupy 0. Using
+# len() here made any op containing wide text overrun the pane and knocked the `│ `
+# gutter out of alignment on wrapped rows.
+def dwidth(s):
+    w = 0
+    for ch in s:
+        if ch < "\x80":                        # ASCII fast path (the common case)
+            w += 1
+        elif unicodedata.combining(ch) or unicodedata.category(ch) in ("Mn", "Me", "Cf"):
+            pass                               # zero-width: combining, ZWJ, VS16, …
+        else:
+            w += 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+    return w
+
+
+def dsplit(s, avail):
+    """Split `s` so the head fits in `avail` display cells: (head, tail). The head is
+    empty when even the first character is wider than `avail`."""
+    w = 0
+    for i, ch in enumerate(s):
+        cw = dwidth(ch)
+        if w + cw > avail:
+            return s[:i], s[i:]
+        w += cw
+    return s, ""
 
 
 # --- One Dark-ish palette (truecolor; kitty supports it) -----------------------
@@ -86,17 +116,19 @@ def wrap_gutter(text, width, gut, gw):
             while j < n and line[j] not in " \t" and not _ANSI.match(line, j):
                 j += 1
             word = line[i:j]; i = j
-            if col > 0 and col + len(pending_sp) + len(word) > cw:
+            ww = dwidth(word)
+            if col > 0 and col + dwidth(pending_sp) + ww > cw:
                 pieces.append(RST + "\n" + gut + active); col = 0; pending_sp = ""
             if pending_sp:                        # leading indent at a real line start is kept
-                pieces.append(pending_sp); col += len(pending_sp); pending_sp = ""
-            while col + len(word) > cw:           # single word wider than a row -> hard-break
-                take = cw - col
-                if take <= 0:
-                    pieces.append(RST + "\n" + gut + active); col = 0; continue
-                pieces.append(word[:take]); word = word[take:]; col += take
+                pieces.append(pending_sp); col += dwidth(pending_sp); pending_sp = ""
+            while col + ww > cw:                  # single word wider than a row -> hard-break
+                head, word = dsplit(word, cw - col)
+                if not head and col == 0:         # one char wider than the whole row: emit it
+                    head, word = word[:1], word[1:]
+                pieces.append(head)
                 pieces.append(RST + "\n" + gut + active); col = 0
-            pieces.append(word); col += len(word)
+                ww = dwidth(word)
+            pieces.append(word); col += ww
         pieces.append(RST)
     return "".join(pieces)
 
@@ -386,14 +418,18 @@ def render(code, width, ind="  "):
                     out.append(atom); col += len(atom)
                 continue
             w = atom
-            if col > indent and col + len(w) > width:
+            ww = dwidth(w)
+            if col > indent and col + ww > width:
                 out.append("\n" + ind); col = indent; cur = None
             setcol(c)
-            while col + len(w) > width and len(w) > width - indent:
-                take = max(1, width - col)
-                out.append(w[:take]); w = w[take:]
+            while col + ww > width and ww > width - indent:
+                head, w = dsplit(w, max(1, width - col))
+                if not head:                      # one char wider than the row: emit it
+                    head, w = w[:1], w[1:]
+                out.append(head)
                 out.append("\n" + ind); col = indent; cur = None; setcol(c)
-            out.append(w); col += len(w)
+                ww = dwidth(w)
+            out.append(w); col += ww
     while out and out[-1] == "\n":
         out.pop()
     out.append(RST)

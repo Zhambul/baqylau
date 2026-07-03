@@ -33,27 +33,34 @@ LBL_FG = (170, 185, 210)  # slate — same colour claude-cmd-fmt.py uses for an 
 def parse_redirect(cmd, cwd):
     # Mirrors claude-cmd-fmt.py's parse_redirect: if the command already sends its
     # own stdout to a file, tail THAT instead of tee-ing into a second file.
+    # Returns (absolute_target, append) or None.
     try:
         toks = shlex.split(cmd, posix=True)
     except ValueError:
         return None
-    target, i = None, 0
+    target, append, i = None, False, 0
     while i < len(toks):
         t = toks[i]
         if ">" in t and not t.startswith("2"):
-            m = re.match(r"^(?:&|1)?>>?(.*)$", t)
+            m = re.match(r"^(?:&|1)?(>>?)(.*)$", t)
             if m:
-                rest = m.group(1)
+                rest = m.group(2)
                 if rest:
-                    target = rest
+                    target, append = rest, m.group(1) == ">>"
                 elif i + 1 < len(toks):
-                    target = toks[i + 1]; i += 1
+                    target, append = toks[i + 1], m.group(1) == ">>"
+                    i += 1
         i += 1
     if not target or target.startswith("&") or target.startswith("/dev/"):
         return None
+    # shlex does NO shell expansion: a target holding $vars, backticks, globs, or a
+    # leading ~ is not the path the shell will actually write to (`> "$OUT"` would
+    # have us tail a literal file named $OUT). Fall back to the tee side file.
+    if any(c in target for c in "$`*?[") or target.startswith("~"):
+        return None
     if not os.path.isabs(target):
         target = os.path.join(cwd or os.getcwd(), target)
-    return target
+    return target, append
 
 
 def main():
@@ -108,10 +115,18 @@ def main():
             pass
 
     redirect = parse_redirect(cmd, d.get("cwd"))
-    wrapped_cmd, src, own = None, redirect, False
+    wrapped_cmd, own, append = None, False, False
+    # The ".done" sentinel gets its own session-keyed /tmp path, NEVER derived from
+    # the command's redirect target — deriving it from `src` used to drop stray
+    # `<target>.done` files (even literal `$VAR.done`) into the project directory
+    # whenever the command redirected to a relative path.
+    stem = f"{log}.fg.{os.getpid()}.{int(time.time() * 1000)}"
+    done = stem + ".done"
 
-    if not redirect:
-        src = f"{log}.fg.{os.getpid()}.{int(time.time() * 1000)}.out"
+    if redirect:
+        src, append = redirect
+    else:
+        src = stem + ".out"
         try:
             open(src, "a").close()
         except Exception:
@@ -136,8 +151,13 @@ def main():
 
     env = dict(os.environ)
     env["CLAUDE_STREAM_SRC"] = src
+    env["CLAUDE_STREAM_DONE"] = done
     if own:
         env["CLAUDE_STREAM_OWN"] = "1"
+    if append:
+        # A `>>` redirect appends to an EXISTING file — tail only what this command
+        # adds, or the whole prior file contents would be replayed into the mirror.
+        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
     try:
         proc = subprocess.Popen(
             [sys.executable, streamer, "fg", f"fg-{os.getpid()}-{int(time.time())}", log, str(slot)],
@@ -155,8 +175,8 @@ def main():
 
     try:
         with open(marker, "w") as f:
-            json.dump({"src": src, "own": own, "pid": proc.pid}, f)
-        A.state_file(log, marker, "write", {"src": src, "own": own, "pid": proc.pid})
+            json.dump({"src": src, "own": own, "pid": proc.pid, "done": done}, f)
+        A.state_file(log, marker, "write", {"src": src, "own": own, "pid": proc.pid, "done": done})
     except Exception:
         A.error(log, "write .fg-live marker", {"src": src})
         return                                     # tailer will notice via its own backstop eventually

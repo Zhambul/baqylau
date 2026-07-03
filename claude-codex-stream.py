@@ -207,8 +207,13 @@ def main():
         if size <= pos:
             return
         try:
+            # Read exactly size-pos bytes: an unbounded read() can grab bytes appended
+            # DURING the read, which `pos = size` would then not account for — the next
+            # pump would re-read and duplicate them.
             with open(LOGFILE, "rb") as fh:
-                fh.seek(pos); pending += fh.read(); pos = size
+                fh.seek(pos)
+                chunk = fh.read(size - pos)
+                pending += chunk; pos += len(chunk)
         except OSError:
             return
         *lines, pending = pending.split(b"\n")

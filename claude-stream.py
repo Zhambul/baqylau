@@ -90,10 +90,16 @@ SRC = os.environ.get("CLAUDE_STREAM_SRC") or ""
 # Set only for a "fg" job whose output file we created ourselves (a tee target, not
 # the command's own explicit redirect) — safe to delete once fully read.
 OWN = os.environ.get("CLAUDE_STREAM_OWN") == "1"
-# Set when a Ctrl+B-converted command's replacement "bg" tailer takes over: our own
-# fg tailer already showed whatever came through its (separate) tee copy before the
-# hand-off, and Claude Code's task-output file holds the FULL output from the start —
-# so skip however many bytes already exist at spawn time instead of re-showing them.
+# The ".done" sentinel path claude-cmd-pre.py agreed with claude-cmd-fmt.py on — a
+# session-keyed /tmp path, deliberately NOT derived from SRC (when SRC is the
+# command's own redirect target, `SRC + ".done"` would land next to a user file).
+# Falls back to `path + ".done"` below for launchers predating this env var.
+DONE = os.environ.get("CLAUDE_STREAM_DONE") or ""
+# Set in two cases where the tailed file already holds bytes that are NOT this job's
+# output: (a) a Ctrl+B-converted command's replacement "bg" tailer — the departing fg
+# tailer already showed everything up to the hand-off, and Claude Code's task-output
+# file holds the FULL output from the start; (b) a `>>` append redirect — the target
+# file's prior contents predate the command. Skip whatever exists at spawn time.
 SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
 
 
@@ -198,8 +204,13 @@ def main():
             return None
         if size > pos:
             try:
+                # Read exactly size-pos bytes: an unbounded read() can grab bytes the
+                # job appended DURING the read, which `pos = size` would then not
+                # account for — the next pump would re-read and duplicate them.
                 with open(path, "rb") as fh:
-                    fh.seek(pos); pending += fh.read(); pos = size
+                    fh.seek(pos)
+                    chunk = fh.read(size - pos)
+                    pending += chunk; pos += len(chunk)
             except OSError:
                 return size
             *lines, pending = pending.split(b"\n")
@@ -220,7 +231,7 @@ def main():
     #             ends, so we track that process — robust at ANY cadence, no grace.
     # Fallbacks use a short idle so the streamer always terminates.
     mon_pid, find_deadline, GRACE = None, start + 20, (2.0 if KIND in ("bg", "fg") else 8.0)
-    sentinel = (path + ".done") if KIND == "fg" else None
+    sentinel = (DONE or path + ".done") if KIND == "fg" else None
     override, FG_BACKSTOP = None, start + 7200   # absolute backstop so a stuck tailer can't run forever
     while True:
         if pump() is None:

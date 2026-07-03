@@ -40,7 +40,11 @@ def width():
 
 
 def fit(s, avail):
-    return s if len(s) <= avail else (s[:avail - 1] + "…" if avail > 1 else s[:avail])
+    if R.dwidth(s) <= avail:
+        return s
+    if avail > 1:
+        return R.dsplit(s, avail - 1)[0] + "…"
+    return R.dsplit(s, max(0, avail))[0]
 
 
 def render(op, w):
@@ -134,8 +138,14 @@ def main():
             _resized = True
         if size > pos:
             try:
+                # Read exactly the bytes we saw at getsize() — an unbounded read()
+                # can grab bytes a producer appended DURING the read, which `pos =
+                # size` would then not account for, so the next poll re-reads (and
+                # re-paints) them.
                 with open(LOG, "rb") as fh:
-                    fh.seek(pos); pending += fh.read(); pos = size
+                    fh.seek(pos)
+                    chunk = fh.read(size - pos)
+                    pending += chunk; pos += len(chunk)
             except OSError:
                 pass
             *lines, pending = pending.split(b"\n")

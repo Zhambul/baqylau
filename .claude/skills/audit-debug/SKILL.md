@@ -68,6 +68,14 @@ the bug **from evidence, not guesswork**.
   second's decision is NOT "ignored: duplicate".
 - **Cross-session contamination** — the same task_id/marker_path appearing under two
   session_ids.
+- **Duplicated block/lines in the mirror** *(fixed 2026-07-04)* — tailers used an
+  unbounded `read()` with `pos = size`, so bytes appended during the read were
+  re-read next poll. If seen on a current build, check `ops` rows for repeated
+  identical payloads seconds apart.
+- **Stray `<target>.done` files in the project dir** *(fixed 2026-07-04)* — the fg
+  `.done` sentinel used to be derived from the command's redirect target (unexpanded,
+  cwd-relative). Now a session-keyed /tmp path; `state_files` shows every sentinel
+  write path — any non-/tmp sentinel path on a current build is a regression.
 
 ## Output contract
 

@@ -337,6 +337,17 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   `CLAUDE_STREAM_SRC` — which then follows **that** file instead, so the
   redirected output streams live too. Completion detection (write-holder gone)
   works unchanged, since the job holds the redirect file open the same way.
+  Two guardrails on the parsed target:
+  - **Unexpanded shell syntax is rejected.** `shlex` does no expansion, so a
+    target containing `$vars`, backticks, globs, or a leading `~` (`> "$OUT"`) is
+    *not* the path the shell will actually write — tailing it would follow a file
+    that never appears (and used to drop a literal `$OUT.done` sentinel into the
+    project directory). Such commands fall back to the tee side file (fg) / the
+    task output file (bg) instead.
+  - **A `>>` append target is tailed from its size at spawn**
+    (`CLAUDE_STREAM_SKIP_EXISTING`, the same mechanism the Ctrl+B hand-off uses),
+    not from 0 — otherwise the target file's entire *prior* contents would replay
+    into the mirror as if the command had printed them.
 
   `│ ` gutter coloured from its kind's palette slot, then writes a
   `■ background finished · Ns` / `■ monitor ended · Ns` line when done. **Completion
@@ -364,8 +375,15 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   spawns `claude-stream.py fg` to tail `$F` the same way a background job is
   tailed. `claude-cmd-fmt.py`'s `PostToolUse` handler is the only place the real
   outcome (duration/exit code/interrupted) is known, so it hands that off to the
-  tailer via a `.done` sentinel next to `$F` instead of re-rendering the block
-  itself; if nothing ever landed in `$F` (e.g. an older Claude Code build ignoring
+  tailer via a `.done` sentinel instead of re-rendering the block itself. The
+  sentinel path is a **session-keyed /tmp path** chosen by `claude-cmd-pre.py`
+  (stored in the `.fg-live` marker as `done` and passed to the tailer via
+  `CLAUDE_STREAM_DONE`) — deliberately **not** `$F + ".done"`: when `$F` is the
+  command's *own* redirect target, deriving the sentinel from it dropped stray
+  `<target>.done` files (even literal `$VAR.done`, from unexpanded-variable
+  redirects) into the project directory, orphaned whenever the tailer exited
+  before consuming them (fast command, or a tail target that never appeared). If
+  nothing ever landed in `$F` (e.g. an older Claude Code build ignoring
   `updatedInput`), the sentinel also carries the real output as a fallback so
   nothing is silently lost. The `fg` tailer gives up by **writer-liveness**, like
   `bg`, not a fixed timeout — it keeps the block (and the tab) blue for as long as
@@ -449,7 +467,10 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   - **Session scoreboard (its own window).** A running "so far" summary of the whole
     session, aggregated across the separate hook processes in a sidecar
     `…/<mirror-log>.stats.json` (each producer bumps its deltas under an `flock`;
-    removed with the log at SessionEnd). **`claude-scorebar.py`** renders it in a
+    removed with the log at SessionEnd). The scorebar's *reads* skip that flock —
+    hook processes must never wait on a renderer — so a read can catch `bump()`'s
+    truncate-then-write mid-flight; a torn read reuses the **last good parse** for
+    that tick instead of blinking the row down to the bare `▪ session` placeholder. **`claude-scorebar.py`** renders it in a
     **dedicated ~4-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
     opened/closed with the mirror by `claude-split.sh`) — an always-on session-id
     line, a team-message census, then the session summary:
@@ -800,6 +821,16 @@ Behaviour & limits:
   so dividers, gutters, and wrapped code/output all re-fit. (Earlier the width was
   baked at write time, so resizing left old blocks frozen.) Cost: a resize
   re-renders the whole history (re-highlighting code) — fine for interactive use.
+  All column accounting counts **terminal cells, not code points**
+  (`claude_render.dwidth`/`dsplit`, wcwidth-style: CJK/emoji are 2 cells, combining
+  marks/ZWJ/VS16 are 0) — with `len()`, any op containing wide text overran the
+  pane and knocked the `│ ` gutter out of alignment on wrapped rows.
+- **Tailers read exactly the bytes they measured.** Every poll-loop reader (the
+  renderer, `claude-stream.py`, `claude-substream.py`, `claude-codex-stream.py`)
+  reads `size - pos` bytes, never an unbounded `read()`: a producer appending
+  *during* the read would otherwise hand the tailer bytes past the measured
+  `size`, which `pos = size` then fails to account for — so the next poll
+  re-read and **duplicated** them (repeated blocks in the pane).
 - **Divider** spans the pane's current width and reflows with everything else.
 - **Pretty-print needs `pygments`**, and highlighting happens **in the renderer
   process** — so the interpreter `claude-mirror.sh` execs must be one that can
