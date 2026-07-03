@@ -17,6 +17,11 @@
 #              Dedup: the rollout <uuid> IS the companion sidecar threadId, so a run
 #              already handled by source A is skipped here.
 #
+# Cross-session isolation: a companion job is matched to its Claude session by
+# sessionId, but a raw rollout (and a job with no sessionId) has no session identity —
+# so those are claimed atomically in a per-repo shared dir (see claim()), keeping each
+# such run in exactly ONE same-repo session's mirror instead of replaying in all.
+#
 # The <slug> is basename(git-root) + sha256(realpath(git-root))[:16] — byte-for-byte
 # what codex's state.mjs computes. Colours round-robin claude_slots.CODEX_PALETTE and
 # are passed to the streamer as "r,g,b". The watcher exits on its own when the
@@ -65,6 +70,54 @@ try:
     REPO_ROOT = os.path.realpath(git_root(CWD))
 except Exception:
     REPO_ROOT = git_root(CWD)
+
+
+def claims_dir():
+    # Shared ACROSS every Claude session in this repo (keyed by the repo slug), so
+    # concurrent sessions coordinate: a codex run that can't be attributed to one
+    # session by id is claimed by the FIRST watcher to see it, and the others skip it —
+    # otherwise every same-repo session's mirror would replay the same run.
+    d = os.path.join(tempfile.gettempdir(), "codex-companion", SLUGDIR, "mirror-claims")
+    try:
+        os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+    return d
+
+
+def claim(key):
+    # Atomic O_EXCL create == this watcher owns the run. A stale claim (holder pid dead)
+    # is taken over so a session that died mid-run doesn't strand the stream forever.
+    p = os.path.join(claims_dir(), re.sub(r"[^A-Za-z0-9._-]+", "-", key))
+
+    def take():
+        fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
+        os.write(fd, str(os.getpid()).encode()); os.close(fd)
+        return True
+
+    try:
+        return take()
+    except FileExistsError:
+        try:
+            holder = int(open(p).read().strip() or "0")
+        except Exception:
+            holder = 0
+        alive = False
+        if holder:
+            try:
+                os.kill(holder, 0); alive = True
+            except OSError as e:
+                import errno
+                alive = (e.errno == errno.EPERM)
+        if alive:
+            return False
+        try:
+            os.remove(p)
+            return take()
+        except Exception:
+            return False
+    except Exception:
+        return False
 
 
 def jobs_dirs():
@@ -218,6 +271,11 @@ def main():
                     created = parse_iso(data.get("createdAt"))
                     if created and created < start - SKEW:
                         continue              # predates this session — don't replay
+                    # A job with a matching sessionId is uniquely ours; one WITHOUT a
+                    # sessionId can't be attributed, so claim it to keep it in a single
+                    # session's mirror rather than every same-repo session's.
+                    if not (SID and js == SID) and not claim("job-" + jid):
+                        continue
                     logfile = data.get("logFile") or os.path.join(d, jid + ".log")
                     spawn(logfile, jf, label_for(data))
 
@@ -257,6 +315,10 @@ def main():
                     cthreads = companion_threadids()
                 if u in cthreads:
                     continue                  # companion owns it — already streamed
+                # A raw run has no session identity; claim so exactly ONE same-repo
+                # session's mirror shows it instead of all of them.
+                if not claim("ro-" + u):
+                    continue
                 spawn(rf, "-", "cli")         # a raw `codex` / `codex exec` run
             time.sleep(POLL)
     finally:

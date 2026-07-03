@@ -1,0 +1,1 @@
+{"chip": "\u25a0 finished \u00b7 0.3s", "color": [170, 185, 210], "fallback_body": "1. custom-agent lead stop, teammates running -> awaiting-bg (want awaiting-bg)\n2. custom-agent lead stop, no tasks -> awaiting-response (want awaiting-response)\n3. stop with agent_id -> working (want working, untouched)\n4. plain lead stop -> awaiting-response (want awaiting-response)"}
