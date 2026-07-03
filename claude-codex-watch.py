@@ -165,7 +165,11 @@ def rollout_files():
     return out
 
 
-def rollout_cwd(path):
+def rollout_meta(path):
+    # -> (cwd, originator). originator tells us WHO launched the run: "Claude Code"
+    # (companion, deduped via source A), "codex_exec" (a programmatic raw exec), or
+    # "codex-tui" (a human driving the interactive TUI in a terminal — belongs to no
+    # Claude session, so the mirror must not adopt it into any session).
     try:
         with open(path, encoding="utf-8") as fh:
             for _ in range(5):
@@ -177,10 +181,12 @@ def rollout_cwd(path):
                 except Exception:
                     continue
                 if o.get("type") == "session_meta":
-                    return ((o.get("payload") or {}).get("cwd") or "").strip()
+                    p = o.get("payload") or {}
+                    return ((p.get("cwd") or "").strip(),
+                            (p.get("originator") or "").strip())
     except Exception:
         pass
-    return ""
+    return "", ""
 
 
 _n = 0
@@ -295,9 +301,12 @@ def main():
                     continue
                 if mtime < start - SKEW:
                     seen.add(u); continue     # predates this session
-                cw = rollout_cwd(rf)
+                cw, origin = rollout_meta(rf)
                 if not cw:
                     continue                  # session_meta not written yet — retry
+                if origin == "codex-tui":
+                    seen.add(u); continue     # a human-driven interactive codex TUI —
+                                              # not this (or any) Claude session's run
                 try:
                     cwr = os.path.realpath(cw)
                 except Exception:
