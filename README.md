@@ -489,7 +489,14 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     is deliberately muted (no background chips): dim separators, slate words, brighter
     numbers, and colour only where it means something — failures/removed red, added
     green, cost orange. It repaints on every sidecar bump and at least once a second
-    (so the `⏱` ticks live), truncates from the tail on narrow panes (cost goes last,
+    (so the `⏱` ticks live). The `⏱` counts **active time**, not wall clock: it
+    **pauses while the tab is green** (awaiting-response — Claude is done, your turn)
+    and resumes on any other colour. The scorebar maps its sid to the Claude pane's
+    kitty window (the `claude_session` user-var tagged at SessionStart), polls that
+    window's persisted tab state (`/tmp/claude-tab-state-<win>`), and accumulates
+    green ticks into the sidecar's `paused` field (same flock'd `bump()`, so it
+    survives a mirror toggle); `scoreboard_parts()` subtracts it from the elapsed
+    time. It truncates from the tail on narrow panes (cost goes last,
     so it drops first), and **exits when the mirror log disappears** at SessionEnd,
     auto-closing its window (`claude-split.sh close` is the safety net). The
     structured data comes from `claude_ops.scoreboard_parts()`. The tools row

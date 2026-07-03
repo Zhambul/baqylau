@@ -21,11 +21,13 @@
 #
 # Data comes from the stats sidecar (<log>.stats.json) that every producer bumps
 # under an flock (claude_ops.bump); we re-read it on mtime change and repaint once a
-# second regardless so the ⏱ duration ticks. Reads skip the flock — a torn read just
+# second regardless so the ⏱ duration ticks. The ⏱ counts ACTIVE time: it pauses
+# while the tab is green (awaiting-response — your turn) and resumes otherwise —
+# see the pause-accounting block below. Reads skip the flock — a torn read just
 # fails to parse and keeps the previous paint for one tick, which beats making hook
 # processes wait on a renderer. Exits when the mirror log disappears (SessionEnd
 # removes it), which auto-closes the window; claude-split.sh close is the safety net.
-import json, os, re, signal, sys, time
+import json, os, re, shutil, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_render as R
@@ -87,6 +89,47 @@ def emit_events(events):
             ops.append(O.label("◉ read · " + frm + " → " + to, MSG_READ_RGB))
     if ops:
         O.emit(LOG, *ops)
+
+
+# --- ⏱ pause accounting -----------------------------------------------------
+# The session timer tracks ACTIVE time: it stops while the tab is GREEN
+# (awaiting-response — Claude is done, your turn) and resumes on any other
+# colour. claude-tab-status.sh persists the current colour per Claude window in
+# /tmp/claude-tab-state-<window_id>; the Claude pane for this session carries the
+# kitty user-var claude_session=<sid> (tagged by claude-split.sh at SessionStart),
+# which is how we map our sid to that window id. Green ticks are accumulated into
+# the stats sidecar's 'paused' field (same flock'd bump as every other producer,
+# so it survives a scorebar restart/toggle), and scoreboard_parts subtracts it.
+
+
+def _claude_window():
+    """Kitty window id (str) of this session's Claude pane, or None. One
+    `kitten @ ls` round-trip — callers cache the result and retry sparingly."""
+    listen = os.environ.get("KITTY_LISTEN_ON")
+    kitten = shutil.which("kitten") or "/Applications/kitty.app/Contents/MacOS/kitten"
+    if not listen or not os.path.exists(kitten):
+        return None
+    sid = session_id()
+    try:
+        out = subprocess.run([kitten, "@", "--to", listen, "ls"],
+                             capture_output=True, timeout=5).stdout
+        for osw in json.loads(out):
+            for t in osw.get("tabs", []):
+                for w in t.get("windows", []):
+                    if (w.get("user_vars") or {}).get("claude_session") == sid:
+                        return str(w.get("id"))
+    except Exception:
+        pass
+    return None
+
+
+def _tab_green(win):
+    """True when the session's tab currently shows awaiting-response (green)."""
+    try:
+        with open(f"/tmp/claude-tab-state-{win}", encoding="utf-8") as f:
+            return f.read().strip() == "awaiting-response"
+    except OSError:
+        return False
 
 
 def session_id():
@@ -164,14 +207,29 @@ def main():
         return
     signal.signal(signal.SIGWINCH, _on_winch)
     last, mt_seen = 0.0, None
+    win, win_retry, prev_ts, pend = None, 0.0, None, 0.0
     while True:
         if not os.path.exists(LOG):        # SessionEnd removed the log -> window closes
             return
+        now = time.time()
+        # ⏱ pause accounting: while the tab is green, fold the elapsed tick into
+        # the sidecar's 'paused' total (flushed ~1s so the display freezes cleanly).
+        # Only once the sidecar exists — pausing shouldn't create an empty session.
+        if win is None and now >= win_retry:
+            win, win_retry = _claude_window(), now + 5.0   # tag lands async at start
+        if win and _tab_green(win) and prev_ts is not None and os.path.exists(STATS):
+            pend += now - prev_ts
+            if pend >= 1.0:
+                O.bump(LOG, paused=round(pend, 2))
+                pend = 0.0
+        elif pend:                          # left green -> flush the remainder
+            O.bump(LOG, paused=round(pend, 2))
+            pend = 0.0
+        prev_ts = now
         try:
             mt = os.path.getmtime(STATS)
         except OSError:
             mt = None
-        now = time.time()
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
             try:                            # poll inboxes: census parts + mirror events

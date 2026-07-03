@@ -477,7 +477,10 @@ def scoreboard_parts(st, now):
         parts.append(("tok", _kfmt(tok) + " tok"))
     start = st.get("start")
     if start:
-        parts.append(("time", "⏱ " + _dur(now - start)))
+        # ⏱ shows ACTIVE time: wall clock minus the green "your turn" stretches
+        # (tab awaiting-response) the scorebar accumulates into 'paused' — the
+        # timer freezes while Claude waits on you and resumes when work restarts.
+        parts.append(("time", "⏱ " + _dur(now - start - float(st.get("paused") or 0))))
     cost = float(st.get("cost") or 0)
     if cost > 0:
         parts.append(("cost", "≈ " + fmt_usd(cost)))
