@@ -414,7 +414,9 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `<dir>/<session>/subagents/agent-<id>.jsonl` and renders, in order: the
     **prompt** (`<type> ⇢ prompt`), each **message** (`<type> ✎ message`), each
     **command** (`<type> ▶ foreground` / `<type> ▷ background` — agent name +
-    kind keyword), file ops (`Read(name)` …), other tools, and the subagent's
+    kind keyword), **file ops** (`<type> Read(name)` / `<type> Update(name) +N -M`
+    — led by the agent's name in its colour, so a Read/Update/Write is attributable
+    to the subagent or teammate that ran it), other tools, and the subagent's
     **returned result** — its final message, labelled `<type> ⇠ result` to set it
     apart from intermediate `✎ message` chatter — then the `■ <type> ended · Ns`
     footer. All in the subagent's colour. (Messages are committed one event late
@@ -448,13 +450,37 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     session, aggregated across the separate hook processes in a sidecar
     `…/<mirror-log>.stats.json` (each producer bumps its deltas under an `flock`;
     removed with the log at SessionEnd). **`claude-scorebar.py`** renders it in a
-    **dedicated ~2-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
-    opened/closed with the mirror by `claude-split.sh`):
+    **dedicated ~4-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
+    opened/closed with the mirror by `claude-split.sh`) — an always-on session-id
+    line, a team-message census, then the session summary:
 
     ```
+    ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
+    ✉ 5 msgs · 1● unread · 2◐ stale · 1◉ read
     ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
       Read 34 · Edit 18 · Write 4
     ```
+
+    The **`⬡` session-id row** is always shown (parsed from the mirror-log filename),
+    so a pane is identifiable at a glance. The **`✉` message census** gives live
+    visibility into the agent-team message flow and is **always shown** (defaults to
+    `0 msgs`, even for a non-team session). It comes from `claude_ops.update_messages()`,
+    which — since there is **no hook** for a message being read/consumed — tracks state
+    by **stateful polling**: each tick it diffs the team inboxes against a persisted
+    sidecar `…/<mirror-log>.msgs.json` (keyed by `msg_id`) and folds transitions into
+    **cumulative** counters, so counts survive a teammate draining its inbox. A message
+    is `read` once it flips `read:true` or disappears from the inbox (draining ⇒
+    consumed); `msgs` is the cumulative delivered total. `unread` and `◐ stale` are a
+    **current-state** split of what's pending right now — `stale` being anything unread
+    for more than `STALE_S` (60s), a disjoint group from `unread` (so `unread + stale =
+    delivered − read`). Since the team files carry **no liveness flag**, `stale` is also
+    the only available (age-based) signal for a message sitting in the inbox of a
+    crashed recipient. The same tracker also **emits into the mirror stream** on each
+    transition — a `● <from> → <to>` chip (+ summary) when a message is delivered, a
+    `◉ read · <from> → <to>` chip when it's consumed — so arrivals/reads interleave with
+    the command stream. Both the census and the events miss transitions that happen
+    entirely while the mirror is toggled off (nothing is polling then) — an accepted gap
+    for an ambient aid.
 
     A separate window — not lines pinned inside the mirror — because that's the only
     thing that survives **scrolling**: anything drawn in the mirror's own screen
@@ -666,7 +692,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   `/tmp/claude-mirror-<sid>.log`. `open` (SessionStart) reads the `session_id` from
   its hook payload, truncates that session's log, tags the Claude pane, switches the
   tab to the `splits` layout, and launches the split at `${CLAUDE_MIRROR_BIAS:-25}`
-  percent, plus the **scoreboard bar** — a ~2-row `claude-scorebar.py` window hsplit
+  percent, plus the **scoreboard bar** — a ~4-row `claude-scorebar.py` window hsplit
   under the mirror (`--next-to` the mirror window, then resized to exactly
   `BAR_ROWS` since kitty's `--bias` is approximate; excluded from the width math,
   which would otherwise double-count the column it shares with the mirror). It also

@@ -554,7 +554,12 @@ def render_file(name_tool, inp, result=None, ctx=""):
     path = inp.get("file_path") or inp.get("notebook_path") or ""
     name = os.path.basename(path.rstrip("/")) or path or "?"
     col = FILE_COL.get(label, R.COL["def"])
-    line = col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
+    # Lead with WHO did it — the agent's name/type in its own colour — so a Read/Update/
+    # Write is attributable to the subagent (or teammate) that ran it, the same identity
+    # cue chip() puts on this agent's Bash ops. The gutter bar already carries the colour,
+    # but the explicit name is what the eye reads.
+    who = R.fg(*SUB_RGB) + LABEL + " " + RST
+    line = who + col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
     # A read shows how much of the file it took ('' == the whole file); a mutation shows
     # its added/removed line counts plus the line range(s) it touched. All go before the
     # model tag so they survive truncation on a narrow pane. Extent/range come from the

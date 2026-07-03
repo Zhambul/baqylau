@@ -1,12 +1,17 @@
 #!/usr/bin/env python3
 # claude-scorebar.py MIRROR_LOG [WIDTH]
 #
-# The session-scoreboard renderer. Runs inside a SMALL DEDICATED kitty window
-# (2 rows, hsplit under the mirror pane — opened by claude-split.sh alongside the
-# mirror) and paints a running "so far" summary of the session:
+# The scoreboard renderer. Runs inside a SMALL DEDICATED kitty window (4 rows, hsplit
+# under the mirror pane — opened by claude-split.sh alongside the mirror) and paints
+# an always-on session id, a team-message census, and the session summary:
 #
+#   ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
+#   ✉ 5 msgs · 3● unread · 2◉ read
 #   ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
 #     Read 34 · Edit 18 · Write 4
+#
+# The ✉ row is tracked by O.update_messages (stateful inbox polling → a persisted
+# sidecar) and always shows a count (0 included). See claude_ops.py.
 #
 # A separate window — not lines pinned inside the mirror — because that's the only
 # thing that survives SCROLLING: anything drawn in the mirror's own screen scrolls
@@ -36,9 +41,16 @@ STATS = O.stats_path(LOG) if LOG else ""
 SLATE = R.fg(*O.SCORE_RGB)          # words: cmds / files / tool names
 VAL   = R.fg(171, 178, 191)         # numbers — the part your eye scans for
 KIND  = {"fail": R.fg(224, 108, 117), "rem": R.fg(224, 108, 117),
-         "add": R.fg(152, 195, 121), "cost": R.fg(209, 154, 102)}
+         "add": R.fg(152, 195, 121), "cost": R.fg(209, 154, 102),
+         # message-census kinds (✉ row): unread yellow, stale orange, read green
+         "unread": R.fg(229, 192, 123), "stale": R.fg(209, 154, 102),
+         "read": R.fg(152, 195, 121)}
 SEP   = R.DIM + " · " + R.RST
 _NUM  = re.compile(r"\d[\d.,]*")
+
+
+def fit(s, avail):
+    return s if len(s) <= avail else (s[:avail - 1] + "…" if avail > 1 else s[:avail])
 
 
 def style(kind, text):
@@ -55,17 +67,63 @@ def joiner(prev_kind, kind):
     return " " if kind == "fail" or (kind == "rem" and prev_kind == "add") else SEP
 
 
-def compose(w):
-    """The two scoreboard rows for width w, as styled strings. Segments drop from the
-    tail (cost first — it's last) until the plain text fits the row."""
+# Mirror-event colours: a delivered/unread message is yellow, a read one green —
+# matching the ●/◉ glyphs the census row uses, so the two surfaces read as one system.
+MSG_NEW_RGB  = (229, 192, 123)
+MSG_READ_RGB = (152, 195, 121)
+
+
+def emit_events(events):
+    """Surface inbox transitions in the MIRROR itself (not just the census): a chip +
+    summary gutter when a message is delivered (unread), a chip when it's read. Ops go
+    to the shared mirror log, so they interleave with the command stream."""
+    ops = []
+    for kind, frm, to, summ in events:
+        if kind == "new":
+            ops.append(O.label("● " + frm + " → " + to, MSG_NEW_RGB))
+            if summ:
+                ops.append(O.gut(summ, MSG_NEW_RGB))
+        else:                                        # read
+            ops.append(O.label("◉ read · " + frm + " → " + to, MSG_READ_RGB))
+    if ops:
+        O.emit(LOG, *ops)
+
+
+def session_id():
+    """The session id this scorebar belongs to, parsed from the mirror log filename
+    (/tmp/claude-mirror-<session_id>.log). Falls back to the raw basename."""
+    b = os.path.basename(LOG)
+    if b.startswith("claude-mirror-") and b.endswith(".log"):
+        return b[len("claude-mirror-"):-len(".log")]
+    return b
+
+
+def compose(w, mparts):
+    """The scoreboard rows for width w, as styled strings: [session-id, messages,
+    session-stats, tools]. Row 0 is the always-on ⬡ session id; row 1 is the ✉ message
+    census `mparts` (always shown — defaults to '0 msgs'); rows 2-3 are the ▪ session
+    summary + tool tallies. Segments drop from the tail until the plain text fits."""
     try:
         with open(STATS, encoding="utf-8") as f:
             st = json.load(f)
     except Exception:
         st = None
+    now = time.time()
+
+    # Row 0: session id — always visible, truncated to width (dim glyph, brighter id).
+    line_sid = R.DIM + " ⬡ " + R.RST + VAL + fit(session_id(), max(1, w - 3)) + R.RST
+
+    # Row 1: message census — never blank; default to a 0 count when there's nothing.
+    if not mparts:
+        mparts = [("msgs", "0 msgs")]
+    avail = w - 3                                    # " ✉ " prefix
+    while len(mparts) > 1 and sum(len(t) for _, t in mparts) + 3 * (len(mparts) - 1) > avail:
+        mparts.pop()
+    line_msg = R.DIM + " ✉ " + R.RST + SEP.join(style(k, t) for k, t in mparts)
+
     if not isinstance(st, dict):
-        return [R.DIM + " ▪ session" + R.RST, ""]
-    parts, tools = O.scoreboard_parts(st, time.time())
+        return [line_sid, line_msg, R.DIM + " ▪ session" + R.RST, ""]
+    parts, tools = O.scoreboard_parts(st, now)
 
     avail = w - 3                                    # " ▪ " prefix
     while parts and sum(len(t) for _, t in parts) + 3 * (len(parts) - 1) > avail:
@@ -73,14 +131,14 @@ def compose(w):
     row = ""
     for i, (kind, text) in enumerate(parts):
         row += ("" if i == 0 else joiner(parts[i - 1][0], kind)) + style(kind, text)
-    line1 = R.DIM + " ▪ " + R.RST + row if parts else R.DIM + " ▪ session" + R.RST
+    line_sess = R.DIM + " ▪ " + R.RST + row if parts else R.DIM + " ▪ session" + R.RST
 
     avail = w - 3                                    # aligned under the parts
     while tools and sum(len(f"{k} {v}") for k, v in tools) + 3 * (len(tools) - 1) > avail:
         tools.pop()
-    line2 = "   " + SEP.join(SLATE + k + " " + VAL + str(v) + R.RST for k, v in tools) \
+    line_tools = "   " + SEP.join(SLATE + k + " " + VAL + str(v) + R.RST for k, v in tools) \
             if tools else ""
-    return [line1, line2]
+    return [line_sid, line_msg, line_sess, line_tools]
 
 
 def width():
@@ -116,7 +174,13 @@ def main():
         now = time.time()
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
-            lines = compose(width())
+            try:                            # poll inboxes: census parts + mirror events
+                mparts, events = O.update_messages(LOG)
+            except Exception:
+                mparts, events = [], []
+            if events:
+                emit_events(events)         # surface arrivals/reads in the mirror pane
+            lines = compose(width(), mparts)
             try:                            # hide cursor; repaint both rows in place
                 sys.stdout.write("\033[?25l\033[H\033[2J" + "\n".join(lines))
                 sys.stdout.flush()

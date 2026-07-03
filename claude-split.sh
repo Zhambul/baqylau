@@ -204,7 +204,7 @@ for osw in json.load(sys.stdin):
 # kitty bias is approximate ("you cannot use this method to create windows of fixed
 # sizes"), so after launching the bar, iterate relative resizes until it is exactly
 # BAR_ROWS tall (or kitty's minimum stops shrinking it).
-BAR_ROWS=2
+BAR_ROWS=4   # ⬡ session id + ✉ message census + 2 session-stats rows
 bar_delta() {  # $1=sid -> (BAR_ROWS - current bar rows)
   "$kitten" @ ls 2>/dev/null | SID="$1" ROWS="$BAR_ROWS" python3 -c '
 import json,os,sys
@@ -314,7 +314,7 @@ case "$cmd" in
     sid="$(sid_from_stdin)"
     [ -n "$sid" ] && close_mirror "$sid"
     log="$(log_for "$sid")"
-    [ -n "$log" ] && rm -f "$log" "$log.stats.json"  # remove this session's log + scoreboard
+    [ -n "$log" ] && rm -f "$log" "$log.stats.json" "$log.msgs.json"  # log + score + msg sidecars
     ;;
   toggle)                                            # keybinding
     sid="$(sid_from_focus)"; [ -n "$sid" ] || exit 0
