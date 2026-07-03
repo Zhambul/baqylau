@@ -172,23 +172,30 @@ def emit(log, *ops):
         pass
 
 
-# --- session statistics (the periodic "▪ session" scoreboard) ------------------
+# --- session statistics (the "▪ session" scoreboard pane) ----------------------
 # The scoreboard is a running "so far" summary, aggregated across the SEPARATE, short-
 # lived hook processes that produce the mirror (one per Bash call, one per file op, one
 # per subagent). They share no memory, so the counters live in a sidecar JSON keyed to
 # the mirror log (removed with it at SessionEnd). Each producer bumps its deltas under
-# an flock; the command hook periodically emits the scoreboard label into the log.
+# an flock; claude-scorebar.py (a small dedicated window under the mirror, opened by
+# claude-split.sh) renders the scoreboard live off the sidecar's mtime.
 
 # Approximate per-MTok (input, output) USD for the resolved model — for the "≈ $X" cost
-# estimate. First substring match wins, so order specific → general. Kept in sync with
-# the current Claude lineup; an unknown model shows no cost (cost_usd → None) rather than
-# guess. Cache reads bill ~0.1× input, cache writes ~1.25×; tot_in already folds in
-# cache_creation, so we price it flat at the input rate (a hair low) and cache_read at
-# 0.1× — good enough for a "≈".
+# estimate. First substring match wins, so order specific → general. Verified against
+# the published price list (2026-06): Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet
+# 3/15 · Haiku 4.5 1/5 · legacy Opus 4.1/4.0/3 15/75. Cache reads bill 0.1× input,
+# cache writes 1.25× (cost_usd handles both); an unknown model shows no cost
+# (cost_usd → None) rather than guess.
+#
+# Sonnet 5 has an introductory 2/10 rate through 2026-08-31; the entry is picked at
+# import time (hook processes are short-lived, so this is per-event in practice) and
+# reverts to the 3/15 sticker automatically after the intro window.
+_SONNET5 = ("sonnet-5", 2.0, 10.0) if time.time() < 1788220800 else ("sonnet-5", 3.0, 15.0)
 PRICES = (
     ("haiku",     1.0,  5.0),
     ("fable",    10.0, 50.0),
     ("mythos",   10.0, 50.0),
+    _SONNET5,
     ("sonnet",    3.0, 15.0),
     ("opus-4-1", 15.0, 75.0),
     ("opus-4-0", 15.0, 75.0),
@@ -199,16 +206,19 @@ PRICES = (
 SCORE_RGB = (120, 132, 158)   # muted slate-blue — reads as a divider, not an event
 
 
-def cost_usd(model, tot_in, tot_out, tot_cache=0):
+def cost_usd(model, tot_in, tot_out, tot_cache=0, tot_create=0):
     """Approximate USD for a run's token totals, or None for an empty/unknown model.
-    tot_in = fresh billed input (input + cache_creation), tot_out = generated,
-    tot_cache = cache_read (~0.1× input). See PRICES."""
+    tot_in = fresh billed input (input + cache_creation, priced at the input rate),
+    tot_out = generated, tot_cache = cache_read (0.1× input), tot_create = the
+    cache_creation share of tot_in — billed at 1.25× input, so it adds the +0.25×
+    premium on top of the flat rate tot_in already paid. See PRICES."""
     m = (model or "").lower()
     if not m:
         return None
     for key, pin, pout in PRICES:
         if key in m:
-            return (tot_in * pin + tot_cache * pin * 0.1 + tot_out * pout) / 1_000_000
+            return (tot_in * pin + tot_create * pin * 0.25
+                    + tot_cache * pin * 0.1 + tot_out * pout) / 1_000_000
     return None
 
 
@@ -229,11 +239,14 @@ def stats_path(log):
     return log + ".stats.json"
 
 
-def bump(log, tool=None, **deltas):
+def bump(log, tool=None, file=None, **deltas):
     """Read-modify-write the scoreboard sidecar under an flock so concurrent hook
     processes don't clobber each other. Adds each numeric delta to its key, increments
-    tools[tool], and stamps 'start' (epoch secs) on first write. Returns the updated
-    dict — {} on any failure (stats are best-effort, never fatal to a hook)."""
+    tools[tool], and stamps 'start' (epoch secs) on first write. `file` records a
+    touched path into the 'file_set' map and keeps 'files' at its size — so the
+    scoreboard's files figure counts UNIQUE files, not file operations (re-editing
+    the same file doesn't inflate it). Returns the updated dict — {} on any failure
+    (stats are best-effort, never fatal to a hook)."""
     p = stats_path(log)
     try:
         f = open(p, "a+", encoding="utf-8")
@@ -257,6 +270,102 @@ def bump(log, tool=None, **deltas):
                 tools = {}
             tools[tool] = (tools.get(tool) or 0) + 1
             st["tools"] = tools
+        if file:
+            fs = st.get("file_set")
+            if not isinstance(fs, dict):
+                fs = {}
+            fs[file] = 1
+            st["file_set"] = fs
+            st["files"] = len(fs)
+        st.setdefault("start", int(time.time()))
+        f.seek(0)
+        f.truncate()
+        f.write(json.dumps(st, ensure_ascii=False))
+        return st
+    except Exception:
+        return {}
+    finally:
+        try:
+            fcntl.flock(f, fcntl.LOCK_UN)
+        except Exception:
+            pass
+        f.close()
+
+
+def bump_transcript(log, transcript):
+    """Fold the MAIN session's own token spend into the scoreboard sidecar.
+
+    Agents/codex bump their spend when their streamer finishes, but the main session
+    has no streamer of its own — without this, the scoreboard's tokens/cost only move
+    when an agent run ends (they'd sit "stuck" through plain main-session work). Hooks
+    call this with the payload's transcript_path: it reads the session JSONL forward
+    from the last position (kept in the sidecar as 'txpos'), sums each new assistant
+    turn's usage into 'tokens' (fresh billed input + output — cache reads are replay,
+    not spend) and 'cost' (cost_usd on that turn's model, cache read/write rates
+    included), and advances the cursor. Runs under the same flock as bump(), so
+    concurrent hooks never double-count a turn. Sidechain (subagent) records are
+    skipped — their own streamer already bumps them. Best-effort: any failure leaves
+    the sidecar unchanged."""
+    if not log or not transcript:
+        return {}
+    p = stats_path(log)
+    try:
+        f = open(p, "a+", encoding="utf-8")
+    except OSError:
+        return {}
+    try:
+        fcntl.flock(f, fcntl.LOCK_EX)
+        f.seek(0)
+        raw = f.read()
+        try:
+            st = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            st = {}
+        if not isinstance(st, dict):
+            st = {}
+        pos = int(st.get("txpos") or 0)
+        try:
+            size = os.path.getsize(transcript)
+        except OSError:
+            return st
+        if size < pos:                      # transcript rotated/replaced — restart
+            pos = 0
+        if size <= pos:
+            return st
+        try:
+            with open(transcript, "rb") as tf:
+                tf.seek(pos)
+                chunk = tf.read(size - pos)
+        except OSError:
+            return st
+        end = chunk.rfind(b"\n")
+        if end < 0:                         # no complete new line yet — keep cursor
+            return st
+        tok, usd = 0, 0.0
+        for ln in chunk[:end].split(b"\n"):
+            try:
+                o = json.loads(ln)
+            except Exception:
+                continue
+            if not isinstance(o, dict) or o.get("type") != "assistant" or o.get("isSidechain"):
+                continue
+            m = o.get("message") or {}
+            u = m.get("usage") if isinstance(m, dict) else None
+            if not isinstance(u, dict):
+                continue
+            create = int(u.get("cache_creation_input_tokens") or 0)
+            fin = int(u.get("input_tokens") or 0) + create
+            out = int(u.get("output_tokens") or 0)
+            tok += fin + out
+            c = cost_usd(m.get("model"), fin, out,
+                         int(u.get("cache_read_input_tokens") or 0), create)
+            if c:
+                usd += c
+        if tok:
+            st["tokens"] = (st.get("tokens") or 0) + tok
+        if usd:
+            st["cost"] = (st.get("cost") or 0) + usd
+        st["txpos"] = pos + end + 1
         st.setdefault("start", int(time.time()))
         f.seek(0)
         f.truncate()
@@ -277,34 +386,52 @@ def _dur(sec):
     return f"{sec}s" if sec < 60 else f"{sec // 60}m{sec % 60:02d}s"
 
 
-def scoreboard_ops(st, now):
-    """Paint ops for the periodic '▪ session' scoreboard from a stats dict (as returned
-    by bump()); `now` is epoch secs. Returns [] when there's nothing to show yet. A muted
-    chip that truncates on narrow panes (cost — the metered agent spend — goes last, so
-    it's the first thing dropped). A second 'tools' chip shows the top tool counts."""
+def _kfmt(n):
+    # Compact token count: 124000 -> "124k", 1200000 -> "1.2M".
+    if n >= 1_000_000:
+        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
+    if n >= 1000:
+        return f"{round(n / 1000)}k"
+    return str(n)
+
+
+def scoreboard_parts(st, now):
+    """Structured scoreboard data from a stats dict (as returned by bump()); `now` is
+    epoch secs. Returns (parts, tools): parts is [(kind, text), …] in display order —
+    kinds: cmds / fail / files / add / rem / tok / time / cost (cost goes last so a
+    narrow pane drops it first) — and tools is the top-5
+    [(name, count), …] EXCLUDING Bash, whose count is already the cmds figure (same
+    bump — listing it again would just duplicate the head). The renderer
+    (claude-scorebar.py) owns the styling; kinds exist so it can colour failures
+    red, added lines green, etc."""
+    parts = []
     cmds = int(st.get("commands") or 0)
-    if cmds <= 0:
-        return []
-    head = f"{cmds} cmd" + ("s" if cmds != 1 else "")
-    failed = int(st.get("failed") or 0)
-    if failed:
-        head += f" ({failed}✗)"
-    parts = [head]
+    if cmds > 0:
+        parts.append(("cmds", f"{cmds} cmd" + ("s" if cmds != 1 else "")))
+        failed = int(st.get("failed") or 0)
+        if failed:
+            parts.append(("fail", f"({failed}✗)"))
     files = int(st.get("files") or 0)
     if files:
-        parts.append(f"{files} file" + ("s" if files != 1 else ""))
+        parts.append(("files", f"{files} file" + ("s" if files != 1 else "")))
     add, rem = int(st.get("added") or 0), int(st.get("removed") or 0)
-    if add or rem:
-        parts.append(" ".join(([f"+{add}"] if add else []) + ([f"-{rem}"] if rem else [])))
+    if add:
+        parts.append(("add", f"+{add}"))
+    if rem:
+        parts.append(("rem", f"-{rem}"))
+    tok = int(st.get("tokens") or 0)     # metered agent/codex spend (fresh in + out),
+    if tok:                              # same provenance as the cost field below
+        parts.append(("tok", _kfmt(tok) + " tok"))
     start = st.get("start")
     if start:
-        parts.append("⏱ " + _dur(now - start))
+        parts.append(("time", "⏱ " + _dur(now - start)))
     cost = float(st.get("cost") or 0)
     if cost > 0:
-        parts.append("≈ " + fmt_usd(cost))
-    ops = [blank(), label("▪ session · " + " · ".join(parts), SCORE_RGB)]
+        parts.append(("cost", "≈ " + fmt_usd(cost)))
     tools = st.get("tools")
+    top = []
     if isinstance(tools, dict) and tools:
-        top = sorted(tools.items(), key=lambda kv: -int(kv[1] or 0))[:5]
-        ops.append(label("tools · " + " · ".join(f"{k} {v}" for k, v in top), SCORE_RGB))
-    return ops
+        top = [(k, int(v or 0)) for k, v in
+               sorted(tools.items(), key=lambda kv: -int(kv[1] or 0))
+               if k != "Bash"][:5]
+    return parts, top

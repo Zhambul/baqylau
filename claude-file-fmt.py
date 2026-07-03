@@ -90,10 +90,13 @@ def main():
                 line += "  " + DIM + rng + RST
     line += mark
     O.emit(LOG, O.line(line))
-    # Feed the session scoreboard (best-effort). The command hook emits it; file ops
-    # only accumulate — one 'files' tick plus the mutation's +/- line counts, keyed by
-    # the raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.
-    O.bump(LOG, tool=tool, files=1, added=added, removed=removed)
+    # Feed the session scoreboard (best-effort): the touched path (files counts
+    # UNIQUE files — see bump()) plus the mutation's +/- line counts, keyed by the
+    # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown,
+    # then the main session's own token spend since the last hook (see
+    # claude_ops.bump_transcript).
+    O.bump(LOG, tool=tool, file=path, added=added, removed=removed)
+    O.bump_transcript(LOG, d.get("transcript_path"))
 
 
 if __name__ == "__main__":

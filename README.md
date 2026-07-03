@@ -7,7 +7,7 @@ a session's state at a glance — even from another tab.
 |-----------|-------|----------|
 | ⬜ grey `#5c6370`    | **idle** — session ready, nothing running                  | `SessionStart` |
 | 🟪 magenta `#c678dd` | **busy** — thinking / non-shell tool (Read/Edit/Write/MCP) / writing the reply (merged — no signal tells them apart) | `UserPromptSubmit`, `PreToolUse` (main-agent non-Bash), `PostToolUse` (main agent) |
-| 🟦 blue `#61afef`    | **the main session is running / awaiting** — a foreground shell command (`executing`, kept blue for its **whole real duration** even past Ctrl+B or the idle-watch threshold — see below), or the main session **awaiting an agent** (a foreground subagent/teammate keeps the turn blocked → blue; a background one → `awaiting-bg`) or a background command / monitor (`awaiting-bg`) | `PreToolUse` Bash/Task/Agent · `Stop` w/ a bg job/monitor/agent running |
+| 🟦 blue `#61afef`    | **the main session is running / awaiting** — a foreground shell command (`executing`, kept blue for its **whole real duration** even past Ctrl+B — see below), or the main session **awaiting an agent** (a foreground subagent/teammate keeps the turn blocked → blue; a background one → `awaiting-bg`) or a background command / monitor (`awaiting-bg`) | `PreToolUse` Bash/Task/Agent · `Stop` w/ a bg job/monitor/agent running |
 | 🟥 red `#e06c75`     | **awaiting-command** — Claude is asking *you* a question | `PreToolUse` `AskUserQuestion`/`ExitPlanMode` · `Notification` (permission/approval message) |
 | 🟩 green `#98c379`   | **awaiting-response** — done, your turn                     | `Stop` w/ nothing running · `Notification` ("waiting for your input") |
 | (theme default)      | cleared on exit                                            | `SessionEnd` |
@@ -92,9 +92,8 @@ instant a job ends — but it no longer has to wait for the next exchange either
   no other tailer marker is still live. (Releasing before the recheck is essential,
   or it would see its own marker.) Recognizing `executing` here (not just
   `awaiting-bg`) is what makes a **manually cancelled** foreground command flip the
-  tab green promptly instead of waiting on the `idle-watch` fallback below —
-  cancelling fires no hook at all, but the `fg` tailer notices its process died
-  (`has_writer` goes false) and calls `bg-recheck` itself.
+  tab green promptly — cancelling fires no hook at all, but the `fg` tailer notices
+  its process died (`has_writer` goes false) and calls `bg-recheck` itself.
 - As a backstop for an *untracked* finished job (a tailer that died without
   rechecking), the `stop` dispatch — when it goes blue — also spawns **one detached
   `bg-watch` watcher** that polls until no live marker remains, then flips the
@@ -104,7 +103,7 @@ instant a job ends — but it no longer has to wait for the next exchange either
 Each color-set persists the state to `/tmp/claude-tab-state-<window_id>` so
 `bg-recheck`/`bg-watch` can make the "is it currently red?" decision.
 
-### Recovering from a cancelled turn (`idle-watch` / `interrupt-watch`)
+### Recovering from a cancelled turn (`interrupt-watch`)
 
 Claude Code fires **no hook at all** when a turn is cancelled/interrupted — no
 `Stop`, no `StopFailure`, nothing. Every cancellation case in this doc ultimately
@@ -121,25 +120,24 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   subagent case). `claude-tab-status.sh`'s `thinking` dispatch (`UserPromptSubmit`)
   reads the payload's `transcript_path` and spawns **one detached
   `interrupt-watch` per window** that tails it for that line, polling every 0.5s —
-  so this case also recovers almost instantly, without waiting on `idle-watch`.
+  so this case recovers almost instantly.
   It only watches while the tab is in the magenta `thinking`/`working` phase, and
   re-checks the state right before flipping green so it never clobbers a state
   that already moved on for a legitimate reason (e.g. a tool call started).
 - **Cancelling before the model has produced anything at all** (mid-thinking,
   before the turn's first hook) is the one case with **no signal whatsoever** —
   confirmed empirically: the harness silently rewinds the turn for editing, and
-  *nothing* is written anywhere (no transcript line, no sidecar file). This is
-  the true backstop `idle-watch` (`ensure_idlewatch`, spawned whenever the tab
-  enters a busy colour) exists for: it polls every 5s, and once the tab has sat
-  on `thinking`/`working`/`executing` for `CLAUDE_TAB_IDLE_SECS` (default **30**)
-  with `bg_command_running` false, it declares the turn abandoned and flips green.
-  `bg_command_running` guards it, so a genuinely long-running Bash/bg/fg/subagent
-  job is **never** a false positive here *regardless* of the timeout value — the
-  real exposure is narrower: a bare thinking stretch, or a slow non-Bash tool
-  call, with zero hook activity for the whole window. 30s was chosen to recover
-  reasonably fast after a cancel while an ordinary thinking pause rarely runs
-  that long with nothing else happening; raise `CLAUDE_TAB_IDLE_SECS` if a slow
-  MCP tool or heavy-effort thinking starts tripping it.
+  *nothing* is written anywhere (no transcript line, no sidecar file). This case
+  is **deliberately left unhandled**: the tab stays magenta until the next
+  interaction resets it. A timeout backstop (`idle-watch`, "fully quiet for
+  `CLAUDE_TAB_IDLE_SECS` → green") existed for it and was **removed** — long
+  thinking fires zero hooks and writes nothing, which is *exactly* the same
+  signature as the cancel, so any timeout short enough to be useful (30s)
+  false-positived on every long thinking stretch, turning the tab green
+  mid-turn. That false "your turn" fired on *every* long think and actively
+  misled; the stale magenta it protected against is rare, happens with the user
+  at the keyboard (they just pressed Esc), and self-corrects at the next prompt —
+  which the cancelling user is typically about to type anyway.
 
 ## Wiring
 
@@ -389,8 +387,8 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     starts from the *current size* of the task's output file
     (`CLAUDE_STREAM_SKIP_EXISTING`), not from 0, so whatever the `fg` tailer's tee
     copy already showed isn't repeated.
-  - **A manually cancelled command** fires no hook at all (same gap `idle-watch`
-    exists for elsewhere in this doc), so `claude-cmd-fmt.py`'s normal cleanup of
+  - **A manually cancelled command** fires no hook at all (the
+    no-hook-on-interrupt gap noted throughout this doc), so `claude-cmd-fmt.py`'s normal cleanup of
     the `.fg-live` marker never runs. Left alone, that stale marker would make
     `claude-cmd-pre.py` think a live block is *already* in flight forever, and
     silently skip wrapping every later command (the mirror would just stop
@@ -446,14 +444,51 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     the summed tokens priced on the resolved model (`claude_ops.PRICES`, per-MTok
     input/output for the current lineup; `cache_read` billed at ~0.1×). An unknown
     model shows nothing rather than guess. Being last, it truncates before the rest.
-  - **Session scoreboard (periodic).** A running "so far" summary of the whole session,
-    aggregated across the separate hook processes in a sidecar `…/<mirror-log>.stats.json`
-    (each producer bumps its deltas under an `flock`; removed with the log at SessionEnd).
-    The command hook emits it as a muted `▪ session · 14 cmds (2✗) · 23 files · +340 -120
-    · ⏱ 4m12s · ≈ $1.20` chip **every `CLAUDE_MIRROR_SCORE_EVERY` commands** (default 5)
-    and immediately after any failure, plus a `tools · Bash 12 · Edit 8 · Read 6` breakdown.
-    The `≈ $` is the sum of metered **agent/codex** spend (the main session has no token
-    stream of its own); it's the last field, so `fit()` drops it first on a narrow pane.
+  - **Session scoreboard (its own window).** A running "so far" summary of the whole
+    session, aggregated across the separate hook processes in a sidecar
+    `…/<mirror-log>.stats.json` (each producer bumps its deltas under an `flock`;
+    removed with the log at SessionEnd). **`claude-scorebar.py`** renders it in a
+    **dedicated ~2-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
+    opened/closed with the mirror by `claude-split.sh`):
+
+    ```
+    ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
+      Read 34 · Edit 18 · Write 4
+    ```
+
+    A separate window — not lines pinned inside the mirror — because that's the only
+    thing that survives **scrolling**: anything drawn in the mirror's own screen
+    scrolls away with its history, and a DECSTBM scroll region would keep it pinned
+    only by discarding scrolled lines instead of pushing them to scrollback. Styling
+    is deliberately muted (no background chips): dim separators, slate words, brighter
+    numbers, and colour only where it means something — failures/removed red, added
+    green, cost orange. It repaints on every sidecar bump and at least once a second
+    (so the `⏱` ticks live), truncates from the tail on narrow panes (cost goes last,
+    so it drops first), and **exits when the mirror log disappears** at SessionEnd,
+    auto-closing its window (`claude-split.sh close` is the safety net). The
+    structured data comes from `claude_ops.scoreboard_parts()`. The tools row
+    **excludes Bash** — its count is already the `cmds` figure (same bump; listing it
+    again would just duplicate the head). `files` counts **unique files** (touched
+    paths are deduped in the sidecar's `file_set`; re-editing the same file doesn't
+    inflate it) while the tools row still counts operations — so `Edit 18` against
+    `5 files` reads as 18 edits across 5 distinct files.
+  - **Tokens + cost cover the whole session.** `tok` sums fresh billed input
+    (`input + cache_creation`) plus generated output — cache reads are replay, not
+    spend, so they're excluded. Two producers feed it: each **agent's** streamer
+    bumps its totals when the run ends, and the **main session's own turns** are
+    folded in by `claude_ops.bump_transcript()` — called from the cmd/file hooks, it
+    reads the session transcript JSONL forward from a cursor kept in the sidecar
+    (`txpos`), sums each new assistant turn's usage (skipping sidechain records —
+    their own streamer already counts them), and advances the cursor under the same
+    `flock` so concurrent hooks never double-count. (Before this, cost only moved
+    when an agent run ended and sat "stuck" through plain main-session work.)
+  - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-06 list):
+    Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet 3/15 · Haiku 4.5 1/5 · legacy
+    Opus 4.1/4.0/3 15/75 per MTok in/out; cache reads bill 0.1× input and cache
+    **writes 1.25×** (the `cache_creation` share is tracked separately so the 0.25×
+    premium is applied). Sonnet 5's introductory 2/10 rate is used automatically
+    through 2026-08-31, then reverts to the 3/15 sticker. An unknown model counts
+    tokens but adds no cost rather than guess.
   - **`<model>·<effort>` on every op header.** Each operation header (prompt, message,
     result, command, file op) is tagged, e.g. `opus-4.8·high`. The **model** comes from
     the agent's own turns (`message.model`); before the first turn lands, the prompt
@@ -476,7 +511,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     safety net, and **only when a colour slot is still claimed** (the streamer
     died mid-run without finalising).
     - **Manually cancelling/killing a subagent fires no `SubagentStop` at all** —
-      the same no-hook-on-interrupt gap noted throughout this doc (`idle-watch`,
+      the same no-hook-on-interrupt gap noted throughout this doc (`interrupt-watch`,
       the cancelled-foreground-command fix above). Left alone, the streamer would
       hang on the sentinel until its 6h backstop, leaving the tab **stuck blue**
       the whole time (`sub.pid.<agent_id>`'s pid stays alive — a subagent has no
@@ -623,10 +658,14 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   `/tmp/claude-mirror-<sid>.log`. `open` (SessionStart) reads the `session_id` from
   its hook payload, truncates that session's log, tags the Claude pane, switches the
   tab to the `splits` layout, and launches the split at `${CLAUDE_MIRROR_BIAS:-25}`
-  percent. It also fires **`claude-codex-launch.py`** (see *Codex streams* above),
+  percent, plus the **scoreboard bar** — a ~2-row `claude-scorebar.py` window hsplit
+  under the mirror (`--next-to` the mirror window, then resized to exactly
+  `BAR_ROWS` since kitty's `--bias` is approximate; excluded from the width math,
+  which would otherwise double-count the column it shares with the mirror). It also
+  fires **`claude-codex-launch.py`** (see *Codex streams* above),
   which detaches this session's codex watcher and returns immediately. `close`
-  (SessionEnd) closes that session's mirror and removes its log — which is also what
-  stops the watcher.
+  (SessionEnd) closes that session's mirror + bar and removes its log — which is also
+  what stops the watcher (and the bar's renderer, which exits when the log vanishes).
   `toggle` closes the pane if present **without** truncating, so reopening re-shows
   the whole session history — and while closed there is **no process at all** (no
   resources, nothing to leak). `grow`/`shrink [N]` resize by N cells

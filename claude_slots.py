@@ -174,14 +174,16 @@ def _read_id(p):
         return None
 
 
-def claim_id(kind, log, ident):
+def claim_id(kind, log, ident, prefer=None):
     """Map `ident` to a round-robin slot (stamping the start time), or return the
-    existing mapping if already claimed. Returns (slot_index, is_new)."""
+    existing mapping if already claimed. `prefer` pins a specific slot for a NEW
+    mapping (a resumed teammate keeps its original colour). Returns
+    (slot_index, is_new)."""
     p = _id_path(log, kind, ident)
     got = _read_id(p)
     if got is not None:
         return got[0], False
-    idx = _next(_dir(log), kind, len(palette(kind)))
+    idx = prefer if prefer is not None else _next(_dir(log), kind, len(palette(kind)))
     try:
         with open(p, "w") as f:
             f.write(f"{idx} {time.time()}")

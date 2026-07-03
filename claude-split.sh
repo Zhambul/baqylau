@@ -139,7 +139,7 @@ import json,os,sys
 sid=os.environ["SID"]
 for osw in json.load(sys.stdin):
   for t in osw["tabs"]:
-    wins=t["windows"]
+    wins=[w for w in t["windows"] if not w.get("user_vars",{}).get("claude_scorebar")]
     cur=next((w.get("columns",0) for w in wins if w.get("user_vars",{}).get("claude_mirror")==sid),0)
     if not cur: continue
     total=sum(w.get("columns",0) for w in wins)
@@ -155,28 +155,101 @@ save_size() {  # $1=sid — remember the mirror's current % for this project
 }
 
 # --- pane ops, all scoped to ONE session's mirror (var:claude_mirror=<sid>) ----
-mirror_exists() {  # $1 = sid
-  "$kitten" @ ls 2>/dev/null | SID="$1" python3 -c '
+# The mirror pane carries a small companion: the SCOREBOARD BAR (claude-scorebar.py),
+# a ~2-row window hsplit under it (var:claude_scorebar=<sid>). Its own window — not
+# lines pinned inside the mirror — so scrolling the mirror's history can't scroll it
+# away. Opened/closed with the mirror; excluded from the width math below (it shares
+# the mirror's column, so counting its columns would double-count that column).
+window_exists() {  # $1 = user-var name  $2 = sid
+  "$kitten" @ ls 2>/dev/null | VAR="$1" SID="$2" python3 -c '
+import json,os,sys
+var,sid=os.environ["VAR"],os.environ["SID"]
+for osw in json.load(sys.stdin):
+  for t in osw["tabs"]:
+    for w in t["windows"]:
+      if w.get("user_vars",{}).get(var)==sid: sys.exit(0)
+sys.exit(1)'
+}
+
+mirror_exists() { window_exists claude_mirror "$1"; }  # $1 = sid
+
+# Close any STALE mirror/scoreboard in the tab whose sid differs from $1. A session's
+# id changes on --resume/--continue (and often /clear): SessionStart then re-tags the
+# Claude pane and opens a mirror keyed by the NEW sid, while the OLD-sid mirror lingers
+# in the same tab — tailing a log nothing writes to anymore (frozen) and doubling the
+# pane. One tab holds exactly one Claude session, so a mirror there with a different sid
+# is always stale. Anchored to KITTY_WINDOW_ID (the hook's Claude pane) when present,
+# else the focused tab (keybinding). No-op when there's nothing stale to close.
+close_stale_mirrors() {  # $1 = sid to KEEP
+  local ids id
+  ids="$("$kitten" @ ls 2>/dev/null | KEEP="$1" ANCHOR="${KITTY_WINDOW_ID:-}" python3 -c '
+import json,os,sys
+keep=os.environ["KEEP"]; anchor=os.environ.get("ANCHOR","")
+for osw in json.load(sys.stdin):
+  for t in osw["tabs"]:
+    if anchor:
+      if not any(str(w.get("id"))==anchor for w in t["windows"]): continue
+    elif not (osw.get("is_focused") and t.get("is_focused")):
+      continue
+    for w in t["windows"]:
+      uv=w.get("user_vars",{})
+      sid=uv.get("claude_mirror") or uv.get("claude_scorebar")
+      if sid and sid!=keep: print(w.get("id"))
+    sys.exit(0)' 2>/dev/null)"
+  for id in $ids; do
+    "$kitten" @ close-window --match "id:$id" >/dev/null 2>&1
+  done
+}
+
+# kitty bias is approximate ("you cannot use this method to create windows of fixed
+# sizes"), so after launching the bar, iterate relative resizes until it is exactly
+# BAR_ROWS tall (or kitty's minimum stops shrinking it).
+BAR_ROWS=2
+bar_delta() {  # $1=sid -> (BAR_ROWS - current bar rows)
+  "$kitten" @ ls 2>/dev/null | SID="$1" ROWS="$BAR_ROWS" python3 -c '
 import json,os,sys
 sid=os.environ["SID"]
 for osw in json.load(sys.stdin):
   for t in osw["tabs"]:
     for w in t["windows"]:
-      if w.get("user_vars",{}).get("claude_mirror")==sid: sys.exit(0)
-sys.exit(1)'
+      if w.get("user_vars",{}).get("claude_scorebar")==sid:
+        print(int(os.environ["ROWS"])-int(w.get("lines") or 0)); sys.exit(0)'
+}
+
+size_bar() {  # $1=sid
+  local d i
+  for i in 1 2 3; do
+    d="$(bar_delta "$1")"
+    case "$d" in ''|0|*[!0-9-]*) return ;; esac
+    "$kitten" @ resize-window --match "var:claude_scorebar=$1" \
+      --axis vertical --increment "$d" >/dev/null 2>&1
+    sleep 0.08                              # let kitty apply before re-measuring
+  done
 }
 
 open_mirror() {  # $1=sid  $2=log  $3=bias%  (does NOT truncate — caller decides)
-  mirror_exists "$1" && return 0
-  # vsplit sizing only works in the splits layout; switch the active tab to it.
-  "$kitten" @ goto-layout splits >/dev/null 2>&1
-  "$kitten" @ launch \
-    --location=vsplit --bias "${3:-$BIAS}" --keep-focus --cwd current \
-    --var "claude_mirror=$1" --title "◧ cmd mirror" \
-    "$DIR/claude-mirror.sh" "$2" >/dev/null 2>&1
+  if ! mirror_exists "$1"; then
+    # vsplit sizing only works in the splits layout; switch the active tab to it.
+    "$kitten" @ goto-layout splits >/dev/null 2>&1
+    "$kitten" @ launch \
+      --location=vsplit --bias "${3:-$BIAS}" --keep-focus --cwd current \
+      --var "claude_mirror=$1" --title "◧ cmd mirror" \
+      "$DIR/claude-mirror.sh" "$2" >/dev/null 2>&1
+  fi
+  if ! window_exists claude_scorebar "$1"; then   # checked separately so a crashed/
+    "$kitten" @ launch \
+      --location=hsplit --next-to "var:claude_mirror=$1" --bias 5 \
+      --keep-focus --cwd current \
+      --var "claude_scorebar=$1" --title "▪ session" \
+      "$DIR/claude-scorebar.py" "$2" >/dev/null 2>&1   # closed bar comes back on toggle
+    size_bar "$1"
+  fi
 }
 
-close_mirror() { "$kitten" @ close-window --match "var:claude_mirror=$1" >/dev/null 2>&1; }  # $1=sid
+close_mirror() {  # $1=sid — the bar rides along with the mirror
+  "$kitten" @ close-window --match "var:claude_scorebar=$1" >/dev/null 2>&1
+  "$kitten" @ close-window --match "var:claude_mirror=$1" >/dev/null 2>&1
+}
 
 tag_window() {  # $1=sid — tag THIS hook's own Claude pane so a keybinding can find it
   [ -n "${KITTY_WINDOW_ID:-}" ] && \
@@ -199,7 +272,7 @@ import json,os,sys
 pct=float(os.environ["PCT"]); sid=os.environ["SID"]
 for osw in json.load(sys.stdin):
   for t in osw["tabs"]:
-    wins=t["windows"]
+    wins=[w for w in t["windows"] if not w.get("user_vars",{}).get("claude_scorebar")]
     cur=next((w.get("columns",0) for w in wins if w.get("user_vars",{}).get("claude_mirror")==sid),0)
     if not cur: continue
     total=sum(w.get("columns",0) for w in wins)
@@ -227,6 +300,7 @@ case "$cmd" in
     [ -n "$log" ] || exit 0
     : > "$log"                                       # fresh log for this session
     tag_window "$sid"
+    close_stale_mirrors "$sid"                       # drop a prior-sid mirror (resume/clear) so it can't double up
     open_mirror "$sid" "$log" "$(project_bias)"      # restore this project's remembered size
     # Stream any codex run (companion job OR raw `codex`/`codex exec`) into this
     # session's mirror. The launcher Popens the watcher DETACHED (start_new_session)
@@ -247,6 +321,7 @@ case "$cmd" in
     if mirror_exists "$sid"; then
       close_mirror "$sid"                            # keep the log -> history preserved
     else
+      close_stale_mirrors "$sid"                     # clear any prior-sid pane in this tab first
       open_mirror "$sid" "$(log_for "$sid")" "$(project_bias)"   # remembered size, keep history
     fi
     ;;

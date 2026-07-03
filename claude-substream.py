@@ -288,6 +288,12 @@ SUBDIR = os.path.join(BASE, "subagents")
 JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
 SENT   = os.path.join(LOG + ".slots", f"sub.done.{AGENT}")
 META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
+# Byte offset of the last fully consumed transcript line. An idle TEAMMATE fires
+# SubagentStop (this streamer finalises and dies) and a later message fires a fresh
+# SubagentStart, which spawns a NEW streamer for the SAME transcript — without a
+# checkpoint that streamer would re-render the whole history. Deliberately NOT
+# removed in cleanup(): it must outlive the streamer to make the resume seamless.
+POS_PATH = os.path.join(LOG + ".slots", f"sub.pos.{AGENT}")
 
 
 def cancelled_by_user():
@@ -318,9 +324,11 @@ TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-mess
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 
-def chip(glyph, kind):
+def chip(glyph, kind, ctx=""):
+    # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
+    # turn, rather than on its own gutter line below it.
     tag = op_tag()
-    s = f"{LABEL} {glyph} {kind}" + (f"  {tag}" if tag else "")
+    s = f"{LABEL} {glyph} {kind}" + (f"  {tag}" if tag else "") + (f"  {ctx}" if ctx else "")
     return O.label(s, SUB_RGB)
 
 
@@ -334,6 +342,11 @@ def cap(text, n):
 
 def gutter(text):
     return O.gut(R.unescape(text), SUB_RGB)
+
+
+def msg_gutter(text):
+    # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).
+    return O.gut(R.markdown(R.unescape(text)), SUB_RGB)
 
 
 def kfmt(n):
@@ -375,21 +388,14 @@ def ctx_used():
 
 
 def ctx_tag():
-    # Colour-by-threshold "ctx 42% · 84k/200k" for the current turn, or "" if no usage.
+    # Plain "ctx 42% · 84k/200k" for the current turn, or "" if no usage. Rendered as
+    # dark text inside the operation chip (see chip()), so no inline threshold colour —
+    # the chip's own solid background carries the identity hue.
     used = ctx_used()
     if used <= 0:
         return ""
     mx = model_ctx()
-    pct = used * 100 // mx
-    col = CTX_GREEN if pct < CTX_WARN else CTX_AMBER if pct < CTX_CRIT else CTX_RED
-    return f"{col}ctx {pct}% · {kfmt(used)}/{kfmt(mx)}{RST}"
-
-
-def emit_ctx(tag):
-    # One colour-coded context line in this agent's stream colour (the digits carry the
-    # threshold colour via inline ANSI; the gutter bar stays the agent's identity hue).
-    if tag:
-        O.emit(LOG, O.gut(tag, SUB_RGB))
+    return f"ctx {used * 100 // mx}% · {kfmt(used)}/{kfmt(mx)}"
 
 
 def result_text(content):
@@ -471,12 +477,15 @@ pending_tag = ""          # ctx token snapshotted when the pending_msg was buffe
 # Cumulative usage over the WHOLE run, for the ended-footer rollup. Distinct from
 # last_usage (a single turn's snapshot, which drives the live ctx %): these sum every
 # assistant turn. tot_in is FRESH billed input (input_tokens + cache_creation) — the
-# tokens actually sent, not replayed; tot_cache is cache_read (cheap replay). So the
-# footer's "cache %" = tot_cache / (tot_in + tot_cache) is the share of all context
-# reads served from cache — a thrash/reuse signal. tool_n counts tool_use blocks.
+# tokens actually sent, not replayed; tot_cache is cache_read (cheap replay); tot_create
+# is the cache_creation share of tot_in, kept separately so cost_usd can bill its 1.25×
+# write premium. So the footer's "cache %" = tot_cache / (tot_in + tot_cache) is the
+# share of all context reads served from cache — a thrash/reuse signal. tool_n counts
+# tool_use blocks.
 tot_in = 0
 tot_out = 0
 tot_cache = 0
+tot_create = 0
 tool_n = 0
 
 
@@ -488,9 +497,8 @@ def flush_msg(is_result=False):
     global pending_msg, pending_tag
     if pending_msg is None:
         return
-    emit_ctx(pending_tag)
     glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
-    O.emit(LOG, chip(glyph, kind), gutter(cap(pending_msg, 40)))
+    O.emit(LOG, chip(glyph, kind, pending_tag), msg_gutter(cap(pending_msg, 40)))
     pending_msg = None
     pending_tag = ""
 
@@ -532,7 +540,7 @@ def render_message(text):
     turn_ctx_shown = True
 
 
-def render_file(name_tool, inp, result=None):
+def render_file(name_tool, inp, result=None, ctx=""):
     label = FILE_LABEL.get(name_tool, "Read")
     path = inp.get("file_path") or inp.get("notebook_path") or ""
     name = os.path.basename(path.rstrip("/")) or path or "?"
@@ -561,6 +569,8 @@ def render_file(name_tool, inp, result=None):
     tag = op_tag()
     if tag:
         line += "  " + R.DIM + tag + RST
+    if ctx:
+        line += "  " + R.DIM + ctx + RST
     O.emit(LOG, O.gut(line, SUB_RGB))
 
 
@@ -568,8 +578,9 @@ def on_tool_use(b):
     global turn_ctx_shown, tool_n
     tool_n += 1                   # count every tool call, for the ended-footer rollup
     flush_msg()
-    if not turn_ctx_shown:        # one ctx line per turn, here if no message led it
-        emit_ctx(cur_tag)
+    ctx = ""                      # ctx rides the FIRST op header of a turn (if no msg led it)
+    if not turn_ctx_shown:
+        ctx = cur_tag
         turn_ctx_shown = True
     name = b.get("name") or ""
     inp = b.get("input") or {}
@@ -577,20 +588,20 @@ def on_tool_use(b):
     if name == "Bash":
         cmd = inp.get("command", "")
         if inp.get("run_in_background"):
-            O.emit(LOG, chip("▷", "background"), O.code(cmd))
+            O.emit(LOG, chip("▷", "background", ctx), O.code(cmd))
             pend[tid] = ("bg", cmd)
         else:
-            O.emit(LOG, chip("▶", "foreground"), O.code(cmd))
+            O.emit(LOG, chip("▶", "foreground", ctx), O.code(cmd))
             pend[tid] = ("fg", cmd)
     elif name in FILE_LABEL:
         # Defer to the result: absolute line info — a Read's EXTENT
         # (startLine/numLines/totalLines) and an edit's touched hunks (structuredPatch)
         # — lives only on the tool_result, which lands in the very next record, so
-        # ordering is preserved. Carry (tool, input) for rendering there.
-        pend[tid] = ("file", (name, inp))
+        # ordering is preserved. Carry (tool, input, ctx) for rendering there.
+        pend[tid] = ("file", (name, inp, ctx))
     elif name == "Monitor":
         cmd = inp.get("command", "")
-        O.emit(LOG, chip("◉", "monitor"), O.code(cmd))
+        O.emit(LOG, chip("◉", "monitor", ctx), O.code(cmd))
         pend[tid] = ("monitor", cmd)
     elif name == "SendMessage":
         # Mail this teammate sends to another teammate / the lead. Show recipient +
@@ -598,16 +609,16 @@ def on_tool_use(b):
         # so it's suppressed in on_tool_result.
         to = inp.get("to") or inp.get("recipient") or "?"
         text = inp.get("message") or inp.get("content") or inp.get("summary") or ""
-        O.emit(LOG, chip("✉", "to " + to), gutter(cap(text.strip(), 12)))
+        O.emit(LOG, chip("✉", "to " + to, ctx), gutter(cap(text.strip(), 12)))
         pend[tid] = ("sendmsg", "")
     elif name in ("Task", "Agent"):
         # A nested subagent gets its OWN block via its own SubagentStart/Stop hooks.
         sub = (inp.get("subagent_type") or "subagent")
-        st = "⊂ spawns " + sub + ("  " + op_tag() if op_tag() else "")
+        st = "⊂ spawns " + sub + ("  " + op_tag() if op_tag() else "") + ("  " + ctx if ctx else "")
         O.emit(LOG, O.gut(R.DIM + st + RST, SUB_RGB))
         pend[tid] = ("agent", "")
     else:
-        O.emit(LOG, chip("·", name or "tool"))
+        O.emit(LOG, chip("·", name or "tool", ctx))
         req = input_summary(inp)                 # show the request (e.g. the query/url)
         if req:
             O.emit(LOG, gutter(cap(req, 10)))
@@ -621,8 +632,8 @@ def on_tool_result(b, tur=None):
     if kind == "file":
         # Deferred from on_tool_use: render the file op now, with the extent (Read) or
         # touched range (edit) the result carries. cmd holds the saved (tool, input).
-        name_tool, saved_inp = cmd if isinstance(cmd, tuple) else ("Read", {})
-        render_file(name_tool, saved_inp, tur)
+        name_tool, saved_inp, saved_ctx = cmd if isinstance(cmd, tuple) else ("Read", {}, "")
+        render_file(name_tool, saved_inp, tur, saved_ctx)
         return
     if kind in ("agent", "sendmsg"):
         return                                      # already shown / handled elsewhere
@@ -646,7 +657,7 @@ def on_tool_result(b, tur=None):
 
 
 def handle_line(s):
-    global last_usage, last_model, cur_tag, turn_ctx_shown, tot_in, tot_out, tot_cache
+    global last_usage, last_model, cur_tag, turn_ctx_shown, tot_in, tot_out, tot_cache, tot_create
     try:
         o = json.loads(s)
     except Exception:
@@ -678,6 +689,7 @@ def handle_line(s):
             # Accumulate for the ended-footer rollup (each turn's usage counted once).
             tot_in += u.get("input_tokens", 0) + u.get("cache_creation_input_tokens", 0)
             tot_cache += u.get("cache_read_input_tokens", 0)
+            tot_create += u.get("cache_creation_input_tokens", 0)
             tot_out += u.get("output_tokens", 0)
         cur_tag = ctx_tag()
         turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
@@ -701,6 +713,15 @@ def main():
         return
 
     pos, pending = 0, b""
+    # Resume from the previous streamer's checkpoint (idle-teammate restart) so
+    # already-rendered history isn't replayed. Ignore a checkpoint past EOF (a
+    # rewritten/foreign transcript) and start over.
+    try:
+        saved = int(open(POS_PATH).read().strip() or "0")
+        if 0 < saved <= os.path.getsize(JSONL):
+            pos = saved
+    except Exception:
+        pass
 
     def pump():
         nonlocal pos, pending
@@ -720,6 +741,13 @@ def main():
                 s = ln.decode("utf-8", "replace").strip()
                 if s:
                     handle_line(s)
+            # Checkpoint only what was fully consumed — a trailing partial line
+            # stays uncounted so a successor re-reads it whole.
+            try:
+                with open(POS_PATH, "w") as fh:
+                    fh.write(str(pos - len(pending)))
+            except Exception:
+                pass
 
     # Completion: the SubagentStop sentinel (the authoritative end signal — written
     # by the stop hook) for a normal finish, OR meta.json's stoppedByUser for a
@@ -761,15 +789,23 @@ def main():
             foot += f" · cache {tot_cache * 100 // reads}%"
     if tool_n:
         foot += f" · {tool_n} tool" + ("s" if tool_n != 1 else "")
-    # Cost estimate from the tokens already summed, priced on the resolved model.
-    usd = O.cost_usd(disp_model(), tot_in, tot_out, tot_cache)
+    # Cost estimate from the tokens already summed, priced on the resolved model
+    # (cache_creation billed at its 1.25× write premium via tot_create).
+    usd = O.cost_usd(disp_model(), tot_in, tot_out, tot_cache, tot_create)
     if usd:
         foot += " · ≈ " + O.fmt_usd(usd)
     O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
-    # Feed this agent's metered spend into the session scoreboard (the main session has
-    # no token stream of its own, so the scoreboard's "≈ $" reflects agent/codex runs).
+    # Feed this agent's metered spend into the session scoreboard (the main session's
+    # own spend is folded in separately by claude_ops.bump_transcript, called from the
+    # cmd/file hooks — together they cover the whole session). tokens = fresh billed
+    # input + generated output — cache reads are replay, not spend, so they're excluded.
+    deltas = {}
     if usd:
-        O.bump(LOG, cost=usd)
+        deltas["cost"] = usd
+    if tot_in or tot_out:
+        deltas["tokens"] = tot_in + tot_out
+    if deltas:
+        O.bump(LOG, **deltas)
 
 
 def cleanup():
@@ -784,7 +820,7 @@ def cleanup():
         except Exception:
             pass
     try:
-        subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots"],
+        subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots", "sub"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:

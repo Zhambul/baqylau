@@ -84,7 +84,22 @@ def main():
         # palette + header keyword differ.
         team = is_teammate(tpath, agent_id)
         pal  = "team" if team else "sub"
-        slot, is_new = claude_slots.claim_id("sub", LOG, agent_id)
+        # A resumed teammate (see the `resumed` block below) must keep its ORIGINAL
+        # colour — one hue per agent identity — so its first slot is persisted in
+        # sub.slot.* and pinned on re-claim instead of taking the next round-robin.
+        slot_file = os.path.join(LOG + ".slots", f"sub.slot.{agent_id}")
+        try:
+            prefer = int(open(slot_file).read().strip())
+        except Exception:
+            prefer = None
+        slot, is_new = claude_slots.claim_id("sub", LOG, agent_id, prefer=prefer)
+        if is_new and prefer is None:
+            try:
+                os.makedirs(LOG + ".slots", exist_ok=True)
+                with open(slot_file, "w") as f:
+                    f.write(str(slot))
+            except Exception:
+                pass
         # A background agent (and a teammate in particular) can fire SubagentStart
         # MORE THAN ONCE. If we already claimed this agent's slot and its streamer is
         # still live, this is a duplicate start — don't write a second header or spawn
@@ -96,11 +111,32 @@ def main():
             except Exception:
                 pass
         rgb = claude_slots.color(pal, slot)
-        desc = claude_slots.desc_pop(LOG)
-        if team:
-            head = f"▶ {atype} · teammate · {desc}" if desc else f"▶ {atype} · teammate"
+        # An idle teammate that wakes on a new message fires SubagentStart AGAIN with
+        # the same agent_id after its previous streamer fully finalised. That resume is
+        # recognisable by the streamer's surviving position checkpoint (sub.pos.*). On
+        # resume there was no PreToolUse(Agent) push, so desc_pop() would steal a
+        # description queued for a DIFFERENT agent — reuse the one persisted at first
+        # start instead, and mark the header ↻ so the block reads as a continuation.
+        desc_file = os.path.join(LOG + ".slots", f"sub.desc.{agent_id}")
+        resumed = os.path.exists(os.path.join(LOG + ".slots", f"sub.pos.{agent_id}"))
+        if resumed:
+            try:
+                desc = open(desc_file).read().strip()
+            except Exception:
+                desc = ""
         else:
-            head = f"▶ {atype} · {desc}" if desc else f"▶ {atype}"
+            desc = claude_slots.desc_pop(LOG)
+            if desc:
+                try:
+                    with open(desc_file, "w") as f:
+                        f.write(desc)
+                except Exception:
+                    pass
+        glyph = "↻" if resumed else "▶"
+        if team:
+            head = f"{glyph} {atype} · teammate · {desc}" if desc else f"{glyph} {atype} · teammate"
+        else:
+            head = f"{glyph} {atype} · {desc}" if desc else f"{glyph} {atype}"
         O.emit(LOG, O.blank(), O.rule(), O.label(head, rgb), O.rule())
         # Spawn the transcript streamer (detached) and record its pid so `stop` can
         # tell whether it's still running. PALETTE (argv 6) tells it which colour

@@ -62,7 +62,11 @@ def wrap_gutter(text, width, gut, gw):
         if li:
             pieces.append("\n")
         pieces.append(gut)
-        col, active, i, n = 0, "", 0, len(line)
+        # Soft-wrap on WORD boundaries: gather whitespace / word runs (ANSI copied
+        # verbatim, zero width) and break before a word that won't fit, dropping the
+        # space that would have led it. Only a single word longer than a whole row is
+        # hard-broken. `active` re-asserts the live SGR colour after every wrap.
+        col, active, pending_sp, i, n = 0, "", "", 0, len(line)
         while i < n:
             m = _ANSI.match(line, i)
             if m:
@@ -72,10 +76,27 @@ def wrap_gutter(text, width, gut, gw):
                     active = "" if seq in ("\x1b[0m", "\x1b[m") else active + seq
                 i = m.end()
                 continue
-            if col >= cw:
-                pieces.append(RST + "\n" + gut + active)
-                col = 0
-            pieces.append(line[i]); col += 1; i += 1
+            if line[i] in " \t":                  # accumulate a whitespace run
+                j = i
+                while j < n and line[j] in " \t" and not _ANSI.match(line, j):
+                    j += 1
+                pending_sp += line[i:j]; i = j
+                continue
+            j = i                                 # a word: a run of non-space, non-ANSI
+            while j < n and line[j] not in " \t" and not _ANSI.match(line, j):
+                j += 1
+            word = line[i:j]; i = j
+            if col > 0 and col + len(pending_sp) + len(word) > cw:
+                pieces.append(RST + "\n" + gut + active); col = 0; pending_sp = ""
+            if pending_sp:                        # leading indent at a real line start is kept
+                pieces.append(pending_sp); col += len(pending_sp); pending_sp = ""
+            while col + len(word) > cw:           # single word wider than a row -> hard-break
+                take = cw - col
+                if take <= 0:
+                    pieces.append(RST + "\n" + gut + active); col = 0; continue
+                pieces.append(word[:take]); word = word[take:]; col += take
+                pieces.append(RST + "\n" + gut + active); col = 0
+            pieces.append(word); col += len(word)
         pieces.append(RST)
     return "".join(pieces)
 
@@ -107,6 +128,43 @@ def emphasize(text):
             out.append(BANNER + line + RST)
         else:
             out.append(line)
+    return "\n".join(out)
+
+
+# --- inline markdown -> ANSI ---------------------------------------------------
+# Claude Code messages are markdown. In the mirror we render a useful subset inline so
+# a message reads the way it was written: **bold**/__bold__, *italic*/_italic_,
+# `code`, ATX headings (`## Title`), and `-`/`*`/`+` bullets. Width-independent (only
+# adds zero-width SGR + swaps the bullet glyph), so it runs at op creation and the
+# gutter wrapper's word-wrap + colour re-assertion carry the styling across rows.
+# Best-effort and conservative: emphasis must hug non-space text, so `2 * 3` and a bare
+# `*` are left alone. Uses granular OFF codes (22/23/39) rather than a full reset so a
+# span nested inside another keeps the outer style.
+_MD_H      = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$")
+_MD_BULLET = re.compile(r"^(\s*)[-*+](\s+)")
+_MD_CODE   = re.compile(r"`([^`\n]+?)`")
+_MD_BOLD   = re.compile(r"\*\*(\S.*?\S|\S)\*\*|__(\S.*?\S|\S)__")
+_MD_ITAL   = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])"
+                        r"|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])")
+
+
+def markdown(text):
+    if not text or not any(c in text for c in "*_`#-+"):
+        return text
+    out = []
+    for line in text.split("\n"):
+        h = _MD_H.match(line)
+        if h:
+            out.append(BANNER + h.group(2) + RST)         # heading -> bold amber
+            continue
+        line = _MD_BULLET.sub(lambda m: m.group(1) + COL["op"] + "•" + RST + m.group(2), line, count=1)
+        codes = []                                        # stash `code` so its * / _ don't emphasise
+        line = _MD_CODE.sub(lambda m: codes.append(m.group(1)) or f"\x00{len(codes) - 1}\x00", line)
+        line = _MD_BOLD.sub(lambda m: "\033[1m" + (m.group(1) or m.group(2)) + "\033[22m", line)
+        line = _MD_ITAL.sub(lambda m: "\033[3m" + (m.group(1) or m.group(2)) + "\033[23m", line)
+        line = re.sub(r"\x00(\d+)\x00",
+                      lambda m: COL["builtin"] + codes[int(m.group(1))] + COL["def"], line)
+        out.append(line)
     return "\n".join(out)
 
 

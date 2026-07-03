@@ -10,7 +10,7 @@
 # Subagent (Task/Agent) tool calls fire this same hook (with an agent_id), but the
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
-import json, os, shlex, subprocess, sys, re, time
+import json, os, shlex, subprocess, sys, re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
@@ -150,6 +150,7 @@ def main():
             O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
 
         O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
+        O.bump_transcript(LOG, d.get("transcript_path"))
         if taskid:
             # Converted: find_file() locates tasks/<taskid>.output itself, same as any
             # genuine background command — this cmd string's own redirect (if any) is
@@ -211,13 +212,13 @@ def main():
         O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
                O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
 
-    # Update the session scoreboard, and emit it every N commands (or right after a
-    # failure, so a red result carries its running context). Best-effort — a failed
-    # bump/emit must never break the command block above.
-    st = O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if failed else {}))
-    every = max(1, int(os.environ.get("CLAUDE_MIRROR_SCORE_EVERY", "5") or "5"))
-    if st and (failed or int(st.get("commands") or 0) % every == 0):
-        O.emit(LOG, *O.scoreboard_ops(st, time.time()))
+    # Update the session scoreboard. claude-scorebar.py (its own small window under
+    # the mirror) refreshes off this sidecar bump — nothing is emitted into the log.
+    # bump_transcript folds in the main session's own token spend since the last hook
+    # (agents bump theirs at stream end). Best-effort — a failed bump must never
+    # break the command block above.
+    O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if failed else {}))
+    O.bump_transcript(LOG, d.get("transcript_path"))
 
 
 if __name__ == "__main__":
