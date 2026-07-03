@@ -42,8 +42,8 @@ the bug **from evidence, not guesswork**.
 2. **`python3 claude_audit.py errors <sid>`** — full tracebacks for every swallowed
    exception. An error just before the symptom's timestamp is the prime suspect.
 3. **`python3 claude_audit.py timeline <sid>`** — the merged chronological story
-   (hooks, tab transitions, slots, streams, spawns, state files, errors). Find the
-   symptom's moment, then read the surrounding ~30 lines both ways.
+   (hooks, tab transitions, slots, streams, spawns, state files, pane ops, errors).
+   Find the symptom's moment, then read the surrounding ~30 lines both ways.
 4. **Free-form**: `python3 claude_audit.py sql "<query>"` — e.g. pull the full
    payload of one hook event, or diff `ops` against what the pane actually showed.
 
@@ -51,16 +51,39 @@ the bug **from evidence, not guesswork**.
 
 - **Tab stuck blue** — a `slots` claim (bg/fg/monitor/sub) with no release + a
   `streams` row with `ended_at IS NULL`, or a `tab_transitions` `bg-recheck`/`bg-watch`
-  row with `applied=0` whose reason explains why it refused to clear.
+  row with `applied=0` whose reason explains why it refused to clear. Also check the
+  `bg-watch` **stream row itself**: `killed-or-crashed` / still-open = the watcher died
+  and nothing was left to clear the blue; and an apply whose reason says
+  "kitten @ failed rc=N" = the green WAS decided but never reached kitty.
 - **Tab stuck magenta** — last transition is thinking/working and no later Stop:
-  check `hook_events` for a missing Stop (cancelled turn — no hook fires) and whether
-  `interrupt-watch` recorded a bailed flip.
+  check `hook_events` for a missing Stop (cancelled turn — no hook fires), the
+  `interrupt-watch` **stream row's end_reason** (`no-interrupt-within-30m` vs
+  `killed-or-crashed` vs a bailed flip), and whether the final apply carried a
+  "kitten @ failed" reason.
 - **Tab flips green too early** — a `bg-recheck`/`bg-watch`/`notify` transition with
   `applied=1` while a `streams` row was still open; the reason column shows what it
   (wrongly) concluded.
-- **Mirror block never closes / frozen pane** — the `streams` row's end_reason
+- **Tab shows a colour the audit says it shouldn't** — trust `applied=1` rows only:
+  any transition with "kitten @ failed rc=N" in the reason means the script decided a
+  colour but kitty never showed it (dead socket, closed tab), and the persisted state
+  file may now disagree with the real tab.
+- **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
   `state_files` shows whether the `.done` / `sub.done` sentinel was ever written.
+- **Frozen / missing / doubled pane** — `pane_events` first: an `open`/`toggle-on`
+  with `ok=0` means the mirror (or the scoreboard bar — see detail) genuinely never
+  opened; a resize whose detail shows an unchanged resulting width did nothing. Then
+  cross-check `spawns` (was the renderer launched?) and `errors` (renderer crash).
+- **Wrong scoreboard numbers** — replay the `state_files` `bump` / `bump-transcript`
+  rows: each carries the delta AND the resulting totals, so find the exact bump where
+  the running total diverges from what the session actually did (`hook_events` is the
+  ground truth to diff against); `bump-transcript` rows also carry the `txpos` cursor —
+  a cursor that jumps backwards or re-covers a range = double-counting. `msg-transitions`
+  rows are the same trail for the ✉ census.
+- **Codex run missing from (or duplicated across) same-repo sessions** — `slots` rows
+  with kind `codex-claim`: `claim` = this session owns the run, `claim-denied` (+ the
+  holder pid) = another session's watcher took it, `steal-stale` = a dead session's
+  claim was taken over.
 - **Command never appeared in the mirror** — `hook_events` decision column: was it
   "ignored: a live fg block is already in flight" (stale `.fg-live`), "ignored:
   agent_id", or did the hook never fire at all?
