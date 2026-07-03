@@ -25,11 +25,16 @@
 #   posttool  (PostToolUse/Failure) agent_id present -> IGNORED; else working (magenta)
 #   notify    read the Notification message; permission/approval -> awaiting-command
 #             (red); else "waiting for your input" -> awaiting-response (green), UNLESS
-#             a background job/teammate is still running -> awaiting-bg (blue)
+#             a background job/teammate is still running -> awaiting-bg (blue), or the
+#             tab was already awaiting-bg (a teammate just finished and the main is
+#             being re-invoked to process it) -> working (magenta), not your turn
 #   stop      awaiting-response (green), or awaiting-bg (blue) when a background
 #             command / monitor this session launched is still running
-#   bg-recheck / bg-watch   flip the stale bg-running blue back to green when the
-#             background job finishes (there is no "background finished" hook)
+#   bg-recheck / bg-watch   flip the stale bg-running blue when the background job
+#             finishes (there is no "background finished" hook): to green for an
+#             untracked shell job (fg/bg/monitor), but to working (magenta) for a
+#             finishing SUBAGENT/TEAMMATE (kind=sub) — Claude Code re-invokes the main
+#             to process its result, so the main is taking over, not handing back
 #
 # Wired up via Claude Code hooks in ~/.claude/settings.json. Uses kitty remote
 # control over the socket in $KITTY_LISTEN_ON, targeting the tab that contains
@@ -287,7 +292,14 @@ if [ "$state" = "bg-recheck" ]; then
     executing)   [ "$kind" = "fg" ] || exit 0 ;;
     *)           exit 0 ;;
   esac
-  state="awaiting-response"
+  # A finishing SUBAGENT/TEAMMATE (kind=sub) does NOT mean it's your turn: Claude Code
+  # re-invokes the main session to process the teammate's result the instant it
+  # completes, so the main is about to TAKE OVER, not hand back to you. Painting green
+  # here produced a visible green flash before the main's own hooks (or its next Stop)
+  # repainted magenta. Go straight to "working" (magenta) so the tab reflects the main
+  # resuming; its subsequent Stop sets green once that follow-up turn genuinely ends.
+  # Untracked shell jobs (fg/bg/monitor) don't re-invoke the main, so those still go green.
+  if [ "$kind" = "sub" ]; then state="working"; else state="awaiting-response"; fi
 fi
 
 # UserPromptSubmit dispatch ("thinking"): besides the literal colour (handled by
@@ -327,6 +339,12 @@ if [ "$state" = "notify" ]; then
       case "$_cur" in thinking|working|executing) exit 0 ;; esac
       if bg_command_running; then
         state="awaiting-bg"; ensure_bgwatch   # teammates/bg still running -> blue, not green
+      elif [ "$_cur" = "awaiting-bg" ]; then
+        # The tab was blue (awaiting the team) and a bg job just finished, firing this
+        # notification. In an agent team the main session is re-invoked to process the
+        # finished teammate's result -> it's TAKING OVER, not your turn. Go magenta
+        # (working); the main's next Stop sets green once it truly hands back to you.
+        state="working"
       else
         state="awaiting-response"             # genuinely your turn -> green
       fi ;;
