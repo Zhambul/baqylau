@@ -152,16 +152,7 @@ def compose(w, mparts):
     session-stats, tools]. Row 0 is the always-on ⬡ session id; row 1 is the ✉ message
     census `mparts` (always shown — defaults to '0 msgs'); rows 2-3 are the ▪ session
     summary + tool tallies. Segments drop from the tail until the plain text fits."""
-    global _last_st
-    try:
-        with open(STATS, encoding="utf-8") as f:
-            st = json.load(f)
-        _last_st = st
-    except Exception:
-        # Reads skip the producers' flock, so we can catch bump()'s truncate-then-
-        # write mid-flight. Keep the previous parse instead of blinking the row empty
-        # for a tick (this is the behavior the module docstring promises).
-        st = _last_st
+    st = St.stats(LOG)      # atomic snapshot from the state DB — no torn reads
     now = time.time()
 
     # Row 0: session id — always visible, truncated to width (dim glyph, brighter id).
