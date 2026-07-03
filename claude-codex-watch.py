@@ -96,15 +96,19 @@ def claims_dir():
 def claim(key):
     # Atomic O_EXCL create == this watcher owns the run. A stale claim (holder pid dead)
     # is taken over so a session that died mid-run doesn't strand the stream forever.
+    # Every outcome is audited (slots table, kind=codex-claim) — "why did session A
+    # (not) show that codex run" is a cross-session question only evidence can answer.
     p = os.path.join(claims_dir(), re.sub(r"[^A-Za-z0-9._-]+", "-", key))
 
-    def take():
+    def take(action):
         fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
         os.write(fd, str(os.getpid()).encode()); os.close(fd)
+        A.slot(LOG, "codex-claim", action, agent_id=key,
+               owner_pid=os.getpid(), marker_path=p)
         return True
 
     try:
-        return take()
+        return take("claim")
     except FileExistsError:
         try:
             holder = int(open(p).read().strip() or "0")
@@ -118,13 +122,17 @@ def claim(key):
                 import errno
                 alive = (e.errno == errno.EPERM)
         if alive:
+            A.slot(LOG, "codex-claim", "claim-denied", agent_id=key,
+                   owner_pid=holder, marker_path=p)
             return False
         try:
             os.remove(p)
-            return take()
+            return take("steal-stale")
         except Exception:
+            A.error(LOG, "claim", {"key": key})
             return False
     except Exception:
+        A.error(LOG, "claim", {"key": key})
         return False
 
 

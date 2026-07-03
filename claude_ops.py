@@ -332,6 +332,14 @@ def bump(log, tool=None, file=None, **deltas):
         f.seek(0)
         f.truncate()
         f.write(json.dumps(st, ensure_ascii=False))
+        # Audit the sidecar evolution: the applied deltas + the resulting headline
+        # totals, so a wrong scoreboard number can be traced to the exact bump that
+        # skewed it (double count, missed count) instead of manual sidecar digging.
+        A.state_file(log, p, "bump", {
+            "deltas": deltas, "tool": tool, "file": file,
+            "now": {k: st.get(k) for k in
+                    ("commands", "failed", "files", "added", "removed",
+                     "tokens", "cost") if st.get(k)}})
         return st
     except Exception:
         A.error(log, "bump", {"deltas": deltas, "tool": tool})
@@ -446,6 +454,14 @@ def bump_transcript(log, transcript):
         f.seek(0)
         f.truncate()
         f.write(json.dumps(st, ensure_ascii=False))
+        # Audit only when spend actually moved (this is called on every hook; a
+        # no-new-turns call is noise). Records the delta, the cursor advance, and
+        # the resulting totals — the trail a token/cost inflation bug needs.
+        if tok or usd:
+            A.state_file(log, p, "bump-transcript", {
+                "d_tokens": tok, "d_cost": round(usd, 6),
+                "txpos": st["txpos"], "txlast": st.get("txlast"),
+                "now": {"tokens": st.get("tokens"), "cost": st.get("cost")}})
         return st
     except Exception:
         A.error(log, "bump_transcript", {"transcript": transcript})
@@ -650,7 +666,15 @@ def update_messages(log):
             with open(p, "w", encoding="utf-8") as f:
                 json.dump({"delivered": delivered, "read": read, "live": new_live}, f)
         except Exception:
-            pass
+            A.error(log, "update_messages", {"delivered": delivered, "read": read})
+    # Audit message-tracker transitions (only when something actually changed —
+    # this runs on every scorebar tick). One row per delivery/read event plus the
+    # resulting cumulative counters, so a wrong ✉ census is traceable.
+    if events:
+        A.state_file(log, p, "msg-transitions", {
+            "events": [{"kind": k, "from": f_, "to": t, "summary": s}
+                       for k, f_, t, s in events],
+            "now": {"delivered": delivered, "read": read}})
     # `stale` is a CURRENT-STATE count (unlike the cumulative delivered/read): messages
     # sitting unread in an inbox right now for longer than STALE_S. It's a DISJOINT group
     # from `unread` — the currently-pending messages split into fresh (unread) vs stale —

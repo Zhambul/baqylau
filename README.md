@@ -888,13 +888,14 @@ payload, `handler = 'subscriber'` — including the ones nothing else listens to
 `UserPromptExpansion`, `InstructionsLoaded`. So nothing that happens in a session is
 invisible to the audit, and a mirror-handler row can be cross-checked against the
 subscriber's independent record of the same event.
-| `tab_transitions` | tab-colour decision — dispatch, prev → new, applied *or skipped*, with the **reason** (replaces the old opt-in `CLAUDE_TAB_DEBUG` flat-file logs) |
+| `tab_transitions` | tab-colour decision — dispatch, prev → new, applied *or skipped*, with the **reason** (replaces the old opt-in `CLAUDE_TAB_DEBUG` flat-file logs). "Applied" is **verified against kitty**: the `kitten @` exit code is captured, so a socket call that failed records `applied=0` + a "kitten @ failed rc=N" reason instead of claiming a colour change that never happened |
 | `slots` | marker-file event — claim / claim-id / steal-stale / claim-denied / release / set-owner |
-| `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / converted-ctrl-b / backstop-timeout / crash) |
+| `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / converted-ctrl-b / backstop-timeout / crash). Includes the **shell watchers** (`bg-watch`, `interrupt-watch`) — a watcher that dies mid-poll leaves an open row the `anomalies` query flags — and the codex watcher's **cross-session claims** (slots, kind `codex-claim`), so "why didn't session A show that codex run" is answerable. A streamer whose end couldn't reach the DB spools it and ingest applies it later, so it never falsely reads as "never ended" |
 | `ops` | paint op written to the mirror log — full pane reconstruction, survives SessionEnd |
 | `errors` | **swallowed exception — full traceback + context** (every `except: pass` site records before swallowing) |
 | `spawns` | detached process launch — parent, child pid, argv, purpose |
-| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … |
+| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … — plus the **scoreboard sidecar's evolution**: every `bump` (deltas + resulting totals), every transcript-spend fold (`bump-transcript`: token/cost delta + cursor), and every team-message transition (`msg-transitions`) — so a wrong scoreboard number is traceable to the exact bump that skewed it |
+| `pane_events` | mirror/scoreboard **pane operation** — open / close / toggle / resize with `ok` verified against kitty (a mirror that failed to open, or a resize that changed nothing, is recorded — the kitten calls used to be silent) |
 
 Explore it with the CLI (from the repo root):
 

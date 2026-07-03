@@ -225,11 +225,26 @@ if [ "$state" = "bg-watch" ]; then
   AUDIT_SID="$(sid_from_slots "$SLOTS")"
   win="${KITTY_WINDOW_ID:-}"
   [ -n "$win" ] || exit 0
-  trap 'rm -f "/tmp/claude-tab-bgwatch-${win}" 2>/dev/null' EXIT
+  # Register this watcher's lifetime in the audit `streams` table — a bg-watch that
+  # dies mid-poll is exactly the "tab stuck blue forever" bug, and without a stream
+  # row its death was invisible. Killed/crashed shows as the default reason (the
+  # trap never got to set a real one); SIGKILL leaves the row open, which the
+  # `streams that never ended` anomaly then flags.
+  WATCH_ID=""; WATCH_REASON="killed-or-crashed"
+  [ "${CLAUDE_AUDIT:-1}" = "0" ] || \
+    WATCH_ID="$(python3 "$DIR/claude_audit.py" stream-start "$AUDIT_SID" bg-watch "$SLOTS" 2>/dev/null)"
+  bgwatch_cleanup() {
+    rm -f "/tmp/claude-tab-bgwatch-${win}" 2>/dev/null
+    [ -n "$WATCH_ID" ] && [ "${CLAUDE_AUDIT:-1}" != "0" ] && \
+      python3 "$DIR/claude_audit.py" stream-end "$WATCH_ID" "$WATCH_REASON" >/dev/null 2>&1
+    return 0
+  }
+  trap bgwatch_cleanup EXIT
   cleared=1; misses=0
   for _ in $(seq 1 1800); do
     sleep 2
     if [ "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" != "awaiting-bg" ]; then
+      WATCH_REASON="state-moved-on"
       audit_tx "" "" 0 "bg-watch: state moved on, watcher exiting"; exit 0
     fi
     if bg_command_running; then
@@ -242,7 +257,11 @@ if [ "$state" = "bg-watch" ]; then
       if [ "$misses" -ge 4 ]; then cleared=0; break; fi
     fi
   done
-  [ "$cleared" -eq 0 ] || exit 0
+  if [ "$cleared" -ne 0 ]; then
+    WATCH_REASON="gave-up-after-1h (markers still live)"
+    exit 0
+  fi
+  WATCH_REASON="cleared-to-green"
   state="awaiting-response"
   REASON="bg-watch: no live markers across ~8s of checks"
 fi
@@ -259,14 +278,27 @@ if [ "$state" = "interrupt-watch" ]; then
   transcript="${2:-}"
   win="${KITTY_WINDOW_ID:-}"
   [ -n "$win" ] && [ -n "$transcript" ] || exit 0
-  trap 'rm -f "/tmp/claude-tab-interruptwatch-${win}" 2>/dev/null' EXIT
+  # The transcript filename IS the session id (~/.claude/projects/<slug>/<sid>.jsonl).
+  AUDIT_SID="$(basename "$transcript" .jsonl)"
+  # Same lifecycle registration as bg-watch: a dead interrupt-watch means a
+  # cancelled turn leaves the tab stuck magenta with no evidence of why.
+  WATCH_ID=""; WATCH_REASON="killed-or-crashed"
+  [ "${CLAUDE_AUDIT:-1}" = "0" ] || \
+    WATCH_ID="$(python3 "$DIR/claude_audit.py" stream-start "$AUDIT_SID" interrupt-watch "$transcript" 2>/dev/null)"
+  iwatch_cleanup() {
+    rm -f "/tmp/claude-tab-interruptwatch-${win}" 2>/dev/null
+    [ -n "$WATCH_ID" ] && [ "${CLAUDE_AUDIT:-1}" != "0" ] && \
+      python3 "$DIR/claude_audit.py" stream-end "$WATCH_ID" "$WATCH_REASON" >/dev/null 2>&1
+    return 0
+  }
+  trap iwatch_cleanup EXIT
   pos="$(wc -c < "$transcript" 2>/dev/null || echo 0)"
   detected=1
   for _ in $(seq 1 3600); do
     sleep 0.5
     case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
       thinking|working) ;;                # still busy in the magenta phase -> keep watching
-      *) exit 0 ;;                         # moved to blue/red/green, or turn ended -> nothing to do
+      *) WATCH_REASON="state-moved-on"; exit 0 ;;   # moved to blue/red/green -> nothing to do
     esac
     size="$(wc -c < "$transcript" 2>/dev/null || echo "$pos")"
     if [ "$size" -gt "$pos" ]; then
@@ -276,11 +308,16 @@ if [ "$state" = "interrupt-watch" ]; then
       pos="$size"
     fi
   done
-  [ "$detected" -eq 0 ] || exit 0
+  if [ "$detected" -ne 0 ]; then
+    WATCH_REASON="no-interrupt-within-30m"
+    exit 0
+  fi
   case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
     thinking|working) ;;                  # re-check: still stuck busy right now -> safe to flip
-    *) audit_tx "" "" 0 "interrupt-watch: interrupt seen but state moved on"; exit 0 ;;
+    *) WATCH_REASON="interrupt-seen-but-state-moved-on"
+       audit_tx "" "" 0 "interrupt-watch: interrupt seen but state moved on"; exit 0 ;;
   esac
+  WATCH_REASON="interrupt-detected-flipped-green"
   state="awaiting-response"
   REASON="interrupt-watch: [Request interrupted by user] in transcript"
 fi
@@ -470,11 +507,17 @@ fi
 # of the same hue so the focused tab clearly stands out — otherwise active and
 # inactive tabs share one background and only the bold font-style tells them apart.
 # The inactive foreground is a fixed light grey that reads on every dim background.
+# KITTEN_RC records whether the `kitten @` call actually succeeded — the output is
+# still discarded (a hook must stay silent), but the audit gets the truth: a row
+# claiming a colour was applied while the socket call failed is exactly the kind of
+# trusted-but-wrong evidence that hides a stuck-colour bug.
+KITTEN_RC=0
 set_color() {
   "$kitten" @ --to "$KITTY_LISTEN_ON" set-tab-color \
     --match "window_id:${KITTY_WINDOW_ID}" \
     active_bg="$1" active_fg="$2" inactive_bg="$3" inactive_fg="#c0c4cc" \
     >/dev/null 2>&1
+  KITTEN_RC=$?
 }
 
 case "$state" in
@@ -492,13 +535,20 @@ case "$state" in
       --match "window_id:${KITTY_WINDOW_ID}" \
       active_bg=NONE active_fg=NONE inactive_bg=NONE inactive_fg=NONE \
       >/dev/null 2>&1
+    KITTEN_RC=$?
     ;;
   *) exit 0 ;;
 esac
 
 # Persist the resolved state so bg-recheck / bg-watch can tell whether a finishing
-# background job should flip the stale bg-running blue back to green.
-audit_tx "$prev_state" "$state" 1 "$REASON"
+# background job should flip the stale bg-running blue back to green. The audit row
+# reflects what kitten actually did: applied=0 + a "kitten @ failed" reason when the
+# socket call errored (dead socket, closed tab, …) — the tab did NOT change colour.
+if [ "$KITTEN_RC" -eq 0 ]; then
+  audit_tx "$prev_state" "$state" 1 "$REASON"
+else
+  audit_tx "$prev_state" "$state" 0 "${REASON:+$REASON — }kitten @ failed rc=$KITTEN_RC"
+fi
 if [ -n "${KITTY_WINDOW_ID:-}" ]; then
   case "$state" in
     idle|thinking|working|executing|awaiting-bg|awaiting-command|awaiting-response)

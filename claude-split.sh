@@ -62,6 +62,16 @@ sys.stdout.write("" if val is None else str(val))' "$1" "${SETTINGS_FILES[@]}" 2
 BIAS="${CLAUDE_MIRROR_BIAS:-$(read_setting CLAUDE_MIRROR_BIAS)}"; BIAS="${BIAS:-25}"
 STEP="${CLAUDE_MIRROR_STEP:-$(read_setting CLAUDE_MIRROR_STEP)}"; STEP="${STEP:-4}"
 
+# --- audit: pane operations (open/close/toggle/resize + failures) ---------------
+# The kitten calls here are all silenced (>/dev/null), so a mirror that failed to
+# open — or a resize that did nothing — used to leave no evidence. Every pane op
+# is recorded in the audit DB's pane_events (fire-and-forget; CLAUDE_AUDIT=0 off).
+audit_pane() {  # $1=sid $2=action $3=ok(0|1) $4=detail
+  [ "${CLAUDE_AUDIT:-1}" = "0" ] && return 0
+  ( nohup python3 "$DIR/claude_audit.py" pane "$1" "$2" "$3" "$4" \
+      >/dev/null 2>&1 & ) 2>/dev/null || true
+}
+
 # Need socket remote control inside kitty, else no-op. A keymap-driven
 # `launch --type=background` child does NOT inherit KITTY_LISTEN_ON, so when it
 # is absent, resolve the controlling instance's socket ourselves: listen_on
@@ -306,6 +316,16 @@ case "$cmd" in
     tag_window "$sid"
     close_stale_mirrors "$sid"                       # drop a prior-sid mirror (resume/clear) so it can't double up
     open_mirror "$sid" "$log" "$(project_bias)"      # restore this project's remembered size
+    # Verify the panes actually exist now — open_mirror's kitten calls are silent.
+    if mirror_exists "$sid"; then
+      if window_exists claude_scorebar "$sid"; then
+        audit_pane "$sid" "open" 1 "bias=$(project_bias)%"
+      else
+        audit_pane "$sid" "open" 0 "mirror opened but scoreboard bar absent"
+      fi
+    else
+      audit_pane "$sid" "open" 0 "mirror window absent after launch"
+    fi
     # Stream any codex run (companion job OR raw `codex`/`codex exec`) into this
     # session's mirror. The launcher Popens the watcher DETACHED (start_new_session)
     # and exits in a few ms, so it can never hang SessionStart — never a bash `&`,
@@ -321,6 +341,7 @@ case "$cmd" in
     [ "${CLAUDE_AUDIT:-1}" = "0" ] || \
       printf '%s' "$payload" | python3 "$DIR/claude_audit.py" session-end >/dev/null 2>&1 || true
     [ -n "$sid" ] && close_mirror "$sid"
+    audit_pane "$sid" "close" 1 "session end"
     log="$(log_for "$sid")"
     [ -n "$log" ] && rm -f "$log" "$log.stats.json" "$log.msgs.json"  # log + score + msg sidecars
     ;;
@@ -328,16 +349,23 @@ case "$cmd" in
     sid="$(sid_from_focus)"; [ -n "$sid" ] || exit 0
     if mirror_exists "$sid"; then
       close_mirror "$sid"                            # keep the log -> history preserved
+      audit_pane "$sid" "toggle-off" 1 ""
     else
       close_stale_mirrors "$sid"                     # clear any prior-sid pane in this tab first
       open_mirror "$sid" "$(log_for "$sid")" "$(project_bias)"   # remembered size, keep history
+      if mirror_exists "$sid"; then
+        audit_pane "$sid" "toggle-on" 1 "bias=$(project_bias)%"
+      else
+        audit_pane "$sid" "toggle-on" 0 "mirror window absent after launch"
+      fi
     fi
     ;;
   # Resize, then remember the resulting % for this project. grow/shrink settle a
-  # moment after the async resize, so pause briefly before measuring.
-  grow)   sid="$(sid_from_focus)"; [ -n "$sid" ] && { resize_mirror "${2:-$STEP}" "$sid"; sleep 0.2; save_size "$sid"; } ;;
-  shrink) sid="$(sid_from_focus)"; [ -n "$sid" ] && { resize_mirror "-${2:-$STEP}" "$sid"; sleep 0.2; save_size "$sid"; } ;;
-  reset)  sid="$(sid_from_focus)"; [ -n "$sid" ] && { size_to "$BIAS" "$sid"; save_size "$sid"; } ;;
-  setpct) sid="$(sid_from_focus)"; [ -n "$sid" ] && { size_to "${2:-$BIAS}" "$sid"; save_size "$sid"; } ;;
+  # moment after the async resize, so pause briefly before measuring. The audited
+  # detail carries the RESULTING width — a resize that changed nothing is visible.
+  grow)   sid="$(sid_from_focus)"; [ -n "$sid" ] && { resize_mirror "${2:-$STEP}" "$sid"; sleep 0.2; save_size "$sid"; audit_pane "$sid" "grow" 1 "+${2:-$STEP} cells -> $(current_pct "$sid")%"; } ;;
+  shrink) sid="$(sid_from_focus)"; [ -n "$sid" ] && { resize_mirror "-${2:-$STEP}" "$sid"; sleep 0.2; save_size "$sid"; audit_pane "$sid" "shrink" 1 "-${2:-$STEP} cells -> $(current_pct "$sid")%"; } ;;
+  reset)  sid="$(sid_from_focus)"; [ -n "$sid" ] && { size_to "$BIAS" "$sid"; save_size "$sid"; audit_pane "$sid" "reset" 1 "target=$BIAS% -> $(current_pct "$sid")%"; } ;;
+  setpct) sid="$(sid_from_focus)"; [ -n "$sid" ] && { size_to "${2:-$BIAS}" "$sid"; save_size "$sid"; audit_pane "$sid" "setpct" 1 "target=${2:-$BIAS}% -> $(current_pct "$sid")%"; } ;;
 esac
 exit 0

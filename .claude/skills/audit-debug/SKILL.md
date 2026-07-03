@@ -22,20 +22,22 @@ the bug **from evidence, not guesswork**.
 |---|---|---|
 | `sessions` | Claude session | cwd, transcript_path, mirror_log, kitty_window_id, started_at/ended_at, end_reason, env (JSON of CLAUDE_MIRROR_*/KITTY_* seen at start) |
 | `hook_events` | hook invocation | hook, tool_name, agent_id ('' = main session), handler (script), **decision** (what the handler chose to do), **payload** (full hook stdin JSON, verbatim). ALL 30 hook events are recorded via a universal async subscriber (handler = 'subscriber', empty decision) — incl. PermissionRequest/Denied, PostToolBatch, MessageDisplay, TeammateIdle, Pre/PostCompact, ConfigChange, CwdChanged, FileChanged, Worktree\*, Elicitation\*, Setup, UserPromptExpansion, InstructionsLoaded — on top of the mirror handlers' own decision-carrying rows for the events they process. So "did event X even fire?" is always answerable from the subscriber rows, and a handler row can be cross-checked against the subscriber's independent record. |
-| `tab_transitions` | tab-colour decision | dispatch (raw arg: pretool/stop/bg-recheck/bg-watch/notify/…), prev_state → new_state, applied (0 = skipped/bailed), **reason** |
+| `tab_transitions` | tab-colour decision | dispatch (raw arg: pretool/stop/bg-recheck/bg-watch/notify/…), prev_state → new_state, applied (0 = skipped/bailed **or the kitten @ call failed** — reason then carries "kitten @ failed rc=N"), **reason** |
 | `slots` | marker-file event | kind (bg/monitor/fg/sub), slot_n, agent_id, owner_pid, action (claim/claim-id/steal-stale/claim-denied/release/release-id/set-owner), marker_path |
-| `streams` | detached tailer/streamer/watcher | kind (fg/bg/monitor/subagent/teammate/codex/codex-watcher), agent_id/task_id, src_path, pid, started_at/ended_at, **end_reason** (writer-gone/sentinel/stop-sentinel/stoppedByUser/converted-ctrl-b/backstop-timeout/crash/…), lines_emitted |
+| `streams` | detached tailer/streamer/watcher | kind (fg/bg/monitor/subagent/teammate/codex/codex-watcher/**bg-watch/interrupt-watch**), agent_id/task_id, src_path, pid, started_at/ended_at, **end_reason** (writer-gone/sentinel/stop-sentinel/stoppedByUser/converted-ctrl-b/backstop-timeout/crash/state-moved-on/cleared-to-green/killed-or-crashed/…), lines_emitted. An open row from a dead pid = the watcher/tailer died — for bg-watch that IS the stuck-blue bug |
 | `ops` | paint op written to the mirror log | producer (script), op (the JSON paint op — full pane reconstruction, survives SessionEnd) |
 | `errors` | swallowed exception | script, func, **traceback** (full), context (JSON of args in hand) |
 | `spawns` | detached process launch | parent_script, child_pid, argv, purpose |
-| `state_files` | coordination-file transition | path, action (write/remove/remove-stale), content (.done sentinels, .fg-live markers, sub.done sentinels) |
+| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-transcript/msg-transitions**), content (.done sentinels, .fg-live markers, sub.done sentinels; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs) |
+| `pane_events` | mirror/scoreboard pane operation | action (open/close/toggle-on/toggle-off/grow/shrink/reset/setpct), **ok** (verified against kitty — 0 means the pane genuinely isn't there), detail (bias/resulting width). First stop for "frozen/missing pane" reports |
 
 ## Triage order
 
 1. **`python3 claude_audit.py anomalies <sid>`** — canned queries for known bug
    signatures: swallowed errors, streams that never ended, slot claims without
    release, tab left on a busy colour, duplicate SubagentStart, start-without-stop,
-   failed tools, spawns that never registered a stream. Start here; a non-empty
+   failed tools, spawns that never registered a stream, pane operations that
+   failed, tab applies where `kitten @` failed. Start here; a non-empty
    section usually IS the bug.
 2. **`python3 claude_audit.py errors <sid>`** — full tracebacks for every swallowed
    exception. An error just before the symptom's timestamp is the prime suspect.

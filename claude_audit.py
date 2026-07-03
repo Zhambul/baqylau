@@ -90,6 +90,9 @@ CREATE TABLE IF NOT EXISTS spawns(
 CREATE TABLE IF NOT EXISTS state_files(
   id INTEGER PRIMARY KEY, ts REAL, session_id TEXT, path TEXT, action TEXT,
   content TEXT, script TEXT, pid INTEGER);
+CREATE TABLE IF NOT EXISTS pane_events(
+  id INTEGER PRIMARY KEY, ts REAL, session_id TEXT, action TEXT, ok INTEGER,
+  detail TEXT, pid INTEGER);
 CREATE INDEX IF NOT EXISTS ix_hook_sid   ON hook_events(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_tab_sid    ON tab_transitions(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_slot_sid   ON slots(session_id, ts);
@@ -98,6 +101,7 @@ CREATE INDEX IF NOT EXISTS ix_ops_sid    ON ops(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_err_sid    ON errors(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_spawn_sid  ON spawns(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_state_sid  ON state_files(session_id, ts);
+CREATE INDEX IF NOT EXISTS ix_pane_sid   ON pane_events(session_id, ts);
 """
 
 
@@ -172,6 +176,15 @@ def _ingest_spool(conn):
 
 
 def _insert(conn, table, cols):
+    # "stream_end" is a pseudo-table used by the spool: a streamer that couldn't
+    # reach the DB at exit spools its end as this record, and ingest applies it as
+    # the UPDATE it stands for — otherwise the stream would look "never ended"
+    # forever (a false positive in `anomalies`).
+    if table == "stream_end":
+        return conn.execute(
+            "UPDATE streams SET ended_at=?, end_reason=?, lines_emitted=? WHERE id=?",
+            (cols.get("ended_at") or time.time(), cols.get("end_reason"),
+             cols.get("lines_emitted"), cols.get("id")))
     keys = list(cols.keys())
     sql = (f"INSERT INTO {table}({','.join(keys)}) "
            f"VALUES({','.join('?' * len(keys))})")
@@ -261,17 +274,18 @@ def stream_start(log, kind, agent_id="", task_id="", src_path=""):
 def stream_end(stream_id, end_reason, lines_emitted=None):
     if stream_id is None or not enabled():
         return
+    row = {"id": stream_id, "ended_at": time.time(), "end_reason": end_reason,
+           "lines_emitted": lines_emitted}
     conn = _connect()
     if conn is None:
-        _spool("stream_end", {"id": stream_id, "end_reason": end_reason,
-                              "lines_emitted": lines_emitted})
+        _spool("stream_end", row)
         return
     try:
         conn.execute("UPDATE streams SET ended_at=?, end_reason=?, lines_emitted=? "
-                     "WHERE id=?", (time.time(), end_reason, lines_emitted, stream_id))
+                     "WHERE id=?", (row["ended_at"], end_reason, lines_emitted, stream_id))
         conn.commit()
     except Exception:
-        pass
+        _spool("stream_end", row)
 
 
 def ops(log, op_list, producer=None):
@@ -342,6 +356,13 @@ def state_file(log, path, action, content=""):
             content = str(content)
     event("state_files", session_id=sid_from_log(log), path=path, action=action,
           content=(content or "")[:2000], script=_script(), pid=os.getpid())
+
+
+def pane(session_id, action, ok, detail=""):
+    """Record a mirror/scoreboard pane operation (open/close/toggle/resize) and
+    whether it verifiably succeeded — claude-split.sh's kitten calls were silent."""
+    event("pane_events", session_id=session_id or "", action=action,
+          ok=1 if ok else 0, detail=detail or "", pid=os.getpid())
 
 
 def session_start(d):
@@ -493,6 +514,10 @@ def cli_timeline(sid, limit=2000):
       SELECT ts, 'file', action || ' ' || path ||
              CASE WHEN content != '' THEN ' :: ' || substr(content, 1, 120) ELSE '' END, session_id
         FROM state_files
+      UNION ALL
+      SELECT ts, 'pane', action || CASE WHEN ok = 1 THEN '' ELSE ' FAILED' END ||
+             CASE WHEN detail != '' THEN ' — ' || detail ELSE '' END, session_id
+        FROM pane_events
     ) WHERE session_id = ? ORDER BY ts LIMIT ?"""
     for ts, src, detail in conn.execute(q, (sid, limit)):
         print(f"{_fmt_ts(ts)}  {src:<7} {detail}")
@@ -557,6 +582,12 @@ def cli_anomalies(sid):
             "SELECT s.ts, s.child_pid, s.purpose FROM spawns s WHERE s.session_id=? "
             "AND s.purpose LIKE 'stream%' AND s.child_pid NOT IN "
             "(SELECT pid FROM streams WHERE session_id=?)", (sid, sid))
+    section("pane operations that failed",
+            "SELECT ts, action, detail FROM pane_events WHERE session_id=? AND ok=0 "
+            "ORDER BY ts", (sid,))
+    section("tab colour applies where kitten @ failed",
+            "SELECT ts, dispatch, new_state, reason FROM tab_transitions "
+            "WHERE session_id=? AND reason LIKE '%kitten @ failed%' ORDER BY ts", (sid,))
 
 
 def cli_sessions(limit=20):
@@ -589,6 +620,22 @@ def main(argv):
         a = argv[2:] + [""] * 3
         event("errors", session_id=a[0], script=a[1] or "shell", func="",
               traceback=a[2], context="", pid=os.getppid())
+    elif cmd == "pane":                     # pane <sid> <action> <ok 0|1> [detail]
+        a = argv[2:] + [""] * 4
+        pane(a[0], a[1], a[2] == "1", a[3])
+    elif cmd == "stream-start":             # stream-start <sid> <kind> [src] -> prints row id
+        a = argv[2:] + [""] * 3
+        rid = event("streams", session_id=a[0], kind=a[1] or "watcher",
+                    agent_id="", task_id="", src_path=a[2], pid=os.getppid(),
+                    started_at=time.time())
+        print(rid if rid is not None else "")
+    elif cmd == "stream-end":               # stream-end <id> <reason> [lines]
+        a = argv[2:] + [""] * 3
+        try:
+            rid = int(a[0])
+        except Exception:
+            rid = None
+        stream_end(rid, a[1] or "?", int(a[2]) if a[2].isdigit() else None)
     elif cmd == "sessions":
         cli_sessions(int(argv[2]) if len(argv) > 2 else 20)
     elif cmd == "timeline":
