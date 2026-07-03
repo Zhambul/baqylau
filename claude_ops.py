@@ -356,8 +356,15 @@ def bump_transcript(log, transcript):
     not spend) and 'cost' (cost_usd on that turn's model, cache read/write rates
     included), and advances the cursor. Runs under the same flock as bump(), so
     concurrent hooks never double-count a turn. Sidechain (subagent) records are
-    skipped — their own streamer already bumps them. Best-effort: any failure leaves
-    the sidecar unchanged."""
+    skipped — their own streamer already bumps them.
+
+    One assistant MESSAGE is written as one JSONL line PER CONTENT BLOCK, each line
+    repeating that message's usage (input/cache fields identical, output_tokens a
+    growing snapshot — the last line has the final count). So usage is counted once
+    per message.id, from its last line. Because a message's lines can straddle two
+    bump calls, the sidecar keeps 'txlast' — the last counted id and what was counted
+    for it — and later lines of the same id only add the (output) delta. Best-effort:
+    any failure leaves the sidecar unchanged."""
     if not log or not transcript:
         return {}
     p = stats_path(log)
@@ -376,12 +383,14 @@ def bump_transcript(log, transcript):
         if not isinstance(st, dict):
             st = {}
         pos = int(st.get("txpos") or 0)
+        prev = st.get("txlast") if isinstance(st.get("txlast"), dict) else None
         try:
             size = os.path.getsize(transcript)
         except OSError:
             return st
         if size < pos:                      # transcript rotated/replaced — restart
             pos = 0
+            prev = None                     # ids from the old file mustn't dedup the new one
         if size <= pos:
             return st
         try:
@@ -394,6 +403,7 @@ def bump_transcript(log, transcript):
         if end < 0:                         # no complete new line yet — keep cursor
             return st
         tok, usd = 0, 0.0
+        rows = {}                           # message id -> last usage line seen for it
         for ln in chunk[:end].split(b"\n"):
             try:
                 o = json.loads(ln)
@@ -408,15 +418,29 @@ def bump_transcript(log, transcript):
             create = int(u.get("cache_creation_input_tokens") or 0)
             fin = int(u.get("input_tokens") or 0) + create
             out = int(u.get("output_tokens") or 0)
-            tok += fin + out
-            c = cost_usd(m.get("model"), fin, out,
-                         int(u.get("cache_read_input_tokens") or 0), create)
-            if c:
-                usd += c
+            cr = int(u.get("cache_read_input_tokens") or 0)
+            mid = m.get("id")
+            if not mid:                     # no id to dedup on — count the line as-is
+                tok += fin + out
+                usd += cost_usd(m.get("model"), fin, out, cr, create) or 0.0
+                continue
+            rows[mid] = (m.get("model"), fin, out, cr, create)
+        for mid, (model, fin, out, cr, create) in rows.items():
+            full_t = fin + out
+            full_c = cost_usd(model, fin, out, cr, create) or 0.0
+            d_t, d_c = full_t, full_c
+            if prev and mid == prev.get("id"):  # tail of a message counted last call
+                d_t -= int(prev.get("tok") or 0)
+                d_c -= float(prev.get("usd") or 0.0)
+            tok += max(d_t, 0)
+            usd += max(d_c, 0.0)
+            prev = {"id": mid, "tok": full_t, "usd": full_c}
         if tok:
             st["tokens"] = (st.get("tokens") or 0) + tok
         if usd:
             st["cost"] = (st.get("cost") or 0) + usd
+        if prev:
+            st["txlast"] = prev
         st["txpos"] = pos + end + 1
         st.setdefault("start", int(time.time()))
         f.seek(0)

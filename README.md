@@ -515,6 +515,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     their own streamer already counts them), and advances the cursor under the same
     `flock` so concurrent hooks never double-count. (Before this, cost only moved
     when an agent run ended and sat "stuck" through plain main-session work.)
+    One assistant **message** is written as one JSONL line **per content block**, each
+    repeating the message's usage (input/cache identical, `output_tokens` a growing
+    snapshot), so usage is deduped by `message.id` — counted once, from the last line.
+    A message whose lines straddle two bump calls is handled by the sidecar's `txlast`
+    (last counted id + what was credited): later lines of the same id add only the
+    delta. (Before the dedup, multi-block turns counted 2–3×, inflating a $3.84
+    session to a $7.29 scoreboard.)
   - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-06 list):
     Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet 3/15 · Haiku 4.5 1/5 · legacy
     Opus 4.1/4.0/3 15/75 per MTok in/out; cache reads bill 0.1× input and cache
