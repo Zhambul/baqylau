@@ -836,6 +836,56 @@ Behaviour & limits:
   (own content, own size, independent toggle), so running several sessions in
   parallel no longer makes one session's toggle close another's pane.
 
+## Audit system (always on)
+
+Everything above is ~20 short-lived hook processes plus detached tailers/watchers
+coordinating through `/tmp` marker files, sidecars, and sentinels — and almost every
+failure used to be swallowed (`except Exception: pass`, `2>/dev/null`), so when a tab
+stuck blue or a block never closed, the evidence evaporated with the processes.
+**Every session is now audited into SQLite** so a bug can be chased after the fact.
+
+- **Where:** `~/.claude/kitty-audit/audit.db` (one global DB, all sessions; override
+  the dir with `CLAUDE_AUDIT_DIR`). WAL mode, so the many concurrent short-lived
+  writers never block each other. Deliberately *not* under `/tmp` — session artifacts
+  there are deleted at SessionEnd, and the audit must survive the session.
+- **On/off:** ON by default; set `CLAUDE_AUDIT=0` (env / settings `env` block) to
+  disable — every audit call becomes a no-op. The DB and spool are gitignored.
+- **Never breaks a hook:** a failed DB write degrades to an append-only
+  `spool.jsonl`, re-ingested on the next successful open — including failures of
+  the auditor itself. The tab-status path writes fire-and-forget in the background,
+  so the latency-sensitive colour path is never blocked.
+- **Retention:** sessions older than 30 days are pruned at SessionEnd.
+
+What's recorded (all tables keyed by `session_id`, written by `claude_audit.py`):
+
+| table | one row per |
+|---|---|
+| `sessions` | Claude session — cwd, transcript, mirror log, window id, start/end, env |
+| `hook_events` | hook invocation — **full stdin payload** + the handler's **decision** ("ignored: agent_id", "handed off to fg tailer: ■ failed (exit 1)", …) |
+| `tab_transitions` | tab-colour decision — dispatch, prev → new, applied *or skipped*, with the **reason** (replaces the old opt-in `CLAUDE_TAB_DEBUG` flat-file logs) |
+| `slots` | marker-file event — claim / claim-id / steal-stale / claim-denied / release / set-owner |
+| `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / converted-ctrl-b / backstop-timeout / crash) |
+| `ops` | paint op written to the mirror log — full pane reconstruction, survives SessionEnd |
+| `errors` | **swallowed exception — full traceback + context** (every `except: pass` site records before swallowing) |
+| `spawns` | detached process launch — parent, child pid, argv, purpose |
+| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … |
+
+Explore it with the CLI (from the repo root):
+
+```sh
+python3 claude_audit.py sessions            # recent sessions
+python3 claude_audit.py timeline  <sid>     # merged chronological story
+python3 claude_audit.py errors    <sid>     # swallowed exceptions, full tracebacks
+python3 claude_audit.py anomalies <sid>     # canned queries for known bug signatures
+python3 claude_audit.py sql "<query>"       # free-form SQL
+python3 claude_audit.py prune [days]        # manual retention pass
+```
+
+Or just hand Claude Code a session id: the **`audit-debug` skill**
+(`.claude/skills/audit-debug/SKILL.md`) walks the triage — anomalies → errors →
+timeline → targeted SQL — and names the bug from the evidence: which rows, which
+code path, and a suggested fix.
+
 ## Notes / tweaking
 
 - **`--dangerously-skip-permissions`** (the `claude` alias): permission prompts
@@ -846,8 +896,9 @@ Behaviour & limits:
   turn never leaves the tab red.
 - Change colors by editing the `set_color` lines in `claude-tab-status.sh`
   (no restart needed).
-- **Debug log:** off by default. Run with `CLAUDE_TAB_DEBUG=1` to append every
-  invocation to `claude-tab-status.log` and confirm which hooks fire.
+- **Debugging:** every session is audited into SQLite — see *Audit system* above.
+  The old opt-in `CLAUDE_TAB_DEBUG` flat-file logs are gone; `tab_transitions`
+  records every colour decision (applied and skipped, with the reason) instead.
 - **Background detection is per-project, not per-session:** two Claude sessions
   in the *same* directory share the temp slug, so one's background job can tint
   the other's tab red. One session per directory (the usual case) is unaffected.

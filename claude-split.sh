@@ -295,7 +295,11 @@ size_to() {  # $1=pct  $2=sid
 
 case "$cmd" in
   open)                                              # SessionStart (payload on stdin)
-    sid="$(sid_from_stdin)"
+    payload="$(cat 2>/dev/null)"
+    sid="$(printf '%s' "$payload" | sid_from_stdin)"
+    # Register the session in the audit DB (always on; CLAUDE_AUDIT=0 disables).
+    [ "${CLAUDE_AUDIT:-1}" = "0" ] || \
+      printf '%s' "$payload" | python3 "$DIR/claude_audit.py" session-start >/dev/null 2>&1 || true
     log="$(log_for "$sid")"
     [ -n "$log" ] || exit 0
     : > "$log"                                       # fresh log for this session
@@ -311,7 +315,11 @@ case "$cmd" in
       python3 "$DIR/claude-codex-launch.py" "$log" "$PWD" "$sid" >/dev/null 2>&1 || true
     ;;
   close)                                             # SessionEnd (payload on stdin)
-    sid="$(sid_from_stdin)"
+    payload="$(cat 2>/dev/null)"
+    sid="$(printf '%s' "$payload" | sid_from_stdin)"
+    # Stamp the session's end in the audit DB (also prunes sessions > 30 days old).
+    [ "${CLAUDE_AUDIT:-1}" = "0" ] || \
+      printf '%s' "$payload" | python3 "$DIR/claude_audit.py" session-end >/dev/null 2>&1 || true
     [ -n "$sid" ] && close_mirror "$sid"
     log="$(log_for "$sid")"
     [ -n "$log" ] && rm -f "$log" "$log.stats.json" "$log.msgs.json"  # log + score + msg sidecars

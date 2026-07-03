@@ -25,6 +25,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_ops as O
 import claude_slots
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+
 LBL_FG = (170, 185, 210)  # slate — same colour claude-cmd-fmt.py uses for an OK foreground block
 
 
@@ -60,12 +62,16 @@ def main():
     except Exception:
         return
     if os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") == "0":
+        A.hook_event(d, decision="ignored: CLAUDE_MIRROR_LIVE_FG=0")
         return                                     # escape hatch if the rewrite ever misbehaves
     if d.get("agent_id"):
+        A.hook_event(d, decision="ignored: agent_id")
         return
     ti = d.get("tool_input") or {}
     cmd = ti.get("command") or ""
     if not cmd.strip() or ti.get("run_in_background"):
+        A.hook_event(d, decision="ignored: " + ("background command" if cmd.strip()
+                                                else "empty command"))
         return
 
     log = O.log_path(d)
@@ -93,9 +99,11 @@ def main():
         except Exception:
             stale = True                            # unreadable / no pid recorded -> can't confirm, assume stale
         if not stale:
+            A.hook_event(d, decision="ignored: a live fg block is already in flight")
             return                                  # a live fg block is genuinely still in flight
         try:
             os.remove(marker)
+            A.state_file(log, marker, "remove-stale", "dead tailer pid — marker abandoned")
         except Exception:
             pass
 
@@ -135,7 +143,9 @@ def main():
             [sys.executable, streamer, "fg", f"fg-{os.getpid()}-{int(time.time())}", log, str(slot)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+        A.spawn(log, proc.pid, [streamer, "fg", str(slot)], purpose="stream:fg live tail")
     except Exception:
+        A.error(log, "spawn fg tailer", {"src": src})
         claude_slots.release("fg", log, slot, os.getpid())
         if own:
             try: os.remove(src)
@@ -146,10 +156,15 @@ def main():
     try:
         with open(marker, "w") as f:
             json.dump({"src": src, "own": own, "pid": proc.pid}, f)
+        A.state_file(log, marker, "write", {"src": src, "own": own, "pid": proc.pid})
     except Exception:
+        A.error(log, "write .fg-live marker", {"src": src})
         return                                     # tailer will notice via its own backstop eventually
 
     O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG), O.code(cmd), O.rule())
+    A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s"
+                 % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
+                    else "tailing command's own redirect"))
 
     if wrapped_cmd:
         new_ti = dict(ti); new_ti["command"] = wrapped_cmd
@@ -161,4 +176,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        A.error("", "main")

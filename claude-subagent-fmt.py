@@ -17,6 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+
 PHASE = sys.argv[1] if len(sys.argv) > 1 else "start"
 LOG   = ""   # set in main() from the payload's session_id (per-session log)
 HERE  = os.path.dirname(os.path.abspath(__file__))
@@ -70,10 +72,12 @@ def main():
     if PHASE == "push":
         ti = d.get("tool_input") or {}
         claude_slots.desc_push(LOG, ti.get("description") or "")
+        A.hook_event(d, decision="pushed description: " + (ti.get("description") or ""))
         return
 
     agent_id = d.get("agent_id")
     if not agent_id:
+        A.hook_event(d, decision="ignored: no agent_id")
         return
     atype = d.get("agent_type") or "agent"
     tpath = d.get("transcript_path") or ""
@@ -107,6 +111,7 @@ def main():
         if not is_new:
             try:
                 if alive(int(open(pid_path(agent_id)).read().strip())):
+                    A.hook_event(d, decision="ignored: duplicate SubagentStart, streamer live")
                     return
             except Exception:
                 pass
@@ -142,6 +147,7 @@ def main():
         # tell whether it's still running. PALETTE (argv 6) tells it which colour
         # family to use — must match the header colour chosen just above.
         streamer = os.path.join(HERE, "claude-substream.py")
+        spawned = None
         if tpath and os.path.exists(streamer):
             try:
                 proc = subprocess.Popen(
@@ -150,8 +156,15 @@ def main():
                     stderr=subprocess.DEVNULL, start_new_session=True)
                 with open(pid_path(agent_id), "w") as f:
                     f.write(str(proc.pid))
+                spawned = proc.pid
+                A.spawn(LOG, proc.pid, [streamer, agent_id, str(slot), atype, pal],
+                        purpose=f"stream:{'teammate' if team else 'subagent'} {atype}")
             except Exception:
-                pass
+                A.error(LOG, "spawn substream", {"agent": agent_id, "type": atype})
+        A.hook_event(d, decision="start: %s slot=%s%s%s streamer=%s"
+                     % ("teammate" if team else "subagent", slot,
+                        " resumed" if resumed else "", "" if is_new else " re-claim",
+                        spawned or "FAILED"))
         # A subagent just started -> the main session is awaiting it, so turn the tab
         # BLUE (even if the lead's turn had ended green). SubagentStart otherwise never
         # touches the tab, so a TEAMMATE working between the lead's turns would leave it
@@ -181,8 +194,10 @@ def main():
     try:
         os.makedirs(slots_dir, exist_ok=True)
         open(os.path.join(slots_dir, f"sub.done.{agent_id}"), "a").close()
+        A.state_file(LOG, os.path.join(slots_dir, f"sub.done.{agent_id}"), "write",
+                     "stop sentinel for streamer")
     except Exception:
-        pass
+        A.error(LOG, "write stop sentinel", {"agent": agent_id})
     try:
         running = alive(int(open(pid_path(agent_id)).read().strip()))
     except Exception:
@@ -195,12 +210,20 @@ def main():
             pal = "team" if is_teammate(tpath, agent_id) else "sub"
             O.emit(LOG, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
             claude_slots.release_id("sub", LOG, agent_id)
+            A.hook_event(d, decision="stop: SAFETY NET footer (streamer died mid-run)")
+        else:
+            A.hook_event(d, decision="stop: no-op (already finalised / duplicate stop)")
         for p in (os.path.join(LOG + ".slots", f"sub.done.{agent_id}"), pid_path(agent_id)):
             try:
                 os.remove(p)
             except Exception:
                 pass
+    else:
+        A.hook_event(d, decision="stop: sentinel written, streamer will finalise")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        A.error(LOG, "main", {"phase": PHASE})

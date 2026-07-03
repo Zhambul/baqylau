@@ -12,6 +12,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+
 
 def main():
     try:
@@ -19,6 +21,7 @@ def main():
     except Exception:
         return
     if (d.get("tool_name") or "") != "Monitor":
+        A.hook_event(d, decision="ignored: not the Monitor tool")
         return
     LOG = O.log_path(d)
     ti = d.get("tool_input") or {}
@@ -53,9 +56,16 @@ def main():
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, start_new_session=True)
             claude_slots.set_owner(marker, proc.pid)
+            A.spawn(LOG, proc.pid, [streamer, "monitor", taskid, str(slot)],
+                    purpose=f"stream:monitor task={taskid}")
         except Exception:
+            A.error(LOG, "spawn monitor tailer", {"taskid": taskid})
             claude_slots.release("monitor", LOG, slot, os.getpid())
+    A.hook_event(d, decision=f"monitor header: task={taskid or '?'} slot={slot} sig={sig!r}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        A.error("", "main")

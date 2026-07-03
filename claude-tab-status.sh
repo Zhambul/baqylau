@@ -98,6 +98,26 @@ state="${1:-}"
 
 # Absolute path to this script (for spawning the detached self-healing watcher).
 self="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+DIR="$(dirname "$self")"
+
+# --- audit trail (always on; CLAUDE_AUDIT=0 disables) --------------------------
+# Every state decision this script makes — applied, skipped, or an early bail —
+# is recorded in the SQLite audit DB (see claude_audit.py) as a tab_transitions
+# row, replacing the old opt-in CLAUDE_TAB_DEBUG flat-file logs. Fired detached
+# in the background so the latency-sensitive tab path is never blocked, and
+# always || true so auditing can never break a hook.
+dispatch="$state"      # the raw arg, before the dispatch blocks rewrite $state
+AUDIT_SID=""           # set by dispatches that learn the session_id
+REASON=""              # why the final state was chosen (set by dispatch blocks)
+audit_tx() {  # $1=prev $2=new $3=applied(0|1) $4=reason
+  [ "${CLAUDE_AUDIT:-1}" = "0" ] && return 0
+  ( nohup python3 "$DIR/claude_audit.py" transition \
+      "$AUDIT_SID" "${KITTY_WINDOW_ID:-}" "$dispatch" "$1" "$2" "$3" "$4" \
+      >/dev/null 2>&1 & ) 2>/dev/null || true
+}
+sid_from_slots() {  # /tmp/claude-mirror-<sid>.log.slots -> <sid>
+  printf '%s' "$1" | sed -E 's#.*/claude-mirror-(.*)\.log\.slots$#\1#'
+}
 
 # Spawn ONE detached bg-watch for this window (if not already running) that polls
 # $SLOTS until no background job/agent remains, then flips the stale awaiting-bg
@@ -152,14 +172,18 @@ if [ "$state" = "stop" ]; then
   # thread runs a custom agent (settings `agent` / --agent, e.g. a "task-manager"
   # orchestrator tab) carries agent_type on its own genuine turn-end Stops —
   # filtering on it left that tab permanently stuck on magenta (confirmed live).
-  if printf '%s' "$_sp" | grep -q '"agent_id"[[:space:]]*:[[:space:]]*"[^"]'; then exit 0; fi
+  if printf '%s' "$_sp" | grep -q '"agent_id"[[:space:]]*:[[:space:]]*"[^"]'; then
+    audit_tx "" "" 0 "ignored: agent stop, not the lead's"; exit 0
+  fi
   _sid="$(printf '%s' "$_sp" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  AUDIT_SID="$_sid"
   if [ -n "$_sid" ]; then SLOTS="$(slots_for_sid "$_sid")"; fi
   if bg_command_running; then
     # A background command / monitor is still running — Claude is awaiting it (not
     # waiting on you), shown BLUE (same as a running foreground command), via a
     # distinct state name so the recheck/watch below can target it.
     state="awaiting-bg"
+    REASON="stop: live tailer slot marker(s) in $SLOTS"
     # There's no "background finished" hook, and the per-job bg-recheck only fires
     # from that job's claude-stream.py tailer — so an UNTRACKED job (tailer died, or
     # a job with none) finishing would leave the tab stuck blue. The detached watcher
@@ -171,9 +195,11 @@ if [ "$state" = "stop" ]; then
     # idling between tasks has released its streamer — so the payload is the more
     # truthful signal here: Claude is awaiting the team, not you. Stay blue.
     state="awaiting-bg"
+    REASON="stop: payload background_tasks reports status=running"
     ensure_bgwatch
   else
     state="awaiting-response"
+    REASON="stop: nothing running"
   fi
 fi
 
@@ -185,7 +211,9 @@ fi
 # the watcher is running so the blue clears once the team goes quiet.
 if [ "$state" = "agent-start" ]; then
   SLOTS="${2:-}"
+  AUDIT_SID="$(sid_from_slots "$SLOTS")"
   state="awaiting-bg"
+  REASON="agent-start: main session now awaiting a subagent/teammate"
   ensure_bgwatch
 fi
 
@@ -194,13 +222,16 @@ fi
 # — then fall through to set that stale blue green. Self-removes its lock on exit.
 if [ "$state" = "bg-watch" ]; then
   SLOTS="${2:-}"                         # this session's slots dir (from the stop spawn)
+  AUDIT_SID="$(sid_from_slots "$SLOTS")"
   win="${KITTY_WINDOW_ID:-}"
   [ -n "$win" ] || exit 0
   trap 'rm -f "/tmp/claude-tab-bgwatch-${win}" 2>/dev/null' EXIT
   cleared=1; misses=0
   for _ in $(seq 1 1800); do
     sleep 2
-    [ "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" = "awaiting-bg" ] || exit 0
+    if [ "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" != "awaiting-bg" ]; then
+      audit_tx "" "" 0 "bg-watch: state moved on, watcher exiting"; exit 0
+    fi
     if bg_command_running; then
       misses=0                       # something running -> reset
     else
@@ -213,6 +244,7 @@ if [ "$state" = "bg-watch" ]; then
   done
   [ "$cleared" -eq 0 ] || exit 0
   state="awaiting-response"
+  REASON="bg-watch: no live markers across ~8s of checks"
 fi
 
 # interrupt-watch dispatch (the detached watcher spawned at turn start by the
@@ -247,9 +279,10 @@ if [ "$state" = "interrupt-watch" ]; then
   [ "$detected" -eq 0 ] || exit 0
   case "$(cat "/tmp/claude-tab-state-${win}" 2>/dev/null)" in
     thinking|working) ;;                  # re-check: still stuck busy right now -> safe to flip
-    *) exit 0 ;;
+    *) audit_tx "" "" 0 "interrupt-watch: interrupt seen but state moved on"; exit 0 ;;
   esac
   state="awaiting-response"
+  REASON="interrupt-watch: [Request interrupted by user] in transcript"
 fi
 
 # bg-recheck dispatch (called by claude-stream.py when a background job/monitor/live
@@ -267,6 +300,7 @@ fi
 if [ "$state" = "bg-recheck" ]; then
   SLOTS="${2:-}"                         # this session's slots dir (passed by the tailer)
   kind="${3:-}"                          # which tailer is calling: fg / bg / monitor / sub
+  AUDIT_SID="$(sid_from_slots "$SLOTS")"
   cur=""
   [ -n "${KITTY_WINDOW_ID:-}" ] && cur="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
   # Clearing "executing" exists SOLELY for the cancelled-foreground-command case,
@@ -276,22 +310,23 @@ if [ "$state" = "bg-recheck" ]; then
   # that green painted "done" over a still-working lead. Only fg may clear it.
   case "$cur" in
     awaiting-bg) ;;
-    executing)   [ "$kind" = "fg" ] || exit 0 ;;
-    *)           exit 0 ;;
+    executing)   [ "$kind" = "fg" ] || { audit_tx "$cur" "" 0 "bg-recheck($kind): only fg may clear executing"; exit 0; } ;;
+    *)           audit_tx "$cur" "" 0 "bg-recheck($kind): tab not on a bg-running colour"; exit 0 ;;
   esac
-  bg_command_running && exit 0
+  bg_command_running && { audit_tx "$cur" "" 0 "bg-recheck($kind): another job still running"; exit 0; }
   # GRACE: a teammate finishing one task usually starts the next within a second or
   # two. Wait briefly and re-check so we don't flip green in that gap; if a new
   # marker appeared (next task started), stay blue. Also bail if the state changed.
   sleep 4
-  bg_command_running && exit 0           # a new task started in the gap -> stay blue
+  bg_command_running && { audit_tx "$cur" "" 0 "bg-recheck($kind): a new job started in the grace gap"; exit 0; }
   cur2=""
   [ -n "${KITTY_WINDOW_ID:-}" ] && cur2="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
   case "$cur2" in                                              # state moved on meanwhile -> leave it alone
     awaiting-bg) ;;
-    executing)   [ "$kind" = "fg" ] || exit 0 ;;
-    *)           exit 0 ;;
+    executing)   [ "$kind" = "fg" ] || { audit_tx "$cur2" "" 0 "bg-recheck($kind): state moved on in the gap"; exit 0; } ;;
+    *)           audit_tx "$cur2" "" 0 "bg-recheck($kind): state moved on in the gap"; exit 0 ;;
   esac
+  REASON="bg-recheck($kind): no live markers remain"
   # A finishing SUBAGENT/TEAMMATE (kind=sub) does NOT mean it's your turn: Claude Code
   # re-invokes the main session to process the teammate's result the instant it
   # completes, so the main is about to TAKE OVER, not hand back to you. Painting green
@@ -309,6 +344,8 @@ fi
 if [ "$state" = "thinking" ]; then
   _up="$(cat 2>/dev/null)"
   _tp="$(printf '%s' "$_up" | grep -o '"transcript_path"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  AUDIT_SID="$(printf '%s' "$_up" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  REASON="prompt submitted"
   ensure_interruptwatch "$_tp"
 fi
 
@@ -324,10 +361,11 @@ if [ "$state" = "notify" ]; then
   _np="$(cat 2>/dev/null)"
   msg="$(printf '%s' "$_np" | grep -o '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*:[[:space:]]*"([^"]*)"$/\1/')"
   _sid="$(printf '%s' "$_np" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  AUDIT_SID="$_sid"
   [ -n "$_sid" ] && SLOTS="$(slots_for_sid "$_sid")"
   case "$msg" in
     *[Pp]ermission*|*[Aa]pprov*|*confirmation*)
-      state="awaiting-command" ;;   # a permission / approval prompt -> red (wins over bg)
+      state="awaiting-command"; REASON="notify: permission/approval prompt: $msg" ;;   # -> red (wins over bg)
     *)
       # If the MAIN session is mid-turn (busy/executing), this notification is a
       # teammate ping ("finished", "idle", mail) — NOT your turn. The last teammate
@@ -336,17 +374,21 @@ if [ "$state" = "notify" ]; then
       # state, so skipping here loses nothing.
       _cur=""
       [ -n "${KITTY_WINDOW_ID:-}" ] && _cur="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
-      case "$_cur" in thinking|working|executing) exit 0 ;; esac
+      case "$_cur" in thinking|working|executing)
+        audit_tx "$_cur" "" 0 "notify: main mid-turn, teammate ping ignored: $msg"; exit 0 ;; esac
       if bg_command_running; then
-        state="awaiting-bg"; ensure_bgwatch   # teammates/bg still running -> blue, not green
+        state="awaiting-bg"; REASON="notify: bg/teammates still running: $msg"
+        ensure_bgwatch                        # teammates/bg still running -> blue, not green
       elif [ "$_cur" = "awaiting-bg" ]; then
         # The tab was blue (awaiting the team) and a bg job just finished, firing this
         # notification. In an agent team the main session is re-invoked to process the
         # finished teammate's result -> it's TAKING OVER, not your turn. Go magenta
         # (working); the main's next Stop sets green once it truly hands back to you.
         state="working"
+        REASON="notify: bg finished, main taking over: $msg"
       else
         state="awaiting-response"             # genuinely your turn -> green
+        REASON="notify: your turn: $msg"
       fi ;;
   esac
 fi
@@ -365,9 +407,11 @@ fi
 #   - every other tool (Edit/Read/Write/MCP/...) -> "working" (magenta).
 if [ "$state" = "pretool" ]; then
   payload="$(cat 2>/dev/null)"
+  AUDIT_SID="$(printf '%s' "$payload" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
   agent_id="$(printf '%s' "$payload" | grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
   [ -n "$agent_id" ] && exit 0                # subagent/teammate inner call -> don't touch the tab
   tool="$(printf '%s' "$payload" | grep -o '"tool_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  REASON="pretool: $tool"
   case "$tool" in
     AskUserQuestion|ExitPlanMode) state="awaiting-command" ;;  # Claude is asking YOU -> red
     Bash|Task|Agent)              state="executing"        ;;  # shell command / awaiting an agent -> blue
@@ -380,24 +424,20 @@ fi
 # tracks the main session only). Otherwise it's the main agent between tools ->
 # "working" (magenta).
 if [ "$state" = "posttool" ]; then
-  agent_id="$(grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' 2>/dev/null | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  _pp="$(cat 2>/dev/null)"
+  AUDIT_SID="$(printf '%s' "$_pp" | grep -o '"session_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
+  agent_id="$(printf '%s' "$_pp" | grep -o '"agent_id"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"$/\1/')"
   [ -n "$agent_id" ] && exit 0                # subagent/teammate inner call -> don't touch the tab
   state="working"
-fi
-
-# --- debug log: OFF by default. Set CLAUDE_TAB_DEBUG=1 to append every
-#     invocation (state, window, socket) to claude-tab-status.log — handy for
-#     verifying which hooks fire. Logged before the kitty guards so it captures
-#     hooks even when remote control is unavailable.
-if [ "${CLAUDE_TAB_DEBUG:-0}" = "1" ]; then
-  printf '%s  %-18s win=%s listen=%s\n' \
-    "$(date '+%H:%M:%S')" "${state:-<none>}" "${KITTY_WINDOW_ID:-?}" "${KITTY_LISTEN_ON:+set}" \
-    >> /Users/z.yermagambet/code/personal/kitty/claude-tab-status.log 2>/dev/null
+  REASON="posttool: main agent between tools"
 fi
 
 # Must be inside kitty with socket remote control available, else no-op silently.
-[ -n "${KITTY_WINDOW_ID:-}" ] || exit 0
-[ -n "${KITTY_LISTEN_ON:-}" ] || exit 0
+# (Audited so the audit trail shows hooks fired even where the tab can't be set.)
+if [ -z "${KITTY_WINDOW_ID:-}" ] || [ -z "${KITTY_LISTEN_ON:-}" ]; then
+  audit_tx "" "$state" 0 "skipped: not inside kitty / no remote-control socket"
+  exit 0
+fi
 
 # Skip the work entirely when the tab is ALREADY showing this state. Tool-heavy
 # turns fire many hooks that all resolve to the same colour (a run of Read/Edit/MCP
@@ -409,7 +449,7 @@ fi
 prev_state="$(cat "/tmp/claude-tab-state-${KITTY_WINDOW_ID}" 2>/dev/null)"
 case "$state" in
   clear|reset|"") [ -z "$prev_state" ] && exit 0 ;;
-  *)              [ "$state" = "$prev_state" ] && exit 0 ;;
+  *)              [ "$state" = "$prev_state" ] && { audit_tx "$prev_state" "$state" 0 "skipped: colour already shown"; exit 0; } ;;
 esac
 
 # Locate the kitten binary (PATH first, then the macOS app bundle).
@@ -458,9 +498,7 @@ esac
 
 # Persist the resolved state so bg-recheck / bg-watch can tell whether a finishing
 # background job should flip the stale bg-running blue back to green.
-if [ "${CLAUDE_TAB_DEBUG:-0}" = "1" ]; then
-  printf '%s win=%s dispatch=%s prev=%s -> %s\n' "$(date '+%H:%M:%S')" "${KITTY_WINDOW_ID:-?}" "${1:-}" "${prev_state:-}" "$state" >> /tmp/claude-tab-transitions.log 2>/dev/null
-fi
+audit_tx "$prev_state" "$state" 1 "$REASON"
 if [ -n "${KITTY_WINDOW_ID:-}" ]; then
   case "$state" in
     idle|thinking|working|executing|awaiting-bg|awaiting-command|awaiting-response)

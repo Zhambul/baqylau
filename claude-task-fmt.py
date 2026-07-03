@@ -17,6 +17,8 @@ import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+
 CREATED_RGB = (214, 153, 92)    # warm amber — a task entering the list
 DONE_RGB    = (152, 195, 121)   # green — a task finished
 
@@ -36,7 +38,11 @@ def main():
         glyph, rgb = "✚", CREATED_RGB
     text = f"{glyph} task #{tid} · {subj}" if subj else f"{glyph} task #{tid}"
     O.emit(LOG, O.blank(), O.label(text, rgb))
+    A.hook_event(d, decision=f"rendered: {text}")
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        A.error("", "main")

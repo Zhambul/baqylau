@@ -32,6 +32,14 @@ from datetime import datetime, timedelta
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from claude_slots import CODEX_PALETTE
 
+try:
+    import claude_audit as A            # always-on audit trail (CLAUDE_AUDIT=0 disables)
+except Exception:
+    class _NoAudit:
+        def __getattr__(self, _):
+            return lambda *a, **k: None
+    A = _NoAudit()
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 STREAM = os.path.join(HERE, "claude-codex-stream.py")
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -197,12 +205,13 @@ def spawn(srcfile, jsonfile, label):
     rgb = ",".join(str(x) for x in CODEX_PALETTE[_n % len(CODEX_PALETTE)])
     _n += 1
     try:
-        subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, STREAM, LOG, rgb, srcfile, jsonfile, label],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
+        A.spawn(LOG, proc.pid, [STREAM, srcfile, label], purpose=f"stream:codex {label}")
     except Exception:
-        pass
+        A.error(LOG, "spawn codex stream", {"src": srcfile, "label": label})
 
 
 def label_for(data):
@@ -253,7 +262,12 @@ def main():
         return
     lock = acquire_lock()
     if lock is None:
+        A.event("streams", session_id=A.sid_from_log(LOG), kind="codex-watcher",
+                pid=os.getpid(), started_at=time.time(), ended_at=time.time(),
+                end_reason="duplicate (pid lock held)")
         return
+    global _WATCH_ID
+    _WATCH_ID = A.stream_start(LOG, "codex-watcher", src_path=SLUGDIR)
     start = time.time()
     seen = set()             # companion job ids + rollout uuids already handled
     pending_ro = {}          # rollout uuid -> first-seen wall time (grace before deciding)
@@ -338,6 +352,8 @@ def main():
             pass
 
 
+_WATCH_ID = None
+
 if __name__ == "__main__":
     try:
         os.setsid()          # redundant when launched via start_new_session, harmless
@@ -345,5 +361,7 @@ if __name__ == "__main__":
         pass
     try:
         main()
+        A.stream_end(_WATCH_ID, "mirror-log-removed (session end)")
     except Exception:
-        pass
+        A.error(LOG, "main")
+        A.stream_end(_WATCH_ID, "crash")

@@ -171,3 +171,10 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         pass
+    except Exception:
+        try:
+            import claude_audit
+            claude_audit.error(LOG, "main (renderer crashed)")
+        except Exception:
+            pass
+        raise

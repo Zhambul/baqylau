@@ -9,7 +9,16 @@
 # finish all share ONE colour, and parallel jobs differ. Slots are atomic marker
 # files under "<mirror-log>.slots/", liveness-checked by pid and released when the
 # streamer exits; >5 concurrent of a kind reuse colours.
-import errno, fcntl, os, time
+import errno, fcntl, os, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import claude_audit as A            # always-on audit trail (CLAUDE_AUDIT=0 disables)
+except Exception:
+    class _NoAudit:
+        def __getattr__(self, _):
+            return lambda *a, **k: None
+    A = _NoAudit()
 
 # Full-spectrum, well-separated hues (large min pairwise distance), avoiding the
 # foreground status hues (red/orange). Slot order keeps slots 0/1/2 very distinct.
@@ -109,6 +118,7 @@ def claim(kind, log):
         try:
             fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
             os.write(fd, mypid.encode()); os.close(fd)
+            A.slot(log, kind, "claim", slot_n=idx, owner_pid=os.getpid(), marker_path=p)
             return idx, p
         except FileExistsError:
             try:
@@ -126,11 +136,15 @@ def claim(kind, log):
                     os.remove(p)
                     fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
                     os.write(fd, mypid.encode()); os.close(fd)
+                    A.slot(log, kind, "steal-stale", slot_n=idx,
+                           owner_pid=os.getpid(), marker_path=p)
                     return idx, p
                 except Exception:
-                    pass
+                    A.error(log, "claim", {"kind": kind, "idx": idx})
         except Exception:
+            A.error(log, "claim", {"kind": kind, "idx": idx})
             break
+    A.slot(log, kind, "claim-denied", slot_n=start, owner_pid=os.getpid())
     return start, None                          # all live -> reuse start, no marker
 
 
@@ -141,8 +155,10 @@ def set_owner(marker_path, pid):
     try:
         with open(marker_path, "w") as f:
             f.write(str(pid))
+        A.event("slots", session_id=A.sid_from_log(marker_path), kind="",
+                action="set-owner", owner_pid=pid, marker_path=marker_path)
     except Exception:
-        pass
+        A.error(marker_path, "set_owner", {"pid": pid})
 
 
 def release(kind, log, idx, pid):
@@ -150,6 +166,7 @@ def release(kind, log, idx, pid):
         p = os.path.join(log + ".slots", f"{kind}.{idx}")
         if (open(p).read().strip() or "0") == str(pid):
             os.remove(p)
+            A.slot(log, kind, "release", slot_n=idx, owner_pid=pid, marker_path=p)
     except Exception:
         pass
 
@@ -187,8 +204,10 @@ def claim_id(kind, log, ident, prefer=None):
     try:
         with open(p, "w") as f:
             f.write(f"{idx} {time.time()}")
+        A.slot(log, kind, "claim-id", slot_n=idx, agent_id=ident,
+               owner_pid=os.getpid(), marker_path=p)
     except Exception:
-        pass
+        A.error(log, "claim_id", {"kind": kind, "ident": ident})
     return idx, True
 
 
@@ -200,6 +219,7 @@ def lookup_id(kind, log, ident):
 def release_id(kind, log, ident):
     try:
         os.remove(_id_path(log, kind, ident))
+        A.slot(log, kind, "release-id", agent_id=ident, owner_pid=os.getpid())
     except Exception:
         pass
 

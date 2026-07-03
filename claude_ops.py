@@ -19,7 +19,16 @@
 #                             when outer is given), wrapped so the gutter repeats on
 #                             every visual row. s may already contain ANSI (zero-width)
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
-import difflib, fcntl, json, os, re, time
+import difflib, fcntl, json, os, re, sys, time
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+try:
+    import claude_audit as A            # always-on audit trail (CLAUDE_AUDIT=0 disables)
+except Exception:                       # audit must never break a producer
+    class _NoAudit:
+        def __getattr__(self, _):
+            return lambda *a, **k: None
+    A = _NoAudit()
 
 
 def diff_counts(tool_name, inp):
@@ -210,7 +219,8 @@ def emit(log, *ops):
         with open(log, "a", encoding="utf-8") as f:
             f.write("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in ops))
     except Exception:
-        pass
+        A.error(log, "emit", {"ops": len(ops)})
+    A.ops(log, ops)
 
 
 # --- session statistics (the "▪ session" scoreboard pane) ----------------------
@@ -324,6 +334,7 @@ def bump(log, tool=None, file=None, **deltas):
         f.write(json.dumps(st, ensure_ascii=False))
         return st
     except Exception:
+        A.error(log, "bump", {"deltas": deltas, "tool": tool})
         return {}
     finally:
         try:
@@ -413,6 +424,7 @@ def bump_transcript(log, transcript):
         f.write(json.dumps(st, ensure_ascii=False))
         return st
     except Exception:
+        A.error(log, "bump_transcript", {"transcript": transcript})
         return {}
     finally:
         try:

@@ -16,6 +16,8 @@ import json, os, sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+
 LABEL = {
     "Read": "Read",
     "Edit": "Update",
@@ -47,13 +49,16 @@ def main():
     # A subagent's file ops are rendered by claude-substream.py (in transcript
     # order, with the subagent's messages) — skip them here to avoid duplication.
     if d.get("agent_id"):
+        A.hook_event(d, decision="ignored: agent_id (substream owns rendering)")
         return
     label = LABEL.get(d.get("tool_name") or "")
     if not label:
+        A.hook_event(d, decision="ignored: not a file tool")
         return
     ti = d.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("notebook_path") or ""
     if not path:
+        A.hook_event(d, decision="ignored: no file path")
         return
     LOG = O.log_path(d)
     name = os.path.basename(path.rstrip("/")) or path
@@ -97,7 +102,13 @@ def main():
     # claude_ops.bump_transcript).
     O.bump(LOG, tool=tool, file=path, added=added, removed=removed)
     O.bump_transcript(LOG, d.get("transcript_path"))
+    A.hook_event(d, decision=f"rendered: {label}({name})"
+                 + (" FAILED" if failed else
+                    ("" if tool == "Read" else f" +{added} -{removed}")))
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        A.error("", "main")

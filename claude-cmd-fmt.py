@@ -17,6 +17,8 @@ import claude_slots
 import claude_render as R
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+
 LOG = ""   # set in main() from the payload's session_id (per-session log)
 
 LBL_FG   = (170, 185, 210)  # slate   — foreground OK (neutral, distinct from the vivid palettes)
@@ -73,11 +75,15 @@ def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
     if skip_existing:
         env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
     try:
-        return subprocess.Popen(
+        proc = subprocess.Popen(
             [sys.executable, streamer, kind, taskid, LOG, str(slot)],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+        A.spawn(LOG, proc.pid, [streamer, kind, taskid, str(slot)],
+                purpose=f"stream:{kind} task={taskid}")
+        return proc
     except Exception:
+        A.error(LOG, "_spawn_stream", {"kind": kind, "taskid": taskid})
         return None
 
 
@@ -91,11 +97,13 @@ def main():
     # A subagent's tool calls are rendered (in transcript order, with messages) by
     # claude-substream.py — skip them here so they aren't rendered twice.
     if d.get("agent_id"):
+        A.hook_event(d, decision="ignored: agent_id (substream owns rendering)")
         return
     ti  = d.get("tool_input") or {}
     tr  = d.get("tool_response") or {}
     cmd = (ti.get("command") or "")
     if not cmd.strip():
+        A.hook_event(d, decision="ignored: empty command")
         return
     bg = bool(ti.get("run_in_background"))
     # Ctrl+B mid-command: the model asked for a plain foreground run, but the USER
@@ -117,9 +125,11 @@ def main():
             with open(marker) as f:
                 live = json.load(f)
         except Exception:
+            A.error(LOG, "read .fg-live", {"marker": marker})
             live = None
         try:
             os.remove(marker)
+            A.state_file(LOG, marker, "remove", live)
         except Exception:
             pass
 
@@ -143,8 +153,9 @@ def main():
             try:
                 with open(live["src"] + ".done", "w") as f:
                     json.dump({"converted": True}, f)
+                A.state_file(LOG, live["src"] + ".done", "write", {"converted": True})
             except Exception:
-                pass
+                A.error(LOG, "write converted sentinel", {"src": live.get("src")})
             O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
         else:
             O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
@@ -161,6 +172,9 @@ def main():
                 claude_slots.set_owner(slot_marker, proc.pid)
             else:
                 claude_slots.release("bg", LOG, slot, os.getpid())
+        A.hook_event(d, decision=("converted ctrl+b -> bg tailer" if converted
+                                  else "background: tailer spawned")
+                     + f" task={taskid or '?'} slot={slot}")
         return
 
     ms  = d.get("duration_ms")
@@ -205,12 +219,16 @@ def main():
         try:
             with open(live["src"] + ".done", "w") as f:
                 json.dump({"chip": chip_txt, "color": list(col), "fallback_body": gut_body}, f)
+            A.state_file(LOG, live["src"] + ".done", "write", {"chip": chip_txt})
         except Exception:
+            A.error(LOG, "write .done sentinel", {"src": live.get("src")})
             live = None    # couldn't hand off -> fall through to the normal render below
 
     if not live:
         O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
                O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
+    A.hook_event(d, decision=("handed off to fg tailer: " if live else "rendered: ")
+                 + chip_txt)
 
     # Update the session scoreboard. claude-scorebar.py (its own small window under
     # the mirror) refreshes off this sidecar bump — nothing is emitted into the log.
@@ -222,4 +240,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception:
+        A.error(LOG, "main")

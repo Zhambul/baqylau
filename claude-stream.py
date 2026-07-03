@@ -37,6 +37,11 @@ import claude_slots
 import claude_render as R
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+STREAM_ID = None   # audit streams-row id (set in main)
+LINES = 0          # output lines forwarded to the mirror
+END_REASON = "?"
+
 KIND   = sys.argv[1] if len(sys.argv) > 1 else "bg"
 TASKID = sys.argv[2] if len(sys.argv) > 2 else ""
 LOG    = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -165,12 +170,15 @@ def find_proc(sig):
 
 
 def main():
+    global STREAM_ID, END_REASON
     if not (TASKID and LOG):
         return
     start = time.time()
+    STREAM_ID = A.stream_start(LOG, KIND, task_id=TASKID, src_path=SRC)
     path = find_file(start + 12)
     if not path:
         O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
+        END_REASON = "output-file-not-found"
         return
 
     pos0 = 0
@@ -183,6 +191,7 @@ def main():
 
     def pump():
         nonlocal pos, pending, last_active, last_size
+        global LINES
         try:
             size = os.path.getsize(path)
         except OSError:
@@ -195,6 +204,7 @@ def main():
                 return size
             *lines, pending = pending.split(b"\n")
             if lines:
+                LINES += len(lines)
                 O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
                                   SLOT_RGB, outer=OUTER_RGB))
         if size > last_size:
@@ -214,6 +224,7 @@ def main():
     override, FG_BACKSTOP = None, start + 7200   # absolute backstop so a stuck tailer can't run forever
     while True:
         if pump() is None:
+            END_REASON = "src-file-vanished"
             break
         now = time.time()
         if KIND == "fg":
@@ -222,11 +233,13 @@ def main():
                     with open(sentinel) as f:
                         override = json.load(f)
                 except Exception:
+                    A.error(LOG, "read .done sentinel", {"sentinel": sentinel})
                     override = {}
                 try:
                     os.remove(sentinel)
                 except Exception:
                     pass
+                END_REASON = "sentinel"
                 break
             # Track the underlying process by writer-liveness, same as "bg" — NOT a
             # fixed timeout. This is what keeps a still-running command's tab BLUE for
@@ -235,24 +248,31 @@ def main():
             # keeps running well past when the ORIGINAL tool call's Post would have
             # fired, so a flat timeout would have wrongly declared it done).
             if not has_writer(path) and (now - last_active) >= GRACE and last_size >= 0:
+                END_REASON = "writer-gone"
                 break                                        # process gone, sentinel never showed -> give up
             if now > FG_BACKSTOP:
+                END_REASON = "backstop-timeout"
                 break
         elif KIND == "monitor":
             if mon_pid is None and now < find_deadline:
                 mon_pid = find_proc(SIG)
             if mon_pid is not None:
                 if not alive(mon_pid):                       # process gone -> definitively done
+                    END_REASON = "monitor-process-exited"
                     break
             elif now > find_deadline and (now - last_active) >= GRACE:
+                END_REASON = "idle-fallback (monitor process never found)"
                 break                                        # never found process -> idle fallback
         else:  # bg
             if not has_writer(path) and (now - last_active) >= GRACE and last_size >= 0:
+                END_REASON = "writer-gone"
                 break
         time.sleep(0.4)
 
     pump()                                                   # final catch-up read
     converted = KIND == "fg" and override and override.get("converted")
+    if converted:
+        END_REASON = "converted-ctrl-b"
     if pending.strip():
         O.emit(LOG, O.gut(unescape(pending.decode("utf-8", "replace")), SLOT_RGB, outer=OUTER_RGB))
     elif KIND == "fg" and pos == 0 and not converted and override and override.get("fallback_body"):
@@ -312,6 +332,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        pass
+        END_REASON = "crash"
+        A.error(LOG, "main", {"kind": KIND, "taskid": TASKID})
     finally:
         release_slot()
+        A.stream_end(STREAM_ID, END_REASON, LINES)

@@ -19,14 +19,24 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 WATCH = os.path.join(HERE, "claude-codex-watch.py")
 
+sys.path.insert(0, HERE)
+try:
+    import claude_audit as A            # always-on audit trail (CLAUDE_AUDIT=0 disables)
+except Exception:
+    class _NoAudit:
+        def __getattr__(self, _):
+            return lambda *a, **k: None
+    A = _NoAudit()
+
 
 def main():
     if not os.path.exists(WATCH) or len(sys.argv) < 2:
         return
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [sys.executable, WATCH] + sys.argv[1:],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL, start_new_session=True)
+    A.spawn(sys.argv[1], proc.pid, [WATCH] + sys.argv[1:], purpose="codex watcher")
 
 
 if __name__ == "__main__":

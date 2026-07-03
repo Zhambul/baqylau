@@ -22,6 +22,10 @@ import claude_slots
 import claude_render as R
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+STREAM_ID = None
+END_REASON = "?"
+
 AGENT   = sys.argv[1]
 TPATH   = sys.argv[2]
 LOG     = sys.argv[3]
@@ -470,7 +474,10 @@ def spawn_tailer(kind, taskid, cmd=""):
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, start_new_session=True)
         claude_slots.set_owner(marker, proc.pid)
+        A.spawn(LOG, proc.pid, [streamer, kind, taskid, str(slot)],
+                purpose=f"stream:{kind} (nested under agent {AGENT[:8]})")
     except Exception:
+        A.error(LOG, "spawn_tailer", {"kind": kind, "taskid": taskid, "agent": AGENT})
         claude_slots.release(kind, LOG, slot, os.getpid())
 
 
@@ -675,6 +682,7 @@ def handle_line(s):
     try:
         o = json.loads(s)
     except Exception:
+        A.error(LOG, "handle_line", {"agent": AGENT, "line": s[:300]})
         return
     t = o.get("type")
     msg = o.get("message") or {}
@@ -718,12 +726,16 @@ def handle_line(s):
 
 
 def main():
+    global STREAM_ID, END_REASON
     start = time.time()
+    STREAM_ID = A.stream_start(LOG, "teammate" if PALETTE == "team" else "subagent",
+                               agent_id=AGENT, src_path=JSONL)
     # Wait for the transcript to appear.
     while not os.path.exists(JSONL) and time.time() < start + 15:
         time.sleep(0.2)
     if not os.path.exists(JSONL):
         O.emit(LOG, O.rule(), O.label(f"■ {LABEL} (no transcript)", SUB_RGB), O.rule())
+        END_REASON = "transcript-never-appeared"
         return
 
     pos, pending = 0, b""
@@ -771,11 +783,14 @@ def main():
     while True:
         pump()
         if os.path.exists(SENT):
+            END_REASON = "stop-sentinel"
             break
         if cancelled_by_user():
             cancelled = True
+            END_REASON = "stoppedByUser (manual cancel)"
             break
         if time.time() - start > 6 * 3600:
+            END_REASON = "backstop-timeout"
             break
         time.sleep(0.3)
 
@@ -845,6 +860,8 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        pass
+        END_REASON = "crash"
+        A.error(LOG, "main", {"agent": AGENT, "type": ATYPE})
     finally:
         cleanup()
+        A.stream_end(STREAM_ID, END_REASON, tool_n)

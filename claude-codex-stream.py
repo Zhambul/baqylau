@@ -27,6 +27,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_render as R
 import claude_ops as O
 
+A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
+STREAM_ID = None
+END_REASON = "?"
+
 LOG      = sys.argv[1] if len(sys.argv) > 1 else ""
 SLOT_RGB = tuple(int(x) for x in sys.argv[2].split(",")) if len(sys.argv) > 2 else (0, 200, 150)
 LOGFILE  = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -178,13 +182,16 @@ def feed_rollout(o):
 
 
 def main():
+    global STREAM_ID, END_REASON
     if not (LOG and LOGFILE):
         return
     start = time.time()
+    STREAM_ID = A.stream_start(LOG, "codex", task_id=LABEL, src_path=LOGFILE)
     # Wait for the source to appear (a companion .log lands a beat after its sidecar).
     while not os.path.exists(LOGFILE) and time.time() < start + 15 and os.path.exists(LOG):
         time.sleep(0.2)
     if not os.path.exists(LOGFILE):
+        END_REASON = "src-never-appeared"
         return
 
     O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
@@ -221,14 +228,17 @@ def main():
     while True:
         pump()
         if not os.path.exists(LOG):          # session ended -> stop
+            END_REASON = "mirror-log-removed (session end)"
             break
         if ROLLOUT:
             if _ro_done_wall and not _ro_active and (time.time() - _ro_done_wall) >= GRACE:
-                pump(); break
+                pump(); END_REASON = "task-complete"; break
         elif read_status() in ("completed", "failed", "cancelled"):
             time.sleep(0.2); pump(); pump()  # drain the tail
+            END_REASON = "sidecar-status: " + read_status()
             break
         if time.time() - start > 6 * 3600:   # backstop for a stuck run
+            END_REASON = "backstop-timeout"
             break
         time.sleep(0.4)
 
@@ -250,4 +260,7 @@ if __name__ == "__main__":
     try:
         main()
     except Exception:
-        pass
+        END_REASON = "crash"
+        A.error(LOG, "main", {"src": LOGFILE, "label": LABEL})
+    finally:
+        A.stream_end(STREAM_ID, END_REASON)
