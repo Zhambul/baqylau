@@ -116,6 +116,47 @@ def log_path(d):
     return "/tmp/claude-mirror-" + key + ".log"
 
 
+def claude_dirs(start=None):
+    """Every `.claude` directory to consult for project-level config (agents, settings),
+    NEAREST-FIRST, always ending with ~/.claude. Used instead of a bare os.getcwd()
+    lookup, because a subagent/teammate frequently runs in a SUBDIRECTORY (a task's
+    `.zhambyl/tasks/<t>/db`, or a git worktree under `.zhambyl/parallel/<wt>`) where
+    `<cwd>/.claude` lacks the def/field we need.
+
+    Resolution:
+      - $CLAUDE_PROJECT_DIR (the harness's own project override; same as claude-split.sh)
+        pins the single project `.claude` when set;
+      - otherwise walk UP from `start`, collecting EVERY ancestor `.claude` (stopping at
+        `/` or $HOME).
+    Collecting *all* of them — not just the nearest — is deliberate: an intermediate dir
+    may hold its own `.claude/` that is missing `agents/` or the field we want (e.g. a
+    task's `db/.claude`), and we must still fall through to the repo-root `.claude` above
+    it. Nearest-first means a more-specific dir still overrides a parent. Since the
+    agent-defs here are UNTRACKED (present only in the main working tree, absent from
+    worktree checkouts), a nested worktree resolves up to the main repo's defs correctly."""
+    dirs = []
+    env = (os.environ.get("CLAUDE_PROJECT_DIR") or "").strip()
+    if env:
+        c = os.path.join(env, ".claude")
+        if os.path.isdir(c):
+            dirs.append(c)
+    else:
+        d = os.path.abspath(start or os.getcwd())
+        home = os.path.expanduser("~")
+        while d not in ("/", home):
+            c = os.path.join(d, ".claude")
+            if os.path.isdir(c):
+                dirs.append(c)
+            parent = os.path.dirname(d)
+            if parent == d:
+                break
+            d = parent
+    home_claude = os.path.expanduser("~/.claude")
+    if home_claude not in dirs:
+        dirs.append(home_claude)
+    return dirs
+
+
 def _rgb(c):
     return [int(c[0]), int(c[1]), int(c[2])]
 

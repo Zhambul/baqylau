@@ -499,8 +499,16 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `effort:` > settings `effortLevel` > the model's default (`high` on Opus 4.8/4.6 ·
     Sonnet 5 · Sonnet 4.6 · Fable 5, `xhigh` on Opus 4.7). A **teammate's** def is found
     via its `meta.json` `customAgentType` (its short type — `container` — doesn't match
-    the def's `name:`/filename `task-container`). Caveat: a session-only `/effort max` /
-    `ultracode` / `--effort` that never persists to settings can't be seen here.
+    the def's `name:`/filename `task-container`). The def + settings are looked up across
+    **every ancestor `.claude/` dir** (`claude_ops.claude_dirs`, `$CLAUDE_PROJECT_DIR`
+    honoured, else walk up from cwd, nearest-first, ending at `~/.claude`) — **not** just
+    `cwd/.claude`: a teammate/subagent often runs in a subdirectory (a task's
+    `.zhambyl/tasks/<t>/db`) or a git worktree, where `cwd/.claude` is absent or a stub
+    without `agents/`; collecting *all* ancestors falls through to the repo-root def so
+    `effort: high` is read instead of dropping to the session/global `low`. (The defs are
+    untracked, so a nested worktree correctly resolves up to the main tree's copy.)
+    Caveat: a session-only `/effort max` / `ultracode` / `--effort` that never persists to
+    settings can't be seen here.
   - **`claude-subagent-log.sh`** + **`claude-subagent-fmt.py`** drive the frame:
     `SubagentStart` claims the colour slot (keyed by `agent_id` so header, body,
     and footer match; parallel subagents differ), writes the `▶ <type> · <desc>`

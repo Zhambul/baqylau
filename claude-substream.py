@@ -107,8 +107,12 @@ def _fm_field(path, field):
 def _agent_def_file(atype):
     # The DEFINITION file for this agent type, if any. Identity is the frontmatter
     # `name:` (docs); fall back to the filename stem. Project defs shadow user defs.
-    roots = [os.path.join(os.getcwd(), ".claude", "agents"),
-             os.path.expanduser("~/.claude/agents")]
+    # Search agents across ALL ancestor .claude dirs (O.claude_dirs), not just
+    # os.getcwd()/.claude: a teammate/subagent frequently runs in a subdirectory or a git
+    # worktree where <cwd>/.claude is absent OR is a stub without agents/ (e.g. a task's
+    # db/.claude), which would otherwise miss the def and drop `effort:`/`model:` to the
+    # session/user default. Nearest-first, ending at ~/.claude.
+    roots = [os.path.join(c, "agents") for c in O.claude_dirs()]
     stem_hit = None
     for r in roots:
         if not os.path.isdir(r):
@@ -135,9 +139,14 @@ def _def_field(field):
 def _settings_field(field):
     # A field from the merged settings (project overriding global) — the same layering
     # claude-split.sh reads. Used for values an agent inherits (model, effortLevel).
-    for p in (os.path.join(os.getcwd(), ".claude", "settings.local.json"),
-              os.path.join(os.getcwd(), ".claude", "settings.json"),
-              os.path.expanduser("~/.claude/settings.json")):
+    # Layered across ALL ancestor .claude dirs (O.claude_dirs, nearest-first) for the same
+    # subdir/worktree reason as _agent_def_file — else a teammate in a subdirectory skips
+    # the project settings and falls straight through to ~/.claude. First non-empty wins.
+    paths = []
+    for c in O.claude_dirs():
+        paths += [os.path.join(c, "settings.local.json"),
+                  os.path.join(c, "settings.json")]
+    for p in paths:
         try:
             with open(p, encoding="utf-8") as fh:
                 v = json.load(fh).get(field)
