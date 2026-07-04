@@ -28,11 +28,14 @@ def find_kitten():
 
 
 def kitten_run(kitten, listen, *args):
-    """A silenced `kitten @ …` call; returns the exit code (1 on any failure)."""
+    """A silenced `kitten @ …` call; returns the exit code (1 on any failure).
+    The timeout matches kitten_ls's: kitten has its own client-side response
+    timeout, but a hang on socket CONNECT is unbounded, and every tab paint and
+    split op runs through here from hook processes — which must never block."""
     try:
         return subprocess.run([kitten, "@", "--to", listen, *args],
                               stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode
+                              stderr=subprocess.DEVNULL, timeout=10).returncode
     except Exception:
         return 1
 

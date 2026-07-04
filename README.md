@@ -1111,13 +1111,15 @@ stuck blue or a block never closed, the evidence evaporated with the processes.
   `spool.jsonl`, re-ingested on the next successful open — including failures of
   the auditor itself. The tab-status path writes fire-and-forget in the background,
   so the latency-sensitive colour path is never blocked.
-- **Retention:** sessions older than 30 days are pruned at SessionEnd.
+- **Retention:** sessions older than 30 days are pruned at SessionEnd — every
+  per-session table including `pane_events` (once omitted from the prune loops,
+  which grew it unboundedly with permanently orphaned rows).
 
 What's recorded (all tables keyed by `session_id`, written by `claude_audit.py`):
 
 | table | one row per |
 |---|---|
-| `sessions` | Claude session — cwd, transcript, mirror log, window id, start/end, env |
+| `sessions` | Claude session — cwd, transcript, mirror log, window id, start/end, env. A SessionEnd that can't reach the DB spools a `session_end` pseudo-row (same mechanism as `stream_end`), so a locked DB no longer leaves the session "(open)" forever |
 | `hook_events` | hook invocation — **full stdin payload** + the handler's **decision** ("ignored: agent_id", "handed off to fg tailer: ■ failed (exit 1)", …) |
 
 `hook_events` is fed two ways. The mirror's own handlers record the events they

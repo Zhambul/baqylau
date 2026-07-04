@@ -230,6 +230,9 @@ def main():
             try:                            # poll inboxes: census parts + mirror events
                 mparts, events = MSG.update_messages(LOG)
             except Exception:
+                # Audited: a crashing tracker otherwise freezes the ✉ row at
+                # stale/0 counts with zero trace in the audit DB.
+                O.A.error(LOG, "update_messages (✉ row frozen this tick)")
                 mparts, events = [], []
             if events:
                 emit_events(events)         # surface arrivals/reads in the mirror pane

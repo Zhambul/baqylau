@@ -188,6 +188,13 @@ def _insert(conn, table, cols):
             "UPDATE streams SET ended_at=?, end_reason=?, lines_emitted=? WHERE id=?",
             (cols.get("ended_at") or time.time(), cols.get("end_reason"),
              cols.get("lines_emitted"), cols.get("id")))
+    # "session_end" is the same idea for the sessions row (a locked DB at
+    # SessionEnd otherwise leaves the session "(open)" forever).
+    if table == "session_end":
+        return conn.execute(
+            "UPDATE sessions SET ended_at=?, end_reason=? WHERE session_id=?",
+            (cols.get("ended_at") or time.time(), cols.get("end_reason"),
+             cols.get("session_id")))
     keys = list(cols.keys())
     sql = (f"INSERT INTO {table}({','.join(keys)}) "
            f"VALUES({','.join('?' * len(keys))})")
@@ -404,16 +411,24 @@ def session_start(d):
 def session_end(d, reason=""):
     if not enabled():
         return
-    conn = _connect()
     sid = sid_of(d)
-    if conn is None or not sid:
+    if not sid:
+        return
+    # Same spool degradation as stream_end (the "session_end" pseudo-table in
+    # _insert): a locked/unreachable DB at SessionEnd used to drop the row
+    # silently, leaving the session "(open)" in cli_sessions forever.
+    row = {"session_id": sid, "ended_at": time.time(),
+           "end_reason": reason or (d.get("reason") or "")}
+    conn = _connect()
+    if conn is None:
+        _spool("session_end", row)
         return
     try:
         conn.execute("UPDATE sessions SET ended_at=?, end_reason=? WHERE session_id=?",
-                     (time.time(), reason or (d.get("reason") or ""), sid))
+                     (row["ended_at"], row["end_reason"], sid))
         conn.commit()
     except Exception:
-        pass
+        _spool("session_end", row)
 
 
 def prune(days=PRUNE_DAYS):
@@ -430,12 +445,12 @@ def prune(days=PRUNE_DAYS):
         sids = [r[0] for r in rows]
         for sid in sids:
             for t in ("hook_events", "tab_transitions", "slots", "streams", "ops",
-                      "errors", "spawns", "state_files"):
+                      "errors", "spawns", "state_files", "pane_events"):
                 conn.execute(f"DELETE FROM {t} WHERE session_id=?", (sid,))
             conn.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
         # Orphan rows whose session row never existed (pre-session writes) age out too.
         for t in ("hook_events", "tab_transitions", "slots", "ops", "errors",
-                  "spawns", "state_files"):
+                  "spawns", "state_files", "pane_events"):
             conn.execute(f"DELETE FROM {t} WHERE ts < ? AND session_id NOT IN "
                          "(SELECT session_id FROM sessions)", (cutoff,))
         conn.execute("DELETE FROM streams WHERE started_at < ? AND session_id NOT IN "

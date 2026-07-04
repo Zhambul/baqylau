@@ -254,7 +254,9 @@ def code(s, ind="  "):
             import claude_render as R
             s = R.format_code(s)
         except Exception:
-            pass
+            # Audited: a broken formatter (pygments regression) otherwise paints
+            # every command unformatted with nothing in the DB saying why.
+            A.error("", "format_code (command shown verbatim)")
     return {"t": "code", "s": s, "ind": ind}
 
 

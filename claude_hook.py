@@ -69,6 +69,10 @@ def spawn_streamer(name, argv, log, env=None, purpose="", audit_argv=None):
     failure, audited) — the CALLER rolls back its own slot/marker state."""
     path = script(name)
     if not os.path.exists(path):
+        # Audited (the docstring promised it, the code didn't): a renamed/deleted
+        # sibling script otherwise means every block silently never streams, with
+        # no spawn row and no errors row to triage from.
+        A.error(log, "spawn " + name + " (script missing)", {"path": path})
         return None
     try:
         proc = subprocess.Popen(
@@ -91,7 +95,9 @@ def notify_tab(dispatch, args, log):
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:
-        pass
+        # A dropped dispatch is a stuck-tab-colour symptom with, before this,
+        # no errors row AND no transitions row (the dispatcher never ran).
+        A.error(log, "notify_tab " + dispatch)
 
 
 def run(main, **context):

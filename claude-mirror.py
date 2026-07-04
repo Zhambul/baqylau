@@ -186,7 +186,16 @@ def main():
             cur_ino = None
         if cur_ino is not None and cur_ino != ino:
             if ino is not None:
-                St._CONNS.pop(db, None)
+                stale = St._CONNS.pop(db, None)
+                if stale is not None:
+                    try:
+                        # Close, don't just drop: the discarded connection holds
+                        # open fds to the DELETED old inode (+ its WAL/SHM),
+                        # pinning them for this long-lived renderer's lifetime —
+                        # one leak per park/restore or session-recreate cycle.
+                        stale.close()
+                    except Exception:
+                        pass
                 last, OPS[:] = 0, []
                 _resized = True
             ino = cur_ino
