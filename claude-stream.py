@@ -30,18 +30,16 @@
 # even got wrapped to write SRC) it falls back to a generic chip after a grace
 # period — and if SRC ended up empty, to the real output PostToolUse hands it in
 # that same sentinel, so a failed rewrite never means silently losing the output.
-import glob, json, os, re, subprocess, sys, time
+import glob, os, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
 import claude_render as R
 import claude_ops as O
 import claude_state as S
+import claude_tail as T
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
-STREAM_ID = None   # audit streams-row id (set in main)
-LINES = 0          # output lines forwarded to the mirror
-END_REASON = "?"
 
 KIND   = sys.argv[1] if len(sys.argv) > 1 else "bg"
 TASKID = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -172,16 +170,14 @@ def find_proc(sig):
     return hits[-1] if hits else None
 
 
-def main():
-    global STREAM_ID, END_REASON
+def main(run):
     if not (TASKID and LOG):
         return
     start = time.time()
-    STREAM_ID = A.stream_start(LOG, KIND, task_id=TASKID, src_path=SRC)
     path = find_file(start + 12)
     if not path:
         O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
-        END_REASON = "output-file-not-found"
+        run.end("output-file-not-found")
         return
 
     pos0 = 0
@@ -190,96 +186,94 @@ def main():
             pos0 = os.path.getsize(path)
         except OSError:
             pos0 = 0
-    pos, pending, last_active, last_size = pos0, b"", start, -1
+    tail = T.FileTailer(path, pos=pos0)
+    run.lines = 0
 
     def pump():
-        nonlocal pos, pending, last_active, last_size
-        global LINES
-        try:
-            size = os.path.getsize(path)
-        except OSError:
-            return None
-        if size > pos:
-            try:
-                # Read exactly size-pos bytes: an unbounded read() can grab bytes the
-                # job appended DURING the read, which `pos = size` would then not
-                # account for — the next pump would re-read and duplicate them.
-                with open(path, "rb") as fh:
-                    fh.seek(pos)
-                    chunk = fh.read(size - pos)
-                    pending += chunk; pos += len(chunk)
-            except OSError:
-                return size
-            *lines, pending = pending.split(b"\n")
-            if lines:
-                LINES += len(lines)
-                O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
-                                  SLOT_RGB, outer=OUTER_RGB))
-        if size > last_size:
-            last_active = time.time()
-        last_size = size
-        return size
+        lines = tail.pump()
+        if lines:
+            run.lines += len(lines)
+            O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
+                              SLOT_RGB, outer=OUTER_RGB))
+        return lines                            # None -> file vanished
 
     # Completion signal differs by kind:
-    #   bg      — the command holds its output file open the whole time, so the
-    #             write-holder vanishing is definitive (works for long silent jobs).
+    #   bg / fg — the command holds its output file open the whole time, so the
+    #             write-holder vanishing (plus a short idle grace) is definitive
+    #             (works for long silent jobs). For fg it is what keeps a
+    #             still-running command's tab BLUE however long it runs, whether
+    #             or not PostToolUse ever shows up (a Ctrl+B-backgrounded
+    #             command's process — and our tee pipe — runs on well past when
+    #             the original tool call's Post would have fired; a flat timeout
+    #             would have wrongly declared it done). fg first checks the
+    #             PostToolUse outcome hand-off (take-once state-DB record keyed
+    #             by CLAUDE_STREAM_DONE — was a .done sentinel file).
     #   monitor — writes in bursts (no held file), but its command PROCESS is
     #             persistent and identifiable, and exits exactly when the monitor
-    #             ends, so we track that process — robust at ANY cadence, no grace.
-    # Fallbacks use a short idle so the streamer always terminates.
-    mon_pid, find_deadline, GRACE = None, start + 20, (2.0 if KIND in ("bg", "fg") else 8.0)
-    # The outcome hand-off is a state-DB record keyed by the token claude-cmd-pre.py
-    # agreed with claude-cmd-fmt.py on (CLAUDE_STREAM_DONE) — was a .done sentinel
-    # file polled with exists/read/remove; hand_take is the same take-once, atomically.
+    #             ends, so we track that process — robust at ANY cadence, no
+    #             grace. Idle fallback only if the process was never found.
+    GRACE = 2.0 if KIND in ("bg", "fg") else 8.0
     sentinel = ("done:" + (DONE or path + ".done")) if KIND == "fg" else None
-    override, FG_BACKSTOP = None, start + 7200   # absolute backstop so a stuck tailer can't run forever
+    mon = {"pid": None, "deadline": start + 20}
+    # Backstop for fg ONLY (and shorter than the tailers' shared 6h cap): an
+    # interactive foreground command past 2h is far likelier a wedged tailer than
+    # a real command, and its live fg slot row keeps the tab blue the whole time.
+    # bg/monitor deliberately have NO backstop — their completion signals
+    # (write-holder vanishing / monitor process exit) are definitive, and a
+    # legitimately long background job must keep streaming past any cap.
+    backstop = start + 7200 if KIND == "fg" else None
+    override = None
+
+    def writer_gone(now):
+        return (not has_writer(path) and tail.idle_for(now) >= GRACE
+                and tail.size >= 0)
+
+    def fg_done(now):
+        nonlocal override
+        taken = S.hand_take(LOG, sentinel) if sentinel else None
+        if taken is not None:
+            override = taken
+            return "sentinel"
+        if writer_gone(now):
+            return "writer-gone"                # process gone, sentinel never showed
+        return None
+
+    def monitor_done(now):
+        if mon["pid"] is None and now < mon["deadline"]:
+            mon["pid"] = find_proc(SIG)
+        if mon["pid"] is not None:
+            if not alive(mon["pid"]):           # process gone -> definitively done
+                return "monitor-process-exited"
+            return None
+        if now > mon["deadline"] and tail.idle_for(now) >= GRACE:
+            return "idle-fallback (monitor process never found)"
+        return None
+
+    def bg_done(now):
+        return "writer-gone" if writer_gone(now) else None
+
+    is_done = {"fg": fg_done, "monitor": monitor_done}.get(KIND, bg_done)
     while True:
         if pump() is None:
-            END_REASON = "src-file-vanished"
+            run.end("src-file-vanished")
             break
         now = time.time()
-        if KIND == "fg":
-            if sentinel:
-                taken = S.hand_take(LOG, sentinel)
-                if taken is not None:
-                    override = taken
-                    END_REASON = "sentinel"
-                    break
-            # Track the underlying process by writer-liveness, same as "bg" — NOT a
-            # fixed timeout. This is what keeps a still-running command's tab BLUE for
-            # as long as it's actually running, whether or not PostToolUse ever shows
-            # up (e.g. a Ctrl+B-backgrounded command: its process — and our tee pipe —
-            # keeps running well past when the ORIGINAL tool call's Post would have
-            # fired, so a flat timeout would have wrongly declared it done).
-            if not has_writer(path) and (now - last_active) >= GRACE and last_size >= 0:
-                END_REASON = "writer-gone"
-                break                                        # process gone, sentinel never showed -> give up
-            if now > FG_BACKSTOP:
-                END_REASON = "backstop-timeout"
-                break
-        elif KIND == "monitor":
-            if mon_pid is None and now < find_deadline:
-                mon_pid = find_proc(SIG)
-            if mon_pid is not None:
-                if not alive(mon_pid):                       # process gone -> definitively done
-                    END_REASON = "monitor-process-exited"
-                    break
-            elif now > find_deadline and (now - last_active) >= GRACE:
-                END_REASON = "idle-fallback (monitor process never found)"
-                break                                        # never found process -> idle fallback
-        else:  # bg
-            if not has_writer(path) and (now - last_active) >= GRACE and last_size >= 0:
-                END_REASON = "writer-gone"
-                break
-        time.sleep(0.4)
+        reason = is_done(now)
+        if reason:
+            run.end(reason)
+            break
+        if backstop and now > backstop:         # stuck fg tailer can't run forever
+            run.end("backstop-timeout")
+            break
+        time.sleep(T.POLL_S)
 
-    pump()                                                   # final catch-up read
+    pump()                                      # final catch-up read
     converted = KIND == "fg" and override and override.get("converted")
     if converted:
-        END_REASON = "converted-ctrl-b"
-    if pending.strip():
-        O.emit(LOG, O.gut(unescape(pending.decode("utf-8", "replace")), SLOT_RGB, outer=OUTER_RGB))
-    elif KIND == "fg" and pos == 0 and not converted and override and override.get("fallback_body"):
+        run.end("converted-ctrl-b")
+    if tail.pending.strip():
+        O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB, outer=OUTER_RGB))
+    elif KIND == "fg" and tail.pos == 0 and not converted and override and override.get("fallback_body"):
         # Nothing ever landed in SRC — most likely an older Claude Code build that
         # ignored PreToolUse's updatedInput, so the command ran unwrapped. Fall back
         # to the real output PostToolUse captured itself rather than showing nothing.
@@ -290,7 +284,7 @@ def main():
         # REAL backgroundTaskId output now owns the rest of this block (header, body,
         # finish chip) — this tailer just bows out quietly, no chip of its own, so the
         # two don't race or double-render.
-        elapsed = max(0.0, last_active - start)  # active duration, excluding any idle wait
+        elapsed = max(0.0, tail.changed_at - start)  # active duration, excluding any idle wait
         dur = f"{elapsed:.1f}s" if elapsed < 60 else f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
         if KIND == "fg" and override and override.get("chip"):
             chip_txt = override["chip"]
@@ -333,11 +327,7 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        END_REASON = "crash"
-        A.error(LOG, "main", {"kind": KIND, "taskid": TASKID})
-    finally:
-        release_slot()
-        A.stream_end(STREAM_ID, END_REASON, LINES)
+    with T.stream_lifecycle(LOG, KIND, task_id=TASKID, src_path=SRC,
+                            ctx={"kind": KIND, "taskid": TASKID},
+                            on_exit=release_slot) as run:
+        main(run)

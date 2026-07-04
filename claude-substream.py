@@ -22,10 +22,9 @@ import claude_slots
 import claude_render as R
 import claude_ops as O
 import claude_state as S
+import claude_tail as T
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
-STREAM_ID = None
-END_REASON = "?"
 
 AGENT   = sys.argv[1]
 TPATH   = sys.argv[2]
@@ -736,20 +735,15 @@ def handle_line(s):
                     on_tool_use(blk)
 
 
-def main():
-    global STREAM_ID, END_REASON
+def main(run):
     start = time.time()
-    STREAM_ID = A.stream_start(LOG, "teammate" if PALETTE == "team" else "subagent",
-                               agent_id=AGENT, src_path=JSONL)
     # Wait for the transcript to appear.
-    while not os.path.exists(JSONL) and time.time() < start + 15:
-        time.sleep(0.2)
-    if not os.path.exists(JSONL):
+    if not T.wait_for(JSONL, start + 15):
         O.emit(LOG, O.rule(), O.label(f"■ {LABEL} (no transcript)", SUB_RGB), O.rule())
-        END_REASON = "transcript-never-appeared"
+        run.end("transcript-never-appeared")
         return
 
-    pos, pending = 0, b""
+    pos = 0
     # Resume from the previous streamer's checkpoint (idle-teammate restart) so
     # already-rendered history isn't replayed. Line 2 (optional JSON) is the
     # predecessor's last-counted usage record, restored so a message straddling
@@ -779,33 +773,21 @@ def main():
         resume["fresh"] = "unreadable checkpoint"
     A.state_file(LOG, STATE_KEY, "resume", resume)
 
+    tail = T.FileTailer(JSONL, pos=pos)
+    ckpt = {"pos": -1}
+
     def pump():
-        nonlocal pos, pending
-        try:
-            size = os.path.getsize(JSONL)
-        except OSError:
-            return
-        if size > pos:
-            try:
-                # Read exactly size-pos bytes: an unbounded read() can grab bytes
-                # appended DURING the read, which `pos = size` would then not account
-                # for — the next pump would re-read and duplicate them.
-                with open(JSONL, "rb") as fh:
-                    fh.seek(pos)
-                    chunk = fh.read(size - pos)
-                    pending += chunk; pos += len(chunk)
-            except OSError:
-                return
-            *lines, pending2 = pending.split(b"\n")
-            pending = pending2
-            for ln in lines:
-                s = ln.decode("utf-8", "replace").strip()
-                if s:
-                    handle_line(s)
-            # Checkpoint only what was fully consumed — a trailing partial line
-            # stays uncounted so a successor re-reads it whole. The last-counted
-            # usage record rides along for the successor's dedup.
-            S.agent_set(LOG, AGENT, pos=pos - len(pending))
+        lines = tail.pump()
+        for ln in (lines or ()):
+            s = ln.decode("utf-8", "replace").strip()
+            if s:
+                handle_line(s)
+        # Checkpoint only what was fully consumed — a trailing partial line
+        # stays uncounted so a successor re-reads it whole. The last-counted
+        # usage record rides along for the successor's dedup.
+        if tail.consumed != ckpt["pos"]:
+            ckpt["pos"] = tail.consumed
+            S.agent_set(LOG, AGENT, pos=tail.consumed)
             if usage_last:
                 S.kv_set(LOG, USAGE_KEY, usage_last)
 
@@ -817,16 +799,16 @@ def main():
     while True:
         pump()
         if S.agent_get(LOG, AGENT).get("done"):
-            END_REASON = "stop-sentinel"
+            run.end("stop-sentinel")
             break
         if cancelled_by_user():
             cancelled = True
-            END_REASON = "stoppedByUser (manual cancel)"
+            run.end("stoppedByUser (manual cancel)")
             break
-        if time.time() - start > 6 * 3600:
-            END_REASON = "backstop-timeout"
+        if time.time() - start > T.BACKSTOP_S:
+            run.end("backstop-timeout")
             break
-        time.sleep(0.3)
+        time.sleep(T.POLL_S)
 
     # Final drain — let the last lines land, then read them.
     time.sleep(0.3)
@@ -862,7 +844,7 @@ def main():
     # consumed and last counted. A successor whose 'resume' row disagrees with this
     # 'final' row is the handoff bug the persisted usage_last exists to prevent.
     A.state_file(LOG, STATE_KEY, "final",
-                 {"agent": AGENT, "pos": pos - len(pending), "usage_last": usage_last,
+                 {"agent": AGENT, "pos": tail.consumed, "usage_last": usage_last,
                   "in": tot_in, "out": tot_out, "cache": tot_cache, "create": tot_create})
     # Feed this agent's metered spend into the session scoreboard (the main session's
     # own spend is folded in separately by claude_ops.bump_transcript, called from the
@@ -902,11 +884,11 @@ def cleanup():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        END_REASON = "crash"
-        A.error(LOG, "main", {"agent": AGENT, "type": ATYPE})
-    finally:
-        cleanup()
-        A.stream_end(STREAM_ID, END_REASON, tool_n)
+    with T.stream_lifecycle(LOG, "teammate" if PALETTE == "team" else "subagent",
+                            agent_id=AGENT, src_path=JSONL,
+                            ctx={"agent": AGENT, "type": ATYPE}) as run:
+        def _finalize():
+            run.lines = tool_n          # tools seen — recorded even on a crash
+            cleanup()
+        run.on_exit = _finalize
+        main(run)
