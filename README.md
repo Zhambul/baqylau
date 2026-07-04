@@ -59,6 +59,14 @@ The main session still goes blue while it *awaits* an agent (see below).
 - **`stop`** — `awaiting-response` (green) normally, but `awaiting-bg`
   (**blue** — the main session is awaiting that job, not you) if a background command /
   monitor / **agent** this session launched is still running.
+- **`agent-start`** (fired by `claude-subagent-fmt.py` on `SubagentStart`) — a
+  background teammate began a task, so the main session is awaiting it →
+  `awaiting-bg` (blue), even if the lead's turn had already ended green (a
+  teammate starting *between* the lead's turns would otherwise leave a stale
+  green while the team works). **Exception: red wins.** If the tab is
+  `awaiting-command`, Claude is blocked on *your* answer (permission prompt /
+  AskUserQuestion) and the teammate's start must not erase that one visual cue —
+  the dispatch bails (audited), same as `notify`'s red-wins rule.
 - **`notify`** — reads the Notification message: a permission/approval prompt →
   `awaiting-command` (red — Claude is asking you); anything else → green.
 

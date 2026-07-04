@@ -60,18 +60,29 @@ the bug **from evidence, not guesswork**.
 - **Tab stuck magenta** — last transition is thinking/working and no later Stop:
   check `hook_events` for a missing Stop (cancelled turn — no hook fires), the
   `interrupt-watch` **stream row's end_reason** (`no-interrupt-within-30m` vs
-  `killed-or-crashed` vs a bailed flip), and whether the final apply carried a
-  "kitten @ failed" reason.
+  `killed-or-crashed` vs `turn-over` vs a bailed/deferred flip —
+  `interrupt-seen-deferred-to-bg-recheck` means it saw the cancel on blue and
+  handed recovery to writer-liveness; the watcher now spans the WHOLE turn, so a
+  `turn-over` exit *before* the stuck stretch means it was killed or never
+  respawned, not that it legitimately stopped at the first tool call), and
+  whether the final apply carried a "kitten @ failed" reason.
 - **Tab flips green too early** — a `bg-recheck`/`bg-watch`/`notify` transition with
   `applied=1` while a `streams` row was still open; the reason column shows what it
   (wrongly) concluded.
 - **Tab shows a colour the audit says it shouldn't** — trust `applied=1` rows only:
-  any transition with "kitten @ failed rc=N" in the reason means the script decided a
-  colour but kitty never showed it (dead socket, closed tab), and the persisted state
-  (the `tab` row in the global /tmp/claude-kitty-tab.db, keyed by window id) may now
-  disagree with the real tab — `sqlite3 /tmp/claude-kitty-tab.db "SELECT * FROM tab"`
-  shows what the tracker THINKS is displayed; its `watchers` table holds the
-  bg-watch/interrupt-watch pid locks.
+  any transition with "kitten @ failed rc=N … state row unchanged" in the reason
+  means the script decided a colour but kitty never showed it (dead socket, closed
+  tab). The persisted state (the `tab` row in the global /tmp/claude-kitty-tab.db,
+  keyed by window id) is written **only on applied paints**, so it always matches
+  what the tab really shows and the next same-state event retries the paint —
+  `sqlite3 /tmp/claude-kitty-tab.db "SELECT * FROM tab"` shows what's displayed;
+  its `watchers` table holds the bg-watch/interrupt-watch pid locks. (A repeated
+  "kitten @ failed" run followed by a "skipped: colour already shown" for the SAME
+  state would mean the persist-on-failure bug regressed.)
+- **Tab lost its red while a team ran** — look for an `agent-start` transition:
+  `applied=0` + "red (awaiting-command) wins" is the guard working; an `applied=1`
+  `agent-start` → awaiting-bg row while the previous state was awaiting-command
+  means the red-wins guard regressed.
 - **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
   `state_files` shows whether the outcome hand-off (`state:done:<token>`) / the agent
