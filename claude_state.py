@@ -484,18 +484,29 @@ def hand_peek(log, key):
         return None
 
 
-def hand_take(log, key):
+def hand_take(log, key, match=None):
     """Atomically consume a hand-off record: returns the object and deletes it, or
-    None if absent — the take-once the old poll/read/remove sentinel dance meant."""
+    None if absent — the take-once the old poll/read/remove sentinel dance meant.
+    With `match` ({field: value, ...}) the record is consumed ONLY if every given
+    field equals the record's value; a mismatch leaves the record in place and
+    returns None. A record MISSING a matched field still matches (records written
+    by an older producer). This is what keys the fg-live hand-off to its own tool
+    call: without it, a cancelled command's surviving record was consumed by the
+    NEXT Bash call's PostToolUse, cross-wiring the two commands' outcomes."""
     conn = connect(log)
     if conn is None:
         return None
     try:
         with immediate(conn):
             row = conn.execute("SELECT val FROM handoffs WHERE key=?", (key,)).fetchone()
+            obj = json.loads(row[0]) if row else None
+            if obj is not None and match:
+                for f, v in match.items():
+                    if f in obj and obj[f] != v:
+                        return None            # someone else's record — leave it
             if row:
                 conn.execute("DELETE FROM handoffs WHERE key=?", (key,))
-        return json.loads(row[0]) if row else None
+        return obj
     except Exception:
         return None
 

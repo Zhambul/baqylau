@@ -41,26 +41,50 @@ def parse_redirect(cmd, cwd):
     points the background tailer at it (the task's own output file stays empty
     when the bytes go to the redirect). Conservative: only stdout (or &>)
     redirects, skip /dev/* and fd-dup targets (&1), give up on anything we can't
-    tokenise. Last redirect wins (the effective stdout sink)."""
+    tokenise. Last redirect wins (the effective stdout sink).
+
+    Tokenised with posix=False so QUOTES SURVIVE: posix mode stripped them, which
+    made `grep '>' file` indistinguishable from `grep > file` — the fg tailer then
+    streamed the whole existing file into the mirror as "command output". A token
+    starting with a quote is a literal argument, never a redirect. Heredocs bail
+    entirely (their BODY lines tokenise like real redirects and last-wins picked
+    those), as do `>|` clobbers and `>(…)` process substitution — None just means
+    the caller falls back to its own tee side file, which is always safe."""
     try:
-        toks = shlex.split(cmd, posix=True)
+        toks = shlex.split(cmd, posix=False)
     except ValueError:
+        return None
+    if any(t.startswith("<<") for t in toks):
         return None
     target, append, i = None, False, 0
     while i < len(toks):
         t = toks[i]
+        if t[:1] in ("'", '"'):
+            i += 1
+            continue                    # quoted word: a literal arg, not a redirect
         if ">" in t and not t.startswith("2"):
             m = re.match(r"^(?:&|1)?(>>?)(.*)$", t)
             if m:
                 rest = m.group(2)
+                if rest.startswith("|") or rest.startswith("("):
+                    return None         # >| clobber / >(process substitution)
                 if rest:
                     target, append = rest, m.group(1) == ">>"
                 elif i + 1 < len(toks):
-                    target, append = toks[i + 1], m.group(1) == ">>"
+                    nxt = toks[i + 1]
+                    if ">" in nxt or nxt.startswith("("):
+                        return None     # `> >(tee …)` and friends
+                    target, append = nxt, m.group(1) == ">>"
                     i += 1
         i += 1
     if not target or target.startswith("&") or target.startswith("/dev/"):
         return None
+    # A quoted target is unwrapped before the metachar guard below (the quotes are
+    # shell syntax, not part of the filename).
+    if len(target) >= 2 and target[0] in ("'", '"') and target[-1] == target[0]:
+        target = target[1:-1]
+        if not target:
+            return None
     # shlex does NO shell expansion: a target holding $vars, backticks, globs, or a
     # leading ~ is not the path the shell will actually write to (`> "$OUT"` would
     # have us tail a literal file named $OUT). Fall back to the caller's side file.

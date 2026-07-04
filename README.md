@@ -403,7 +403,10 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   Bash) makes a normal foreground command stream live instead of only appearing
   once it completes. It rewrites the command via `PreToolUse`'s `updatedInput`
   (undocumented but confirmed working) to also `tee` its stdout/stderr into a side
-  file — `{ <cmd>; } > >(tee -a "$F") 2> >(tee -a "$F" >&2)`, or the command's own
+  file — `{ <cmd>\n\n} > >(tee -a "$F") 2> >(tee -a "$F" >&2)` (the blank line
+  before `}` is load-bearing: a command ending in a line-continuation backslash
+  eats the first newline, which used to weld the `}` onto the last line — a
+  syntax error for a command that ran fine unwrapped), or the command's own
   redirect target if it already has one — emits the `▶ foreground` header
   immediately, claims an `fg.<n>` slot (so the tab tracker sees it, above), and
   spawns `claude-stream.py fg` to tail `$F` the same way a background job is
@@ -449,6 +452,30 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `claude_slots` uses for stale slots) before treating an existing claim as
     genuinely in-flight — a dead pid means abandoned, so it's cleared and the next
     command streams normally.
+  - **The `fg-live` record is keyed to its tool call** (`tid` = the payload's
+    `tool_use_id`), and `claude-cmd-fmt.py` consumes it with a *matched* take
+    (`hand_take(..., match={"tid": …})`). Without the key, a cancelled command's
+    surviving record (its tailer still alive in the writer-gone grace window) was
+    consumed by the **next** Bash call's `PostToolUse`, which then wrote its own
+    chip and fallback body into the cancelled command's block while itself never
+    rendering — two commands cross-wired. A mismatched take leaves the record in
+    place and returns None; the exiting `fg` tailer also reclaims **its own**
+    record (matched on pid) so a cancelled command's record doesn't linger.
+  - **Redirect detection is quote-aware** (`claude_ops.parse_redirect`,
+    `posix=False` tokens): posix tokenising stripped quotes, so `grep '>' file`
+    parsed as a *redirect to `file`* — cmd-pre then skipped the tee rewrite and
+    the tailer streamed the whole existing file into the mirror as "command
+    output" (tail-from-0 is only correct when a real `>` truncates). Heredocs,
+    `>|` clobbers, and `>(…)` process substitution all return None (the body of a
+    heredoc tokenises like real redirects and last-wins picked those) — None just
+    means falling back to the tee side file, which is always safe.
+  - **The rewrite auto-approves deliberately.** `updatedInput` only takes effect
+    with `permissionDecision: "allow"` (auto-approve) or `"ask"` — and `"ask"`
+    prompts on *every* rewritten command, even ones your allowlist would pass
+    silently (there is no "rewrite, then normal permission rules" option in
+    Claude Code today). `"allow"` is the chosen trade-off: rewritten foreground
+    commands never permission-prompt (deny rules still apply). This is a
+    documented, deliberate decision — not a bug to fix.
   - Escape hatch: `CLAUDE_MIRROR_LIVE_FG=0` disables the command rewrite entirely
     if it ever misbehaves on some pathological command's quoting.
 - **`claude-monitor-fmt.py`** (the `PostToolUse` hook

@@ -85,7 +85,11 @@ def main():
             return
         own = True
         q = shlex.quote(src)
-        wrapped_cmd = "{ " + cmd + "\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+        # The blank line before "}" is load-bearing: a command ENDING in a
+        # line-continuation backslash consumes the first newline, which used to
+        # weld the closing "}" onto the last line — a syntax error for a command
+        # that ran fine unwrapped. The extra newline gives it one to eat.
+        wrapped_cmd = "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
 
     if not os.path.exists(H.script("claude-stream.py")):
         if own:
@@ -120,7 +124,11 @@ def main():
         return
     claude_slots.set_owner(slot_marker, proc.pid)
 
-    rec = {"src": src, "own": own, "pid": proc.pid, "done": done}
+    # "tid" keys this record to THIS tool call: PostToolUse consumes it only on a
+    # matching tool_use_id, so a cancelled command's surviving record can't be
+    # eaten by the next command's Post (which cross-wired the two blocks).
+    rec = {"src": src, "own": own, "pid": proc.pid, "done": done,
+           "tid": d.get("tool_use_id") or ""}
     if S.hand_put(log, "fg-live", rec):
         A.state_file(log, "state:fg-live", "write", rec)
     else:
@@ -133,6 +141,13 @@ def main():
                     else "tailing command's own redirect"))
 
     if wrapped_cmd:
+        # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):
+        # updatedInput only takes effect with "allow" (auto-approve) or "ask"
+        # (prompt on EVERY rewritten command, even allowlisted ones — there is no
+        # "rewrite, then fall through to normal permission rules" option). "ask"
+        # is unusably noisy, so rewritten foreground commands never
+        # permission-prompt; deny rules still apply. See README § Live foreground
+        # streaming.
         new_ti = dict(ti); new_ti["command"] = wrapped_cmd
         print(json.dumps({"hookSpecificOutput": {
             "hookEventName": "PreToolUse",

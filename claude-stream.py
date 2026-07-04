@@ -307,6 +307,16 @@ def main(run):
         except Exception:
             pass
 
+    if KIND == "fg":
+        # Remove our own fg-live record (matched on our pid so a NEWER command's
+        # record is never touched). Normally PostToolUse consumes it — but a
+        # cancelled command fires no hook at all, and the surviving record made
+        # the next command's Pre think a live fg block was still in flight (no
+        # live-streaming) until it noticed the dead pid.
+        if S.hand_take(LOG, "fg-live", match={"pid": os.getpid()}) is not None:
+            A.state_file(LOG, "state:fg-live", "remove-own",
+                         "fg tailer exiting — reclaimed its own record")
+
     # Release this job's slot marker BEFORE the recheck below — bg_command_running
     # now detects running jobs via live slot markers, so the recheck must not see
     # this (now-finished) tailer's own marker, or it would refuse to clear the red.

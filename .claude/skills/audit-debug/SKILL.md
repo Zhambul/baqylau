@@ -83,6 +83,17 @@ the bug **from evidence, not guesswork**.
   `applied=0` + "red (awaiting-command) wins" is the guard working; an `applied=1`
   `agent-start` → awaiting-bg row while the previous state was awaiting-command
   means the red-wins guard regressed.
+- **fg block shows the wrong outcome / a command never rendered** — the `fg-live`
+  hand-off is keyed to its tool call (`tid`) and consumed with a matched take;
+  check `state_files` `state:fg-live` rows: `write` (with `tid`) → `remove`
+  (consumed by that same call's Post) is healthy; a cancelled command's record
+  ends in `remove-own` (its exiting tailer reclaimed it) or `remove-stale` (next
+  Pre found the pid dead). A `remove` whose consuming hook_event belongs to a
+  *different* command means the tid keying regressed (the cross-wire bug).
+- **Mirror replays a whole existing file as command output** — parse_redirect
+  misread an argument as a redirect: check the cmd-pre `hook_events` decision
+  ("tailing command's own redirect" for a command with a quoted `>`/heredoc means
+  the quote-aware tokenizer regressed; correct behavior is "rewrote command (tee)").
 - **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
   `state_files` shows whether the outcome hand-off (`state:done:<token>`) / the agent

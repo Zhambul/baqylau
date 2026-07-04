@@ -77,7 +77,13 @@ def main():
     # consumed atomically up front (state-DB handoff, key "fg-live" — was a .fg-live
     # JSON file read+removed in two racy steps) since the genuine/converted-background
     # path below and the ordinary finish path further down both need to know about it.
-    live = S.hand_take(LOG, "fg-live")
+    # match=tid: consume ONLY this tool call's record. A cancelled command fires no
+    # hook, so its fg-live record survives (tailer still alive in its grace window) —
+    # an unconditional take here let the NEXT Bash call's Post eat it and write its
+    # own outcome into the cancelled command's block while itself never rendering.
+    # A mismatched record is left alone: its tailer finishes via writer-liveness and
+    # removes it itself, and this call just renders normally (live=None).
+    live = S.hand_take(LOG, "fg-live", match={"tid": d.get("tool_use_id") or ""})
     if live:
         A.state_file(LOG, "state:fg-live", "remove", live)
     # Hand-off key for giving the outcome to the fg tailer: the session-keyed token
