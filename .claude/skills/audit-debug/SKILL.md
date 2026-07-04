@@ -127,7 +127,11 @@ the bug **from evidence, not guesswork**.
   (usage summed per JSONL *line*, but one message = one line per content block):
   `bump_transcript()` *(fixed, `message.id` dedup + `txlast`)* and the agent
   streamers' footer rollup in `claude-substream.py` *(fixed 2026-07-04, `usage_last`
-  + checkpoint line 2 — was ×2.24 on multi-block agents)*. For a suspected handoff
+  + checkpoint line 2 — was ×2.24 on multi-block agents)*. Both now share ONE fold,
+  `claude_ops.usage_fold()` (carry record `{"id","f":[in,out,cache,create]}` —
+  `txlast`/`usage_last` both persist this shape; a `{"id","tok","usd"}` record is
+  the pre-refactor shape, converted once by a compat branch), so a recurrence means
+  either the shared fold itself or a producer bypassing it. For a suspected handoff
   double-count, diff the streamer's `resume` row against its predecessor's `final`
   row (path `sub.pos.<agent>`). The `anomalies` command flags any token/cost delta
   arriving as plain `bump` (unattributed producer) on a current build.

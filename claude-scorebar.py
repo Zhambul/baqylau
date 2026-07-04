@@ -32,6 +32,7 @@ import json, os, re, shutil, signal, subprocess, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_render as R
 import claude_ops as O
+import claude_paths as P
 import claude_state as St
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
@@ -145,12 +146,9 @@ def _tab_green(win):
 
 
 def session_id():
-    """The session id this scorebar belongs to, parsed from the mirror log filename
-    (/tmp/claude-mirror-<session_id>.log). Falls back to the raw basename."""
-    b = os.path.basename(LOG)
-    if b.startswith("claude-mirror-") and b.endswith(".log"):
-        return b[len("claude-mirror-"):-len(".log")]
-    return b
+    """The session id this scorebar belongs to, parsed from the mirror log path
+    (/tmp/claude-mirror-<session_id>.log). Falls back to the raw path."""
+    return P.sid_from_log(LOG)
 
 
 

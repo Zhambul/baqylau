@@ -30,7 +30,7 @@
 # even got wrapped to write SRC) it falls back to a generic chip after a grace
 # period — and if SRC ended up empty, to the real output PostToolUse hands it in
 # that same sentinel, so a failed rewrite never means silently losing the output.
-import errno, glob, json, os, re, subprocess, sys, time
+import glob, json, os, re, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
@@ -143,11 +143,7 @@ def has_writer(path):
     return False
 
 
-def alive(pid):
-    try:
-        os.kill(pid, 0); return True
-    except OSError as e:
-        return e.errno == errno.EPERM           # exists but owned by another user
+alive = S.pid_alive                             # EPERM (foreign-owned) counts as alive
 
 
 def find_proc(sig):

@@ -36,6 +36,9 @@
 #                                         write entry points for the shell scripts
 import json, os, re, sys, time, traceback
 
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_paths as P    # the one owner of the mirror-log path format
+
 _CONN = None            # cached per-process connection (streamers are long-lived)
 _FAILED = False         # sqlite gave up this process -> spool only, don't retry each call
 
@@ -222,9 +225,8 @@ def _script():
 
 def sid_from_log(log):
     """Recover the session id from a mirror-log path (/tmp/claude-mirror-<sid>.log —
-    or its .slots dir). Returns the key verbatim (the cwd-slug fallback included)."""
-    m = re.match(r".*/claude-mirror-(.+?)\.log", log or "")
-    return m.group(1) if m else (log or "")
+    or any derived path). Returns the key verbatim (the cwd-slug fallback included)."""
+    return P.sid_from_log(log)
 
 
 def sid_of(d):
@@ -379,7 +381,7 @@ def session_start(d):
     cols = dict(session_id=sid, cwd=d.get("cwd") or os.getcwd(),
                 project_slug=os.path.basename((d.get("cwd") or os.getcwd()).rstrip("/")),
                 transcript_path=d.get("transcript_path") or "",
-                mirror_log="/tmp/claude-mirror-" + re.sub(r"[^A-Za-z0-9._-]", "-", sid) + ".log",
+                mirror_log=P.mirror_log(sid),
                 kitty_window_id=os.environ.get("KITTY_WINDOW_ID") or "",
                 started_at=time.time(), env=json.dumps(envkeys, ensure_ascii=False))
     if conn is None:

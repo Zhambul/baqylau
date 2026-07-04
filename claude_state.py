@@ -38,6 +38,8 @@
 # break a hook or a streamer. Callers audit their own transitions.
 import errno, json, os, sqlite3, time
 
+import claude_paths as P
+
 _CONNS = {}                     # path -> connection (streamers are long-lived)
 
 _SCHEMA = """
@@ -60,7 +62,21 @@ CREATE TABLE IF NOT EXISTS live(
 
 
 def db_path(log):
-    return log + ".state.db"
+    return P.state_db(log)
+
+
+def pid_alive(pid):
+    """The ONE pid-liveness probe (slot rows, claims, fg-live hand-offs, watcher
+    locks all trust it). EPERM means the pid EXISTS but is owned by another user —
+    that is alive; treating it as dead falsely reaps live foreign-owned streamers.
+    Tolerates None / non-numeric pids from DB rows (-> dead)."""
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except OSError as e:
+        return e.errno == errno.EPERM
+    except (TypeError, ValueError):
+        return False
 
 
 def _connect(path):
@@ -440,12 +456,7 @@ def hand_del(log, key):
 
 # --- pid-liveness claims (was O_EXCL pid files: codex mirror-claims + watch lock) ----
 
-def _alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError as e:
-        return e.errno == errno.EPERM
+_alive = pid_alive                  # historical internal name
 
 
 def claim(db, key, pid=None):

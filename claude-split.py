@@ -41,6 +41,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import claude_audit as A   # noqa: E402
 import claude_ops as O     # noqa: E402
+import claude_paths as P   # noqa: E402
 
 # Keymap-launched background processes can inherit a minimal PATH; guarantee the
 # tools we shell out to (kitten, ps) resolve.
@@ -242,10 +243,7 @@ SIZE_DIR = os.path.join(CONFIG_DIR, "kitty-mirror-sizes")   # legacy, imported+r
 
 
 def proj_slug():
-    try:
-        return re.sub(r"[/.]", "-", os.path.realpath(os.getcwd()))
-    except OSError:
-        return ""
+    return P.cwd_slug()
 
 
 def size_put(project, pct):

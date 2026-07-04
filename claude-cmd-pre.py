@@ -94,18 +94,8 @@ def main():
         # claude_slots does for slots: a dead pid means it's stale, so clear it and
         # proceed as if there were none. (The record lives in the per-session state
         # DB — claude_state handoffs, key "fg-live" — was a .fg-live JSON file.)
-        stale = True
-        try:
-            pid = held.get("pid")
-            if pid:
-                os.kill(pid, 0)
-            stale = False
-        except ProcessLookupError:
-            stale = True
-        except PermissionError:
-            stale = False                           # exists, owned by someone else -> still alive
-        except Exception:
-            stale = True                            # no pid recorded -> can't confirm, assume stale
+        pid = held.get("pid") if isinstance(held, dict) else None
+        stale = not (pid and S.pid_alive(pid))      # no pid recorded -> can't confirm, assume stale
         if not stale:
             A.hook_event(d, decision="ignored: a live fg block is already in flight")
             return                                  # a live fg block is genuinely still in flight

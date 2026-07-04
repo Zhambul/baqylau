@@ -15,7 +15,7 @@
 # queries it (sqlite3 CLI) for pids of live tailers — kinds bg/monitor/fg (numeric
 # palette slots, key = the slot index) and sub.pid (a substream tailer, key = the
 # agent_id). Colour-mapping rows (kind sub.id, no pid) are NOT liveness rows.
-import errno, os, sys, time
+import os, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_state as St
@@ -73,12 +73,7 @@ def color(kind, idx):
     return p[idx % len(p)]
 
 
-def _alive(pid):
-    try:
-        os.kill(pid, 0)
-        return True
-    except OSError as e:
-        return e.errno == errno.EPERM
+_alive = St.pid_alive               # one canonical liveness probe (EPERM = alive)
 
 
 def _token(log, kind, idx):

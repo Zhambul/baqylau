@@ -30,6 +30,7 @@ except Exception:                       # audit must never break a producer
         def __getattr__(self, _):
             return lambda *a, **k: None
     A = _NoAudit()
+import claude_paths as P                # the one owner of the mirror-log path format
 import claude_state as S                # per-session runtime state (SQLite, /tmp)
 
 
@@ -119,12 +120,7 @@ def log_path(d):
     payload somehow lacks session_id. claude-split.py derives the SAME path (from
     the SessionStart payload's session_id, and from the focused pane's
     claude_session var) so the renderer tails exactly what the producers write."""
-    sid = (d.get("session_id") or "").strip()
-    if sid:
-        key = re.sub(r"[^A-Za-z0-9._-]", "-", sid)
-    else:
-        key = re.sub(r"[/.]", "-", d.get("cwd") or os.getcwd())
-    return "/tmp/claude-mirror-" + key + ".log"
+    return P.mirror_log(d.get("session_id"), d.get("cwd"))
 
 
 def claude_dirs(start=None):
@@ -279,6 +275,38 @@ def cost_usd(model, tot_in, tot_out, tot_cache=0, tot_create=0):
     return None
 
 
+def usage_fields(u):
+    """(fin, out, cache_read, cache_create) ints from an assistant message's usage
+    dict — fin is the fresh billed input (input + cache_creation), the argument
+    order cost_usd takes."""
+    create = int(u.get("cache_creation_input_tokens") or 0)
+    fin = int(u.get("input_tokens") or 0) + create
+    out = int(u.get("output_tokens") or 0)
+    cr = int(u.get("cache_read_input_tokens") or 0)
+    return fin, out, cr, create
+
+
+def usage_fold(mid, fields, prev):
+    """THE per-message.id dedup fold (the ~2.2x scoreboard-inflation fix): one
+    assistant MESSAGE is written as one transcript line PER CONTENT BLOCK, each line
+    repeating that message's usage with output_tokens a growing snapshot — so usage
+    counts once per message id, and later lines of the SAME id add only the
+    (clamped non-negative) per-field delta. Both accountants — bump_transcript here
+    (main session) and claude-substream.py (agents) — must share this one
+    implementation; they drifted apart once and the fix had to be made twice.
+
+    `fields` is usage_fields(); `prev` is the carried record {"id", "f": [4 ints]}
+    (or None). Returns (delta_fields, new_prev). Since cost_usd is linear, pricing
+    the deltas equals the full-minus-previous cost, so callers price delta_fields
+    directly."""
+    if prev and mid and prev.get("id") == mid:
+        pf = prev.get("f") or [0, 0, 0, 0]
+        deltas = tuple(max(v - int(p or 0), 0) for v, p in zip(fields, pf))
+    else:
+        deltas = fields
+    return deltas, ({"id": mid, "f": list(fields)} if mid else prev)
+
+
 def fmt_usd(c):
     """Compact dollar string: '<$0.01' / '$0.42' / '$12' / '$1.2k'. '' for None."""
     if c is None:
@@ -415,26 +443,26 @@ def bump_transcript(log, transcript):
             u = m.get("usage") if isinstance(m, dict) else None
             if not isinstance(u, dict):
                 continue
-            create = int(u.get("cache_creation_input_tokens") or 0)
-            fin = int(u.get("input_tokens") or 0) + create
-            out = int(u.get("output_tokens") or 0)
-            cr = int(u.get("cache_read_input_tokens") or 0)
+            fields = usage_fields(u)
             mid = m.get("id")
             if not mid:                     # no id to dedup on — count the line as-is
-                tok += fin + out
-                usd += cost_usd(m.get("model"), fin, out, cr, create) or 0.0
+                tok += fields[0] + fields[1]
+                usd += cost_usd(m.get("model"), *fields) or 0.0
                 continue
-            rows[mid] = (m.get("model"), fin, out, cr, create)
-        for mid, (model, fin, out, cr, create) in rows.items():
-            full_t = fin + out
-            full_c = cost_usd(model, fin, out, cr, create) or 0.0
-            d_t, d_c = full_t, full_c
-            if prev and mid == prev.get("id"):  # tail of a message counted last call
-                d_t -= int(prev.get("tok") or 0)
-                d_c -= float(prev.get("usd") or 0.0)
-            tok += max(d_t, 0)
-            usd += max(d_c, 0.0)
-            prev = {"id": mid, "tok": full_t, "usd": full_c}
+            rows[mid] = (m.get("model"), fields)
+        for mid, (model, fields) in rows.items():
+            if prev and mid == prev.get("id") and "f" not in prev:
+                # txlast persisted by a pre-usage_fold build ({"id","tok","usd"}):
+                # delta the whole-message totals once, then re-persist as {"id","f"}.
+                d_t = (fields[0] + fields[1]) - int(prev.get("tok") or 0)
+                d_c = (cost_usd(model, *fields) or 0.0) - float(prev.get("usd") or 0.0)
+                tok += max(d_t, 0)
+                usd += max(d_c, 0.0)
+                prev = {"id": mid, "f": list(fields)}
+                continue
+            d, prev = usage_fold(mid, fields, prev)
+            tok += d[0] + d[1]
+            usd += cost_usd(model, *d) or 0.0
         if tok:
             _add("tokens", tok)
         if usd:
@@ -555,7 +583,7 @@ def team_dir(log):
     """The agent-team directory for a mirror log, or None if this isn't a team
     session. The log is /tmp/claude-mirror-<session_id>.log; the team dir is
     ~/.claude/teams/session-<first-8-of-session-id> (see the config.json `name`)."""
-    m = re.match(r".*/claude-mirror-([0-9a-fA-F]{8})-", log or "")
+    m = re.match(r"([0-9a-fA-F]{8})-", P.sid_from_log(log))
     if not m:
         return None
     d = os.path.expanduser("~/.claude/teams/session-" + m.group(1).lower())

@@ -54,6 +54,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SELF = os.path.join(HERE, os.path.basename(__file__))
 sys.path.insert(0, HERE)
 import claude_audit as A  # noqa: E402  (in-process; every write swallows + spools)
+import claude_paths as P  # noqa: E402  (the one owner of the mirror-log path format)
+import claude_state as St  # noqa: E402  (pid_alive only — DB reads stay mode=ro via sq())
 
 WIN = os.environ.get("KITTY_WINDOW_ID", "")
 
@@ -125,34 +127,27 @@ def bg_command_running():
     resolved per dispatch from the session_id (stop payload) or passed in
     (bg-watch/bg-recheck); it falls back to the cwd slug to stay correct if a
     session_id is ever unavailable."""
-    db = MLOG + ".state.db" if MLOG else ""
-    if not db:
-        try:
-            slug = re.sub(r"[/.]", "-", os.path.realpath(os.getcwd()))
-        except Exception:
-            slug = ""
-        if slug:
-            db = f"/tmp/claude-mirror-{slug}.log.state.db"
-    if not db:
+    log = MLOG
+    if not log and P.cwd_slug():
+        log = P.mirror_log()                # cwd-slug fallback, same as claude_ops
+    if not log:
         return False
-    for pid in sq(db, "SELECT pid FROM live WHERE pid IS NOT NULL "
-                      "AND kind IN ('bg','monitor','fg','sub.pid')"):
-        try:
-            os.kill(int(pid), 0)
+    for pid in sq(P.state_db(log), "SELECT pid FROM live WHERE pid IS NOT NULL "
+                                   "AND kind IN ('bg','monitor','fg','sub.pid')"):
+        if _alive(pid):
             return True                     # a live tailer -> a job/agent is running
-        except (OSError, TypeError, ValueError):
-            continue
     return False
 
 
 def log_for_sid(sid):
-    """Mirror-log KEY for a given session key (sanitised session_id), matching
-    claude_ops.log_path so it points at exactly the state DB the tailers write."""
-    return f"/tmp/claude-mirror-{sid}.log"
+    """Mirror-log KEY for a given session key (an ALREADY-sanitised session_id or
+    cwd slug — appended verbatim), matching claude_ops.log_path so it points at
+    exactly the state DB the tailers write."""
+    return P.PREFIX + sid + ".log"
 
 
 def sid_from_key(key):  # /tmp/claude-mirror-<sid>.log -> <sid>
-    return re.sub(r".*/claude-mirror-(.*)\.log$", r"\1", key or "")
+    return P.sid_from_log(key)
 
 
 # --- global tab DB -------------------------------------------------------------
@@ -210,12 +205,7 @@ def watcher_del(kind, win):
     tw("DELETE FROM watchers WHERE kind=? AND win=?", (kind, win))
 
 
-def _alive(pid):
-    try:
-        os.kill(int(pid), 0)
-        return True
-    except (OSError, TypeError, ValueError):
-        return False
+_alive = St.pid_alive               # canonical probe: EPERM (foreign-owned) = alive
 
 
 def _spawn_watcher(kind, args):

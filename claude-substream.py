@@ -15,7 +15,7 @@
 # footer, then releases the slot. A subagent's BACKGROUND command / monitor is
 # streamed by claude-stream.py with a DOUBLE gutter (outer = this subagent's
 # colour, inner = the job's own palette slot) so nested parallel jobs stay distinct.
-import errno, glob, json, os, re, subprocess, sys, time
+import glob, json, os, re, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
@@ -453,11 +453,7 @@ def input_summary(inp):
     return "\n".join(lines)
 
 
-def alive(pid):
-    try:
-        os.kill(pid, 0); return True
-    except OSError as e:
-        return e.errno == errno.EPERM
+alive = S.pid_alive                 # EPERM (foreign-owned) counts as alive
 
 
 def spawn_tailer(kind, taskid, cmd=""):
@@ -517,7 +513,7 @@ tot_out = 0
 tot_cache = 0
 tot_create = 0
 tool_n = 0
-usage_last = None         # {"id", "in", "out", "cache", "create"} of the last counted message
+usage_last = None         # O.usage_fold carry record {"id", "f"} of the last counted message
 
 
 def flush_msg(is_result=False):
@@ -724,25 +720,10 @@ def handle_line(s):
             last_usage = u
             last_model = msg.get("model") or last_model
             # Accumulate for the ended-footer rollup — once per message.id, deltas
-            # only for repeat lines of the same message (see usage_last above).
-            create = int(u.get("cache_creation_input_tokens") or 0)
-            fin = int(u.get("input_tokens") or 0) + create
-            out = int(u.get("output_tokens") or 0)
-            cr = int(u.get("cache_read_input_tokens") or 0)
-            mid = msg.get("id")
-            prev = usage_last if (mid and usage_last and usage_last.get("id") == mid) else None
-            if prev:
-                tot_in += max(fin - int(prev.get("in") or 0), 0)
-                tot_out += max(out - int(prev.get("out") or 0), 0)
-                tot_cache += max(cr - int(prev.get("cache") or 0), 0)
-                tot_create += max(create - int(prev.get("create") or 0), 0)
-            else:
-                tot_in += fin
-                tot_out += out
-                tot_cache += cr
-                tot_create += create
-            if mid:
-                usage_last = {"id": mid, "in": fin, "out": out, "cache": cr, "create": create}
+            # only for repeat lines of the same message (O.usage_fold, the shared
+            # dedup — see usage_last above).
+            d, usage_last = O.usage_fold(msg.get("id"), O.usage_fields(u), usage_last)
+            tot_in += d[0]; tot_out += d[1]; tot_cache += d[2]; tot_create += d[3]
         cur_tag = ctx_tag()
         turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
         if isinstance(content, list):
@@ -785,6 +766,9 @@ def main():
             pos = saved
             lu = S.kv_get(LOG, USAGE_KEY)
             if isinstance(lu, dict) and lu.get("id"):
+                if "f" not in lu:   # predecessor predates O.usage_fold's record shape
+                    lu = {"id": lu.get("id"),
+                          "f": [int(lu.get(k) or 0) for k in ("in", "out", "cache", "create")]}
                 usage_last = lu
             resume.update({"adopted_pos": pos, "usage_last": usage_last})
         elif saved:

@@ -50,11 +50,10 @@ def is_teammate(tpath, agent_id):
     return False
 
 
-def alive(pid):
-    try:
-        os.kill(pid, 0); return True
-    except OSError:
-        return False
+# The canonical probe treats EPERM (exists, foreign-owned) as ALIVE — the local
+# copy this replaces returned False there, which could misread a live streamer
+# as dead and fire the safety-net footer spuriously.
+alive = S.pid_alive
 
 
 def main():

@@ -762,7 +762,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   never collide: each mirror pane carries `var:claude_mirror=<sid>`, each Claude pane
   carries `var:claude_session=<sid>`, and each session's content is its own state
   DB at `/tmp/claude-mirror-<sid>.log.state.db` (the `.log` path is the KEY the
-  scripts pass around; no log file exists anymore). `open` (SessionStart) reads
+  scripts pass around; no log file exists anymore). The key format itself —
+  sanitizing a session id, the cwd-slug fallback, deriving/parsing the path — is
+  owned by ONE stdlib-only module, **`claude_paths.py`**; it used to be encoded in
+  four independently-maintained regexes (ops/audit/split/tab-status) that had
+  already drifted (audit captured the full sid where `team_dir` captured 8 hex
+  chars), and any two of them disagreeing silently breaks the audit join or the
+  fallback DB paths. `open` (SessionStart) reads
   the `session_id` from its hook payload, sets up that session's state DB (see
   *history across resume* below), tags the Claude pane, switches the
   tab to the `splits` layout, and launches the split at `${CLAUDE_MIRROR_BIAS:-25}`
