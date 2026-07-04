@@ -360,7 +360,7 @@ def state_file(log, path, action, content=""):
 
 def pane(session_id, action, ok, detail=""):
     """Record a mirror/scoreboard pane operation (open/close/toggle/resize) and
-    whether it verifiably succeeded — claude-split.sh's kitten calls were silent."""
+    whether it verifiably succeeded — claude-split.py's kitten calls were silent."""
     event("pane_events", session_id=session_id or "", action=action,
           ok=1 if ok else 0, detail=detail or "", pid=os.getpid())
 
@@ -592,6 +592,15 @@ def cli_anomalies(sid):
     # split in meta). A plain 'bump' carrying a tokens/cost delta means some
     # producer bypassed the attribution — the scoreboard number it fed can only be
     # traced by timestamp correlation, which is the gap bump-agent closed.
+    # A --resume/--continue SessionStart should find the parked *.keep state DB and
+    # log a `restore-history` (or, after a crash with no SessionEnd, find the DB
+    # still live: `reuse-live-db`). A `fresh-db` row on a source=resume start
+    # means the history was lost — the mirror came back empty.
+    section("resume that lost its mirror history (fresh-db on source=resume)",
+            "SELECT h.ts FROM hook_events h WHERE h.session_id=? AND "
+            "h.hook='SessionStart' AND json_extract(h.payload,'$.source')='resume' "
+            "AND EXISTS (SELECT 1 FROM state_files f WHERE f.session_id=h.session_id "
+            "AND f.action='fresh-db' AND abs(f.ts - h.ts) < 30)", (sid,))
     section("unattributed token/cost bumps (should be bump-agent with meta)",
             "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
             "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
@@ -631,6 +640,9 @@ def main(argv):
     elif cmd == "pane":                     # pane <sid> <action> <ok 0|1> [detail]
         a = argv[2:] + [""] * 4
         pane(a[0], a[1], a[2] == "1", a[3])
+    elif cmd == "state-file":               # state-file <log> <path> <action> [content]
+        a = argv[2:] + [""] * 4
+        state_file(a[0], a[1], a[2], a[3])
     elif cmd == "stream-start":             # stream-start <sid> <kind> [src] -> prints row id
         a = argv[2:] + [""] * 3
         rid = event("streams", session_id=a[0], kind=a[1] or "watcher",
@@ -680,7 +692,8 @@ if __name__ == "__main__":
     except Exception:
         # The CLI write paths are fired from hooks — they must never fail loudly.
         if len(sys.argv) > 1 and sys.argv[1] in ("session-start", "session-end",
-                                                 "hook", "transition", "error"):
+                                                 "hook", "transition", "error",
+                                                 "pane", "state-file"):
             pass
         else:
             raise

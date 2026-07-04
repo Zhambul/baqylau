@@ -12,17 +12,23 @@
 #     /tmp/claude-mirror-<sid>.log.state.db
 #
 # WAL mode + BEGIN IMMEDIATE transactions give the atomic increments and take-once
-# semantics those dances approximated. Living in /tmp next to the log keeps the
-# old lifecycle: removed at SessionEnd (claude-split.sh close), self-clearing on
-# reboot. This DB is RUNTIME state — load-bearing for behavior — and is deliberately
-# SEPARATE from the audit DB (~/.claude/kitty-audit), which must stay fire-and-forget.
+# semantics those dances approximated. The "<sid>.log" path is a historical KEY —
+# no log file exists: the mirror's paint-op stream itself lives in this DB's `ops`
+# table (claude-mirror.py polls it by rowid), and the palette/liveness slot
+# markers live in its `live` table (claude_slots.py; claude-tab-status.py queries
+# it via the sqlite3 CLI). The DB FILE's existence is the session-alive signal —
+# parked as *.keep at SessionEnd (claude-split.py), restored on resume, so the
+# scorebar/codex-watcher exit when the path vanishes and a resumed session
+# replays its history. Living in /tmp keeps it self-clearing on reboot. This DB
+# is RUNTIME state — load-bearing for behavior — and is deliberately SEPARATE
+# from the audit DB (~/.claude/kitty-audit), which must stay fire-and-forget.
 #
-# What deliberately STAYS as files (read from bash hot paths or liveness-checked):
-#   - the slot pid markers (bg.N / fg.N / monitor.N / sub.pid.*) — the tab tracker's
-#     liveness signal, scanned with `kill -0` from claude-tab-status.sh;
-#   - /tmp/claude-tab-state-<win> — `cat` on every hook;
-#   - the mirror log itself — the renderer's tail source + session-alive signal;
-#   - the bg-watch / interrupt-watch pid locks (bash-side).
+# Related DBs: window-keyed tab state + watcher pid locks live in the GLOBAL
+# /tmp/claude-kitty-tab.db (a window outlives any one session — see
+# claude-tab-status.py); remembered pane sizes in ~/.claude/kitty-mirror.db
+# (must survive reboots). What stays as plain files is only what physics
+# demands: the fg tee'd .out streams + their .done sentinels (written by the
+# rewritten command itself) and kitty's own sockets.
 #
 # The codex cross-session claims (previously O_EXCL files in
 # $TMPDIR/codex-companion/<slug>/mirror-claims/) use the same table machinery in a
@@ -35,6 +41,7 @@ import errno, json, os, sqlite3, time
 _CONNS = {}                     # path -> connection (streamers are long-lived)
 
 _SCHEMA = """
+CREATE TABLE IF NOT EXISTS ops(id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS counters(key TEXT PRIMARY KEY, val REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, val TEXT);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY);
@@ -46,6 +53,9 @@ CREATE TABLE IF NOT EXISTS agents(
 CREATE TABLE IF NOT EXISTS queue(id INTEGER PRIMARY KEY AUTOINCREMENT, text TEXT);
 CREATE TABLE IF NOT EXISTS handoffs(key TEXT PRIMARY KEY, val TEXT);
 CREATE TABLE IF NOT EXISTS claims(key TEXT PRIMARY KEY, pid INTEGER);
+CREATE TABLE IF NOT EXISTS live(
+  kind TEXT, key TEXT, pid INTEGER, idx INTEGER, start_ts REAL,
+  PRIMARY KEY(kind, key));
 """
 
 
@@ -72,6 +82,62 @@ def _connect(path):
 
 def connect(log):
     return _connect(db_path(log))
+
+
+# --- mirror paint ops (was the append-only JSONL mirror log) ------------------------
+# The mirror's paint-op stream lives in the `ops` table: producers (hooks, tailers)
+# INSERT rows, the renderer polls `id > last_seen`. One transaction per emit() keeps a
+# block of ops contiguous relative to concurrent producers — the same atomicity the
+# single O_APPEND write() gave the old file. The DB file's existence doubles as the
+# session-alive signal the old log path provided (scorebar/codex-watcher exit when it
+# vanishes at SessionEnd — the DB is parked as *.keep, so the path does disappear).
+
+def ops_append(log, ops):
+    """Append paint ops (dicts) as one atomic block. Returns True on success."""
+    if not ops:
+        return True
+    conn = connect(log)
+    if conn is None:
+        return False
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        conn.executemany("INSERT INTO ops(op) VALUES(?)",
+                         [(json.dumps(o, ensure_ascii=False),) for o in ops])
+        conn.commit()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+
+
+def ops_after(log, last_id):
+    """(new_last_id, [op, ...]) — every op with id > last_id, in insertion order.
+    A max id BELOW last_id means the DB was recreated (fresh session reusing the
+    key): the caller should reset and re-read from 0. Returns (last_id, []) on
+    failure so a transient error never looks like a reset."""
+    conn = connect(log)
+    if conn is None:
+        return last_id, []
+    try:
+        rows = conn.execute("SELECT id, op FROM ops WHERE id > ? ORDER BY id",
+                            (last_id,)).fetchall()
+        if not rows:
+            top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM ops").fetchone()[0]
+            if top < last_id:
+                return -1, []               # recreated DB -> signal a reset
+            return last_id, []
+        out = []
+        for _id, s in rows:
+            try:
+                out.append(json.loads(s))
+            except Exception:
+                continue
+        return rows[-1][0], out
+    except Exception:
+        return last_id, []
 
 
 # --- scoreboard counters (was .stats.json under flock) -----------------------------

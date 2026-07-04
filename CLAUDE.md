@@ -6,8 +6,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A kitty-terminal integration for Claude Code, built entirely out of Claude Code **hooks** plus detached background processes. Three user-facing features:
 
-1. **Tab colors** (`claude-tab-status.sh`) — the kitty tab color reflects the session state (grey idle · magenta busy · blue running/awaiting · red asking-you · green your-turn) via `kitten @ set-tab-color` over the socket in `$KITTY_LISTEN_ON`.
-2. **Command mirror pane** (`claude-split.sh` + `claude-mirror.py`) — a right-side vertical split showing every command, file op, subagent, teammate, monitor, and codex run as colored streaming blocks, plus a ~4-row scoreboard window (`claude-scorebar.py`) underneath.
+1. **Tab colors** (`claude-tab-status.py`) — the kitty tab color reflects the session state (grey idle · magenta busy · blue running/awaiting · red asking-you · green your-turn) via `kitten @ set-tab-color` over the socket in `$KITTY_LISTEN_ON`.
+2. **Command mirror pane** (`claude-split.py` + `claude-mirror.py`) — a right-side vertical split showing every command, file op, subagent, teammate, monitor, and codex run as colored streaming blocks, plus a ~4-row scoreboard window (`claude-scorebar.py`) underneath.
 3. **Audit trail** (`claude_audit.py`) — always-on SQLite recording of every hook event, tab transition, slot claim, stream lifecycle, paint op, and swallowed exception, at `~/.claude/kitty-audit/audit.db`.
 
 There is no build system, package manifest, or test suite. Scripts are invoked directly by hooks wired in `~/.claude/settings.json` (the hook table is in README.md § Wiring — the settings file itself is *not* in this repo). Python scripts target the system `python3`; only `pygments` is an (optional, probed-for) dependency.
@@ -24,12 +24,12 @@ python3 claude_audit.py sql "<query>"       # free-form SQL
 
 # Manual smoke test — cycle the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
-  ./claude-tab-status.sh "$s"; ping -c 4 127.0.0.1 >/dev/null
+  ./claude-tab-status.py "$s"; ping -c 4 127.0.0.1 >/dev/null
 done
-./claude-tab-status.sh clear
+./claude-tab-status.py clear
 
 # Mirror pane controls
-./claude-split.sh toggle|grow|shrink|reset|setpct <N>
+./claude-split.py toggle|grow|shrink|reset|setpct <N>
 ```
 
 To debug a reported session bug, prefer the **`audit-debug` skill** (`.claude/skills/audit-debug/SKILL.md`) — it walks the triage order (anomalies → errors → timeline → targeted SQL) and documents the full audit schema.
@@ -38,25 +38,25 @@ Script edits take effect immediately (hooks re-exec them). Only `kitty.conf` cha
 
 ## Architecture
 
-**Producer/renderer split via paint ops.** Hook handlers and tailers never print to the pane. They append width-INDEPENDENT **paint ops** (JSONL: `rule`/`label`/`code`/`gut`/`line`, built by `claude_ops.py`) to `/tmp/claude-mirror-<session_id>.log`. The single renderer `claude-mirror.py`, running inside the pane, paints ops at the live pane width and re-renders everything on SIGWINCH so content reflows. Consequence: anything width-dependent (wrapping, gutters, dividers) belongs in the renderer; anything width-independent (syntax highlighting, one-liner reflow) runs once at op creation.
+**Producer/renderer split via paint ops.** Hook handlers and tailers never print to the pane. They append width-INDEPENDENT **paint ops** (`rule`/`label`/`code`/`gut`/`line`, built by `claude_ops.py`) as rows of the per-session state DB's `ops` table (`/tmp/claude-mirror-<session_id>.log.state.db` — the `.log` path is only the KEY everything derives from; no log file exists). The single renderer `claude-mirror.py`, running inside the pane, polls new rows by id, paints ops at the live pane width and re-renders everything on SIGWINCH so content reflows. Consequence: anything width-dependent (wrapping, gutters, dividers) belongs in the renderer; anything width-independent (syntax highlighting, one-liner reflow) runs once at op creation.
 
-**Process model.** ~20 short-lived hook processes plus detached long-lived tailers/watchers, coordinating through a per-session SQLite state DB (`claude_state.py`) plus a few deliberate files in `/tmp` (pid markers, the mirror log, tab state):
+**Process model.** ~20 short-lived hook processes plus detached long-lived tailers/watchers, coordinating through SQLite: a per-session state DB (`claude_state.py` — ops, scoreboard, slots, hand-offs; parked as `*.keep` at SessionEnd and restored on resume, so a resumed session replays its mirror history), a global window-keyed tab DB (`/tmp/claude-kitty-tab.db` — tab colour + watcher pid locks), and `~/.claude/kitty-mirror.db` (remembered pane sizes). The only plain files left are what physics demands: the fg tee'd `.out` streams + `.done` sentinels (written by the rewritten command itself). Everything is Python; `claude-tab-status.py` reads the state/tab DBs read-only (`mode=ro`, so a probe can never create a DB whose existence is a liveness signal):
 - `claude-cmd-pre.py` (PreToolUse Bash) rewrites foreground commands via `updatedInput` to tee output into a side file so it streams live; `claude-cmd-fmt.py` (PostToolUse) hands the real outcome to the tailer via a take-once hand-off record in the state DB.
 - `claude-stream.py` tails background/monitor/fg output files; `claude-substream.py` tails a subagent/teammate transcript (`subagents/agent-<id>.jsonl`) — the only in-order source of its prompt/messages/tools/result; `claude-codex-watch.py` (one per session) discovers every codex run from two global directories and spawns `claude-codex-stream.py` per run.
 - Detached processes are spawned with `start_new_session=True` — spawning from a hook with bash `&` leaves them in the hook's process group, which Claude Code waits to drain (this hung SessionStart once; see `claude-codex-launch.py`).
 
-**Slot/marker files** (`claude_slots.py`) do double duty: they assign each concurrent stream a palette color (5-color palettes per kind: bg/monitor/subagent/teammate/codex) AND they are the tab tracker's liveness signal — `claude-tab-status.sh stop` keeps the tab blue exactly while a live-pid marker (`bg.<n>`/`monitor.<n>`/`fg.<n>`/`sub.pid.<agent_id>`) exists. Markers store the owner pid and are liveness-checked (`os.kill(pid, 0)`) before being trusted; stale ones are stolen.
+**Slot rows** (`claude_slots.py`, the state DB's `live` table) do double duty: they assign each concurrent stream a palette color (5-color palettes per kind: bg/monitor/subagent/teammate/codex) AND they are the tab tracker's liveness signal — `claude-tab-status.py stop` keeps the tab blue exactly while a live-pid row (kind `bg`/`monitor`/`fg`/`sub.pid`) exists. Rows store the owner pid and are liveness-checked (`os.kill(pid, 0)`) before being trusted; stale ones are stolen.
 
-**Shared modules:** `claude_ops.py` (paint ops, scoreboard `bump()`, transcript token/cost accounting deduped by `message.id`, model pricing, model/effort resolution across ancestor `.claude/` dirs), `claude_state.py` (per-session RUNTIME state in SQLite at `/tmp/claude-mirror-<sid>.log.state.db` — scoreboard counters, team-message tracker, per-agent records incl. the stop flag + resume checkpoint, description queue, take-once hand-offs, pid-liveness claims; load-bearing for behavior and deliberately separate from the audit DB), `claude_render.py` (pygments highlighting, ANSI-aware wrap, gutters, escape-sequence unescape, section-banner emphasis), `claude_slots.py` (atomic slot claim/release — the pid marker files stay on disk: they are the tab tracker's bash-side liveness signal), `claude_audit.py` (audit writes — degrade to a spool file, never raise into a hook).
+**Shared modules:** `claude_ops.py` (paint ops, scoreboard `bump()`, transcript token/cost accounting deduped by `message.id`, model pricing, model/effort resolution across ancestor `.claude/` dirs), `claude_state.py` (per-session RUNTIME state in SQLite at `/tmp/claude-mirror-<sid>.log.state.db` — the mirror's `ops` stream, scoreboard counters, team-message tracker, per-agent records incl. the stop flag + resume checkpoint, description queue, take-once hand-offs, pid-liveness claims, the `live` slot table; load-bearing for behavior and deliberately separate from the audit DB; its file-existence is the session-alive signal watchers poll), `claude_render.py` (pygments highlighting, ANSI-aware wrap, gutters, escape-sequence unescape, section-banner emphasis), `claude_slots.py` (transactional slot claim/release on the `live` table), `claude_audit.py` (audit writes — degrade to a spool file, never raise into a hook).
 
-**Everything is keyed by `session_id`** — mirror log, pane kitty vars (`claude_mirror`/`claude_session`), sidecars — so parallel sessions never collide. Exception: background-job detection is per-project (temp slug from cwd), so two sessions in one directory can cross-talk.
+**Everything is keyed by `session_id`** — the state DB, pane kitty vars (`claude_mirror`/`claude_session`), sidecars — so parallel sessions never collide. Exception: background-job detection is per-project (temp slug from cwd), so two sessions in one directory can cross-talk.
 
 ## Hard-won invariants (violating these reintroduces fixed bugs)
 
 - **Hooks must never block or fail.** Every hook path exits 0 and swallows exceptions — but every swallow site must record to the audit first (`claude_audit` errors table). The tab-color path writes audit rows fire-and-forget.
 - **Claude Code fires NO hook on cancel/interrupt** — no Stop, nothing. Every cancellation path needs its own recovery signal: writer-liveness for commands, `meta.json` `stoppedByUser` for subagents, the transcript's `[Request interrupted by user]` line for plain replies (`interrupt-watch`). Cancel-before-first-hook has no signal at all and is deliberately left unhandled — do not re-add an idle-timeout backstop; it false-positived on every long think.
 - **Main session only:** any hook event carrying an `agent_id` is a subagent/teammate inner call — tab dispatch ignores it, and cmd/file formatters skip it (the substream owns subagent rendering; handling both would duplicate/mis-order).
-- **Release slot markers *before* calling `bg-recheck`**, or the recheck sees its own marker. `bg-recheck` flips only a currently-blue tab and only when no live marker remains.
+- **Release slot rows *before* calling `bg-recheck`**, or the recheck sees its own row. `bg-recheck` flips only a currently-blue tab and only when no live row remains.
 - **Duplicate events are real:** `SubagentStart` and `SubagentStop` can each fire more than once for background agents — both handlers guard on slot state.
 - **Failures arrive on `PostToolUseFailure`, not `PostToolUse`** — any new PostToolUse hook must be wired to both or failures silently vanish.
 - Empirically-confirmed but undocumented Claude Code behaviors this repo depends on (`updatedInput` command rewriting, Ctrl+B's `backgroundTaskId`+`backgroundedByUser` payload, `stoppedByUser` in meta.json, the interrupted-transcript line) are called out in README.md — check there before assuming a payload field exists or not.

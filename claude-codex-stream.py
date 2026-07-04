@@ -26,6 +26,7 @@ import json, os, re, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_render as R
 import claude_ops as O
+import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 STREAM_ID = None
@@ -188,7 +189,7 @@ def main():
     start = time.time()
     STREAM_ID = A.stream_start(LOG, "codex", task_id=LABEL, src_path=LOGFILE)
     # Wait for the source to appear (a companion .log lands a beat after its sidecar).
-    while not os.path.exists(LOGFILE) and time.time() < start + 15 and os.path.exists(LOG):
+    while not os.path.exists(LOGFILE) and time.time() < start + 15 and os.path.exists(S.db_path(LOG)):
         time.sleep(0.2)
     if not os.path.exists(LOGFILE):
         END_REASON = "src-never-appeared"
@@ -232,8 +233,8 @@ def main():
     GRACE = 8.0        # rollout: close the block if no new turn starts within grace
     while True:
         pump()
-        if not os.path.exists(LOG):          # session ended -> stop
-            END_REASON = "mirror-log-removed (session end)"
+        if not os.path.exists(S.db_path(LOG)):   # session ended (state DB parked) -> stop
+            END_REASON = "state-db-parked (session end)"
             break
         if ROLLOUT:
             if _ro_done_wall and not _ro_active and (time.time() - _ro_done_wall) >= GRACE:

@@ -3,7 +3,8 @@
 #
 # THE REFLOW REFACTOR. Producers (the *-fmt.py hooks + claude-stream.py /
 # claude-substream.py) no longer bake the pane width into final ANSI. Instead they
-# append width-INDEPENDENT paint ops — one JSON object per line — to the mirror log,
+# append width-INDEPENDENT paint ops — rows of the per-session state DB's `ops`
+# table (claude_state, keyed by the historical mirror-log path) —
 # and claude-mirror.py (running inside the pane) renders them at the CURRENT width,
 # re-rendering EVERYTHING on resize (SIGWINCH) so the content reflows. Each op carries
 # its colours and already-highlighted / pre-styled text; only the width-dependent
@@ -115,7 +116,7 @@ def edit_range(structured_patch):
 def log_path(d):
     """The mirror log for a hook payload, keyed by session_id so PARALLEL Claude
     sessions get separate logs (separate content). Falls back to a cwd slug if a
-    payload somehow lacks session_id. claude-split.sh derives the SAME path (from
+    payload somehow lacks session_id. claude-split.py derives the SAME path (from
     the SessionStart payload's session_id, and from the focused pane's
     claude_session var) so the renderer tails exactly what the producers write."""
     sid = (d.get("session_id") or "").strip()
@@ -134,7 +135,7 @@ def claude_dirs(start=None):
     `<cwd>/.claude` lacks the def/field we need.
 
     Resolution:
-      - $CLAUDE_PROJECT_DIR (the harness's own project override; same as claude-split.sh)
+      - $CLAUDE_PROJECT_DIR (the harness's own project override; same as claude-split.py)
         pins the single project `.claude` when set;
       - otherwise walk UP from `start`, collecting EVERY ancestor `.claude` (stopping at
         `/` or $HOME).
@@ -212,13 +213,16 @@ def line(s):
 
 
 def emit(log, *ops):
-    """Append paint ops to the mirror log as JSON lines. One write so a block of ops
-    lands atomically relative to other producers appending concurrently."""
+    """Append paint ops to the session's `ops` table (claude_state, keyed by the
+    mirror-log path). One transaction so a block of ops lands contiguously relative
+    to other producers inserting concurrently — the atomicity the old single
+    O_APPEND write() to the JSONL log provided."""
     if not ops:
         return
     try:
-        with open(log, "a", encoding="utf-8") as f:
-            f.write("".join(json.dumps(o, ensure_ascii=False) + "\n" for o in ops))
+        import claude_state
+        if not claude_state.ops_append(log, list(ops)):
+            A.error(log, "emit", {"ops": len(ops)})
     except Exception:
         A.error(log, "emit", {"ops": len(ops)})
     A.ops(log, ops)
@@ -227,10 +231,11 @@ def emit(log, *ops):
 # --- session statistics (the "▪ session" scoreboard pane) ----------------------
 # The scoreboard is a running "so far" summary, aggregated across the SEPARATE, short-
 # lived hook processes that produce the mirror (one per Bash call, one per file op, one
-# per subagent). They share no memory, so the counters live in a sidecar JSON keyed to
-# the mirror log (removed with it at SessionEnd). Each producer bumps its deltas under
-# an flock; claude-scorebar.py (a small dedicated window under the mirror, opened by
-# claude-split.sh) renders the scoreboard live off the sidecar's mtime.
+# per subagent). They share no memory, so the counters live in the per-session state
+# DB keyed to the mirror-log path (claude_state — parked at SessionEnd, restored on
+# resume). Each producer bumps its deltas atomically; claude-scorebar.py (a small
+# dedicated window under the mirror, opened by claude-split.py) renders the
+# scoreboard live off the DB's change counter.
 
 # Approximate per-MTok (input, output) USD for the resolved model — for the "≈ $X" cost
 # estimate. First substring match wins, so order specific → general. Verified against

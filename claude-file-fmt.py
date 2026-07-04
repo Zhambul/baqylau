@@ -9,7 +9,7 @@
 #   Update(claude-cmd-fmt.py)
 #   Write(new_thing.py)
 #
-# Invoked by claude-file-log.sh. Verbs mirror Claude Code's own UI: Edit and
+# Invoked directly as the PostToolUse hook. Verbs mirror Claude Code's own UI: Edit and
 # MultiEdit show as "Update", Write as "Write", Read as "Read".
 import json, os, sys
 

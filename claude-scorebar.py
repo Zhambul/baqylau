@@ -2,7 +2,7 @@
 # claude-scorebar.py MIRROR_LOG [WIDTH]
 #
 # The scoreboard renderer. Runs inside a SMALL DEDICATED kitty window (4 rows, hsplit
-# under the mirror pane — opened by claude-split.sh alongside the mirror) and paints
+# under the mirror pane — opened by claude-split.py alongside the mirror) and paints
 # an always-on session id, a team-message census, and the session summary:
 #
 #   ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
@@ -26,7 +26,7 @@
 # turn) and resumes otherwise — see the pause-accounting block below. Reads are
 # plain SELECTs (WAL — never block the producers). Exits when the mirror log
 # disappears (SessionEnd removes it), which auto-closes the window;
-# claude-split.sh close is the safety net.
+# claude-split.py close is the safety net.
 import json, os, re, shutil, signal, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -98,9 +98,10 @@ def emit_events(events):
 # --- ⏱ pause accounting -----------------------------------------------------
 # The session timer tracks ACTIVE time: it stops while the tab is GREEN
 # (awaiting-response — Claude is done, your turn) and resumes on any other
-# colour. claude-tab-status.sh persists the current colour per Claude window in
-# /tmp/claude-tab-state-<window_id>; the Claude pane for this session carries the
-# kitty user-var claude_session=<sid> (tagged by claude-split.sh at SessionStart),
+# colour. claude-tab-status.py persists the current colour per Claude window in
+# the global tab DB (/tmp/claude-kitty-tab.db, `tab` table — was a
+# /tmp/claude-tab-state-<window_id> file); the Claude pane for this session carries the
+# kitty user-var claude_session=<sid> (tagged by claude-split.py at SessionStart),
 # which is how we map our sid to that window id. Green ticks are accumulated into
 # the stats sidecar's 'paused' field (same flock'd bump as every other producer,
 # so it survives a scorebar restart/toggle), and scoreboard_parts subtracts it.
@@ -130,9 +131,16 @@ def _claude_window():
 def _tab_green(win):
     """True when the session's tab currently shows awaiting-response (green)."""
     try:
-        with open(f"/tmp/claude-tab-state-{win}", encoding="utf-8") as f:
-            return f.read().strip() == "awaiting-response"
-    except OSError:
+        import sqlite3
+        conn = sqlite3.connect("file:/tmp/claude-kitty-tab.db?mode=ro", uri=True,
+                               timeout=0.2)
+        try:
+            row = conn.execute("SELECT state FROM tab WHERE win=?",
+                               (str(win),)).fetchone()
+            return bool(row) and row[0] == "awaiting-response"
+        finally:
+            conn.close()
+    except Exception:
         return False
 
 
@@ -211,7 +219,7 @@ def main():
     last, mt_seen = 0.0, None
     win, win_retry, prev_ts, pend = None, 0.0, None, 0.0
     while True:
-        if not os.path.exists(LOG):        # SessionEnd removed the log -> window closes
+        if not os.path.exists(St.db_path(LOG)):   # SessionEnd parked the state DB -> window closes
             return
         now = time.time()
         # ⏱ pause accounting: while the tab is green, fold the elapsed tick into

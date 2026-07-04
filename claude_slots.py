@@ -6,12 +6,20 @@
 # for background, claude-monitor-fmt for monitor) claims a free slot and colours
 # the block's header chip with it, then passes the slot index to claude-stream.py,
 # which uses it for the gutter + finish chip — so a job's header, gutter, and
-# finish all share ONE colour, and parallel jobs differ. Slots are atomic marker
-# files under "<mirror-log>.slots/", liveness-checked by pid and released when the
+# finish all share ONE colour, and parallel jobs differ. Slots are rows in the
+# per-session state DB's `live` table (claude_state — were O_EXCL marker files
+# under "<mirror-log>.slots/"), liveness-checked by pid and released when the
 # streamer exits; >5 concurrent of a kind reuse colours.
-import errno, fcntl, os, sys, time
+#
+# The `live` table doubles as the tab tracker's liveness signal: claude-tab-status.py
+# queries it (sqlite3 CLI) for pids of live tailers — kinds bg/monitor/fg (numeric
+# palette slots, key = the slot index) and sub.pid (a substream tailer, key = the
+# agent_id). Colour-mapping rows (kind sub.id, no pid) are NOT liveness rows.
+import errno, os, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_state as St
+
 try:
     import claude_audit as A            # always-on audit trail (CLAUDE_AUDIT=0 disables)
 except Exception:
@@ -31,8 +39,8 @@ except Exception:
 #   teammate:   rose · amber · lavender · mint — a LIGHTER, pastel family so an agent
 #               team member reads differently from an ordinary (electric/dark) subagent
 #               when both run at once. Teammates reuse the subagent slot machinery
-#               (round-robin + sub.* markers); only the render colour differs, so this
-#               is keyed as its own palette but never gets its own slot kind.
+#               (round-robin + the sub.* live rows); only the render colour differs, so
+#               this is keyed as its own palette but never gets its own slot kind.
 #   codex:      jade · sky · orchid · gold — a distinct family (jade slot-0 evokes the
 #               OpenAI mark) for codex-plugin / codex-CLI streams, so a codex block
 #               never reads as one of our own subagents/teammates. The codex watcher
@@ -65,108 +73,122 @@ def color(kind, idx):
     return p[idx % len(p)]
 
 
-def _dir(log):
-    d = log + ".slots"
+def _alive(pid):
     try:
-        os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
-    return d
+        os.kill(pid, 0)
+        return True
+    except OSError as e:
+        return e.errno == errno.EPERM
 
 
-def _next(d, kind, n):
-    """Round-robin counter per kind: returns the next index and advances it. A
-    file lock makes concurrent launches each get a different starting index."""
-    p = os.path.join(d, f"{kind}.next")
-    try:
-        fd = os.open(p, os.O_CREAT | os.O_RDWR, 0o644)
-    except Exception:
+def _token(log, kind, idx):
+    """Opaque claim token (was the marker-file path): carried by the claimer to
+    set_owner(), and shown verbatim in the audit's marker_path column."""
+    return f"{log}::live:{kind}.{idx}"
+
+
+def _next(log, kind, n):
+    """Round-robin counter per kind (counters key 'slotnext:<kind>'): returns the
+    next index and advances it atomically, so concurrent launches each get a
+    different starting index (was an flock'd <kind>.next file)."""
+    conn = St.connect(log)
+    if conn is None:
         return 0
+    key = "slotnext:" + kind
     try:
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX)
-        except Exception:
-            pass
-        try:
-            cur = int((os.read(fd, 64) or b"0").decode().strip() or "0")
-        except Exception:
-            cur = 0
-        try:
-            os.lseek(fd, 0, 0); os.ftruncate(fd, 0); os.write(fd, str(cur + 1).encode())
-        except Exception:
-            pass
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT val FROM counters WHERE key=?", (key,)).fetchone()
+        cur = int(row[0]) if row else 0
+        conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
+                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                     (key, cur + 1))
+        conn.commit()
         return cur % n
-    finally:
+    except Exception:
         try:
-            fcntl.flock(fd, fcntl.LOCK_UN)
+            conn.rollback()
         except Exception:
             pass
-        os.close(fd)
+        return 0
 
 
 def claim(kind, log):
-    """Claim a palette slot round-robin. Returns (index, marker_path|None). Starts
-    at the next counter value (so a just-freed colour isn't immediately reused) and
-    walks forward to the first slot not held by a live streamer."""
-    d = _dir(log)
+    """Claim a palette slot round-robin. Returns (index, token|None). Starts at the
+    next counter value (so a just-freed colour isn't immediately reused) and walks
+    forward to the first slot not held by a live streamer — all in ONE transaction,
+    so two concurrent claimers can't take the same slot."""
     n = len(palette(kind))
-    mypid = str(os.getpid())
-    start = _next(d, kind, n)
-    for k in range(n):
-        idx = (start + k) % n
-        p = os.path.join(d, f"{kind}.{idx}")
+    mypid = os.getpid()
+    start = _next(log, kind, n)
+    conn = St.connect(log)
+    if conn is None:
+        return start, None
+    got, action = None, "claim"
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        for k in range(n):
+            idx = (start + k) % n
+            row = conn.execute("SELECT pid FROM live WHERE kind=? AND key=?",
+                               (kind, str(idx))).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO live(kind, key, pid, idx, start_ts) "
+                             "VALUES(?,?,?,?,?)",
+                             (kind, str(idx), mypid, idx, time.time()))
+                got = idx
+                break
+            holder = int(row[0] or 0)
+            if not holder or not _alive(holder):    # stale holder -> steal the slot
+                conn.execute("UPDATE live SET pid=?, start_ts=? WHERE kind=? AND key=?",
+                             (mypid, time.time(), kind, str(idx)))
+                got, action = idx, "steal-stale"
+                break
+        conn.commit()
+    except Exception:
         try:
-            fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-            os.write(fd, mypid.encode()); os.close(fd)
-            A.slot(log, kind, "claim", slot_n=idx, owner_pid=os.getpid(), marker_path=p)
-            return idx, p
-        except FileExistsError:
-            try:
-                holder = int(open(p).read().strip() or "0")
-            except Exception:
-                holder = 0
-            alive = False
-            if holder:
-                try:
-                    os.kill(holder, 0); alive = True
-                except OSError as e:
-                    alive = (e.errno == errno.EPERM)
-            if not alive:                       # stale holder -> steal the slot
-                try:
-                    os.remove(p)
-                    fd = os.open(p, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-                    os.write(fd, mypid.encode()); os.close(fd)
-                    A.slot(log, kind, "steal-stale", slot_n=idx,
-                           owner_pid=os.getpid(), marker_path=p)
-                    return idx, p
-                except Exception:
-                    A.error(log, "claim", {"kind": kind, "idx": idx})
+            conn.rollback()
         except Exception:
-            A.error(log, "claim", {"kind": kind, "idx": idx})
-            break
-    A.slot(log, kind, "claim-denied", slot_n=start, owner_pid=os.getpid())
-    return start, None                          # all live -> reuse start, no marker
+            pass
+        A.error(log, "claim", {"kind": kind, "start": start})
+        return start, None
+    if got is None:                                 # all live -> reuse start, no token
+        A.slot(log, kind, "claim-denied", slot_n=start, owner_pid=mypid)
+        return start, None
+    A.slot(log, kind, action, slot_n=got, owner_pid=mypid,
+           marker_path=_token(log, kind, got))
+    return got, _token(log, kind, got)
 
 
-def set_owner(marker_path, pid):
-    """Re-point a freshly claimed marker at the long-lived streamer pid."""
-    if not marker_path:
+def set_owner(token, pid):
+    """Re-point a freshly claimed slot at the long-lived streamer pid."""
+    if not token:
         return
     try:
-        with open(marker_path, "w") as f:
-            f.write(str(pid))
-        A.event("slots", session_id=A.sid_from_log(marker_path), kind="",
-                action="set-owner", owner_pid=pid, marker_path=marker_path)
+        log, _, tail = token.partition("::live:")
+        kind, _, idx = tail.rpartition(".")
+        conn = St.connect(log)
+        if conn is None:
+            return
+        conn.execute("UPDATE live SET pid=? WHERE kind=? AND key=?", (pid, kind, idx))
+        conn.commit()
+        A.event("slots", session_id=A.sid_from_log(log), kind=kind,
+                action="set-owner", owner_pid=pid, marker_path=token)
     except Exception:
-        A.error(marker_path, "set_owner", {"pid": pid})
+        A.error(token, "set_owner", {"pid": pid})
 
 
 def release(kind, log, idx, pid):
+    """Release a numeric slot — only if `pid` still owns it (same guard the old
+    marker-file content check gave)."""
+    conn = St.connect(log)
+    if conn is None:
+        return
     try:
-        p = os.path.join(log + ".slots", f"{kind}.{idx}")
-        if (open(p).read().strip() or "0") == str(pid):
-            os.remove(p)
-            A.slot(log, kind, "release", slot_n=idx, owner_pid=pid, marker_path=p)
+        cur = conn.execute("DELETE FROM live WHERE kind=? AND key=? AND pid=?",
+                           (kind, str(idx), pid))
+        conn.commit()
+        if cur.rowcount:
+            A.slot(log, kind, "release", slot_n=idx, owner_pid=pid,
+                   marker_path=_token(log, kind, idx))
     except Exception:
         pass
 
@@ -176,36 +198,34 @@ def release(kind, log, idx, pid):
 # claim to release. A subagent is different: its lifetime spans MANY separate hook
 # invocations (SubagentStart, each inner PreToolUse/PostToolUse, SubagentStop),
 # each a fresh short-lived process. So its colour is keyed by the stable agent_id
-# in a small map file "<kind>.id.<agent_id>" -> "<slot> <start_ts>", claimed on
-# SubagentStart and released on SubagentStop; every event in between just looks it
-# up. The slot index itself is still round-robin so parallel subagents differ.
-def _id_path(log, kind, ident):
-    return os.path.join(_dir(log), f"{kind}.id.{ident}")
-
-
-def _read_id(p):
-    try:
-        parts = open(p).read().split()
-        return int(parts[0]), (float(parts[1]) if len(parts) > 1 else 0.0)
-    except Exception:
-        return None
-
+# in a `live` row (kind "<kind>.id", key = agent_id, no pid — was a small map file
+# "<kind>.id.<agent_id>"), claimed on SubagentStart and released on SubagentStop;
+# every event in between just looks it up. The slot index itself is still
+# round-robin so parallel subagents differ.
 
 def claim_id(kind, log, ident, prefer=None):
     """Map `ident` to a round-robin slot (stamping the start time), or return the
     existing mapping if already claimed. `prefer` pins a specific slot for a NEW
     mapping (a resumed teammate keeps its original colour). Returns
     (slot_index, is_new)."""
-    p = _id_path(log, kind, ident)
-    got = _read_id(p)
+    got = lookup_id(kind, log, ident)
     if got is not None:
         return got[0], False
-    idx = prefer if prefer is not None else _next(_dir(log), kind, len(palette(kind)))
+    idx = prefer if prefer is not None else _next(log, kind, len(palette(kind)))
+    conn = St.connect(log)
+    if conn is None:
+        return idx, True
     try:
-        with open(p, "w") as f:
-            f.write(f"{idx} {time.time()}")
+        cur = conn.execute(
+            "INSERT OR IGNORE INTO live(kind, key, pid, idx, start_ts) "
+            "VALUES(?,?,NULL,?,?)", (kind + ".id", ident, idx, time.time()))
+        conn.commit()
+        if not cur.rowcount:                        # raced: another hook claimed it
+            got = lookup_id(kind, log, ident)
+            if got is not None:
+                return got[0], False
         A.slot(log, kind, "claim-id", slot_n=idx, agent_id=ident,
-               owner_pid=os.getpid(), marker_path=p)
+               owner_pid=os.getpid(), marker_path=_token(log, kind + ".id", idx))
     except Exception:
         A.error(log, "claim_id", {"kind": kind, "ident": ident})
     return idx, True
@@ -213,13 +233,75 @@ def claim_id(kind, log, ident, prefer=None):
 
 def lookup_id(kind, log, ident):
     """Return (slot_index, start_ts) for a claimed `ident`, or None."""
-    return _read_id(_id_path(log, kind, ident))
+    conn = St.connect(log)
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT idx, start_ts FROM live WHERE kind=? AND key=?",
+                           (kind + ".id", ident)).fetchone()
+        return (int(row[0]), float(row[1] or 0.0)) if row else None
+    except Exception:
+        return None
 
 
 def release_id(kind, log, ident):
+    conn = St.connect(log)
+    if conn is None:
+        return
     try:
-        os.remove(_id_path(log, kind, ident))
-        A.slot(log, kind, "release-id", agent_id=ident, owner_pid=os.getpid())
+        cur = conn.execute("DELETE FROM live WHERE kind=? AND key=?",
+                           (kind + ".id", ident))
+        conn.commit()
+        if cur.rowcount:
+            A.slot(log, kind, "release-id", agent_id=ident, owner_pid=os.getpid())
+    except Exception:
+        pass
+
+
+# --- per-agent tailer pid (the tab tracker's liveness signal) --------------------
+# A substream tailer registers its pid under kind "sub.pid" (key = agent_id — was
+# the <log>.slots/sub.pid.<agent_id> file). claude-tab-status.py counts these rows
+# (with bg/monitor/fg) as "something is still running"; claude-subagent-fmt's stop
+# handler liveness-checks it to decide whether the safety-net footer is needed.
+
+def pid_set(log, ident, pid):
+    conn = St.connect(log)
+    if conn is None:
+        return
+    try:
+        conn.execute("INSERT INTO live(kind, key, pid, idx, start_ts) "
+                     "VALUES('sub.pid', ?, ?, NULL, ?) "
+                     "ON CONFLICT(kind, key) DO UPDATE SET pid = excluded.pid",
+                     (ident, pid, time.time()))
+        conn.commit()
+        A.slot(log, "sub", "claim-pid", agent_id=ident, owner_pid=pid,
+               marker_path=f"{log}::live:sub.pid.{ident}")
+    except Exception:
+        A.error(log, "pid_set", {"ident": ident, "pid": pid})
+
+
+def pid_get(log, ident):
+    """The registered tailer pid for `ident`, or 0."""
+    conn = St.connect(log)
+    if conn is None:
+        return 0
+    try:
+        row = conn.execute("SELECT pid FROM live WHERE kind='sub.pid' AND key=?",
+                           (ident,)).fetchone()
+        return int(row[0] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+def pid_del(log, ident):
+    conn = St.connect(log)
+    if conn is None:
+        return
+    try:
+        cur = conn.execute("DELETE FROM live WHERE kind='sub.pid' AND key=?", (ident,))
+        conn.commit()
+        if cur.rowcount:
+            A.slot(log, "sub", "release-pid", agent_id=ident, owner_pid=os.getpid())
     except Exception:
         pass
 
@@ -236,10 +318,8 @@ def release_id(kind, log, ident):
 # The queue lives in the per-session state DB (claude_state.queue — was an flock'd
 # desc.queue file); the signatures are kept here so callers don't change.
 def desc_push(log, text):
-    import claude_state
-    claude_state.desc_push(log, text)
+    St.desc_push(log, text)
 
 
 def desc_pop(log):
-    import claude_state
-    return claude_state.desc_pop(log)
+    return St.desc_pop(log)

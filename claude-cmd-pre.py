@@ -3,7 +3,7 @@
 # live in the mirror, the same way background commands already do.
 #
 # Claude Code only hands a foreground command's output to a hook at PostToolUse,
-# once it has already finished (see claude-cmd-log.sh) — there's no other way to
+# once it has already finished (see claude-cmd-fmt.py) — there's no other way to
 # see it while it's still running. To fix that we rewrite the command here (via
 # PreToolUse's `updatedInput`) so it ALSO tees its stdout/stderr into a side file,
 # emit the "▶ foreground" header immediately, and spawn a detached claude-stream.py
@@ -142,7 +142,7 @@ def main():
             except Exception: pass
         return
 
-    # Claim a "fg" slot so claude-tab-status.sh's bg_command_running() can see this
+    # Claim a "fg" slot so claude-tab-status.py's bg_command_running() can see this
     # command is still running (via a live fg.<n> marker) — without this, a foreground
     # command running past the idle-watch threshold gets its tab wrongly flipped green
     # (and there'd be no way to notice a Ctrl+B-backgrounded command at all).

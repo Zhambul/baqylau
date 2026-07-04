@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # claude-codex-launch.py MIRROR_LOG CWD [SESSION_ID]
 #
-# Tiny launcher for the per-session codex watcher, called from `claude-split.sh open`
+# Tiny launcher for the per-session codex watcher, called from `claude-split.py open`
 # (the SessionStart hook). Its ONLY job: start claude-codex-watch.py **fully detached**
 # and exit IMMEDIATELY, so SessionStart can never hang.
 #

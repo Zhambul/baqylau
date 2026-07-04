@@ -143,7 +143,7 @@ def _def_field(field):
 
 def _settings_field(field):
     # A field from the merged settings (project overriding global) — the same layering
-    # claude-split.sh reads. Used for values an agent inherits (model, effortLevel).
+    # claude-split.py reads. Used for values an agent inherits (model, effortLevel).
     # Layered across ALL ancestor .claude dirs (O.claude_dirs, nearest-first) for the same
     # subdir/worktree reason as _agent_def_file — else a teammate in a subdirectory skips
     # the project settings and falls straight through to ~/.claude. First non-empty wins.
@@ -316,7 +316,7 @@ USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
 
 def cancelled_by_user():
     # A manually killed/cancelled subagent fires NO SubagentStop hook — the same
-    # gap documented throughout this codebase for interrupts (claude-tab-status.sh's
+    # gap documented throughout this codebase for interrupts (claude-tab-status.py's
     # idle-watch, claude-cmd-pre.py's cancelled-foreground-command fix) — so the
     # done flag never flips and this tailer would otherwise hang until the 6h backstop
     # below, leaving the tab stuck blue the whole time. But Claude Code stamps
@@ -901,19 +901,16 @@ def main():
 
 def cleanup():
     # Release this agent's markers FIRST (so the recheck below doesn't see our own
-    # still-live sub.pid), then ask claude-tab-status.sh to flip a stale bg-running
+    # still-live sub.pid), then ask claude-tab-status.py to flip a stale bg-running
     # blue back to green — a background agent finishing has no other hook to do it.
     # (No-op unless the tab is currently awaiting-bg and nothing else is running.)
     claude_slots.release_id("sub", LOG, AGENT)
     # Clear the done flag (NOT pos — a resumed teammate needs the checkpoint) so a
     # later SubagentStart for this agent_id doesn't finalise its new streamer at once.
     S.agent_set(LOG, AGENT, done=0)
+    claude_slots.pid_del(LOG, AGENT)
     try:
-        os.remove(os.path.join(LOG + ".slots", f"sub.pid.{AGENT}"))
-    except Exception:
-        pass
-    try:
-        subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots", "sub"],
+        subprocess.run([os.path.join(HERE, "claude-tab-status.py"), "bg-recheck", LOG, "sub"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:

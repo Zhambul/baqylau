@@ -16,7 +16,7 @@
 #   SIG                     — monitor: signature token to find its process
 #   OUTER                   — "r,g,b" subagent colour -> double gutter (nested job)
 #
-# Completion is detected the same way claude-tab-status.sh detects a running
+# Completion is detected the same way claude-tab-status.py detects a running
 # background job: the writing process holds the output file open the whole time,
 # so when no write-holder remains (lsof) and the size has stopped growing, the
 # job is done. The tailer only reads the file, so it never counts itself.
@@ -324,12 +324,12 @@ def main():
 
     # No "background finished" hook exists, so if the tab went red while Claude
     # handed back to the user, it would stay red. Now that this job is done, ask
-    # claude-tab-status.sh to flip a *stale red* back to green (it no-ops unless
+    # claude-tab-status.py to flip a *stale red* back to green (it no-ops unless
     # the tab is currently red and nothing else is still running). The detached
     # process inherited KITTY_LISTEN_ON / KITTY_WINDOW_ID from the launch hook.
     try:
         here = os.path.dirname(os.path.abspath(__file__))
-        subprocess.run([os.path.join(here, "claude-tab-status.sh"), "bg-recheck", LOG + ".slots", KIND],
+        subprocess.run([os.path.join(here, "claude-tab-status.py"), "bg-recheck", LOG, KIND],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:

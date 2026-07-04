@@ -31,10 +31,6 @@ def fmt_dur(sec):
     return f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
 
 
-def pid_path(agent_id):
-    return os.path.join(LOG + ".slots", f"sub.pid.{agent_id}")
-
-
 def is_teammate(tpath, agent_id):
     # An in-process agent-team teammate is, at the storage layer, just a subagent —
     # but its meta.json carries taskKind == "in_process_teammate". (Unlike an ordinary
@@ -104,12 +100,10 @@ def main():
         # still live, this is a duplicate start — don't write a second header or spawn
         # a second streamer (which would re-render the whole transcript a second time).
         if not is_new:
-            try:
-                if alive(int(open(pid_path(agent_id)).read().strip())):
-                    A.hook_event(d, decision="ignored: duplicate SubagentStart, streamer live")
-                    return
-            except Exception:
-                pass
+            _p = claude_slots.pid_get(LOG, agent_id)
+            if _p and alive(_p):
+                A.hook_event(d, decision="ignored: duplicate SubagentStart, streamer live")
+                return
         rgb = claude_slots.color(pal, slot)
         # An idle teammate that wakes on a new message fires SubagentStart AGAIN with
         # the same agent_id after its previous streamer fully finalised. That resume is
@@ -142,8 +136,7 @@ def main():
                     [sys.executable, streamer, agent_id, tpath, LOG, str(slot), atype, pal, desc],
                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL, start_new_session=True)
-                with open(pid_path(agent_id), "w") as f:
-                    f.write(str(proc.pid))
+                claude_slots.pid_set(LOG, agent_id, proc.pid)
                 spawned = proc.pid
                 A.spawn(LOG, proc.pid, [streamer, agent_id, str(slot), atype, pal],
                         purpose=f"stream:{'teammate' if team else 'subagent'} {atype}")
@@ -161,7 +154,7 @@ def main():
         # teammates into green. A foreground subagent is already blue via the lead's
         # blocked turn, so this is at worst a no-op for them.
         try:
-            subprocess.run([os.path.join(HERE, "claude-tab-status.sh"), "agent-start", LOG + ".slots"],
+            subprocess.run([os.path.join(HERE, "claude-tab-status.py"), "agent-start", LOG],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                            stderr=subprocess.DEVNULL, timeout=10)
         except Exception:
@@ -183,10 +176,8 @@ def main():
     # later RESUME of the same agent_id doesn't finalise its new streamer instantly.
     S.agent_set(LOG, agent_id, done=1)
     A.state_file(LOG, "state:agent." + agent_id, "write", "done=1 (stop signal for streamer)")
-    try:
-        running = alive(int(open(pid_path(agent_id)).read().strip()))
-    except Exception:
-        running = False
+    _p = claude_slots.pid_get(LOG, agent_id)
+    running = bool(_p) and alive(_p)
     if not running:
         got = claude_slots.lookup_id("sub", LOG, agent_id)
         if got:                                   # streamer died without finalising
@@ -199,10 +190,7 @@ def main():
         else:
             A.hook_event(d, decision="stop: no-op (already finalised / duplicate stop)")
         S.agent_set(LOG, agent_id, done=0)        # don't wedge a future resume
-        try:
-            os.remove(pid_path(agent_id))
-        except Exception:
-            pass
+        claude_slots.pid_del(LOG, agent_id)
     else:
         A.hook_event(d, decision="stop: done flag set, streamer will finalise")
 

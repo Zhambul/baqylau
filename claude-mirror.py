@@ -2,19 +2,77 @@
 # claude-mirror.py MIRROR_LOG [WIDTH]
 #
 # The command-mirror RENDERER. Runs inside the kitty split pane (launched by
-# claude-mirror.sh) and replaces the old `tail -F`. It reads the structured paint-op
-# log (JSONL, written by claude_ops producers), renders each op at the pane's CURRENT
-# width, and — the whole point of this design — RE-RENDERS EVERYTHING on resize so the
-# content reflows. Resizing the pane changes its pty size, which delivers SIGWINCH
-# here; we recompute the width, clear the screen, and repaint every op.
+# claude-split.py) and replaces the old `tail -F`. It polls the session's `ops`
+# table (the per-session state DB, claude_state — argv[1] is the mirror-log KEY the
+# DB path derives from; written by claude_ops producers), renders each op at the
+# pane's CURRENT width, and — the whole point of this design — RE-RENDERS EVERYTHING
+# on resize so the content reflows. Resizing the pane changes its pty size, which
+# delivers SIGWINCH here; we recompute the width, clear the screen, and repaint
+# every op.
 #
 # Width is read live from the pane itself (os.get_terminal_size), so producers never
 # need to know it — they only emit width-independent ops. A literal WIDTH argv is
 # accepted for non-tty testing.
-import json, os, signal, sys, time
+import json, os, signal, subprocess, sys, time
+
+
+def _ensure_pygments():
+    """The renderer syntax-highlights commands (bash + embedded python) with
+    pygments, and does so IN THIS PROCESS — so the interpreter running this file
+    must have pygments, or every command paints in the plain default colour with no
+    highlighting at all. kitty launches this pane with a PATH whose `python3` is
+    often the bare macOS / Xcode build (no pygments), so when pygments is missing,
+    probe for an interpreter that can import it and re-exec into it; if none is
+    found, keep running here (still works, just uncoloured). Set
+    CLAUDE_MIRROR_PYTHON to force a specific interpreter. (This replaces the old
+    claude-mirror.sh wrapper, whose only job was this probe.)"""
+    try:
+        import pygments  # noqa: F401
+        return
+    except ImportError:
+        pass
+    if os.environ.get("_CLAUDE_MIRROR_REEXEC"):     # never re-exec twice
+        return
+    import shutil
+    cands = [os.environ.get("CLAUDE_MIRROR_PYTHON"), shutil.which("python3"),
+             os.path.expanduser("~/.pyenv/shims/python3"),
+             "/opt/homebrew/bin/python3", "/usr/local/bin/python3"]
+    # Newest pyenv-installed CPython (e.g. .../versions/3.12.1/bin/python3), if any.
+    try:
+        import glob
+        vers = sorted(glob.glob(os.path.expanduser("~/.pyenv/versions/[0-9]*/")),
+                      key=lambda p: [int(x) for x in
+                                     os.path.basename(p.rstrip("/")).split(".")
+                                     if x.isdigit()])
+        if vers:
+            cands.append(os.path.join(vers[-1], "bin", "python3"))
+    except Exception:
+        pass
+    me = os.path.realpath(sys.executable or "")
+    for c in cands:
+        if not c or not os.access(c, os.X_OK):
+            continue
+        if os.path.realpath(c) == me:
+            continue
+        try:
+            ok = subprocess.run([c, "-c", "import pygments"],
+                                stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL).returncode == 0
+        except OSError:
+            ok = False
+        if ok:
+            os.environ["_CLAUDE_MIRROR_REEXEC"] = "1"
+            try:
+                os.execv(c, [c, os.path.abspath(__file__)] + sys.argv[1:])
+            except OSError:
+                continue
+
+
+_ensure_pygments()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_render as R
+import claude_state as St
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
@@ -119,45 +177,39 @@ def main():
     global _resized
     if not LOG:
         return
-    # Do NOT truncate: the log is the session's history (truncated once at
-    # SessionStart by claude-split.sh, removed at SessionEnd). Reading it from the
-    # top means TOGGLING the pane off/on re-shows everything that happened — and
+    # Do NOT clear the ops table: it is the session's history (parked/restored
+    # across resume by claude-split.py, fresh for a new session). Reading it from
+    # id 0 means TOGGLING the pane off/on re-shows everything that happened — and
     # while off there is no process at all, so no resources are used.
     signal.signal(signal.SIGWINCH, _on_winch)
 
-    pos, pending = 0, b""
+    db = St.db_path(LOG)
+    last, ino = 0, None
     while True:
-        # Drain any new ops appended to the log.
-        new = []
+        # A recreated DB file (new session reusing the key, or a park/restore
+        # cycle) leaves the cached connection pointing at the OLD inode — drop it
+        # and re-read from the top. A missing DB just means no producer has
+        # written yet (or a resume is mid-restore): keep waiting, don't reset.
         try:
-            size = os.path.getsize(LOG)
+            cur_ino = os.stat(db).st_ino
         except OSError:
-            size = 0
-        if size < pos:                       # log was truncated/rotated — restart
-            pos, pending, OPS[:] = 0, b"", []
-            _resized = True
-        if size > pos:
-            try:
-                # Read exactly the bytes we saw at getsize() — an unbounded read()
-                # can grab bytes a producer appended DURING the read, which `pos =
-                # size` would then not account for, so the next poll re-reads (and
-                # re-paints) them.
-                with open(LOG, "rb") as fh:
-                    fh.seek(pos)
-                    chunk = fh.read(size - pos)
-                    pending += chunk; pos += len(chunk)
-            except OSError:
-                pass
-            *lines, pending = pending.split(b"\n")
-            for ln in lines:
-                s = ln.decode("utf-8", "replace").strip()
-                if not s:
-                    continue
-                try:
-                    op = json.loads(s)
-                except Exception:
-                    continue
-                OPS.append(op); new.append(op)
+            cur_ino = None
+        if cur_ino is not None and cur_ino != ino:
+            if ino is not None:
+                St._CONNS.pop(db, None)
+                last, OPS[:] = 0, []
+                _resized = True
+            ino = cur_ino
+
+        # Drain any new ops appended to the table.
+        new = []
+        if cur_ino is not None:
+            last, new = St.ops_after(LOG, last)
+            if last < 0:                     # table shrank under us — restart
+                last, OPS[:] = 0, []
+                _resized = True
+                continue
+            OPS.extend(new)
             # Bound memory on a long session by dropping oldest ops from the in-memory
             # list. This only affects what a FUTURE full repaint (on resize) draws — the
             # already-printed lines stay in the terminal's scrollback — so we must NOT

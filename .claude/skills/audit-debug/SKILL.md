@@ -23,12 +23,12 @@ the bug **from evidence, not guesswork**.
 | `sessions` | Claude session | cwd, transcript_path, mirror_log, kitty_window_id, started_at/ended_at, end_reason, env (JSON of CLAUDE_MIRROR_*/KITTY_* seen at start) |
 | `hook_events` | hook invocation | hook, tool_name, agent_id ('' = main session), handler (script), **decision** (what the handler chose to do), **payload** (full hook stdin JSON, verbatim). ALL 30 hook events are recorded via a universal async subscriber (handler = 'subscriber', empty decision) — incl. PermissionRequest/Denied, PostToolBatch, MessageDisplay, TeammateIdle, Pre/PostCompact, ConfigChange, CwdChanged, FileChanged, Worktree\*, Elicitation\*, Setup, UserPromptExpansion, InstructionsLoaded — on top of the mirror handlers' own decision-carrying rows for the events they process. So "did event X even fire?" is always answerable from the subscriber rows, and a handler row can be cross-checked against the subscriber's independent record. |
 | `tab_transitions` | tab-colour decision | dispatch (raw arg: pretool/stop/bg-recheck/bg-watch/notify/…), prev_state → new_state, applied (0 = skipped/bailed **or the kitten @ call failed** — reason then carries "kitten @ failed rc=N"), **reason** |
-| `slots` | marker-file event | kind (bg/monitor/fg/sub), slot_n, agent_id, owner_pid, action (claim/claim-id/steal-stale/claim-denied/release/release-id/set-owner), marker_path |
-| `streams` | detached tailer/streamer/watcher | kind (fg/bg/monitor/subagent/teammate/codex/codex-watcher/**bg-watch/interrupt-watch**), agent_id/task_id, src_path, pid, started_at/ended_at, **end_reason** (writer-gone/sentinel/stop-sentinel/stoppedByUser/converted-ctrl-b/backstop-timeout/crash/state-moved-on/cleared-to-green/killed-or-crashed/…), lines_emitted. An open row from a dead pid = the watcher/tailer died — for bg-watch that IS the stuck-blue bug |
+| `slots` | palette/liveness-slot event (rows of the session state DB's `live` table — were marker files) | kind (bg/monitor/fg/sub), slot_n, agent_id, owner_pid, action (claim/claim-id/**claim-pid**/steal-stale/claim-denied/release/release-id/**release-pid**/set-owner), marker_path (now an opaque `<log>::live:<kind>.<key>` token). To see the CURRENT slot state: `sqlite3 /tmp/claude-mirror-<sid>.log.state.db "SELECT * FROM live"` |
+| `streams` | detached tailer/streamer/watcher | kind (fg/bg/monitor/subagent/teammate/codex/codex-watcher/**bg-watch/interrupt-watch**), agent_id/task_id, src_path, pid, started_at/ended_at, **end_reason** (writer-gone/sentinel/stop-sentinel/stoppedByUser/converted-ctrl-b/backstop-timeout/crash/state-moved-on/cleared-to-green/killed-or-crashed/state-db-parked/…), lines_emitted. An open row from a dead pid = the watcher/tailer died — for bg-watch that IS the stuck-blue bug |
 | `ops` | paint op written to the mirror log | producer (script), op (the JSON paint op — full pane reconstruction, survives SessionEnd) |
 | `errors` | swallowed exception | script, func, **traceback** (full), context (JSON of args in hand) |
 | `spawns` | detached process launch | parent_script, child_pid, argv, purpose |
-| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split cost_usd priced — attribution and re-pricing need no timestamp correlation. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff |
+| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final/keep-history/restore-history/reuse-live-db/fresh-db**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split cost_usd priced — attribution and re-pricing need no timestamp correlation. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff. **keep-history/restore-history/reuse-live-db/fresh-db** (path = `<log>.state.db.keep`, content = the SessionStart `source`) trace the session state DB's lifecycle: SessionEnd parks it as `*.keep` (`keep-history`); SessionStart either restores it (`restore-history`, resume of the same sid), leaves a live DB alone (`reuse-live-db`, compact or resume-after-crash), or starts fresh (`fresh-db`). The state DB IS the mirror content (its `ops` table) — so these rows are the resume-history trail |
 | `pane_events` | mirror/scoreboard pane operation | action (open/close/toggle-on/toggle-off/grow/shrink/reset/setpct), **ok** (verified against kitty — 0 means the pane genuinely isn't there), detail (bias/resulting width). First stop for "frozen/missing pane" reports |
 
 ## Triage order
@@ -37,8 +37,8 @@ the bug **from evidence, not guesswork**.
    signatures: swallowed errors, streams that never ended, slot claims without
    release, tab left on a busy colour, duplicate SubagentStart, start-without-stop,
    failed tools, spawns that never registered a stream, pane operations that
-   failed, tab applies where `kitten @` failed. Start here; a non-empty
-   section usually IS the bug.
+   failed, tab applies where `kitten @` failed, a resume that lost its mirror
+   history. Start here; a non-empty section usually IS the bug.
 2. **`python3 claude_audit.py errors <sid>`** — full tracebacks for every swallowed
    exception. An error just before the symptom's timestamp is the prime suspect.
 3. **`python3 claude_audit.py timeline <sid>`** — the merged chronological story
@@ -49,7 +49,9 @@ the bug **from evidence, not guesswork**.
 
 ## Known bug shapes → what to look for
 
-- **Tab stuck blue** — a `slots` claim (bg/fg/monitor/sub) with no release + a
+- **Tab stuck blue** — a `slots` claim (bg/fg/monitor/sub) with no release (cross-check
+  the live truth: `sqlite3 .../claude-mirror-<sid>.log.state.db "SELECT * FROM live"` —
+  a row whose pid is dead is stale-but-harmless, it's ignored by liveness checks) + a
   `streams` row with `ended_at IS NULL`, or a `tab_transitions` `bg-recheck`/`bg-watch`
   row with `applied=0` whose reason explains why it refused to clear. Also check the
   `bg-watch` **stream row itself**: `killed-or-crashed` / still-open = the watcher died
@@ -66,7 +68,10 @@ the bug **from evidence, not guesswork**.
 - **Tab shows a colour the audit says it shouldn't** — trust `applied=1` rows only:
   any transition with "kitten @ failed rc=N" in the reason means the script decided a
   colour but kitty never showed it (dead socket, closed tab), and the persisted state
-  file may now disagree with the real tab.
+  (the `tab` row in the global /tmp/claude-kitty-tab.db, keyed by window id) may now
+  disagree with the real tab — `sqlite3 /tmp/claude-kitty-tab.db "SELECT * FROM tab"`
+  shows what the tracker THINKS is displayed; its `watchers` table holds the
+  bg-watch/interrupt-watch pid locks.
 - **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
   `state_files` shows whether the outcome hand-off (`state:done:<token>`) / the agent
@@ -75,6 +80,15 @@ the bug **from evidence, not guesswork**.
   with `ok=0` means the mirror (or the scoreboard bar — see detail) genuinely never
   opened; a resize whose detail shows an unchanged resulting width did nothing. Then
   cross-check `spawns` (was the renderer launched?) and `errors` (renderer crash).
+- **Mirror came back empty after `--resume`/`--continue`** — the `state_files` DB-fate
+  row next to the SessionStart tells you what happened to the history: `restore-history`
+  = it WAS restored (an empty pane then points at the renderer — check `spawns`/`errors`,
+  and whether the restored DB's `ops` table actually has rows);
+  `fresh-db` on a `source=resume` start = the `*.keep` was missing (prior SessionEnd
+  never ran its `keep-history`, or the 7-day sweep ate it — check the prior session's
+  `pane_events` close row and its `keep-history` state row). The `anomalies` command
+  flags the `fresh-db`-on-resume case directly. Pre-2026-07-04 builds always
+  truncated on SessionStart — empty-on-resume there is the old design, not a bug.
 - **Wrong scoreboard numbers** — replay the `state_files` `bump` / `bump-transcript`
   rows: each carries the delta AND the resulting totals, so find the exact bump where
   the running total diverges from what the session actually did (`hook_events` is the

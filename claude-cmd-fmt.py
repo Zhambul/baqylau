@@ -3,8 +3,8 @@
 #
 # Reads a Claude Code PostToolUse(Bash) hook payload (JSON) on stdin and appends
 # a formatted block (command | output | elapsed) to the mirror log given as
-# argv[1], wrapped to the pane width given as argv[2]. Invoked by
-# claude-cmd-log.sh. The bash/python highlighting, gutter-wrapping, and escape
+# argv[1], wrapped to the pane width given as argv[2]. Invoked directly as
+# the PostToolUse(Bash) hook. The bash/python highlighting, gutter-wrapping, and escape
 # handling live in claude_render (shared with claude-substream.py).
 #
 # Subagent (Task/Agent) tool calls fire this same hook (with an agent_id), but the

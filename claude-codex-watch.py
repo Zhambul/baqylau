@@ -225,7 +225,9 @@ def main():
     seen = set()             # companion job ids + rollout uuids already handled
     pending_ro = {}          # rollout uuid -> first-seen wall time (grace before deciding)
     try:
-        while os.path.exists(LOG):
+        # Session-alive signal: the per-session state DB (parked as *.keep at
+        # SessionEnd, so the path vanishes — was the mirror log file itself).
+        while os.path.exists(S.db_path(LOG)):
             # --- source A: companion jobs (labelled, Claude-session matched) ---------
             for d in jobs_dirs():
                 for jf in glob.glob(os.path.join(d, "*.json")):
@@ -310,7 +312,7 @@ if __name__ == "__main__":
         pass
     try:
         main()
-        A.stream_end(_WATCH_ID, "mirror-log-removed (session end)")
+        A.stream_end(_WATCH_ID, "state-db-parked (session end)")
     except Exception:
         A.error(LOG, "main")
         A.stream_end(_WATCH_ID, "crash")
