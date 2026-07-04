@@ -76,3 +76,7 @@ The audit trail is only useful if it has no blind spots — a mechanism that lea
 ## README.md is the design doc
 
 The README (~1000 lines) is the authoritative, exhaustively-detailed record of how every mechanism works *and why the alternatives failed*. When changing behavior, update the corresponding README section in the same commit — the "why not X" notes there are what prevents regressing to already-rejected designs.
+
+## Always commit and push to main
+
+This is a personal repo with a linear `main` history — there is no PR/review flow. When a change is complete and verified (code + its audit wiring + README/skill docs, per the sections above), commit it directly to `main` and `git push` — every time, without being asked again and without creating a branch. Do not open PRs or leave work sitting on a feature branch.
