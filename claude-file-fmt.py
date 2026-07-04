@@ -11,9 +11,10 @@
 #
 # Invoked directly as the PostToolUse hook. Verbs mirror Claude Code's own UI: Edit and
 # MultiEdit show as "Update", Write as "Write", Read as "Read".
-import json, os, sys
+import os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_hook as H
 import claude_ops as O
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -42,28 +43,22 @@ RST = "\033[0m"
 
 
 def main():
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
+    d, LOG = H.read_payload()
+    if d is None:
         return
     # A subagent's file ops are rendered by claude-substream.py (in transcript
     # order, with the subagent's messages) — skip them here to avoid duplication.
     if d.get("agent_id"):
-        A.hook_event(d, decision="ignored: agent_id (substream owns rendering)")
-        return
+        return H.ignore(d, "agent_id (substream owns rendering)")
     label = LABEL.get(d.get("tool_name") or "")
     if not label:
-        A.hook_event(d, decision="ignored: not a file tool")
-        return
+        return H.ignore(d, "not a file tool")
     ti = d.get("tool_input") or {}
     path = ti.get("file_path") or ti.get("notebook_path") or ""
     if not path:
-        A.hook_event(d, decision="ignored: no file path")
-        return
-    LOG = O.log_path(d)
+        return H.ignore(d, "no file path")
     name = os.path.basename(path.rstrip("/")) or path
-    failed = "Failure" in (d.get("hook_event_name") or "")
+    failed = H.is_failure(d)
     if failed:
         col, mark = fg(224, 108, 117), DIM + " ✗" + RST   # red verb + ✗ on failure
     else:
@@ -109,7 +104,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        A.error("", "main")
+    H.run(main)

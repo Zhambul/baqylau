@@ -12,9 +12,10 @@
 # Empirically the payload carries task_id + task_subject + task_description (NOT the
 # "task_title"/"task_status" the docs mention). There is no readable per-task file
 # on disk, so the hook payload is the source of truth.
-import json, os, sys
+import os, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_hook as H
 import claude_ops as O
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -24,12 +25,9 @@ DONE_RGB    = (152, 195, 121)   # green — a task finished
 
 
 def main():
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
+    d, LOG = H.read_payload()
+    if d is None:
         return
-    LOG = O.log_path(d)
     ev   = d.get("hook_event_name") or ""
     tid  = d.get("task_id") or "?"
     subj = d.get("task_subject") or d.get("task_title") or d.get("task_description") or ""
@@ -43,7 +41,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        A.error("", "main")
+    H.run(main)

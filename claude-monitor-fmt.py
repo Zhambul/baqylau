@@ -6,9 +6,10 @@
 # monitor's event stream into the same log. Monitor's PostToolUse fires at start
 # (the tool returns immediately while streaming continues), with the stream's
 # taskId in tool_response — same shape as a background Bash launch.
-import json, os, re, subprocess, sys
+import os, re, sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_hook as H
 import claude_slots
 import claude_ops as O
 
@@ -16,15 +17,13 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 
 def main():
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
+    d, LOG = H.read_payload()
+    if d is None:
         return
     if (d.get("tool_name") or "") != "Monitor":
-        A.hook_event(d, decision="ignored: not the Monitor tool")
-        return
-    LOG = O.log_path(d)
+        return H.ignore(d, "not the Monitor tool")
+    # NO agent_id guard here, deliberately: a subagent's monitors ARE rendered by
+    # this hook (noted in the header below) — the substream doesn't own them.
     ti = d.get("tool_input") or {}
     tr = d.get("tool_response") or {}
     taskid = tr.get("taskId") if isinstance(tr, dict) else None
@@ -48,25 +47,17 @@ def main():
 
     O.emit(LOG, O.blank(), O.rule(), O.label(text, head_rgb), O.rule())
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    streamer = os.path.join(here, "claude-stream.py")
-    if taskid and os.path.exists(streamer):
-        try:
-            proc = subprocess.Popen(
-                [sys.executable, streamer, "monitor", taskid, LOG, str(slot), sig],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True)
+    if taskid:
+        proc = H.spawn_streamer("claude-stream.py",
+                                ["monitor", taskid, LOG, slot, sig], LOG,
+                                purpose=f"stream:monitor task={taskid}",
+                                audit_argv=["monitor", taskid, str(slot)])
+        if proc is not None:
             claude_slots.set_owner(marker, proc.pid)
-            A.spawn(LOG, proc.pid, [streamer, "monitor", taskid, str(slot)],
-                    purpose=f"stream:monitor task={taskid}")
-        except Exception:
-            A.error(LOG, "spawn monitor tailer", {"taskid": taskid})
+        else:
             claude_slots.release("monitor", LOG, slot, os.getpid())
     A.hook_event(d, decision=f"monitor header: task={taskid or '?'} slot={slot} sig={sig!r}")
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        A.error("", "main")
+    H.run(main)

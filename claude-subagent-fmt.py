@@ -11,9 +11,10 @@
 #   stop  — SubagentStop: signal completion to the streamer (which writes the footer
 #           and releases the slot). Safety net: if the streamer isn't running, write
 #           the footer + release the slot here.
-import json, os, subprocess, sys, time
+import json, os, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_hook as H
 import claude_slots
 import claude_ops as O
 import claude_state as S
@@ -22,7 +23,6 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 PHASE = sys.argv[1] if len(sys.argv) > 1 else "start"
 LOG   = ""   # set in main() from the payload's session_id (per-session log)
-HERE  = os.path.dirname(os.path.abspath(__file__))
 
 
 def fmt_dur(sec):
@@ -58,12 +58,9 @@ alive = S.pid_alive
 
 def main():
     global LOG
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
+    d, LOG = H.read_payload()
+    if d is None:
         return
-    LOG = O.log_path(d)
 
     # PreToolUse(Agent): stash the task description for the upcoming SubagentStart.
     if PHASE == "push":
@@ -74,8 +71,7 @@ def main():
 
     agent_id = d.get("agent_id")
     if not agent_id:
-        A.hook_event(d, decision="ignored: no agent_id")
-        return
+        return H.ignore(d, "no agent_id")
     atype = d.get("agent_type") or "agent"
     tpath = d.get("transcript_path") or ""
 
@@ -127,20 +123,16 @@ def main():
         # Spawn the transcript streamer (detached) and record its pid so `stop` can
         # tell whether it's still running. PALETTE (argv 6) tells it which colour
         # family to use — must match the header colour chosen just above.
-        streamer = os.path.join(HERE, "claude-substream.py")
         spawned = None
-        if tpath and os.path.exists(streamer):
-            try:
-                proc = subprocess.Popen(
-                    [sys.executable, streamer, agent_id, tpath, LOG, str(slot), atype, pal, desc],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, start_new_session=True)
+        if tpath:
+            proc = H.spawn_streamer(
+                "claude-substream.py",
+                [agent_id, tpath, LOG, slot, atype, pal, desc], LOG,
+                purpose=f"stream:{'teammate' if team else 'subagent'} {atype}",
+                audit_argv=[agent_id, str(slot), atype, pal])
+            if proc is not None:
                 claude_slots.pid_set(LOG, agent_id, proc.pid)
                 spawned = proc.pid
-                A.spawn(LOG, proc.pid, [streamer, agent_id, str(slot), atype, pal],
-                        purpose=f"stream:{'teammate' if team else 'subagent'} {atype}")
-            except Exception:
-                A.error(LOG, "spawn substream", {"agent": agent_id, "type": atype})
         A.hook_event(d, decision="start: %s slot=%s%s%s streamer=%s"
                      % ("teammate" if team else "subagent", slot,
                         " resumed" if resumed else "", "" if is_new else " re-claim",
@@ -152,12 +144,7 @@ def main():
         # is racy (the meta.json can lag SubagentStart), so gating on it dropped real
         # teammates into green. A foreground subagent is already blue via the lead's
         # blocked turn, so this is at worst a no-op for them.
-        try:
-            subprocess.run([os.path.join(HERE, "claude-tab-status.py"), "agent-start", LOG],
-                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=10)
-        except Exception:
-            pass
+        H.notify_tab("agent-start", [LOG], LOG)
         return
 
     # stop: signal completion to the streamer, which is the SOLE writer of the
@@ -195,7 +182,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        A.error(LOG, "main", {"phase": PHASE})
+    H.run(main, phase=PHASE)

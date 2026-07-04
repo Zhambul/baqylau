@@ -20,7 +20,7 @@
 #                             when outer is given), wrapped so the gutter repeats on
 #                             every visual row. s may already contain ANSI (zero-width)
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
-import difflib, fcntl, json, os, re, sys, time
+import difflib, json, os, re, shlex, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 try:
@@ -32,6 +32,43 @@ except Exception:                       # audit must never break a producer
     A = _NoAudit()
 import claude_paths as P                # the one owner of the mirror-log path format
 import claude_state as S                # per-session runtime state (SQLite, /tmp)
+
+
+def parse_redirect(cmd, cwd):
+    """If `cmd` sends stdout to a file (… > file / &> file / 1>> file), return
+    (absolute_target, append) — else None. Used by BOTH Bash hooks: claude-cmd-pre
+    tails the redirect target instead of tee-ing a second copy, and claude-cmd-fmt
+    points the background tailer at it (the task's own output file stays empty
+    when the bytes go to the redirect). Conservative: only stdout (or &>)
+    redirects, skip /dev/* and fd-dup targets (&1), give up on anything we can't
+    tokenise. Last redirect wins (the effective stdout sink)."""
+    try:
+        toks = shlex.split(cmd, posix=True)
+    except ValueError:
+        return None
+    target, append, i = None, False, 0
+    while i < len(toks):
+        t = toks[i]
+        if ">" in t and not t.startswith("2"):
+            m = re.match(r"^(?:&|1)?(>>?)(.*)$", t)
+            if m:
+                rest = m.group(2)
+                if rest:
+                    target, append = rest, m.group(1) == ">>"
+                elif i + 1 < len(toks):
+                    target, append = toks[i + 1], m.group(1) == ">>"
+                    i += 1
+        i += 1
+    if not target or target.startswith("&") or target.startswith("/dev/"):
+        return None
+    # shlex does NO shell expansion: a target holding $vars, backticks, globs, or a
+    # leading ~ is not the path the shell will actually write to (`> "$OUT"` would
+    # have us tail a literal file named $OUT). Fall back to the caller's side file.
+    if any(c in target for c in "$`*?[") or target.startswith("~"):
+        return None
+    if not os.path.isabs(target):
+        target = os.path.join(cwd or os.getcwd(), target)
+    return target, append
 
 
 def diff_counts(tool_name, inp):

@@ -19,9 +19,10 @@
 # the main loop, which always awaits one Bash call's Pre->exec->Post cycle before
 # starting the next, but not for concurrent subagents — those keep the old bundled
 # rendering (already excluded below via the agent_id check, same as claude-cmd-fmt.py).
-import json, os, re, shlex, subprocess, sys, time
+import json, os, shlex, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_hook as H
 import claude_ops as O
 import claude_slots
 import claude_state as S
@@ -31,59 +32,19 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 LBL_FG = (170, 185, 210)  # slate — same colour claude-cmd-fmt.py uses for an OK foreground block
 
 
-def parse_redirect(cmd, cwd):
-    # Mirrors claude-cmd-fmt.py's parse_redirect: if the command already sends its
-    # own stdout to a file, tail THAT instead of tee-ing into a second file.
-    # Returns (absolute_target, append) or None.
-    try:
-        toks = shlex.split(cmd, posix=True)
-    except ValueError:
-        return None
-    target, append, i = None, False, 0
-    while i < len(toks):
-        t = toks[i]
-        if ">" in t and not t.startswith("2"):
-            m = re.match(r"^(?:&|1)?(>>?)(.*)$", t)
-            if m:
-                rest = m.group(2)
-                if rest:
-                    target, append = rest, m.group(1) == ">>"
-                elif i + 1 < len(toks):
-                    target, append = toks[i + 1], m.group(1) == ">>"
-                    i += 1
-        i += 1
-    if not target or target.startswith("&") or target.startswith("/dev/"):
-        return None
-    # shlex does NO shell expansion: a target holding $vars, backticks, globs, or a
-    # leading ~ is not the path the shell will actually write to (`> "$OUT"` would
-    # have us tail a literal file named $OUT). Fall back to the tee side file.
-    if any(c in target for c in "$`*?[") or target.startswith("~"):
-        return None
-    if not os.path.isabs(target):
-        target = os.path.join(cwd or os.getcwd(), target)
-    return target, append
-
-
 def main():
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
+    d, log = H.read_payload()
+    if d is None:
         return
     if os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") == "0":
-        A.hook_event(d, decision="ignored: CLAUDE_MIRROR_LIVE_FG=0")
-        return                                     # escape hatch if the rewrite ever misbehaves
+        return H.ignore(d, "CLAUDE_MIRROR_LIVE_FG=0")   # escape hatch if the rewrite ever misbehaves
     if d.get("agent_id"):
-        A.hook_event(d, decision="ignored: agent_id")
-        return
+        return H.ignore(d, "agent_id")
     ti = d.get("tool_input") or {}
     cmd = ti.get("command") or ""
     if not cmd.strip() or ti.get("run_in_background"):
-        A.hook_event(d, decision="ignored: " + ("background command" if cmd.strip()
-                                                else "empty command"))
-        return
+        return H.ignore(d, "background command" if cmd.strip() else "empty command")
 
-    log = O.log_path(d)
     held = S.hand_peek(log, "fg-live")
     if held:
         # Normally consumed by claude-cmd-fmt.py's PostToolUse handler — but a
@@ -103,7 +64,9 @@ def main():
         A.state_file(log, "state:fg-live", "remove-stale",
                      "dead tailer pid — record abandoned")
 
-    redirect = parse_redirect(cmd, d.get("cwd"))
+    # If the command already sends its own stdout to a file, tail THAT instead of
+    # tee-ing into a second file (shared tokenizer — see claude_ops.parse_redirect).
+    redirect = O.parse_redirect(cmd, d.get("cwd"))
     wrapped_cmd, own, append = None, False, False
     # The ".done" sentinel gets its own session-keyed /tmp path, NEVER derived from
     # the command's redirect target — deriving it from `src` used to drop stray
@@ -124,9 +87,7 @@ def main():
         q = shlex.quote(src)
         wrapped_cmd = "{ " + cmd + "\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
 
-    here = os.path.dirname(os.path.abspath(__file__))
-    streamer = os.path.join(here, "claude-stream.py")
-    if not os.path.exists(streamer):
+    if not os.path.exists(H.script("claude-stream.py")):
         if own:
             try: os.remove(src)
             except Exception: pass
@@ -147,14 +108,11 @@ def main():
         # A `>>` redirect appends to an EXISTING file — tail only what this command
         # adds, or the whole prior file contents would be replayed into the mirror.
         env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, streamer, "fg", f"fg-{os.getpid()}-{int(time.time())}", log, str(slot)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-        A.spawn(log, proc.pid, [streamer, "fg", str(slot)], purpose="stream:fg live tail")
-    except Exception:
-        A.error(log, "spawn fg tailer", {"src": src})
+    proc = H.spawn_streamer("claude-stream.py",
+                            ["fg", f"fg-{os.getpid()}-{int(time.time())}", log, slot],
+                            log, env=env, purpose="stream:fg live tail",
+                            audit_argv=["fg", str(slot)])
+    if proc is None:
         claude_slots.release("fg", log, slot, os.getpid())
         if own:
             try: os.remove(src)
@@ -184,7 +142,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        A.error("", "main")
+    H.run(main)

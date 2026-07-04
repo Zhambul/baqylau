@@ -174,6 +174,14 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   | `StopFailure`      | —      | `claude-tab-status.py stop` (turn ended on an API error — keep the tab from getting stuck on the "busy" colour) |
   | `SessionEnd`       | —      | `claude-tab-status.py clear` + `claude-split.py close` |
 
+  All six `*-fmt.py`/`-pre.py` handlers share **`claude_hook.py`** — the harness
+  owning the identical per-hook skeleton (stdin payload parse + mirror-log
+  derivation, audited ignore-decisions, detached streamer spawn with the
+  load-bearing `start_new_session=True`, and the top-level audit-then-swallow).
+  The `agent_id` main-session guard is deliberately NOT in the harness: most
+  handlers skip agent-inner events, but `claude-monitor-fmt.py` renders subagent
+  monitors on purpose, so each handler makes that call explicitly.
+
   Agent-team support also needs the experimental feature itself enabled, via an
   `env` entry in the same `settings.json` (read at session start):
   ```json

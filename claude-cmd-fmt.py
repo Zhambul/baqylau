@@ -10,9 +10,10 @@
 # Subagent (Task/Agent) tool calls fire this same hook (with an agent_id), but the
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
-import json, os, shlex, subprocess, sys, re
+import os, sys, re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_hook as H
 import claude_slots
 import claude_render as R
 import claude_ops as O
@@ -27,92 +28,41 @@ LBL_BG   = (209, 154, 102)  # orange  — background header chip / foreground "i
 LBL_FAIL = (224, 108, 117)  # red     — a failed tool (PostToolUseFailure)
 
 
-def parse_redirect(cmd, cwd):
-    # If the command sends stdout to a file (… > file / &> file / 1>> file), the
-    # background task's own output file stays EMPTY — the bytes go to that file
-    # instead. Return (absolute_path, append) so the tailer can follow it live;
-    # otherwise there'd be nothing to show until the job exits. Conservative: only
-    # stdout (or &>) redirects, skip /dev/* and fd-dup targets (&1), give up on
-    # anything we can't tokenise. Last redirect wins (the effective stdout sink).
-    try:
-        toks = shlex.split(cmd, posix=True)
-    except ValueError:
-        return None
-    target, append, i = None, False, 0
-    while i < len(toks):
-        t = toks[i]
-        if ">" in t and not t.startswith("2"):
-            m = re.match(r"^(?:&|1)?(>>?)(.*)$", t)
-            if m:
-                rest = m.group(2)
-                if rest:
-                    target, append = rest, m.group(1) == ">>"
-                elif i + 1 < len(toks):
-                    target, append = toks[i + 1], m.group(1) == ">>"
-                    i += 1
-        i += 1
-    if not target or target.startswith("&") or target.startswith("/dev/"):
-        return None
-    # shlex does NO shell expansion: a target holding $vars, backticks, globs, or a
-    # leading ~ is not the path the shell will actually write to (`> "$OUT"` would
-    # have us tail a literal file named $OUT). Fall back to the task output file.
-    if any(c in target for c in "$`*?[") or target.startswith("~"):
-        return None
-    if not os.path.isabs(target):
-        target = os.path.join(cwd or os.getcwd(), target)
-    return target, append
-
-
 def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
-    # Launch claude-stream.py detached (own session) so it keeps tailing the job's
-    # output file after this hook exits. Passes the claimed slot so its gutter +
-    # finish chip match the header colour. If the command redirected stdout to a
-    # file (`src`), hand it to the streamer via env so it tails that instead of the
-    # empty task output file. `skip_existing` is for a Ctrl+B conversion handoff: the
+    # Launch claude-stream.py detached so it keeps tailing the job's output file
+    # after this hook exits. Passes the claimed slot so its gutter + finish chip
+    # match the header colour. If the command redirected stdout to a file (`src`),
+    # hand it to the streamer via env so it tails that instead of the empty task
+    # output file. `skip_existing` is for a Ctrl+B conversion handoff: the
     # departing fg tailer already showed whatever came through its own tee copy, so
     # the replacement bg tailer should skip whatever's already in the task's output
     # file rather than re-showing it from the start. Returns the Popen (or None).
-    here = os.path.dirname(os.path.abspath(__file__))
-    streamer = os.path.join(here, "claude-stream.py")
-    if not (taskid and os.path.exists(streamer)):
+    if not taskid:
         return None
     env = dict(os.environ)
     if src:
         env["CLAUDE_STREAM_SRC"] = src
     if skip_existing:
         env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, streamer, kind, taskid, LOG, str(slot)],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-        A.spawn(LOG, proc.pid, [streamer, kind, taskid, str(slot)],
-                purpose=f"stream:{kind} task={taskid}")
-        return proc
-    except Exception:
-        A.error(LOG, "_spawn_stream", {"kind": kind, "taskid": taskid})
-        return None
+    return H.spawn_streamer("claude-stream.py", [kind, taskid, LOG, slot], LOG,
+                            env=env, purpose=f"stream:{kind} task={taskid}",
+                            audit_argv=[kind, taskid, str(slot)])
 
 
 def main():
     global LOG
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
+    d, LOG = H.read_payload()
+    if d is None:
         return
-    LOG = O.log_path(d)
     # A subagent's tool calls are rendered (in transcript order, with messages) by
     # claude-substream.py — skip them here so they aren't rendered twice.
     if d.get("agent_id"):
-        A.hook_event(d, decision="ignored: agent_id (substream owns rendering)")
-        return
+        return H.ignore(d, "agent_id (substream owns rendering)")
     ti  = d.get("tool_input") or {}
     tr  = d.get("tool_response") or {}
     cmd = (ti.get("command") or "")
     if not cmd.strip():
-        A.hook_event(d, decision="ignored: empty command")
-        return
+        return H.ignore(d, "empty command")
     bg = bool(ti.get("run_in_background"))
     # Ctrl+B mid-command: the model asked for a plain foreground run, but the USER
     # backgrounded it before it finished. Claude Code reports this the same way as a
@@ -166,7 +116,7 @@ def main():
             # Converted: find_file() locates tasks/<taskid>.output itself, same as any
             # genuine background command — this cmd string's own redirect (if any) is
             # irrelevant to where Claude Code is now writing the real output.
-            redirect = None if converted else parse_redirect(cmd, d.get("cwd"))
+            redirect = None if converted else O.parse_redirect(cmd, d.get("cwd"))
             src, src_append = redirect if redirect else (None, False)
             # skip_existing for a `>>` redirect: tail only what this job appends, or
             # the target file's entire prior contents would replay into the mirror.
@@ -183,7 +133,7 @@ def main():
 
     ms  = d.get("duration_ms")
     dur = "?" if ms is None else (f"{ms/1000:.1f}s" if ms < 60000 else f"{int(ms//60000)}m{int(ms//1000)%60:02d}s")
-    failed = "Failure" in (d.get("hook_event_name") or "")
+    failed = H.is_failure(d)
     interrupted = bool(d.get("is_interrupt"))
 
     if failed:
@@ -243,7 +193,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except Exception:
-        A.error(LOG, "main")
+    H.run(main)
