@@ -509,7 +509,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     The **`⬡` session-id row** is always shown (parsed from the mirror-log filename),
     so a pane is identifiable at a glance. The **`✉` message census** gives live
     visibility into the agent-team message flow and is **always shown** (defaults to
-    `0 msgs`, even for a non-team session). It comes from `claude_ops.update_messages()`,
+    `0 msgs`, even for a non-team session). It comes from `claude_msgs.update_messages()`,
     which — since there is **no hook** for a message being read/consumed — tracks state
     by **stateful polling**: each tick it diffs the team inboxes against the persisted
     state (the state DB's `messages` table, keyed by `msg_id` — was a `.msgs.json`

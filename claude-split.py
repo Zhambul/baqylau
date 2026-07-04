@@ -40,6 +40,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import claude_audit as A   # noqa: E402
+import claude_kitty as K   # noqa: E402
 import claude_ops as O     # noqa: E402
 import claude_paths as P   # noqa: E402
 
@@ -159,38 +160,17 @@ LISTEN_ON = resolve_listen_on()
 os.environ["KITTY_LISTEN_ON"] = LISTEN_ON
 
 
-def find_kitten():
-    k = os.environ.get("KITTY_KITTEN_BIN")
-    if k:
-        return k
-    k = shutil.which("kitten")
-    if k:
-        return k
-    bundle = "/Applications/kitty.app/Contents/MacOS/kitten"
-    return bundle if os.access(bundle, os.X_OK) else None
-
-
-KITTEN = find_kitten()
+KITTEN = K.find_kitten()
 
 
 def kitten_run(*args):
     """A silenced `kitten @ …` call; returns the exit code (1 on any failure)."""
-    try:
-        return subprocess.run([KITTEN, "@", "--to", LISTEN_ON, *args],
-                              stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL).returncode
-    except Exception:
-        return 1
+    return K.kitten_run(KITTEN, LISTEN_ON, *args)
 
 
 def kitten_ls():
     """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
-    try:
-        out = subprocess.run([KITTEN, "@", "--to", LISTEN_ON, "ls"],
-                             capture_output=True, text=True).stdout
-        return json.loads(out)
-    except Exception:
-        return []
+    return K.kitten_ls(KITTEN, LISTEN_ON)
 
 
 # --- session identity --------------------------------------------------------
@@ -206,21 +186,16 @@ def sid_from_stdin():
 
 def sid_from_focus():
     """Keybinding: the session of the currently focused kitty tab."""
-    for osw in kitten_ls():
-        if not osw.get("is_focused"):
-            continue                          # the frontmost OS window
-        for t in osw.get("tabs", []):
-            if not t.get("is_focused"):
-                continue                      # its active tab
-            sess = mir = ""
-            for w in t.get("windows", []):
-                uv = w.get("user_vars", {})
-                if uv.get("claude_session"):
-                    sess = uv["claude_session"]
-                if uv.get("claude_mirror"):
-                    mir = uv["claude_mirror"]
-            return sess or mir
-    return ""
+    sess = mir = ""
+    for osw, t, w in K.iter_windows(kitten_ls()):
+        if not (osw.get("is_focused") and t.get("is_focused")):
+            continue                          # frontmost OS window, active tab
+        uv = w.get("user_vars", {})
+        if uv.get("claude_session"):
+            sess = uv["claude_session"]
+        if uv.get("claude_mirror"):
+            mir = uv["claude_mirror"]
+    return sess or mir
 
 
 def log_for(sid):
@@ -297,8 +272,12 @@ def project_bias():
     return BIAS
 
 
-def current_pct(sid):
-    """The mirror's current width as % of its tab, or None."""
+def mirror_geometry(sid):
+    """(mirror_columns, tab_total_columns) for the tab holding this session's
+    mirror, or None. Scorebar windows are excluded from the width math — the bar
+    shares the mirror's column, so counting it would double-count that column.
+    The one geometry walk behind current_pct AND target_delta (they had drifted
+    into two near-identical copies)."""
     for osw in kitten_ls():
         for t in osw.get("tabs", []):
             wins = [w for w in t.get("windows", [])
@@ -307,9 +286,17 @@ def current_pct(sid):
                         if w.get("user_vars", {}).get("claude_mirror") == sid), 0)
             if not cur:
                 continue
-            total = sum(w.get("columns", 0) for w in wins)
-            return round(100 * cur / total) if total else None
+            return cur, sum(w.get("columns", 0) for w in wins)
     return None
+
+
+def current_pct(sid):
+    """The mirror's current width as % of its tab, or None."""
+    g = mirror_geometry(sid)
+    if not g:
+        return None
+    cur, total = g
+    return round(100 * cur / total) if total else None
 
 
 def save_size(sid):
@@ -327,12 +314,8 @@ def save_size(sid):
 # the mirror's column, so counting its columns would double-count that column).
 
 def window_exists(var, sid):
-    for osw in kitten_ls():
-        for t in osw.get("tabs", []):
-            for w in t.get("windows", []):
-                if w.get("user_vars", {}).get(var) == sid:
-                    return True
-    return False
+    return any(w.get("user_vars", {}).get(var) == sid
+               for _o, _t, w in K.iter_windows(kitten_ls()))
 
 
 def mirror_exists(sid):
@@ -375,11 +358,9 @@ BAR_ROWS = 4   # ⬡ session id + ✉ message census + 2 session-stats rows
 
 def bar_delta(sid):
     """(BAR_ROWS - current bar rows), or None if the bar can't be measured."""
-    for osw in kitten_ls():
-        for t in osw.get("tabs", []):
-            for w in t.get("windows", []):
-                if w.get("user_vars", {}).get("claude_scorebar") == sid:
-                    return BAR_ROWS - int(w.get("lines") or 0)
+    for _o, _t, w in K.iter_windows(kitten_ls()):
+        if w.get("user_vars", {}).get("claude_scorebar") == sid:
+            return BAR_ROWS - int(w.get("lines") or 0)
     return None
 
 
@@ -438,17 +419,11 @@ def resize_mirror(inc, sid):
 # ITERATE — re-measuring — until within a cell.
 def target_delta(pct, sid):
     """(target_cols - current_mirror_cols), or None if the mirror can't be found."""
-    for osw in kitten_ls():
-        for t in osw.get("tabs", []):
-            wins = [w for w in t.get("windows", [])
-                    if not w.get("user_vars", {}).get("claude_scorebar")]
-            cur = next((w.get("columns", 0) for w in wins
-                        if w.get("user_vars", {}).get("claude_mirror") == sid), 0)
-            if not cur:
-                continue
-            total = sum(w.get("columns", 0) for w in wins)
-            return round(total * pct / 100.0) - cur if total else None
-    return None
+    g = mirror_geometry(sid)
+    if not g:
+        return None
+    cur, total = g
+    return round(total * pct / 100.0) - cur if total else None
 
 
 def size_to(pct, sid):
@@ -466,6 +441,43 @@ def size_to(pct, sid):
 
 # --- commands -------------------------------------------------------------------
 
+def decide_log_fate(sid, log):
+    """What happens to this sid's state DB at SessionStart — the session's entire
+    mirror history lives in it ("log" is only the KEY the DB path derives from —
+    no log file exists anymore): the ops table is what the renderer replays, the
+    rest is scoreboard/coordination state. Keyed on file existence, NOT the
+    payload's `source` field, so a resume-after-crash (no SessionEnd, DB still
+    live) is covered too. Returns the fate the caller audits ("mirror came back
+    empty after a resume" is diagnosable as a `fresh-db` row on a source=resume
+    start):
+      restore-history — SessionEnd parked this sid's state DB at *.keep;
+                        --resume/--continue keeps the sid, so move it back and
+                        the renderer replays the whole prior session.
+      reuse-live-db   — the DB already exists: compact fires SessionStart
+                        mid-session, and a crash skips SessionEnd. Leave it alone.
+      fresh-db        — brand-new session (the DB is created lazily by the first
+                        writer). With no sid (the shared cwd-slug fallback) any
+                        leftover DB may be another session's — remove it."""
+    db = log + ".state.db"
+    if sid and os.path.isfile(db + ".keep"):
+        for f in (db, db + "-wal", db + "-shm"):
+            if os.path.isfile(f + ".keep"):
+                try:
+                    os.replace(f + ".keep", f)
+                except OSError:
+                    pass
+        return "restore-history"
+    if os.path.isfile(db):
+        if sid:
+            return "reuse-live-db"
+        for f in (db, db + "-wal", db + "-shm"):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+    return "fresh-db"
+
+
 def cmd_open():                              # SessionStart (payload on stdin)
     payload, sid = sid_from_stdin()
     # Register the session in the audit DB (always on; CLAUDE_AUDIT=0 disables).
@@ -476,44 +488,8 @@ def cmd_open():                              # SessionStart (payload on stdin)
     log = log_for(sid)
     if not log:
         return
-    # The session's entire mirror history lives in the state DB ("log" is only the
-    # KEY the DB path derives from — no log file exists anymore): the ops table is
-    # what the renderer replays, the rest is scoreboard/coordination state. What
-    # happens to the DB here decides whether history survives — keyed on file
-    # existence, NOT the payload's `source` field, so a resume-after-crash (no
-    # SessionEnd, DB still live) is covered too. Each branch leaves a state_files
-    # audit row; "mirror came back empty after a resume" is diagnosable as a
-    # `fresh-db` row on a source=resume start.
-    #   restore-history — SessionEnd parked this sid's state DB at *.keep;
-    #                     --resume/--continue keeps the sid, so move it back and
-    #                     the renderer replays the whole prior session.
-    #   reuse-live-db   — the DB already exists: compact fires SessionStart
-    #                     mid-session, and a crash skips SessionEnd. Leave it alone.
-    #   fresh-db        — brand-new session (the DB is created lazily by the first
-    #                     writer). With no sid (the shared cwd-slug fallback) any
-    #                     leftover DB may be another session's — remove it.
-    db = log + ".state.db"
-    if sid and os.path.isfile(db + ".keep"):
-        for f in (db, db + "-wal", db + "-shm"):
-            if os.path.isfile(f + ".keep"):
-                try:
-                    os.replace(f + ".keep", f)
-                except OSError:
-                    pass
-        log_fate = "restore-history"
-    elif os.path.isfile(db):
-        if sid:
-            log_fate = "reuse-live-db"
-        else:
-            for f in (db, db + "-wal", db + "-shm"):
-                try:
-                    os.remove(f)
-                except OSError:
-                    pass
-            log_fate = "fresh-db"
-    else:
-        log_fate = "fresh-db"
-    audit_state(log, db + ".keep", log_fate,
+    log_fate = decide_log_fate(sid, log)
+    audit_state(log, log + ".state.db.keep", log_fate,
                 f"source={payload.get('source') or ''}")
     # The DB file's EXISTENCE is the session-alive signal the scoreboard bar and
     # the codex watcher poll — create it (with schema) BEFORE launching them, or
@@ -593,11 +569,15 @@ def cmd_close():                             # SessionEnd (payload on stdin)
             os.remove(f)
         except OSError:
             pass
-    # Sweep debris: pre-migration leftovers (marker dirs, tab-state/watcher-pid
-    # files — nothing reads or writes them anymore) and anything session-scoped
-    # older than 7 days (parked *.keep never resumed, state DBs of crashed
-    # sessions, orphaned fg .out/.done side files — a LIVE session's files are
-    # always younger).
+    sweep_tmp_debris()
+
+
+def sweep_tmp_debris():
+    """Global /tmp janitor, run at every SessionEnd: pre-migration leftovers
+    (marker dirs, tab-state/watcher-pid files — nothing reads or writes them
+    anymore) and anything session-scoped older than 7 days (parked *.keep never
+    resumed, state DBs of crashed sessions, orphaned fg .out/.done side files —
+    a LIVE session's files are always younger)."""
     for p in glob.glob("/tmp/claude-mirror-*.log.slots"):
         shutil.rmtree(p, ignore_errors=True)
     for pat in ("/tmp/claude-tab-state-*", "/tmp/claude-tab-bgwatch-*",

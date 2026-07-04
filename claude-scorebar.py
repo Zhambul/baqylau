@@ -10,7 +10,7 @@
 #   ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
 #     Read 34 · Edit 18 · Write 4
 #
-# The ✉ row is tracked by O.update_messages (stateful inbox polling → a persisted
+# The ✉ row is tracked by claude_msgs.update_messages (stateful inbox polling → a persisted
 # sidecar) and always shows a count (0 included). See claude_ops.py.
 #
 # A separate window — not lines pinned inside the mirror — because that's the only
@@ -27,9 +27,11 @@
 # plain SELECTs (WAL — never block the producers). Exits when the mirror log
 # disappears (SessionEnd removes it), which auto-closes the window;
 # claude-split.py close is the safety net.
-import json, os, re, shutil, signal, subprocess, sys, time
+import os, re, signal, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import claude_kitty as K
+import claude_msgs as MSG
 import claude_render as R
 import claude_ops as O
 import claude_paths as P
@@ -112,21 +114,10 @@ def _claude_window():
     """Kitty window id (str) of this session's Claude pane, or None. One
     `kitten @ ls` round-trip — callers cache the result and retry sparingly."""
     listen = os.environ.get("KITTY_LISTEN_ON")
-    kitten = shutil.which("kitten") or "/Applications/kitty.app/Contents/MacOS/kitten"
-    if not listen or not os.path.exists(kitten):
+    kitten = K.find_kitten()
+    if not listen or not kitten:
         return None
-    sid = session_id()
-    try:
-        out = subprocess.run([kitten, "@", "--to", listen, "ls"],
-                             capture_output=True, timeout=5).stdout
-        for osw in json.loads(out):
-            for t in osw.get("tabs", []):
-                for w in t.get("windows", []):
-                    if (w.get("user_vars") or {}).get("claude_session") == sid:
-                        return str(w.get("id"))
-    except Exception:
-        pass
-    return None
+    return K.window_for_session(kitten, listen, session_id())
 
 
 def _tab_green(win):
@@ -229,7 +220,7 @@ def main():
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
             try:                            # poll inboxes: census parts + mirror events
-                mparts, events = O.update_messages(LOG)
+                mparts, events = MSG.update_messages(LOG)
             except Exception:
                 mparts, events = [], []
             if events:

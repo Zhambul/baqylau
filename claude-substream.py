@@ -15,10 +15,11 @@
 # footer, then releases the slot. A subagent's BACKGROUND command / monitor is
 # streamed by claude-stream.py with a DOUBLE gutter (outer = this subagent's
 # colour, inner = the job's own palette slot) so nested parallel jobs stay distinct.
-import glob, json, os, re, subprocess, sys, time
+import json, os, re, subprocess, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_slots
+import claude_model as M
 import claude_render as R
 import claude_ops as O
 import claude_state as S
@@ -49,231 +50,30 @@ RST  = R.RST
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
-def _int_env(name, default):
-    try:
-        return int((os.environ.get(name) or "").strip() or default)
-    except Exception:
-        return default
-
-
 # Context-fill thresholds (percent) for the live per-turn % shown on each turn:
 # < WARN green, < CRIT amber, else red. Tunable per workload via the env, same as
 # CLAUDE_MIRROR_BIAS — e.g. a [1m] session wants higher cutoffs.
-CTX_WARN = _int_env("CLAUDE_MIRROR_CTX_WARN", 30)
-CTX_CRIT = _int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
+CTX_WARN = M.int_env("CLAUDE_MIRROR_CTX_WARN", 30)
+CTX_CRIT = M.int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
 CTX_GREEN = R.fg(152, 195, 121)
 CTX_AMBER = R.fg(229, 192, 123)
 CTX_RED   = R.fg(224, 108, 117)
 
-# --- context-window detection -------------------------------------------------
-# There is NO context-size frontmatter field (docs): the window follows the resolved
-# MODEL, which a subagent can pin explicitly (e.g. `model: opus[1m]`). Determining it
-# is messy — Sonnet 5 / Fable 5 / Opus 4.6-4.8 run 1M by default (no suffix), older
-# models are 200k unless [1m], and CLAUDE_CODE_DISABLE_1M_CONTEXT caps everything.
-DISABLE_1M = bool(_int_env("CLAUDE_CODE_DISABLE_1M_CONTEXT", 0))
-KNOWN_1M = ("fable-5", "sonnet-5", "opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6")
+# Model / effort / context-window resolution lives in claude_model.py; this block
+# just binds it to THIS agent's identity (its meta.json, definition file, and the
+# parent session's transcript).
 RESOLVED_MODEL = None      # authoritative model id (with [1m]) read from the parent
-
-
-def _window(model):
-    # A model alias / id (with or without [1m]) -> its context window; None if empty.
-    if not model:
-        return None
-    m = model.lower().strip()
-    if "haiku" in m:
-        return 200_000
-    if "[1m]" in m:
-        return 1_000_000
-    if any(tok in m for tok in KNOWN_1M):
-        return 1_000_000
-    if m in ("opus", "sonnet", "fable"):     # current aliases -> latest gen -> 1M
-        return 1_000_000
-    return 200_000                           # older / unknown pinned versions
-
-
-def _fm_field(path, field):
-    # Scalar field from a markdown file's YAML frontmatter (the first --- ... --- block).
-    try:
-        with open(path, encoding="utf-8", errors="replace") as fh:
-            if fh.readline().strip() != "---":
-                return None
-            for line in fh:
-                if line.strip() == "---":
-                    break
-                k, sep, v = line.partition(":")
-                if sep and k.strip() == field:
-                    return v.strip().strip('"\'') or None
-    except Exception:
-        return None
-    return None
-
-
-def _agent_def_file(atype):
-    # The DEFINITION file for this agent type, if any. Identity is the frontmatter
-    # `name:` (docs); fall back to the filename stem. Project defs shadow user defs.
-    # Search agents across ALL ancestor .claude dirs (O.claude_dirs), not just
-    # os.getcwd()/.claude: a teammate/subagent frequently runs in a subdirectory or a git
-    # worktree where <cwd>/.claude is absent OR is a stub without agents/ (e.g. a task's
-    # db/.claude), which would otherwise miss the def and drop `effort:`/`model:` to the
-    # session/user default. Nearest-first, ending at ~/.claude.
-    roots = [os.path.join(c, "agents") for c in O.claude_dirs()]
-    stem_hit = None
-    for r in roots:
-        if not os.path.isdir(r):
-            continue
-        for dp, _dirs, files in os.walk(r):
-            for f in files:
-                if not f.endswith(".md"):
-                    continue
-                p = os.path.join(dp, f)
-                if _fm_field(p, "name") == atype:
-                    return p
-                if os.path.splitext(f)[0] == atype and stem_hit is None:
-                    stem_hit = p
-    return stem_hit
-
-
-def _def_field(field):
-    # A frontmatter field from this agent's definition; "inherit"/unset -> None so
-    # resolution falls through to what the agent actually ran / the session default.
-    v = _fm_field(AGENT_DEF_FILE, field) if AGENT_DEF_FILE else None
-    return None if (not v or v == "inherit") else v
-
-
-def _settings_field(field):
-    # A field from the merged settings (project overriding global) — the same layering
-    # claude-split.py reads. Used for values an agent inherits (model, effortLevel).
-    # Layered across ALL ancestor .claude dirs (O.claude_dirs, nearest-first) for the same
-    # subdir/worktree reason as _agent_def_file — else a teammate in a subdirectory skips
-    # the project settings and falls straight through to ~/.claude. First non-empty wins.
-    paths = []
-    for c in O.claude_dirs():
-        paths += [os.path.join(c, "settings.local.json"),
-                  os.path.join(c, "settings.json")]
-    for p in paths:
-        try:
-            with open(p, encoding="utf-8") as fh:
-                v = json.load(fh).get(field)
-            if v:
-                return v
-        except Exception:
-            pass
-    return None
-
-
-def _session_model():
-    # The model VERSION the parent session runs (e.g. "claude-opus-4-8"), from the last
-    # assistant turn in its transcript. Gives the prompt line a precise version for
-    # agents that INHERIT, before the agent's own first turn reveals it. Tail-scan only
-    # (the latest turn is near the end) so it stays cheap even on long sessions.
-    try:
-        with open(TPATH, "rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - 262144))
-            chunk = fh.read().decode("utf-8", "replace")
-        last = None
-        for line in chunk.splitlines():
-            if '"assistant"' in line and '"model"' in line:
-                try:
-                    m = (json.loads(line).get("message") or {}).get("model")
-                except Exception:
-                    continue
-                if m:
-                    last = m
-        return last
-    except Exception:
-        return None
-
-
-def _parent_resolved_model():
-    # The authoritative resolved model (carrying [1m]) is recorded in the PARENT
-    # transcript on this agent's Task result — but only at completion. Best-effort:
-    # scan TPATH for our agentId; returns None if not written yet (footer falls back).
-    try:
-        hit = None
-        with open(TPATH, encoding="utf-8", errors="replace") as fh:
-            for line in fh:
-                if AGENT not in line or "resolvedModel" not in line:
-                    continue
-                try:
-                    tur = (json.loads(line).get("toolUseResult") or {})
-                except Exception:
-                    continue
-                if tur.get("agentId") == AGENT and tur.get("resolvedModel"):
-                    hit = tur["resolvedModel"]
-        return hit
-    except Exception:
-        return None
-
-
-def _meta():
-    # The agent's meta.json sidecar (present at SubagentStart for teammates; may lag a
-    # beat for ordinary subagents, so retry briefly). Carries `customAgentType` — the
-    # DEFINITION's name, which for a teammate differs from its short display type
-    # (agentType "container" vs def "task-container") — and its configured `model`.
-    base = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
-    p = os.path.join(base, "subagents", f"agent-{AGENT}.meta.json")
-    for _ in range(6):
-        try:
-            with open(p, encoding="utf-8") as fh:
-                return json.load(fh)
-        except FileNotFoundError:
-            time.sleep(0.05)
-        except Exception:
-            break
-    return {}
-
-
-META = _meta()
+META = M.agent_meta(TPATH, AGENT)
 # Look up the definition by its real name (customAgentType) — the short agentType a
 # teammate reports ("container") won't match the def's `name:`/filename ("task-container").
 DEF_TYPE = META.get("customAgentType") or ATYPE
-AGENT_DEF_FILE  = _agent_def_file(DEF_TYPE)
-AGENT_DEF_MODEL = _def_field("model")
-SETTINGS_MODEL  = _settings_field("model")
-SESSION_MODEL   = _session_model()
+AGENT_DEF_FILE  = M.agent_def_file(DEF_TYPE)
+AGENT_DEF_MODEL = M.def_field(AGENT_DEF_FILE, "model")
+SETTINGS_MODEL  = M.settings_field("model")
+SESSION_MODEL   = M.session_model(TPATH)
+EFFORT_CFG      = M.effort_config(AGENT_DEF_FILE)
 
-# Effort is NOT recorded in any transcript — it's config-only. Resolve it in the order
-# the docs mandate (model-config: "The environment variable takes precedence over all
-# other methods … Frontmatter effort … overriding the session level but not the
-# environment variable"): env > agent-def frontmatter `effort` > session `effortLevel`
-# > the running MODEL's default. A subagent with no explicit effort inherits the session
-# level; with nothing configured it falls to the model default (docs: high on Opus 4.8 /
-# 4.6 / Sonnet 5 / Sonnet 4.6 / Fable 5, xhigh on Opus 4.7). Caveat: a session-only
-# `/effort max`/`ultracode`/`--effort` isn't persisted, so it can't be seen here.
-EFFORT_CFG = ((os.environ.get("CLAUDE_CODE_EFFORT_LEVEL") or "").strip()
-              or _def_field("effort") or _settings_field("effortLevel") or "")
-
-
-def _model_default_effort(model):
-    if not model:
-        return ""
-    m = model.lower()
-    if "opus-4-7" in m:
-        return "xhigh"
-    if any(t in m for t in ("opus-4-8", "opus-4-6", "sonnet-5", "sonnet-4-6", "fable-5")):
-        return "high"
-    return ""                                # models without adaptive reasoning
-
-
-def short_model(model):
-    # "claude-opus-4-8" -> "opus-4.8", "claude-haiku-4-5-20251001" -> "haiku-4.5",
-    # "claude-sonnet-5" -> "sonnet-5", alias "opus" -> "opus". [1m] is dropped (the
-    # window already shows in the ctx line).
-    if not model:
-        return ""
-    s = model.lower().replace("[1m]", "").strip()
-    if s.startswith("claude-"):
-        s = s[7:]
-    parts = s.split("-")
-    ver = []
-    for p in parts[1:]:
-        if p.isdigit() and len(p) <= 2:      # version component; skip 8-digit dates
-            ver.append(p)
-        else:
-            break
-    return parts[0] + ("-" + ".".join(ver) if ver else "")
+short_model = M.short_model
 
 
 def disp_model():
@@ -287,7 +87,7 @@ def disp_model():
 def effort():
     # Configured effort (env > frontmatter > session) if any, else the running model's
     # default — so an agent that inherits shows the level it actually reasons at.
-    return EFFORT_CFG or _model_default_effort(disp_model())
+    return EFFORT_CFG or M.model_default_effort(disp_model())
 
 
 def op_tag():
@@ -384,13 +184,7 @@ def model_ctx():
     #   3. last_model — the bare id the agent actually ran (family is reliable; the
     #      known-1M table covers Opus 4.8 etc. even though the [1m] suffix is stripped)
     #   4. SETTINGS_MODEL — the session default, for agents that inherit
-    if DISABLE_1M:
-        return 200_000
-    for m in (RESOLVED_MODEL, AGENT_DEF_MODEL, last_model, SETTINGS_MODEL):
-        w = _window(m)
-        if w:
-            return w
-    return 200_000
+    return M.context_window(RESOLVED_MODEL, AGENT_DEF_MODEL, last_model, SETTINGS_MODEL)
 
 
 def ctx_used():
@@ -821,7 +615,7 @@ def main(run):
     dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
     foot = f"■ {LABEL} " + ("cancelled" if cancelled else "ended") + f" · {dur}"
     global RESOLVED_MODEL
-    RESOLVED_MODEL = _parent_resolved_model()   # authoritative window, best-effort
+    RESOLVED_MODEL = M.parent_resolved_model(TPATH, AGENT)   # authoritative window, best-effort
     used = ctx_used()                    # final context fill (plain — the chip is dark text)
     if used > 0:
         mx = model_ctx()

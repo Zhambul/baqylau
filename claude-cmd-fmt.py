@@ -86,51 +86,61 @@ def main():
     done = (live.get("done") or (live["src"] + ".done")) if live and live.get("src") else None
 
     if bg or converted:
-        # Claim a palette slot now and colour the "▷ background" header with it, so
-        # this job's header, gutter, and finish chip all share one colour and the
-        # parallel jobs differ. The streamer (passed the slot) does gutter + finish.
-        if taskid:
-            slot, slot_marker = claude_slots.claim("bg", LOG)
-            head_rgb = claude_slots.color("bg", slot)
+        return _render_background(d, cmd, taskid, converted, done)
+    _render_finished(d, tr, cmd, live, done)
+
+
+def _render_background(d, cmd, taskid, converted, done):
+    """A background launch (genuine run_in_background, or a Ctrl+B conversion):
+    write the header, hand the rest of the block to a detached bg tailer."""
+    # Claim a palette slot now and colour the "▷ background" header with it, so
+    # this job's header, gutter, and finish chip all share one colour and the
+    # parallel jobs differ. The streamer (passed the slot) does gutter + finish.
+    if taskid:
+        slot, slot_marker = claude_slots.claim("bg", LOG)
+        head_rgb = claude_slots.color("bg", slot)
+    else:
+        slot, slot_marker, head_rgb = None, None, LBL_BG
+
+    if converted and done:
+        # Our own fg tailer was tee-ing this command's own side file — but once
+        # Ctrl+B hands it off, Claude Code captures further output into its OWN
+        # backgroundTaskId file instead (empirically: our tee file gets nothing
+        # more from this point on), so tell that tailer to bow out quietly (no
+        # finish chip, no fallback body) instead of racing the bg tailer below,
+        # which is about to own the rest of this block.
+        if S.hand_put(LOG, "done:" + done, {"converted": True}):
+            A.state_file(LOG, "state:done:" + done, "write", {"converted": True})
         else:
-            slot, slot_marker, head_rgb = None, None, LBL_BG
+            A.error(LOG, "write converted handoff", {"done": done})
+        O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
+    else:
+        O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
 
-        if converted and done:
-            # Our own fg tailer was tee-ing this command's own side file — but once
-            # Ctrl+B hands it off, Claude Code captures further output into its OWN
-            # backgroundTaskId file instead (empirically: our tee file gets nothing
-            # more from this point on), so tell that tailer to bow out quietly (no
-            # finish chip, no fallback body) instead of racing the bg tailer below,
-            # which is about to own the rest of this block.
-            if S.hand_put(LOG, "done:" + done, {"converted": True}):
-                A.state_file(LOG, "state:done:" + done, "write", {"converted": True})
-            else:
-                A.error(LOG, "write converted handoff", {"done": done})
-            O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
+    O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
+    O.bump_transcript(LOG, d.get("transcript_path"))
+    if taskid:
+        # Converted: find_file() locates tasks/<taskid>.output itself, same as any
+        # genuine background command — this cmd string's own redirect (if any) is
+        # irrelevant to where Claude Code is now writing the real output.
+        redirect = None if converted else O.parse_redirect(cmd, d.get("cwd"))
+        src, src_append = redirect if redirect else (None, False)
+        # skip_existing for a `>>` redirect: tail only what this job appends, or
+        # the target file's entire prior contents would replay into the mirror.
+        proc = _spawn_stream("bg", taskid, slot, src,
+                             skip_existing=converted or src_append)
+        if proc is not None:
+            claude_slots.set_owner(slot_marker, proc.pid)
         else:
-            O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
+            claude_slots.release("bg", LOG, slot, os.getpid())
+    A.hook_event(d, decision=("converted ctrl+b -> bg tailer" if converted
+                              else "background: tailer spawned")
+                 + f" task={taskid or '?'} slot={slot}")
 
-        O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
-        O.bump_transcript(LOG, d.get("transcript_path"))
-        if taskid:
-            # Converted: find_file() locates tasks/<taskid>.output itself, same as any
-            # genuine background command — this cmd string's own redirect (if any) is
-            # irrelevant to where Claude Code is now writing the real output.
-            redirect = None if converted else O.parse_redirect(cmd, d.get("cwd"))
-            src, src_append = redirect if redirect else (None, False)
-            # skip_existing for a `>>` redirect: tail only what this job appends, or
-            # the target file's entire prior contents would replay into the mirror.
-            proc = _spawn_stream("bg", taskid, slot, src,
-                                 skip_existing=converted or src_append)
-            if proc is not None:
-                claude_slots.set_owner(slot_marker, proc.pid)
-            else:
-                claude_slots.release("bg", LOG, slot, os.getpid())
-        A.hook_event(d, decision=("converted ctrl+b -> bg tailer" if converted
-                                  else "background: tailer spawned")
-                     + f" task={taskid or '?'} slot={slot}")
-        return
 
+def _render_finished(d, tr, cmd, live, done):
+    """A foreground command's real outcome: hand it to the live fg tailer when one
+    exists (it owns the block), else render the whole block here."""
     ms  = d.get("duration_ms")
     dur = "?" if ms is None else (f"{ms/1000:.1f}s" if ms < 60000 else f"{int(ms//60000)}m{int(ms//1000)%60:02d}s")
     failed = H.is_failure(d)
