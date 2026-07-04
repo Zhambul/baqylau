@@ -112,6 +112,14 @@ def wrap_gutter(text, width, gut, gw):
     cw = max(1, width - gw)                       # visible columns after the gutter
     pieces, lines = [], text.split("\n")
     for li, line in enumerate(lines):
+        # Expand tabs BEFORE any width math: the terminal advances a raw \t to
+        # the next tab stop, but every counter here saw it as 1 cell — any
+        # tab-containing output (git diff, Makefiles, TSV, `column -t`) overran
+        # the pane and knocked the gutter out of alignment on wrapped rows.
+        # (Exact tab-stop columns are unknowable anyway once the gutter shifts
+        # everything; deterministic spaces are the point.)
+        if "\t" in line:
+            line = line.expandtabs(8)
         if li:
             pieces.append("\n")
         pieces.append(gut)
@@ -415,7 +423,12 @@ def format_code(code):
 # never has to parse ANSI: we emit our own colour per word and re-assert it after
 # every wrap. `width` is the pane width; `ind` is the hanging continuation indent.
 def render(code, width, ind="  "):
+    # Tabs out before tokenising — same rationale as wrap_gutter: the column
+    # arithmetic below counts a raw \t as 1 cell but the terminal jumps to a tab
+    # stop, so tab-indented code overflowed the pane.
     code = code.rstrip("\n")
+    if "\t" in code:
+        code = code.expandtabs(8)
     try:
         toks = _mixed_tokens(code)
     except Exception:

@@ -68,9 +68,14 @@ def _msg_epoch(ts):
 
 
 def _scan_inbox(d):
-    """Snapshot of every message currently in this team's inboxes:
-    {msg_id: read_bool}, {msg_id: (from, recipient, summary)} (recipient = inbox filename
-    stem), and {msg_id: epoch_or_None}. Torn/malformed inbox files are skipped."""
+    """Snapshot of every message currently in this team's inboxes, keyed by
+    (recipient, msg_id): {key: read_bool}, {key: (from, recipient, summary)}
+    (recipient = inbox filename stem), and {key: epoch_or_None}. Keyed per
+    RECIPIENT COPY, not per msg_id: a broadcast puts the same msg_id in several
+    inboxes, and collapsing those made the tracked read flag whichever copy
+    os.listdir yielded last — deliveries undercounted (one event for N copies)
+    and reads double-counted or lost as the flag flapped between copies.
+    Torn/malformed inbox files are skipped."""
     inbox = os.path.join(d, "inboxes")
     states, meta, ts = {}, {}, {}
     try:
@@ -94,9 +99,10 @@ def _scan_inbox(d):
             mid = m.get("msg_id")
             if not mid:
                 continue
-            states[mid] = bool(m.get("read"))
-            meta[mid] = (m.get("from") or "?", recipient, m.get("summary") or "")
-            ts[mid] = _msg_epoch(m.get("timestamp"))
+            k = (recipient, mid)
+            states[k] = bool(m.get("read"))
+            meta[k] = (m.get("from") or "?", recipient, m.get("summary") or "")
+            ts[k] = _msg_epoch(m.get("timestamp"))
     return states, meta, ts
 
 
@@ -116,27 +122,27 @@ def update_messages(log):
         return [("msgs", "0 msgs")], []      # non-team: still show a 0 count, no events
     delivered0, read0, live = S.msgs_state(log)
     delivered, read = delivered0, read0
-    cur, meta, ts = _scan_inbox(d)
+    cur, meta, ts = _scan_inbox(d)       # keyed by (recipient, msg_id) — see _scan_inbox
     events = []
-    for mid, is_read in cur.items():     # deliveries — ids present now we hadn't seen
-        if mid not in live:
+    for k, is_read in cur.items():       # deliveries — copies present now we hadn't seen
+        if k not in live:
             delivered += 1
-            frm, to, summ = meta[mid]
+            frm, to, summ = meta[k]
             events.append(("new", frm, to, summ))
             if is_read:                  # arrived already read (fast consumer)
                 read += 1
                 events.append(("read", frm, to, summ))
-    for mid, ent in list(live.items()):  # reads/drains among ids we were tracking
+    for k, ent in list(live.items()):    # reads/drains among copies we were tracking
         was_read = bool(ent[0])
-        if mid not in cur:               # drained -> consumed => read
+        if k not in cur:                 # drained -> consumed => read
             if not was_read:
                 read += 1
                 events.append(("read", ent[1], ent[2], ent[3]))
-        elif cur[mid] and not was_read:  # flipped read:true in place
+        elif cur[k] and not was_read:    # flipped read:true in place
             read += 1
-            frm, to, summ = meta[mid]
+            frm, to, summ = meta[k]
             events.append(("read", frm, to, summ))
-    new_live = {mid: [cur[mid], meta[mid][0], meta[mid][1], meta[mid][2]] for mid in cur}
+    new_live = {k: [cur[k], meta[k][0], meta[k][1], meta[k][2]] for k in cur}
     if delivered != delivered0 or read != read0 or new_live != live:
         S.msgs_write(log, delivered, read, new_live)
     # Audit message-tracker transitions (only when something actually changed —
@@ -153,8 +159,8 @@ def update_messages(log):
     # so unread + stale = delivered - read. A stale message is the age-only signal for a
     # possibly-dead recipient (there's no liveness flag in the team files to know for sure).
     now = time.time()
-    stale = sum(1 for mid, is_read in cur.items()
-                if not is_read and ts.get(mid) and now - ts[mid] > STALE_S)
+    stale = sum(1 for k, is_read in cur.items()
+                if not is_read and ts.get(k) and now - ts[k] > STALE_S)
     # Always lead with the delivered count (0 included) so the ✉ row is never blank; the
     # renderer shows this even for non-team sessions (which returned early above with the
     # same 0-count shape). unread/stale/read segments appear only when non-zero.

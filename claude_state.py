@@ -49,7 +49,8 @@ CREATE TABLE IF NOT EXISTS counters(key TEXT PRIMARY KEY, val REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, val TEXT);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS messages(
-  msg_id TEXT PRIMARY KEY, read INTEGER, sender TEXT, recipient TEXT, summary TEXT);
+  msg_id TEXT, read INTEGER, sender TEXT, recipient TEXT, summary TEXT,
+  PRIMARY KEY(msg_id, recipient));
 CREATE TABLE IF NOT EXISTS agents(
   agent_id TEXT PRIMARY KEY, slot INTEGER, desc TEXT, pos INTEGER,
   done INTEGER DEFAULT 0, start_ts REAL);
@@ -90,11 +91,34 @@ def _connect(path):
         conn.execute("PRAGMA busy_timeout=5000")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(_SCHEMA)
+        _migrate(conn)
         conn.commit()
         _CONNS[path] = conn
         return conn
     except Exception:
         return None
+
+
+def _migrate(conn):
+    """In-place schema upgrades for a DB created by an older build (a resumed
+    session restores its parked *.keep). messages: PK msg_id -> (msg_id,
+    recipient) — a broadcast (the same msg_id in N inboxes) collapsed to one row
+    under the old PK, so per-recipient read tracking miscounted. Best-effort,
+    same swallow-with-default style as the rest of this module."""
+    try:
+        row = conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name='messages'").fetchone()
+        if row and "PRIMARY KEY(msg_id, recipient)" not in (row[0] or ""):
+            conn.executescript(
+                "ALTER TABLE messages RENAME TO messages_old;"
+                "CREATE TABLE messages(msg_id TEXT, read INTEGER, sender TEXT,"
+                " recipient TEXT, summary TEXT, PRIMARY KEY(msg_id, recipient));"
+                "INSERT OR IGNORE INTO messages"
+                " SELECT msg_id, read, sender, COALESCE(recipient, '?'), summary"
+                " FROM messages_old;"
+                "DROP TABLE messages_old;")
+    except Exception:
+        pass
 
 
 def connect(log):
@@ -106,17 +130,24 @@ def immediate(conn):
     """BEGIN IMMEDIATE / commit; on any exception roll back (best-effort) and
     re-raise — each call site keeps its own swallow-with-default. Replaces the
     try/commit/except/rollback/except/pass block that was copy-pasted at every
-    read-modify-write site in this module, claude_slots, and claude_ops."""
+    read-modify-write site in this module, claude_slots, and claude_ops.
+
+    The commit is INSIDE the protected region: with it outside, a commit-time
+    failure (I/O error, SQLITE_FULL) left the cached connection stuck in an open
+    transaction — the next plain autocommit write on that connection then
+    durably committed the "failed" transaction's writes, e.g. a hand_take that
+    returned None ("nothing taken") whose DELETE landed later anyway, silently
+    breaking take-once semantics."""
     conn.execute("BEGIN IMMEDIATE")
     try:
         yield conn
+        conn.commit()
     except Exception:
         try:
             conn.rollback()
         except Exception:
             pass
         raise
-    conn.commit()
 
 
 # --- counter primitives (used inside an open transaction) ---------------------------
@@ -349,15 +380,17 @@ def kv_del(log, key):
 # --- team-message tracker (was .msgs.json) ------------------------------------------
 
 def msgs_state(log):
-    """(delivered, read, live) — live is {msg_id: [read, from, recipient, summary]},
-    the same shape update_messages tracked in the old sidecar."""
+    """(delivered, read, live) — live is {(recipient, msg_id): [read, from,
+    recipient, summary]}. Keyed per RECIPIENT COPY, not per msg_id: a broadcast
+    puts the same msg_id in several inboxes, and collapsing those to one entry
+    made the read flag depend on inbox scan order (reads double-counted or lost)."""
     conn = connect(log)
     if conn is None:
         return 0, 0, {}
     try:
         d = conn.execute("SELECT val FROM counters WHERE key='msg_delivered'").fetchone()
         r = conn.execute("SELECT val FROM counters WHERE key='msg_read'").fetchone()
-        live = {mid: [bool(rd), s or "?", rc or "?", su or ""]
+        live = {(rc or "?", mid): [bool(rd), s or "?", rc or "?", su or ""]
                 for mid, rd, s, rc, su in
                 conn.execute("SELECT msg_id, read, sender, recipient, summary FROM messages")}
         return int(d[0]) if d else 0, int(r[0]) if r else 0, live
@@ -378,7 +411,7 @@ def msgs_write(log, delivered, read, live):
                 "INSERT INTO messages(msg_id, read, sender, recipient, summary) "
                 "VALUES(?,?,?,?,?)",
                 [(mid, 1 if ent[0] else 0, ent[1], ent[2], ent[3])
-                 for mid, ent in live.items()])
+                 for (_rc, mid), ent in live.items()])
             counter_set(conn, "msg_delivered", delivered)
             counter_set(conn, "msg_read", read)
     except Exception:

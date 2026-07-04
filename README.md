@@ -578,8 +578,11 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `0 msgs`, even for a non-team session). It comes from `claude_msgs.update_messages()`,
     which — since there is **no hook** for a message being read/consumed — tracks state
     by **stateful polling**: each tick it diffs the team inboxes against the persisted
-    state (the state DB's `messages` table, keyed by `msg_id` — was a `.msgs.json`
-    sidecar) and folds transitions into
+    state (the state DB's `messages` table, keyed by `(msg_id, recipient)` — was a
+    `.msgs.json` sidecar; per RECIPIENT COPY because a broadcast puts the same
+    `msg_id` in several inboxes, and collapsing those to one entry made the read
+    flag whichever copy the scan saw last: deliveries undercounted, reads
+    double-counted or lost) and folds transitions into
     **cumulative** counters, so counts survive a teammate draining its inbox. A message
     is `read` once it flips `read:true` or disappears from the inbox (draining ⇒
     consumed); `msgs` is the cumulative delivered total. `unread` and `◐ stale` are a
@@ -662,7 +665,11 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     scoreboard.
   - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-06 list):
     Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet 3/15 · Haiku 4.5 1/5 · legacy
-    Opus 4.1/4.0/3 15/75 per MTok in/out; cache reads bill 0.1× input and cache
+    Opus 4.1/4.0/3 15/75 per MTok in/out. The table keys are **substrings of the
+    real model ids** — the legacy rows are `opus-4-1` / `opus-4-2025`
+    (`claude-opus-4-20250514`) / `3-opus` (`claude-3-opus-…`); the earlier
+    `opus-4-0`/`opus-3` keys appeared in *no real id*, so every legacy-Opus run
+    fell through to the generic 5/25 row (a silent 3× undercount). Cache reads bill 0.1× input and cache
     **writes 1.25×** (the `cache_creation` share is tracked separately so the 0.25×
     premium is applied). Sonnet 5's introductory 2/10 rate is used automatically
     through 2026-08-31, then reverts to the 3/15 sticker. An unknown model counts
@@ -985,7 +992,12 @@ Behaviour & limits:
   chip reuses the stream's gutter colour so you can tell which one finished.
   Lines wider than the pane are **hard-wrapped** so the gutter repeats on every
   visual row (ANSI-aware — colour is re-asserted across the wrap), rather than
-  soft-wrapping and losing the gutter on the continuation.
+  soft-wrapping and losing the gutter on the continuation. **Tabs are expanded to
+  spaces (8-col stops) before any width math**: the terminal advances a raw `\t`
+  to the next tab stop but the wrap counters saw 1 cell, so tab-containing output
+  (git diff, Makefiles, TSV) overran the pane and broke gutter alignment — and
+  exact terminal tab stops are unknowable once the gutter shifts every column
+  anyway, so deterministic spaces are the point.
 - **Failures** show in red: a non-zero exit / tool error fires `PostToolUseFailure`
   (not `PostToolUse`), whose payload carries the combined output in an `error`
   field prefixed `Exit code N`. The block's header + finish chip turn red and the
@@ -1059,7 +1071,14 @@ Behaviour & limits:
   Presets + reset use `claude-split.py setpct <N>`, which sets an absolute width:
   kitty's splits layout only resizes by a relative increment (and one unit isn't
   exactly one column), so it reads the live geometry and **iterates** toward the
-  target until within a cell.
+  target until within a cell. The tab's total width comes from walking the
+  mirror's `neighbors` chain (whose entries are **group ids** — resolved through
+  the tab's `groups` map; confirmed live), summing one window per horizontal
+  segment — *not* from summing every window's columns: hsplit-stacked windows
+  each report the full column width, so the plain sum double-counted shared
+  columns, under-reported the mirror's %, and drove `reset`/`setpct` (and the
+  remembered size) far off whenever the shell side was split. (Plain sum remains
+  the fallback for a kitty too old to report `neighbors`.)
 - **Remembered per project.** Any resize (grow/shrink/preset/reset) records the
   resulting width %, keyed by the project's cwd, in
   `~/.claude/kitty-mirror.db` (`sizes` table — was a directory of one-number

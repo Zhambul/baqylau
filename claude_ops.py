@@ -312,10 +312,17 @@ PRICES = (
     ("mythos",   10.0, 50.0),
     _SONNET5,
     ("sonnet",    3.0, 15.0),
-    ("opus-4-1", 15.0, 75.0),
-    ("opus-4-0", 15.0, 75.0),
-    ("opus-3",   15.0, 75.0),
-    ("opus",      5.0, 25.0),
+    # Keys are SUBSTRINGS of real model ids (cost_usd matches `key in model`).
+    # The legacy entries must match the ids Anthropic actually ships:
+    # claude-opus-4-1-20250805 / claude-opus-4-20250514 / claude-3-opus-20240229.
+    # ("opus-4-0" and "opus-3" appear in NO real id — every legacy Opus run fell
+    # through to the generic 5/25 row, a 3× cost undercount.) Order matters:
+    # "opus-4-1" before "opus-4-2025", and the generic "opus" last so Opus 4.5+
+    # (claude-opus-4-5/-4-8, 5/25 sticker) still lands there.
+    ("opus-4-1",    15.0, 75.0),
+    ("opus-4-2025", 15.0, 75.0),   # the dated Opus 4.0 id, claude-opus-4-20250514
+    ("3-opus",      15.0, 75.0),   # Claude 3 Opus, claude-3-opus-20240229
+    ("opus",         5.0, 25.0),
 )
 
 SCORE_RGB = (120, 132, 158)   # muted slate-blue — reads as a divider, not an event

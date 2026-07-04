@@ -277,16 +277,49 @@ def mirror_geometry(sid):
     mirror, or None. Scorebar windows are excluded from the width math — the bar
     shares the mirror's column, so counting it would double-count that column.
     The one geometry walk behind current_pct AND target_delta (they had drifted
-    into two near-identical copies)."""
+    into two near-identical copies).
+
+    The tab total is computed by walking the mirror's `neighbors` chain left and
+    right, summing ONE window per horizontal segment — NOT by summing every
+    window's columns: two windows hsplit-stacked in the same column each report
+    the full column width, so the plain sum double-counted it, under-reported
+    the mirror's %, and drove reset/setpct (and the remembered size) far off.
+    Falls back to the plain sum on a kitty too old to report `neighbors`."""
     for osw in kitten_ls():
         for t in osw.get("tabs", []):
-            wins = [w for w in t.get("windows", [])
-                    if not w.get("user_vars", {}).get("claude_scorebar")]
-            cur = next((w.get("columns", 0) for w in wins
-                        if w.get("user_vars", {}).get("claude_mirror") == sid), 0)
-            if not cur:
+            wins = {w.get("id"): w for w in t.get("windows", [])
+                    if not w.get("user_vars", {}).get("claude_scorebar")}
+            mirror = next((w for w in wins.values()
+                           if w.get("user_vars", {}).get("claude_mirror") == sid), None)
+            if not mirror or not mirror.get("columns"):
                 continue
-            return cur, sum(w.get("columns", 0) for w in wins)
+            cur = mirror.get("columns", 0)
+            if "neighbors" not in mirror:                 # older kitty: old behavior
+                return cur, sum(w.get("columns", 0) for w in wins.values())
+            # `neighbors` holds GROUP ids (confirmed live), which coincide with
+            # window ids only for never-regrouped windows — resolve through the
+            # tab's groups map first, then as a plain window id.
+            groups = {g.get("id"): (g.get("windows") or []) for g in t.get("groups", [])}
+
+            def resolve(i):
+                for wid in groups.get(i, [i]):
+                    if wid in wins:
+                        return wins[wid]
+                return None
+
+            total, seen = cur, {mirror.get("id")}
+            for side in ("left", "right"):
+                w = mirror
+                while True:
+                    cands = ((w.get("neighbors") or {}).get(side)) or []
+                    nxt = next((ww for ww in map(resolve, cands)
+                                if ww is not None and ww.get("id") not in seen), None)
+                    if nxt is None:
+                        break
+                    seen.add(nxt.get("id"))
+                    total += nxt.get("columns", 0)
+                    w = nxt
+            return cur, total
     return None
 
 

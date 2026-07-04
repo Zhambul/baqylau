@@ -128,7 +128,19 @@ the bug **from evidence, not guesswork**.
   the running total diverges from what the session actually did (`hook_events` is the
   ground truth to diff against); `bump-transcript` rows also carry the `txpos` cursor —
   a cursor that jumps backwards or re-covers a range = double-counting. `msg-transitions`
-  rows are the same trail for the ✉ census.
+  rows are the same trail for the ✉ census (the tracker keys per `(recipient,
+  msg_id)` copy — a broadcast to N teammates is N `new` events; one event for N
+  copies, or `read` events exceeding deliveries, means the per-recipient keying
+  regressed). For a wrong COST with right tokens, check the model id against
+  `claude_ops.PRICES` substring keys — a legacy Opus id pricing at 5/25 means the
+  `opus-4-2025`/`3-opus` keys regressed (the old `opus-4-0`/`opus-3` keys matched
+  no real id).
+- **Mirror resizes to the wrong width / preset lands far off** — the geometry
+  walk in `claude-split.py mirror_geometry` resolves the mirror's `neighbors`
+  chain through the tab's `groups` map; `pane_events` resize rows whose detail
+  shows a target % wildly different from the visible pane (with the shell side
+  hsplit) means the group-id resolution or the one-window-per-segment walk
+  regressed to the old sum-all-columns behavior.
 - **Codex run missing from (or duplicated across) same-repo sessions** — `slots` rows
   with kind `codex-claim`: `claim` = this session owns the run, `claim-denied` (+ the
   holder pid) = another session's watcher took it, `steal-stale` = a dead session's
