@@ -580,11 +580,22 @@ def main(run):
 
     # Completion: the SubagentStop sentinel (the authoritative end signal — written
     # by the stop hook) for a normal finish, OR meta.json's stoppedByUser for a
-    # manual cancel (see cancelled_by_user() above — no hook fires for that case).
-    # A long cap is a backstop for a stuck/lost streamer either way.
+    # manual cancel (see cancelled_by_user() above — no hook fires for that case),
+    # OR the state DB vanishing (SessionEnd parked it as *.keep — quitting Claude
+    # Code kills a background agent with no SubagentStop and no stoppedByUser
+    # stamp, so without this check the streamer spun for the full backstop as a
+    # zombie while its checkpoint writes mutated the parked snapshot through the
+    # cached connection; the codex tailers run the same check). A long cap is a
+    # backstop for a stuck/lost streamer either way.
     cancelled = False
     while True:
         pump()
+        if not os.path.exists(S.db_path(LOG)):
+            run.end("state-db-parked (session end)")
+            # No footer, no bumps, no checkpoint past this point: every write
+            # would either recreate the state DB (whose file-existence IS the
+            # session-alive signal watchers poll) or land in the parked snapshot.
+            return
         if S.agent_get(LOG, AGENT).get("done"):
             run.end("stop-sentinel")
             break

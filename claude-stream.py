@@ -127,13 +127,32 @@ def find_file(deadline):
     return None
 
 
+_LSOF_STATE = {"missing": False, "audited": False}
+
+
 def has_writer(path):
     # True if some process holds the file open for writing (lsof FD ends w/u/W).
+    # A FAILED lsof (5s timeout on a busy box) must read as "can't tell — assume
+    # still writing", NOT "no writer": returning False here once let writer_gone
+    # fire mid-command during a silent phase (premature finish chip, tab flipped
+    # green, remaining output lost). Only a MISSING lsof binary keeps returning
+    # False — writer-liveness is impossible without it, and "always alive" would
+    # mean bg streams never end (they deliberately have no backstop).
+    if _LSOF_STATE["missing"]:
+        return False
     try:
         out = subprocess.run(["lsof", "--", path], capture_output=True,
                              text=True, timeout=5).stdout
-    except Exception:
+    except FileNotFoundError:
+        _LSOF_STATE["missing"] = True
+        A.error(LOG, "lsof missing — writer-liveness disabled", {"path": path})
         return False
+    except Exception:
+        if not _LSOF_STATE["audited"]:          # first occurrence only, or it spams
+            _LSOF_STATE["audited"] = True
+            A.error(LOG, "lsof failed — assuming writer still present",
+                    {"path": path})
+        return True
     for line in out.splitlines()[1:]:
         parts = line.split()
         if len(parts) >= 4 and parts[3][-1:] in "wuW":
@@ -149,6 +168,14 @@ def find_proc(sig):
     # runs as `zsh -c … eval '<command>'`, so the signature is in its argv). This
     # process stays alive across event gaps and exits exactly when the monitor
     # ends — a definitive completion signal at any cadence. Excludes self/streamers.
+    #
+    # Disambiguation: a FULL-command argv match (CLAUDE_MONITOR_CMD, set by the
+    # launcher) always wins — `sig` is just the command's longest token, which can
+    # equally match an UNRELATED long-lived process (another tail/editor holding
+    # the same file path in its argv); latching onto that pid kept the monitor
+    # block open and the tab blue forever, with the slot row owned by a live pid
+    # so it was never reaped. With a full command available, ambiguous token-only
+    # hits return None — the idle fallback then closes the block instead.
     if not sig:
         return None
     try:
@@ -156,7 +183,8 @@ def find_proc(sig):
                              capture_output=True, text=True, timeout=5).stdout
     except Exception:
         return None
-    me, hits = os.getpid(), []
+    full = os.environ.get("CLAUDE_MONITOR_CMD") or ""
+    me, hits, full_hits = os.getpid(), [], []
     for line in out.splitlines():
         line = line.strip()
         pid_s, _, args = line.partition(" ")
@@ -165,9 +193,15 @@ def find_proc(sig):
         pid = int(pid_s)
         if pid == me or "claude-stream.py" in args:
             continue
-        if sig in args:
+        if full and full in args:
+            full_hits.append(pid)
+        elif sig in args:
             hits.append(pid)
-    return hits[-1] if hits else None
+    if full_hits:
+        return full_hits[-1]
+    if not full:
+        return hits[-1] if hits else None   # old launcher, no full cmd: old behavior
+    return hits[0] if len(hits) == 1 else None
 
 
 def main(run):

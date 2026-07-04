@@ -164,12 +164,15 @@ def main():
     running = bool(_p) and alive(_p)
     if not running:
         got = claude_slots.lookup_id("sub", LOG, agent_id)
-        if got:                                   # streamer died without finalising
+        # Release FIRST, emit only if THIS call deleted the row: two overlapping
+        # duplicate stops (the dead-streamer case fires them concurrently) could
+        # both pass the lookup above and both paint the footer — the atomic
+        # DELETE's rowcount (release_id's return) is the once-only licence.
+        if got and claude_slots.release_id("sub", LOG, agent_id):
             dur = fmt_dur(time.time() - got[1]) if got[1] else ""
             chip = f"■ {atype} ended · {dur}" if dur else f"■ {atype} ended"
             pal = "team" if is_teammate(tpath, agent_id) else "sub"
             O.emit(LOG, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
-            claude_slots.release_id("sub", LOG, agent_id)
             A.hook_event(d, decision="stop: SAFETY NET footer (streamer died mid-run)")
         else:
             A.hook_event(d, decision="stop: no-op (already finalised / duplicate stop)")

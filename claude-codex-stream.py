@@ -191,6 +191,13 @@ def main(run):
         run.end("src-never-appeared")
         return
 
+    # Re-check right before the first emit: SessionEnd may have parked the state
+    # DB during the wait above, and claude_state's connect would CREATE a missing
+    # DB file — resurrecting the very file whose existence is the session-alive
+    # signal (the codex watcher's own loop polls it and would then never exit).
+    if not os.path.exists(S.db_path(LOG)):
+        run.end("state-db-parked (before header)")
+        return
     O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
 
     tail = T.FileTailer(LOGFILE)
@@ -213,7 +220,9 @@ def main(run):
         pump()
         if not os.path.exists(S.db_path(LOG)):   # session ended (state DB parked) -> stop
             run.end("state-db-parked (session end)")
-            break
+            # No footer: writing it would go into the parked *.keep snapshot via
+            # the cached connection — or recreate the DB file outright.
+            return
         if ROLLOUT:
             if _ro_done_wall and not _ro_active and (time.time() - _ro_done_wall) >= GRACE:
                 pump(); run.end("task-complete"); break

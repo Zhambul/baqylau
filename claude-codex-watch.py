@@ -156,6 +156,30 @@ def rollout_files():
     return out
 
 
+RO_TS = re.compile(r"rollout-(\d{4})-(\d{2})-(\d{2})T(\d{2})-(\d{2})-(\d{2})-")
+
+
+def rollout_created(path):
+    """Creation time of a rollout — the filename timestamp when parseable (local
+    time, e.g. rollout-2026-07-04T10-30-05-<uuid>.jsonl), else inode birth time
+    (macOS), else mtime as a last resort. Deliberately NOT plain mtime: a rollout
+    still being WRITTEN refreshes its mtime forever, so a long `codex exec` run
+    started before this session passed the predates-this-session filter — its
+    dead previous claim was stolen and its entire history replayed into the new
+    session's mirror."""
+    m = RO_TS.search(os.path.basename(path))
+    if m:
+        try:
+            return datetime(*map(int, m.groups())).timestamp()
+        except ValueError:
+            pass
+    try:
+        st = os.stat(path)
+        return getattr(st, "st_birthtime", 0) or st.st_mtime
+    except OSError:
+        return None
+
+
 def rollout_meta(path):
     # -> (cwd, originator). originator tells us WHO launched the run: "Claude Code"
     # (companion, deduped via source A), "codex_exec" (a programmatic raw exec), or
@@ -264,12 +288,12 @@ def main():
                 u = m.group(1)
                 if u in seen:
                     continue
-                try:
-                    mtime = os.path.getmtime(rf)
-                except OSError:
+                created = rollout_created(rf)
+                if created is None:
                     continue
-                if mtime < start - SKEW:
-                    seen.add(u); continue     # predates this session
+                if created < start - SKEW:
+                    seen.add(u); continue     # predates this session (creation
+                                              # time, NOT mtime — see rollout_created)
                 cw, origin = rollout_meta(rf)
                 if not cw:
                     continue                  # session_meta not written yet — retry

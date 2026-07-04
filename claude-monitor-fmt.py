@@ -39,24 +39,40 @@ def main():
         desc = (atype + " · " + desc) if desc else atype
     text = "◉ monitor · " + desc if desc else "◉ monitor"
 
+    if H.is_failure(d) or not taskid:
+        # A failed Monitor call (PostToolUseFailure carries no taskId — nothing
+        # will ever stream) used to paint just the open header: a dangling,
+        # footer-less block indistinguishable from a running monitor. Close the
+        # block inline instead, with the error on the chip.
+        err = " ".join((d.get("error") or "").split())
+        chip = "■ monitor failed" + ((" · " + err[:80]) if err else "")
+        O.emit(LOG, O.blank(), O.rule(), O.label(text, (86, 182, 194)),
+               O.label(chip, O.RED), O.rule())
+        A.hook_event(d, decision="monitor failed / no taskId: block closed inline")
+        return
+
     # Claim a monitor palette slot and colour the header with it, so this monitor's
     # header, gutter, and finish chip all share one colour (and parallel monitors
     # differ). The streamer (passed the slot) does the gutter + finish.
-    slot, marker = (claude_slots.claim("monitor", LOG) if taskid else (None, None))
-    head_rgb = claude_slots.color("monitor", slot) if taskid else (86, 182, 194)
+    slot, marker = claude_slots.claim("monitor", LOG)
+    head_rgb = claude_slots.color("monitor", slot)
 
     O.emit(LOG, O.blank(), O.rule(), O.label(text, head_rgb), O.rule())
 
-    if taskid:
-        proc = H.spawn_streamer("claude-stream.py",
-                                ["monitor", taskid, LOG, slot, sig], LOG,
-                                purpose=f"stream:monitor task={taskid}",
-                                audit_argv=["monitor", taskid, str(slot)])
-        if proc is not None:
-            claude_slots.set_owner(marker, proc.pid)
-        else:
-            claude_slots.release("monitor", LOG, slot, os.getpid())
-    A.hook_event(d, decision=f"monitor header: task={taskid or '?'} slot={slot} sig={sig!r}")
+    # The FULL command rides along in env: find_proc prefers a whole-command argv
+    # match over the single longest-token `sig`, which alone can also match an
+    # unrelated long-lived process (see claude-stream.py find_proc).
+    env = dict(os.environ)
+    env["CLAUDE_MONITOR_CMD"] = ti.get("command") or ""
+    proc = H.spawn_streamer("claude-stream.py",
+                            ["monitor", taskid, LOG, slot, sig], LOG, env=env,
+                            purpose=f"stream:monitor task={taskid}",
+                            audit_argv=["monitor", taskid, str(slot)])
+    if proc is not None:
+        claude_slots.set_owner(marker, proc.pid)
+    else:
+        claude_slots.release("monitor", LOG, slot, os.getpid())
+    A.hook_event(d, decision=f"monitor header: task={taskid} slot={slot} sig={sig!r}")
 
 
 if __name__ == "__main__":

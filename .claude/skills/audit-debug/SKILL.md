@@ -97,7 +97,19 @@ the bug **from evidence, not guesswork**.
 - **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
   `state_files` shows whether the outcome hand-off (`state:done:<token>`) / the agent
-  record's done flag (`state:agent.<id>`) was ever written.
+  record's done flag (`state:agent.<id>`) was ever written. For a MONITOR block:
+  an `idle-fallback` end is now also the escape for an ambiguous process match
+  (multiple token hits, no full-command hit — see CLAUDE_MONITOR_CMD); a monitor
+  stream open for hours with a live tailer pid suggests the wrong-pid latch
+  regressed. A `■ monitor failed` chip with no stream row is normal — a failed
+  Monitor call closes inline, no tailer is spawned. Substream/codex streams
+  ending `state-db-parked (session end)` (and codex `(before header)`) are the
+  healthy quit-while-running shape — deliberately footer-less, NOT a lost block.
+- **Stream ended too early / output missing at the end** — check `errors` for
+  "lsof failed — assuming writer still present" (transient lsof trouble is now
+  survivable; a `writer-gone` end *without* such an error row and with the
+  command demonstrably still running would be a new detection bug) and
+  "lsof missing — writer-liveness disabled" (bg/fg completion is then backstop-only).
 - **Frozen / missing / doubled pane** — `pane_events` first: an `open`/`toggle-on`
   with `ok=0` means the mirror (or the scoreboard bar — see detail) genuinely never
   opened; a resize whose detail shows an unchanged resulting width did nothing. Then

@@ -172,7 +172,10 @@ def release(kind, log, idx, pid):
             A.slot(log, kind, "release", slot_n=idx, owner_pid=pid,
                    marker_path=_token(log, kind, idx))
     except Exception:
-        pass
+        # Audited like the claim side: a silently failed release leaves a live
+        # row lingering (tab stays blue, bg-recheck refuses) with a claim row but
+        # no release row and — without this — no errors row saying why.
+        A.error(log, "release", {"kind": kind, "idx": idx})
 
 
 # --- id-keyed slots (subagents) -------------------------------------------------
@@ -227,17 +230,24 @@ def lookup_id(kind, log, ident):
 
 
 def release_id(kind, log, ident):
+    """Release an id-keyed slot. Returns True only when THIS call deleted the
+    row — the caller's licence for once-only follow-up work (the safety-net
+    footer in claude-subagent-fmt.py: duplicate SubagentStops can overlap, and
+    both used to pass a lookup_id check and both paint the footer)."""
     conn = St.connect(log)
     if conn is None:
-        return
+        return False
     try:
         cur = conn.execute("DELETE FROM live WHERE kind=? AND key=?",
                            (kind + ".id", ident))
         conn.commit()
         if cur.rowcount:
             A.slot(log, kind, "release-id", agent_id=ident, owner_pid=os.getpid())
+            return True
+        return False
     except Exception:
-        pass
+        A.error(log, "release_id", {"kind": kind, "ident": ident})
+        return False
 
 
 # --- per-agent tailer pid (the tab tracker's liveness signal) --------------------
@@ -285,7 +295,8 @@ def pid_del(log, ident):
         if cur.rowcount:
             A.slot(log, "sub", "release-pid", agent_id=ident, owner_pid=os.getpid())
     except Exception:
-        pass
+        # Same rationale as release(): a lingering sub.pid row keeps the tab blue.
+        A.error(log, "pid_del", {"ident": ident})
 
 
 # --- subagent description hand-off ---------------------------------------------

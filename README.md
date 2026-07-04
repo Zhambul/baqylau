@@ -390,7 +390,11 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   - **background** — the command holds its output file open the whole time, so
     the write-holder vanishing (`lsof`) is a definitive signal (works even for a
     long silent `sleep 3600; echo done`). The tailer only *reads*, so it never
-    counts itself.
+    counts itself. A **failed** `lsof` (its 5s timeout on a busy box) reads as
+    "can't tell — assume still writing", never "no writer": returning False there
+    once ended a stream mid-command during a silent phase (premature finish chip,
+    tab green, output lost). Only a *missing* lsof binary disables
+    writer-liveness outright (audited once).
   - **monitor** — writes its file in bursts with gaps (no held handle), so the
     write-holder trick fails. Instead the tailer tracks the monitor's **command
     process**: a monitor runs as `zsh -c … eval '<command>'`, a persistent process
@@ -398,7 +402,20 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     the command; the tailer finds that process (`ps`) and watches it — it exits
     exactly when the monitor ends, so completion is exact at **any cadence** (1s
     or 1h between ticks) with no grace/idle guess. A short idle fallback only
-    applies if the process can't be found.
+    applies if the process can't be found. **Disambiguation:** the launcher also
+    passes the *full* command (`CLAUDE_MONITOR_CMD`) and a whole-command argv
+    match always wins — the longest-token signature alone can equally match an
+    unrelated long-lived process (another tail/editor holding the same file path
+    in its argv), and latching onto that pid kept the block open and the tab blue
+    forever. With the full command available, ambiguous token-only multi-hits
+    return "not found" so the idle fallback closes the block instead. A **failed
+    Monitor call** (`PostToolUseFailure` — no `taskId`, nothing will ever stream)
+    gets its block closed inline by `claude-monitor-fmt.py` with a
+    `■ monitor failed` chip, instead of a dangling open header.
+  - **All tailers handle truncation**: if the tailed file *shrinks* (the command
+    runs `> file` again, or the file is rotated in place), `FileTailer.pump`
+    restarts from byte 0 — the old offset pointed past EOF, so nothing would ever
+    be emitted again (or a regrow would resume mid-content from a stale position).
 - **Live foreground streaming (Ctrl+B aware).** `claude-cmd-pre.py` (`PreToolUse`
   Bash) makes a normal foreground command stream live instead of only appearing
   once it completes. It rewrites the command via `PreToolUse`'s `updatedInput`
@@ -700,7 +717,20 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     A background agent's `SubagentStop` can fire **more than once** ("may notify
     more than once") — after the first, the streamer has finalised and freed its
     slot, so the duplicate finds no slot and does nothing. (Without that guard a
-    duplicate stop printed a spurious slot-0 indigo `■ agent ended`.)
+    duplicate stop printed a spurious slot-0 indigo `■ agent ended`.) The
+    safety-net footer itself is emitted only when this call's `release_id`
+    atomically deleted the slot row (its rowcount is the once-only licence) —
+    two *overlapping* duplicate stops could both pass the lookup check and both
+    paint the footer otherwise.
+    - **Quitting Claude Code with a background agent running** leaves a third
+      end-shape: the agent is killed with no `SubagentStop` and no
+      `stoppedByUser` stamp, but SessionEnd parks the state DB — so the streamer
+      also polls the DB file's existence (same check the codex tailers run) and
+      exits `state-db-parked (session end)` instead of spinning to its 6h
+      backstop as a zombie whose checkpoint writes mutate the parked `*.keep`
+      snapshot through its cached connection. No footer/bumps after that: any
+      write would either land in the snapshot or recreate the DB file — whose
+      existence IS the session-alive signal watchers poll.
   - **Nested background / monitor → double gutter.** When a subagent launches a
     `run_in_background` command (or a Monitor), the streamer extracts the task id
     from the tool_result and spawns `claude-stream.py` with the subagent's colour
@@ -784,13 +814,23 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     with no follow-up turn. **Dedup:** the rollout filename's `<uuid>` *is* the companion
     sidecar's `threadId`, so a run already handled by source A is skipped here (after a
     short grace that lets the sidecar reveal its threadId) — a companion job streams
-    once, with its nicer label, never twice.
+    once, with its nicer label, never twice. **The predates-this-session filter uses
+    the rollout's *creation* time** (the filename timestamp, falling back to inode
+    birth time) — deliberately not mtime: a rollout still being *written* refreshes
+    its mtime forever, so a long `codex exec` started before this session passed an
+    mtime filter, its dead previous claim was stolen, and its entire history
+    replayed from byte 0 into the new session's mirror.
   - **`claude-codex-stream.py`** renders both sources into the codex palette (colour
     picked round-robin by the watcher and passed as `r,g,b`; it keeps no slot marker, so
     it never affects the tab colour): `▶ cmd` (syntax-highlighted), `⋯ reasoning`,
     `✎ message`, `⇠ review` / `⇠ result`, framed by a rule-bracketed `codex ▶ <label>`
     … `■ codex <label> ended · Ns`. Successful sub-commands are suppressed; a non-zero
-    exit shows a red `■ exit N`.
+    exit shows a red `■ exit N`. It never writes after the state DB is parked: the
+    header emit re-checks the DB file right before painting (SessionEnd can park it
+    during the tailer's wait-for-source window, and `claude_state`'s connect would
+    *create* a missing DB — resurrecting the session-alive signal the watcher polls,
+    which then never exits), and a park detected mid-stream skips the footer rather
+    than writing it into the `*.keep` snapshot via the cached connection.
   - **Session/cwd-attributed, not nested.** A codex run is keyed to the Claude
     `sessionId` (source A) or the repo `cwd` (source B), not the launching `agent_id`,
     so it reads as its own **top-level** stream rather than nested under the teammate

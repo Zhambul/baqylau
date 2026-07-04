@@ -44,6 +44,15 @@ class FileTailer:
             size = os.path.getsize(self.path)
         except OSError:
             return None
+        if size < self.pos:
+            # The file SHRANK (truncated / rewritten in place, e.g. the command
+            # ran `> file` again): our offset points past EOF, so nothing would
+            # ever be emitted again — and a regrow past the old offset would
+            # resume mid-content from a stale position. A truncating writer
+            # means the content is fresh: start over from 0.
+            self.pos = 0
+            self.pending = b""
+            self.changed_at = time.time()
         if size > self.size:
             self.changed_at = time.time()
         self.size = size
