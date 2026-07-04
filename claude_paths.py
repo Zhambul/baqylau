@@ -14,6 +14,12 @@ import re
 
 PREFIX = "/tmp/claude-mirror-"
 
+# The GLOBAL window-keyed tab DB (colour state + watcher pid locks). Owned by
+# claude-tab-status.py (schema + writes); claude_state.tab_state is the one
+# sanctioned reader. Window-keyed, not session-keyed — a kitty window outlives
+# any one session. In /tmp so it self-clears on reboot.
+TAB_DB = "/tmp/claude-kitty-tab.db"
+
 
 def sanitize_sid(sid):
     """A session id as it appears in the mirror-log key."""

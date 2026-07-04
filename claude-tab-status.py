@@ -155,7 +155,7 @@ def sid_from_key(key):  # /tmp/claude-mirror-<sid>.log -> <sid>
 # runtime DB. Window-keyed — a kitty window id is unique per kitty instance and
 # outlives any one session — so this is deliberately NOT the per-session state DB.
 # In /tmp so it self-clears on reboot.
-TABDB = "/tmp/claude-kitty-tab.db"
+TABDB = P.TAB_DB
 TABDB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tab(win TEXT PRIMARY KEY, state TEXT);
 CREATE TABLE IF NOT EXISTS watchers(kind TEXT, win TEXT, pid INTEGER, PRIMARY KEY(kind, win));

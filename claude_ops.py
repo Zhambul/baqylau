@@ -414,59 +414,34 @@ def bump_transcript(log, transcript):
     One assistant MESSAGE is written as one JSONL line PER CONTENT BLOCK, each line
     repeating that message's usage (input/cache fields identical, output_tokens a
     growing snapshot — the last line has the final count). So usage is counted once
-    per message.id, from its last line. Because a message's lines can straddle two
-    bump calls, the state keeps 'txlast' — the last counted id and what was counted
-    for it — and later lines of the same id only add the (output) delta. Best-effort:
-    any failure rolls the transaction back and leaves the state unchanged."""
+    per message.id, from its last line (usage_fold, carried across calls in the
+    state's 'txlast' record). The read-modify-write of the cursor runs inside ONE
+    BEGIN IMMEDIATE transaction, owned by claude_state.transcript_fold — this
+    function only parses and prices. Best-effort: any failure rolls the
+    transaction back and leaves the state unchanged."""
     if not log or not transcript:
         return {}
-    conn = S.connect(log)
-    if conn is None:
-        return {}
+    moved = {}                              # what fold counted, for the audit below
 
-    def _get(key, default=0):
-        row = conn.execute("SELECT val FROM counters WHERE key=?", (key,)).fetchone()
-        return row[0] if row else default
-
-    def _add(key, v):
-        conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET val = val + excluded.val",
-                     (key, float(v)))
-
-    def _put(key, v):
-        conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                     (key, float(v)))
-
-    try:
-        conn.execute("BEGIN IMMEDIATE")     # serialize concurrent hooks on the cursor
-        pos = int(_get("txpos"))
-        row = conn.execute("SELECT val FROM kv WHERE key='txlast'").fetchone()
-        prev = json.loads(row[0]) if row else None
-        if not isinstance(prev, dict):
-            prev = None
+    def fold(pos, prev):
         try:
             size = os.path.getsize(transcript)
         except OSError:
-            conn.commit()
-            return stats_now(log)
+            return None
         if size < pos:                      # transcript rotated/replaced — restart
             pos = 0
             prev = None                     # ids from the old file mustn't dedup the new one
         if size <= pos:
-            conn.commit()
-            return stats_now(log)
+            return None
         try:
             with open(transcript, "rb") as tf:
                 tf.seek(pos)
                 chunk = tf.read(size - pos)
         except OSError:
-            conn.commit()
-            return stats_now(log)
+            return None
         end = chunk.rfind(b"\n")
         if end < 0:                         # no complete new line yet — keep cursor
-            conn.commit()
-            return stats_now(log)
+            return None
         tok, usd = 0, 0.0
         rows = {}                           # message id -> last usage line seen for it
         for ln in chunk[:end].split(b"\n"):
@@ -500,35 +475,21 @@ def bump_transcript(log, transcript):
             d, prev = usage_fold(mid, fields, prev)
             tok += d[0] + d[1]
             usd += cost_usd(model, *d) or 0.0
-        if tok:
-            _add("tokens", tok)
-        if usd:
-            _add("cost", usd)
-        if prev is not None:
-            conn.execute("INSERT INTO kv(key, val) VALUES('txlast', ?) "
-                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                         (json.dumps(prev, ensure_ascii=False),))
-        _put("txpos", pos + end + 1)
-        conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
-                     (int(time.time()),))
-        conn.execute("INSERT INTO counters(key, val) VALUES('v', 1) "
-                     "ON CONFLICT(key) DO UPDATE SET val = val + 1")
-        conn.commit()
-        st = stats_now(log)
+        moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev)
+        return pos + end + 1, prev, tok, usd
+
+    try:
+        st = S.transcript_fold(log, fold)
         # Audit only when spend actually moved (this is called on every hook; a
         # no-new-turns call is noise). Records the delta, the cursor advance, and
         # the resulting totals — the trail a token/cost inflation bug needs.
-        if tok or usd:
+        if moved.get("tok") or moved.get("usd"):
             A.state_file(log, S.db_path(log), "bump-transcript", {
-                "d_tokens": tok, "d_cost": round(usd, 6),
-                "txpos": pos + end + 1, "txlast": prev,
+                "d_tokens": moved["tok"], "d_cost": round(moved["usd"], 6),
+                "txpos": moved["txpos"], "txlast": moved["txlast"],
                 "now": {"tokens": st.get("tokens"), "cost": st.get("cost")}})
         return st
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         A.error(log, "bump_transcript", {"transcript": transcript})
         return {}
 

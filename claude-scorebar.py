@@ -130,19 +130,10 @@ def _claude_window():
 
 
 def _tab_green(win):
-    """True when the session's tab currently shows awaiting-response (green)."""
-    try:
-        import sqlite3
-        conn = sqlite3.connect("file:/tmp/claude-kitty-tab.db?mode=ro", uri=True,
-                               timeout=0.2)
-        try:
-            row = conn.execute("SELECT state FROM tab WHERE win=?",
-                               (str(win),)).fetchone()
-            return bool(row) and row[0] == "awaiting-response"
-        finally:
-            conn.close()
-    except Exception:
-        return False
+    """True when the session's tab currently shows awaiting-response (green).
+    Read through claude_state.tab_state — the tab DB's schema is owned by
+    claude-tab-status.py, not hardcoded here."""
+    return St.tab_state(win) == "awaiting-response"
 
 
 def session_id():

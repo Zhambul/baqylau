@@ -91,19 +91,11 @@ def _next(log, kind, n):
         return 0
     key = "slotnext:" + kind
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT val FROM counters WHERE key=?", (key,)).fetchone()
-        cur = int(row[0]) if row else 0
-        conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                     (key, cur + 1))
-        conn.commit()
+        with St.immediate(conn):
+            cur = int(St.counter_get(conn, key))
+            St.counter_set(conn, key, cur + 1)
         return cur % n
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return 0
 
 
@@ -120,29 +112,24 @@ def claim(kind, log):
         return start, None
     got, action = None, "claim"
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        for k in range(n):
-            idx = (start + k) % n
-            row = conn.execute("SELECT pid FROM live WHERE kind=? AND key=?",
-                               (kind, str(idx))).fetchone()
-            if row is None:
-                conn.execute("INSERT INTO live(kind, key, pid, idx, start_ts) "
-                             "VALUES(?,?,?,?,?)",
-                             (kind, str(idx), mypid, idx, time.time()))
-                got = idx
-                break
-            holder = int(row[0] or 0)
-            if not holder or not _alive(holder):    # stale holder -> steal the slot
-                conn.execute("UPDATE live SET pid=?, start_ts=? WHERE kind=? AND key=?",
-                             (mypid, time.time(), kind, str(idx)))
-                got, action = idx, "steal-stale"
-                break
-        conn.commit()
+        with St.immediate(conn):
+            for k in range(n):
+                idx = (start + k) % n
+                row = conn.execute("SELECT pid FROM live WHERE kind=? AND key=?",
+                                   (kind, str(idx))).fetchone()
+                if row is None:
+                    conn.execute("INSERT INTO live(kind, key, pid, idx, start_ts) "
+                                 "VALUES(?,?,?,?,?)",
+                                 (kind, str(idx), mypid, idx, time.time()))
+                    got = idx
+                    break
+                holder = int(row[0] or 0)
+                if not holder or not _alive(holder):    # stale holder -> steal the slot
+                    conn.execute("UPDATE live SET pid=?, start_ts=? WHERE kind=? AND key=?",
+                                 (mypid, time.time(), kind, str(idx)))
+                    got, action = idx, "steal-stale"
+                    break
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         A.error(log, "claim", {"kind": kind, "start": start})
         return start, None
     if got is None:                                 # all live -> reuse start, no token

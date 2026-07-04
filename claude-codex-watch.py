@@ -100,7 +100,7 @@ def claim(key):
     # Every outcome is audited (slots table, kind=codex-claim) — "why did session A
     # (not) show that codex run" is a cross-session question only evidence can answer.
     db = claims_db()
-    got = S.claim(db, key)
+    got = S.lock_acquire(db, key)
     if got in ("claim", "steal-stale"):
         A.slot(LOG, "codex-claim", got, agent_id=key,
                owner_pid=os.getpid(), marker_path=db)
@@ -207,7 +207,7 @@ def label_for(data):
 def acquire_lock():
     """Per-session single-watcher lock (was <log>.slots/codex.watch.pid) — a claim
     row in the SESSION state DB, pid-liveness-checked so a stale lock is stolen."""
-    got = S.claim(S.db_path(LOG), "codex-watch")
+    got = S.lock_acquire(S.db_path(LOG), "codex-watch")
     return got in ("claim", "steal-stale")
 
 
@@ -300,7 +300,7 @@ def main():
                 spawn(rf, "-", "cli")         # a raw `codex` / `codex exec` run
             time.sleep(POLL)
     finally:
-        S.release_claim(S.db_path(LOG), "codex-watch")
+        S.lock_release(S.db_path(LOG), "codex-watch")
 
 
 _WATCH_ID = None

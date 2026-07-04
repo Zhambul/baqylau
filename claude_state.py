@@ -37,6 +37,7 @@
 # Every function swallows exceptions: runtime state is best-effort and must never
 # break a hook or a streamer. Callers audit their own transitions.
 import errno, json, os, sqlite3, time
+from contextlib import contextmanager
 
 import claude_paths as P
 
@@ -100,6 +101,43 @@ def connect(log):
     return _connect(db_path(log))
 
 
+@contextmanager
+def immediate(conn):
+    """BEGIN IMMEDIATE / commit; on any exception roll back (best-effort) and
+    re-raise — each call site keeps its own swallow-with-default. Replaces the
+    try/commit/except/rollback/except/pass block that was copy-pasted at every
+    read-modify-write site in this module, claude_slots, and claude_ops."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        yield conn
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+    conn.commit()
+
+
+# --- counter primitives (used inside an open transaction) ---------------------------
+
+def counter_add(conn, key, v=1):
+    conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET val = val + excluded.val",
+                 (key, float(v)))
+
+
+def counter_set(conn, key, v):
+    conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                 (key, float(v)))
+
+
+def counter_get(conn, key, default=0):
+    row = conn.execute("SELECT val FROM counters WHERE key=?", (key,)).fetchone()
+    return row[0] if row else default
+
+
 # --- mirror paint ops (was the append-only JSONL mirror log) ------------------------
 # The mirror's paint-op stream lives in the `ops` table: producers (hooks, tailers)
 # INSERT rows, the renderer polls `id > last_seen`. One transaction per emit() keeps a
@@ -116,16 +154,11 @@ def ops_append(log, ops):
     if conn is None:
         return False
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.executemany("INSERT INTO ops(op) VALUES(?)",
-                         [(json.dumps(o, ensure_ascii=False),) for o in ops])
-        conn.commit()
+        with immediate(conn):
+            conn.executemany("INSERT INTO ops(op) VALUES(?)",
+                             [(json.dumps(o, ensure_ascii=False),) for o in ops])
         return True
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return False
 
 
@@ -167,28 +200,18 @@ def incr(log, tool=None, file=None, **deltas):
     if conn is None:
         return {}
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        for k, v in deltas.items():
-            conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
-                         "ON CONFLICT(key) DO UPDATE SET val = val + excluded.val",
-                         (k, float(v)))
-        if tool:
-            conn.execute("INSERT INTO counters(key, val) VALUES(?, 1) "
-                         "ON CONFLICT(key) DO UPDATE SET val = val + 1",
-                         ("tool:" + tool,))
-        if file:
-            conn.execute("INSERT OR IGNORE INTO files(path) VALUES(?)", (file,))
-        conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
-                     (int(time.time()),))
-        conn.execute("INSERT INTO counters(key, val) VALUES('v', 1) "
-                     "ON CONFLICT(key) DO UPDATE SET val = val + 1")
-        conn.commit()
+        with immediate(conn):
+            for k, v in deltas.items():
+                counter_add(conn, k, v)
+            if tool:
+                counter_add(conn, "tool:" + tool)
+            if file:
+                conn.execute("INSERT OR IGNORE INTO files(path) VALUES(?)", (file,))
+            conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
+                         (int(time.time()),))
+            counter_add(conn, "v")
         return stats(log)
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return {}
 
 
@@ -221,6 +244,47 @@ def stats(log):
         return st
     except Exception:
         return {}
+
+
+def transcript_fold(log, fold):
+    """One atomic read-modify-write of the main session's transcript cursor — the
+    transaction claude_ops.bump_transcript used to hand-roll against this module's
+    private tables. `fold(pos, prev)` is called INSIDE the transaction with the
+    current byte cursor ('txpos') and dedup carry record ('txlast', a dict or
+    None); it returns None to leave everything unchanged, or
+    (new_pos, new_prev, tok, usd) — tok/usd are added to the 'tokens'/'cost'
+    counters, the cursor advances, 'start' is stamped and the change counter 'v'
+    bumped, all in the same transaction (so concurrent hooks never double-count).
+    Returns the updated stats dict, {} when the DB is unreachable. Exceptions from
+    `fold` propagate after rollback — the caller audits them."""
+    conn = connect(log)
+    if conn is None:
+        return {}
+    with immediate(conn):
+        pos = int(counter_get(conn, "txpos"))
+        row = conn.execute("SELECT val FROM kv WHERE key='txlast'").fetchone()
+        try:
+            prev = json.loads(row[0]) if row else None
+        except Exception:
+            prev = None
+        if not isinstance(prev, dict):
+            prev = None
+        r = fold(pos, prev)
+        if r is not None:
+            new_pos, new_prev, tok, usd = r
+            if tok:
+                counter_add(conn, "tokens", tok)
+            if usd:
+                counter_add(conn, "cost", usd)
+            if new_prev is not None:
+                conn.execute("INSERT INTO kv(key, val) VALUES('txlast', ?) "
+                             "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                             (json.dumps(new_prev, ensure_ascii=False),))
+            counter_set(conn, "txpos", new_pos)
+            conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
+                         (int(time.time()),))
+            counter_add(conn, "v")
+    return stats(log)
 
 
 def version(log):
@@ -300,22 +364,17 @@ def msgs_write(log, delivered, read, live):
     if conn is None:
         return
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        conn.execute("DELETE FROM messages")
-        conn.executemany(
-            "INSERT INTO messages(msg_id, read, sender, recipient, summary) "
-            "VALUES(?,?,?,?,?)",
-            [(mid, 1 if ent[0] else 0, ent[1], ent[2], ent[3])
-             for mid, ent in live.items()])
-        for k, v in (("msg_delivered", delivered), ("msg_read", read)):
-            conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
-                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val", (k, v))
-        conn.commit()
+        with immediate(conn):
+            conn.execute("DELETE FROM messages")
+            conn.executemany(
+                "INSERT INTO messages(msg_id, read, sender, recipient, summary) "
+                "VALUES(?,?,?,?,?)",
+                [(mid, 1 if ent[0] else 0, ent[1], ent[2], ent[3])
+                 for mid, ent in live.items()])
+            counter_set(conn, "msg_delivered", delivered)
+            counter_set(conn, "msg_read", read)
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
+        pass
 
 
 # --- per-agent record (was sub.slot.* / sub.desc.* / sub.pos.* / sub.done.*) --------
@@ -380,17 +439,12 @@ def desc_pop(log):
     if conn is None:
         return ""
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT id, text FROM queue ORDER BY id LIMIT 1").fetchone()
-        if row:
-            conn.execute("DELETE FROM queue WHERE id=?", (row[0],))
-        conn.commit()
+        with immediate(conn):
+            row = conn.execute("SELECT id, text FROM queue ORDER BY id LIMIT 1").fetchone()
+            if row:
+                conn.execute("DELETE FROM queue WHERE id=?", (row[0],))
         return row[1] if row else ""
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return ""
 
 
@@ -429,17 +483,12 @@ def hand_take(log, key):
     if conn is None:
         return None
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT val FROM handoffs WHERE key=?", (key,)).fetchone()
-        if row:
-            conn.execute("DELETE FROM handoffs WHERE key=?", (key,))
-        conn.commit()
+        with immediate(conn):
+            row = conn.execute("SELECT val FROM handoffs WHERE key=?", (key,)).fetchone()
+            if row:
+                conn.execute("DELETE FROM handoffs WHERE key=?", (key,))
         return json.loads(row[0]) if row else None
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return None
 
 
@@ -454,43 +503,59 @@ def hand_del(log, key):
         pass
 
 
+# --- global tab DB (OWNED by claude-tab-status.py) -----------------------------------
+
+def tab_state(win):
+    """The tab colour-state claude-tab-status.py last applied for a kitty window,
+    '' when absent/unreadable. mode=ro so a probe can never create the DB. The DB
+    and its schema belong to claude-tab-status.py; this accessor is the ONE
+    sanctioned cross-module reader (the scorebar's pause-accounting) — before it,
+    the scorebar hardcoded the path and schema and a change there broke it
+    silently."""
+    try:
+        conn = sqlite3.connect(f"file:{P.TAB_DB}?mode=ro", uri=True, timeout=0.2)
+        try:
+            row = conn.execute("SELECT state FROM tab WHERE win=?",
+                               (str(win),)).fetchone()
+            return row[0] or "" if row else ""
+        finally:
+            conn.close()
+    except Exception:
+        return ""
+
+
 # --- pid-liveness claims (was O_EXCL pid files: codex mirror-claims + watch lock) ----
 
 _alive = pid_alive                  # historical internal name
 
 
-def claim(db, key, pid=None):
-    """Claim `key` for `pid` (default: this process) in the claims table of the DB at
-    `db` (a full path — the codex claims DB is shared per-repo, not per-session).
-    Returns 'claim', 'steal-stale', or 'claim-denied:<holder-pid>'. A holder whose
-    pid is dead is taken over, same as the old O_EXCL marker files."""
+def lock_acquire(db, key, pid=None):
+    """Take the pid-lock `key` for `pid` (default: this process) in the claims table
+    of the DB at `db` (a full path — the codex claims DB is shared per-repo, not
+    per-session). Returns 'claim', 'steal-stale', or 'claim-denied:<holder-pid>' (the
+    return strings are audit vocabulary and stay stable). A holder whose pid is dead
+    is taken over, same as the old O_EXCL marker files. (Named lock_*, not claim —
+    that name collided with claude_slots.claim, a different mechanism.)"""
     pid = pid or os.getpid()
     conn = _connect(db)
     if conn is None:
         return "claim-denied:no-db"
     try:
-        conn.execute("BEGIN IMMEDIATE")
-        row = conn.execute("SELECT pid FROM claims WHERE key=?", (key,)).fetchone()
-        if row is None:
-            conn.execute("INSERT INTO claims(key, pid) VALUES(?, ?)", (key, pid))
-            conn.commit()
-            return "claim"
-        holder = int(row[0] or 0)
-        if holder and holder != pid and _alive(holder):
-            conn.commit()
-            return f"claim-denied:{holder}"
-        conn.execute("UPDATE claims SET pid=? WHERE key=?", (pid, key))
-        conn.commit()
-        return "claim" if holder == pid else "steal-stale"
+        with immediate(conn):
+            row = conn.execute("SELECT pid FROM claims WHERE key=?", (key,)).fetchone()
+            if row is None:
+                conn.execute("INSERT INTO claims(key, pid) VALUES(?, ?)", (key, pid))
+                return "claim"
+            holder = int(row[0] or 0)
+            if holder and holder != pid and _alive(holder):
+                return f"claim-denied:{holder}"
+            conn.execute("UPDATE claims SET pid=? WHERE key=?", (pid, key))
+            return "claim" if holder == pid else "steal-stale"
     except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
         return "claim-denied:error"
 
 
-def release_claim(db, key, pid=None):
+def lock_release(db, key, pid=None):
     pid = pid or os.getpid()
     conn = _connect(db)
     if conn is None:
