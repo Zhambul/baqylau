@@ -59,6 +59,17 @@ import claude_state as St  # noqa: E402  (pid_alive only — DB reads stay mode=
 
 WIN = os.environ.get("KITTY_WINDOW_ID", "")
 
+# The literal tab states (also the vocabulary of the tab DB's `state` column and
+# the hooks' argv) — constants so an internal typo is a NameError, not a silently
+# never-matching transition. The mapping to colours is COLORS below.
+IDLE       = "idle"
+THINKING   = "thinking"
+WORKING    = "working"
+EXECUTING  = "executing"
+AWAITING_BG       = "awaiting-bg"
+AWAITING_COMMAND  = "awaiting-command"      # red — Claude is asking YOU
+AWAITING_RESPONSE = "awaiting-response"     # green — done, your turn
+
 # The state decisions below record to the audit DB (see claude_audit.py) as
 # tab_transitions rows — applied, skipped, and early bails alike. claude_audit's
 # writers never raise and spool on a locked/unreachable DB, so calling them
@@ -285,7 +296,7 @@ def run_bgwatch(mlog):
         misses = 0
         for _ in range(1800):
             time.sleep(2)
-            if tab_get(WIN) != "awaiting-bg":
+            if tab_get(WIN) != AWAITING_BG:
                 reason = "state-moved-on"
                 audit_tx("", "", 0, "bg-watch: state moved on, watcher exiting")
                 return None
@@ -304,7 +315,7 @@ def run_bgwatch(mlog):
             return None
         reason = "cleared-to-green"
         REASON = "bg-watch: no live markers across ~8s of checks"
-        return "awaiting-response"
+        return AWAITING_RESPONSE
     finally:
         watcher_del("bgwatch", WIN)
         try:
@@ -338,7 +349,7 @@ def run_interruptwatch(transcript):
             pos = 0
         for _ in range(3600):
             time.sleep(0.5)
-            if tab_get(WIN) not in ("thinking", "working"):
+            if tab_get(WIN) not in (THINKING, WORKING):
                 reason = "state-moved-on"   # moved to blue/red/green -> nothing to do
                 return None
             try:
@@ -358,14 +369,14 @@ def run_interruptwatch(transcript):
         else:
             reason = "no-interrupt-within-30m"
             return None
-        if tab_get(WIN) not in ("thinking", "working"):
+        if tab_get(WIN) not in (THINKING, WORKING):
             # re-check: only flip if still stuck busy right now
             reason = "interrupt-seen-but-state-moved-on"
             audit_tx("", "", 0, "interrupt-watch: interrupt seen but state moved on")
             return None
         reason = "interrupt-detected-flipped-green"
         REASON = "interrupt-watch: [Request interrupted by user] in transcript"
-        return "awaiting-response"
+        return AWAITING_RESPONSE
     finally:
         watcher_del("interruptwatch", WIN)
         try:
@@ -410,7 +421,7 @@ def d_stop():
         # blue. The detached watcher polls until no bg job remains, then flips
         # this stale blue green.
         ensure_bgwatch()
-        return "awaiting-bg"
+        return AWAITING_BG
     if re.search(r'"status"\s*:\s*"running"', json.dumps(p)):
         # No live tailer marker, but the Stop payload's own background_tasks list
         # says a teammate/background task is still RUNNING. Markers are burst-
@@ -419,9 +430,9 @@ def d_stop():
         # the team, not you. Stay blue.
         REASON = "stop: payload background_tasks reports status=running"
         ensure_bgwatch()
-        return "awaiting-bg"
+        return AWAITING_BG
     REASON = "stop: nothing running"
-    return "awaiting-response"
+    return AWAITING_RESPONSE
 
 
 def d_agent_start():
@@ -436,7 +447,7 @@ def d_agent_start():
     AUDIT_SID = sid_from_key(MLOG)
     REASON = "agent-start: main session now awaiting a subagent/teammate"
     ensure_bgwatch()
-    return "awaiting-bg"
+    return AWAITING_BG
 
 
 def d_bg_watch():
@@ -457,7 +468,7 @@ def d_bg_recheck():
 
     executing matters for a MANUALLY CANCELLED foreground command: cancelling one
     fires NO hook at all (the same no-hook-on-interrupt gap noted above), so
-    "executing" would otherwise stick until the next interaction. But the fg
+    EXECUTING would otherwise stick until the next interaction. But the fg
     tailer (claude-cmd-pre.py) DOES notice its process died (has_writer goes
     false) and calls bg-recheck right then — a fast, reliable signal for exactly
     this case, so we honour it here too."""
@@ -466,16 +477,16 @@ def d_bg_recheck():
     kind = sys.argv[3] if len(sys.argv) > 3 else ""   # fg / bg / monitor / sub
     AUDIT_SID = sid_from_key(MLOG)
     cur = tab_get(WIN) if WIN else ""
-    # Clearing "executing" exists SOLELY for the cancelled-foreground-command
+    # Clearing EXECUTING exists SOLELY for the cancelled-foreground-command
     # case, where the caller is that command's own fg tailer noticing its writer
     # died. Any OTHER tailer (a finishing teammate/subagent/bg job) calling in
     # while the tab shows executing means the MAIN session is running its own
     # command — flipping that green painted "done" over a still-working lead.
     # Only fg may clear it.
-    if cur == "executing" and kind != "fg":
+    if cur == EXECUTING and kind != "fg":
         audit_tx(cur, "", 0, f"bg-recheck({kind}): only fg may clear executing")
         return None
-    if cur not in ("awaiting-bg", "executing"):
+    if cur not in (AWAITING_BG, EXECUTING):
         audit_tx(cur, "", 0, f"bg-recheck({kind}): tab not on a bg-running colour")
         return None
     if bg_command_running():
@@ -490,8 +501,8 @@ def d_bg_recheck():
         audit_tx(cur, "", 0, f"bg-recheck({kind}): a new job started in the grace gap")
         return None
     cur2 = tab_get(WIN) if WIN else ""
-    if cur2 not in ("awaiting-bg", "executing") or \
-       (cur2 == "executing" and kind != "fg"):
+    if cur2 not in (AWAITING_BG, EXECUTING) or \
+       (cur2 == EXECUTING and kind != "fg"):
         audit_tx(cur2, "", 0, f"bg-recheck({kind}): state moved on in the gap")
         return None
     REASON = f"bg-recheck({kind}): no live markers remain"
@@ -500,10 +511,10 @@ def d_bg_recheck():
     # the instant it completes, so the main is about to TAKE OVER, not hand back
     # to you. Painting green here produced a visible green flash before the
     # main's own hooks (or its next Stop) repainted magenta. Go straight to
-    # "working" (magenta) so the tab reflects the main resuming; its subsequent
+    # WORKING (magenta) so the tab reflects the main resuming; its subsequent
     # Stop sets green once that follow-up turn genuinely ends. Untracked shell
     # jobs (fg/bg/monitor) don't re-invoke the main, so those still go green.
-    return "working" if kind == "sub" else "awaiting-response"
+    return WORKING if kind == "sub" else AWAITING_RESPONSE
 
 
 def d_thinking():
@@ -516,7 +527,7 @@ def d_thinking():
     AUDIT_SID = (p.get("session_id") or "").strip()
     REASON = "prompt submitted"
     ensure_interruptwatch(p.get("transcript_path") or "")
-    return "thinking"
+    return THINKING
 
 
 def d_notify():
@@ -536,30 +547,30 @@ def d_notify():
         MLOG = log_for_sid(AUDIT_SID)
     if re.search(r"[Pp]ermission|[Aa]pprov|confirmation", msg):
         REASON = f"notify: permission/approval prompt: {msg}"
-        return "awaiting-command"       # -> red (wins over bg)
+        return AWAITING_COMMAND       # -> red (wins over bg)
     # If the MAIN session is mid-turn (busy/executing), this notification is a
-    # teammate ping ("finished", "idle", mail) — NOT your turn. The last
+    # teammate ping ("finished", IDLE, mail) — NOT your turn. The last
     # teammate finishing used to slip through the bg check below and paint
     # green over a still-working lead; when the lead is truly waiting, Stop has
     # already set the state, so skipping here loses nothing.
     cur = tab_get(WIN) if WIN else ""
-    if cur in ("thinking", "working", "executing"):
+    if cur in (THINKING, WORKING, EXECUTING):
         audit_tx(cur, "", 0, f"notify: main mid-turn, teammate ping ignored: {msg}")
         return None
     if bg_command_running():
         REASON = f"notify: bg/teammates still running: {msg}"
         ensure_bgwatch()                # teammates/bg still running -> blue, not green
-        return "awaiting-bg"
-    if cur == "awaiting-bg":
+        return AWAITING_BG
+    if cur == AWAITING_BG:
         # The tab was blue (awaiting the team) and a bg job just finished,
         # firing this notification. In an agent team the main session is
         # re-invoked to process the finished teammate's result -> it's TAKING
         # OVER, not your turn. Go magenta (working); the main's next Stop sets
         # green once it truly hands back to you.
         REASON = f"notify: bg finished, main taking over: {msg}"
-        return "working"
+        return WORKING
     REASON = f"notify: your turn: {msg}"
-    return "awaiting-response"          # genuinely your turn -> green
+    return AWAITING_RESPONSE          # genuinely your turn -> green
 
 
 def d_pretool():
@@ -574,7 +585,7 @@ def d_pretool():
       - the Bash tool                   -> a shell command is running -> blue.
       - the Task/Agent tool             -> launching/awaiting an agent -> blue.
       - AskUserQuestion / ExitPlanMode  -> Claude is asking YOU -> red.
-      - every other tool (Edit/Read/Write/MCP/...) -> "working" (magenta)."""
+      - every other tool (Edit/Read/Write/MCP/...) -> WORKING (magenta)."""
     global AUDIT_SID, REASON
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
@@ -583,24 +594,24 @@ def d_pretool():
     tool = p.get("tool_name") or ""
     REASON = f"pretool: {tool}"
     if tool in ("AskUserQuestion", "ExitPlanMode"):
-        return "awaiting-command"       # Claude is asking YOU -> red
+        return AWAITING_COMMAND       # Claude is asking YOU -> red
     if tool in ("Bash", "Task", "Agent"):
-        return "executing"              # shell command / awaiting an agent -> blue
-    return "working"                    # other tool -> magenta (busy)
+        return EXECUTING              # shell command / awaiting an agent -> blue
+    return WORKING                    # other tool -> magenta (busy)
 
 
 def d_posttool():
     """PostToolUse / PostToolUseFailure: after a tool finishes. An event with an
     agent_id is a SUBAGENT's / TEAMMATE's own tool finishing -> IGNORE it (the
     tab tracks the main session only). Otherwise it's the main agent between
-    tools -> "working" (magenta)."""
+    tools -> WORKING (magenta)."""
     global AUDIT_SID, REASON
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
     if p.get("agent_id"):
         return None                     # subagent/teammate inner call -> don't touch the tab
     REASON = "posttool: main agent between tools"
-    return "working"
+    return WORKING
 
 
 DISPATCHES = {
@@ -609,7 +620,7 @@ DISPATCHES = {
     "bg-watch":        d_bg_watch,
     "interrupt-watch": d_interrupt_watch,
     "bg-recheck":      d_bg_recheck,
-    "thinking":        d_thinking,
+    THINKING:        d_thinking,
     "notify":          d_notify,
     "pretool":         d_pretool,
     "posttool":        d_posttool,
@@ -639,17 +650,17 @@ def set_color(kitten, active_bg, active_fg, inactive_bg):
 
 
 COLORS = {
-    "idle":              ("#5c6370", "#e6e9ef", "#33373f"),  # grey  — ready, nothing running
+    IDLE:              ("#5c6370", "#e6e9ef", "#33373f"),  # grey  — ready, nothing running
     # thinking + working are merged: there's no signal to tell reasoning apart
     # from non-shell tool use / reply-writing, so both are one "busy" colour.
-    "thinking":          ("#c678dd", "#1a0620", "#4a2b52"),  # magenta — Claude busy
-    "working":           ("#c678dd", "#1a0620", "#4a2b52"),
+    THINKING:          ("#c678dd", "#1a0620", "#4a2b52"),  # magenta — Claude busy
+    WORKING:           ("#c678dd", "#1a0620", "#4a2b52"),
     # blue — a command is running: a foreground shell command (executing), or a
     # background command / monitor Claude is awaiting (awaiting-bg). Same colour.
-    "executing":         ("#61afef", "#06121f", "#2c4a63"),
-    "awaiting-bg":       ("#61afef", "#06121f", "#2c4a63"),
-    "awaiting-command":  ("#e06c75", "#2a0608", "#5e2d31"),  # red — Claude is asking you
-    "awaiting-response": ("#98c379", "#07180a", "#445733"),  # green — done, your turn
+    EXECUTING:         ("#61afef", "#06121f", "#2c4a63"),
+    AWAITING_BG:       ("#61afef", "#06121f", "#2c4a63"),
+    AWAITING_COMMAND:  ("#e06c75", "#2a0608", "#5e2d31"),  # red — Claude is asking you
+    AWAITING_RESPONSE: ("#98c379", "#07180a", "#445733"),  # green — done, your turn
 }
 
 
@@ -667,7 +678,7 @@ def main():
 
     # Skip the work entirely when the tab is ALREADY showing this state.
     # Tool-heavy turns fire many hooks that all resolve to the same colour (a run
-    # of Read/Edit/MCP calls all become "working"), and re-applying an identical
+    # of Read/Edit/MCP calls all become WORKING), and re-applying an identical
     # colour is a wasted `kitten @` socket round-trip. The persisted state row
     # (written at the end of every applied change) is our record of what's
     # currently shown: if it matches, there's nothing to do — bail before locating

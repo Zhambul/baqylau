@@ -23,9 +23,9 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 LOG = ""   # set in main() from the payload's session_id (per-session log)
 
-LBL_FG   = (170, 185, 210)  # slate   — foreground OK (neutral, distinct from the vivid palettes)
-LBL_BG   = (209, 154, 102)  # orange  — background header chip / foreground "interrupted"
-LBL_FAIL = (224, 108, 117)  # red     — a failed tool (PostToolUseFailure)
+LBL_FG   = O.SLATE    # foreground OK (neutral, distinct from the vivid palettes)
+LBL_BG   = O.ORANGE   # background header chip / foreground "interrupted"
+LBL_FAIL = O.RED      # a failed tool (PostToolUseFailure)
 
 
 def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
@@ -142,7 +142,7 @@ def _render_finished(d, tr, cmd, live, done):
     """A foreground command's real outcome: hand it to the live fg tailer when one
     exists (it owns the block), else render the whole block here."""
     ms  = d.get("duration_ms")
-    dur = "?" if ms is None else (f"{ms/1000:.1f}s" if ms < 60000 else f"{int(ms//60000)}m{int(ms//1000)%60:02d}s")
+    dur = "?" if ms is None else O.fmt_dur(ms / 1000)
     failed = H.is_failure(d)
     interrupted = bool(d.get("is_interrupt"))
 

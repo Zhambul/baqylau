@@ -29,7 +29,7 @@ import claude_state as S
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-LBL_FG = (170, 185, 210)  # slate — same colour claude-cmd-fmt.py uses for an OK foreground block
+LBL_FG = O.SLATE   # same colour claude-cmd-fmt.py uses for an OK foreground block
 
 
 def main():

@@ -55,9 +55,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # CLAUDE_MIRROR_BIAS — e.g. a [1m] session wants higher cutoffs.
 CTX_WARN = M.int_env("CLAUDE_MIRROR_CTX_WARN", 30)
 CTX_CRIT = M.int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
-CTX_GREEN = R.fg(152, 195, 121)
-CTX_AMBER = R.fg(229, 192, 123)
-CTX_RED   = R.fg(224, 108, 117)
+CTX_GREEN = R.fg(*O.GREEN)
+CTX_AMBER = R.fg(*O.YELLOW)
+CTX_RED   = R.fg(*O.RED)
 
 # Model / effort / context-window resolution lives in claude_model.py; this block
 # just binds it to THIS agent's identity (its meta.json, definition file, and the
@@ -127,11 +127,10 @@ def cancelled_by_user():
     except Exception:
         return False
 
-# Verb colours for file ops (match claude-file-fmt.py).
-FILE_LABEL = {"Read": "Read", "Edit": "Update", "MultiEdit": "Update",
-              "Write": "Write", "NotebookEdit": "Update"}
-FILE_COL   = {"Read": R.fg(97, 175, 239), "Update": R.fg(229, 192, 123),
-              "Write": R.fg(152, 195, 121)}
+# Verbs + colours for file ops — the shared claude_ops table (claude-file-fmt.py
+# renders the main session's file ops with the same).
+FILE_LABEL = O.FILE_LABEL
+FILE_COL   = {verb: R.fg(*rgb) for verb, rgb in O.FILE_RGB.items()}
 
 # A message DELIVERED to this teammate appears in its transcript as a plain user
 # record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
@@ -166,13 +165,7 @@ def msg_gutter(text):
     return O.gut(R.markdown(R.unescape(text)), SUB_RGB)
 
 
-def kfmt(n):
-    # Compact token count: 124000 -> "124k", 1000000 -> "1M".
-    if n >= 1_000_000:
-        return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
-    if n >= 1000:
-        return f"{round(n / 1000)}k"
-    return str(n)
+kfmt = O.kfmt        # compact token count: 124000 -> "124k"
 
 
 def model_ctx():
@@ -612,7 +605,7 @@ def main(run):
     got = claude_slots.lookup_id("sub", LOG, AGENT)
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
-    dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
+    dur = O.fmt_dur(sec)
     foot = f"■ {LABEL} " + ("cancelled" if cancelled else "ended") + f" · {dur}"
     global RESOLVED_MODEL
     RESOLVED_MODEL = M.parent_resolved_model(TPATH, AGENT)   # authoritative window, best-effort

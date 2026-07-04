@@ -37,7 +37,7 @@ LOGFILE  = sys.argv[3] if len(sys.argv) > 3 else ""
 JSONF    = sys.argv[4] if len(sys.argv) > 4 else "-"
 LABEL    = sys.argv[5] if len(sys.argv) > 5 else "task"
 ROLLOUT  = LOGFILE.endswith(".jsonl")     # else companion .log
-RST, FAIL = R.RST, R.fg(224, 108, 117)
+RST, FAIL = R.RST, R.fg(*O.RED)
 
 # A companion job-log line is prefixed with an ISO timestamp; the tail is the event
 # head. Un-prefixed lines are continuation body of the preceding block event.
@@ -236,7 +236,7 @@ def main(run):
     else:
         state = "failed" if read_status() == "failed" else "ended"
         sec = max(0.0, time.time() - start)
-    dur = f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
+    dur = O.fmt_dur(sec)
     O.emit(LOG, O.rule(), O.label(f"■ codex {LABEL} {state} · {dur}", SLOT_RGB), O.rule())
 
 

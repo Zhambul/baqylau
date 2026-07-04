@@ -280,7 +280,8 @@ def emit(log, *ops):
 # Sonnet 5 has an introductory 2/10 rate through 2026-08-31; the entry is picked at
 # import time (hook processes are short-lived, so this is per-event in practice) and
 # reverts to the 3/15 sticker automatically after the intro window.
-_SONNET5 = ("sonnet-5", 2.0, 10.0) if time.time() < 1788220800 else ("sonnet-5", 3.0, 15.0)
+SONNET5_INTRO_UNTIL = 1788220800   # 2026-08-31T00:00:00Z — end of the 2/10 intro rate
+_SONNET5 = ("sonnet-5", 2.0, 10.0) if time.time() < SONNET5_INTRO_UNTIL else ("sonnet-5", 3.0, 15.0)
 PRICES = (
     ("haiku",     1.0,  5.0),
     ("fable",    10.0, 50.0),
@@ -294,6 +295,30 @@ PRICES = (
 )
 
 SCORE_RGB = (120, 132, 158)   # muted slate-blue — reads as a divider, not an event
+
+# --- shared status colours (RGB) -------------------------------------------------
+# One table for the hues that must agree across producers (several used to be
+# duplicated per-file with "must match" comments). Palette families for streams
+# stay in claude_slots; these are the fixed semantic colours.
+SLATE  = (170, 185, 210)   # foreground OK (neutral, distinct from the vivid palettes)
+ORANGE = (209, 154, 102)   # background header / interrupted
+RED    = (224, 108, 117)   # failure / removals
+GREEN  = (152, 195, 121)   # success / additions / a written file
+YELLOW = (229, 192, 123)   # modification / warning
+BLUE   = (97, 175, 239)    # a read
+AMBER  = (214, 153, 92)    # a task entering the list
+
+# File-op verbs + colours, shared by claude-file-fmt.py (main session) and
+# claude-substream.py (agents) — verbs mirror Claude Code's own UI.
+FILE_LABEL = {"Read": "Read", "Edit": "Update", "MultiEdit": "Update",
+              "Write": "Write", "NotebookEdit": "Update"}
+FILE_RGB   = {"Read": BLUE, "Update": YELLOW, "Write": GREEN}
+
+
+def fmt_dur(sec):
+    """Wall-clock duration chip text: '3.2s' / '4m07s' (negatives clamp to 0)."""
+    sec = max(0.0, sec)
+    return f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
 
 
 def cost_usd(model, tot_in, tot_out, tot_cache=0, tot_create=0):
@@ -504,13 +529,16 @@ def _dur(sec):
     return f"{sec}s" if sec < 60 else f"{sec // 60}m{sec % 60:02d}s"
 
 
-def _kfmt(n):
-    # Compact token count: 124000 -> "124k", 1200000 -> "1.2M".
+def kfmt(n):
+    """Compact token count: 124000 -> "124k", 1200000 -> "1.2M"."""
     if n >= 1_000_000:
         return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
     if n >= 1000:
         return f"{round(n / 1000)}k"
     return str(n)
+
+
+_kfmt = kfmt                       # historical internal name
 
 
 def scoreboard_parts(st, now):

@@ -19,24 +19,16 @@ import claude_ops as O
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-LABEL = {
-    "Read": "Read",
-    "Edit": "Update",
-    "MultiEdit": "Update",
-    "Write": "Write",
-    "NotebookEdit": "Update",
-}
+# Verbs + colours are the shared claude_ops table (claude-substream.py renders a
+# subagent's file ops with the SAME verbs/colours).
+LABEL = O.FILE_LABEL
 
 
 def fg(r, g, b):
     return f"\033[38;2;{r};{g};{b}m"
 
 
-COLOR = {
-    "Read":   fg(97, 175, 239),   # blue   — a read
-    "Update": fg(229, 192, 123),  # yellow — a modification
-    "Write":  fg(152, 195, 121),  # green  — a new file written
-}
+COLOR = {verb: fg(*rgb) for verb, rgb in O.FILE_RGB.items()}
 DIM = fg(92, 99, 112)
 DEF = fg(171, 178, 191)
 RST = "\033[0m"
@@ -60,7 +52,7 @@ def main():
     name = os.path.basename(path.rstrip("/")) or path
     failed = H.is_failure(d)
     if failed:
-        col, mark = fg(224, 108, 117), DIM + " ✗" + RST   # red verb + ✗ on failure
+        col, mark = fg(*O.RED), DIM + " ✗" + RST          # red verb + ✗ on failure
     else:
         col, mark = COLOR.get(label, DEF), ""
     tool = d.get("tool_name") or ""
@@ -81,9 +73,9 @@ def main():
             added, removed = O.diff_counts(tool, ti)
             parts = []
             if added:
-                parts.append(fg(152, 195, 121) + f"+{added}" + RST)   # green additions
+                parts.append(fg(*O.GREEN) + f"+{added}" + RST)   # green additions
             if removed:
-                parts.append(fg(224, 108, 117) + f"-{removed}" + RST)  # red removals
+                parts.append(fg(*O.RED) + f"-{removed}" + RST)   # red removals
             if parts:
                 line += "  " + " ".join(parts)
             rng = O.edit_range(tr.get("structuredPatch") if isinstance(tr, dict) else None)

@@ -57,7 +57,7 @@ else:
     SLOT, _MARKER = claude_slots.claim(KIND, LOG)
 SLOT_RGB = claude_slots.color(KIND, SLOT)
 if KIND == "fg":
-    SLOT_RGB = (170, 185, 210)   # slate — matches claude-cmd-pre.py's "▶ foreground" header
+    SLOT_RGB = O.SLATE           # matches claude-cmd-pre.py's "▶ foreground" header
 # When this background/monitor job was launched *by a subagent*, a second gutter bar
 # in the subagent's colour (outer = which subagent, inner = which bg/monitor job)
 # keeps nested parallel jobs distinguishable. claude-substream.py passes "r,g,b".
@@ -285,7 +285,7 @@ def main(run):
         # finish chip) — this tailer just bows out quietly, no chip of its own, so the
         # two don't race or double-render.
         elapsed = max(0.0, tail.changed_at - start)  # active duration, excluding any idle wait
-        dur = f"{elapsed:.1f}s" if elapsed < 60 else f"{int(elapsed // 60)}m{int(elapsed % 60):02d}s"
+        dur = O.fmt_dur(elapsed)
         if KIND == "fg" and override and override.get("chip"):
             chip_txt = override["chip"]
             chip_rgb = tuple(override.get("color") or SLOT_RGB)

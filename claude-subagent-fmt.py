@@ -26,9 +26,7 @@ LOG   = ""   # set in main() from the payload's session_id (per-session log)
 
 
 def fmt_dur(sec):
-    if sec <= 0:
-        return ""
-    return f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
+    return O.fmt_dur(sec) if sec > 0 else ""
 
 
 def is_teammate(tpath, agent_id):

@@ -5,7 +5,9 @@
 # ANSI-aware gutter wrapping, escape-unescaping, and chip labels can be reused by
 # claude-substream.py (which renders a subagent's transcript). Everything here is
 # width-parameterised (no module-level WIDTH) so it imports cleanly.
+import os
 import re
+import sys
 import unicodedata
 
 
@@ -36,6 +38,27 @@ def dsplit(s, avail):
             return s[:i], s[i:]
         w += cw
     return s, ""
+
+
+def term_width(fixed=None, floor=16, fallback=53):
+    """The live pane width for a renderer (claude-mirror / claude-scorebar):
+    an explicit argv override when given, else the terminal size — re-queried
+    every paint so a SIGWINCH repaint sees the new width."""
+    if fixed:
+        return max(floor, fixed)
+    try:
+        return max(floor, os.get_terminal_size(sys.stdout.fileno()).columns)
+    except Exception:
+        return fallback
+
+
+def fit(s, avail):
+    """Truncate `s` to `avail` display cells, ellipsis when it doesn't fit."""
+    if dwidth(s) <= avail:
+        return s
+    if avail > 1:
+        return dsplit(s, avail - 1)[0] + "…"
+    return dsplit(s, max(0, avail))[0]
 
 
 # --- One Dark-ish palette (truecolor; kitty supports it) -----------------------

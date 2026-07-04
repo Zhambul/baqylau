@@ -54,12 +54,7 @@ SEP   = R.DIM + " · " + R.RST
 _NUM  = re.compile(r"\d[\d.,]*")
 
 
-def fit(s, avail):
-    if R.dwidth(s) <= avail:
-        return s
-    if avail > 1:
-        return R.dsplit(s, avail - 1)[0] + "…"
-    return R.dsplit(s, max(0, avail))[0]
+fit = R.fit
 
 
 def style(kind, text):
@@ -175,12 +170,7 @@ def compose(w, mparts):
 
 
 def width():
-    if FIXED_WIDTH:
-        return max(16, FIXED_WIDTH)
-    try:
-        return max(16, os.get_terminal_size(sys.stdout.fileno()).columns)
-    except Exception:
-        return 53
+    return R.term_width(FIXED_WIDTH)
 
 
 _winch = False

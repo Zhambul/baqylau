@@ -20,8 +20,8 @@ import claude_ops as O
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-CREATED_RGB = (214, 153, 92)    # warm amber — a task entering the list
-DONE_RGB    = (152, 195, 121)   # green — a task finished
+CREATED_RGB = O.AMBER   # a task entering the list
+DONE_RGB    = O.GREEN   # a task finished
 
 
 def main():
@@ -30,7 +30,9 @@ def main():
         return
     ev   = d.get("hook_event_name") or ""
     tid  = d.get("task_id") or "?"
-    subj = d.get("task_subject") or d.get("task_title") or d.get("task_description") or ""
+    # task_subject with a task_description fallback — the payload carries these two
+    # (NOT the "task_title" the docs mention; a speculative fallback on it was dropped).
+    subj = d.get("task_subject") or d.get("task_description") or ""
     if ev == "TaskCompleted":
         glyph, rgb = "✓", DONE_RGB
     else:                                    # TaskCreated (or anything task-ish)

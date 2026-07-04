@@ -13,7 +13,7 @@
 # Width is read live from the pane itself (os.get_terminal_size), so producers never
 # need to know it — they only emit width-independent ops. A literal WIDTH argv is
 # accepted for non-tty testing.
-import json, os, signal, subprocess, sys, time
+import os, signal, subprocess, sys, time
 
 
 def _ensure_pygments():
@@ -89,20 +89,10 @@ _resized = True     # paint once at startup (and whenever a SIGWINCH arrives)
 
 
 def width():
-    if FIXED_WIDTH:
-        return max(16, FIXED_WIDTH)
-    try:
-        return max(16, os.get_terminal_size(sys.stdout.fileno()).columns)
-    except Exception:
-        return 53
+    return R.term_width(FIXED_WIDTH)
 
 
-def fit(s, avail):
-    if R.dwidth(s) <= avail:
-        return s
-    if avail > 1:
-        return R.dsplit(s, avail - 1)[0] + "…"
-    return R.dsplit(s, max(0, avail))[0]
+fit = R.fit
 
 
 def render(op, w):
