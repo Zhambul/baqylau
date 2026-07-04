@@ -368,6 +368,7 @@ def render_file(name_tool, inp, result=None, ctx=""):
     # its added/removed line counts plus the line range(s) it touched. All go before the
     # model tag so they survive truncation on a narrow pane. Extent/range come from the
     # tool_result (`result`); counts from the input.
+    added = removed = 0
     if name_tool == "Read":
         ext = O.read_extent(result.get("file") if isinstance(result, dict) else None, inp)
         if ext:
@@ -390,6 +391,18 @@ def render_file(name_tool, inp, result=None, ctx=""):
     if ctx:
         line += "  " + R.DIM + ctx + RST
     O.emit(LOG, O.gut(line, SUB_RGB))
+    # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
+    # reflect TEAM-WIDE file activity, not just the main session's own file ops
+    # (claude-file-fmt.py skips agent_id calls — the substream owns their rendering,
+    # and now their accounting too, mirroring how the ended-footer already folds each
+    # agent's token spend into the scoreboard). `files` is a UNIQUE-path set, so an
+    # agent re-touching a path — or touching one the main session already did — never
+    # inflates it; added/removed sum. Handoff-safe: each transcript line is consumed
+    # exactly once across the streamer chain (the `pos` checkpoint), so an idle-teammate
+    # restart can't double-count, same as the per-streamer tool_n above. Emitted as a
+    # plain `bump` (no meta) — the deltas are files/lines, not the tokens/cost that the
+    # unattributed-bump anomaly guards.
+    O.bump(LOG, tool=name_tool, file=path, added=added, removed=removed)
 
 
 def on_tool_use(b):

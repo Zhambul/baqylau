@@ -129,7 +129,15 @@ New always-audited swallow sites (previously silent — their absence used to ma
   rows: each carries the delta AND the resulting totals, so find the exact bump where
   the running total diverges from what the session actually did (`hook_events` is the
   ground truth to diff against); `bump-transcript` rows also carry the `txpos` cursor —
-  a cursor that jumps backwards or re-covers a range = double-counting. `msg-transitions`
+  a cursor that jumps backwards or re-covers a range = double-counting. Plain `bump`
+  rows carrying `files`/`added`/`removed` deltas come from TWO producers now: the main
+  session's `claude-file-fmt.py` AND each agent's `claude-substream.py` `render_file`
+  (team-wide file accounting — an agent file op has no `tool`-keyed `commands` delta, so
+  a `bump` with a `Read`/`Edit`/`Write` tool + file/line deltas but NO matching
+  main-session PostToolUse hook_event is the substream feeding it, not an anomaly). The
+  `files` counter is a session-wide UNIQUE-path set, so its total can be LOWER than the
+  count of file `bump` rows (same path touched by main + agents counts once) — that's
+  correct, not a lost bump. `msg-transitions`
   rows are the same trail for the ✉ census (the tracker keys per `(recipient,
   msg_id)` copy — a broadcast to N teammates is N `new` events; one event for N
   copies, or `read` events exceeding deliveries, means the per-recipient keying

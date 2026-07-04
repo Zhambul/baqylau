@@ -619,7 +619,19 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     again would just duplicate the head). `files` counts **unique files** (touched
     paths are deduped in the sidecar's `file_set`; re-editing the same file doesn't
     inflate it) while the tools row still counts operations — so `Edit 18` against
-    `5 files` reads as 18 edits across 5 distinct files.
+    `5 files` reads as 18 edits across 5 distinct files. The file counters are
+    **team-wide**: the main session's own file ops feed them via `claude-file-fmt.py`,
+    and every **subagent/teammate** file op feeds them too — `claude-substream.py`'s
+    `render_file` bumps the same `files`/`added`/`removed` (and tools) counters as it
+    renders each op, mirroring how the ended-footer already folds each agent's *token*
+    spend into the scoreboard. (`claude-file-fmt.py` deliberately skips any `agent_id`
+    call — the substream owns rendering *and* now the accounting of agent file ops, so
+    there's no double count.) Because `files` is a unique-path set shared across the
+    whole session, an agent re-touching a path the main session already touched never
+    inflates it. It's handoff-safe: each transcript line is consumed exactly once
+    across the streamer chain (the `pos` checkpoint), so an idle-teammate restart
+    can't recount, and the bump lands as a plain `bump` row (deltas are files/lines,
+    not the tokens/cost the unattributed-bump anomaly guards).
   - **Tokens + cost cover the whole session.** The `cost` figure prices fresh billed
     input (`input + cache_creation`) plus output plus the cheap cache-read/write rates;
     the underlying `tokens` counter (fresh input + output — cache reads are replay, not
