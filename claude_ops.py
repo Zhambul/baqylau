@@ -556,18 +556,17 @@ def kfmt(n):
     return str(n)
 
 
-_kfmt = kfmt                       # historical internal name
-
-
 def scoreboard_parts(st, now):
     """Structured scoreboard data from a stats dict (as returned by bump()); `now` is
     epoch secs. Returns (parts, tools): parts is [(kind, text), …] in display order —
-    kinds: cmds / fail / files / add / rem / tok / time / cost (cost goes last so a
+    kinds: cmds / fail / files / add / rem / time / cost (cost goes last so a
     narrow pane drops it first) — and tools is the top-5
     [(name, count), …] EXCLUDING Bash, whose count is already the cmds figure (same
     bump — listing it again would just duplicate the head). The renderer
     (claude-scorebar.py) owns the styling; kinds exist so it can colour failures
-    red, added lines green, etc."""
+    red, added lines green, etc. Token counts live on the separate Σ row
+    (token_parts) — the 'tokens' counter still backs the cost figure below and the
+    Σ row's total, it's just no longer rendered here."""
     parts = []
     cmds = int(st.get("commands") or 0)
     if cmds > 0:
@@ -583,9 +582,8 @@ def scoreboard_parts(st, now):
         parts.append(("add", f"+{add}"))
     if rem:
         parts.append(("rem", f"-{rem}"))
-    tok = int(st.get("tokens") or 0)     # metered agent/codex spend (fresh in + out),
-    if tok:                              # same provenance as the cost field below
-        parts.append(("tok", _kfmt(tok) + " tok"))
+    # Token counts moved to the dedicated Σ row (token_parts) — the ▪ row would only
+    # duplicate the billed subset. The 'tokens' counter still backs the cost below.
     start = st.get("start")
     if start:
         # ⏱ shows ACTIVE time: wall clock minus the green "your turn" stretches

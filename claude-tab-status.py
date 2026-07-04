@@ -244,13 +244,15 @@ def ensure_bgwatch():
 
 def ensure_interruptwatch(transcript):
     """Spawn ONE detached interrupt-watch per window (if not already running): the
-    recovery for a cancelled turn that never ran a Bash/subagent tool (so has no
-    marker/pid of its own to liveness-check) — a plain text reply or an Edit/Read/MCP
-    tool call killed mid-flight leaves the tab stuck on magenta (thinking/working
-    merged) otherwise. Claude Code appends a synthetic "[Request interrupted by user]"
+    recovery for a cancel at any point in the turn where no marker/pid of its own
+    exists to liveness-check — a plain text reply, an Edit/Read/MCP tool call, a
+    permission prompt, or the stretch AFTER a command finished, killed mid-flight,
+    leaves the tab stuck on magenta/red otherwise. (A cancel while a command RUNS
+    is covered faster by the fg tailer's writer-liveness; the watcher defers to it
+    on blue.) Claude Code appends a synthetic "[Request interrupted by user]"
     line to the session transcript the instant that happens (confirmed empirically,
     same as the subagent-cancel case) — this watcher tails the transcript for that
-    line and flips green within ~0.5s.
+    line, for the whole turn, and flips green within ~0.5s.
 
     KNOWN GAP (deliberate): cancelling BEFORE the model has produced anything at all
     (mid-thinking) leaves no trace anywhere — no hook, no transcript line, nothing
@@ -325,13 +327,15 @@ def run_bgwatch(mlog):
 
 
 def run_interruptwatch(transcript):
-    """interrupt-watch: recovery for a turn cancelled before any Bash/subagent tool
-    ran — those have their own fast self-heal (writer-liveness / meta.json polling)
-    via a marker/pid this watcher doesn't need, but a plain text reply or an
-    Edit/Read/MCP call killed mid-flight has neither, so it would otherwise sit on
-    magenta until the next interaction. Tails the transcript for the synthetic
-    "[Request interrupted by user]" line Claude Code appends the instant a cancel
-    happens, and flips green within one ~0.5s tick."""
+    """interrupt-watch: recovery for a cancel anywhere in the turn that leaves no
+    other signal. Live commands/agents have their own fast self-heal (writer-
+    liveness / meta.json polling) via a marker/pid this watcher doesn't need — so
+    it defers to those on blue — but a plain text reply, an Edit/Read/MCP call, a
+    permission prompt, or the reply written AFTER a command finished has neither,
+    and killed mid-flight would otherwise sit on magenta/red until the next
+    interaction. Tails the transcript for the synthetic "[Request interrupted by
+    user]" line Claude Code appends the instant a cancel happens, for the whole
+    turn (exits on green/idle/cleared), and flips green within one ~0.5s tick."""
     global AUDIT_SID, REASON
     if not (WIN and transcript):
         return None
@@ -349,8 +353,16 @@ def run_interruptwatch(transcript):
             pos = 0
         for _ in range(3600):
             time.sleep(0.5)
-            if tab_get(WIN) not in (THINKING, WORKING):
-                reason = "state-moved-on"   # moved to blue/red/green -> nothing to do
+            # Keep watching through the WHOLE turn (magenta/blue/red are all
+            # mid-turn). Exiting the moment the state left thinking/working
+            # meant the first Bash/Task pretool (-> executing) killed the
+            # watcher, and a cancel later in the same turn — e.g. Esc while the
+            # model writes its long post-command reply — had no recovery at all
+            # (the fg tailer only covers a cancel while its command runs):
+            # stuck magenta until the next interaction. Only green/idle/cleared
+            # mean the turn is over and there is nothing left to recover.
+            if tab_get(WIN) in (AWAITING_RESPONSE, IDLE, ""):
+                reason = "turn-over"        # green/idle/cleared -> nothing to do
                 return None
             try:
                 size = os.path.getsize(transcript)
@@ -369,11 +381,22 @@ def run_interruptwatch(transcript):
         else:
             reason = "no-interrupt-within-30m"
             return None
-        if tab_get(WIN) not in (THINKING, WORKING):
-            # re-check: only flip if still stuck busy right now
-            reason = "interrupt-seen-but-state-moved-on"
-            audit_tx("", "", 0, "interrupt-watch: interrupt seen but state moved on")
+        cur = tab_get(WIN)
+        if cur in (AWAITING_RESPONSE, IDLE, ""):
+            # re-check: the turn already resolved on its own right now
+            reason = "interrupt-seen-but-turn-already-over"
+            audit_tx(cur, "", 0, "interrupt-watch: interrupt seen but turn already over")
             return None
+        if cur in (EXECUTING, AWAITING_BG):
+            # blue: the cancelled command/agent has its own faster recovery
+            # (writer-liveness -> bg-recheck / bg-watch); flipping green here
+            # would race it and could paint "done" over a still-live bg job.
+            reason = "interrupt-seen-deferred-to-bg-recheck"
+            audit_tx(cur, "", 0,
+                     "interrupt-watch: interrupt seen on blue — writer-liveness self-heals")
+            return None
+        # magenta (thinking/working) or red (awaiting-command): no other signal
+        # covers a cancel here -> flip green.
         reason = "interrupt-detected-flipped-green"
         REASON = "interrupt-watch: [Request interrupted by user] in transcript"
         return AWAITING_RESPONSE
@@ -441,10 +464,21 @@ def d_agent_start():
     goes BLUE — even if the lead's turn had already ended (green). Without this,
     a teammate starting a new task between the lead's turns would leave the tab
     stuck green while the teammate works (SubagentStart otherwise never touches
-    the tab). Also ensures the watcher so the blue clears once the team quiets."""
+    the tab). Also ensures the watcher so the blue clears once the team quiets.
+
+    EXCEPTION: red (awaiting-command) wins. Red means Claude is blocked on YOUR
+    answer (permission prompt / AskUserQuestion) — a teammate starting its next
+    task in the background must not erase the one visual cue that you're needed
+    (d_notify makes red win over its bg check for the same reason). No watcher is
+    needed while red: answering the prompt resumes the normal state flow."""
     global MLOG, AUDIT_SID, REASON
     MLOG = sys.argv[2] if len(sys.argv) > 2 else ""
     AUDIT_SID = sid_from_key(MLOG)
+    cur = tab_get(WIN) if WIN else ""
+    if cur == AWAITING_COMMAND:
+        audit_tx(cur, "", 0,
+                 "agent-start: red (awaiting-command) wins — user's answer still needed")
+        return None
     REASON = "agent-start: main session now awaiting a subagent/teammate"
     ensure_bgwatch()
     return AWAITING_BG
@@ -706,18 +740,22 @@ def main():
 
     # Persist the resolved state (tab DB row) so bg-recheck / bg-watch can tell
     # whether a finishing background job should flip the stale bg-running blue back
-    # to green. The audit row reflects what kitten actually did: applied=0 + a
-    # "kitten @ failed" reason when the socket call errored (dead socket, closed
-    # tab, …) — the tab did NOT change colour.
+    # to green — but ONLY when the paint actually landed (rc == 0). Persisting a
+    # failed paint made the DB claim a colour the tab never showed, and the
+    # "colour already shown" dedup above then suppressed every retry of that same
+    # state: one transient socket error stranded the old colour until a DIFFERENT
+    # state came along. Leaving the row unchanged keeps the next same-state event
+    # eligible to retry the paint.
     if rc == 0:
         audit_tx(prev_state, state, 1, REASON)
+        if state in COLORS:
+            tab_set(WIN, state)
+        else:
+            tab_clear(WIN)
     else:
         audit_tx(prev_state, state, 0,
-                 (f"{REASON} — " if REASON else "") + f"kitten @ failed rc={rc}")
-    if state in COLORS:
-        tab_set(WIN, state)
-    else:
-        tab_clear(WIN)
+                 (f"{REASON} — " if REASON else "")
+                 + f"kitten @ failed rc={rc} — state row unchanged")
 
 
 if __name__ == "__main__":

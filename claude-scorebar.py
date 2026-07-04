@@ -8,13 +8,15 @@
 #
 #   ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
 #   ✉ 5 msgs · 3● unread · 2◉ read
-#   ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
+#   ▪ 45 cmds (5✗) · 56 files · +791 -29 · ⏱ 68m24s · ≈ $1.20
 #   Σ 56M total · 428k in · 197k out · 55M cache · 410k write
 #     Read 34 · Edit 18 · Write 4
 #
-# The ▪ row's "tok" is BILLED spend (fresh input + output); the Σ row's total is the
-# all-in count INCLUDING cache-read replay, so it reconciles with `claude --resume`'s
-# "Usage by model" and is far larger than the ▪ headline (see O.token_parts).
+# All token counts live on the Σ row (the ▪ row carries cmds/files/±/time/cost).
+# The Σ total is the all-in count INCLUDING cache-read replay, so it reconciles with
+# `claude --resume`'s "Usage by model" (see O.token_parts). Its breakdown is
+# input · output · cache read · cache write; the total dwarfs billed spend because
+# cache read is the bulk on a long session.
 #
 # The ✉ row is tracked by claude_msgs.update_messages (stateful inbox polling → a persisted
 # sidecar) and always shows a count (0 included). See claude_ops.py.

@@ -100,10 +100,15 @@ instant a job ends — but it no longer has to wait for the next exchange either
   stale blue green (and exits immediately if a new turn starts). One watcher per
   window, guarded by a pid row in the tab DB.
 
-Each color-set persists the state to the **global tab DB**
+Each **applied** color-set persists the state to the **global tab DB**
 (`/tmp/claude-kitty-tab.db`, `tab` table keyed by window id — was a
 `/tmp/claude-tab-state-<window_id>` file) so `bg-recheck`/`bg-watch` can make the
-"is it currently red?" decision; the per-window `bg-watch`/`interrupt-watch` pid
+"is it currently red?" decision. Applied only: persisting a *failed* `kitten @`
+paint made the DB claim a colour the tab never showed, and the "colour already
+shown" dedup then suppressed every retry of that state — one transient socket
+error stranded the old colour until a different state came along. On `rc != 0`
+the row is left unchanged (audited as `applied=0 … state row unchanged`), so the
+next same-state event retries the paint; the per-window `bg-watch`/`interrupt-watch` pid
 locks live in its `watchers` table. Window-keyed state can't live in the
 per-session state DB (a window outlives any one session), and /tmp keeps the old
 self-clearing-on-reboot lifecycle.
@@ -118,17 +123,25 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   process or file to poll (a tailer's writer-liveness, a subagent's `meta.json`
   `stoppedByUser`), so they self-heal in about a second — see *Live foreground
   streaming* and the subagent section above.
-- **Everything else** — cancelling a plain text reply, or a non-Bash tool call
-  (Read/Edit/Write/MCP) — has no such process to poll, but Claude Code *does*
+- **Everything else** — cancelling a plain text reply, a non-Bash tool call
+  (Read/Edit/Write/MCP), a permission prompt, or the reply written *after* a
+  command already finished — has no such process to poll, but Claude Code *does*
   append a synthetic `[Request interrupted by user]` line to the session
   transcript the instant it happens (confirmed empirically, mirroring the
   subagent case). `claude-tab-status.py`'s `thinking` dispatch (`UserPromptSubmit`)
   reads the payload's `transcript_path` and spawns **one detached
   `interrupt-watch` per window** that tails it for that line, polling every 0.5s —
   so this case recovers almost instantly.
-  It only watches while the tab is in the magenta `thinking`/`working` phase, and
-  re-checks the state right before flipping green so it never clobbers a state
-  that already moved on for a legitimate reason (e.g. a tool call started).
+  It watches for the **whole turn**, exiting only on green/idle/cleared. (It
+  originally exited the moment the state left magenta — but the first Bash/Task
+  pretool sets `executing`, so the watcher died at the turn's first tool call and
+  a cancel *later* in the same turn, e.g. Esc during the long reply after a
+  command finished, had no recovery at all: stuck magenta.) On seeing the
+  interrupt line it re-checks the state: green/idle means the turn already
+  resolved (do nothing); blue means a live command/agent whose own
+  writer-liveness recovery is faster and authoritative (defer, or it would race
+  `bg-recheck` and could paint "done" over a still-live bg job); magenta or red
+  has no other signal, so it flips green.
 - **Cancelling before the model has produced anything at all** (mid-thinking,
   before the turn's first hook) is the one case with **no signal whatsoever** —
   confirmed empirically: the harness silently rewinds the turn for editing, and
@@ -502,7 +515,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     ```
     ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
     ✉ 5 msgs · 1● unread · 2◐ stale · 1◉ read
-    ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
+    ▪ 45 cmds (5✗) · 56 files · +791 -29 · ⏱ 68m24s · ≈ $1.20
     Σ 56M total · 428k in · 197k out · 55M cache · 410k write
       Read 34 · Edit 18 · Write 4
     ```
@@ -552,9 +565,11 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     paths are deduped in the sidecar's `file_set`; re-editing the same file doesn't
     inflate it) while the tools row still counts operations — so `Edit 18` against
     `5 files` reads as 18 edits across 5 distinct files.
-  - **Tokens + cost cover the whole session.** The `▪`-row `tok` sums fresh billed input
-    (`input + cache_creation`) plus generated output — cache reads are replay, not
-    spend, so they're excluded. Two producers feed it: each **agent's** streamer
+  - **Tokens + cost cover the whole session.** The `cost` figure prices fresh billed
+    input (`input + cache_creation`) plus output plus the cheap cache-read/write rates;
+    the underlying `tokens` counter (fresh input + output — cache reads are replay, not
+    billed) backs it and the Σ total but is no longer shown on the `▪` row itself (the
+    Σ row owns the token display). Two producers feed it: each **agent's** streamer
     bumps its totals when the run ends, and the **main session's own turns** are
     folded in by `claude_ops.bump_transcript()` — called from the cmd/file hooks
     **and from `claude-stop-fmt.py` on every `Stop`/`StopFailure`**, it
@@ -571,16 +586,16 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     and the last before SessionEnd parks the DB — no SessionEnd fold is needed (it
     would race the park/rename). The fold is idempotent (the `txpos` cursor guards
     re-reads), so a repeated `Stop` never double-counts.
-  - **The `Σ` row breaks tokens down by category with an all-in total.** Where `▪ tok`
-    is *billed spend*, the `Σ` row (`claude_ops.token_parts()`) shows the four raw
+  - **The `Σ` row is the token display: a per-category breakdown with an all-in total.**
+    The `Σ` row (`claude_ops.token_parts()`) shows the four raw
     categories — **input · output · cache read · cache write** — plus a **total** that
     ADDS cache-read replay, so it reconciles with what `claude --resume`'s "Usage by
-    model" reports (that total is dominated by cache read on a long session and is far
-    larger than the `▪ tok` headline — different metrics, on purpose). Both accountants
+    model" reports (that total is dominated by cache read on a long session, so it far
+    exceeds *billed* spend — different metrics, on purpose). Both accountants
     feed four dedicated counters (`tk_in`/`tk_out`/`tk_read`/`tk_create`) from the same
     `usage_fields` split `cost_usd` prices, so `tk_in + tk_create + tk_out` equals the
-    `▪`-row `tok` and `+ tk_read` is the Σ total's extra. Total-first so a narrow pane
-    keeps the headline.
+    billed `tokens` counter and `+ tk_read` is the Σ total's extra. Total-first so a
+    narrow pane keeps the headline.
     One assistant **message** is written as one JSONL line **per content block**, each
     repeating the message's usage (input/cache identical, `output_tokens` a growing
     snapshot), so usage is deduped by `message.id` — counted once, from the last line.
