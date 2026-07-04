@@ -644,6 +644,15 @@ def main(run):
         deltas["cost"] = usd
     if tot_in or tot_out:
         deltas["tokens"] = tot_in + tot_out
+    if tot_in or tot_out or tot_cache or tot_create:
+        # Per-category split feeding the scoreboard's Σ row — same four totals
+        # cost_usd priced. tk_in is fresh input EXCL. cache creation (tot_in is
+        # input+create), so tk_in+tk_create == tot_in and the Σ total stays
+        # consistent with the ▪-row 'tokens' plus cache read. See O.token_parts.
+        deltas["tk_in"] = tot_in - tot_create
+        deltas["tk_out"] = tot_out
+        deltas["tk_read"] = tot_cache
+        deltas["tk_create"] = tot_create
     if deltas:
         O.bump(LOG, meta={"agent_id": AGENT,
                           "kind": "teammate" if PALETTE == "team" else "subagent",

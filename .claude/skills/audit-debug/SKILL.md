@@ -28,7 +28,7 @@ the bug **from evidence, not guesswork**.
 | `ops` | paint op written to the mirror log | producer (script), op (the JSON paint op — full pane reconstruction, survives SessionEnd) |
 | `errors` | swallowed exception | script, func, **traceback** (full), context (JSON of args in hand) |
 | `spawns` | detached process launch | parent_script, child_pid, argv, purpose |
-| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final/keep-history/restore-history/reuse-live-db/fresh-db**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split cost_usd priced — attribution and re-pricing need no timestamp correlation. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff. **keep-history/restore-history/reuse-live-db/fresh-db** (path = `<log>.state.db.keep`, content = the SessionStart `source`) trace the session state DB's lifecycle: SessionEnd parks it as `*.keep` (`keep-history`); SessionStart either restores it (`restore-history`, resume of the same sid), leaves a live DB alone (`reuse-live-db`, compact or resume-after-crash), or starts fresh (`fresh-db`). The state DB IS the mirror content (its `ops` table) — so these rows are the resume-history trail |
+| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final/keep-history/restore-history/reuse-live-db/fresh-db**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split cost_usd priced — attribution and re-pricing need no timestamp correlation. **bump-transcript** now also carries `d_split` (the per-category token delta `tk_in`/`tk_out`/`tk_read`/`tk_create` feeding the scorebar's Σ row) alongside `d_tokens`/`d_cost` — and these rows are written from `claude-stop-fmt.py` on every `Stop`/`StopFailure` too, not just the cmd/file hooks (the Stop fold is what captures a turn's final tool-less reply). The per-category counters live in the state DB (`SELECT key,val FROM counters WHERE key LIKE 'tk_%'`); `tk_in+tk_create+tk_out` == the `▪`-row `tokens`, and `+tk_read` is the Σ total. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff. **keep-history/restore-history/reuse-live-db/fresh-db** (path = `<log>.state.db.keep`, content = the SessionStart `source`) trace the session state DB's lifecycle: SessionEnd parks it as `*.keep` (`keep-history`); SessionStart either restores it (`restore-history`, resume of the same sid), leaves a live DB alone (`reuse-live-db`, compact or resume-after-crash), or starts fresh (`fresh-db`). The state DB IS the mirror content (its `ops` table) — so these rows are the resume-history trail |
 | `pane_events` | mirror/scoreboard pane operation | action (open/close/toggle-on/toggle-off/grow/shrink/reset/setpct), **ok** (verified against kitty — 0 means the pane genuinely isn't there), detail (bias/resulting width). First stop for "frozen/missing pane" reports |
 
 ## Triage order
@@ -135,6 +135,23 @@ the bug **from evidence, not guesswork**.
   double-count, diff the streamer's `resume` row against its predecessor's `final`
   row (path `sub.pos.<agent>`). The `anomalies` command flags any token/cost delta
   arriving as plain `bump` (unattributed producer) on a current build.
+- **Scoreboard `tok` looks 30×+ SMALLER than `/cost`'s token count** — NOT a bug: the
+  `▪`-row `tok` is *billed spend* (fresh input + output; cache-read replay excluded),
+  while `/cost`'s "Usage by model" lists cache read separately (tens of millions on a
+  long session). The **`Σ` row** is the reconciling view — `token_parts()` sums the
+  four `tk_*` counters into an all-in total that DOES include cache read. Confirm from
+  the state DB: `tk_in+tk_out+tk_read+tk_create` should match `/cost`'s four-category
+  sum. If the Σ total itself is short, it's the fold, not the metric — see next.
+- **Scoreboard cost a few % UNDER `/cost`** *(final-turn tail, fixed 2026-07-04)* —
+  `bump_transcript` used to run ONLY from the Bash/file PostToolUse hooks, so a turn's
+  closing reply (no trailing tool) and the whole last turn of a session were never
+  folded; on a cache-heavy (fable) session the dropped final turn is dollars. Tell:
+  the last `bump-transcript` row's `txpos` sits short of the transcript's byte size
+  (`wc -c` the `sessions.transcript_path`), and re-folding to EOF recovers the gap.
+  Fixed by `claude-stop-fmt.py` folding on every `Stop`/`StopFailure` (idempotent via
+  the `txpos` cursor). On a current build, a `txpos` short of EOF with no later
+  `bump-transcript` = the Stop hook never fired or isn't wired (check `hook_events`
+  for a `Stop` subscriber row and a `claude-stop-fmt.py` decision row).
 
 ## Output contract
 

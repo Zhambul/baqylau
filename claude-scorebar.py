@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 # claude-scorebar.py MIRROR_LOG [WIDTH]
 #
-# The scoreboard renderer. Runs inside a SMALL DEDICATED kitty window (4 rows, hsplit
+# The scoreboard renderer. Runs inside a SMALL DEDICATED kitty window (5 rows, hsplit
 # under the mirror pane — opened by claude-split.py alongside the mirror) and paints
-# an always-on session id, a team-message census, and the session summary:
+# an always-on session id, a team-message census, the session summary, and a token
+# breakdown:
 #
 #   ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
 #   ✉ 5 msgs · 3● unread · 2◉ read
 #   ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
+#   Σ 56M total · 428k in · 197k out · 55M cache · 410k write
 #     Read 34 · Edit 18 · Write 4
+#
+# The ▪ row's "tok" is BILLED spend (fresh input + output); the Σ row's total is the
+# all-in count INCLUDING cache-read replay, so it reconciles with `claude --resume`'s
+# "Usage by model" and is far larger than the ▪ headline (see O.token_parts).
 #
 # The ✉ row is tracked by claude_msgs.update_messages (stateful inbox polling → a persisted
 # sidecar) and always shows a count (0 included). See claude_ops.py.
@@ -132,9 +138,11 @@ def session_id():
 
 def compose(w, mparts):
     """The scoreboard rows for width w, as styled strings: [session-id, messages,
-    session-stats, tools]. Row 0 is the always-on ⬡ session id; row 1 is the ✉ message
-    census `mparts` (always shown — defaults to '0 msgs'); rows 2-3 are the ▪ session
-    summary + tool tallies. Segments drop from the tail until the plain text fits."""
+    session-stats, tokens, tools]. Row 0 is the always-on ⬡ session id; row 1 is the
+    ✉ message census `mparts` (always shown — defaults to '0 msgs'); row 2 is the ▪
+    session summary; row 3 is the Σ token breakdown (input/output/cache/write + an
+    all-in total); row 4 is the tool tallies. Segments drop from the tail until the
+    plain text fits."""
     st = St.stats(LOG)      # atomic snapshot from the state DB — no torn reads
     now = time.time()
 
@@ -150,7 +158,7 @@ def compose(w, mparts):
     line_msg = R.DIM + " ✉ " + R.RST + SEP.join(style(k, t) for k, t in mparts)
 
     if not isinstance(st, dict):
-        return [line_sid, line_msg, R.DIM + " ▪ session" + R.RST, ""]
+        return [line_sid, line_msg, R.DIM + " ▪ session" + R.RST, "", ""]
     parts, tools = O.scoreboard_parts(st, now)
 
     avail = w - 3                                    # " ▪ " prefix
@@ -161,12 +169,20 @@ def compose(w, mparts):
         row += ("" if i == 0 else joiner(parts[i - 1][0], kind)) + style(kind, text)
     line_sess = R.DIM + " ▪ " + R.RST + row if parts else R.DIM + " ▪ session" + R.RST
 
+    # Row 3: Σ token breakdown — total-first so a narrow pane keeps the headline.
+    tparts = O.token_parts(st)
+    avail = w - 3                                    # " Σ " prefix
+    while len(tparts) > 1 and sum(len(t) for _, t in tparts) + 3 * (len(tparts) - 1) > avail:
+        tparts.pop()
+    line_tok = R.DIM + " Σ " + R.RST + SEP.join(style(k, t) for k, t in tparts) \
+            if tparts else ""
+
     avail = w - 3                                    # aligned under the parts
     while tools and sum(len(f"{k} {v}") for k, v in tools) + 3 * (len(tools) - 1) > avail:
         tools.pop()
     line_tools = "   " + SEP.join(SLATE + k + " " + VAL + str(v) + R.RST for k, v in tools) \
             if tools else ""
-    return [line_sid, line_msg, line_sess, line_tools]
+    return [line_sid, line_msg, line_sess, line_tok, line_tools]
 
 
 def width():

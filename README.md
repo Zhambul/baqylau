@@ -170,11 +170,11 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   | `TaskCreated`      | —      | `claude-task-fmt.py` (agent-team shared task list: writes `✚ task #N · <subject>` to the mirror) |
   | `TaskCompleted`    | —      | `claude-task-fmt.py` (writes `✓ task #N · <subject>` to the mirror) |
   | `Notification`     | —      | `claude-tab-status.py notify` (reads the message: a permission/approval prompt → red `awaiting-command`; a "waiting for your input" notice → green `awaiting-response`, since that's just your turn) |
-  | `Stop`             | —      | `claude-tab-status.py stop` |
-  | `StopFailure`      | —      | `claude-tab-status.py stop` (turn ended on an API error — keep the tab from getting stuck on the "busy" colour) |
+  | `Stop`             | —      | `claude-tab-status.py stop` **+ `claude-stop-fmt.py`** (folds the turn's token/cost spend into the scoreboard — see below) |
+  | `StopFailure`      | —      | `claude-tab-status.py stop` (turn ended on an API error — keep the tab from getting stuck on the "busy" colour) **+ `claude-stop-fmt.py`** (fold whatever landed in the transcript) |
   | `SessionEnd`       | —      | `claude-tab-status.py clear` + `claude-split.py close` |
 
-  All six `*-fmt.py`/`-pre.py` handlers share **`claude_hook.py`** — the harness
+  All seven `*-fmt.py`/`-pre.py` handlers (incl. `claude-stop-fmt.py`) share **`claude_hook.py`** — the harness
   owning the identical per-hook skeleton (stdin payload parse + mirror-log
   derivation, audited ignore-decisions, detached streamer spawn with the
   load-bearing `start_new_session=True`, and the top-level audit-then-swallow).
@@ -495,14 +495,15 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     the scoreboard's counters survive a `--resume`/`--continue`). The scorebar repaints when the
     state's change counter moves (a `v` counter bumped by every write — WAL commits
     don't reliably touch the db file's mtime). **`claude-scorebar.py`** renders it in a
-    **dedicated ~4-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
-    opened/closed with the mirror by `claude-split.py`) — an always-on session-id
-    line, a team-message census, then the session summary:
+    **dedicated 5-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
+    `BAR_ROWS` in `claude-split.py`, opened/closed with the mirror by it) — an always-on
+    session-id line, a team-message census, the session summary, then a token breakdown:
 
     ```
     ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
     ✉ 5 msgs · 1● unread · 2◐ stale · 1◉ read
     ▪ 45 cmds (5✗) · 56 files · +791 -29 · 1.2M tok · ⏱ 68m24s · ≈ $1.20
+    Σ 56M total · 428k in · 197k out · 55M cache · 410k write
       Read 34 · Edit 18 · Write 4
     ```
 
@@ -551,16 +552,35 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     paths are deduped in the sidecar's `file_set`; re-editing the same file doesn't
     inflate it) while the tools row still counts operations — so `Edit 18` against
     `5 files` reads as 18 edits across 5 distinct files.
-  - **Tokens + cost cover the whole session.** `tok` sums fresh billed input
+  - **Tokens + cost cover the whole session.** The `▪`-row `tok` sums fresh billed input
     (`input + cache_creation`) plus generated output — cache reads are replay, not
     spend, so they're excluded. Two producers feed it: each **agent's** streamer
     bumps its totals when the run ends, and the **main session's own turns** are
-    folded in by `claude_ops.bump_transcript()` — called from the cmd/file hooks, it
+    folded in by `claude_ops.bump_transcript()` — called from the cmd/file hooks
+    **and from `claude-stop-fmt.py` on every `Stop`/`StopFailure`**, it
     reads the session transcript JSONL forward from a cursor kept in the state DB
     (the `txpos` counter), sums each new assistant turn's usage (skipping sidechain
     records — their own streamer already counts them), and advances the cursor inside
     one `BEGIN IMMEDIATE` transaction so concurrent hooks never double-count. (Before this, cost only moved
-    when an agent run ended and sat "stuck" through plain main-session work.)
+    when an agent run ended and sat "stuck" through plain main-session work.) The
+    **`Stop` trigger closes the final-turn tail**: the cmd/file hooks only fire on a
+    tool call, so a turn's closing reply (no trailing tool) — and the whole last turn
+    of a session — was never folded, dropping its tokens and (cache-read-dominated)
+    cost and leaving the scoreboard a few % under `claude --resume`'s real total.
+    `Stop` fires at the end of every turn, so each is folded before the next begins
+    and the last before SessionEnd parks the DB — no SessionEnd fold is needed (it
+    would race the park/rename). The fold is idempotent (the `txpos` cursor guards
+    re-reads), so a repeated `Stop` never double-counts.
+  - **The `Σ` row breaks tokens down by category with an all-in total.** Where `▪ tok`
+    is *billed spend*, the `Σ` row (`claude_ops.token_parts()`) shows the four raw
+    categories — **input · output · cache read · cache write** — plus a **total** that
+    ADDS cache-read replay, so it reconciles with what `claude --resume`'s "Usage by
+    model" reports (that total is dominated by cache read on a long session and is far
+    larger than the `▪ tok` headline — different metrics, on purpose). Both accountants
+    feed four dedicated counters (`tk_in`/`tk_out`/`tk_read`/`tk_create`) from the same
+    `usage_fields` split `cost_usd` prices, so `tk_in + tk_create + tk_out` equals the
+    `▪`-row `tok` and `+ tk_read` is the Σ total's extra. Total-first so a narrow pane
+    keeps the headline.
     One assistant **message** is written as one JSONL line **per content block**, each
     repeating the message's usage (input/cache identical, `output_tokens` a growing
     snapshot), so usage is deduped by `message.id` — counted once, from the last line.

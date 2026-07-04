@@ -252,11 +252,14 @@ def transcript_fold(log, fold):
     private tables. `fold(pos, prev)` is called INSIDE the transaction with the
     current byte cursor ('txpos') and dedup carry record ('txlast', a dict or
     None); it returns None to leave everything unchanged, or
-    (new_pos, new_prev, tok, usd) — tok/usd are added to the 'tokens'/'cost'
-    counters, the cursor advances, 'start' is stamped and the change counter 'v'
-    bumped, all in the same transaction (so concurrent hooks never double-count).
-    Returns the updated stats dict, {} when the DB is unreachable. Exceptions from
-    `fold` propagate after rollback — the caller audits them."""
+    (new_pos, new_prev, tok, usd[, comps]) — tok/usd are added to the
+    'tokens'/'cost' counters and each key of the optional `comps` dict (the
+    per-category token split tk_in/tk_out/tk_read/tk_create that feeds the
+    scoreboard's Σ breakdown row) to its own counter, the cursor advances, 'start'
+    is stamped and the change counter 'v' bumped, all in the same transaction (so
+    concurrent hooks never double-count). Returns the updated stats dict, {} when
+    the DB is unreachable. Exceptions from `fold` propagate after rollback — the
+    caller audits them."""
     conn = connect(log)
     if conn is None:
         return {}
@@ -271,11 +274,16 @@ def transcript_fold(log, fold):
             prev = None
         r = fold(pos, prev)
         if r is not None:
-            new_pos, new_prev, tok, usd = r
+            new_pos, new_prev, tok, usd = r[:4]
+            comps = r[4] if len(r) > 4 else None
             if tok:
                 counter_add(conn, "tokens", tok)
             if usd:
                 counter_add(conn, "cost", usd)
+            if comps:                    # per-category split (tk_in/out/read/create)
+                for k, v in comps.items():
+                    if v:
+                        counter_add(conn, k, v)
             if new_prev is not None:
                 conn.execute("INSERT INTO kv(key, val) VALUES('txlast', ?) "
                              "ON CONFLICT(key) DO UPDATE SET val = excluded.val",

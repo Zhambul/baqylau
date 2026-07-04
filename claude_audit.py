@@ -607,6 +607,15 @@ def cli_anomalies(sid):
             "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
             "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
             "OR json_extract(content, '$.deltas.cost') IS NOT NULL) ORDER BY ts", (sid,))
+    # The Stop fold (claude-stop-fmt.py) captures a turn's final tool-less reply —
+    # without it the scoreboard cost sits a few % under /cost (the dropped final
+    # turn). If Stop fired (a subscriber row exists) but no claude-stop-fmt.py
+    # decision row ever landed, the hook isn't wired: the tail is being lost.
+    section("Stop fired but the transcript-fold hook (claude-stop-fmt.py) never ran",
+            "SELECT ts FROM hook_events WHERE session_id=? AND hook='Stop' "
+            "AND agent_id='' GROUP BY session_id HAVING COUNT(*) > 0 AND NOT EXISTS "
+            "(SELECT 1 FROM hook_events e WHERE e.session_id=hook_events.session_id "
+            "AND e.handler='claude-stop-fmt.py')", (sid,))
 
 
 def cli_sessions(limit=20):

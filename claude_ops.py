@@ -468,6 +468,13 @@ def bump_transcript(log, transcript):
         if end < 0:                         # no complete new line yet — keep cursor
             return None
         tok, usd = 0, 0.0
+        # Per-category token split for the scoreboard's Σ breakdown row, from the
+        # SAME usage_fields cost_usd prices: input (fresh, EXCL. cache creation —
+        # fields[0] is input+create, so subtract fields[3]), output, cache read
+        # (replay), cache write (creation). tk_in+tk_create == the billed 'fin', so
+        # tk_in+tk_out+tk_create == the ▪-row 'tokens'; +tk_read is the extra the Σ
+        # total carries (why it dwarfs the ▪ headline).
+        cin = cout = cread = ccreate = 0
         rows = {}                           # message id -> last usage line seen for it
         for ln in chunk[:end].split(b"\n"):
             try:
@@ -485,6 +492,8 @@ def bump_transcript(log, transcript):
             if not mid:                     # no id to dedup on — count the line as-is
                 tok += fields[0] + fields[1]
                 usd += cost_usd(m.get("model"), *fields) or 0.0
+                cin += fields[0] - fields[3]; cout += fields[1]
+                cread += fields[2]; ccreate += fields[3]
                 continue
             rows[mid] = (m.get("model"), fields)
         for mid, (model, fields) in rows.items():
@@ -495,13 +504,21 @@ def bump_transcript(log, transcript):
                 d_c = (cost_usd(model, *fields) or 0.0) - float(prev.get("usd") or 0.0)
                 tok += max(d_t, 0)
                 usd += max(d_c, 0.0)
+                # legacy carry has no per-field split — count this one straddling
+                # message's categories in full (a one-time small Σ-row over-count,
+                # never of billed tok/usd), then re-persist in the {"id","f"} shape.
+                cin += fields[0] - fields[3]; cout += fields[1]
+                cread += fields[2]; ccreate += fields[3]
                 prev = {"id": mid, "f": list(fields)}
                 continue
             d, prev = usage_fold(mid, fields, prev)
             tok += d[0] + d[1]
             usd += cost_usd(model, *d) or 0.0
-        moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev)
-        return pos + end + 1, prev, tok, usd
+            cin += d[0] - d[3]; cout += d[1]
+            cread += d[2]; ccreate += d[3]
+        comps = {"tk_in": cin, "tk_out": cout, "tk_read": cread, "tk_create": ccreate}
+        moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev, comps=comps)
+        return pos + end + 1, prev, tok, usd, comps
 
     try:
         st = S.transcript_fold(log, fold)
@@ -511,6 +528,7 @@ def bump_transcript(log, transcript):
         if moved.get("tok") or moved.get("usd"):
             A.state_file(log, S.db_path(log), "bump-transcript", {
                 "d_tokens": moved["tok"], "d_cost": round(moved["usd"], 6),
+                "d_split": moved.get("comps"),
                 "txpos": moved["txpos"], "txlast": moved["txlast"],
                 "now": {"tokens": st.get("tokens"), "cost": st.get("cost")}})
         return st
@@ -584,3 +602,28 @@ def scoreboard_parts(st, now):
                sorted(tools.items(), key=lambda kv: -int(kv[1] or 0))
                if k != "Bash"][:5]
     return parts, top
+
+
+def token_parts(st):
+    """The Σ token-breakdown row (claude-scorebar.py), as [(kind, text), …] in
+    display order — kinds: ttot / tin / tout / tread / twrite. The all-in TOTAL
+    goes FIRST so a narrow pane (tail-drop) keeps it. [] until something's counted.
+
+    Sums the four per-category counters (tk_in/tk_out/tk_read/tk_create) that BOTH
+    accountants feed from the same usage_fields split cost_usd prices —
+    bump_transcript (main session) and claude-substream.py (agents). Unlike the ▪
+    row's "tok" (billed spend = fresh input + output only), this total ADDS cache
+    read (tk_read — replay, not billed as fresh) and cache write, so it reconciles
+    with `claude --resume`'s "Usage by model" line, which lists all four categories.
+    That's why the Σ total is far larger than the ▪ tok headline — different metrics,
+    on purpose."""
+    ti = int(st.get("tk_in") or 0)
+    to = int(st.get("tk_out") or 0)
+    tr = int(st.get("tk_read") or 0)
+    tc = int(st.get("tk_create") or 0)
+    total = ti + to + tr + tc
+    if not total:
+        return []
+    return [("ttot", kfmt(total) + " total"), ("tin", kfmt(ti) + " in"),
+            ("tout", kfmt(to) + " out"), ("tread", kfmt(tr) + " cache"),
+            ("twrite", kfmt(tc) + " write")]

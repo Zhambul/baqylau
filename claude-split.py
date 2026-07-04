@@ -308,7 +308,7 @@ def save_size(sid):
 
 # --- pane ops, all scoped to ONE session's mirror (var:claude_mirror=<sid>) ----
 # The mirror pane carries a small companion: the SCOREBOARD BAR (claude-scorebar.py),
-# a ~2-row window hsplit under it (var:claude_scorebar=<sid>). Its own window — not
+# a small (BAR_ROWS-tall) window hsplit under it (var:claude_scorebar=<sid>). Its own window — not
 # lines pinned inside the mirror — so scrolling the mirror's history can't scroll it
 # away. Opened/closed with the mirror; excluded from the width math above (it shares
 # the mirror's column, so counting its columns would double-count that column).
@@ -353,7 +353,7 @@ def close_stale_mirrors(keep):
 # kitty bias is approximate ("you cannot use this method to create windows of fixed
 # sizes"), so after launching the bar, iterate relative resizes until it is exactly
 # BAR_ROWS tall (or kitty's minimum stops shrinking it).
-BAR_ROWS = 4   # ⬡ session id + ✉ message census + 2 session-stats rows
+BAR_ROWS = 5   # ⬡ session id + ✉ census + ▪ summary + Σ token breakdown + tools
 
 
 def bar_delta(sid):
