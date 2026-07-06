@@ -238,11 +238,18 @@ def release_id(kind, log, ident):
     if conn is None:
         return False
     try:
+        # Fetch idx before the delete so the audit row carries slot_n: the
+        # anomalies query pairs claims with releases grouped by (kind, slot_n,
+        # agent), so a slot_n-less release lands in a different group and every
+        # normally-finished subagent false-flagged "claim without release".
+        row = conn.execute("SELECT idx FROM live WHERE kind=? AND key=?",
+                           (kind + ".id", ident)).fetchone()
         cur = conn.execute("DELETE FROM live WHERE kind=? AND key=?",
                            (kind + ".id", ident))
         conn.commit()
         if cur.rowcount:
-            A.slot(log, kind, "release-id", agent_id=ident, owner_pid=os.getpid())
+            A.slot(log, kind, "release-id", slot_n=row[0] if row else None,
+                   agent_id=ident, owner_pid=os.getpid())
             return True
         return False
     except Exception:

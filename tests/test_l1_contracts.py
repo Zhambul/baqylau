@@ -247,13 +247,16 @@ def test_subagent_duplicate_start_is_guarded(run_hook, test_env, session):
     assert len(s.ops()) == ops_before, "duplicate start repeated the header"
 
 
-def test_subagent_stop_sets_done_flag(run_hook, test_env, session):
+def test_subagent_stop_signals_streamer(run_hook, test_env, session):
+    """The stop hook's job is the done signal; `done` itself is transient
+    (reset once the streamer finalises), so pin the audited decision."""
     s = session.make()
     s.write_subagent_jsonl("agent-0001", [])
     run_hook("claude-subagent-fmt.py", P.subagent_start(s), argv=("start",))
     run_hook("claude-subagent-fmt.py", P.subagent_stop(s), argv=("stop",))
-    agents = {r[0]: r[4] for r in s.agents()}
-    assert agents.get("agent-0001") == 1, "done flag not set on SubagentStop"
+    stops = [d for d in oracle.decisions(test_env, s.sid, "claude-subagent-fmt.py")
+             if d.startswith("stop:")]
+    assert stops, "no audited stop decision"
     # duplicate stop tolerated
     run_hook("claude-subagent-fmt.py", P.subagent_stop(s), argv=("stop",))
 

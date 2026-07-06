@@ -66,19 +66,33 @@ def test_env(tmp_path):
 
 _KITTEN_SRC = r'''#!/usr/bin/env python3
 # Fake `kitten` recorder: logs every invocation's argv, honours a control file
-# for programmed rc / canned `@ ls` output. Stands in for the real binary via
-# the product's own $KITTY_KITTEN_BIN override (claude_kitty.find_kitten).
+# for programmed rc / canned `@ ls` output, and keeps a minimal WINDOW MODEL so
+# launch/close-window/set-user-vars round-trip through `ls` (what the product
+# uses to find its panes). Stands in for the real binary via the product's own
+# $KITTY_KITTEN_BIN override (claude_kitty.find_kitten).
 import json, os, sys
 root = os.path.dirname(os.path.abspath(__file__))
 argv = sys.argv[1:]
 with open(os.path.join(root, "kitten-calls.jsonl"), "a") as f:
     f.write(json.dumps(argv) + "\n")
-cfg = {}
-try:
-    with open(os.path.join(root, "kitten-ctl.json")) as f:
-        cfg = json.load(f)
-except Exception:
-    pass
+
+def load(name, default):
+    try:
+        with open(os.path.join(root, name)) as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+def save(name, obj):
+    with open(os.path.join(root, name), "w") as f:
+        json.dump(obj, f)
+
+cfg = load("kitten-ctl.json", {})
+wins = load("kitten-windows.json", None)
+if wins is None:
+    wins = [{"id": int(cfg.get("base_win", 1)), "user_vars": {},
+             "is_focused": True}]
+
 # argv shape (claude_kitty.kitten_run/kitten_ls): @ --to <listen> <subcmd> ...
 sub, toks = "", list(argv)
 if toks and toks[0] == "@":
@@ -88,9 +102,49 @@ while toks:
         toks = toks[2:]
         continue
     sub = toks[0]
+    toks = toks[1:]
     break
-if sub == "ls":
-    print(json.dumps(cfg.get("ls", [])))
+
+def matches(w, m):
+    kind, _, val = m.partition(":")
+    if kind in ("id", "window_id"):
+        return str(w["id"]) == val
+    if kind == "var":
+        k, _, v = val.partition("=")
+        return w.get("user_vars", {}).get(k) == v
+    return False
+
+def opt(flag):
+    return toks[toks.index(flag) + 1] if flag in toks else None
+
+if sub == "launch":
+    uv = {}
+    for i, a in enumerate(toks):
+        if a == "--var" and i + 1 < len(toks):
+            k, _, v = toks[i + 1].partition("=")
+            uv[k] = v
+    wid = max([w["id"] for w in wins] + [999]) + 1
+    wins.append({"id": wid, "user_vars": uv, "is_focused": False})
+    save("kitten-windows.json", wins)
+    print(wid)
+elif sub == "close-window":
+    m = opt("--match")
+    wins = [w for w in wins if not (m and matches(w, m))]
+    save("kitten-windows.json", wins)
+elif sub == "set-user-vars":
+    m = opt("--match")
+    for w in wins:
+        if m and matches(w, m):
+            for a in toks[toks.index(m) + 1:]:
+                if "=" in a and not a.startswith("--"):
+                    k, _, v = a.partition("=")
+                    w["user_vars"][k] = v
+    save("kitten-windows.json", wins)
+elif sub == "ls":
+    tree = cfg.get("ls") or [{"id": 1, "is_focused": True,
+                              "tabs": [{"id": 1, "is_focused": True,
+                                        "windows": wins}]}]
+    print(json.dumps(tree))
 sys.exit(int(cfg.get("rc", {}).get(sub, cfg.get("rc_default", 0))))
 '''
 
@@ -110,7 +164,8 @@ class FakeKitten:
         _WIN_COUNTER[0] += 1
         self.window_id = str(_WIN_COUNTER[0])
         self.listen = "unix:" + os.path.join(self.root, "fake-kitty.sock")
-        self._ctl = {}
+        self._ctl = {"base_win": int(self.window_id)}
+        self._write_ctl()
 
     def calls(self, sub=None):
         """Recorded invocations, each as the argv list; optionally only those
@@ -141,6 +196,14 @@ class FakeKitten:
             os.remove(self.calls_path)
         except OSError:
             pass
+
+    def windows(self):
+        """The fake window model (what `@ ls` reflects after launches/closes)."""
+        try:
+            with open(os.path.join(self.root, "kitten-windows.json")) as f:
+                return json.load(f)
+        except OSError:
+            return []
 
     def _write_ctl(self):
         with open(self.ctl_path, "w") as f:

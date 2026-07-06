@@ -102,6 +102,19 @@ def assert_clean(env, sid, allow=()):
 
 # ----------------------------------------------------------------- tab DB
 
+def watchers(env, kind=None):
+    """Watcher pid rows from the tab DB (bgwatch / interruptwatch)."""
+    path = os.path.join(env["CLAUDE_MIRROR_TMPDIR"], "claude-kitty-tab.db")
+    if not os.path.exists(path):
+        return []
+    conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
+    try:
+        rows = conn.execute("SELECT kind, win, pid FROM watchers").fetchall()
+        return [r for r in rows if kind is None or r[0] == kind]
+    finally:
+        conn.close()
+
+
 def tab_state(env, win):
     """Current colour-state row for a window in this test's tab DB."""
     path = os.path.join(env["CLAUDE_MIRROR_TMPDIR"], "claude-kitty-tab.db")
