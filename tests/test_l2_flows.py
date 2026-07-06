@@ -186,6 +186,10 @@ def test_f4a_background_command_lifecycle(run_hook, test_env, session,
     wait_until(lambda: oracle.tab_state(test_env, fake_kitten.window_id)
                == "awaiting-response", desc="bg-recheck flips blue to green")
     assert not s.live("bg"), "bg slot not released"
+    # the stop dispatch also spawned a bg-watch; it exits state-moved-on a
+    # poll tick after the green lands — let its stream row close first
+    wait_until(lambda: streams_all_ended(test_env, s.sid),
+               desc="bg-watch stream row closed")
     oracle.assert_clean(test_env, s.sid)
 
 
@@ -482,13 +486,21 @@ def test_f11_session_end_parks_db_and_substream_exits(run_hook, test_env,
     wait_until(lambda: streams_all_ended(test_env, s.sid),
                desc="substream exits once the DB is parked")
     assert any("parked" in (r or "") for r in end_reasons(test_env, s.sid))
-    # The exiting substream fires a detached bg-recheck that lands a beat after
-    # its stream row closes — let it settle, then run SessionEnd's other wiring
-    # row, the tab clear (else the recheck's takeover magenta stays the last
-    # applied transition and the busy-colour anomaly fires).
-    wait_until(lambda: oracle.tab_state(test_env, fake_kitten.window_id)
-               == "working",
-               desc="the exiting substream's bg-recheck flipped to takeover")
+    # The exiting substream fires a detached bg-recheck that lands a beat
+    # after its stream row closes. Let it fully settle (its transition row is
+    # written before its tab write, so also wait for the tab to reflect an
+    # applied flip), THEN run SessionEnd's other wiring row — the tab clear —
+    # so the recheck can't repaint over the cleared tab.
+    def recheck_settled():
+        rows = [r for r in oracle.transitions(test_env, s.sid)
+                if r[0] == "bg-recheck"]
+        if not rows:
+            return False
+        if rows[-1][3] == 1:       # applied flip -> wait for the tab to show it
+            return oracle.tab_state(test_env, fake_kitten.window_id) == rows[-1][2]
+        return True                 # bailed -> nothing more will be painted
+    wait_until(recheck_settled, timeout=15,
+               desc="the exiting substream's bg-recheck settled")
     run_hook(TAB, P.session_end(s), argv=("clear",))
     assert oracle.tab_state(test_env, fake_kitten.window_id) is None
     oracle.assert_clean(test_env, s.sid,
