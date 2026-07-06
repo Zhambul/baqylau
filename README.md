@@ -175,7 +175,7 @@ pluggable. The layers and their one dependency rule:
 core/        tool- and terminal-agnostic runtime — imports nothing outside core/
 frontends/   terminal adapters — import core/ at most
 plugins/     one directory per agent tool — import core/ + frontends/,
-             never each other                                    (in progress)
+             never each other
 claude-*.py  repo-root entry scripts: the assembly layer. They may import
              anything. Their FILENAMES are load-bearing twice over: the hook
              wiring in ~/.claude/settings.json points at them, and argv[0] is
@@ -185,12 +185,36 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
              the packages.
 ```
 
-`core/` currently holds: `paths.py` (the mirror-log path format — was
+`core/` holds: `paths.py` (the mirror-log path format — was
 `claude_paths.py`), `state.py` (per-session runtime SQLite — was
 `claude_state.py`), `slots.py` (palette/liveness slots — was
 `claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
-`render.py` (ANSI rendering — was `claude_render.py`), and `audit.py` (the
-audit trail — was `claude_audit.py`).
+`render.py` (ANSI rendering — was `claude_render.py`), `audit.py` (the audit
+trail — was `claude_audit.py`), `ops.py` (paint ops, `emit`, the scoreboard
+counters/parts, the semantic colour table — the tool-agnostic half of the old
+`claude_ops.py`), and `tabs.py` (the tab-state vocabulary: state constants,
+the `COLORS` hex table every frontend paints from, and the global
+window-keyed tab DB + watcher pid locks).
+
+`plugins/claude_code/` is the HOST-tool adapter — everything that reads
+Claude Code's own signals: `hookkit.py` (the hook-handler harness, was
+`claude_hook.py`, plus `log_path`), `accounting.py` (Anthropic usage-dict
+parsing, the `PRICES` table, `cost_usd`, the `usage_fold` message-id dedup,
+`fold_usage`, `bump_transcript` — the pricing half of old `claude_ops.py`),
+`tools.py` (Claude's built-in tool payload shapes: `parse_redirect`,
+`diff_counts`, `read_extent`, `edit_range`, `FILE_LABEL`/`FILE_RGB`),
+`model.py` (was `claude_model.py`, plus `claude_dirs`), `msgs.py` (was
+`claude_msgs.py`), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+`file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the two
+streamers (`stream.py`, `substream.py`), the tab dispatch (`tabstatus.py` —
+maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
+and the pane/session lifecycle (`split.py`). Each repo-root `claude-*.py`
+entry is now a ~8-line shim importing its plugin module and calling
+`entry()`; `claude-mirror.py` and `claude-scorebar.py` keep their bodies at
+the root (they are assembly-layer renderers, allowed to import both core and
+plugins). `claude_ops.py` remains as a compat AGGREGATOR (a namespace copy
+re-exporting all three homes — unlike the other shims there is no single
+module to alias to).
 
 `frontends/` is the terminal layer. `frontends/base.py` defines the
 `Frontend` interface — tab colour (`set_tab_color`/`clear_tab_color`), window

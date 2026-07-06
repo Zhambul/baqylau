@@ -71,8 +71,8 @@ def _ensure_pygments():
 _ensure_pygments()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import claude_render as R
-import claude_state as St
+from core import render as R
+from core import state as St
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
@@ -234,8 +234,8 @@ if __name__ == "__main__":
         pass
     except Exception:
         try:
-            import claude_audit
-            claude_audit.error(LOG, "main (renderer crashed)")
+            from core import audit
+            audit.error(LOG, "main (renderer crashed)")
         except Exception:
             pass
         raise

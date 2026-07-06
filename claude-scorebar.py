@@ -41,11 +41,11 @@ import os, re, signal, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import frontends
-import claude_msgs as MSG
-import claude_render as R
-import claude_ops as O
-import claude_paths as P
-import claude_state as St
+from core import ops as O
+from core import paths as P
+from core import render as R
+from core import state as St
+from plugins.claude_code import msgs as MSG
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
@@ -282,8 +282,8 @@ if __name__ == "__main__":
         pass
     except Exception:
         try:
-            import claude_audit
-            claude_audit.error(LOG, "main (renderer crashed)")
+            from core import audit
+            audit.error(LOG, "main (renderer crashed)")
         except Exception:
             pass
         raise
