@@ -169,3 +169,65 @@ def test_watcher_exits_when_state_db_parked(test_env, codex):
     rows = [r for r in oracle.streams(test_env, codex.s.sid)
             if r[0] == "codex-watcher"]
     assert rows and rows[0][1] and "parked" in rows[0][1]
+
+
+def test_rollout_deepening_files_tokens_search_model(test_env, codex):
+    """The rollout-side deepening: apply_patch file ops render + feed the
+    scoreboard, token_count folds into Σ/cost at the footer (bump-agent,
+    kind=codex), web searches / the model tag / a failed exit / a compaction
+    all render. Event shapes verbatim from real ~/.codex/sessions rollouts."""
+    w = codex.start_watcher()
+    _, u = codex.add_rollout(events=[
+        {"type": "turn_context", "payload": {
+            "model": "gpt-5-codex",
+            "collaboration_mode": {"settings": {"reasoning_effort": "medium"}}}},
+        {"type": "event_msg", "payload": {"type": "task_started"}},
+        {"type": "response_item", "payload": {
+            "type": "web_search_call",
+            "action": {"type": "search", "query": "kitty remote control docs"}}},
+        {"type": "event_msg", "payload": {"type": "patch_apply_end",
+            "success": True, "changes": {
+                "/w/a.py": {"type": "update",
+                            "unified_diff": "@@\n-old\n+new\n+more\n"},
+                "/w/b.sh": {"type": "add", "content": "#!/bin/sh\necho hi\n"}}}},
+        {"type": "response_item", "payload": {
+            "type": "function_call_output",
+            "output": "Process exited with code 2\nOutput:\nboom"}},
+        {"type": "event_msg", "payload": {"type": "context_compacted"}},
+        {"type": "event_msg", "payload": {"type": "token_count", "info": {
+            "total_token_usage": {"input_tokens": 1000,
+                                  "cached_input_tokens": 600,
+                                  "output_tokens": 50,
+                                  "total_tokens": 1050}}}},
+        {"type": "event_msg", "payload": {"type": "task_complete"}},
+    ])
+    # adoption waits out the 8s companion grace; completion then follows the
+    # (test-shortened) CLAUDE_CODEX_GRACE_S
+    wait_until(lambda: any(r[1] and r[0] == "codex"
+                           for r in oracle.streams(test_env, codex.s.sid)),
+               timeout=25, desc="rollout adopted and completed")
+    text = codex.s.ops_text()
+    assert "⚙ gpt-5-codex · medium" in text          # turn_context model tag
+    assert "kitty remote control docs" in text        # web_search_call query
+    assert "Update" in text and "a.py" in text        # patch: updated file
+    assert "Write" in text and "b.sh" in text         # patch: added file
+    assert "■ exit 2" in text                         # failed exec output
+    assert "⟳ compacted" in text                      # context_compacted
+    # footer rollup: fresh in = 1000-600, out = 50, cache 600/1000
+    assert "400 in" in text and "50 out" in text and "cache 60%" in text
+    assert "≈ <$0.01" in text                         # gpt-5-codex priced
+    # scoreboard: file ops counted like any agent's; tokens folded once
+    c = codex.s.counters()
+    assert c.get("added") == 4 and c.get("removed") == 1
+    assert c.get("tokens") == 450
+    assert c.get("tk_in") == 400 and c.get("tk_out") == 50 and c.get("tk_read") == 600
+    assert c.get("tool:Edit") == 1 and c.get("tool:Write") == 1
+    assert codex.s.query_state("SELECT COUNT(*) FROM files")[0][0] == 2
+    # the token fold arrived attributed (bump-agent with kind=codex meta)
+    rows = [r for r in oracle.state_files(test_env, codex.s.sid)
+            if r[1] == "bump-agent" and '"kind": "codex"' in (r[2] or "")]
+    assert rows, "codex token fold must be an attributed bump-agent row"
+    # end the session (park the DB) so the watcher exits, then the full oracle
+    os.replace(codex.s.state_db, codex.s.state_db + ".keep")
+    wait_until(lambda: w.poll() is not None, desc="watcher exits after park")
+    oracle.assert_clean(test_env, codex.s.sid)

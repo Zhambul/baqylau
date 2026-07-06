@@ -387,7 +387,8 @@ def session_start(d):
                                 "CLAUDE_AUDIT",
                                 # test-suite seams (README § Testing): a session
                                 # run with altered timing/paths must say so here
-                                "CLAUDE_TAIL_", "CLAUDE_STREAM_", "CLAUDE_WATCH_"))
+                                "CLAUDE_TAIL_", "CLAUDE_STREAM_", "CLAUDE_WATCH_",
+                                "CLAUDE_CODEX_"))
                or k in ("KITTY_WINDOW_ID",)}
     cols = dict(session_id=sid, cwd=d.get("cwd") or os.getcwd(),
                 project_slug=os.path.basename((d.get("cwd") or os.getcwd()).rstrip("/")),
@@ -576,10 +577,17 @@ def cli_anomalies(sid):
     section("streams that never ended (crashed/stuck tailer)",
             "SELECT id, kind, pid, task_id, agent_id, started_at FROM streams "
             "WHERE session_id=? AND ended_at IS NULL", (sid,))
+    # kind='codex-claim' is EXCLUDED: those rows are permanent cross-session
+    # OWNERSHIP records (which session shows a codex run), not slot lifecycles
+    # — no release ever follows, so counting them false-fired on every adopted
+    # rollout. 'claim-denied' is likewise not an acquisition (nothing was
+    # taken, so nothing will be released).
     section("slot claims without a matching release",
             "SELECT kind, slot_n, agent_id, COUNT(*) FROM slots WHERE session_id=? "
+            "AND kind != 'codex-claim' "
             "GROUP BY kind, COALESCE(slot_n, -1), agent_id "
-            "HAVING SUM(CASE WHEN action LIKE 'claim%' THEN 1 ELSE 0 END) > "
+            "HAVING SUM(CASE WHEN action LIKE 'claim%' AND action != 'claim-denied' "
+            "               THEN 1 ELSE 0 END) > "
             "       SUM(CASE WHEN action LIKE 'release%' OR action LIKE 'steal%' THEN 1 ELSE 0 END)",
             (sid,))
     section("tab left on a busy colour (last transition not green/idle/clear)",

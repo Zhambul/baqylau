@@ -58,6 +58,7 @@ def test_env(tmp_path):
         "CLAUDE_TAIL_BACKSTOP_S": "60",
         "CLAUDE_STREAM_GRACE_S": "0.3",
         "CLAUDE_WATCH_POLL_S": "0.1",
+        "CLAUDE_CODEX_GRACE_S": "0.3",
         # Hermeticity: claude-split.py's resolve_listen_on() otherwise goes
         # looking for a REAL kitty socket under /tmp/kitty-* (and found the
         # desktop session's when this suite ran on the dev machine). A dead

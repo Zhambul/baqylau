@@ -1011,7 +1011,43 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     it never affects the tab colour): `▶ cmd` (syntax-highlighted), `⋯ reasoning`,
     `✎ message`, `⇠ review` / `⇠ result`, framed by a rule-bracketed `codex ▶ <label>`
     … `■ codex <label> ended · Ns`. Successful sub-commands are suppressed; a non-zero
-    exit shows a red `■ exit N`. It never writes after the state DB is parked: the
+    exit shows a red `■ exit N` (on the rollout side parsed from
+    `function_call_output`'s "Exit code / Process exited with code" head lines).
+    The ROLLOUT side additionally renders, from codex's own event stream
+    (shapes verified against real `~/.codex/sessions` rollouts, 2026-07):
+    - **file ops** from `patch_apply_end` — the authoritative record (resolved
+      ABSOLUTE paths + per-file `unified_diff`/`content`), one
+      `Update(name) +a -r` / `Write(name) +n` / `Delete(name)` line per changed
+      file in the Claude file-op look, each fed to the scoreboard exactly like
+      a subagent's file ops (unique-path `files` set, ± line sums, Edit/Write
+      tool tallies). The `apply_patch` response_item is deliberately IGNORED —
+      it only carries repo-relative patch text, and rendering both would
+      duplicate. A `success:false` patch paints a red `■ patch failed` and
+      bumps nothing.
+    - **token accounting** from `token_count` — codex reports a CUMULATIVE
+      `total_token_usage` snapshot (input incl. cached / cached / output), so
+      the stream keeps only the last one and folds it into the scoreboard ONCE
+      at the footer (a `bump-agent` row, meta `kind:"codex"` + model + the
+      split — re-derivable from the audit DB alone, same rule as agent spend).
+      The footer gains `· <in> in · <out> out · cache N%` and, when the model
+      is priced, `≈ $X`. Pricing is the PLUGIN'S own `CODEX_PRICES` table
+      (cached input 0.1×), matched by version-exact prefix — an unverified
+      newer version (e.g. `gpt-5.3-codex`) deliberately shows NO cost rather
+      than silently pricing at an older rate. No fold on the parked-DB exit,
+      and none for companion (`.log`) runs — their usage isn't in the activity
+      log and their rollout is deliberately not adopted (dedup).
+    - **`⚙ model · effort`** (dim, once per change) from `turn_context`,
+      **`⌕ search`** + query from `web_search_call`, and **`⟳ compacted`**
+      from `context_compacted` — matching the substream's compact treatment.
+    **Why no per-subagent codex streams** (the roadmap item): a survey of every
+    rollout on the dev machine (33 files, 2026-07-07) found ZERO
+    subagent/collab events in codex's vocabulary — the full event set is
+    task/turn lifecycle, messages, reasoning, exec, apply_patch, web_search,
+    token_count, compaction. The companion log's `Subagent …` head (rendered as
+    one `✎ sub` chip) likewise never occurs in any job log on disk. There is
+    nothing to attach a per-subagent stream to; revisit when codex actually
+    emits per-agent records.
+    It never writes after the state DB is parked: the
     header emit re-checks the DB file right before painting (SessionEnd can park it
     during the tailer's wait-for-source window, and `claude_state`'s connect would
     *create* a missing DB — resurrecting the session-alive signal the watcher polls,
@@ -1351,10 +1387,11 @@ session, and unset they leave shipped behavior bit-identical:
 | `CLAUDE_TAIL_POLL_S` / `CLAUDE_TAIL_BACKSTOP_S` | `0.4` / 6 h | `claude_tail.py` poll cadence / absolute tailer cap |
 | `CLAUDE_STREAM_GRACE_S` | 2 s (fg/bg) · 8 s (monitor) | `claude-stream.py` idle-grace before writer-gone is definitive |
 | `CLAUDE_WATCH_POLL_S` | unset | One value replacing every `claude-tab-status.py` watcher/grace sleep (bg-watch 2 s, interrupt-watch 0.5 s, bg-recheck grace 4 s) |
+| `CLAUDE_CODEX_GRACE_S` | 8 s | `plugins/codex/stream.py` rollout completion grace (close the block if no new turn follows `task_complete`) |
 
 Any session started with the timing knobs set is self-evident in the audit:
-`session_start` captures `CLAUDE_TAIL_*`/`CLAUDE_STREAM_*`/`CLAUDE_WATCH_*`
-(and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
+`session_start` captures `CLAUDE_TAIL_*`/`CLAUDE_STREAM_*`/`CLAUDE_WATCH_*`/
+`CLAUDE_CODEX_*` (and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
 side is injected via the pre-existing `KITTY_KITTEN_BIN` override (a recorder
 script standing in for `kitten`), so no product code special-cases tests.
 
