@@ -637,16 +637,16 @@ def kfmt(n):
 def scoreboard_parts(st, now):
     """Structured scoreboard data from a stats dict (as returned by bump()); `now` is
     epoch secs. Returns (parts, tools): parts is [(kind, text), …] in display order —
-    kinds: cmds / fail / add / rem / time / cost (cost goes last so a
-    narrow pane drops it first) — and tools is the top-5
+    kinds: cmds / fail / time — and tools is the top-5
     [(name, count), …] EXCLUDING Bash, whose count is already the cmds figure (same
-    bump — listing it again would just duplicate the head). The unique-`files` count
-    lives on the tools row now (rendered by claude-scorebar.py alongside the
-    Read/Edit/Write tallies), not on this ▪ row. The renderer
-    (claude-scorebar.py) owns the styling; kinds exist so it can colour failures
-    red, added lines green, etc. Token counts live on the separate Σ row
-    (token_parts) — the 'tokens' counter still backs the cost figure below and the
-    Σ row's total, it's just no longer rendered here."""
+    bump — listing it again would just duplicate the head). The ▪ row is now just
+    activity (commands + active time); the other figures moved to where they belong:
+    the unique-`files` count AND the ± line-diff render on the tools row (all
+    file/tool stats together), and the `≈ $` cost rides the Σ token row (spend
+    derives from tokens) — all three rendered by claude-scorebar.py from the same
+    `st` dict. The renderer owns the styling; kinds exist so it can colour failures
+    red, etc. Token counts live on the separate Σ row (token_parts) — the 'tokens'
+    counter still backs the cost figure and the Σ row's total."""
     parts = []
     cmds = int(st.get("commands") or 0)
     if cmds > 0:
@@ -654,22 +654,14 @@ def scoreboard_parts(st, now):
         failed = int(st.get("failed") or 0)
         if failed:
             parts.append(("fail", f"({failed}✗)"))
-    add, rem = int(st.get("added") or 0), int(st.get("removed") or 0)
-    if add:
-        parts.append(("add", f"+{add}"))
-    if rem:
-        parts.append(("rem", f"-{rem}"))
-    # Token counts moved to the dedicated Σ row (token_parts) — the ▪ row would only
-    # duplicate the billed subset. The 'tokens' counter still backs the cost below.
+    # ± line-diff moved to the tools row (with files/Read/Edit/Write); token/cost
+    # figures moved to the Σ row. Both rendered by claude-scorebar.py from `st`.
     start = st.get("start")
     if start:
         # ⏱ shows ACTIVE time: wall clock minus the green "your turn" stretches
         # (tab awaiting-response) the scorebar accumulates into 'paused' — the
         # timer freezes while Claude waits on you and resumes when work restarts.
         parts.append(("time", "⏱ " + _dur(now - start - float(st.get("paused") or 0))))
-    cost = float(st.get("cost") or 0)
-    if cost > 0:
-        parts.append(("cost", "≈ " + fmt_usd(cost)))
     tools = st.get("tools")
     top = []
     if isinstance(tools, dict) and tools:

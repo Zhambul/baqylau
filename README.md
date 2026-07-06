@@ -584,9 +584,9 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     ```
     ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
     ✉ 5 msgs · 1● unread · 2◐ stale · 1◉ read
-    ▪ 45 cmds (5✗) · +791 -29 · ⏱ 68m24s · ≈ $1.20
-    Σ 56M total · 428k in · 197k out · 55M cache · 410k write
-      56 files · Read 34 · Edit 18 · Write 4
+    ▪ 45 cmds (5✗) · ⏱ 68m24s
+    Σ 56M total · 428k in · 197k out · 55M cache · 410k write · ≈ $1.20
+      56 files · +791 -29 · Read 34 · Edit 18 · Write 4
     ```
 
     The **`⬡` session-id row** is always shown (parsed from the mirror-log filename),
@@ -628,14 +628,21 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     window's persisted tab state (the global tab DB's `tab` row), and accumulates
     green ticks into the state's `paused` counter (same atomic `bump()`, so it
     survives a mirror toggle); `scoreboard_parts()` subtracts it from the elapsed
-    time. It truncates from the tail on narrow panes (cost goes last,
-    so it drops first), and **exits when the mirror log disappears** at SessionEnd,
-    auto-closing its window (`claude-split.py close` is the safety net). The
-    structured data comes from `claude_ops.scoreboard_parts()`. The tools row
-    **excludes Bash** — its count is already the `cmds` figure (same bump; listing it
-    again would just duplicate the head). The unique-`files` count **leads that same
-    row** (relocated off the `▪` summary so every file/tool figure sits together, and
-    kept when the row must drop segments — the tool tallies pop from the tail first).
+    time. It truncates from the tail on narrow panes, and **exits when the mirror log
+    disappears** at SessionEnd, auto-closing its window (`claude-split.py close` is the
+    safety net). Each row is grouped by concern: the **`▪` row is just activity**
+    (commands + failures + active time); the **`Σ` row is all token counts plus the
+    `≈ $` cost** — spend derives from tokens, so it sits here rather than on `▪`, and
+    goes **last** so the tail-drop sheds it before the token breakdown; the **last row
+    carries every file/line/tool figure** — the unique-`files` count, then the `±`
+    line-diff (`+added -removed`, relocated off `▪`), then the tool tallies. The
+    structured data comes from `claude_ops.scoreboard_parts()` (which now returns only
+    the `▪`-row activity + the tool tallies; the renderer reads `files`/`added`/
+    `removed`/`cost` straight off the stats dict for the rows they moved to). The tools
+    row **excludes Bash** — its count is already the `cmds` figure (same bump; listing
+    it again would just duplicate the head). The unique-`files` count and the `±`
+    line-diff **lead that row** (kept when it must drop segments — the tool tallies pop
+    from the tail first).
     `files` counts **unique files** (touched paths are deduped in the state DB's
     `files` table; re-editing the same file doesn't inflate it) while the tool counts
     are operations — so `Edit 18` against `5 files` reads as 18 edits across 5 distinct

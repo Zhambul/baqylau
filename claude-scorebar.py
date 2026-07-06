@@ -8,12 +8,13 @@
 #
 #   ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
 #   ✉ 5 msgs · 3● unread · 2◉ read
-#   ▪ 45 cmds (5✗) · +791 -29 · ⏱ 68m24s · ≈ $1.20
-#   Σ 56M total · 428k in · 197k out · 55M cache · 410k write
-#     56 files · Read 34 · Edit 18 · Write 4
+#   ▪ 45 cmds (5✗) · ⏱ 68m24s
+#   Σ 56M total · 428k in · 197k out · 55M cache · 410k write · ≈ $1.20
+#     56 files · +791 -29 · Read 34 · Edit 18 · Write 4
 #
-# All token counts live on the Σ row (the ▪ row carries cmds/±/time/cost); the
-# unique-file count leads the tool tallies on the last row.
+# The ▪ row is just activity (commands + active time). The Σ row is all token
+# counts plus the `≈ $` cost (spend derives from tokens, so it goes last). The last
+# row carries every file/line/tool figure: unique files · ± line-diff · tool tallies.
 # The Σ total is the all-in count INCLUDING cache-read replay, so it reconciles with
 # `claude --resume`'s "Usage by model" (see O.token_parts). Its breakdown is
 # input · output · cache read · cache write; the total dwarfs billed spend because
@@ -143,8 +144,9 @@ def compose(w, mparts):
     """The scoreboard rows for width w, as styled strings: [session-id, messages,
     session-stats, tokens, tools]. Row 0 is the always-on ⬡ session id; row 1 is the
     ✉ message census `mparts` (always shown — defaults to '0 msgs'); row 2 is the ▪
-    session summary; row 3 is the Σ token breakdown (input/output/cache/write + an
-    all-in total); row 4 is the unique-file count followed by the tool tallies.
+    activity summary (commands + active time); row 3 is the Σ token breakdown
+    (input/output/cache/write + an all-in total) with the `≈ $` cost last; row 4 is
+    the unique-file count + the ± line-diff + the tool tallies.
     Segments drop from the tail until the plain text fits."""
     st = St.stats(LOG)      # atomic snapshot from the state DB — no torn reads
     now = time.time()
@@ -172,27 +174,43 @@ def compose(w, mparts):
         row += ("" if i == 0 else joiner(parts[i - 1][0], kind)) + style(kind, text)
     line_sess = R.DIM + " ▪ " + R.RST + row if parts else R.DIM + " ▪ session" + R.RST
 
-    # Row 3: Σ token breakdown — total-first so a narrow pane keeps the headline.
+    # Row 3: Σ token breakdown + cost — total-first so a narrow pane keeps the
+    # headline; the `≈ $` cost rides this row now (spend derives from tokens) and
+    # goes LAST so tail-drop sheds it before the token breakdown.
     tparts = O.token_parts(st)
+    cost = float(st.get("cost") or 0)
+    if cost > 0:
+        tparts.append(("cost", "≈ " + O.fmt_usd(cost)))
     avail = w - 3                                    # " Σ " prefix
     while len(tparts) > 1 and sum(len(t) for _, t in tparts) + 3 * (len(tparts) - 1) > avail:
         tparts.pop()
     line_tok = R.DIM + " Σ " + R.RST + SEP.join(style(k, t) for k, t in tparts) \
             if tparts else ""
 
-    # Row 4: file stats + tool tallies. The unique-file count leads (relocated here
-    # from the ▪ row so every file/tool figure sits together), then the top tool
-    # tallies. `files` is a UNIQUE-path set; the tool counts are operations — so
-    # "5 files · Edit 18" reads as 18 edits across 5 distinct files. The files chip is
-    # kept when the row must drop segments to fit (tools pop from the tail first).
+    # Row 4: file/line stats + tool tallies. The unique-file count and the ± line-diff
+    # lead (relocated here from the ▪ row so every file/tool figure sits together),
+    # then the top tool tallies. `files` is a UNIQUE-path set; the tool counts are
+    # operations — so "5 files · Edit 18" reads as 18 edits across 5 distinct files.
+    # The leads are kept when the row must drop segments to fit (tools pop first).
     files = int(st.get("files") or 0)
-    files_txt = (f"{files} file" + ("s" if files != 1 else "")) if files else ""
+    add, rem = int(st.get("added") or 0), int(st.get("removed") or 0)
+    lead = []                                        # (plain, styled) — priority segs
+    if files:
+        t = f"{files} file" + ("s" if files != 1 else "")
+        lead.append((t, style("files", t)))
+    if add and rem:                                  # "+791 -29" clings (one segment)
+        lead.append((f"+{add} -{rem}",
+                     style("add", f"+{add}") + " " + style("rem", f"-{rem}")))
+    elif add:
+        lead.append((f"+{add}", style("add", f"+{add}")))
+    elif rem:
+        lead.append((f"-{rem}", style("rem", f"-{rem}")))
     avail = w - 3                                    # aligned under the parts
-    if files_txt:
-        avail -= len(files_txt) + 3                  # + its separator
+    for t, _ in lead:
+        avail -= len(t) + 3                          # + its separator
     while tools and sum(len(f"{k} {v}") for k, v in tools) + 3 * (len(tools) - 1) > avail:
         tools.pop()
-    segs = ([style("files", files_txt)] if files_txt else []) \
+    segs = [s for _, s in lead] \
             + [SLATE + k + " " + VAL + str(v) + R.RST for k, v in tools]
     line_tools = "   " + SEP.join(segs) if segs else ""
     return [line_sid, line_msg, line_sess, line_tok, line_tools]
