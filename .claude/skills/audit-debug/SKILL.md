@@ -161,8 +161,9 @@ New always-audited swallow sites (previously silent — their absence used to ma
   `opus-4-2025`/`3-opus` keys regressed (the old `opus-4-0`/`opus-3` keys matched
   no real id).
 - **Mirror resizes to the wrong width / preset lands far off** — the geometry
-  walk in `claude-split.py mirror_geometry` resolves the mirror's `neighbors`
-  chain through the tab's `groups` map; `pane_events` resize rows whose detail
+  walk (`frontends/kitty.py` `split_geometry`, reached via
+  `plugins/claude_code/split.py mirror_geometry`) resolves the mirror's
+  `neighbors` chain through the tab's `groups` map; `pane_events` resize rows whose detail
   shows a target % wildly different from the visible pane (with the shell side
   hsplit) means the group-id resolution or the one-window-per-segment walk
   regressed to the old sum-all-columns behavior.
