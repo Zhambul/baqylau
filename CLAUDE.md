@@ -10,7 +10,7 @@ A kitty-terminal integration for Claude Code, built entirely out of Claude Code 
 2. **Command mirror pane** (`claude-split.py` + `claude-mirror.py`) — a right-side vertical split showing every command, file op, subagent, teammate, monitor, and codex run as colored streaming blocks, plus a 5-row scoreboard window (`claude-scorebar.py`) underneath (session id · ✉ message census · ▪ activity (cmds + time) · Σ token breakdown + cost · files + ± line-diff + tools).
 3. **Audit trail** (`claude_audit.py`) — always-on SQLite recording of every hook event, tab transition, slot claim, stream lifecycle, paint op, and swallowed exception, at `~/.claude/kitty-audit/audit.db`.
 
-There is no build system, package manifest, or test suite. Scripts are invoked directly by hooks wired in `~/.claude/settings.json` (the hook table is in README.md § Wiring — the settings file itself is *not* in this repo). Python scripts target the system `python3`; only `pygments` is an (optional, probed-for) dependency.
+There is no build system or package manifest. Scripts are invoked directly by hooks wired in `~/.claude/settings.json` (the hook table is in README.md § Wiring — the settings file itself is *not* in this repo). Python scripts target the system `python3`; only `pygments` is an (optional, probed-for) runtime dependency. The e2e test suite lives in `tests/` (`make test`, dev-only deps in `requirements-dev.txt` — see README § Testing); it drives the real hook scripts as subprocesses against per-test temp dirs and a fake `kitten` recorder.
 
 ## Commands
 
@@ -30,6 +30,11 @@ done
 
 # Mirror pane controls
 ./claude-split.py toggle|grow|shrink|reset|setpct <N>
+
+# E2E test suite (hermetic — fake kitten, per-test tmp dirs; see README § Testing)
+make test        # the whole hermetic suite
+make test-par    # same, parallel (pytest-xdist)
+make test-all    # + the opt-in real-kitty smoke tests
 ```
 
 To debug a reported session bug, prefer the **`audit-debug` skill** (`.claude/skills/audit-debug/SKILL.md`) — it walks the triage order (anomalies → errors → timeline → targeted SQL) and documents the full audit schema.
@@ -79,4 +84,4 @@ The README (~1000 lines) is the authoritative, exhaustively-detailed record of h
 
 ## Always commit and push to main
 
-This is a personal repo with a linear `main` history — there is no PR/review flow. When a change is complete and verified (code + its audit wiring + README/skill docs, per the sections above), commit it directly to `main` and `git push` — every time, without being asked again and without creating a branch. Do not open PRs or leave work sitting on a feature branch.
+This is a personal repo with a linear `main` history — there is no PR/review flow. When a change is complete and verified (code + its audit wiring + README/skill docs, per the sections above, and `make test` green), commit it directly to `main` and `git push` — every time, without being asked again and without creating a branch. Do not open PRs or leave work sitting on a feature branch.

@@ -1,0 +1,345 @@
+# conftest.py — the e2e harness (see README § Testing).
+#
+# Philosophy: drive the REAL hook scripts as subprocesses with synthetic JSON
+# payloads (exactly how Claude Code invokes them), then assert on the three
+# observable state surfaces: the per-session state DB, the global tab DB, and
+# the audit DB. The terminal is faked at the pre-existing $KITTY_KITTEN_BIN
+# seam (a recorder script standing in for `kitten`); everything else is the
+# shipped code, isolated per-test via the env knobs in README § Testing.
+import json
+import os
+import signal
+import sqlite3
+import subprocess
+import sys
+import time
+import uuid
+
+import pytest
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# ---------------------------------------------------------------- wait_until
+
+def wait_until(pred, timeout=10.0, interval=0.05, desc=""):
+    """The ONE wait primitive — poll an observable fact, never sleep blind."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        v = pred()
+        if v:
+            return v
+        time.sleep(interval)
+    raise AssertionError("wait_until timed out (%ss): %s" % (timeout, desc or pred))
+
+
+# ------------------------------------------------------------------ test env
+
+@pytest.fixture
+def test_env(tmp_path):
+    """Hermetic env for every subprocess: fresh dirs for the mirror tmp root,
+    audit DB, HOME/TMPDIR, plus fast timing knobs. Host KITTY_*/CLAUDE_* vars
+    are stripped so running the suite from inside a live Claude-in-kitty
+    session can't leak its state in."""
+    dirs = {"mirror": tmp_path / "mirror", "audit": tmp_path / "audit",
+            "home": tmp_path / "home", "tmp": tmp_path / "tmp",
+            "config": tmp_path / "home" / ".claude"}
+    for p in dirs.values():
+        p.mkdir(parents=True, exist_ok=True)
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("KITTY_", "CLAUDE_"))}
+    env.update({
+        "HOME": str(dirs["home"]),
+        "TMPDIR": str(dirs["tmp"]),
+        "CLAUDE_CONFIG_DIR": str(dirs["config"]),
+        "CLAUDE_MIRROR_TMPDIR": str(dirs["mirror"]),
+        "CLAUDE_AUDIT_DIR": str(dirs["audit"]),
+        "CLAUDE_AUDIT": "1",
+        "CLAUDE_TAIL_POLL_S": "0.05",
+        "CLAUDE_TAIL_BACKSTOP_S": "60",
+        "CLAUDE_STREAM_GRACE_S": "0.3",
+        "CLAUDE_WATCH_POLL_S": "0.1",
+    })
+    return env
+
+
+# ---------------------------------------------------------------- fake kitten
+
+_KITTEN_SRC = r'''#!/usr/bin/env python3
+# Fake `kitten` recorder: logs every invocation's argv, honours a control file
+# for programmed rc / canned `@ ls` output. Stands in for the real binary via
+# the product's own $KITTY_KITTEN_BIN override (claude_kitty.find_kitten).
+import json, os, sys
+root = os.path.dirname(os.path.abspath(__file__))
+argv = sys.argv[1:]
+with open(os.path.join(root, "kitten-calls.jsonl"), "a") as f:
+    f.write(json.dumps(argv) + "\n")
+cfg = {}
+try:
+    with open(os.path.join(root, "kitten-ctl.json")) as f:
+        cfg = json.load(f)
+except Exception:
+    pass
+# argv shape (claude_kitty.kitten_run/kitten_ls): @ --to <listen> <subcmd> ...
+sub, toks = "", list(argv)
+if toks and toks[0] == "@":
+    toks = toks[1:]
+while toks:
+    if toks[0] == "--to":
+        toks = toks[2:]
+        continue
+    sub = toks[0]
+    break
+if sub == "ls":
+    print(json.dumps(cfg.get("ls", [])))
+sys.exit(int(cfg.get("rc", {}).get(sub, cfg.get("rc_default", 0))))
+'''
+
+_WIN_COUNTER = [100]
+
+
+class FakeKitten:
+    def __init__(self, root):
+        os.makedirs(str(root), exist_ok=True)
+        self.root = str(root)
+        self.bin = os.path.join(self.root, "kitten")
+        self.calls_path = os.path.join(self.root, "kitten-calls.jsonl")
+        self.ctl_path = os.path.join(self.root, "kitten-ctl.json")
+        with open(self.bin, "w") as f:
+            f.write(_KITTEN_SRC)
+        os.chmod(self.bin, 0o755)
+        _WIN_COUNTER[0] += 1
+        self.window_id = str(_WIN_COUNTER[0])
+        self.listen = "unix:" + os.path.join(self.root, "fake-kitty.sock")
+        self._ctl = {}
+
+    def calls(self, sub=None):
+        """Recorded invocations, each as the argv list; optionally only those
+        whose subcommand (first token after `@ --to <listen>`) matches."""
+        out = []
+        try:
+            with open(self.calls_path) as f:
+                for line in f:
+                    argv = json.loads(line)
+                    if sub is None or self._sub(argv) == sub:
+                        out.append(argv)
+        except OSError:
+            pass
+        return out
+
+    @staticmethod
+    def _sub(argv):
+        toks = argv[1:] if argv[:1] == ["@"] else list(argv)
+        while toks:
+            if toks[0] == "--to":
+                toks = toks[2:]
+                continue
+            return toks[0]
+        return ""
+
+    def clear(self):
+        try:
+            os.remove(self.calls_path)
+        except OSError:
+            pass
+
+    def _write_ctl(self):
+        with open(self.ctl_path, "w") as f:
+            json.dump(self._ctl, f)
+
+    def set_rc(self, sub, rc):
+        self._ctl.setdefault("rc", {})[sub] = rc
+        self._write_ctl()
+
+    def set_ls(self, tree):
+        self._ctl["ls"] = tree
+        self._write_ctl()
+
+    def set_ls_for_session(self, sid, win_id=None, extra_windows=()):
+        """Canned `kitten @ ls` tree: one OS window / tab holding a window
+        tagged with user_vars.claude_session=<sid> (how the product finds the
+        Claude pane), plus any extra window dicts."""
+        win = {"id": int(win_id or self.window_id),
+               "user_vars": {"claude_session": sid}, "is_focused": True}
+        self.set_ls([{"id": 1, "is_focused": True,
+                      "tabs": [{"id": 1, "is_focused": True,
+                                "windows": [win, *extra_windows]}]}])
+
+
+@pytest.fixture
+def fake_kitten(test_env, tmp_path):
+    fk = FakeKitten(tmp_path / "kitten-root")
+    test_env["KITTY_KITTEN_BIN"] = fk.bin
+    test_env["KITTY_LISTEN_ON"] = fk.listen
+    test_env["KITTY_WINDOW_ID"] = fk.window_id
+    return fk
+
+
+# ------------------------------------------------------------------- session
+
+class Session:
+    """A synthetic Claude Code session: unique sid, its own cwd + transcript,
+    and helpers for the paths/DBs every assertion needs. The path arithmetic
+    here deliberately re-states the claude_paths format — pinning it."""
+
+    def __init__(self, env, root, sid=None):
+        self.env = env
+        self.sid = sid or str(uuid.uuid4())
+        self.cwd = os.path.join(str(root), "project")
+        os.makedirs(self.cwd, exist_ok=True)
+        tdir = os.path.join(str(root), "transcripts")
+        os.makedirs(tdir, exist_ok=True)
+        self.transcript = os.path.join(tdir, self.sid + ".jsonl")
+        open(self.transcript, "a").close()
+        self.log = env["CLAUDE_MIRROR_TMPDIR"] + "/claude-mirror-" + self.sid + ".log"
+        self.state_db = self.log + ".state.db"
+
+    # ---- transcript writers (shapes per claude_ops.bump_transcript) ----
+    def add_line(self, obj):
+        with open(self.transcript, "a") as f:
+            f.write(json.dumps(obj) + "\n")
+
+    def add_assistant(self, msg_id, model="claude-opus-4-8", usage=None,
+                      text="hello", sidechain=False):
+        o = {"type": "assistant",
+             "message": {"id": msg_id, "model": model, "role": "assistant",
+                         "content": [{"type": "text", "text": text}],
+                         "usage": usage or {"input_tokens": 10, "output_tokens": 5,
+                                            "cache_creation_input_tokens": 0,
+                                            "cache_read_input_tokens": 0}}}
+        if sidechain:
+            o["isSidechain"] = True
+        self.add_line(o)
+
+    def add_user(self, text="do the thing"):
+        self.add_line({"type": "user", "message": {"role": "user", "content": text}})
+
+    def add_interrupted(self):
+        self.add_line({"type": "user", "message": {
+            "role": "user", "content": "[Request interrupted by user]"}})
+
+    # ---- subagent sidecars (paths per claude-substream.py) ----
+    @property
+    def subagent_dir(self):
+        return self.transcript[:-len(".jsonl")] + "/subagents"
+
+    def subagent_jsonl(self, agent_id):
+        return os.path.join(self.subagent_dir, "agent-%s.jsonl" % agent_id)
+
+    def write_subagent_jsonl(self, agent_id, events):
+        os.makedirs(self.subagent_dir, exist_ok=True)
+        with open(self.subagent_jsonl(agent_id), "a") as f:
+            for e in events:
+                f.write(json.dumps(e) + "\n")
+
+    def write_meta(self, agent_id, **fields):
+        os.makedirs(self.subagent_dir, exist_ok=True)
+        path = os.path.join(self.subagent_dir, "agent-%s.meta.json" % agent_id)
+        cur = {}
+        if os.path.exists(path):
+            with open(path) as f:
+                cur = json.load(f)
+        cur.update(fields)
+        with open(path, "w") as f:
+            json.dump(cur, f)
+        return path
+
+    # ---- state-DB readers ----
+    def query_state(self, sql, args=()):
+        if not os.path.exists(self.state_db):
+            return []
+        conn = sqlite3.connect("file:%s?mode=ro" % self.state_db, uri=True, timeout=5)
+        try:
+            return conn.execute(sql, args).fetchall()
+        finally:
+            conn.close()
+
+    def ops(self):
+        """All mirror paint ops, as parsed JSON rows (claude_state ops table)."""
+        return [json.loads(r[0]) for r in
+                self.query_state("SELECT op FROM ops ORDER BY id")]
+
+    def ops_text(self):
+        """Every string anywhere in the ops stream, joined — coarse 'does the
+        mirror show X' assertions."""
+        def strings(v):
+            if isinstance(v, str):
+                yield v
+            elif isinstance(v, (list, tuple)):
+                for x in v:
+                    yield from strings(x)
+            elif isinstance(v, dict):
+                for x in v.values():
+                    yield from strings(x)
+        return "\n".join(s for op in self.ops() for s in strings(op))
+
+    def counters(self):
+        return dict(self.query_state("SELECT key, val FROM counters"))
+
+    def live(self, kind=None):
+        rows = self.query_state("SELECT kind, key, pid, idx FROM live")
+        return [r for r in rows if kind is None or r[0] == kind]
+
+    def agents(self):
+        return self.query_state(
+            "SELECT agent_id, slot, desc, pos, done FROM agents")
+
+
+@pytest.fixture
+def session(test_env, tmp_path):
+    """Factory: session.make() → a fresh synthetic Session in this test's env."""
+    class _Factory:
+        def make(self, sid=None):
+            return Session(test_env, tmp_path, sid=sid)
+    return _Factory()
+
+
+# ------------------------------------------------------------------ run_hook
+
+@pytest.fixture
+def run_hook(test_env):
+    """Invoke a hook script exactly as Claude Code does: a subprocess with the
+    JSON payload on stdin. Asserts the never-fail contract (rc 0) by default."""
+    def _run(script, payload=None, argv=(), env=None, raw_stdin=None,
+             check=True, timeout=15):
+        e = dict(env if env is not None else test_env)
+        stdin = raw_stdin if raw_stdin is not None else json.dumps(payload or {})
+        p = subprocess.run(
+            [sys.executable, os.path.join(REPO, script), *map(str, argv)],
+            input=stdin, text=True, capture_output=True, env=e, timeout=timeout,
+            cwd=REPO)
+        if check:
+            assert p.returncode == 0, \
+                "%s %s exited %s\nstdout: %s\nstderr: %s" % (
+                    script, argv, p.returncode, p.stdout, p.stderr)
+        return p
+    return _run
+
+
+# -------------------------------------------------------------------- reaper
+
+@pytest.fixture(autouse=True)
+def reaper(test_env):
+    """Kill every process a test leaves behind: Popens registered by the test
+    plus every hook-spawned detached child recorded in the audit spawns table
+    (each is its own process group via start_new_session=True)."""
+    procs = []
+    yield procs
+    pids = set()
+    for p in procs:
+        pids.add(p.pid if hasattr(p, "pid") else int(p))
+    db = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "audit.db")
+    if os.path.exists(db):
+        try:
+            conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
+            pids.update(r[0] for r in
+                        conn.execute("SELECT child_pid FROM spawns").fetchall())
+            conn.close()
+        except sqlite3.Error:
+            pass
+    for pid in pids:
+        for sig in (signal.SIGTERM, signal.SIGKILL):
+            try:
+                os.killpg(int(pid), sig)
+            except (ProcessLookupError, PermissionError, OSError):
+                break
+            time.sleep(0.02)
