@@ -18,13 +18,16 @@ def audit_db(env):
 
 
 def q(env, sql, args=()):
-    """Read-only query against this test's audit DB ([] if it doesn't exist)."""
+    """Read-only query against this test's audit DB ([] if it doesn't exist,
+    or if a writer is mid-schema-creation — polling callers just retry)."""
     path = audit_db(env)
     if not os.path.exists(path):
         return []
     conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
     try:
         return conn.execute(sql, args).fetchall()
+    except sqlite3.OperationalError:
+        return []
     finally:
         conn.close()
 

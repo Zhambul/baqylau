@@ -40,6 +40,14 @@ def writer(reaper):
     return _start
 
 
+needs_private_tmp = pytest.mark.skipif(
+    not os.path.isdir("/private/tmp"),
+    reason="claude-stream.py find_file globs /private/tmp/claude-*/ — the "
+           "empirical macOS location of Claude Code's tasks/<id>.output; on "
+           "Linux there is no /private (a known product gap: bg-task/monitor "
+           "output discovery is macOS-only today)")
+
+
 @pytest.fixture
 def task_dir():
     """A tasks/ dir matching claude-stream.py's /private/tmp/claude-* glob —
@@ -160,7 +168,7 @@ def test_f4a_background_command_lifecycle(run_hook, test_env, session,
     s = session.make()
     out = os.path.join(s.cwd, "bg.log")
     cmd = "build_stuff > %s" % out
-    w = writer(out, seconds=2)
+    w = writer(out)                # long-lived; the test terminates it below
     run_hook("claude-cmd-fmt.py",
              P.post_bash(s, cmd, run_in_background=True,
                          background_task_id="bg-" + uuid.uuid4().hex[:8]))
@@ -181,6 +189,7 @@ def test_f4a_background_command_lifecycle(run_hook, test_env, session,
     oracle.assert_clean(test_env, s.sid)
 
 
+@needs_private_tmp
 def test_f4b_ctrl_b_conversion(run_hook, test_env, session, task_dir, writer):
     """Ctrl+B mid-command: fg tailer bows out silently (converted-ctrl-b),
     a bg tailer takes over from Claude Code's own tasks/<id>.output file."""
@@ -194,7 +203,7 @@ def test_f4b_ctrl_b_conversion(run_hook, test_env, session, task_dir, writer):
 
     taskid = "bgt-" + uuid.uuid4().hex[:8]
     out = os.path.join(task_dir, taskid + ".output")
-    wbg = writer(out, seconds=3)
+    wbg = writer(out)              # long-lived; terminated below
     run_hook("claude-cmd-fmt.py",
              P.post_bash(s, "long_job", background_task_id=taskid,
                          backgrounded_by_user=True, duration_ms=800))
@@ -316,6 +325,7 @@ def test_f6_teammate_rendering(run_hook, test_env, session):
 
 # --------------------------------------------------------------------- F7
 
+@needs_private_tmp
 def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     """Monitor: header + tailer on tasks/<id>.output, completion detected by
     the monitored PROCESS exiting (find_proc on CLAUDE_MONITOR_CMD)."""
@@ -426,7 +436,10 @@ def test_f9c_interrupted_reply_flips_green(run_hook, test_env, session,
 
 # -------------------------------------------------------------------- F10
 
-def test_f10_resume_restores_mirror_history(run_hook, test_env, session):
+def test_f10_resume_restores_mirror_history(run_hook, test_env, session,
+                                            fake_kitten):
+    # fake_kitten matters: without a live listen socket claude-split.py no-ops
+    # entirely ("not inside kitty"), so open/close would never park/restore
     s = session.make()
     run_hook("claude-split.py", P.session_start(s), argv=("open",))
     run_hook("claude-file-fmt.py", P.post_file(s, tool="Edit"))
@@ -453,7 +466,7 @@ def test_f10_resume_restores_mirror_history(run_hook, test_env, session):
 # -------------------------------------------------------------------- F11
 
 def test_f11_session_end_parks_db_and_substream_exits(run_hook, test_env,
-                                                      session):
+                                                      session, fake_kitten):
     """SessionEnd while an agent stream is still live: parking the DB is the
     exit signal — no orphaned tailer, stream row closed with state-db-parked."""
     s = session.make()
@@ -469,6 +482,15 @@ def test_f11_session_end_parks_db_and_substream_exits(run_hook, test_env,
     wait_until(lambda: streams_all_ended(test_env, s.sid),
                desc="substream exits once the DB is parked")
     assert any("parked" in (r or "") for r in end_reasons(test_env, s.sid))
+    # The exiting substream fires a detached bg-recheck that lands a beat after
+    # its stream row closes — let it settle, then run SessionEnd's other wiring
+    # row, the tab clear (else the recheck's takeover magenta stays the last
+    # applied transition and the busy-colour anomaly fires).
+    wait_until(lambda: oracle.tab_state(test_env, fake_kitten.window_id)
+               == "working",
+               desc="the exiting substream's bg-recheck flipped to takeover")
+    run_hook(TAB, P.session_end(s), argv=("clear",))
+    assert oracle.tab_state(test_env, fake_kitten.window_id) is None
     oracle.assert_clean(test_env, s.sid,
                         allow=("SubagentStart without SubagentStop",
                                "slot claims without a matching release"))

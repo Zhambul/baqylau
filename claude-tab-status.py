@@ -673,6 +673,21 @@ def resolve(state):
     handler = DISPATCHES.get(state)
     if handler:
         return handler()
+    # A literal state (SessionStart's `idle`, SessionEnd's `clear`, the manual
+    # smoke cycle): attribute its transition row when a hook payload is present.
+    # These rows used to land with session_id="" — which left the SessionEnd
+    # clear invisible to per-session audit queries (the busy-colour anomaly
+    # flagged sessions whose tab WAS cleared). TTY guard: the manual smoke loop
+    # pipes no stdin, and reading a terminal would block it.
+    global AUDIT_SID, MLOG
+    try:
+        if not sys.stdin.isatty():
+            sid = (read_payload().get("session_id") or "").strip()
+            if sid:
+                AUDIT_SID = sid
+                MLOG = log_for_sid(P.sanitize_sid(sid))
+    except Exception:
+        pass
     return state                            # already a literal state (or clear/reset)
 
 
