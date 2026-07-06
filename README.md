@@ -173,7 +173,7 @@ pluggable. The layers and their one dependency rule:
 
 ```
 core/        tool- and terminal-agnostic runtime — imports nothing outside core/
-frontends/   terminal adapters — import core/ at most            (in progress)
+frontends/   terminal adapters — import core/ at most
 plugins/     one directory per agent tool — import core/ + frontends/,
              never each other                                    (in progress)
 claude-*.py  repo-root entry scripts: the assembly layer. They may import
@@ -191,6 +191,24 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
 `claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
 `render.py` (ANSI rendering — was `claude_render.py`), and `audit.py` (the
 audit trail — was `claude_audit.py`).
+
+`frontends/` is the terminal layer. `frontends/base.py` defines the
+`Frontend` interface — tab colour (`set_tab_color`/`clear_tab_color`), window
+enumeration (`ls`/`iter_windows`/`find_window`/`window_for_session`), and pane
+management (`launch_pane`/`close_pane`/`resize_pane`/`set_user_vars`/
+`goto_splits_layout`/`split_geometry`) — and doubles as the inert "none"
+frontend (every op a silent no-op with the callers' expected failure value).
+`frontends/kitty.py` is the kitty implementation (absorbing the old
+`claude_kitty.py` helpers, `claude-split.py`'s socket resolution, and the
+kitty-specific `neighbors`/`groups` geometry walk). `frontends.get()` selects
+the active frontend — `$CLAUDE_FRONTEND` pins one, default kitty — so
+supporting iTerm2/ghostty later means one new sibling module plus a detection
+line, with `claude-tab-status.py` / `claude-split.py` / `claude-scorebar.py`
+untouched (they already speak only the interface). Note ghostty has no
+remote-control API comparable to kitty's — a ghostty frontend would keep
+`available()` truthful and let the pane features degrade to no-ops while tab
+colour (if/where possible) still works; the base class's no-op defaults are
+designed for exactly that partial-capability case.
 
 **Compat shims.** Every historical top-level module name still works:
 `claude_state.py` and friends remain at the repo root as five-line shims that

@@ -52,12 +52,13 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 SELF = os.path.join(HERE, os.path.basename(__file__))
 sys.path.insert(0, HERE)
+import frontends  # noqa: E402  (the terminal adapter — kitty today)
 import claude_audit as A  # noqa: E402  (in-process; every write swallows + spools)
-import claude_kitty as K  # noqa: E402  (kitten lookup + set-tab-color plumbing)
 import claude_paths as P  # noqa: E402  (the one owner of the mirror-log path format)
 import claude_state as St  # noqa: E402  (pid_alive only — DB reads stay mode=ro via sq())
 
-WIN = os.environ.get("KITTY_WINDOW_ID", "")
+FE = frontends.get()      # env-detected; painting goes through the Frontend interface
+WIN = FE.current_window()
 
 # Test-suite-only cadence override (README § Testing): one value that replaces
 # every watcher/grace sleep below (bg-watch 2s, interrupt-watch 0.5s, bg-recheck
@@ -692,18 +693,11 @@ def resolve(state):
 
 
 # --- painting -----------------------------------------------------------------
-
-find_kitten = K.find_kitten
-
-
-def set_color(kitten, active_bg, active_fg, inactive_bg):
-    """active bg/fg + inactive (dimmed) bg for THIS window's tab — the inactive
-    background is a darkened variant of the same hue so the focused tab still
-    stands out (otherwise only the bold font-style tells them apart). See
-    claude_kitty.set_tab_color for the audit-the-real-rc rationale."""
-    return K.set_tab_color(kitten, os.environ.get("KITTY_LISTEN_ON", ""), WIN,
-                           active_bg, active_fg, inactive_bg)
-
+# The paint itself goes through the Frontend (frontends/kitty.py today): active
+# bg/fg + inactive (dimmed) bg for THIS window's tab — the inactive background
+# is a darkened variant of the same hue so the focused tab still stands out
+# (otherwise only the bold font-style tells them apart). See
+# frontends.kitty.set_tab_color for the audit-the-real-rc rationale.
 
 COLORS = {
     IDLE:              ("#5c6370", "#e6e9ef", "#33373f"),  # grey  — ready, nothing running
@@ -725,10 +719,10 @@ def main():
     if state is None:
         return
 
-    # Must be inside kitty with socket remote control available, else no-op
-    # silently. (Audited so the audit trail shows hooks fired even where the tab
-    # can't be set.)
-    if not WIN or not os.environ.get("KITTY_LISTEN_ON"):
+    # Must be inside a controllable terminal (kitty: window id + remote-control
+    # socket), else no-op silently. (Audited so the audit trail shows hooks
+    # fired even where the tab can't be set.)
+    if not WIN or not FE.available():
         audit_tx("", state, 0, "skipped: not inside kitty / no remote-control socket")
         return
 
@@ -748,15 +742,13 @@ def main():
         audit_tx(prev_state, state, 0, "skipped: colour already shown")
         return
 
-    kitten = find_kitten()
-    if not kitten:
+    if not FE.usable():
         return
 
     if state in COLORS:
-        rc = set_color(kitten, *COLORS[state])
+        rc = FE.set_tab_color(WIN, *COLORS[state])
     elif state in ("clear", "reset", ""):
-        rc = K.set_tab_color(kitten, os.environ.get("KITTY_LISTEN_ON", ""), WIN,
-                             "NONE", "NONE", "NONE", inactive_fg="NONE")
+        rc = FE.clear_tab_color(WIN)
     else:
         return
 

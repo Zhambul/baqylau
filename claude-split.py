@@ -39,8 +39,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+import frontends           # noqa: E402
 import claude_audit as A   # noqa: E402
-import claude_kitty as K   # noqa: E402
 import claude_ops as O     # noqa: E402
 import claude_paths as P   # noqa: E402
 
@@ -124,53 +124,14 @@ def audit_state(log, path, action, content):
         pass
 
 
-# Need socket remote control inside kitty, else no-op. A keymap-driven
-# `launch --type=background` child does NOT inherit KITTY_LISTEN_ON, so when it
-# is absent, resolve the controlling instance's socket ourselves: listen_on
-# `unix:/tmp/kitty` yields `/tmp/kitty-<kitty-pid>`, and that kitty pid is an
-# ancestor of this process. Fall back to the lone socket if just one instance.
-def _is_socket(p):
-    try:
-        import stat
-        return stat.S_ISSOCK(os.stat(p).st_mode)
-    except OSError:
-        return False
-
-
-def resolve_listen_on():
-    if os.environ.get("KITTY_LISTEN_ON"):
-        return os.environ["KITTY_LISTEN_ON"]
-    pid = os.getppid()
-    while pid and pid > 1:
-        if _is_socket(f"/tmp/kitty-{pid}"):
-            return f"unix:/tmp/kitty-{pid}"
-        try:
-            out = subprocess.run(["ps", "-o", "ppid=", "-p", str(pid)],
-                                 capture_output=True, text=True).stdout.strip()
-            pid = int(out)
-        except (ValueError, OSError):
-            break
-    socks = [s for s in glob.glob("/tmp/kitty-*") if _is_socket(s)]
-    if len(socks) == 1:
-        return "unix:" + socks[0]
-    return ""
-
-
-LISTEN_ON = resolve_listen_on()
-os.environ["KITTY_LISTEN_ON"] = LISTEN_ON
-
-
-KITTEN = K.find_kitten()
-
-
-def kitten_run(*args):
-    """A silenced `kitten @ …` call; returns the exit code (1 on any failure)."""
-    return K.kitten_run(KITTEN, LISTEN_ON, *args)
-
-
-def kitten_ls():
-    """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
-    return K.kitten_ls(KITTEN, LISTEN_ON)
+# The terminal adapter. resolve=True lets it hunt for its control channel
+# beyond the environment — a keymap-driven `launch --type=background` child
+# does NOT inherit KITTY_LISTEN_ON, so the kitty frontend walks the ppid chain
+# to the controlling instance's socket (frontends.kitty.resolve_listen_on).
+# export_env() then stamps the resolved channel back into our env so detached
+# children (streamers, the codex watcher) inherit it.
+FE = frontends.get(resolve=True)
+FE.export_env()
 
 
 # --- session identity --------------------------------------------------------
@@ -185,9 +146,9 @@ def sid_from_stdin():
 
 
 def sid_from_focus():
-    """Keybinding: the session of the currently focused kitty tab."""
+    """Keybinding: the session of the currently focused terminal tab."""
     sess = mir = ""
-    for osw, t, w in K.iter_windows(kitten_ls()):
+    for osw, t, w in FE.iter_windows():
         if not (osw.get("is_focused") and t.get("is_focused")):
             continue                          # frontmost OS window, active tab
         uv = w.get("user_vars", {})
@@ -277,50 +238,10 @@ def mirror_geometry(sid):
     mirror, or None. Scorebar windows are excluded from the width math — the bar
     shares the mirror's column, so counting it would double-count that column.
     The one geometry walk behind current_pct AND target_delta (they had drifted
-    into two near-identical copies).
-
-    The tab total is computed by walking the mirror's `neighbors` chain left and
-    right, summing ONE window per horizontal segment — NOT by summing every
-    window's columns: two windows hsplit-stacked in the same column each report
-    the full column width, so the plain sum double-counted it, under-reported
-    the mirror's %, and drove reset/setpct (and the remembered size) far off.
-    Falls back to the plain sum on a kitty too old to report `neighbors`."""
-    for osw in kitten_ls():
-        for t in osw.get("tabs", []):
-            wins = {w.get("id"): w for w in t.get("windows", [])
-                    if not w.get("user_vars", {}).get("claude_scorebar")}
-            mirror = next((w for w in wins.values()
-                           if w.get("user_vars", {}).get("claude_mirror") == sid), None)
-            if not mirror or not mirror.get("columns"):
-                continue
-            cur = mirror.get("columns", 0)
-            if "neighbors" not in mirror:                 # older kitty: old behavior
-                return cur, sum(w.get("columns", 0) for w in wins.values())
-            # `neighbors` holds GROUP ids (confirmed live), which coincide with
-            # window ids only for never-regrouped windows — resolve through the
-            # tab's groups map first, then as a plain window id.
-            groups = {g.get("id"): (g.get("windows") or []) for g in t.get("groups", [])}
-
-            def resolve(i):
-                for wid in groups.get(i, [i]):
-                    if wid in wins:
-                        return wins[wid]
-                return None
-
-            total, seen = cur, {mirror.get("id")}
-            for side in ("left", "right"):
-                w = mirror
-                while True:
-                    cands = ((w.get("neighbors") or {}).get(side)) or []
-                    nxt = next((ww for ww in map(resolve, cands)
-                                if ww is not None and ww.get("id") not in seen), None)
-                    if nxt is None:
-                        break
-                    seen.add(nxt.get("id"))
-                    total += nxt.get("columns", 0)
-                    w = nxt
-            return cur, total
-    return None
+    into two near-identical copies). The walk itself (kitty's `neighbors`/
+    `groups` semantics) lives in the frontend — see
+    frontends.kitty.KittyFrontend.split_geometry."""
+    return FE.split_geometry(("claude_mirror", sid), exclude_var="claude_scorebar")
 
 
 def current_pct(sid):
@@ -347,8 +268,7 @@ def save_size(sid):
 # the mirror's column, so counting its columns would double-count that column).
 
 def window_exists(var, sid):
-    return any(w.get("user_vars", {}).get(var) == sid
-               for _o, _t, w in K.iter_windows(kitten_ls()))
+    return FE.find_window(var, sid) is not None
 
 
 def mirror_exists(sid):
@@ -364,9 +284,9 @@ def close_stale_mirrors(keep):
     mirror there with a different sid is always stale. Anchored to KITTY_WINDOW_ID
     (the hook's Claude pane) when present, else the focused tab (keybinding).
     No-op when there's nothing stale to close."""
-    anchor = os.environ.get("KITTY_WINDOW_ID", "")
+    anchor = FE.current_window()
     stale = []
-    for osw in kitten_ls():
+    for osw in FE.ls():
         for t in osw.get("tabs", []):
             if anchor:
                 if not any(str(w.get("id")) == anchor for w in t.get("windows", [])):
@@ -380,7 +300,7 @@ def close_stale_mirrors(keep):
                     stale.append(w.get("id"))
             break
     for wid in stale:
-        kitten_run("close-window", "--match", f"id:{wid}")
+        FE.close_pane(win_id=wid)
 
 
 # kitty bias is approximate ("you cannot use this method to create windows of fixed
@@ -391,10 +311,8 @@ BAR_ROWS = 5   # ⬡ session id + ✉ census + ▪ summary + Σ token breakdown 
 
 def bar_delta(sid):
     """(BAR_ROWS - current bar rows), or None if the bar can't be measured."""
-    for _o, _t, w in K.iter_windows(kitten_ls()):
-        if w.get("user_vars", {}).get("claude_scorebar") == sid:
-            return BAR_ROWS - int(w.get("lines") or 0)
-    return None
+    w = FE.find_window("claude_scorebar", sid)
+    return BAR_ROWS - int(w.get("lines") or 0) if w else None
 
 
 def size_bar(sid):
@@ -402,8 +320,7 @@ def size_bar(sid):
         d = bar_delta(sid)
         if not d:
             return
-        kitten_run("resize-window", "--match", f"var:claude_scorebar={sid}",
-                   "--axis", "vertical", "--increment", str(d))
+        FE.resize_pane(("claude_scorebar", sid), "vertical", d)
         time.sleep(0.08)                     # let kitty apply before re-measuring
 
 
@@ -411,38 +328,33 @@ def open_mirror(sid, log, bias):
     """Does NOT truncate — the caller decides the log's fate."""
     if not mirror_exists(sid):
         # vsplit sizing only works in the splits layout; switch the active tab to it.
-        kitten_run("goto-layout", "splits")
-        kitten_run("launch",
-                   "--location=vsplit", "--bias", str(bias or BIAS),
-                   "--keep-focus", "--cwd", "current",
-                   "--var", f"claude_mirror={sid}", "--title", "◧ cmd mirror",
-                   os.path.join(HERE, "claude-mirror.py"), log)
+        FE.goto_splits_layout()
+        FE.launch_pane([os.path.join(HERE, "claude-mirror.py"), log],
+                       "vsplit", bias=(bias or BIAS),
+                       var={"claude_mirror": sid}, title="◧ cmd mirror")
     if not window_exists("claude_scorebar", sid):   # checked separately so a crashed/
-        kitten_run("launch",                        # closed bar comes back on toggle
-                   "--location=hsplit", "--next-to", f"var:claude_mirror={sid}",
-                   "--bias", "5", "--keep-focus", "--cwd", "current",
-                   "--var", f"claude_scorebar={sid}", "--title", "▪ session",
-                   os.path.join(HERE, "claude-scorebar.py"), log)
-        size_bar(sid)
+        FE.launch_pane([os.path.join(HERE, "claude-scorebar.py"), log],
+                       "hsplit", bias=5, next_to=("claude_mirror", sid),
+                       var={"claude_scorebar": sid}, title="▪ session")
+        size_bar(sid)                               # closed bar comes back on toggle
 
 
 def close_mirror(sid):
     """The bar rides along with the mirror."""
-    kitten_run("close-window", "--match", f"var:claude_scorebar={sid}")
-    kitten_run("close-window", "--match", f"var:claude_mirror={sid}")
+    FE.close_pane(var=("claude_scorebar", sid))
+    FE.close_pane(var=("claude_mirror", sid))
 
 
 def tag_window(sid):
     """Tag THIS hook's own Claude pane so a keybinding can find it."""
-    win = os.environ.get("KITTY_WINDOW_ID", "")
+    win = FE.current_window()
     if win:
-        kitten_run("set-user-vars", "--match", f"id:{win}", f"claude_session={sid}")
+        FE.set_user_vars(win, {"claude_session": sid})
 
 
 def resize_mirror(inc, sid):
     """Positive increment widens."""
-    kitten_run("resize-window", "--match", f"var:claude_mirror={sid}",
-               "--axis", "horizontal", "--increment", str(inc))
+    FE.resize_pane(("claude_mirror", sid), "horizontal", inc)
 
 
 # Resize a session's mirror to an ABSOLUTE width of PCT% of the tab. kitty only
@@ -683,7 +595,7 @@ def cmd_resize(action):
 
 
 def main():
-    if not LISTEN_ON or not KITTEN:
+    if not FE.usable():
         return
     if CMD == "open":
         cmd_open()

@@ -40,7 +40,7 @@
 import os, re, signal, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import claude_kitty as K
+import frontends
 import claude_msgs as MSG
 import claude_render as R
 import claude_ops as O
@@ -116,13 +116,14 @@ def emit_events(events):
 
 
 def _claude_window():
-    """Kitty window id (str) of this session's Claude pane, or None. One
-    `kitten @ ls` round-trip — callers cache the result and retry sparingly."""
-    listen = os.environ.get("KITTY_LISTEN_ON")
-    kitten = K.find_kitten()
-    if not listen or not kitten:
+    """Terminal window id (str) of this session's Claude pane, or None. One
+    window-enumeration round-trip — callers cache the result and retry
+    sparingly. Goes through the Frontend so a non-kitty terminal only needs
+    its own window_for_session."""
+    fe = frontends.get()
+    if not fe.usable():
         return None
-    return K.window_for_session(kitten, listen, session_id())
+    return fe.window_for_session(session_id())
 
 
 def _tab_green(win):
