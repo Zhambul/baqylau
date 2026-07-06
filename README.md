@@ -1242,6 +1242,27 @@ Or just hand Claude Code a session id: the **`audit-debug` skill**
 timeline → targeted SQL — and names the bug from the evidence: which rows, which
 code path, and a suggested fix.
 
+## Testing
+
+The e2e suite (`tests/`, `make test`) drives the real hook scripts as
+subprocesses with synthetic payloads and asserts on the three state surfaces
+(session state DB, tab DB, audit DB). To run hermetically and fast it uses four
+env knobs that exist **only for the test suite** — nothing sets them in a real
+session, and unset they leave shipped behavior bit-identical:
+
+| Env var | Default | Effect |
+|---|---|---|
+| `CLAUDE_MIRROR_TMPDIR` | `/tmp` | Relocates everything `claude_paths.py` derives: `claude-mirror-<key>.log*` state DBs/sidecars/parks **and** the global `claude-kitty-tab.db` — per-test isolation |
+| `CLAUDE_TAIL_POLL_S` / `CLAUDE_TAIL_BACKSTOP_S` | `0.4` / 6 h | `claude_tail.py` poll cadence / absolute tailer cap |
+| `CLAUDE_STREAM_GRACE_S` | 2 s (fg/bg) · 8 s (monitor) | `claude-stream.py` idle-grace before writer-gone is definitive |
+| `CLAUDE_WATCH_POLL_S` | unset | One value replacing every `claude-tab-status.py` watcher/grace sleep (bg-watch 2 s, interrupt-watch 0.5 s, bg-recheck grace 4 s) |
+
+Any session started with the timing knobs set is self-evident in the audit:
+`session_start` captures `CLAUDE_TAIL_*`/`CLAUDE_STREAM_*`/`CLAUDE_WATCH_*`
+(and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
+side is injected via the pre-existing `KITTY_KITTEN_BIN` override (a recorder
+script standing in for `kitten`), so no product code special-cases tests.
+
 ## Notes / tweaking
 
 - **`--dangerously-skip-permissions`** (the `claude` alias): permission prompts

@@ -51,6 +51,12 @@ New always-audited swallow sites (previously silent — their absence used to ma
 
 ## Known bug shapes → what to look for
 
+- **Timings or paths look impossible** (grace periods way too short, state DBs
+  not under `/tmp/claude-mirror-…`, a tailer that gave up in under a second) —
+  check the session's `sessions.env` column for test-suite seams
+  (`CLAUDE_MIRROR_TMPDIR`, `CLAUDE_TAIL_*`, `CLAUDE_STREAM_*`,
+  `CLAUDE_WATCH_*`, README § Testing): the "session" is probably a test run,
+  not a real one.
 - **Tab stuck blue** — a `slots` claim (bg/fg/monitor/sub) with no release (cross-check
   the live truth: `sqlite3 .../claude-mirror-<sid>.log.state.db "SELECT * FROM live"` —
   a row whose pid is dead is stale-but-harmless, it's ignored by liveness checks) + a

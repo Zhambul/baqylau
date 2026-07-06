@@ -384,7 +384,11 @@ def session_start(d):
         return
     envkeys = {k: v for k, v in os.environ.items()
                if k.startswith(("CLAUDE_MIRROR", "CLAUDE_TAB", "CLAUDE_CODE_EFFORT",
-                                "CLAUDE_AUDIT")) or k in ("KITTY_WINDOW_ID",)}
+                                "CLAUDE_AUDIT",
+                                # test-suite seams (README § Testing): a session
+                                # run with altered timing/paths must say so here
+                                "CLAUDE_TAIL_", "CLAUDE_STREAM_", "CLAUDE_WATCH_"))
+               or k in ("KITTY_WINDOW_ID",)}
     cols = dict(session_id=sid, cwd=d.get("cwd") or os.getcwd(),
                 project_slug=os.path.basename((d.get("cwd") or os.getcwd()).rstrip("/")),
                 transcript_path=d.get("transcript_path") or "",

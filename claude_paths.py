@@ -12,13 +12,19 @@
 import os
 import re
 
-PREFIX = "/tmp/claude-mirror-"
+# CLAUDE_MIRROR_TMPDIR relocates EVERYTHING derived from these two roots (state
+# DBs, .out/.done sidecars, .keep parks, the tab DB) — it exists solely so the
+# test suite can run hermetically; nothing sets it in real sessions. Read at
+# import: every hook is a fresh process, so a per-process env is a per-run root.
+_TMP = os.environ.get("CLAUDE_MIRROR_TMPDIR") or "/tmp"
+
+PREFIX = _TMP + "/claude-mirror-"
 
 # The GLOBAL window-keyed tab DB (colour state + watcher pid locks). Owned by
 # claude-tab-status.py (schema + writes); claude_state.tab_state is the one
 # sanctioned reader. Window-keyed, not session-keyed — a kitty window outlives
 # any one session. In /tmp so it self-clears on reboot.
-TAB_DB = "/tmp/claude-kitty-tab.db"
+TAB_DB = _TMP + "/claude-kitty-tab.db"
 
 
 def sanitize_sid(sid):

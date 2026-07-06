@@ -246,7 +246,8 @@ def main(run):
     #             persistent and identifiable, and exits exactly when the monitor
     #             ends, so we track that process — robust at ANY cadence, no
     #             grace. Idle fallback only if the process was never found.
-    GRACE = 2.0 if KIND in ("bg", "fg") else 8.0
+    GRACE = float(os.environ.get("CLAUDE_STREAM_GRACE_S") or
+                  (2.0 if KIND in ("bg", "fg") else 8.0))
     sentinel = ("done:" + (DONE or path + ".done")) if KIND == "fg" else None
     mon = {"pid": None, "deadline": start + 20}
     # Backstop for fg ONLY (and shorter than the tailers' shared 6h cap): an

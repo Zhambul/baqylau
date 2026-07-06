@@ -59,6 +59,13 @@ import claude_state as St  # noqa: E402  (pid_alive only — DB reads stay mode=
 
 WIN = os.environ.get("KITTY_WINDOW_ID", "")
 
+# Test-suite-only cadence override (README § Testing): one value that replaces
+# every watcher/grace sleep below (bg-watch 2s, interrupt-watch 0.5s, bg-recheck
+# grace 4s). Unset (the shipped default) leaves each sleep its literal value —
+# written as `time.sleep(WATCH_POLL_S or <literal>)` so the defaults stay
+# greppable at their use sites.
+WATCH_POLL_S = float(os.environ.get("CLAUDE_WATCH_POLL_S") or 0)
+
 # The literal tab states (also the vocabulary of the tab DB's `state` column and
 # the hooks' argv) — constants so an internal typo is a NameError, not a silently
 # never-matching transition. The mapping to colours is COLORS below.
@@ -297,7 +304,7 @@ def run_bgwatch(mlog):
     try:
         misses = 0
         for _ in range(1800):
-            time.sleep(2)
+            time.sleep(WATCH_POLL_S or 2)
             if tab_get(WIN) != AWAITING_BG:
                 reason = "state-moved-on"
                 audit_tx("", "", 0, "bg-watch: state moved on, watcher exiting")
@@ -352,7 +359,7 @@ def run_interruptwatch(transcript):
         except OSError:
             pos = 0
         for _ in range(3600):
-            time.sleep(0.5)
+            time.sleep(WATCH_POLL_S or 0.5)
             # Keep watching through the WHOLE turn (magenta/blue/red are all
             # mid-turn). Exiting the moment the state left thinking/working
             # meant the first Bash/Task pretool (-> executing) killed the
@@ -530,7 +537,7 @@ def d_bg_recheck():
     # second or two. Wait briefly and re-check so we don't flip green in that
     # gap; if a new marker appeared (next task started), stay blue. Also bail
     # if the state changed.
-    time.sleep(4)
+    time.sleep(WATCH_POLL_S or 4)
     if bg_command_running():
         audit_tx(cur, "", 0, f"bg-recheck({kind}): a new job started in the grace gap")
         return None

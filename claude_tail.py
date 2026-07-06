@@ -17,8 +17,12 @@ import claude_ops as O
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-POLL_S = 0.4                # main poll cadence of every tailer loop
-BACKSTOP_S = 6 * 3600       # absolute cap so a stuck/lost tailer can't run forever
+# Env overrides exist solely for the test suite (README § Testing) — real
+# sessions never set them, so the shipped cadence stays the literal defaults.
+POLL_S = float(os.environ.get("CLAUDE_TAIL_POLL_S") or 0.4)
+                            # main poll cadence of every tailer loop
+BACKSTOP_S = float(os.environ.get("CLAUDE_TAIL_BACKSTOP_S") or 6 * 3600)
+                            # absolute cap so a stuck/lost tailer can't run forever
 
 
 class FileTailer:
