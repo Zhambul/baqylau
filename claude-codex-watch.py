@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-codex-watch.py MIRROR_LOG CWD [SESSION_ID]
 #
 # ONE per Claude session (launched DETACHED by claude-codex-launch.py at SessionStart

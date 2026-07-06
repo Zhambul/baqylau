@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-cmd-fmt.py — formatter for the kitty command-mirror pane.
 #
 # Reads a Claude Code PostToolUse(Bash) hook payload (JSON) on stdin and appends

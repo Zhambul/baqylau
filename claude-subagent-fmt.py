@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-subagent-fmt.py MIRROR_LOG PHASE
 #
 # Drives a subagent's block in the kitty command mirror. PHASE is:

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-task-fmt.py MIRROR_LOG WIDTH
 #
 # Renders an agent-team shared-task-list event into the command mirror as one

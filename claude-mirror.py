@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-mirror.py MIRROR_LOG [WIDTH]
 #
 # The command-mirror RENDERER. Runs inside the kitty split pane (launched by

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-file-fmt.py — formatter for file-operation lines in the kitty mirror.
 #
 # Reads a Claude Code PostToolUse payload (JSON) on stdin for a Read/Edit/Write/

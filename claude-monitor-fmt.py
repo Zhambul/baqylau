@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-monitor-fmt.py MIRROR_LOG WIDTH
 #
 # Reads a Claude Code PostToolUse(Monitor) payload on stdin, writes a monitor

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_paths.py — the ONE owner of the mirror-log path format.
 #
 # Everything in this project is keyed by the mirror-log path

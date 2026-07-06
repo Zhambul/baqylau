@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-stream.py KIND TASKID MIRROR_LOG SLOT [SIG] [OUTER]
 #
 # Detached tailer for the kitty command-mirror pane. Background Bash jobs and

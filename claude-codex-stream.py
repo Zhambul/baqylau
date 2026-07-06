@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-codex-stream.py MIRROR_LOG "r,g,b" SRCFILE JSONFILE LABEL
 #
 # Detached tailer for ONE codex run, rendered into the kitty command-mirror pane.

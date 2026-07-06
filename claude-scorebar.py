@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-scorebar.py MIRROR_LOG [WIDTH]
 #
 # The scoreboard renderer. Runs inside a SMALL DEDICATED kitty window (5 rows, hsplit

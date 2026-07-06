@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-codex-launch.py MIRROR_LOG CWD [SESSION_ID]
 #
 # Tiny launcher for the per-session codex watcher, called from `claude-split.py open`

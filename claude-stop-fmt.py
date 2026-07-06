@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-stop-fmt.py — main-session Stop / StopFailure accounting flush.
 #
 # The scoreboard's token/cost totals are folded out of the session transcript by

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_ops.py — structured paint-op log for the kitty command mirror.
 #
 # THE REFLOW REFACTOR. Producers (the *-fmt.py hooks + claude-stream.py /

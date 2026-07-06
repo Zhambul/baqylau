@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_hook.py — the shared harness for the short-lived hook handlers
 # (claude-cmd-pre / claude-cmd-fmt / claude-file-fmt / claude-subagent-fmt /
 # claude-monitor-fmt / claude-task-fmt).

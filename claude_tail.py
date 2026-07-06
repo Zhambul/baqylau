@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_tail.py — the shared skeleton of every detached tailer
 # (claude-stream.py, claude-substream.py, claude-codex-stream.py).
 #

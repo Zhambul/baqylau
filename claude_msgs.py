@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_msgs.py — the agent-team message tracker (the "✉ messages" scoreboard row
 # + mirror events). Extracted from claude_ops.py: its only consumer is
 # claude-scorebar.py, and claude_ops had become a grab-bag.

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_model.py — model / effort / context-window resolution for agents.
 #
 # Extracted from claude-substream.py, where ~250 lines of config-dir walking,

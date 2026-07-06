@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_audit.py — always-on SQLite audit trail for the kitty mirror tooling.
 #
 # The mirror is ~20 short-lived hook processes plus detached tailers/watchers

@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_render.py — shared rendering primitives for the kitty command mirror.
 #
 # Extracted from claude-cmd-fmt.py so the same bash/python syntax highlighting,

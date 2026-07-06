@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-split.py open|close|toggle|grow|shrink|reset|setpct
 #
 # Manage a "command mirror" vertical split — by default the right 25% of the tab —

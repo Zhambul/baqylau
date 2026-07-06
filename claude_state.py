@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_state.py — per-session runtime coordination state in SQLite.
 #
 # The mirror's Python-side coordination state used to be a zoo of small files next

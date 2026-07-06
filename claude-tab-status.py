@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-tab-status.py — color the kitty tab to reflect Claude Code's status.
 #
 # Usage: claude-tab-status.py <state>

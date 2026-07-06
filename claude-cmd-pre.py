@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-cmd-pre.py — PreToolUse(Bash) hook: makes long foreground commands stream
 # live in the mirror, the same way background commands already do.
 #

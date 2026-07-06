@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-substream.py AGENT_ID TRANSCRIPT_PATH MIRROR_LOG SLOT AGENT_TYPE [PALETTE]
 #
 # Detached streamer for a SUBAGENT (Task/Agent tool). A subagent fires real hooks

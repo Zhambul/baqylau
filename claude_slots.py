@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_slots.py — shared palette + slot allocation for the kitty command mirror.
 #
 # Background and monitor streams each draw their "│ " gutter colour from their own

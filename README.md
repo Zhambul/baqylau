@@ -209,6 +209,36 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }
   ```
 
+### Interpreter: skip the pyenv shim (`retarget-python.py`)
+
+Every hook fires a fresh `python3`. If that `python3` is the **pyenv shim** — a
+bash script that re-runs `pyenv` on every call to pick a version — it costs
+**~140ms of pure overhead per process** (measured 0.15s vs 0.01s for the
+concrete interpreter it eventually execs). A single `PostToolUse` fans out to
+five-plus hook processes, so the shim tax dominates end-to-end hook latency by
+an order of magnitude — it swamps the scripts' own ~5ms of imports. (Child
+processes are already fast: they spawn via `sys.executable`, which inside a
+shim-launched interpreter is already the concrete binary.)
+
+Two top-level entry shapes hit the shim: the `#!/usr/bin/env python3` **shebang**
+on the `/abs/path/claude-*.py …` hook commands, and the literal `python3 …`
+prefix on the `claude_audit.py hook subscriber` commands in `settings.json`.
+**`retarget-python.py`** rewrites both to an absolute concrete-interpreter path
+(it takes `sys.executable`, which under the shim already resolves to pyenv's
+*active* version, so it honours `pyenv version`):
+
+```sh
+./retarget-python.py            # bake in the concrete interpreter (run once at setup)
+./retarget-python.py --revert   # restore portable `#!/usr/bin/env python3`
+```
+
+It is idempotent — **re-run it after any `pyenv` version change** to re-point the
+hooks. Why not a faster startup flag (`-S`/`-I`) instead? Those shave only a
+couple ms off interpreter init; the shim's bash+`pyenv` round-trip is the whole
+cost, and only bypassing the shim removes it. Why not a `~/.pyenv/shims`-free
+`PATH`? Shebangs and the `settings.json` `python3` token don't inherit a
+reordered `PATH`, and the concrete path is unambiguous.
+
 ## Activating it
 
 `listen_on` is read only at startup, so **fully quit and reopen kitty** (Cmd+Q,

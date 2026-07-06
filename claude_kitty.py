@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_kitty.py — shared kitty remote-control plumbing.
 #
 # Talking to kitty happens over the socket in $KITTY_LISTEN_ON (hooks run with no
