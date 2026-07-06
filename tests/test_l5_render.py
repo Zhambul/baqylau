@@ -1,0 +1,107 @@
+# L5 — renderer goldens.
+#
+# The whole producer/renderer contract in one pin: a canonical op sequence
+# (built through claude_ops, highlighting included) rendered by the real
+# claude-mirror.py at two FIXED_WIDTHs. Width 100 vs 60 is the reflow pin —
+# the same width-INDEPENDENT ops must wrap/gutter differently at paint time.
+# Regenerate with UPDATE_GOLDEN=1 after an intentional renderer change.
+import os
+import signal
+import subprocess
+import sys
+import time
+
+import pytest
+
+from conftest import REPO, wait_until
+
+GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden")
+
+SEED_OPS = r'''
+import claude_ops as O
+import claude_render as R
+log = %(log)r
+O.emit(log,
+       O.blank(), O.rule(), O.label("▶ foreground", O.SLATE),
+       O.code("for i in $(seq 3); do echo line-$i; done"),
+       O.rule(),
+       O.gut("line-1\nline-2\nline-3", O.SLATE),
+       O.rule(), O.label("■ finished · 1.2s", O.SLATE), O.rule())
+O.emit(log,
+       O.blank(), O.rule(), O.label("▷ background", O.ORANGE),
+       O.code("python3 train.py --epochs 10 --batch-size 32 --learning-rate 0.0003"),
+       O.rule(),
+       O.gut("epoch 1/10 loss 2.31\nepoch 2/10 loss 1.94 " + "x" * 80, O.ORANGE),
+       O.rule(), O.label("■ failed (exit 1) · 3m07s", O.RED), O.rule())
+O.emit(log,
+       O.line("%(sentinel)s"))
+'''
+
+
+def build_ops(env, log, sentinel):
+    p = subprocess.run([sys.executable, "-c", SEED_OPS % {"log": log,
+                                                          "sentinel": sentinel}],
+                       env=dict(env), cwd=REPO, capture_output=True, text=True,
+                       timeout=20)
+    assert p.returncode == 0, p.stderr
+
+
+def render_at(env, reaper, log, width, sentinel):
+    """Run the real renderer non-tty at a fixed width until the sentinel op
+    has been painted, then stop it and return everything it wrote."""
+    out_path = log + ".render-%d.out" % width
+    with open(out_path, "wb") as out:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(REPO, "claude-mirror.py"), log,
+             str(width)],
+            stdout=out, stderr=subprocess.DEVNULL, env=dict(env), cwd=REPO)
+    reaper.append(proc)
+    try:
+        wait_until(lambda: sentinel.encode() in open(out_path, "rb").read(),
+                   desc="renderer painted the sentinel op")
+        time.sleep(0.3)                       # let the paint flush fully
+    finally:
+        proc.send_signal(signal.SIGTERM)
+        proc.wait(timeout=5)
+    with open(out_path, "rb") as f:
+        return f.read()
+
+
+def check_golden(name, data):
+    path = os.path.join(GOLDEN_DIR, name)
+    if os.environ.get("UPDATE_GOLDEN") == "1":
+        os.makedirs(GOLDEN_DIR, exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(data)
+        pytest.skip("golden %s regenerated" % name)
+    assert os.path.exists(path), \
+        "golden %s missing — run UPDATE_GOLDEN=1 pytest %s" % (name, __file__)
+    with open(path, "rb") as f:
+        want = f.read()
+    assert data == want, \
+        ("renderer output diverged from golden %s (if the change is "
+         "intentional: UPDATE_GOLDEN=1)" % name)
+
+
+SENTINEL = "END-OF-CANON"
+
+
+@pytest.mark.parametrize("width", [100, 60])
+def test_canonical_ops_golden(test_env, session, reaper, width):
+    s = session.make(sid="golden-render")        # fixed sid: byte-stable paths
+    build_ops(test_env, s.log, SENTINEL)
+    data = render_at(test_env, reaper, s.log, width, SENTINEL)
+    assert SENTINEL.encode() in data
+    check_golden("mirror-w%d.ansi" % width, data)
+
+
+def test_same_ops_reflow_differently_by_width(test_env, session, reaper):
+    """The reflow property itself (independent of golden bytes): the long
+    gutter line must occupy more painted lines at 60 columns than at 100."""
+    s = session.make(sid="golden-reflow")
+    build_ops(test_env, s.log, SENTINEL)
+    wide = render_at(test_env, reaper, s.log, 100, SENTINEL)
+    narrow = render_at(test_env, reaper, s.log, 60, SENTINEL)
+    assert wide != narrow
+    assert narrow.count(b"\n") > wide.count(b"\n"), \
+        "narrower pane should need more wrapped lines"
