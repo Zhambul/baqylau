@@ -216,6 +216,19 @@ plugins). `claude_ops.py` remains as a compat AGGREGATOR (a namespace copy
 re-exporting all three homes — unlike the other shims there is no single
 module to alias to).
 
+`plugins/codex/` is a SECONDARY-source adapter: `launch.py` (the detach-fast
+launcher), `watch.py` (the one-per-session discovery watcher), `stream.py`
+(one tailer per codex run) — moved bodies of the three `claude-codex-*.py`
+entries, which remain as shims. `plugins/__init__.py` is the registry:
+`all_plugins()` (host first), `on_session_start(log, cwd, sid)` (SessionStart
+fan-out — how codex attaches its watcher; a plugin failure is audited and
+never blocks the host's SessionStart), and `census(log)` (the scoreboard's
+✉-row fan-out). **Adding support for another agent tool** = a new
+`plugins/<tool>/` directory implementing whichever hooks it needs
+(`on_session_start` for a watcher-driven source like codex; its own entry
+scripts + hook wiring for a hook-driven host like Claude Code) + one line in
+`all_plugins()` — core and the frontends don't change.
+
 `frontends/` is the terminal layer. `frontends/base.py` defines the
 `Frontend` interface — tab colour (`set_tab_color`/`clear_tab_color`), window
 enumeration (`ls`/`iter_windows`/`find_window`/`window_for_session`), and pane

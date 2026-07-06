@@ -461,19 +461,14 @@ def cmd_open():                              # SessionStart (payload on stdin)
             audit_pane(sid, "open", 0, "mirror opened but scoreboard bar absent")
     else:
         audit_pane(sid, "open", 0, "mirror window absent after launch")
-    # Stream any codex run (companion job OR raw `codex`/`codex exec`) into this
-    # session's mirror. The launcher Popens the watcher DETACHED (start_new_session)
-    # and exits in a few ms, so it can never hang SessionStart — the long-lived
-    # watcher must never sit in the hook's process group. The watcher exits on its
-    # own when this log is removed at SessionEnd.
-    launcher = os.path.join(HERE, "claude-codex-launch.py")
-    if os.path.isfile(launcher):
-        try:
-            subprocess.run([sys.executable or "python3", launcher,
-                            log, os.getcwd(), sid],
-                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+    # Attach every secondary-source plugin to this session (plugins registry —
+    # codex streams any companion job or raw `codex`/`codex exec` run into this
+    # session's mirror; its launcher Popens the watcher DETACHED so SessionStart
+    # can never hang, and the watcher exits on its own when this session's
+    # state DB is parked at SessionEnd). Plugin failures are audited inside the
+    # registry and never block SessionStart.
+    import plugins
+    plugins.on_session_start(log, os.getcwd(), sid)
 
 
 def cmd_close():                             # SessionEnd (payload on stdin)

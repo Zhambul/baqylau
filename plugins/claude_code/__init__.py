@@ -7,3 +7,10 @@
 # tools (built-in tool payload shapes), model (model/effort/window resolution),
 # msgs (agent-team message tracker). Entry scripts at the repo root are thin
 # shims into these modules — the entry FILENAMES are the audit vocabulary.
+
+
+def census(log):
+    """The agent-team message census for the scoreboard's ✉ row — see msgs.py
+    (stateful inbox polling; returns (parts, events))."""
+    from plugins.claude_code import msgs
+    return msgs.update_messages(log)

@@ -20,8 +20,9 @@
 # input · output · cache read · cache write; the total dwarfs billed spend because
 # cache read is the bulk on a long session.
 #
-# The ✉ row is tracked by claude_msgs.update_messages (stateful inbox polling → a persisted
-# sidecar) and always shows a count (0 included). See claude_ops.py.
+# The ✉ row is fed by the plugins registry's census fan-out (today: the
+# claude_code plugin's msgs.update_messages — stateful inbox polling) and
+# always shows a count (0 included).
 #
 # A separate window — not lines pinned inside the mirror — because that's the only
 # thing that survives SCROLLING: anything drawn in the mirror's own screen scrolls
@@ -45,7 +46,7 @@ from core import ops as O
 from core import paths as P
 from core import render as R
 from core import state as St
-from plugins.claude_code import msgs as MSG
+import plugins as PLUGINS
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
@@ -258,7 +259,7 @@ def main():
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
             try:                            # poll inboxes: census parts + mirror events
-                mparts, events = MSG.update_messages(LOG)
+                mparts, events = PLUGINS.census(LOG)
             except Exception:
                 # Audited: a crashing tracker otherwise freezes the ✉ row at
                 # stale/0 counts with zero trace in the audit DB.
