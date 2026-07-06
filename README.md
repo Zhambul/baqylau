@@ -651,7 +651,11 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     **team-wide**: the main session's own ops feed them via `claude-file-fmt.py` /
     `claude-cmd-fmt.py`, and every **subagent/teammate** op feeds them too —
     `claude-substream.py`'s `render_file` bumps the same `files`/`added`/`removed` (and
-    tools) counters, and its `on_tool_result` bumps `commands`/`failed`/`tool:Bash` for
+    tools) counters for every subagent file tool (Read/Edit/MultiEdit/Write/NotebookEdit),
+    matching `claude-file-fmt.py` op-for-op — including a **failed** mutation, which counts
+    the path + tool but **0** added/removed (a failed Write never wrote its lines, so
+    `render_file` skips `diff_counts` on `is_error`, same as file-fmt's `if not failed`).
+    Its `on_tool_result` also bumps `commands`/`failed`/`tool:Bash` for
     each subagent Bash call (a background launch counts at spawn; a foreground call counts
     its `is_error` as a failure) — so the `▪` row's `N cmds (M✗)` covers the whole team,
     mirroring how the ended-footer already folds each agent's *token* spend into the

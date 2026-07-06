@@ -362,11 +362,11 @@ def render_message(text):
     turn_ctx_shown = True
 
 
-def render_file(name_tool, inp, result=None, ctx=""):
+def render_file(name_tool, inp, result=None, ctx="", failed=False):
     label = FILE_LABEL.get(name_tool, "Read")
     path = inp.get("file_path") or inp.get("notebook_path") or ""
     name = os.path.basename(path.rstrip("/")) or path or "?"
-    col = FILE_COL.get(label, R.COL["def"])
+    col = R.fg(*O.RED) if failed else FILE_COL.get(label, R.COL["def"])   # red verb on failure
     # Lead with WHO did it — the agent's name/type in its own colour — so a Read/Update/
     # Write is attributable to the subagent (or teammate) that ran it, the same identity
     # cue chip() puts on this agent's Bash ops. The gutter bar already carries the colour,
@@ -378,7 +378,11 @@ def render_file(name_tool, inp, result=None, ctx=""):
     # model tag so they survive truncation on a narrow pane. Extent/range come from the
     # tool_result (`result`); counts from the input.
     added = removed = 0
-    if name_tool == "Read":
+    if failed:
+        # A failed op: no extent, no counts (diff_counts would count lines never
+        # written) — just the ✗ mark, same as claude-file-fmt.py's `if not failed`.
+        line += "  " + R.DIM + "✗" + RST
+    elif name_tool == "Read":
         ext = O.read_extent(result.get("file") if isinstance(result, dict) else None, inp)
         if ext:
             line += "  " + R.DIM + ext + RST
@@ -476,8 +480,11 @@ def on_tool_result(b, tur=None):
     if kind == "file":
         # Deferred from on_tool_use: render the file op now, with the extent (Read) or
         # touched range (edit) the result carries. cmd holds the saved (tool, input).
+        # A FAILED op (is_error) counts the path + tool but NO line deltas, matching
+        # the main session's claude-file-fmt.py — otherwise a failed Write would
+        # inflate +added with lines it never wrote.
         name_tool, saved_inp, saved_ctx = cmd if isinstance(cmd, tuple) else ("Read", {}, "")
-        render_file(name_tool, saved_inp, tur, saved_ctx)
+        render_file(name_tool, saved_inp, tur, saved_ctx, failed=bool(b.get("is_error")))
         return
     if kind in ("agent", "sendmsg"):
         return                                      # already shown / handled elsewhere
