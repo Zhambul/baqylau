@@ -402,6 +402,51 @@ def usage_fold(mid, fields, prev):
     return deltas, ({"id": mid, "f": list(fields)} if mid else prev)
 
 
+def fold_usage(path, pos=0, usage_last=None):
+    """Fold an agent transcript's assistant-message token usage from byte offset
+    `pos` to the last COMPLETE line, deduped by message.id (via usage_fold, carry
+    `usage_last`). Returns (fin, out, cache_read, cache_create, usage_last,
+    consumed) — the four totals in cost_usd's argument order, the updated carry,
+    and the byte offset consumed. Best-effort: zeros + unchanged cursor on any read
+    error or partial-only tail.
+
+    This is the batch analogue of claude-substream.py's inline per-line fold: it
+    lets a crashed/killed streamer's un-bumped tail be reconciled at SubagentStop
+    against the transcript's TRUE total (claude-subagent-fmt.py). Unlike
+    bump_transcript, it does NOT skip isSidechain lines — an agent's own transcript
+    IS its (sidechain) turns, exactly what the streamer folds."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return 0, 0, 0, 0, usage_last, pos
+    if size <= pos:                         # nothing new (or rotated shorter — don't guess)
+        return 0, 0, 0, 0, usage_last, pos
+    try:
+        with open(path, "rb") as f:
+            f.seek(pos)
+            chunk = f.read(size - pos)
+    except OSError:
+        return 0, 0, 0, 0, usage_last, pos
+    end = chunk.rfind(b"\n")
+    if end < 0:                             # no complete line yet
+        return 0, 0, 0, 0, usage_last, pos
+    ti = to = tc = tcr = 0
+    for ln in chunk[:end].split(b"\n"):
+        try:
+            o = json.loads(ln)
+        except Exception:
+            continue
+        if not isinstance(o, dict) or o.get("type") != "assistant":
+            continue
+        u = (o.get("message") or {}).get("usage")
+        if not isinstance(u, dict):
+            continue
+        d, usage_last = usage_fold((o.get("message") or {}).get("id"),
+                                   usage_fields(u), usage_last)
+        ti += d[0]; to += d[1]; tc += d[2]; tcr += d[3]
+    return ti, to, tc, tcr, usage_last, pos + end + 1
+
+
 def fmt_usd(c):
     """Compact dollar string: '<$0.01' / '$0.42' / '$12' / '$1.2k'. '' for None."""
     if c is None:

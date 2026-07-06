@@ -111,6 +111,13 @@ JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
 META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
 STATE_KEY = "state:agent." + AGENT          # audit label for checkpoint rows
 USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
+BILLED_KEY = "billed:" + AGENT              # kv slot: {in,out,cache,create} this
+                                            # streamer chain has folded into the
+                                            # scoreboard — the baseline reconcile_spend
+                                            # (claude-subagent-fmt.py) diffs the
+                                            # transcript's true total against, so a
+                                            # crashed streamer's un-bumped tail is
+                                            # recovered exactly once at SubagentStop.
 
 
 def cancelled_by_user():
@@ -205,6 +212,8 @@ def ctx_tag():
 def result_text(content):
     if isinstance(content, str):
         return content
+    if isinstance(content, dict):       # a lone content block — normalise to a 1-list
+        content = [content]
     if isinstance(content, list):
         parts = []
         for b in content:
@@ -439,7 +448,11 @@ def on_tool_use(b):
         # the message body; the tool_result is just a "{success:true,…}" ack (noise),
         # so it's suppressed in on_tool_result.
         to = inp.get("to") or inp.get("recipient") or "?"
-        text = inp.get("message") or inp.get("content") or inp.get("summary") or ""
+        # message/content may be a plain string OR a structured content block
+        # (dict / list of blocks) — normalise through result_text so .strip() never
+        # hits a dict (that AttributeError crashed the streamer mid-run, dropping the
+        # agent's un-bumped token tail; reconcile_spend recovers it, but don't crash).
+        text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
         O.emit(LOG, chip("✉", "to " + to, ctx), gutter(cap(text.strip(), 12)))
         pend[tid] = ("sendmsg", "")
     elif name in ("Task", "Agent"):
@@ -683,6 +696,16 @@ def main(run):
                           "model": disp_model(), "in": tot_in, "out": tot_out,
                           "cache": tot_cache, "create": tot_create, "src": JSONL},
                **deltas)
+    # Advance the cumulative-billed baseline (across the whole streamer chain — each
+    # generation is its own process, so tot_* is just this generation's delta). A
+    # crash BEFORE this point leaves the baseline behind the transcript's true total,
+    # and reconcile_spend bumps exactly that gap at SubagentStop. Single writer (no
+    # concurrent streamer for one agent_id), so a plain read-add-write is safe.
+    _pv = S.kv_get(LOG, BILLED_KEY) or {}
+    S.kv_set(LOG, BILLED_KEY, {"in": int(_pv.get("in") or 0) + tot_in,
+                               "out": int(_pv.get("out") or 0) + tot_out,
+                               "cache": int(_pv.get("cache") or 0) + tot_cache,
+                               "create": int(_pv.get("create") or 0) + tot_create})
 
 
 def cleanup():

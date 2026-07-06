@@ -16,6 +16,7 @@ import json, os, sys, time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import claude_hook as H
 import claude_slots
+import claude_model as M
 import claude_ops as O
 import claude_state as S
 
@@ -52,6 +53,69 @@ def is_teammate(tpath, agent_id):
 # copy this replaces returned False there, which could misread a live streamer
 # as dead and fire the safety-net footer spuriously.
 alive = S.pid_alive
+
+
+def reconcile_spend(log, tpath, agent_id, team):
+    """Recover any agent token spend a dead/crashed streamer never folded into the
+    scoreboard. The streamer bumps an agent's spend only at its footer; a crash
+    (the `.strip()`-on-dict bug was one cause) — or any exit before the footer —
+    drops the un-bumped tail. Run at SubagentStop once the streamer is gone: fold
+    the agent's FULL transcript to its TRUE total (claude_ops.fold_usage, deduped by
+    message.id) and bump only the residual over what the streamer chain already
+    billed (the BILLED_KEY baseline the footer advances). Idempotent — a clean
+    finish leaves true == baseline, so this bumps nothing, and a duplicate stop
+    re-folds to the same total. Best-effort; never raises into the hook."""
+    try:
+        base = tpath[:-6] if tpath.endswith(".jsonl") else tpath
+        jsonl = os.path.join(base, "subagents", f"agent-{agent_id}.jsonl")
+        if not tpath or not os.path.exists(jsonl):
+            return
+        ti, to, tc, tcr, carry, consumed = O.fold_usage(jsonl, 0, None)
+        key = "billed:" + agent_id
+        prev = S.kv_get(log, key) or {}
+        r_in = ti - int(prev.get("in") or 0)
+        r_out = to - int(prev.get("out") or 0)
+        r_cache = tc - int(prev.get("cache") or 0)
+        r_create = tcr - int(prev.get("create") or 0)
+        if r_in <= 0 and r_out <= 0 and r_cache <= 0 and r_create <= 0:
+            return                              # streamer already billed everything
+        model = (M.parent_resolved_model(tpath, agent_id)
+                 or M.agent_meta(tpath, agent_id).get("model"))
+        usd = O.cost_usd(model, r_in, r_out, r_cache, r_create)
+        deltas = {}
+        if usd:
+            deltas["cost"] = usd
+        if r_in or r_out:
+            deltas["tokens"] = r_in + r_out     # fresh billed input(+create) + output
+        if r_in or r_out or r_cache or r_create:
+            # Same Σ-row split the streamer footer uses: tk_in is fresh input EXCL.
+            # cache creation (r_in is input+create), so tk_in+tk_create == r_in.
+            deltas["tk_in"] = r_in - r_create
+            deltas["tk_out"] = r_out
+            deltas["tk_read"] = r_cache
+            deltas["tk_create"] = r_create
+        if not deltas:
+            return
+        O.bump(log, meta={"agent_id": agent_id,
+                          "kind": "teammate" if team else "subagent",
+                          "model": model, "in": r_in, "out": r_out,
+                          "cache": r_cache, "create": r_create,
+                          "src": jsonl, "reconcile": True}, **deltas)
+        S.kv_set(log, key, {"in": ti, "out": to, "cache": tc, "create": tcr})
+        # Advance the resume checkpoint to the folded EOF so a LATER SubagentStart
+        # for this agent (idle-teammate wake after a crash) resumes past what we just
+        # billed — otherwise its new streamer re-folds [pos, EOF] and double-counts.
+        # `pos` is the render/resume cursor; USAGE_KEY is the straddle-dedup carry.
+        S.agent_set(log, agent_id, pos=consumed)
+        if carry:
+            S.kv_set(log, "usage_last:" + agent_id, carry)
+        A.state_file(log, "state:agent." + agent_id, "reconcile",
+                     {"agent": agent_id,
+                      "residual": {"in": r_in, "out": r_out, "cache": r_cache,
+                                   "create": r_create}, "cost": usd,
+                      "true": {"in": ti, "out": to, "cache": tc, "create": tcr}})
+    except Exception:
+        A.error(log, "reconcile_spend", {"agent": agent_id})
 
 
 def main():
@@ -163,6 +227,12 @@ def main():
     _p = claude_slots.pid_get(LOG, agent_id)
     running = bool(_p) and alive(_p)
     if not running:
+        # The streamer is gone. If it died before its footer (crash/kill), its
+        # un-bumped token tail is still on disk — fold it into the scoreboard now.
+        # Idempotent (diffs against the billed baseline), so a duplicate stop or a
+        # clean finish recovers nothing. Runs even when the crashed streamer's own
+        # cleanup already released the slot (so it's not gated on the release below).
+        reconcile_spend(LOG, tpath, agent_id, is_teammate(tpath, agent_id))
         got = claude_slots.lookup_id("sub", LOG, agent_id)
         # Release FIRST, emit only if THIS call deleted the row: two overlapping
         # duplicate stops (the dead-streamer case fires them concurrently) could

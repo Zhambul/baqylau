@@ -547,6 +547,23 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     handoff. The rollup is appended last, so on a narrow pane
     it's the first thing the renderer's `fit()` truncates — duration and ctx always
     survive.
+  - **Crash-safe spend reconciliation.** The scoreboard bump lives in this footer, so
+    a streamer that dies *before* the footer (a crash, or a kill) drops the agent's
+    un-bumped token tail — the scoreboard reads under `/cost` by exactly that gap. (The
+    real culprit was an `AttributeError: 'dict' object has no attribute 'strip'` in
+    `on_tool_use`: a `SendMessage` whose body was a structured content block instead of
+    a string; now normalised through `result_text`.) To make the loss unrecoverable-proof
+    rather than just fixing the one trigger, the footer now advances a persisted
+    cumulative baseline (`billed:<agent>` kv — `{in,out,cache,create}` summed across the
+    whole streamer chain), and **`claude-subagent-fmt.py`'s `SubagentStop`**, once it
+    sees the streamer is gone, folds the agent's *full* transcript to its true total
+    (`claude_ops.fold_usage`, the batch analogue of the inline fold — same `usage_fold`
+    dedup) and bumps only `true − baseline` (a `bump-agent` with `meta.reconcile`, plus
+    a `reconcile` audit row). Idempotent: a clean finish or a duplicate stop leaves
+    `true == baseline` and bumps nothing. This recovers the *transcript-resident*
+    shortfall; a separate residual (interrupted/retried turns whose billed usage never
+    lands as complete assistant lines on disk) is not transcript-recoverable and leaves
+    a transcript-folding scoreboard slightly under `/cost` on cancellation-heavy sessions.
   - **Cost estimate in the footer.** After the rollup the footer appends `· ≈ $X`,
     the summed tokens priced on the resolved model (`claude_ops.PRICES`, per-MTok
     input/output for the current lineup; `cache_read` billed at ~0.1×). An unknown
@@ -725,7 +742,12 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     tab tracker's liveness signal, read by `claude-tab-status.py`. The streamer is
     the **sole footer writer**; `SubagentStop` only closes the block itself as a
     safety net, and **only when a colour slot is still claimed** (the streamer
-    died mid-run without finalising).
+    died mid-run without finalising). Independent of the footer, `SubagentStop`
+    also runs `reconcile_spend` whenever it finds the streamer gone (crashed or
+    already finalised): it folds the agent's full transcript to its true token total
+    and bumps whatever the streamer chain didn't (see *Crash-safe spend
+    reconciliation* above) — this runs even when the crashed streamer's own cleanup
+    already released the slot, so it is **not** gated on the safety-net footer.
     - **Manually cancelling/killing a subagent fires no `SubagentStop` at all** —
       the same no-hook-on-interrupt gap noted throughout this doc (`interrupt-watch`,
       the cancelled-foreground-command fix above). Left alone, the streamer would
