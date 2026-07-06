@@ -165,6 +165,46 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   at the keyboard (they just pressed Esc), and self-corrects at the next prompt —
   which the cancelling user is typically about to type anyway.
 
+## Architecture (core / plugins / frontends)
+
+The codebase is layered so that agent tools (Claude Code, codex, future
+similar tools) and terminals (kitty, future iTerm2/ghostty) are both
+pluggable. The layers and their one dependency rule:
+
+```
+core/        tool- and terminal-agnostic runtime — imports nothing outside core/
+frontends/   terminal adapters — import core/ at most            (in progress)
+plugins/     one directory per agent tool — import core/ + frontends/,
+             never each other                                    (in progress)
+claude-*.py  repo-root entry scripts: the assembly layer. They may import
+             anything. Their FILENAMES are load-bearing twice over: the hook
+             wiring in ~/.claude/settings.json points at them, and argv[0] is
+             the audit DB's handler/script vocabulary (`hook_events.handler`,
+             `errors.script`, spawn parents) — so entries stay at the root
+             under their historical names even as implementations move into
+             the packages.
+```
+
+`core/` currently holds: `paths.py` (the mirror-log path format — was
+`claude_paths.py`), `state.py` (per-session runtime SQLite — was
+`claude_state.py`), `slots.py` (palette/liveness slots — was
+`claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
+`render.py` (ANSI rendering — was `claude_render.py`), and `audit.py` (the
+audit trail — was `claude_audit.py`).
+
+**Compat shims.** Every historical top-level module name still works:
+`claude_state.py` and friends remain at the repo root as five-line shims that
+replace themselves in `sys.modules` with the package module, so
+`import claude_state` yields the *same module object* as
+`from core import state` (shared `_CONNS`, shared globals — not a copy).
+`claude_audit.py` additionally stays the documented CLI entry point
+(`python3 claude_audit.py sessions|anomalies|…` and the
+`claude_audit.py hook subscriber` write entry hooks invoke). Why shims rather
+than a clean break: the hook table in `~/.claude/settings.json` lives outside
+this repo, and the audit DB's historical vocabulary + the test suite's
+subprocess imports all reference the old names — a rename would silently
+orphan all three.
+
 ## Wiring
 
 - **`~/.config/kitty/kitty.conf`** (appended at the end):
