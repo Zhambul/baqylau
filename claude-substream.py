@@ -483,6 +483,10 @@ def on_tool_result(b, tur=None):
         return                                      # already shown / handled elsewhere
     txt = result_text(b.get("content"))
     if kind in ("bg", "monitor"):
+        if kind == "bg":
+            # A background Bash launch is a command — count it (its finish is owned
+            # by the tailer), same as the main session's _render_background.
+            O.bump(LOG, tool="Bash", commands=1)
         m = re.search(r"with ID:\s*([^\s.]+)", txt)
         if m:
             spawn_tailer(kind, m.group(1), cmd)
@@ -496,8 +500,18 @@ def on_tool_result(b, tur=None):
         O.emit(LOG, O.gut(R.emphasize(R.unescape(cap(body, 60))), SUB_RGB))
     else:
         O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB))
-    if b.get("is_error"):
+    err = bool(b.get("is_error"))
+    if err:
         O.emit(LOG, O.gut(R.fg(224, 108, 117) + "■ failed" + RST, SUB_RGB))
+    if kind == "fg":
+        # Team-wide command accounting, mirroring the main session's
+        # claude-cmd-fmt.py — which deliberately SKIPS any agent_id event (the
+        # substream owns subagent rendering AND, now, its command tally). Without
+        # this, a subagent's Bash calls and their FAILURES never reached the
+        # scoreboard's ▪ `N cmds (M✗)` (only its file ops were team-wide, via
+        # render_file). Count every foreground Bash call + its failure, exactly as
+        # _render_finished does for the lead.
+        O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if err else {}))
 
 
 def handle_line(s):

@@ -647,14 +647,19 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `files` table; re-editing the same file doesn't inflate it) while the tool counts
     are operations — so `Edit 18` against `5 files` reads as 18 edits across 5 distinct
     files (and `Read 90` against `87 files` is the same file read more than once, not a
-    miscount). The file counters are
-    **team-wide**: the main session's own file ops feed them via `claude-file-fmt.py`,
-    and every **subagent/teammate** file op feeds them too — `claude-substream.py`'s
-    `render_file` bumps the same `files`/`added`/`removed` (and tools) counters as it
-    renders each op, mirroring how the ended-footer already folds each agent's *token*
-    spend into the scoreboard. (`claude-file-fmt.py` deliberately skips any `agent_id`
-    call — the substream owns rendering *and* now the accounting of agent file ops, so
-    there's no double count.) Because `files` is a unique-path set shared across the
+    miscount). The file **and command** counters are
+    **team-wide**: the main session's own ops feed them via `claude-file-fmt.py` /
+    `claude-cmd-fmt.py`, and every **subagent/teammate** op feeds them too —
+    `claude-substream.py`'s `render_file` bumps the same `files`/`added`/`removed` (and
+    tools) counters, and its `on_tool_result` bumps `commands`/`failed`/`tool:Bash` for
+    each subagent Bash call (a background launch counts at spawn; a foreground call counts
+    its `is_error` as a failure) — so the `▪` row's `N cmds (M✗)` covers the whole team,
+    mirroring how the ended-footer already folds each agent's *token* spend into the
+    scoreboard. (`claude-file-fmt.py` **and** `claude-cmd-fmt.py` deliberately skip any
+    `agent_id` call — the substream owns subagent rendering *and* its accounting, so
+    there's no double count; without the command half, a session whose command failures
+    were all inside subagents showed `(0✗)` despite the failures being real.) Because
+    `files` is a unique-path set shared across the
     whole session, an agent re-touching a path the main session already touched never
     inflates it. It's handoff-safe: each transcript line is consumed exactly once
     across the streamer chain (the `pos` checkpoint), so an idle-teammate restart

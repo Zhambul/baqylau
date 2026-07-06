@@ -132,9 +132,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
   a cursor that jumps backwards or re-covers a range = double-counting. Plain `bump`
   rows carrying `files`/`added`/`removed` deltas come from TWO producers now: the main
   session's `claude-file-fmt.py` AND each agent's `claude-substream.py` `render_file`
-  (team-wide file accounting — an agent file op has no `tool`-keyed `commands` delta, so
-  a `bump` with a `Read`/`Edit`/`Write` tool + file/line deltas but NO matching
-  main-session PostToolUse hook_event is the substream feeding it, not an anomaly). The
+  (team-wide file accounting — a `bump` with a `Read`/`Edit`/`Write` tool + file/line
+  deltas but NO matching main-session PostToolUse hook_event is the substream feeding it,
+  not an anomaly). **`commands`/`failed` are team-wide the same way** (fixed 2026-07-06):
+  the substream's `on_tool_result` bumps `tool=Bash, commands=1` (+`failed=1` on
+  `is_error`) for each subagent Bash call, since `claude-cmd-fmt.py` skips `agent_id`
+  events — so a `bump` with `tool=Bash` + a `commands`/`failed` delta and NO matching
+  main-session PostToolUse(Bash) hook_event is a SUBAGENT command (its `PostToolUse`/
+  `PostToolUseFailure` carries an `agent_id`), not a lost or phantom bump. Before the
+  fix the `▪` row's `N cmds (M✗)` counted the LEAD's Bash only — a session whose failures
+  were all inside subagents showed `(0✗)` (or no `failed` counter at all) despite
+  `hook_events` holding `PostToolUseFailure` rows with an `agent_id`; that mismatch on a
+  pre-fix build is the tell. The
   `files` counter is a session-wide UNIQUE-path set, so its total can be LOWER than the
   count of file `bump` rows (same path touched by main + agents counts once) — that's
   correct, not a lost bump. `msg-transitions`
