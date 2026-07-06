@@ -315,6 +315,42 @@ def run_hook(test_env):
     return _run
 
 
+# ---------------------------------------------------------------- state seed
+
+@pytest.fixture
+def seed(test_env, reaper):
+    """Seed runtime state exactly like the product would — via claude_state in
+    a subprocess running under the test env (so CLAUDE_MIRROR_TMPDIR applies)."""
+    class _Seed:
+        def py(self, code, timeout=15):
+            p = subprocess.run([sys.executable, "-c", code], env=dict(test_env),
+                               cwd=REPO, capture_output=True, text=True,
+                               timeout=timeout)
+            assert p.returncode == 0, "seed code failed:\n%s\n%s" % (code, p.stderr)
+            return p.stdout
+
+        def live_row(self, log, kind, pid, key=None, idx=0):
+            """A live slot row — the tab tracker's liveness signal."""
+            self.py(
+                "import claude_state as S\n"
+                "c = S.connect(%r)\n"
+                "c.execute(\"INSERT OR REPLACE INTO live(kind,key,pid,idx,start_ts)\"\n"
+                "          \" VALUES(?,?,?,?,0)\", (%r, %r, %d, %d))\n"
+                "c.commit()" % (log, kind, key or (kind + ".seed"), int(pid), idx))
+
+        def live_pid(self):
+            """A genuinely-alive pid to own a live row (reaped at teardown)."""
+            p = subprocess.Popen(["sleep", "300"], start_new_session=True)
+            reaper.append(p)
+            return p.pid
+
+        def dead_pid(self):
+            p = subprocess.Popen(["true"])
+            p.wait()
+            return p.pid
+    return _Seed()
+
+
 # -------------------------------------------------------------------- reaper
 
 @pytest.fixture(autouse=True)
@@ -333,6 +369,16 @@ def reaper(test_env):
             conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
             pids.update(r[0] for r in
                         conn.execute("SELECT child_pid FROM spawns").fetchall())
+            conn.close()
+        except sqlite3.Error:
+            pass
+    # tab-status watchers register in the tab DB, not the audit spawns table
+    tab_db = os.path.join(test_env["CLAUDE_MIRROR_TMPDIR"], "claude-kitty-tab.db")
+    if os.path.exists(tab_db):
+        try:
+            conn = sqlite3.connect("file:%s?mode=ro" % tab_db, uri=True, timeout=5)
+            pids.update(r[0] for r in
+                        conn.execute("SELECT pid FROM watchers").fetchall())
             conn.close()
         except sqlite3.Error:
             pass
