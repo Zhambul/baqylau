@@ -567,9 +567,9 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     ```
     ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
     ✉ 5 msgs · 1● unread · 2◐ stale · 1◉ read
-    ▪ 45 cmds (5✗) · 56 files · +791 -29 · ⏱ 68m24s · ≈ $1.20
+    ▪ 45 cmds (5✗) · +791 -29 · ⏱ 68m24s · ≈ $1.20
     Σ 56M total · 428k in · 197k out · 55M cache · 410k write
-      Read 34 · Edit 18 · Write 4
+      56 files · Read 34 · Edit 18 · Write 4
     ```
 
     The **`⬡` session-id row** is always shown (parsed from the mirror-log filename),
@@ -616,10 +616,14 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     auto-closing its window (`claude-split.py close` is the safety net). The
     structured data comes from `claude_ops.scoreboard_parts()`. The tools row
     **excludes Bash** — its count is already the `cmds` figure (same bump; listing it
-    again would just duplicate the head). `files` counts **unique files** (touched
-    paths are deduped in the sidecar's `file_set`; re-editing the same file doesn't
-    inflate it) while the tools row still counts operations — so `Edit 18` against
-    `5 files` reads as 18 edits across 5 distinct files. The file counters are
+    again would just duplicate the head). The unique-`files` count **leads that same
+    row** (relocated off the `▪` summary so every file/tool figure sits together, and
+    kept when the row must drop segments — the tool tallies pop from the tail first).
+    `files` counts **unique files** (touched paths are deduped in the state DB's
+    `files` table; re-editing the same file doesn't inflate it) while the tool counts
+    are operations — so `Edit 18` against `5 files` reads as 18 edits across 5 distinct
+    files (and `Read 90` against `87 files` is the same file read more than once, not a
+    miscount). The file counters are
     **team-wide**: the main session's own file ops feed them via `claude-file-fmt.py`,
     and every **subagent/teammate** file op feeds them too — `claude-substream.py`'s
     `render_file` bumps the same `files`/`added`/`removed` (and tools) counters as it

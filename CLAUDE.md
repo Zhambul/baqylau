@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 A kitty-terminal integration for Claude Code, built entirely out of Claude Code **hooks** plus detached background processes. Three user-facing features:
 
 1. **Tab colors** (`claude-tab-status.py`) — the kitty tab color reflects the session state (grey idle · magenta busy · blue running/awaiting · red asking-you · green your-turn) via `kitten @ set-tab-color` over the socket in `$KITTY_LISTEN_ON`.
-2. **Command mirror pane** (`claude-split.py` + `claude-mirror.py`) — a right-side vertical split showing every command, file op, subagent, teammate, monitor, and codex run as colored streaming blocks, plus a 5-row scoreboard window (`claude-scorebar.py`) underneath (session id · ✉ message census · ▪ summary · Σ token breakdown · tools).
+2. **Command mirror pane** (`claude-split.py` + `claude-mirror.py`) — a right-side vertical split showing every command, file op, subagent, teammate, monitor, and codex run as colored streaming blocks, plus a 5-row scoreboard window (`claude-scorebar.py`) underneath (session id · ✉ message census · ▪ summary · Σ token breakdown · files + tools).
 3. **Audit trail** (`claude_audit.py`) — always-on SQLite recording of every hook event, tab transition, slot claim, stream lifecycle, paint op, and swallowed exception, at `~/.claude/kitty-audit/audit.db`.
 
 There is no build system, package manifest, or test suite. Scripts are invoked directly by hooks wired in `~/.claude/settings.json` (the hook table is in README.md § Wiring — the settings file itself is *not* in this repo). Python scripts target the system `python3`; only `pygments` is an (optional, probed-for) dependency.

@@ -592,10 +592,12 @@ def kfmt(n):
 def scoreboard_parts(st, now):
     """Structured scoreboard data from a stats dict (as returned by bump()); `now` is
     epoch secs. Returns (parts, tools): parts is [(kind, text), …] in display order —
-    kinds: cmds / fail / files / add / rem / time / cost (cost goes last so a
+    kinds: cmds / fail / add / rem / time / cost (cost goes last so a
     narrow pane drops it first) — and tools is the top-5
     [(name, count), …] EXCLUDING Bash, whose count is already the cmds figure (same
-    bump — listing it again would just duplicate the head). The renderer
+    bump — listing it again would just duplicate the head). The unique-`files` count
+    lives on the tools row now (rendered by claude-scorebar.py alongside the
+    Read/Edit/Write tallies), not on this ▪ row. The renderer
     (claude-scorebar.py) owns the styling; kinds exist so it can colour failures
     red, added lines green, etc. Token counts live on the separate Σ row
     (token_parts) — the 'tokens' counter still backs the cost figure below and the
@@ -607,9 +609,6 @@ def scoreboard_parts(st, now):
         failed = int(st.get("failed") or 0)
         if failed:
             parts.append(("fail", f"({failed}✗)"))
-    files = int(st.get("files") or 0)
-    if files:
-        parts.append(("files", f"{files} file" + ("s" if files != 1 else "")))
     add, rem = int(st.get("added") or 0), int(st.get("removed") or 0)
     if add:
         parts.append(("add", f"+{add}"))
