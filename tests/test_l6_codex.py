@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import pytest
 
 import oracle
+import payloads as P
 from conftest import REPO, wait_until
 
 
@@ -45,11 +46,13 @@ def codex(test_env, session, seed, reaper):
                                      slug_for(self.s.cwd), "jobs")
             os.makedirs(self.jobs, exist_ok=True)
 
-        def start_watcher(self):
+        def start_watcher(self, host_pid=None):
+            argv = [sys.executable, os.path.join(REPO, "claude-codex-watch.py"),
+                    self.s.log, self.s.cwd, self.s.sid]
+            if host_pid is not None:          # 4th arg -> STANDALONE host manager
+                argv.append(str(host_pid))
             p = subprocess.Popen(
-                [sys.executable, os.path.join(REPO, "claude-codex-watch.py"),
-                 self.s.log, self.s.cwd, self.s.sid],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, env=dict(test_env),
                 start_new_session=True)
             reaper.append(p)
@@ -78,8 +81,8 @@ def codex(test_env, session, seed, reaper):
                 for b in body:
                     f.write(b + "\n")
 
-        def add_rollout(self, originator="codex_exec", cwd=None, events=()):
-            u = str(uuid.uuid4())
+        def add_rollout(self, originator="codex_exec", cwd=None, events=(), u=None):
+            u = u or str(uuid.uuid4())
             now = datetime.now()
             d = os.path.join(test_env["HOME"], ".codex", "sessions",
                              "%04d" % now.year, "%02d" % now.month,
@@ -231,3 +234,103 @@ def test_rollout_deepening_files_tokens_search_model(test_env, codex):
     os.replace(codex.s.state_db, codex.s.state_db + ".keep")
     wait_until(lambda: w.poll() is not None, desc="watcher exits after park")
     oracle.assert_clean(test_env, codex.s.sid)
+
+
+# ---- standalone codex: its own SessionStart hook hosts the mirror -----------
+# (no Claude Code session — plugins/codex/session.py + watch.py standalone mode)
+
+def test_standalone_watcher_streams_own_tui_rollout(test_env, codex, reaper):
+    """A STANDALONE watcher (host pid passed) streams THIS codex session's own
+    rollout — matched by uuid == session id — and adopts it even though the
+    originator is codex-tui (the human-driven TUI IS this session), with none of
+    the companion grace the secondary-source path imposes on raw runs."""
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
+        {"type": "event_msg", "payload": {"type": "user_message",
+                                          "message": "standalone hello"}}])
+    wait_until(lambda: "standalone hello" in codex.s.ops_text(),
+               desc="standalone codex streams its own codex-tui rollout")
+    host.terminate()
+
+
+def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
+    """Standalone pins to its OWN session id: a different codex run in the same
+    repo (a stray rollout with another uuid) is NOT adopted — each standalone tab
+    shows exactly its own session, no cross-tab bleed."""
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    codex.start_watcher(host_pid=host.pid)
+    codex.add_rollout(originator="codex_exec", events=[   # random uuid != our sid
+        {"type": "event_msg", "payload": {"type": "user_message",
+                                          "message": "not mine"}}])
+    codex.add_rollout(originator="codex-tui", u=codex.s.sid, events=[
+        {"type": "event_msg", "payload": {"type": "user_message",
+                                          "message": "mine"}}])
+    wait_until(lambda: "mine" in codex.s.ops_text(), desc="own rollout streamed")
+    assert "not mine" not in codex.s.ops_text(), \
+        "a foreign codex run leaked into a standalone session's mirror"
+    host.terminate()
+
+
+def test_standalone_teardown_parks_db_on_host_exit(test_env, codex, reaper):
+    """Codex fires no SessionEnd hook, so the standalone watcher owns teardown:
+    when the codex host pid dies (here: killed), it parks the state DB (-> *.keep,
+    so a codex `resume` replays) and exits — the SessionEnd surrogate."""
+    host = subprocess.Popen(["sleep", "60"])
+    reaper.append(host)
+    w = codex.start_watcher(host_pid=host.pid)
+    wait_until(lambda: any(r[0] == "codex-watcher"
+                           for r in oracle.streams(test_env, codex.s.sid)),
+               desc="standalone watcher registered")
+    host.terminate()
+    host.wait()
+    wait_until(lambda: os.path.exists(codex.s.state_db + ".keep"),
+               desc="state DB parked when codex host exits")
+    assert not os.path.exists(codex.s.state_db)
+    wait_until(lambda: w.poll() is not None, desc="watcher exits after teardown")
+    pane = [r for r in oracle.q(
+        test_env, "SELECT action, ok, detail FROM pane_events WHERE session_id=?",
+        (codex.s.sid,))]
+    assert any(a == "close" and "standalone" in (d or "")
+               for a, _ok, d in pane), "teardown must audit the pane close"
+
+
+def test_standalone_session_handler_opens_mirror(run_hook, test_env, session,
+                                                 fake_kitten, reaper):
+    """claude-codex-session.py — codex's native SessionStart hook — stands up the
+    mirror for a standalone codex (no host mirror in the tab) and records
+    standalone-open. Its spawned watcher is reaped via the audit spawns table."""
+    s = session.make()
+    run_hook("claude-codex-session.py", P.session_start(s))
+    assert any("claude-mirror.py" in " ".join(map(str, a))
+               for a in fake_kitten.calls("launch")), "no mirror pane launched"
+    assert os.path.exists(s.state_db), "state DB not created by the codex host"
+    assert any("standalone-open" in d
+               for d in oracle.decisions(test_env, s.sid, handler="codex-session"))
+    os.replace(s.state_db, s.state_db + ".keep")   # signal the spawned watcher to exit
+
+
+def test_standalone_session_handler_nested_skips(run_hook, test_env, session,
+                                                 fake_kitten, reaper):
+    """Codex running as a Claude SUBAGENT inherits Claude's pane, so its
+    SessionStart hook fires too — but the tab already carries Claude's live
+    claude_mirror, whose watcher already streams the run. The handler must detect
+    the nested host and open NO second mirror."""
+    s = session.make()
+    host = session.make()                          # the hosting Claude session
+    open(host.state_db, "w").close()               # its mirror DB is live
+    fake_kitten.set_ls([{"id": 1, "is_focused": True, "tabs": [
+        {"id": 1, "is_focused": True, "windows": [
+            {"id": int(fake_kitten.window_id), "is_focused": True,
+             "user_vars": {"claude_session": "claude-host"}},
+            {"id": 777, "user_vars": {"claude_mirror": host.sid}}]}]}])
+    run_hook("claude-codex-session.py", P.session_start(s))
+    assert not os.path.exists(s.state_db), \
+        "nested codex must not stand up its own state DB"
+    assert not any("claude-mirror.py" in " ".join(map(str, a))
+                   for a in fake_kitten.calls("launch")), \
+        "nested codex must not open a second mirror"
+    assert any("nested-skip" in d
+               for d in oracle.decisions(test_env, s.sid, handler="codex-session"))

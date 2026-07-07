@@ -192,9 +192,13 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
 `render.py` (ANSI rendering — was `claude_render.py`), `audit.py` (the audit
 trail — was `claude_audit.py`), `ops.py` (paint ops, `emit`, the scoreboard
 counters/parts, the semantic colour table — the tool-agnostic half of the old
-`claude_ops.py`), and `tabs.py` (the tab-state vocabulary: state constants,
-the `COLORS` hex table every frontend paints from, and the global
-window-keyed tab DB + watcher pid locks).
+`claude_ops.py`), `hostpane.py` (the tool-AGNOSTIC host mirror lifecycle —
+open/close the mirror pane + scoreboard bar, create/restore/park the state DB;
+shared by BOTH hosts, Claude Code's `split.py` and standalone codex's
+`session.py`. Frontend-INJECTED: core imports no frontend, so every terminal-
+touching function takes the caller's `fe` as its first arg), and `tabs.py`
+(the tab-state vocabulary: state constants, the `COLORS` hex table every
+frontend paints from, and the global window-keyed tab DB + watcher pid locks).
 
 `plugins/claude_code/` is the HOST-tool adapter — everything that reads
 Claude Code's own signals: `hookkit.py` (the hook-handler harness, was
@@ -208,7 +212,8 @@ parsing, the `PRICES` table, `cost_usd`, the `usage_fold` message-id dedup,
 `file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the two
 streamers (`stream.py`, `substream.py`), the tab dispatch (`tabstatus.py` —
 maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
-and the pane/session lifecycle (`split.py`). Each repo-root `claude-*.py`
+and the pane/session lifecycle (`split.py` — now a thin caller into
+`core/hostpane.py`, which it shares with the codex host). Each repo-root `claude-*.py`
 entry is now a ~8-line shim importing its plugin module and calling
 `entry()`; `claude-mirror.py` and `claude-scorebar.py` keep their bodies at
 the root (they are assembly-layer renderers, allowed to import both core and
@@ -216,18 +221,23 @@ plugins). `claude_ops.py` remains as a compat AGGREGATOR (a namespace copy
 re-exporting all three homes — unlike the other shims there is no single
 module to alias to).
 
-`plugins/codex/` is a SECONDARY-source adapter: `launch.py` (the detach-fast
-launcher), `watch.py` (the one-per-session discovery watcher), `stream.py`
-(one tailer per codex run) — moved bodies of the three `claude-codex-*.py`
-entries, which remain as shims. `plugins/__init__.py` is the registry:
-`all_plugins()` (host first), `on_session_start(log, cwd, sid)` (SessionStart
-fan-out — how codex attaches its watcher; a plugin failure is audited and
-never blocks the host's SessionStart), and `census(log)` (the scoreboard's
-✉-row fan-out). **Adding support for another agent tool** = a new
-`plugins/<tool>/` directory implementing whichever hooks it needs
-(`on_session_start` for a watcher-driven source like codex; its own entry
-scripts + hook wiring for a hook-driven host like Claude Code) + one line in
-`all_plugins()` — core and the frontends don't change.
+`plugins/codex/` is a DUAL-role adapter — a secondary source inside a Claude
+session AND a first-class HOST on its own: `launch.py` (the detach-fast
+launcher), `watch.py` (the discovery watcher — in a Claude host it streams
+every repo codex run; given a `HOST_PID` it becomes a standalone session
+manager, streaming just this codex session's own rollout and owning teardown),
+`stream.py` (one tailer per codex run), and `session.py` (the standalone-host
+SessionStart handler — see *Codex streams › standalone* below). The three
+`claude-codex-*.py` entries plus `claude-codex-session.py` remain as shims.
+`plugins/__init__.py` is the registry: `all_plugins()` (host first),
+`on_session_start(log, cwd, sid)` (SessionStart fan-out — how codex attaches
+its watcher to a Claude host; a plugin failure is audited and never blocks the
+host's SessionStart), and `census(log)` (the scoreboard's ✉-row fan-out).
+**Adding support for another agent tool** = a new `plugins/<tool>/` directory
+implementing whichever hooks it needs (`on_session_start` for a secondary
+source; its own entry scripts + hook wiring for a hook-driven host — Claude
+Code and now codex are both hosts, both driving the shared `core/hostpane.py`
+lifecycle) + one line in `all_plugins()` — core and the frontends don't change.
 
 `frontends/` is the terminal layer. `frontends/base.py` defines the
 `Frontend` interface — tab colour (`set_tab_color`/`clear_tab_color`), window
@@ -303,6 +313,30 @@ orphan all three.
   ```json
   "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }
   ```
+
+- **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
+  (codex CLI ≥ 0.142). Like Claude's hook table, this wiring lives outside the
+  repo. Enable codex's hook system and point its `SessionStart` at the entry:
+  ```toml
+  # ~/.codex/config.toml
+  [features]
+  hooks = true          # canonical key (deprecated alias: codex_hooks)
+  ```
+  ```json
+  // ~/.codex/hooks.json  (auto-loaded next to config.toml)
+  { "hooks": { "SessionStart": [ {
+      "matcher": "startup|resume|clear",
+      "hooks": [ { "type": "command",
+        "command": "/ABS/PATH/kitty/claude-codex-session.py",
+        "statusMessage": "kitty mirror" } ] } ] } }
+  ```
+  Codex hooks are Claude-compatible (stdin JSON: `session_id`/`cwd`/`source`/…),
+  so `claude-codex-session.py` reads the payload exactly as a Claude hook does.
+  **One manual trust step:** codex will not run a non-managed hook until it is
+  trusted — on the next `codex` launch, run `/hooks` in the TUI and trust it (or
+  pass `--dangerously-bypass-hook-trust`); editing the hook re-triggers review
+  (trust is keyed to the hook's hash). Codex has **no SessionEnd hook** — teardown
+  rides the codex-process liveness signal instead (see *Codex streams › standalone*).
 
 ### Interpreter: skip the pyenv shim (`retarget-python.py`)
 
@@ -1059,6 +1093,42 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     that launched it — the deliberate trade for a global, zero-per-launcher design. (Two
     Claude sessions in the same repo both show a source-B run, the same per-project
     caveat as background-job detection.)
+  - **Standalone codex — codex as its OWN host (no Claude session).** Everything
+    above renders codex *into a hosting Claude session's* mirror. When you run
+    `codex` on its own in a kitty tab there is no Claude SessionStart, so nothing
+    used to stand up a pane. Codex now hosts its own mirror via its **native hook
+    system** (CLI ≥ 0.142, `[features] hooks = true` + `~/.codex/hooks.json` — the
+    same Claude-compatible stdin-JSON hooks, see *Wiring*):
+    - **`SessionStart` → `claude-codex-session.py`** (`plugins/codex/session.py`).
+      The payload (`session_id`/`cwd`/`source`, drop-in compatible with Claude's)
+      drives the SAME `core/hostpane.py` lifecycle Claude's `split.py` does: create/
+      restore the state DB, open the mirror + scoreboard, then detach this session's
+      watcher in **standalone mode**. `source:"resume"` restores the parked `*.keep`
+      DB, so a `codex resume` replays its mirror history exactly like a Claude resume.
+    - **Standalone watcher** (`watch.py` with a `HOST_PID` argv). It streams
+      *exactly this session's own rollout* — the rollout filename's `<uuid>` **is**
+      the `session_id`, so it matches `rollout-*-<sid>.jsonl` precisely and **adopts
+      it even though the originator is `codex-tui`** (the human-driven TUI IS this
+      session — the opposite of the secondary-source rule, which drops `codex-tui`
+      as belonging to no Claude session). Pinning to the session id means two
+      standalone codex tabs in one repo never cross-stream.
+    - **Teardown without a SessionEnd hook.** Codex fires no session-end event (only
+      `Stop`, per-turn) — the same class as "Claude fires nothing on cancel", so the
+      same doctrine applies: teardown rides a **liveness signal**. `session.py`
+      resolves the codex process pid (ppid walk) and hands it to the watcher, which
+      parks the DB + closes the panes when that pid dies — even on a hard Ctrl-C
+      (which fires no hook at all). This is *more* robust than the Claude path: the
+      pid is always a truthful end-of-session signal.
+    - **Nested vs standalone.** Codex ALSO runs as a Claude subagent (`codex exec`),
+      inheriting Claude's pane — so its `SessionStart` hook fires there too. But that
+      Claude session's watcher already streams the run (source B, `codex_exec`
+      originator). So `session.py` detects it is nested — the tab already carries a
+      live `claude_mirror` (`hostpane.tab_host_sid`) — and does **nothing**: no
+      second pane, no double stream. Only a truly standalone codex opens its own.
+      *Why not a shell wrapper around `codex`:* rejected — it can't distinguish
+      nested from standalone, needs a per-user rc edit, and misses codex launched
+      any other way. The native hook fires for every entry point and carries the
+      session identity the wrapper lacked.
 - **`claude-mirror.py LOG`** — the renderer — runs inside the pane (launched
   directly by `claude-split.py`, replacing the old `tail -F`) on that session's
   log KEY (the key is the historical `/tmp/claude-mirror-<sid>.log` path, from

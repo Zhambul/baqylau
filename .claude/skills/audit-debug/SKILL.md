@@ -21,10 +21,10 @@ the bug **from evidence, not guesswork**.
 | table | one row per | key columns |
 |---|---|---|
 | `sessions` | Claude session | cwd, transcript_path, mirror_log, kitty_window_id, started_at/ended_at, end_reason, env (JSON of CLAUDE_MIRROR_*/KITTY_* seen at start). A SessionEnd that couldn't reach the DB spools a `session_end` pseudo-row (like `stream_end`), ingested later — a session still "(open)" long after it visibly ended now means the end never fired at all, not a locked DB |
-| `hook_events` | hook invocation | hook, tool_name, agent_id ('' = main session), handler (script), **decision** (what the handler chose to do), **payload** (full hook stdin JSON, verbatim). ALL 30 hook events are recorded via a universal async subscriber (handler = 'subscriber', empty decision) — incl. PermissionRequest/Denied, PostToolBatch, MessageDisplay, TeammateIdle, Pre/PostCompact, ConfigChange, CwdChanged, FileChanged, Worktree\*, Elicitation\*, Setup, UserPromptExpansion, InstructionsLoaded — on top of the mirror handlers' own decision-carrying rows for the events they process. So "did event X even fire?" is always answerable from the subscriber rows, and a handler row can be cross-checked against the subscriber's independent record. |
+| `hook_events` | hook invocation | hook, tool_name, agent_id ('' = main session), handler (script), **decision** (what the handler chose to do), **payload** (full hook stdin JSON, verbatim). ALL 30 hook events are recorded via a universal async subscriber (handler = 'subscriber', empty decision) — incl. PermissionRequest/Denied, PostToolBatch, MessageDisplay, TeammateIdle, Pre/PostCompact, ConfigChange, CwdChanged, FileChanged, Worktree\*, Elicitation\*, Setup, UserPromptExpansion, InstructionsLoaded — on top of the mirror handlers' own decision-carrying rows for the events they process. So "did event X even fire?" is always answerable from the subscriber rows, and a handler row can be cross-checked against the subscriber's independent record. Since 2026-07-07 a `codex-session` handler also appears — the STANDALONE codex host's own SessionStart hook (`claude-codex-session.py`), the one `hook_events` row keyed to a *codex* session id rather than a Claude one; decisions: `standalone-open (<fate>, host_pid=N)`, `nested-skip (host mirror <sid> present)` (codex ran as a Claude subagent — that session's watcher already streams it), `no session_id`, `no usable frontend`. |
 | `tab_transitions` | tab-colour decision | dispatch (raw arg: pretool/stop/bg-recheck/bg-watch/notify/…), prev_state → new_state, applied (0 = skipped/bailed **or the kitten @ call failed** — reason then carries "kitten @ failed rc=N"), **reason**. Literal-state dispatches (SessionStart `idle`, SessionEnd `clear`) are sid-attributed since 2026-07; in older sessions those rows have `session_id=''`, so a per-sid query missed the final clear |
 | `slots` | palette/liveness-slot event (rows of the session state DB's `live` table — were marker files) | kind (bg/monitor/fg/sub), slot_n, agent_id, owner_pid, action (claim/claim-id/**claim-pid**/steal-stale/claim-denied/release/release-id/**release-pid**/set-owner), marker_path (now an opaque `<log>::live:<kind>.<key>` token). To see the CURRENT slot state: `sqlite3 /tmp/claude-mirror-<sid>.log.state.db "SELECT * FROM live"` |
-| `streams` | detached tailer/streamer/watcher | kind (fg/bg/monitor/subagent/teammate/codex/codex-watcher/**bg-watch/interrupt-watch**), agent_id/task_id, src_path, pid, started_at/ended_at, **end_reason** (writer-gone/sentinel/stop-sentinel/stoppedByUser/converted-ctrl-b/backstop-timeout/crash/state-moved-on/cleared-to-green/killed-or-crashed/state-db-parked/…), lines_emitted. An open row from a dead pid = the watcher/tailer died — for bg-watch that IS the stuck-blue bug |
+| `streams` | detached tailer/streamer/watcher | kind (fg/bg/monitor/subagent/teammate/codex/codex-watcher/**bg-watch/interrupt-watch**), agent_id/task_id, src_path, pid, started_at/ended_at, **end_reason** (writer-gone/sentinel/stop-sentinel/stoppedByUser/converted-ctrl-b/backstop-timeout/crash/state-moved-on/cleared-to-green/killed-or-crashed/state-db-parked/…), lines_emitted. An open row from a dead pid = the watcher/tailer died — for bg-watch that IS the stuck-blue bug. A `codex-watcher` whose `src_path` starts `standalone:` is a STANDALONE codex host manager (spawned with a `HOST_PID`): it streams only its own session's rollout and owns teardown when the codex process dies (the codex analogue of SessionEnd — see the standalone shape below) |
 | `ops` | paint op written to the mirror log | producer (script), op (the JSON paint op — full pane reconstruction, survives SessionEnd) |
 | `errors` | swallowed exception | script, func, **traceback** (full), context (JSON of args in hand) |
 | `spawns` | detached process launch | parent_script, child_pid, argv, purpose |
@@ -185,6 +185,21 @@ New always-audited swallow sites (previously silent — their absence used to ma
   deliberately show no cost). Codex file edits (`patch_apply_end`) bump
   files/±/Edit/Write as plain `bump` rows — file deltas, exempt from the
   unattributed-bump anomaly, same as substream file ops.
+- **Standalone codex: mirror never appeared / never closed** — a `codex` run on
+  its OWN (no Claude session) is hosted by codex's native SessionStart hook
+  (`claude-codex-session.py`). Triage in order: (1) **did the hook fire?** — a
+  `hook_events` `codex-session` row keyed to the codex session id. Absent = the
+  codex-side wiring is off (`~/.codex/config.toml` `[features] hooks`, `~/.codex/
+  hooks.json`, or the hook was never trusted via `/hooks` — codex silently skips
+  untrusted hooks). (2) **decision** — `no usable frontend` (not in kitty / no
+  remote control), `nested-skip …` (correct when codex ran under Claude — that
+  session's watcher shows it), or `standalone-open (<fate>, host_pid=N)` (opened).
+  (3) **never closed** — the standalone `codex-watcher` (`src_path` `standalone:…`)
+  tears down when `host_pid` dies; an open `streams` row for it with the codex
+  process long gone = the pid-liveness teardown didn't fire (the DB never got
+  parked → the scoreboard bar also never exited). A `pane_events` `close` row with
+  detail `standalone codex host exited` + a `keep-history` state row (content
+  `codex host pid gone`) is the healthy teardown trail; their absence pinpoints it.
 - **Command never appeared in the mirror** — `hook_events` decision column: was it
   "ignored: a live fg block is already in flight" (stale `fg-live` state record), "ignored:
   agent_id", or did the hook never fire at all?

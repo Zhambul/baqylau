@@ -1,6 +1,15 @@
-# plugins/codex/watch.py — argv: MIRROR_LOG CWD [SESSION_ID]
+# plugins/codex/watch.py — argv: MIRROR_LOG CWD [SESSION_ID] [HOST_PID]
 # Entry point: claude-codex-watch.py (a thin shim — the entry FILENAME is the
 # audit vocabulary and what claude-codex-launch.py spawns).
+#
+# TWO roles, selected by whether a HOST_PID (argv[4]) is passed:
+#   secondary source (no HOST_PID) — ONE per Claude Code session; streams EVERY
+#     codex run in the repo into that Claude session's mirror (sources A + B below).
+#   standalone host manager (HOST_PID set) — spawned by plugins/codex/session.py
+#     for a codex running on its OWN (no Claude host). Streams exactly this codex
+#     session's rollout (uuid == SID) and, because codex has no SessionEnd hook,
+#     owns teardown: parks the DB + closes the panes when the codex host pid dies
+#     (see standalone_scan / teardown). The rest of this file is the secondary role.
 #
 # ONE per Claude session (launched DETACHED by claude-codex-launch.py at SessionStart
 # — see that file for why it must be Popen(start_new_session=True), never a bash `&`).
@@ -48,6 +57,15 @@ STREAM = os.path.join(REPO, "claude-codex-stream.py")
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 CWD = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
 SID = sys.argv[3] if len(sys.argv) > 3 else ""
+# argv[4] = the codex HOST pid, present ONLY when this watcher is the session
+# manager for a STANDALONE codex (plugins/codex/session.py). Its presence flips
+# the watcher into standalone mode: stream exactly THIS session's own rollout
+# (uuid == SID, adopting the codex-tui originator we otherwise skip) and, since
+# codex has no SessionEnd hook, own teardown — park the DB + close the panes when
+# the codex host pid dies. Empty/"0" = the classic secondary-source mode inside a
+# Claude Code host (backward-compatible 3-arg launch).
+HOST_PID = sys.argv[4] if len(sys.argv) > 4 else ""
+STANDALONE = bool(HOST_PID) and HOST_PID != "0"
 
 POLL = 0.4
 SKEW = 5.0          # accept a run created up to this many seconds before we started
@@ -237,6 +255,49 @@ def acquire_lock():
     return got in ("claim", "steal-stale")
 
 
+# --- standalone mode: this session's own codex run + its teardown ------------
+
+def standalone_scan(seen):
+    """STANDALONE poll: stream exactly this codex session's own rollout. We know
+    our session_id, and the rollout filename's uuid IS that session_id, so we
+    target `rollout-*-<SID>.jsonl` precisely — no cwd heuristics, no claim races,
+    and (unlike the secondary-source path) we adopt it even though its originator
+    is `codex-tui`, because here that human-driven TUI IS our session."""
+    if SID in seen:
+        return
+    for rf in rollout_files():
+        m = RO_UUID.search(os.path.basename(rf))
+        if not m or m.group(1) != SID:
+            continue
+        cw, _origin = rollout_meta(rf)
+        if not cw:
+            return                    # session_meta not written yet — retry next poll
+        seen.add(SID)
+        spawn(rf, "-", "cli")         # our standalone codex session
+        return
+
+
+def teardown():
+    """STANDALONE SessionEnd surrogate. Codex fires no SessionEnd hook, so when
+    the codex host pid dies (exit OR a hard Ctrl-C, which fires nothing) this is
+    how the mirror closes: park the state DB (-> *.keep, so a codex `resume`
+    replays history; renaming makes the DB path vanish, which also stops the
+    scoreboard bar) and close the panes. The watcher's cached DB connection means
+    the finally's lock_release writes to the parked inode, never recreating the
+    file."""
+    from core import hostpane as HP
+    action = HP.park_db(SID, LOG)
+    A.state_file(LOG, S.db_path(LOG) + ".keep", action, "codex host pid gone")
+    try:
+        import frontends
+        fe = frontends.get(resolve=True)
+        if fe.usable():
+            HP.close_mirror(fe, SID)
+    except Exception:
+        A.error(LOG, "codex standalone teardown (close panes)")
+    A.pane(SID, "close", 1, "standalone codex host exited")
+
+
 def main():
     if not LOG:
         return
@@ -246,7 +307,8 @@ def main():
                 end_reason="duplicate (pid lock held)")
         return
     global _WATCH_ID
-    _WATCH_ID = A.stream_start(LOG, "codex-watcher", src_path=SLUGDIR)
+    _WATCH_ID = A.stream_start(LOG, "codex-watcher",
+                               src_path=("standalone:" if STANDALONE else "") + SLUGDIR)
     start = time.time()
     seen = set()             # companion job ids + rollout uuids already handled
     pending_ro = {}          # rollout uuid -> first-seen wall time (grace before deciding)
@@ -254,6 +316,14 @@ def main():
         # Session-alive signal: the per-session state DB (parked as *.keep at
         # SessionEnd, so the path vanishes — was the mirror log file itself).
         while os.path.exists(S.db_path(LOG)):
+            # --- standalone codex host: own run + pid-liveness teardown -------------
+            if STANDALONE:
+                if not S.pid_alive(HOST_PID):
+                    teardown()
+                    break             # DB parked -> loop condition now false anyway
+                standalone_scan(seen)
+                time.sleep(POLL)
+                continue
             # --- source A: companion jobs (labelled, Claude-session matched) ---------
             for d in jobs_dirs():
                 for jf in glob.glob(os.path.join(d, "*.json")):

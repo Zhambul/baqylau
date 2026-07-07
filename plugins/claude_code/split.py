@@ -45,6 +45,7 @@ import time
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import frontends                          # noqa: E402
 from core import audit as A               # noqa: E402
+from core import hostpane as HP           # noqa: E402  (shared host pane lifecycle)
 from core import paths as P               # noqa: E402
 from plugins.claude_code import hookkit as HK  # noqa: E402  (log_path)
 
@@ -265,88 +266,36 @@ def save_size(sid):
 
 
 # --- pane ops, all scoped to ONE session's mirror (var:claude_mirror=<sid>) ----
-# The mirror pane carries a small companion: the SCOREBOARD BAR (claude-scorebar.py),
-# a small (BAR_ROWS-tall) window hsplit under it (var:claude_scorebar=<sid>). Its own window — not
-# lines pinned inside the mirror — so scrolling the mirror's history can't scroll it
-# away. Opened/closed with the mirror; excluded from the width math above (it shares
-# the mirror's column, so counting its columns would double-count that column).
+# The mirror pane + scoreboard bar lifecycle is tool-AGNOSTIC — a second host
+# (standalone codex) drives the identical machinery — so it lives in core:
+# core.hostpane, frontend-INJECTED (core imports no frontend, so we pass FE/HERE
+# in). These thin wrappers bind THIS host's FE/HERE/BIAS so the call sites below
+# read unchanged. The scoreboard bar (claude-scorebar.py) is a small hsplit under
+# the mirror (var:claude_scorebar=<sid>) — its own window so scrolling the
+# mirror's history can't scroll it away; excluded from the width math above (it
+# shares the mirror's column, so counting its columns would double-count it).
+BAR_ROWS = HP.BAR_ROWS
+
 
 def window_exists(var, sid):
-    return FE.find_window(var, sid) is not None
+    return HP.window_exists(FE, var, sid)
 
 
 def mirror_exists(sid):
-    return window_exists("claude_mirror", sid)
+    return HP.mirror_exists(FE, sid)
 
 
 def close_stale_mirrors(keep):
-    """Close any STALE mirror/scoreboard in the tab whose sid differs from `keep`.
-    A session's id changes on --resume/--continue (and often /clear): SessionStart
-    then re-tags the Claude pane and opens a mirror keyed by the NEW sid, while the
-    OLD-sid mirror lingers in the same tab — tailing a log nothing writes to anymore
-    (frozen) and doubling the pane. One tab holds exactly one Claude session, so a
-    mirror there with a different sid is always stale. Anchored to KITTY_WINDOW_ID
-    (the hook's Claude pane) when present, else the focused tab (keybinding).
-    No-op when there's nothing stale to close."""
-    anchor = FE.current_window()
-    stale = []
-    for osw in FE.ls():
-        for t in osw.get("tabs", []):
-            if anchor:
-                if not any(str(w.get("id")) == anchor for w in t.get("windows", [])):
-                    continue
-            elif not (osw.get("is_focused") and t.get("is_focused")):
-                continue
-            for w in t.get("windows", []):
-                uv = w.get("user_vars", {})
-                sid = uv.get("claude_mirror") or uv.get("claude_scorebar")
-                if sid and sid != keep:
-                    stale.append(w.get("id"))
-            break
-    for wid in stale:
-        FE.close_pane(win_id=wid)
-
-
-# kitty bias is approximate ("you cannot use this method to create windows of fixed
-# sizes"), so after launching the bar, iterate relative resizes until it is exactly
-# BAR_ROWS tall (or kitty's minimum stops shrinking it).
-BAR_ROWS = 5   # ⬡ session id + ✉ census + ▪ summary + Σ token breakdown + tools
-
-
-def bar_delta(sid):
-    """(BAR_ROWS - current bar rows), or None if the bar can't be measured."""
-    w = FE.find_window("claude_scorebar", sid)
-    return BAR_ROWS - int(w.get("lines") or 0) if w else None
-
-
-def size_bar(sid):
-    for _ in range(3):
-        d = bar_delta(sid)
-        if not d:
-            return
-        FE.resize_pane(("claude_scorebar", sid), "vertical", d)
-        time.sleep(0.08)                     # let kitty apply before re-measuring
+    HP.close_stale_mirrors(FE, keep)
 
 
 def open_mirror(sid, log, bias):
-    """Does NOT truncate — the caller decides the log's fate."""
-    if not mirror_exists(sid):
-        # vsplit sizing only works in the splits layout; switch the active tab to it.
-        FE.goto_splits_layout()
-        FE.launch_pane([os.path.join(HERE, "claude-mirror.py"), log],
-                       "vsplit", bias=(bias or BIAS),
-                       var={"claude_mirror": sid}, title="◧ cmd mirror")
-    if not window_exists("claude_scorebar", sid):   # checked separately so a crashed/
-        FE.launch_pane([os.path.join(HERE, "claude-scorebar.py"), log],
-                       "hsplit", bias=5, next_to=("claude_mirror", sid),
-                       var={"claude_scorebar": sid}, title="▪ session")
-        size_bar(sid)                               # closed bar comes back on toggle
+    """Does NOT truncate — the caller decides the state DB's fate."""
+    HP.open_mirror(FE, HERE, sid, log, bias, BIAS)
 
 
 def close_mirror(sid):
-    """The bar rides along with the mirror."""
-    FE.close_pane(var=("claude_scorebar", sid))
-    FE.close_pane(var=("claude_mirror", sid))
+    HP.close_mirror(FE, sid)
 
 
 def tag_window(sid):
@@ -391,40 +340,10 @@ def size_to(pct, sid):
 # --- commands -------------------------------------------------------------------
 
 def decide_log_fate(sid, log):
-    """What happens to this sid's state DB at SessionStart — the session's entire
-    mirror history lives in it ("log" is only the KEY the DB path derives from —
-    no log file exists anymore): the ops table is what the renderer replays, the
-    rest is scoreboard/coordination state. Keyed on file existence, NOT the
-    payload's `source` field, so a resume-after-crash (no SessionEnd, DB still
-    live) is covered too. Returns the fate the caller audits ("mirror came back
-    empty after a resume" is diagnosable as a `fresh-db` row on a source=resume
-    start):
-      restore-history — SessionEnd parked this sid's state DB at *.keep;
-                        --resume/--continue keeps the sid, so move it back and
-                        the renderer replays the whole prior session.
-      reuse-live-db   — the DB already exists: compact fires SessionStart
-                        mid-session, and a crash skips SessionEnd. Leave it alone.
-      fresh-db        — brand-new session (the DB is created lazily by the first
-                        writer). With no sid (the shared cwd-slug fallback) any
-                        leftover DB may be another session's — remove it."""
-    db = log + ".state.db"
-    if sid and os.path.isfile(db + ".keep"):
-        for f in (db, db + "-wal", db + "-shm"):
-            if os.path.isfile(f + ".keep"):
-                try:
-                    os.replace(f + ".keep", f)
-                except OSError:
-                    pass
-        return "restore-history"
-    if os.path.isfile(db):
-        if sid:
-            return "reuse-live-db"
-        for f in (db, db + "-wal", db + "-shm"):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
-    return "fresh-db"
+    """Delegates to core.hostpane (shared with the codex host): restore a parked
+    *.keep DB on resume, reuse a live DB (compact / crash-resume), or start
+    fresh. Returns the fate the caller audits."""
+    return HP.decide_log_fate(sid, log)
 
 
 def cmd_open():                              # SessionStart (payload on stdin)
@@ -444,11 +363,7 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # the codex watcher poll — create it (with schema) BEFORE launching them, or
     # on a fresh session they'd start, find no DB, and exit instantly (the old
     # design's `: > "$log"` provided this same guarantee for the log file).
-    try:
-        from core import state as _state
-        _state.connect(log)
-    except Exception:
-        pass
+    HP.ensure_db(log)
     tag_window(sid)
     close_stale_mirrors(sid)   # drop a prior-sid mirror (resume/clear) so it can't double up
     bias = project_bias()
@@ -493,21 +408,9 @@ def cmd_close():                             # SessionEnd (payload on stdin)
     # pruned on every close ("log" itself is a pre-migration leftover: removed).
     if not log:
         return
-    db = log + ".state.db"
-    if sid:
-        for f in (db, db + "-wal", db + "-shm"):
-            if os.path.isfile(f):
-                try:
-                    os.replace(f, f + ".keep")
-                except OSError:
-                    pass
-        audit_state(log, db + ".keep", "keep-history", "parked for resume")
-    else:
-        for f in (db, db + "-wal", db + "-shm"):
-            try:
-                os.remove(f)
-            except OSError:
-                pass
+    action = HP.park_db(sid, log)            # rename->*.keep (resume) or delete
+    if action == "keep-history":
+        audit_state(log, log + ".state.db.keep", "keep-history", "parked for resume")
     for f in (log, log + ".keep"):           # legacy JSONL log, if any
         try:
             os.remove(f)
