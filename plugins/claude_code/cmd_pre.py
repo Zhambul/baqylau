@@ -33,6 +33,64 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 LBL_FG = O.SLATE   # same colour claude-cmd-fmt.py uses for an OK foreground block
 
 
+def sub_fg(d, log):
+    # A SUBAGENT's foreground Bash command. claude-cmd-fmt.py still SKIPS agent_id
+    # events (the substream owns subagent RENDERING), but the substream can only
+    # show a subagent command's output once its tool_result lands in the transcript —
+    # i.e. AFTER it finishes. To stream it live too, apply the same tee-rewrite trick
+    # the main session uses, keyed by tool_use_id: leave a "subfg:<tid>" hand-off with
+    # the tee paths, and claude-substream.py (which HAS the subagent's colour) spawns
+    # the tailer when it reaches this tool_use and suppresses its own output render.
+    # No fg slot is claimed (the tab is already blue via this agent's sub.pid row) and
+    # no header is emitted (the substream emits its own, in the subagent's colour).
+    if os.environ.get("CLAUDE_MIRROR_LIVE_FG_SUB", "1") == "0":
+        return H.ignore(d, "agent_id (CLAUDE_MIRROR_LIVE_FG_SUB=0)")
+    ti = d.get("tool_input") or {}
+    cmd = ti.get("command") or ""
+    tid = d.get("tool_use_id") or ""
+    if not cmd.strip() or ti.get("run_in_background") or not tid:
+        return H.ignore(d, "agent_id (not a live-fg subagent command)")
+
+    redirect = CT.parse_redirect(cmd, d.get("cwd"))
+    stem = f"{log}.subfg.{tid}"
+    done = stem + ".done"
+    wrapped_cmd, own, append = None, False, False
+    if redirect:
+        src, append = redirect                       # tail the command's own redirect target
+    else:
+        src = stem + ".out"
+        try:
+            open(src, "a").close()
+        except Exception:
+            return H.ignore(d, "agent_id (could not create tee file)")
+        own = True
+        q = shlex.quote(src)
+        # The blank line before "}" is load-bearing — see the identical wrap below.
+        wrapped_cmd = "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+
+    rec = {"src": src, "done": done, "own": own, "append": append, "tid": tid}
+    if not S.hand_put(log, "subfg:" + tid, rec):
+        if own:
+            try: os.remove(src)
+            except Exception: pass
+        A.error(log, "write subfg record", {"src": src, "tid": tid})
+        return
+    A.state_file(log, "state:subfg:" + tid, "write", rec)
+    A.hook_event(d, decision="subagent live fg: marker written tid=%s (%s)"
+                 % (tid[:8], "rewrote command (tee)" if wrapped_cmd else "own redirect"))
+
+    if wrapped_cmd:
+        # permissionDecision "allow" is required for updatedInput to take effect (see
+        # the main path below) — so a subagent's rewritten fg command is auto-approved
+        # (deny rules still apply). Gated by CLAUDE_MIRROR_LIVE_FG_SUB above.
+        new_ti = dict(ti); new_ti["command"] = wrapped_cmd
+        print(json.dumps({"hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": new_ti,
+        }}))
+
+
 def main():
     d, log = H.read_payload()
     if d is None:
@@ -40,7 +98,7 @@ def main():
     if os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") == "0":
         return H.ignore(d, "CLAUDE_MIRROR_LIVE_FG=0")   # escape hatch if the rewrite ever misbehaves
     if d.get("agent_id"):
-        return H.ignore(d, "agent_id")
+        return sub_fg(d, log)                           # a subagent's fg command -> live tee (below)
     ti = d.get("tool_input") or {}
     cmd = ti.get("command") or ""
     if not cmd.strip() or ti.get("run_in_background"):

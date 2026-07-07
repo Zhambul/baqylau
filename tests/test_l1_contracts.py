@@ -90,7 +90,6 @@ def test_cmd_pre_own_redirect_skips_rewrite(run_hook, test_env, session):
 
 @pytest.mark.parametrize("payload_kw,reason", [
     (dict(run_in_background=True), "background command"),
-    (dict(agent_id="agent-x"), "agent_id"),
 ])
 def test_cmd_pre_ignores(run_hook, test_env, session, payload_kw, reason):
     s = session.make()
@@ -98,6 +97,31 @@ def test_cmd_pre_ignores(run_hook, test_env, session, payload_kw, reason):
     assert p.stdout.strip() == ""
     assert not s.live("fg")
     assert any(("ignored: " + reason) in d for d in oracle.decisions(test_env, s.sid))
+
+
+def test_cmd_pre_subagent_fg_rewrites(run_hook, test_env, session):
+    # A subagent's foreground command IS now rewritten to tee (so claude-substream.py
+    # can live-tail it) — but cmd-pre leaves the header + tailer to the substream: it
+    # claims NO fg slot and emits NO header, only the tee rewrite + a "subfg:<tid>"
+    # hand-off marker.
+    s = session.make()
+    p = run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo hi", agent_id="agent-x"))
+    hso = json.loads(p.stdout)["hookSpecificOutput"]
+    assert hso["permissionDecision"] == "allow"
+    assert "tee -a" in hso["updatedInput"]["command"]
+    assert not s.live("fg"), "subagent fg must NOT claim the main-session fg slot"
+    assert "▶ foreground" not in s.ops_text(), "substream owns the header, not cmd-pre"
+    assert any("subagent live fg" in d for d in oracle.decisions(test_env, s.sid))
+    assert any(a == "write" and ":subfg:" in path
+               for (path, a, _c) in oracle.state_files(test_env, s.sid))
+
+
+def test_cmd_pre_subagent_fg_optout(run_hook, test_env, session):
+    s = session.make()
+    env = dict(test_env, CLAUDE_MIRROR_LIVE_FG_SUB="0")
+    p = run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo hi", agent_id="agent-x"), env=env)
+    assert p.stdout.strip() == ""
+    assert any("CLAUDE_MIRROR_LIVE_FG_SUB=0" in d for d in oracle.decisions(test_env, s.sid))
 
 
 def test_cmd_pre_escape_hatch(run_hook, test_env, session):

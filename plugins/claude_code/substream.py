@@ -49,6 +49,13 @@ LABEL = DESC if (ATYPE == "general-purpose" and DESC) else ATYPE
 
 SUB_RGB = claude_slots.color(PALETTE, SLOT)
 RST  = R.RST
+# Live-stream this subagent's FOREGROUND commands (tee'd by claude-cmd-pre.py's
+# PreToolUse), the same way its background/monitor jobs already stream. On by
+# default; CLAUDE_MIRROR_LIVE_FG_SUB=0 (or the parent CLAUDE_MIRROR_LIVE_FG=0)
+# opts out, matching claude-cmd-pre.py's gate so the two agree on when a marker exists.
+SUB_FG = (os.environ.get("CLAUDE_MIRROR_LIVE_FG_SUB", "1") != "0"
+          and os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") != "0")
+fg_live = {}          # tool_use_id -> the subfg hand-off rec, while its fg tailer runs
 # The repo root, where the sibling ENTRY scripts live (this module is two
 # package levels below it) — nested tailers/the tab dispatcher are entry files.
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -281,6 +288,56 @@ def spawn_tailer(kind, taskid, cmd=""):
         claude_slots.release(kind, LOG, slot, os.getpid())
 
 
+def take_subfg(tid):
+    # Consume the tee hand-off claude-cmd-pre.py's PreToolUse left for this fg command
+    # (keyed by tool_use_id). That hook fires as the command dispatches — the transcript
+    # tool_use line we're reading can arrive a beat before it, so wait briefly rather
+    # than miss the live tail. Only reached when SUB_FG is on, so a disabled feature
+    # (no marker ever written) never pays this wait.
+    deadline = time.time() + 1.5
+    while True:
+        rec = S.hand_take(LOG, "subfg:" + tid)
+        if rec is not None:
+            A.state_file(LOG, "state:subfg:" + tid, "remove", "consumed by substream")
+            return rec
+        if time.time() >= deadline:
+            return None
+        time.sleep(0.05)
+
+
+def spawn_fg_tailer(tid, rec):
+    # Live-tail a subagent's FOREGROUND command (tee'd by claude-cmd-pre.py) with the
+    # main fg tailer (claude-stream.py KIND=fg), double-guttered in THIS subagent's
+    # colour — the foreground analogue of spawn_tailer's nested bg/monitor jobs. The
+    # fg tailer waits for the outcome hand-off we drop in on_tool_result (keyed by
+    # rec["done"]), or falls back to writer-liveness.
+    streamer = os.path.join(HERE, "claude-stream.py")
+    if not os.path.exists(streamer):
+        return None
+    slot, marker = claude_slots.claim("fg", LOG)
+    outer = ",".join(str(x) for x in SUB_RGB)
+    env = dict(os.environ)
+    env["CLAUDE_STREAM_SRC"] = rec["src"]
+    env["CLAUDE_STREAM_DONE"] = rec["done"]
+    if rec.get("own"):
+        env["CLAUDE_STREAM_OWN"] = "1"
+    if rec.get("append"):
+        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
+    try:
+        proc = subprocess.Popen(
+            [sys.executable, streamer, "fg", "subfg-" + tid, LOG, str(slot), "", outer],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
+        claude_slots.set_owner(marker, proc.pid)
+        A.spawn(LOG, proc.pid, [streamer, "fg", "subfg-" + tid, str(slot)],
+                purpose=f"stream:fg live (subagent {AGENT[:8]} foreground cmd)")
+        return proc
+    except Exception:
+        A.error(LOG, "spawn_fg_tailer", {"tid": tid, "agent": AGENT})
+        claude_slots.release("fg", LOG, slot, os.getpid())
+        return None
+
+
 # --- rendering of transcript blocks --------------------------------------------
 pend = {}                 # tool_use_id -> (kind, cmd)
 pending_msg = None        # latest assistant text, held so the LAST one (the result) can be labelled
@@ -440,7 +497,14 @@ def on_tool_use(b):
             pend[tid] = ("bg", cmd)
         else:
             O.emit(LOG, chip("▶", "foreground", ctx), O.code(cmd))
-            pend[tid] = ("fg", cmd)
+            rec = take_subfg(tid) if (SUB_FG and tid) else None
+            if rec and spawn_fg_tailer(tid, rec):
+                # A live fg tailer now owns this command's OUTPUT + finish chip; we
+                # only hand it the outcome (below) and skip re-rendering the body.
+                fg_live[tid] = rec
+                pend[tid] = ("fg-live", cmd)
+            else:
+                pend[tid] = ("fg", cmd)
     elif name in FILE_LABEL:
         # Defer to the result: absolute line info — a Read's EXTENT
         # (startLine/numLines/totalLines) and an edit's touched hunks (structuredPatch)
@@ -492,6 +556,22 @@ def on_tool_result(b, tur=None):
         return
     if kind in ("agent", "sendmsg"):
         return                                      # already shown / handled elsewhere
+    if kind == "fg-live":
+        # A live fg tailer streamed this command's output and owns its finish chip.
+        # Hand it the real outcome (this is the ONLY place the subagent's transcript
+        # reveals pass/fail) via the "done:" sentinel the tailer polls, and SUPPRESS
+        # our own body render so the block isn't drawn twice. The tailer computes the
+        # duration itself; fallback_body covers the (unexpected) empty-tee case. Still
+        # feed the team-wide command tally, exactly as the plain fg path does below.
+        rec = fg_live.pop(tid, None)
+        err = bool(b.get("is_error"))
+        if rec:
+            body = result_text(b.get("content")).rstrip("\n")
+            fb = R.emphasize(R.unescape(cap(body, 60))) if body else R.DIM + "(no output)" + RST
+            if S.hand_put(LOG, "done:" + rec["done"], {"failed": err, "fallback_body": fb}):
+                A.state_file(LOG, "state:done:" + rec["done"], "write", {"failed": err})
+        O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if err else {}))
+        return
     txt = result_text(b.get("content"))
     if kind in ("bg", "monitor"):
         if kind == "bg":

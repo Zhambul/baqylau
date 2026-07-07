@@ -328,6 +328,10 @@ def main(run):
         if KIND == "fg" and override and override.get("chip"):
             chip_txt = override["chip"]
             chip_rgb = tuple(override.get("color") or SLOT_RGB)
+        elif KIND == "fg" and override and override.get("failed"):
+            # A subagent fg command whose outcome hand-off (claude-substream.py) carries
+            # only pass/fail — no precomputed chip (the tailer owns the duration).
+            chip_txt, chip_rgb = "■ failed · " + dur, O.RED
         else:
             text = {"bg": "background finished", "fg": "foreground finished"}.get(KIND, "monitor ended")
             chip_txt, chip_rgb = "■ " + text + " · " + dur, SLOT_RGB

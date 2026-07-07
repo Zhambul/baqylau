@@ -676,6 +676,26 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     apart from intermediate `✎ message` chatter — then the `■ <type> ended · Ns`
     footer. All in the subagent's colour. (Messages are committed one event late
     so the last one can be tagged `⇠ result`.)
+  - **Live foreground commands (subagents too).** A subagent's foreground Bash
+    command would otherwise only show its output when the `tool_result` lands in
+    the transcript — i.e. *after* it finishes — because `claude-cmd-fmt.py` skips
+    `agent_id` events (above) and the substream renders from the transcript alone.
+    To stream it live like a background job, `claude-cmd-pre.py` applies the **same
+    tee-rewrite** it uses for the main session (`updatedInput`, confirmed to work
+    for a subagent's PreToolUse too), keyed by `tool_use_id`: it leaves a
+    `subfg:<tid>` state-DB hand-off with the tee paths but emits **no header and
+    claims no `fg` slot** (the tab is already blue via this agent's `sub.pid` row).
+    `claude-substream.py`, when it reaches that `tool_use`, consumes the marker
+    (a short bounded wait — the hook can lag the transcript line by a beat) and
+    spawns the ordinary `claude-stream.py fg` tailer **double-guttered in the
+    subagent's colour** (the foreground analogue of its nested bg/monitor jobs),
+    then **suppresses its own output render** so the block isn't drawn twice. At
+    `tool_result` it hands the tailer the outcome via the same `done:<path>`
+    sentinel the main session uses — carrying only pass/fail (`{"failed": …}`),
+    since the tailer owns the duration; a failed command gets a red `■ failed`
+    chip. Gated by `CLAUDE_MIRROR_LIVE_FG_SUB` (default on; `=0` opts out, as does
+    the parent `CLAUDE_MIRROR_LIVE_FG=0`) — and it inherits the auto-approve
+    trade-off above, now extended to subagent commands (deny rules still apply).
   - **Per-turn context fill.** Every assistant turn carries a `message.usage`, so the
     streamer prints a colour-coded `<type> ctx N% · used/max` line once per turn —
     `input + cache_creation + cache_read` tokens over the window (**< 30% green,
