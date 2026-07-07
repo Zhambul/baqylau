@@ -404,6 +404,35 @@ def test_f9b_cancelled_subagent_stops_via_meta(run_hook, test_env, session):
                         allow=("SubagentStart without SubagentStop",))  # the cancel
 
 
+def test_f9d_rejected_subagent_stops_via_parent_result(run_hook, test_env,
+                                                       session):
+    """A REJECTED Task fires no SubagentStop AND leaves meta.json without
+    stoppedByUser — neither f5's stop-sentinel nor f9b's meta signal ever comes.
+    The parent transcript's tool_result for the Task's toolUseId is the recovery
+    signal, so the streamer exits (and releases its tab-blue-holding slot)
+    instead of hanging until the 6h backstop."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    tid = "toolu_" + uuid.uuid4().hex[:12]
+    s.write_meta(agent, toolUseId=tid)          # the parent Task call's id
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, SUB_EVENTS[:3])
+    wait_until(lambda: "scanning the tree now" in s.ops_text(), desc="running")
+    # The user rejected the Task: its result lands in the PARENT transcript,
+    # is_error, with NO SubagentStop and NO stoppedByUser stamp.
+    s.add_line({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tid, "is_error": True,
+         "content": "The user doesn't want to proceed with this tool use."}]}})
+    wait_until(lambda: any("parent-task-resolved" in (r or "")
+                           for r in end_reasons(test_env, s.sid)),
+               desc="substream exits on the parent Task result")
+    wait_until(lambda: not s.live(), desc="slot released")
+    oracle.assert_clean(test_env, s.sid,
+                        allow=("SubagentStart without SubagentStop",))  # the reject
+
+
 def test_f9c_interrupted_reply_flips_green(run_hook, test_env, session,
                                            fake_kitten):
     """A cancelled plain reply leaves only the transcript line — the

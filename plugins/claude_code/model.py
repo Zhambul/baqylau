@@ -222,6 +222,35 @@ def parent_resolved_model(tpath, agent_id):
         return None
 
 
+def parent_tool_result(line, tool_use_id):
+    """Whether this raw PARENT-transcript JSONL line carries the tool_result that
+    resolves `tool_use_id` (the agent's Task/Agent call, from its meta.json
+    `toolUseId`) — and if so, its is_error flag: True == the user REJECTED /
+    cancelled the call ("The user doesn't want to proceed with this tool use").
+    Returns None when the line isn't that result.
+
+    This is the authoritative "the subagent is done" signal for the cases the
+    hooks miss: a rejected or otherwise-abandoned Task fires NO SubagentStop and
+    leaves meta.json WITHOUT `stoppedByUser`, so the substream's usual end signals
+    never come. The parent transcript still records the Task's tool_result the
+    instant the call resolves (completed, rejected, or cancelled) — an EVENT, not
+    an idle timeout, so watching for it recovers the gap without the backstop that
+    false-positived on long thinks."""
+    if not tool_use_id or tool_use_id not in line:
+        return None
+    try:
+        content = (json.loads(line).get("message") or {}).get("content")
+    except Exception:
+        return None
+    if not isinstance(content, list):
+        return None
+    for b in content:
+        if (isinstance(b, dict) and b.get("type") == "tool_result"
+                and b.get("tool_use_id") == tool_use_id):
+            return bool(b.get("is_error"))
+    return None
+
+
 def agent_meta(tpath, agent_id):
     """The agent's meta.json sidecar (present at SubagentStart for teammates; may
     lag a beat for ordinary subagents, so retry briefly). Carries

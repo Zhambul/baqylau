@@ -934,6 +934,27 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
       and exits within its next 0.3s tick, releasing the slot and triggering the
       usual `bg-recheck` handoff to green. The footer reads `■ <type> cancelled ·
       Ns` instead of `ended` in this case.
+    - **Rejecting a Task at the permission prompt** (or otherwise abandoning it
+      mid-run) is a *fourth* end-shape that neither of the above covers: Claude
+      Code fires **no `SubagentStop`** *and* writes **no `stoppedByUser`** stamp
+      (the tool_result reads "The user doesn't want to proceed with this tool
+      use"), so the streamer — and the `sub.pid` `live` row that keeps the tab
+      blue — would hang until the 6h backstop. The recovery signal is the **parent
+      transcript**: the Task/Agent tool_use resolves there into a `tool_result`
+      keyed by the agent's `meta.json` `toolUseId`, the instant the call ends
+      (completed, rejected, or cancelled). The streamer tails the parent transcript
+      from its end (the result lands later) as a fallback poll — checked *below*
+      the sentinel and `stoppedByUser` (so a normal finish still exits on its
+      authoritative signal) and lightly throttled (every ~2s) so a chatty parent
+      isn't re-scanned each tick. It exits `parent-task-resolved` (`… (rejected)`
+      when the result `is_error`), footer `cancelled` for a reject. *Why not an
+      idle timeout:* this is an **event** (the result appearing), not "quiet for N
+      seconds" — the banned `idle-watch` backstop false-positived on long thinks;
+      keying on the parent's own completion record has no such failure mode. The
+      detector is `model.parent_tool_result` (a pure function, sibling to
+      `parent_resolved_model`, which already scans the parent for this agent's Task
+      result). *Cancel-before-first-`SubagentStart`* still has no streamer to
+      recover and is left unhandled, as elsewhere.
     A background agent's `SubagentStop` can fire **more than once** ("may notify
     more than once") — after the first, the streamer has finalised and freed its
     slot, so the duplicate finds no slot and does nothing. (Without that guard a
@@ -1420,7 +1441,7 @@ invisible to the audit, and a mirror-handler row can be cross-checked against th
 subscriber's independent record of the same event.
 | `tab_transitions` | tab-colour decision — dispatch, prev → new, applied *or skipped*, with the **reason** (replaces the old opt-in `CLAUDE_TAB_DEBUG` flat-file logs). "Applied" is **verified against kitty**: the `kitten @` exit code is captured, so a socket call that failed records `applied=0` + a "kitten @ failed rc=N" reason instead of claiming a colour change that never happened |
 | `slots` | palette/liveness-slot event (`live`-table rows) — claim / claim-id / claim-pid / steal-stale / claim-denied / release / release-id / release-pid / set-owner |
-| `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / converted-ctrl-b / backstop-timeout / crash). Includes the **shell watchers** (`bg-watch`, `interrupt-watch`) — a watcher that dies mid-poll leaves an open row the `anomalies` query flags — and the codex watcher's **cross-session claims** (slots, kind `codex-claim`), so "why didn't session A show that codex run" is answerable. A streamer whose end couldn't reach the DB spools it and ingest applies it later, so it never falsely reads as "never ended" |
+| `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / parent-task-resolved / converted-ctrl-b / backstop-timeout / crash). Includes the **shell watchers** (`bg-watch`, `interrupt-watch`) — a watcher that dies mid-poll leaves an open row the `anomalies` query flags — and the codex watcher's **cross-session claims** (slots, kind `codex-claim`), so "why didn't session A show that codex run" is answerable. A streamer whose end couldn't reach the DB spools it and ingest applies it later, so it never falsely reads as "never ended" |
 | `ops` | paint op written to the mirror log — full pane reconstruction, survives SessionEnd |
 | `errors` | **swallowed exception — full traceback + context** (every `except: pass` site records before swallowing) |
 | `spawns` | detached process launch — parent, child pid, argv, purpose |

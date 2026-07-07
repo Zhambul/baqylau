@@ -629,15 +629,52 @@ def main(run):
             if usage_last:
                 S.kv_set(LOG, USAGE_KEY, usage_last)
 
+    # A REJECTED (or otherwise abandoned) Task fires no SubagentStop AND leaves
+    # meta.json without stoppedByUser, so neither signal below ever comes — the
+    # streamer (and its sub.pid slot row, the tab's liveness signal → a stuck-blue
+    # tab) would then hang until the 6h backstop. But the PARENT transcript records
+    # the Task's tool_result the instant the call resolves, keyed by meta.json's
+    # toolUseId. Tail it (from its current end — the result lands later) as a
+    # fallback end signal. This is an EVENT, not an idle timeout: it does NOT
+    # reintroduce the banned idle-watch backstop (which false-positived on long
+    # thinks). Checked below the done/stoppedByUser signals and lightly throttled,
+    # so a normal finish still exits on its authoritative stop-sentinel.
+    parent_tid = (META.get("toolUseId") or "").strip()
+    parent_tail = None
+    if parent_tid and os.path.exists(TPATH):
+        try:
+            parent_tail = T.FileTailer(TPATH, pos=os.path.getsize(TPATH))
+        except Exception:
+            parent_tail = None
+    parent_next = start + 2.0                # next time the parent scan is allowed
+
+    def parent_resolved():
+        # None = not resolved (or throttled); bool = resolved, value is is_error
+        # (True == user rejected/cancelled the Task).
+        nonlocal parent_next
+        if parent_tail is None or time.time() < parent_next:
+            return None
+        parent_next = time.time() + 2.0
+        res = None
+        try:
+            for ln in (parent_tail.pump() or ()):
+                r = M.parent_tool_result(ln.decode("utf-8", "replace"), parent_tid)
+                if r is not None:
+                    res = r                  # last hit wins (there is only one)
+        except Exception:
+            return None
+        return res
+
     # Completion: the SubagentStop sentinel (the authoritative end signal — written
     # by the stop hook) for a normal finish, OR meta.json's stoppedByUser for a
     # manual cancel (see cancelled_by_user() above — no hook fires for that case),
-    # OR the state DB vanishing (SessionEnd parked it as *.keep — quitting Claude
-    # Code kills a background agent with no SubagentStop and no stoppedByUser
-    # stamp, so without this check the streamer spun for the full backstop as a
-    # zombie while its checkpoint writes mutated the parked snapshot through the
-    # cached connection; the codex tailers run the same check). A long cap is a
-    # backstop for a stuck/lost streamer either way.
+    # OR the parent Task result resolving (parent_resolved() — the rejected/abandoned
+    # case neither of those covers), OR the state DB vanishing (SessionEnd parked it
+    # as *.keep — quitting Claude Code kills a background agent with no SubagentStop
+    # and no stoppedByUser stamp, so without this check the streamer spun for the
+    # full backstop as a zombie while its checkpoint writes mutated the parked
+    # snapshot through the cached connection; the codex tailers run the same check).
+    # A long cap is a backstop for a stuck/lost streamer either way.
     cancelled = False
     while True:
         pump()
@@ -653,6 +690,11 @@ def main(run):
         if cancelled_by_user():
             cancelled = True
             run.end("stoppedByUser (manual cancel)")
+            break
+        pr = parent_resolved()
+        if pr is not None:
+            cancelled = bool(pr)             # rejected -> "cancelled" footer
+            run.end("parent-task-resolved" + (" (rejected)" if pr else ""))
             break
         if time.time() - start > T.BACKSTOP_S:
             run.end("backstop-timeout")
