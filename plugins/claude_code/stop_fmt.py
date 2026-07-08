@@ -25,6 +25,7 @@ import os, sys
 from core import ops as O
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import hookkit as H
+from plugins.claude_code import subagent_fmt as SUB
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -35,8 +36,20 @@ def main():
         return
     # A subagent/teammate Stop is inner — its own streamer (claude-substream.py)
     # bumps that agent's spend; folding the main transcript here would be wrong
-    # (and it isn't the agent's transcript anyway). Main session only.
+    # (and it isn't the agent's transcript anyway). Main session only — EXCEPT a
+    # StopFailure carrying an agent_id: a subagent turn that DIED on an API error
+    # (e.g. 529 Overloaded) fires this and NO SubagentStop (nor a stoppedByUser
+    # stamp), so it is the agent's only stop signal. Ignoring it leaves the agent's
+    # streamer holding its sub.pid slot row — the tab's liveness signal — forever,
+    # wedging the tab blue (audit-debug stuck-blue shape). Hand it to the same
+    # finaliser SubagentStop uses. A plain Stop with an agent_id stays ignored: it is
+    # just an inner turn boundary and SubagentStop still owns finalisation.
     if d.get("agent_id"):
+        if d.get("hook_event_name") == "StopFailure":
+            SUB.finalize(LOG, d, d.get("agent_id"),
+                         d.get("agent_type") or "agent",
+                         d.get("transcript_path") or "", tag="stopfail")
+            return
         return H.ignore(d, "agent_id (substream owns agent accounting)")
     st = ACC.bump_transcript(LOG, d.get("transcript_path"))
     tok = int((st or {}).get("tokens") or 0)

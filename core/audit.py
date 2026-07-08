@@ -619,6 +619,17 @@ def cli_anomalies(sid):
             "h.hook='SubagentStop' AND h.agent_id != '' AND h.agent_id NOT IN "
             "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStart')",
             (sid, sid))
+    # A subagent turn that dies on an API error (e.g. 529 Overloaded) fires
+    # StopFailure carrying its agent_id and NO SubagentStop — the agent's only stop
+    # signal. claude-stop-fmt.py must hand it to the subagent finaliser (a
+    # 'stopfail: …' decision); the pre-fix behaviour ('ignored: agent_id …') left the
+    # streamer's slot claimed forever and wedged the tab blue. This flags only the
+    # UNrecovered case — a StopFailure+agent_id whose decision is NOT 'stopfail:' — so
+    # a healthy recovered session stays clean and a non-empty row IS the regression.
+    section("StopFailure carrying an agent_id NOT handed to the finaliser (stuck-blue regression)",
+            "SELECT ts, agent_id, decision FROM hook_events WHERE session_id=? AND "
+            "hook='StopFailure' AND agent_id != '' AND handler != 'subscriber' "
+            "AND decision NOT LIKE 'stopfail:%' ORDER BY ts", (sid,))
     section("failed tools (PostToolUseFailure)",
             "SELECT ts, tool_name, decision FROM hook_events WHERE session_id=? AND "
             "hook LIKE '%Failure%' ORDER BY ts", (sid,))

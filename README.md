@@ -297,7 +297,7 @@ orphan all three.
   | `TaskCompleted`    | —      | `claude-task-fmt.py` (writes `✓ task #N · <subject>` to the mirror) |
   | `Notification`     | —      | `claude-tab-status.py notify` (reads the message: a permission/approval prompt → red `awaiting-command`; a "waiting for your input" notice → green `awaiting-response`, since that's just your turn) |
   | `Stop`             | —      | `claude-tab-status.py stop` **+ `claude-stop-fmt.py`** (folds the turn's token/cost spend into the scoreboard — see below) |
-  | `StopFailure`      | —      | `claude-tab-status.py stop` (turn ended on an API error — keep the tab from getting stuck on the "busy" colour) **+ `claude-stop-fmt.py`** (fold whatever landed in the transcript) |
+  | `StopFailure`      | —      | `claude-tab-status.py stop` (turn ended on an API error — keep the tab from getting stuck on the "busy" colour) **+ `claude-stop-fmt.py`** (fold whatever landed in the transcript; and when the payload carries an `agent_id` — a subagent that died on an API error, which fires no `SubagentStop` — finalise that agent's block/slot via `subagent_fmt.finalize`, else its streamer hangs and the tab stays blue) |
   | `SessionEnd`       | —      | `claude-tab-status.py clear` + `claude-split.py close` |
 
   All seven `*-fmt.py`/`-pre.py` handlers (incl. `claude-stop-fmt.py`) share **`claude_hook.py`** — the harness
@@ -1001,6 +1001,25 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
       `parent_resolved_model`, which already scans the parent for this agent's Task
       result). *Cancel-before-first-`SubagentStart`* still has no streamer to
       recover and is left unhandled, as elsewhere.
+    - **A subagent turn that dies on an API error** (e.g. `529 Overloaded`) is a
+      *fifth* end-shape. Claude Code fires **`StopFailure` carrying the subagent's
+      `agent_id`** — not `SubagentStop`, and no `stoppedByUser` stamp (confirmed
+      empirically: payload `error: "server_error"`, `last_assistant_message` the
+      API-error text). For an **async background agent** the rejected-Task recovery
+      above also can't help: its parent `tool_result` is only the "Async agent
+      launched successfully" ack (`is_error` absent), which never resolves — so the
+      streamer had *no* end signal and hung on its 6h backstop, `sub.pid` `live` row
+      keeping the tab **stuck blue** the whole time. `StopFailure` is wired to
+      `claude-stop-fmt.py`, which ignores an `agent_id` payload for accounting (the
+      inner turn is the substream's to bill) — but a `StopFailure` *is* the agent's
+      only stop signal, so stop-fmt now hands it to the same finaliser
+      `claude-subagent-fmt.py`'s `SubagentStop` uses (`subagent_fmt.finalize`): set the
+      agent record's `done` flag (the streamer polls it and exits `stop-sentinel`,
+      releasing the slot → `bg-recheck` to green), with the crash-tail reconcile +
+      safety-net footer if the streamer already died. Its decisions carry a
+      `stopfail:` prefix (vs `SubagentStop`'s `stop:`) so the two are distinguishable
+      in the audit. A *plain* `Stop` with an `agent_id` stays ignored — that's an
+      inner turn boundary, and `SubagentStop` still owns finalisation.
     A background agent's `SubagentStop` can fire **more than once** ("may notify
     more than once") — after the first, the streamer has finalised and freed its
     slot, so the duplicate finds no slot and does nothing. (Without that guard a

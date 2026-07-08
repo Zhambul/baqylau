@@ -130,6 +130,67 @@ def reconcile_spend(log, tpath, agent_id, team, ajsonl=""):
         return "error"
 
 
+def finalize(log, d, agent_id, atype, tpath, tag="stop"):
+    """Signal the agent's streamer to finalise its block and release its colour slot,
+    writing a safety-net footer if the streamer already died. Reached from two stop
+    signals:
+      • SubagentStop (tag="stop") — the normal end of a subagent/teammate.
+      • StopFailure carrying an agent_id (tag="stopfail", from claude-stop-fmt.py) —
+        a subagent turn that DIED on an API error (e.g. 529 Overloaded). Claude Code
+        fires NO SubagentStop (nor stamps meta.json stoppedByUser) for it, so this
+        StopFailure is the agent's ONLY stop signal; without acting on it the streamer
+        keeps its sub.pid slot row — the tab's liveness signal — claimed forever,
+        wedging the tab blue. An ASYNC background agent makes it worse still: its parent
+        tool_result is only the "launched successfully" ack (no is_error), so the
+        streamer's parent-task-resolved recovery never fires either.
+
+    A background agent's stop can fire MORE THAN ONCE. After the first stop the streamer
+    finalises and releases its slot, so a later duplicate finds no slot and does NOTHING
+    (else it painted a spurious indigo "■ agent ended", slot 0, no duration). The stop
+    signal is the agent record's `done` flag (was a sub.done.* sentinel); the streamer
+    polls it and finalises, then cleanup clears it so a later RESUME of the same agent_id
+    doesn't finalise its new streamer instantly. `started` is read BEFORE the done write
+    creates the record: an agent with no slot on record never saw a SubagentStart here
+    (Claude Code runs hidden summarizer agents that fire ONLY SubagentStop — no start,
+    usually no transcript, so their spend is real but unfoldable)."""
+    started = S.agent_get(log, agent_id).get("slot") is not None
+    S.agent_set(log, agent_id, done=1)
+    A.state_file(log, "state:agent." + agent_id, "write", "done=1 (stop signal for streamer)")
+    _p = claude_slots.pid_get(log, agent_id)
+    running = bool(_p) and alive(_p)
+    if not running:
+        # The streamer is gone. If it died before its footer (crash/kill), its
+        # un-bumped token tail is still on disk — fold it into the scoreboard now.
+        # Idempotent (diffs against the billed baseline), so a duplicate stop or a
+        # clean finish recovers nothing. The payload's agent_transcript_path (when
+        # present) beats the derived path.
+        rec_st = reconcile_spend(log, tpath, agent_id, is_teammate(tpath, agent_id),
+                                 d.get("agent_transcript_path") or "")
+        got = claude_slots.lookup_id("sub", log, agent_id)
+        # Release FIRST, emit only if THIS call deleted the row: two overlapping
+        # duplicate stops could both pass the lookup and both paint the footer — the
+        # atomic DELETE's rowcount (release_id's return) is the once-only licence.
+        if got and claude_slots.release_id("sub", log, agent_id):
+            dur = fmt_dur(time.time() - got[1]) if got[1] else ""
+            chip = f"■ {atype} ended · {dur}" if dur else f"■ {atype} ended"
+            pal = "team" if is_teammate(tpath, agent_id) else "sub"
+            O.emit(log, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
+            A.hook_event(d, decision="%s: SAFETY NET footer (streamer died mid-run, "
+                         "spend %s)" % (tag, rec_st))
+        elif not started:
+            # Not a duplicate — this agent NEVER started here. "no transcript" is the
+            # scoreboard-under-/cost tell (billed spend the fold structurally can't see).
+            A.hook_event(d, decision="%s: never started (hidden agent) — spend %s"
+                         % (tag, rec_st))
+        else:
+            A.hook_event(d, decision="%s: no-op (already finalised / duplicate stop; "
+                         "spend %s)" % (tag, rec_st))
+        S.agent_set(log, agent_id, done=0)        # don't wedge a future resume
+        claude_slots.pid_del(log, agent_id)
+    else:
+        A.hook_event(d, decision="%s: done flag set, streamer will finalise" % tag)
+
+
 def main():
     global LOG
     d, LOG = H.read_payload()
@@ -221,63 +282,12 @@ def main():
         H.notify_tab("agent-start", [LOG], LOG)
         return
 
-    # stop: signal completion to the streamer, which is the SOLE writer of the
-    # footer (and releases the slot). We only write a footer here as a safety net,
-    # and ONLY when the streamer truly isn't running AND it still holds a claimed
-    # slot — i.e. it died mid-run without closing the block.
-    #
-    # A background agent's SubagentStop can fire MORE THAN ONCE ("may notify more
-    # than once"). After the first stop the streamer finalises and releases its
-    # slot, so a later duplicate stop finds no slot (lookup_id -> None) and we do
-    # NOTHING — otherwise it printed a spurious indigo "■ agent ended" (slot 0,
-    # no duration). Requiring a still-claimed slot is what suppresses that.
-    # The stop signal is the agent record's `done` flag (was a sub.done.* sentinel
-    # file) — the streamer polls it and finalises; cleanup clears it back to 0 so a
-    # later RESUME of the same agent_id doesn't finalise its new streamer instantly.
-    # `started` is read BEFORE the done write creates the record: an agent with no
-    # slot on record never saw a SubagentStart here (Claude Code runs hidden
-    # summarizer-style agents that fire ONLY SubagentStop — no start, and usually no
-    # transcript on disk either, so their spend is real but unfoldable; see the
-    # SubagentStop-without-SubagentStart anomaly).
-    started = S.agent_get(LOG, agent_id).get("slot") is not None
-    S.agent_set(LOG, agent_id, done=1)
-    A.state_file(LOG, "state:agent." + agent_id, "write", "done=1 (stop signal for streamer)")
-    _p = claude_slots.pid_get(LOG, agent_id)
-    running = bool(_p) and alive(_p)
-    if not running:
-        # The streamer is gone. If it died before its footer (crash/kill), its
-        # un-bumped token tail is still on disk — fold it into the scoreboard now.
-        # Idempotent (diffs against the billed baseline), so a duplicate stop or a
-        # clean finish recovers nothing. Runs even when the crashed streamer's own
-        # cleanup already released the slot (so it's not gated on the release below).
-        # The payload's agent_transcript_path (when present) beats the derived path —
-        # it also lets a never-started agent's spend fold if its transcript exists.
-        rec_st = reconcile_spend(LOG, tpath, agent_id, is_teammate(tpath, agent_id),
-                                 d.get("agent_transcript_path") or "")
-        got = claude_slots.lookup_id("sub", LOG, agent_id)
-        # Release FIRST, emit only if THIS call deleted the row: two overlapping
-        # duplicate stops (the dead-streamer case fires them concurrently) could
-        # both pass the lookup above and both paint the footer — the atomic
-        # DELETE's rowcount (release_id's return) is the once-only licence.
-        if got and claude_slots.release_id("sub", LOG, agent_id):
-            dur = fmt_dur(time.time() - got[1]) if got[1] else ""
-            chip = f"■ {atype} ended · {dur}" if dur else f"■ {atype} ended"
-            pal = "team" if is_teammate(tpath, agent_id) else "sub"
-            O.emit(LOG, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
-            A.hook_event(d, decision="stop: SAFETY NET footer (streamer died mid-run, "
-                         "spend " + rec_st + ")")
-        elif not started:
-            # Not a duplicate — this agent NEVER started here. Name it distinctly:
-            # "no transcript" is the scoreboard-under-/cost tell (billed spend the
-            # transcript-folding scoreboard structurally cannot see).
-            A.hook_event(d, decision="stop: never started (hidden agent) — spend " + rec_st)
-        else:
-            A.hook_event(d, decision="stop: no-op (already finalised / duplicate stop; "
-                         "spend " + rec_st + ")")
-        S.agent_set(LOG, agent_id, done=0)        # don't wedge a future resume
-        claude_slots.pid_del(LOG, agent_id)
-    else:
-        A.hook_event(d, decision="stop: done flag set, streamer will finalise")
+    # stop: hand off to the shared finaliser — it signals the streamer (the SOLE
+    # writer of the footer + slot release) via the agent record's `done` flag and
+    # writes a safety-net footer only if the streamer already died mid-run. The same
+    # finaliser is reached from claude-stop-fmt.py when a StopFailure carries an
+    # agent_id (an API-error stop that fires no SubagentStop); see finalize().
+    finalize(LOG, d, agent_id, atype, tpath)
 
 
 def entry():

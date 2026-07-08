@@ -433,6 +433,36 @@ def test_f9d_rejected_subagent_stops_via_parent_result(run_hook, test_env,
                         allow=("SubagentStart without SubagentStop",))  # the reject
 
 
+def test_f9e_api_error_subagent_stops_via_stopfailure(run_hook, test_env, session):
+    """A subagent turn that dies on an API error (529) fires StopFailure carrying
+    its agent_id and NO SubagentStop (nor stoppedByUser). For an async agent the
+    parent tool_result is only the launch ack, so f9d's recovery can't fire either.
+    claude-stop-fmt.py must hand that StopFailure to the same finaliser SubagentStop
+    uses — else the streamer keeps its tab-blue-holding slot and hangs."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, SUB_EVENTS[:3])
+    wait_until(lambda: "scanning the tree now" in s.ops_text(), desc="running")
+    # The agent's final turn 529'd: StopFailure fires with the agent_id, no
+    # SubagentStop, no stoppedByUser stamp.
+    run_hook("claude-stop-fmt.py",
+             P.base(s, "StopFailure", agent_id=agent, agent_type="Explore",
+                    error="server_error",
+                    last_assistant_message="API Error: 529 Overloaded."))
+    wait_until(lambda: "stop-sentinel" in end_reasons(test_env, s.sid),
+               desc="streamer finalises on the done flag set by stop-fmt")
+    wait_until(lambda: not s.live(), desc="slot released")
+    # SubagentStart-without-SubagentStop is expected (none ever fired), and the
+    # StopFailure itself lands in the informational "failed tools" section (hook
+    # matches %Failure%). The stuck-blue *regression* anomaly must NOT fire — the
+    # StopFailure was handed to the finaliser (decision 'stopfail: …').
+    oracle.assert_clean(test_env, s.sid,
+                        allow=("SubagentStart without SubagentStop", "failed tools"))
+
+
 def test_f9c_interrupted_reply_flips_green(run_hook, test_env, session,
                                            fake_kitten):
     """A cancelled plain reply leaves only the transcript line — the
