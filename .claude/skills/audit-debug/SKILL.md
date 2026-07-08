@@ -28,7 +28,7 @@ the bug **from evidence, not guesswork**.
 | `ops` | paint op written to the mirror log | producer (script), op (the JSON paint op — full pane reconstruction, survives SessionEnd) |
 | `errors` | swallowed exception | script, func, **traceback** (full), context (JSON of args in hand) |
 | `spawns` | detached process launch | parent_script, child_pid, argv, purpose |
-| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final/reconcile/keep-history/restore-history/reuse-live-db/fresh-db**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:subfg:<tid>` (subagent live-fg tee hand-off: `write` by cmd-pre, `remove` when the substream consumes it), `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split that was priced — attribution and re-pricing need no timestamp correlation; `meta.kind` is `subagent`/`teammate` (priced by `accounting.cost_usd`) or, since 2026-07-07, `codex` (a rollout run's cumulative `token_count` fold, priced by the codex plugin's own `CODEX_PRICES`; `meta.src` is the rollout path); a `bump-agent` whose `meta.reconcile` is true is the SubagentStop safety-net (see **reconcile** below), not a streamer footer. **reconcile** (path = `state:agent.<id>`) = `claude-subagent-fmt.py` recovered an agent's un-bumped token tail after its streamer died before its footer (crash/kill): content carries the `residual` split bumped, the priced `cost`, and the transcript's `true` total. Its absence next to a dead-streamer stop, plus a `bump-agent` baseline short of the agent transcript's deduped total, is the lost-agent-spend bug (see the scoreboard-under playbook). Idempotent — a clean finish or duplicate stop leaves `true` == the `billed:<agent>` baseline (kv), so no row. **bump-transcript** now also carries `d_split` (the per-category token delta `tk_in`/`tk_out`/`tk_read`/`tk_create` feeding the scorebar's Σ row) alongside `d_tokens`/`d_cost` — and these rows are written from `claude-stop-fmt.py` on every `Stop`/`StopFailure` too, not just the cmd/file hooks (the Stop fold is what captures a turn's final tool-less reply). The per-category counters live in the state DB (`SELECT key,val FROM counters WHERE key LIKE 'tk_%'`); `tk_in+tk_create+tk_out` == the billed `tokens` counter (which backs `cost`; no longer shown on the `▪` row), and `+tk_read` is the Σ total. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff. **keep-history/restore-history/reuse-live-db/fresh-db** (path = `<log>.state.db.keep`, content = the SessionStart `source`) trace the session state DB's lifecycle: SessionEnd parks it as `*.keep` (`keep-history`); SessionStart either restores it (`restore-history`, resume of the same sid), leaves a live DB alone (`reuse-live-db`, compact or resume-after-crash), or starts fresh (`fresh-db`). The state DB IS the mirror content (its `ops` table) — so these rows are the resume-history trail |
+| `state_files` | coordination-file transition | path, action (write/remove/remove-stale/**bump/bump-agent/bump-transcript/msg-transitions/resume/final/reconcile/keep-history/restore-history/reuse-live-db/fresh-db**), content (state-DB records — path is a `state:` key: `state:fg-live`, `state:done:<token>`, `state:subfg:<tid>` (subagent live-fg tee hand-off: `write` by cmd-pre, `remove` when the substream consumes it), `state:agent.<id>`; for bump\* actions: the scoreboard deltas + resulting totals — the trail for wrong-scoreboard-number bugs). **bump-agent** = an agent streamer's spend bump, `meta` carries agent_id/kind/model + the in/out/cache/create split that was priced (since 2026-07-08 also `create_1h`, the 1-hour-TTL cache-write share — it bills 2× input where 5m bills 1.25×, so re-pricing needs it) — attribution and re-pricing need no timestamp correlation; `meta.kind` is `subagent`/`teammate` (priced by `accounting.cost_usd`) or, since 2026-07-07, `codex` (a rollout run's cumulative `token_count` fold, priced by the codex plugin's own `CODEX_PRICES`; `meta.src` is the rollout path); a `bump-agent` whose `meta.reconcile` is true is the SubagentStop safety-net (see **reconcile** below), not a streamer footer. **reconcile** (path = `state:agent.<id>`) = `claude-subagent-fmt.py` recovered an agent's un-bumped token tail after its streamer died before its footer (crash/kill): content carries the `residual` split bumped, the priced `cost`, and the transcript's `true` total. Its absence next to a dead-streamer stop, plus a `bump-agent` baseline short of the agent transcript's deduped total, is the lost-agent-spend bug (see the scoreboard-under playbook). Idempotent — a clean finish or duplicate stop leaves `true` == the `billed:<agent>` baseline (kv), so no row. **bump-transcript** now also carries `d_split` (the per-category token delta `tk_in`/`tk_out`/`tk_read`/`tk_create` feeding the scorebar's Σ row) and `d_create_1h` (the 2×-billed 1h cache-write share of that delta's `tk_create` — a pricing input, not a Σ category) alongside `d_tokens`/`d_cost` — and these rows are written from `claude-stop-fmt.py` on every `Stop`/`StopFailure` too, not just the cmd/file hooks (the Stop fold is what captures a turn's final tool-less reply). The per-category counters live in the state DB (`SELECT key,val FROM counters WHERE key LIKE 'tk_%'`); `tk_in+tk_create+tk_out` == the billed `tokens` counter (which backs `cost`; no longer shown on the `▪` row), and `+tk_read` is the Σ total. Scorebar `paused`-only ticks are NOT audited (1/s noise; the total rides every other bump's `now`). **resume/final** (path = `state:agent.<id>`) bracket each substream streamer: what checkpoint + dedup state it adopted (or `fresh: <why>`) and what it left behind — a successor's `resume` disagreeing with its predecessor's `final` is a broken handoff. **keep-history/restore-history/reuse-live-db/fresh-db** (path = `<log>.state.db.keep`, content = the SessionStart `source`) trace the session state DB's lifecycle: SessionEnd parks it as `*.keep` (`keep-history`); SessionStart either restores it (`restore-history`, resume of the same sid), leaves a live DB alone (`reuse-live-db`, compact or resume-after-crash), or starts fresh (`fresh-db`). The state DB IS the mirror content (its `ops` table) — so these rows are the resume-history trail |
 | `pane_events` | mirror/scoreboard pane operation | action (open/close/toggle-on/toggle-off/grow/shrink/reset/setpct), **ok** (verified against kitty — 0 means the pane genuinely isn't there), detail (bias/resulting width). First stop for "frozen/missing pane" reports. Pruned with the other per-session tables (was once omitted — unbounded growth) |
 
 New always-audited swallow sites (previously silent — their absence used to make these symptoms triage-blind): `errors` rows for `release`/`release_id`/`pid_del` (failed slot release = stuck blue), `spawn <script> (script missing)` + `notify_tab <dispatch>` from claude_hook (block never streams / dropped tab dispatch), `update_messages` from the scorebar (frozen ✉ row), `format_code` from core/ops (commands paint verbatim), and `lsof failed/missing` from claude-stream (see the stream-ended-too-early shape).
@@ -38,9 +38,13 @@ New always-audited swallow sites (previously silent — their absence used to ma
 1. **`python3 claude_audit.py anomalies <sid>`** — canned queries for known bug
    signatures: swallowed errors, streams that never ended, slot claims without
    release, tab left on a busy colour, duplicate SubagentStart, start-without-stop,
+   **stop-without-start (hidden agents — spend likely missing from the scoreboard)**,
    failed tools, spawns that never registered a stream, pane operations that
    failed, tab applies where `kitten @` failed, a resume that lost its mirror
-   history. Start here; a non-empty section usually IS the bug.
+   history. Start here; a non-empty section usually IS the bug. (The hook-counting
+   queries filter `handler != 'subscriber'` where a per-event count matters — the
+   universal subscriber writes a second row for every event, which once made every
+   normally-started agent read as "duplicate SubagentStart".)
 2. **`python3 claude_audit.py errors <sid>`** — full tracebacks for every swallowed
    exception. An error just before the symptom's timestamp is the prime suspect.
 3. **`python3 claude_audit.py timeline <sid>`** — the merged chronological story
@@ -241,13 +245,20 @@ New always-audited swallow sites (previously silent — their absence used to ma
   `streams.src_path`) deduped by `message.id` and diff against the bump deltas —
   whichever producer's delta exceeds its deduped source is the culprit. Tokens right
   but dollars wrong = re-run `cost_usd` on `meta.model` + the meta split: a pricing
-  bug (`PRICES`), not a counting bug. Two fixed instances of the counting shape
+  bug (`PRICES`), not a counting bug. Two fixed pricing instances: legacy Opus ids
+  falling through to the generic 5/25 row (`opus-4-2025`/`3-opus` keys), and 1-hour
+  cache writes priced at the 5m 1.25× instead of 2× *(fixed 2026-07-08 — usage's
+  `cache_creation.ephemeral_1h_input_tokens` is now the 5th `usage_fields` field and
+  rides bump meta as `create_1h`; a session whose writes are ALL 1h — the shape that
+  exposed it — undercounted ~$0.9)*. Two fixed instances of the counting shape
   (usage summed per JSONL *line*, but one message = one line per content block):
   `bump_transcript()` *(fixed, `message.id` dedup + `txlast`)* and the agent
   streamers' footer rollup in `claude-substream.py` *(fixed 2026-07-04, `usage_last`
   + checkpoint line 2 — was ×2.24 on multi-block agents)*. Both now share ONE fold,
-  `plugins/claude_code/accounting.py` `usage_fold()` (carry record `{"id","f":[in,out,cache,create]}` —
-  `txlast`/`usage_last` both persist this shape; a `{"id","tok","usd"}` record is
+  `plugins/claude_code/accounting.py` `usage_fold()` (carry record
+  `{"id","f":[in,out,cache,create,create_1h]}` — `txlast`/`usage_last` both persist
+  this shape; a 4-int `f` is the pre-create_1h shape, zero-padded by the fold; a
+  `{"id","tok","usd"}` record is
   the pre-refactor shape, converted once by a compat branch), so a recurrence means
   either the shared fold itself or a producer bypassing it. For a suspected handoff
   double-count, diff the streamer's `resume` row against its predecessor's `final`
@@ -272,6 +283,21 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the transcripts THEMSELVES short of `/cost` (no compaction, dedup correct) is the
   separate interrupted/retried-turn gap — billed usage that never lands as complete
   assistant lines, which a transcript-folding scoreboard structurally can't recover.
+- **Scoreboard well UNDER `/cost` (tens of %), transcripts clean** *(hidden
+  summarizer agents, found 2026-07-08)* — Claude Code runs hidden agents that fire
+  ONLY `SubagentStop`: no `SubagentStart` (so no substream, no `bump-agent`), no
+  inner tool events, one stop each on a ~35s cadence while the session is busy, a
+  one-line session summary as `last_assistant_message`, and an
+  `agent_transcript_path` that was NEVER written (the `subagents/` dir mtime doesn't
+  move). Their full-context billed reads reach `/cost` but no transcript any fold
+  can see — a $53.85 session showed $39 (~$14 across 38 such agents). Tell: the
+  `SubagentStop without SubagentStart` anomaly is non-empty, and those stops'
+  `claude-subagent-fmt.py` decisions read `stop: never started (hidden agent) —
+  spend no transcript` (pre-2026-07-08 builds misfiled them as `no-op (already
+  finalised / duplicate stop)` — the old decision on a session with stop-only
+  agent_ids is this shape, not a duplicate-stop storm). `spend reconciled` instead
+  means the transcript DID exist and the spend was folded — no gap. This gap is
+  structural (nothing on disk to fold); diagnose it, don't chase the fold.
 - **Scoreboard `Σ` total vs `/cost`'s token count** — the **`Σ` row** (`token_parts()`)
   is the token display: it sums the four `tk_*` counters into an all-in total that
   INCLUDES cache read, so `tk_in+tk_out+tk_read+tk_create` should match `/cost`'s

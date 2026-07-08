@@ -733,8 +733,8 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `on_tool_use`: a `SendMessage` whose body was a structured content block instead of
     a string; now normalised through `result_text`.) To make the loss unrecoverable-proof
     rather than just fixing the one trigger, the footer now advances a persisted
-    cumulative baseline (`billed:<agent>` kv — `{in,out,cache,create}` summed across the
-    whole streamer chain), and **`claude-subagent-fmt.py`'s `SubagentStop`**, once it
+    cumulative baseline (`billed:<agent>` kv — `{in,out,cache,create,create_1h}` summed
+    across the whole streamer chain), and **`claude-subagent-fmt.py`'s `SubagentStop`**, once it
     sees the streamer is gone, folds the agent's *full* transcript to its true total
     (`claude_ops.fold_usage`, the batch analogue of the inline fold — same `usage_fold`
     dedup) and bumps only `true − baseline` (a `bump-agent` with `meta.reconcile`, plus
@@ -743,9 +743,19 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     shortfall; a separate residual (interrupted/retried turns whose billed usage never
     lands as complete assistant lines on disk) is not transcript-recoverable and leaves
     a transcript-folding scoreboard slightly under `/cost` on cancellation-heavy sessions.
+    A much larger structural gap of the same kind: Claude Code runs **hidden
+    summarizer-style agents** (one every ~35s while a session is busy) that fire *only*
+    `SubagentStop` — no `SubagentStart`, and their payload's `agent_transcript_path` is
+    never written to disk — so their full-context billed reads reach `/cost` but no
+    transcript any fold can see (~$14 on the session that exposed this). The stop
+    handler names them distinctly (`stop: never started (hidden agent) — spend no
+    transcript`) instead of the old misleading "duplicate stop", reconciles from the
+    payload path when a transcript *does* exist, and the audit gained a
+    `SubagentStop without SubagentStart` anomaly so the gap is diagnosable, not silent.
   - **Cost estimate in the footer.** After the rollup the footer appends `· ≈ $X`,
     the summed tokens priced on the resolved model (`claude_ops.PRICES`, per-MTok
-    input/output for the current lineup; `cache_read` billed at ~0.1×). An unknown
+    input/output for the current lineup; `cache_read` billed at ~0.1×, cache writes
+    at their per-TTL premium — see *Pricing* below). An unknown
     model shows nothing rather than guess. Being last, it truncates before the rest.
   - **Session scoreboard (its own window).** A running "so far" summary of the whole
     session, aggregated across the separate hook processes in the **per-session
@@ -891,17 +901,24 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     as a second instance of the same bug: a session whose four review agents really
     billed ~784k tokens bumped 1.75M (×2.24), turning a $18.76 session into a $23
     scoreboard.
-  - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-06 list):
+  - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-07 list):
     Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet 3/15 · Haiku 4.5 1/5 · legacy
     Opus 4.1/4.0/3 15/75 per MTok in/out. The table keys are **substrings of the
     real model ids** — the legacy rows are `opus-4-1` / `opus-4-2025`
     (`claude-opus-4-20250514`) / `3-opus` (`claude-3-opus-…`); the earlier
     `opus-4-0`/`opus-3` keys appeared in *no real id*, so every legacy-Opus run
-    fell through to the generic 5/25 row (a silent 3× undercount). Cache reads bill 0.1× input and cache
-    **writes 1.25×** (the `cache_creation` share is tracked separately so the 0.25×
-    premium is applied). Sonnet 5's introductory 2/10 rate is used automatically
-    through 2026-08-31, then reverts to the 3/15 sticker. An unknown model counts
-    tokens but adds no cost rather than guess.
+    fell through to the generic 5/25 row (a silent 3× undercount). Cache reads bill
+    0.1× input; cache **writes bill by TTL** — 5-minute 1.25×, **1-hour 2×**. The
+    usage dict carries the per-TTL split
+    (`cache_creation.ephemeral_{5m,1h}_input_tokens`), which `usage_fields` reads as
+    a fifth field so `cost_usd` can add the 1h share's extra +0.75×; pricing every
+    write at 1.25× undercounted a session whose writes were all 1h by ~$0.9 (a
+    breakdown-less usage prices as all-5m, i.e. exactly the old math). There is **no
+    long-context premium** — the 1M window bills at these flat rates (a >200k-context
+    agent run is priced the same; confirmed on the published price page). Sonnet 5's
+    introductory 2/10 rate is used automatically through 2026-08-31, then reverts to
+    the 3/15 sticker. An unknown model counts tokens but adds no cost rather than
+    guess.
   - **`<model>·<effort>` on every op header.** Each operation header (prompt, message,
     result, command, file op) is tagged, e.g. `opus-4.8·high`. The **model** comes from
     the agent's own turns (`message.model`); before the first turn lands, the prompt
@@ -943,6 +960,15 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     and bumps whatever the streamer chain didn't (see *Crash-safe spend
     reconciliation* above) — this runs even when the crashed streamer's own cleanup
     already released the slot, so it is **not** gated on the safety-net footer.
+    The stop decision distinguishes three no-footer cases: a genuine duplicate stop
+    (`no-op (already finalised / duplicate stop)`), a **never-started hidden agent**
+    (`never started (hidden agent) — spend <reconciled | no transcript>`; the handler
+    reads the agent record's `slot` *before* writing the `done` flag — only a real
+    `SubagentStart` sets a slot), and the safety-net footer itself; each carries the
+    reconcile outcome so a spend gap is attributable from the decision row alone.
+    Reconcile prefers the payload's `agent_transcript_path` over the derived
+    `subagents/agent-<id>.jsonl` path — that's also what lets a never-started agent's
+    spend fold on the one stop it ever fires, if its transcript exists.
     - **Manually cancelling/killing a subagent fires no `SubagentStop` at all** —
       the same no-hook-on-interrupt gap noted throughout this doc (`interrupt-watch`,
       the cancelled-foreground-command fix above). Left alone, the streamer would
@@ -1465,7 +1491,7 @@ subscriber's independent record of the same event.
 | `ops` | paint op written to the mirror log — full pane reconstruction, survives SessionEnd |
 | `errors` | **swallowed exception — full traceback + context** (every `except: pass` site records before swallowing) |
 | `spawns` | detached process launch — parent, child pid, argv, purpose |
-| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … — plus the **scoreboard sidecar's evolution**: every `bump` (deltas + resulting totals), every agent-spend bump (`bump-agent`: same, plus `meta` with agent_id/kind/model and the in/out/cache/create split `cost_usd` priced — attribution and re-pricing without timestamp correlation), every transcript-spend fold (`bump-transcript`: token/cost delta + cursor), every team-message transition (`msg-transitions`), and each substream streamer's checkpoint bookends (`resume`/`final` on `sub.pos.<agent>`: adopted vs left-behind pos + dedup state — a mismatched pair is a broken idle-restart handoff) — so a wrong scoreboard number is traceable to the exact bump that skewed it. The scorebar's per-second `paused` ticks are deliberately **not** audited (they buried real bumps ~1000:1; the running total rides every other bump row) |
+| `state_files` | coordination-file transition — `.done` sentinels, `.fg-live`, `sub.done`, … — plus the **scoreboard sidecar's evolution**: every `bump` (deltas + resulting totals), every agent-spend bump (`bump-agent`: same, plus `meta` with agent_id/kind/model and the in/out/cache/create(+create_1h, the 2×-billed 1h cache-write share) split `cost_usd` priced — attribution and re-pricing without timestamp correlation), every transcript-spend fold (`bump-transcript`: token/cost delta + cursor), every team-message transition (`msg-transitions`), and each substream streamer's checkpoint bookends (`resume`/`final` on `sub.pos.<agent>`: adopted vs left-behind pos + dedup state — a mismatched pair is a broken idle-restart handoff) — so a wrong scoreboard number is traceable to the exact bump that skewed it. The scorebar's per-second `paused` ticks are deliberately **not** audited (they buried real bumps ~1000:1; the running total rides every other bump row) |
 | `pane_events` | mirror/scoreboard **pane operation** — open / close / toggle / resize with `ok` verified against kitty (a mirror that failed to open, or a resize that changed nothing, is recorded — the kitten calls used to be silent) |
 
 Explore it with the CLI (from the repo root):

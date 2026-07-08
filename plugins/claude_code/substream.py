@@ -122,7 +122,7 @@ JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
 META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
 STATE_KEY = "state:agent." + AGENT          # audit label for checkpoint rows
 USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
-BILLED_KEY = "billed:" + AGENT              # kv slot: {in,out,cache,create} this
+BILLED_KEY = "billed:" + AGENT              # kv slot: {in,out,cache,create,create_1h} this
                                             # streamer chain has folded into the
                                             # scoreboard — the baseline reconcile_spend
                                             # (claude-subagent-fmt.py) diffs the
@@ -351,8 +351,9 @@ pending_tag = ""          # ctx token snapshotted when the pending_msg was buffe
 # last_usage (a single turn's snapshot, which drives the live ctx %): these sum every
 # assistant turn. tot_in is FRESH billed input (input_tokens + cache_creation) — the
 # tokens actually sent, not replayed; tot_cache is cache_read (cheap replay); tot_create
-# is the cache_creation share of tot_in, kept separately so cost_usd can bill its 1.25×
-# write premium. So the footer's "cache %" = tot_cache / (tot_in + tot_cache) is the
+# is the cache_creation share of tot_in, kept separately so cost_usd can bill its write
+# premium (5m TTL 1.25×; tot_create_1h is the 1h-TTL share, which bills 2×).
+# So the footer's "cache %" = tot_cache / (tot_in + tot_cache) is the
 # share of all context reads served from cache — a thrash/reuse signal. tool_n counts
 # tool_use blocks.
 #
@@ -368,6 +369,7 @@ tot_in = 0
 tot_out = 0
 tot_cache = 0
 tot_create = 0
+tot_create_1h = 0         # 1-hour-TTL share of tot_create — bills 2× input, not 1.25×
 tool_n = 0
 usage_last = None         # O.usage_fold carry record {"id", "f"} of the last counted message
 
@@ -606,7 +608,8 @@ def on_tool_result(b, tur=None):
 
 
 def handle_line(s):
-    global last_usage, last_model, cur_tag, turn_ctx_shown, tot_in, tot_out, tot_cache, tot_create, usage_last
+    global last_usage, last_model, cur_tag, turn_ctx_shown, \
+        tot_in, tot_out, tot_cache, tot_create, tot_create_1h, usage_last
     try:
         o = json.loads(s)
     except Exception:
@@ -640,7 +643,8 @@ def handle_line(s):
             # only for repeat lines of the same message (O.usage_fold, the shared
             # dedup — see usage_last above).
             d, usage_last = ACC.usage_fold(msg.get("id"), ACC.usage_fields(u), usage_last)
-            tot_in += d[0]; tot_out += d[1]; tot_cache += d[2]; tot_create += d[3]
+            tot_in += d[0]; tot_out += d[1]; tot_cache += d[2]
+            tot_create += d[3]; tot_create_1h += d[4]
         cur_tag = ctx_tag()
         turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
         if isinstance(content, list):
@@ -806,8 +810,10 @@ def main(run):
     if tool_n:
         foot += f" · {tool_n} tool" + ("s" if tool_n != 1 else "")
     # Cost estimate from the tokens already summed, priced on the resolved model
-    # (cache_creation billed at its 1.25× write premium via tot_create).
-    usd = ACC.cost_usd(disp_model(), tot_in, tot_out, tot_cache, tot_create)
+    # (cache_creation billed at its write premium via tot_create — 1.25×, plus the
+    # tot_create_1h share's extra to reach the 1h TTL's 2×).
+    usd = ACC.cost_usd(disp_model(), tot_in, tot_out, tot_cache, tot_create,
+                       tot_create_1h)
     if usd:
         foot += " · ≈ " + O.fmt_usd(usd)
     O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
@@ -816,13 +822,15 @@ def main(run):
     # 'final' row is the handoff bug the persisted usage_last exists to prevent.
     A.state_file(LOG, STATE_KEY, "final",
                  {"agent": AGENT, "pos": tail.consumed, "usage_last": usage_last,
-                  "in": tot_in, "out": tot_out, "cache": tot_cache, "create": tot_create})
+                  "in": tot_in, "out": tot_out, "cache": tot_cache,
+                  "create": tot_create, "create_1h": tot_create_1h})
     # Feed this agent's metered spend into the session scoreboard (the main session's
     # own spend is folded in separately by claude_ops.bump_transcript, called from the
     # cmd/file hooks — together they cover the whole session). tokens = fresh billed
     # input + generated output — cache reads are replay, not spend, so they're excluded.
     # `meta` makes the bump attributable and re-priceable straight from the audit DB
-    # (agent, model priced on, and the four totals cost_usd saw).
+    # (agent, model priced on, and the five totals cost_usd saw — incl. the 1h
+    # cache-write share, which prices at 2× instead of the 5m 1.25×).
     deltas = {}
     if usd:
         deltas["cost"] = usd
@@ -841,7 +849,8 @@ def main(run):
         O.bump(LOG, meta={"agent_id": AGENT,
                           "kind": "teammate" if PALETTE == "team" else "subagent",
                           "model": disp_model(), "in": tot_in, "out": tot_out,
-                          "cache": tot_cache, "create": tot_create, "src": JSONL},
+                          "cache": tot_cache, "create": tot_create,
+                          "create_1h": tot_create_1h, "src": JSONL},
                **deltas)
     # Advance the cumulative-billed baseline (across the whole streamer chain — each
     # generation is its own process, so tot_* is just this generation's delta). A
@@ -852,7 +861,8 @@ def main(run):
     S.kv_set(LOG, BILLED_KEY, {"in": int(_pv.get("in") or 0) + tot_in,
                                "out": int(_pv.get("out") or 0) + tot_out,
                                "cache": int(_pv.get("cache") or 0) + tot_cache,
-                               "create": int(_pv.get("create") or 0) + tot_create})
+                               "create": int(_pv.get("create") or 0) + tot_create,
+                               "create_1h": int(_pv.get("create_1h") or 0) + tot_create_1h})
 
 
 def cleanup():

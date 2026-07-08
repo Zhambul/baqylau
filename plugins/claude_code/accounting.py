@@ -19,10 +19,13 @@ from core import state as S
 
 # Approximate per-MTok (input, output) USD for the resolved model — for the "≈ $X" cost
 # estimate. First substring match wins, so order specific → general. Verified against
-# the published price list (2026-06): Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet
-# 3/15 · Haiku 4.5 1/5 · legacy Opus 4.1/4.0/3 15/75. Cache reads bill 0.1× input,
-# cache writes 1.25× (cost_usd handles both); an unknown model shows no cost
-# (cost_usd → None) rather than guess.
+# the published price list (2026-07): Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet
+# 3/15 · Haiku 4.5 1/5 · legacy Opus 4.1/4.0/3 15/75. Cache reads bill 0.1× input;
+# cache writes bill by TTL — 5-minute 1.25×, 1-hour 2× (usage carries the split in
+# cache_creation.ephemeral_{5m,1h}_input_tokens; pricing everything at 1.25× under-
+# counted a session whose writes were all 1h — cost_usd handles both). An unknown
+# model shows no cost (cost_usd → None) rather than guess. No long-context premium:
+# the 1M window bills at these flat rates (confirmed on the published price page).
 #
 # Sonnet 5 has an introductory 2/10 rate through 2026-08-31; the entry is picked at
 # import time (hook processes are short-lived, so this is per-event in practice) and
@@ -49,31 +52,40 @@ PRICES = (
 )
 
 
-def cost_usd(model, tot_in, tot_out, tot_cache=0, tot_create=0):
+def cost_usd(model, tot_in, tot_out, tot_cache=0, tot_create=0, tot_create_1h=0):
     """Approximate USD for a run's token totals, or None for an empty/unknown model.
     tot_in = fresh billed input (input + cache_creation, priced at the input rate),
     tot_out = generated, tot_cache = cache_read (0.1× input), tot_create = the
     cache_creation share of tot_in — billed at 1.25× input, so it adds the +0.25×
-    premium on top of the flat rate tot_in already paid. See PRICES."""
+    premium on top of the flat rate tot_in already paid. tot_create_1h = the
+    1-hour-TTL share of tot_create, billed at 2× input — another +0.75× on top of
+    the +0.25× every creation token already added (0 keeps the old all-5m math,
+    so callers without the split are unchanged). See PRICES."""
     m = (model or "").lower()
     if not m:
         return None
     for key, pin, pout in PRICES:
         if key in m:
             return (tot_in * pin + tot_create * pin * 0.25
+                    + tot_create_1h * pin * 0.75
                     + tot_cache * pin * 0.1 + tot_out * pout) / 1_000_000
     return None
 
 
 def usage_fields(u):
-    """(fin, out, cache_read, cache_create) ints from an assistant message's usage
-    dict — fin is the fresh billed input (input + cache_creation), the argument
-    order cost_usd takes."""
+    """(fin, out, cache_read, cache_create, create_1h) ints from an assistant
+    message's usage dict — fin is the fresh billed input (input + cache_creation),
+    the argument order cost_usd takes. create_1h is the 1-hour-TTL share of
+    cache_create, read from the usage's cache_creation.ephemeral_1h_input_tokens
+    breakdown (0 when the breakdown is absent — old transcripts price as all-5m,
+    exactly what they did before the split existed)."""
     create = int(u.get("cache_creation_input_tokens") or 0)
     fin = int(u.get("input_tokens") or 0) + create
     out = int(u.get("output_tokens") or 0)
     cr = int(u.get("cache_read_input_tokens") or 0)
-    return fin, out, cr, create
+    cc = u.get("cache_creation")
+    c1h = int(cc.get("ephemeral_1h_input_tokens") or 0) if isinstance(cc, dict) else 0
+    return fin, out, cr, create, min(c1h, create)
 
 
 def usage_fold(mid, fields, prev):
@@ -85,12 +97,15 @@ def usage_fold(mid, fields, prev):
     (main session) and claude-substream.py (agents) — must share this one
     implementation; they drifted apart once and the fix had to be made twice.
 
-    `fields` is usage_fields(); `prev` is the carried record {"id", "f": [4 ints]}
-    (or None). Returns (delta_fields, new_prev). Since cost_usd is linear, pricing
-    the deltas equals the full-minus-previous cost, so callers price delta_fields
-    directly."""
+    `fields` is usage_fields(); `prev` is the carried record {"id", "f": [5 ints,
+    the usage_fields order]} (or None). Returns (delta_fields, new_prev). Since
+    cost_usd is linear, pricing the deltas equals the full-minus-previous cost, so
+    callers price delta_fields directly. A carry persisted by a 4-field build
+    (pre-create_1h) is padded with zeros — its straddling message counts the full
+    1h share once, a one-time cents-scale premium over-count, never of tokens."""
     if prev and mid and prev.get("id") == mid:
-        pf = prev.get("f") or [0, 0, 0, 0]
+        pf = list(prev.get("f") or [])
+        pf += [0] * (len(fields) - len(pf))
         deltas = tuple(max(v - int(p or 0), 0) for v, p in zip(fields, pf))
     else:
         deltas = fields
@@ -100,10 +115,10 @@ def usage_fold(mid, fields, prev):
 def fold_usage(path, pos=0, usage_last=None):
     """Fold an agent transcript's assistant-message token usage from byte offset
     `pos` to the last COMPLETE line, deduped by message.id (via usage_fold, carry
-    `usage_last`). Returns (fin, out, cache_read, cache_create, usage_last,
-    consumed) — the four totals in cost_usd's argument order, the updated carry,
-    and the byte offset consumed. Best-effort: zeros + unchanged cursor on any read
-    error or partial-only tail.
+    `usage_last`). Returns (fin, out, cache_read, cache_create, create_1h,
+    usage_last, consumed) — the five totals in cost_usd's argument order, the
+    updated carry, and the byte offset consumed. Best-effort: zeros + unchanged
+    cursor on any read error or partial-only tail.
 
     This is the batch analogue of claude-substream.py's inline per-line fold: it
     lets a crashed/killed streamer's un-bumped tail be reconciled at SubagentStop
@@ -113,19 +128,19 @@ def fold_usage(path, pos=0, usage_last=None):
     try:
         size = os.path.getsize(path)
     except OSError:
-        return 0, 0, 0, 0, usage_last, pos
+        return 0, 0, 0, 0, 0, usage_last, pos
     if size <= pos:                         # nothing new (or rotated shorter — don't guess)
-        return 0, 0, 0, 0, usage_last, pos
+        return 0, 0, 0, 0, 0, usage_last, pos
     try:
         with open(path, "rb") as f:
             f.seek(pos)
             chunk = f.read(size - pos)
     except OSError:
-        return 0, 0, 0, 0, usage_last, pos
+        return 0, 0, 0, 0, 0, usage_last, pos
     end = chunk.rfind(b"\n")
     if end < 0:                             # no complete line yet
-        return 0, 0, 0, 0, usage_last, pos
-    ti = to = tc = tcr = 0
+        return 0, 0, 0, 0, 0, usage_last, pos
+    ti = to = tc = tcr = t1h = 0
     for ln in chunk[:end].split(b"\n"):
         try:
             o = json.loads(ln)
@@ -138,8 +153,8 @@ def fold_usage(path, pos=0, usage_last=None):
             continue
         d, usage_last = usage_fold((o.get("message") or {}).get("id"),
                                    usage_fields(u), usage_last)
-        ti += d[0]; to += d[1]; tc += d[2]; tcr += d[3]
-    return ti, to, tc, tcr, usage_last, pos + end + 1
+        ti += d[0]; to += d[1]; tc += d[2]; tcr += d[3]; t1h += d[4]
+    return ti, to, tc, tcr, t1h, usage_last, pos + end + 1
 
 
 def bump_transcript(log, transcript):
@@ -195,7 +210,7 @@ def bump_transcript(log, transcript):
         # (replay), cache write (creation). tk_in+tk_create == the billed 'fin', so
         # tk_in+tk_out+tk_create == the ▪-row 'tokens'; +tk_read is the extra the Σ
         # total carries (why it dwarfs the ▪ headline).
-        cin = cout = cread = ccreate = 0
+        cin = cout = cread = ccreate = c1h = 0
         rows = {}                           # message id -> last usage line seen for it
         for ln in chunk[:end].split(b"\n"):
             try:
@@ -214,7 +229,7 @@ def bump_transcript(log, transcript):
                 tok += fields[0] + fields[1]
                 usd += cost_usd(m.get("model"), *fields) or 0.0
                 cin += fields[0] - fields[3]; cout += fields[1]
-                cread += fields[2]; ccreate += fields[3]
+                cread += fields[2]; ccreate += fields[3]; c1h += fields[4]
                 continue
             rows[mid] = (m.get("model"), fields)
         for mid, (model, fields) in rows.items():
@@ -229,16 +244,20 @@ def bump_transcript(log, transcript):
                 # message's categories in full (a one-time small Σ-row over-count,
                 # never of billed tok/usd), then re-persist in the {"id","f"} shape.
                 cin += fields[0] - fields[3]; cout += fields[1]
-                cread += fields[2]; ccreate += fields[3]
+                cread += fields[2]; ccreate += fields[3]; c1h += fields[4]
                 prev = {"id": mid, "f": list(fields)}
                 continue
             d, prev = usage_fold(mid, fields, prev)
             tok += d[0] + d[1]
             usd += cost_usd(model, *d) or 0.0
             cin += d[0] - d[3]; cout += d[1]
-            cread += d[2]; ccreate += d[3]
+            cread += d[2]; ccreate += d[3]; c1h += d[4]
+        # c1h (the 1h-TTL share of ccreate) prices at 2× instead of 1.25× — it rides
+        # the audit row (re-pricing evidence), not comps: it is a pricing input, not
+        # a fifth Σ-row display category, so no tk_create_1h counter exists.
         comps = {"tk_in": cin, "tk_out": cout, "tk_read": cread, "tk_create": ccreate}
-        moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev, comps=comps)
+        moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev,
+                     comps=comps, c1h=c1h)
         return pos + end + 1, prev, tok, usd, comps
 
     try:
@@ -249,7 +268,7 @@ def bump_transcript(log, transcript):
         if moved.get("tok") or moved.get("usd"):
             A.state_file(log, S.db_path(log), "bump-transcript", {
                 "d_tokens": moved["tok"], "d_cost": round(moved["usd"], 6),
-                "d_split": moved.get("comps"),
+                "d_split": moved.get("comps"), "d_create_1h": moved.get("c1h"),
                 "txpos": moved["txpos"], "txlast": moved["txlast"],
                 "now": {"tokens": st.get("tokens"), "cost": st.get("cost")}})
         return st

@@ -595,14 +595,29 @@ def cli_anomalies(sid):
             "WHERE session_id=? AND applied=1 AND ts = (SELECT MAX(ts) FROM "
             "tab_transitions WHERE session_id=? AND applied=1) AND new_state NOT IN "
             "('awaiting-response', 'idle', 'clear', '')", (sid, sid))
+    # handler != 'subscriber': the universal async subscriber records EVERY hook
+    # event alongside the handler's own decision row, so counting both made every
+    # normally-started agent look started-twice (a false positive on all sessions
+    # since the subscriber landed).
     section("duplicate SubagentStart (same agent started twice)",
             "SELECT agent_id, COUNT(*) FROM hook_events WHERE session_id=? AND "
-            "hook='SubagentStart' AND agent_id != '' GROUP BY agent_id HAVING COUNT(*) > 1",
+            "hook='SubagentStart' AND agent_id != '' AND handler != 'subscriber' "
+            "GROUP BY agent_id HAVING COUNT(*) > 1",
             (sid,))
     section("SubagentStart without SubagentStop",
-            "SELECT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
+            "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
             "h.hook='SubagentStart' AND h.agent_id != '' AND h.agent_id NOT IN "
             "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStop')",
+            (sid, sid))
+    # The inverse is the scoreboard-under-/cost signature: Claude Code runs hidden
+    # summarizer-style agents that fire ONLY SubagentStop — no SubagentStart, no
+    # substream, and (usually) no transcript file, so their billed spend never
+    # reaches the scoreboard. The stop handler's decision row says whether the
+    # spend was reconciled from a transcript or is unfoldable ("never started …").
+    section("SubagentStop without SubagentStart (hidden agent — spend likely not in scoreboard)",
+            "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
+            "h.hook='SubagentStop' AND h.agent_id != '' AND h.agent_id NOT IN "
+            "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStart')",
             (sid, sid))
     section("failed tools (PostToolUseFailure)",
             "SELECT ts, tool_name, decision FROM hook_events WHERE session_id=? AND "

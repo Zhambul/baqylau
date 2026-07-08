@@ -104,8 +104,8 @@ def subagent_start(s, agent_id="agent-0001", agent_type="Explore"):
     return base(s, "SubagentStart", agent_id=agent_id, agent_type=agent_type)
 
 
-def subagent_stop(s, agent_id="agent-0001", agent_type="Explore"):
-    return base(s, "SubagentStop", agent_id=agent_id, agent_type=agent_type)
+def subagent_stop(s, agent_id="agent-0001", agent_type="Explore", **over):
+    return base(s, "SubagentStop", agent_id=agent_id, agent_type=agent_type, **over)
 
 
 def task_created(s, task_id="1", subject="Fix the thing"):

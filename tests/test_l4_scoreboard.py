@@ -19,10 +19,14 @@ from conftest import wait_until
 STOP = "claude-stop-fmt.py"
 
 
-def usage(i=0, o=0, read=0, create=0):
-    return {"input_tokens": i, "output_tokens": o,
-            "cache_read_input_tokens": read,
-            "cache_creation_input_tokens": create}
+def usage(i=0, o=0, read=0, create=0, c1h=None):
+    u = {"input_tokens": i, "output_tokens": o,
+         "cache_read_input_tokens": read,
+         "cache_creation_input_tokens": create}
+    if c1h is not None:                     # the per-TTL breakdown real usage carries
+        u["cache_creation"] = {"ephemeral_5m_input_tokens": create - c1h,
+                               "ephemeral_1h_input_tokens": c1h}
+    return u
 
 
 def fold(run_hook, s):
@@ -126,6 +130,34 @@ def test_cache_read_write_premiums(run_hook, session):
     assert c["cost"] == pytest.approx(want)
 
 
+def test_1h_cache_write_bills_2x(run_hook, session):
+    """The 1-hour-TTL share of cache_creation bills 2x input, not the 5m 1.25x —
+    pricing everything at 1.25x undercounted a session whose writes were all 1h
+    (the usage's cache_creation.ephemeral_1h_input_tokens breakdown is the split).
+    Tokens/Σ categories are unchanged: the split is a pricing input only."""
+    s = session.make()
+    s.add_assistant("m1", model="claude-opus-4-8",
+                    usage=usage(i=100, o=10, read=1000, create=200, c1h=150))
+    c = fold(run_hook, s)
+    assert c["tk_create"] == 200 and c["tokens"] == 310   # split changes no counter
+    want = (300 * 5 + 200 * 5 * 0.25 + 150 * 5 * 0.75    # +0.75x more on the 1h share
+            + 1000 * 5 * 0.1 + 10 * 25) / 1e6
+    assert c["cost"] == pytest.approx(want)
+
+
+def test_1h_share_straddling_two_folds_deltas_only(run_hook, session):
+    """A message straddling a fold boundary must not re-bill its 1h premium."""
+    s = session.make()
+    s.add_assistant("m1", model="claude-opus-4-8",
+                    usage=usage(i=100, o=10, create=100, c1h=100))
+    first = fold(run_hook, s)["cost"]
+    s.add_assistant("m1", model="claude-opus-4-8",       # same id, grown output only
+                    usage=usage(i=100, o=30, create=100, c1h=100))
+    c = fold(run_hook, s)
+    assert c["cost"] == pytest.approx(first + 20 * 25 / 1e6), \
+        "straddling message re-billed its cache-write premium"
+
+
 # ------------------------------------------------------------- byte cursor
 
 def test_cursor_never_double_counts(run_hook, session):
@@ -180,6 +212,47 @@ def test_reconcile_recovers_crashed_streamer_spend(run_hook, test_env, session):
         "crashed streamer's spend not reconciled: %s" % c
     actions = [r[1] for r in oracle.state_files(test_env, s.sid)]
     assert "reconcile" in actions or "bump-agent" in actions
+
+
+def test_never_started_agent_stop_reconciles_from_transcript(run_hook, test_env, session):
+    """Claude Code runs hidden agents that fire ONLY SubagentStop (no
+    SubagentStart -> no streamer, no footer bump). When such an agent's
+    transcript DOES exist, the stop-time reconcile must fold its spend — and the
+    decision row must name the never-started case, not call it a duplicate."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [
+        {"type": "assistant", "message": {
+            "id": "hm1", "model": "claude-opus-4-8", "role": "assistant",
+            "content": [{"type": "text", "text": "summary"}],
+            "usage": usage(i=300, o=50)}},
+    ])
+    run_hook("claude-subagent-fmt.py",
+             P.subagent_stop(s, agent_id=agent,
+                             agent_transcript_path=s.subagent_jsonl(agent)),
+             argv=("stop",))
+    assert s.counters().get("tokens", 0) >= 350, \
+        "never-started agent's on-disk spend not reconciled"
+    dec = [x for x in oracle.decisions(test_env, s.sid, "claude-subagent-fmt.py")
+           if x.startswith("stop:")]
+    assert dec and "never started" in dec[-1] and "reconciled" in dec[-1], dec
+
+
+def test_never_started_agent_stop_without_transcript(run_hook, test_env, session):
+    """The hidden-summarizer shape: SubagentStop for an agent with no start AND
+    no transcript on disk. Nothing is foldable — but the decision must say so
+    (the scoreboard-under-/cost tell), never 'duplicate stop'."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    run_hook("claude-subagent-fmt.py",
+             P.subagent_stop(s, agent_id=agent,
+                             agent_transcript_path=s.subagent_jsonl(agent)),
+             argv=("stop",))
+    assert not s.counters().get("tokens"), "phantom spend bumped from nothing"
+    dec = [x for x in oracle.decisions(test_env, s.sid, "claude-subagent-fmt.py")
+           if x.startswith("stop:")]
+    assert dec and "never started" in dec[-1] and "no transcript" in dec[-1], dec
+    assert not [e for e in oracle.errors(test_env, s.sid)], "stop path raised"
 
 
 def _alive(pid):
