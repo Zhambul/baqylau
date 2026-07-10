@@ -89,10 +89,16 @@ BUG_SHAPES = [
         ("INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
          " VALUES(1,?,'/x.log','bump','{\"deltas\":{\"tokens\":5}}',NULL,1)",
          (SID,))]),
-    ("Stop fired but the transcript-fold hook", [
+    ("SessionEnd transcript fallback fired despite OTEL data", [
+        # A SessionEnd fallback fold decision AND a bump-otel row for the same
+        # session = the otel_seen gate broke and cost was double-counted.
         ("INSERT INTO hook_events(ts,session_id,hook,tool_name,agent_id,"
          "handler,decision,pid,payload)"
-         " VALUES(1,?,'Stop','','','subscriber','',1,'{}')", (SID,))]),
+         " VALUES(1,?,'SessionEnd','','','claude-stop-fmt.py',"
+         "'otel absent — folded transcript fallback; tokens=5 cost=0.1',1,'{}')", (SID,)),
+        ("INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
+         " VALUES(1,?,'/x.log','bump-otel','{\"deltas\":{\"cost\":0.1}}',NULL,1)",
+         (SID,))]),
 ]
 
 

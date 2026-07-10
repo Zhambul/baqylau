@@ -15,7 +15,6 @@
 import os, sys
 
 from core import ops as O
-from plugins.claude_code import accounting as ACC
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -87,11 +86,10 @@ def main():
     O.emit(LOG, O.line(line))
     # Feed the session scoreboard (best-effort): the touched path (files counts
     # UNIQUE files — see bump()) plus the mutation's +/- line counts, keyed by the
-    # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown,
-    # then the main session's own token spend since the last hook (see
-    # claude_ops.bump_transcript).
+    # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.
+    # Token/cost spend is no longer folded here — the OTLP receiver (plugins/otel/)
+    # owns it and updates the scoreboard live.
     O.bump(LOG, tool=tool, file=path, added=added, removed=removed)
-    ACC.bump_transcript(LOG, d.get("transcript_path"))
     A.hook_event(d, decision=f"rendered: {label}({name})"
                  + (" FAILED" if failed else
                     ("" if tool == "Read" else f" +{added} -{removed}")))

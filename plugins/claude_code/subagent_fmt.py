@@ -57,20 +57,19 @@ alive = S.pid_alive
 
 
 def reconcile_spend(log, tpath, agent_id, team, ajsonl=""):
-    """Recover any agent token spend a dead/crashed streamer never folded into the
-    scoreboard. The streamer bumps an agent's spend only at its footer; a crash
-    (the `.strip()`-on-dict bug was one cause) — or any exit before the footer —
-    drops the un-bumped tail. Run at SubagentStop once the streamer is gone: fold
-    the agent's FULL transcript to its TRUE total (claude_ops.fold_usage, deduped by
-    message.id) and bump only the residual over what the streamer chain already
-    billed (the BILLED_KEY baseline the footer advances). Idempotent — a clean
-    finish leaves true == baseline, so this bumps nothing, and a duplicate stop
-    re-folds to the same total. `ajsonl` is the payload's agent_transcript_path
-    when it carried one (authoritative; the derived subagents/ path is the
-    fallback). Returns a short status for the stop decision row — 'reconciled',
-    'already billed', or 'no transcript' (the hidden-summarizer-agent case: a
-    stop for an agent whose transcript was never written; its spend is real but
-    unfoldable). Best-effort; never raises into the hook."""
+    """Cross-check an agent's transcript-derived spend against the OTEL-authoritative
+    scoreboard at SubagentStop. Cost is now folded live by the OTLP receiver
+    (plugins/otel/, query_source=subagent) — including the tail a crashed streamer
+    would have dropped — so this NO LONGER bumps counters. It still folds the agent's
+    FULL transcript to its TRUE total (claude_ops.fold_usage, deduped by message.id),
+    records the residual over the BILLED_KEY baseline as a `reconcile` audit row (an
+    OTEL-vs-transcript reconciliation trail), and advances the baseline/render cursor
+    so a later resume renders past what we folded. `ajsonl` is the payload's
+    agent_transcript_path when it carried one (authoritative; the derived subagents/
+    path is the fallback). Returns a short status for the stop decision row —
+    'reconciled', 'already billed', or 'no transcript' (the hidden-summarizer-agent
+    case: a stop for an agent whose transcript was never written — OTEL still captured
+    its spend, so this is no longer a gap, just a note). Best-effort; never raises."""
     try:
         base = tpath[:-6] if tpath.endswith(".jsonl") else tpath
         jsonl = ajsonl or os.path.join(base, "subagents", f"agent-{agent_id}.jsonl")
@@ -103,11 +102,11 @@ def reconcile_spend(log, tpath, agent_id, team, ajsonl=""):
             deltas["tk_create"] = r_create
         if not deltas:
             return "already billed"
-        O.bump(log, meta={"agent_id": agent_id,
-                          "kind": "teammate" if team else "subagent",
-                          "model": model, "in": r_in, "out": r_out,
-                          "cache": r_cache, "create": r_create, "create_1h": r_1h,
-                          "src": jsonl, "reconcile": True}, **deltas)
+        # Cost is OTEL-authoritative now (the OTLP receiver folds agent spend live),
+        # so we NO LONGER bump these residual deltas into the scoreboard — that would
+        # double-count. We still fold the transcript and record the residual below as
+        # an OTEL-vs-transcript cross-check (the `reconcile` audit row), and advance
+        # the baselines/cursor so a later resume renders past what we folded.
         S.kv_set(log, key, {"in": ti, "out": to, "cache": tc, "create": tcr,
                             "create_1h": t1h})
         # Advance the resume checkpoint to the folded EOF so a LATER SubagentStart

@@ -30,7 +30,13 @@ def usage(i=0, o=0, read=0, create=0, c1h=None):
 
 
 def fold(run_hook, s):
-    run_hook(STOP, P.stop(s))
+    # Cost is OTEL-authoritative now; the transcript fold survives ONLY as the
+    # SessionEnd fallback (fires when the receiver wrote nothing — otel_seen==0,
+    # which is the default in these hermetic tests). It exercises the SAME
+    # accounting.py machinery (dedup / PRICES / cache premiums / txpos cursor) the
+    # old per-Stop fold did, so these goldens still pin that code — just via the
+    # fallback trigger. A plain Stop no longer folds.
+    run_hook(STOP, P.session_end(s))
     return s.counters()
 
 
@@ -212,9 +218,11 @@ def test_transcript_shrink_restarts_cursor(run_hook, session):
 
 # --------------------------------------------------------- reconcile_spend
 
-def test_reconcile_recovers_crashed_streamer_spend(run_hook, test_env, session):
-    """A subagent streamer killed before its footer leaves its token tail
-    un-bumped; SubagentStop's reconcile_spend must fold the true total."""
+def test_reconcile_crosschecks_crashed_streamer_without_bumping(run_hook, test_env, session):
+    """A subagent streamer killed before its footer used to leave its token tail
+    un-bumped, and reconcile_spend re-billed it. Cost is OTEL-authoritative now (the
+    receiver folds agent spend live), so reconcile NO LONGER bumps counters — it only
+    records the transcript-derived residual as a `reconcile` cross-check row."""
     s = session.make()
     agent = "agent-" + uuid.uuid4().hex[:8]
     s.write_subagent_jsonl(agent, [])
@@ -232,18 +240,17 @@ def test_reconcile_recovers_crashed_streamer_spend(run_hook, test_env, session):
     wait_until(lambda: not _alive(pid), desc="streamer dead")
     run_hook("claude-subagent-fmt.py", P.subagent_stop(s, agent_id=agent),
              argv=("stop",))
-    c = s.counters()
-    assert c.get("tokens", 0) >= 500, \
-        "crashed streamer's spend not reconciled: %s" % c
+    # No counter bump — OTEL owns agent spend now.
+    assert not s.counters().get("tokens"), "reconcile double-counted (OTEL owns spend)"
+    # But the transcript cross-check row IS still recorded.
     actions = [r[1] for r in oracle.state_files(test_env, s.sid)]
-    assert "reconcile" in actions or "bump-agent" in actions
+    assert "reconcile" in actions, "reconcile cross-check row missing"
 
 
-def test_never_started_agent_stop_reconciles_from_transcript(run_hook, test_env, session):
-    """Claude Code runs hidden agents that fire ONLY SubagentStop (no
-    SubagentStart -> no streamer, no footer bump). When such an agent's
-    transcript DOES exist, the stop-time reconcile must fold its spend — and the
-    decision row must name the never-started case, not call it a duplicate."""
+def test_never_started_agent_crosscheck_from_transcript(run_hook, test_env, session):
+    """A hidden agent that fires ONLY SubagentStop (no start -> no streamer). When
+    its transcript DOES exist, reconcile records the cross-check (decision 'never
+    started … reconciled') WITHOUT bumping — OTEL already booked the spend live."""
     s = session.make()
     agent = "agent-" + uuid.uuid4().hex[:8]
     s.write_subagent_jsonl(agent, [
@@ -256,8 +263,7 @@ def test_never_started_agent_stop_reconciles_from_transcript(run_hook, test_env,
              P.subagent_stop(s, agent_id=agent,
                              agent_transcript_path=s.subagent_jsonl(agent)),
              argv=("stop",))
-    assert s.counters().get("tokens", 0) >= 350, \
-        "never-started agent's on-disk spend not reconciled"
+    assert not s.counters().get("tokens"), "reconcile double-counted (OTEL owns spend)"
     dec = [x for x in oracle.decisions(test_env, s.sid, "claude-subagent-fmt.py")
            if x.startswith("stop:")]
     assert dec and "never started" in dec[-1] and "reconciled" in dec[-1], dec

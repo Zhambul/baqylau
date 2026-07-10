@@ -368,6 +368,27 @@ orphan all three.
   "env": { "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1" }
   ```
 
+  **The OTEL cost pipeline (`plugins/otel/`) requires telemetry env** in the same
+  `env` block — without it the scoreboard's cost/tokens fall back to the SessionEnd
+  transcript fold (which can't see hidden `auxiliary` agents). The receiver
+  (`claude-otlp-receiver.py`) is spawned automatically at SessionStart *only when*
+  `CLAUDE_CODE_ENABLE_TELEMETRY=1`; it derives its port from `CLAUDE_OTEL_PORT` (must
+  match the OTLP endpoint):
+  ```json
+  "env": {
+    "CLAUDE_CODE_ENABLE_TELEMETRY": "1",
+    "OTEL_METRICS_EXPORTER": "otlp",
+    "OTEL_EXPORTER_OTLP_PROTOCOL": "http/json",
+    "OTEL_EXPORTER_OTLP_ENDPOINT": "http://localhost:4319",
+    "OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE": "delta",
+    "OTEL_METRIC_EXPORT_INTERVAL": "2000",
+    "CLAUDE_OTEL_PORT": "4319"
+  }
+  ```
+  `http/json` (not the OTLP default `grpc`) because the receiver is a stdlib
+  `http.server`; `delta` temporality because the receiver sums datapoints; the
+  2 s export interval keeps the scoreboard's `≈ $` reasonably live.
+
 - **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
   (codex CLI ≥ 0.142). Like Claude's hook table, this wiring lives outside the
   repo. Enable codex's hook system and point its `SessionStart` at the entry:
@@ -965,44 +986,59 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     across the streamer chain (the `pos` checkpoint), so an idle-teammate restart
     can't recount, and the bump lands as a plain `bump` row (deltas are files/lines,
     not the tokens/cost the unattributed-bump anomaly guards).
-  - **Tokens + cost cover the whole session.** The `cost` figure prices fresh billed
-    input (`input + cache_creation`) plus output plus the cheap cache-read/write rates;
-    the underlying `tokens` counter (fresh input + output — cache reads are replay, not
-    billed) backs it and the Σ total but is no longer shown on the `▪` row itself (the
-    Σ row owns the token display). Two producers feed it: each **agent's** streamer
-    bumps its totals when the run ends, and the **main session's own turns** are
-    folded in by `claude_ops.bump_transcript()` — called from the cmd/file hooks
-    **and from `claude-stop-fmt.py` on every `Stop`/`StopFailure`**, it
-    reads the session transcript JSONL forward from a cursor kept in the state DB
-    (the `txpos` counter), sums each new assistant turn's usage (skipping sidechain
-    records — their own streamer already counts them), and advances the cursor inside
-    one `BEGIN IMMEDIATE` transaction so concurrent hooks never double-count. (Before this, cost only moved
-    when an agent run ended and sat "stuck" through plain main-session work.) The
-    **`Stop` trigger closes the final-turn tail**: the cmd/file hooks only fire on a
-    tool call, so a turn's closing reply (no trailing tool) — and the whole last turn
-    of a session — was never folded, dropping its tokens and (cache-read-dominated)
-    cost and leaving the scoreboard a few % under `claude --resume`'s real total.
-    `Stop` fires at the end of every turn, so each is folded before the next begins.
-    The fold is idempotent (the `txpos` cursor guards re-reads), so a repeated `Stop`
-    never double-counts. **`SessionEnd` also triggers the fold** as a backstop: the
-    very last turn's closing assistant line can be flushed to the transcript a beat
-    AFTER that turn's `Stop` hook read it, leaving the final `Stop` fold one message
-    short of EOF (observed as a scoreboard cost a fraction under `/cost` — the last
-    reply's cache-read cost). By `SessionEnd` the transcript is fully flushed. Since
-    the single-dispatcher refactor `Stop`-fold and pane-close are ORDERED in-process
-    steps, so the `SessionEnd` fold runs *before* `claude-split.py` parks/renames the
-    state DB — the old "a `SessionEnd` fold would race the park/rename" objection (two
-    separate hook processes) no longer holds.
+  - **Tokens + cost are OTEL-authoritative (`plugins/otel/`).** Cost/token accounting
+    no longer comes from folding the transcript — it comes from **OpenTelemetry**.
+    Claude Code, with telemetry enabled (env in settings.json, see § Wiring), exports
+    `claude_code.token.usage` / `claude_code.cost.usage` after **every API request**,
+    tagged with `session.id`, `query_source` (`main`/`subagent`/**`auxiliary`**),
+    `model`, and `type`. A per-machine singleton HTTP receiver
+    (`claude-otlp-receiver.py`, spawned at SessionStart via
+    `plugins/otel/on_session_start` → the detach-fast `claude-otlp-launch.py`) ingests
+    these and writes the SAME per-session counters the fold used to
+    (`tk_in`/`tk_out`/`tk_read`/`tk_create` from the `type` attribute, `cost` from
+    cost.usage), keyed by `session.id`, so the scorebar display is unchanged.
+    **Why OTEL and not the transcript** (which is what shipped before): folding the
+    transcript structurally CANNOT see Claude Code's hidden "auxiliary" agents
+    (summarizers / title generators) — they fire only a `SubagentStop` with no usage
+    in the payload and write no transcript, yet their (cache-read-dominated) spend
+    reaches `/cost`. Measured: on one session those hidden agents were **11.6%** of
+    cost, entirely invisible to the fold. OTEL captures them as `query_source=auxiliary`.
+    **Why delta temporality**: Claude Code exports delta datapoints (verified
+    non-monotonic per session), so the receiver SUMS them; the settings env pins
+    `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`. **Why a global
+    singleton**: the OTLP endpoint is a process-global env var, so ONE receiver serves
+    every session (dual-guarded by a pid-lock in `core.paths.OTLP_DB` AND the port
+    bind; a duplicate exits with a clean `duplicate` streams row). **Codex is exempt**:
+    it runs in a separate process OTEL can't see, so it keeps its own rollout fold
+    (`bump-agent`, `meta.kind=codex`). Every raw datapoint is captured in the audit
+    `otel` table (`python3 claude_audit.py otel <sid>`), so the counters are fully
+    reconstructible.
+  - **The transcript fold survives ONLY as a resilience fallback.**
+    `claude_ops.bump_transcript()` (transcript JSONL → `txpos` cursor → the same
+    `tk_*`/`cost` counters) now runs from `claude-stop-fmt.py` on **`SessionEnd` only**,
+    and only when the receiver wrote nothing for the session (`otel_seen == 0`:
+    telemetry off, receiver down, or a machine without the env). So a session that
+    never exported still isn't $0. It runs as an ORDERED dispatcher step *before*
+    `claude-split.py` parks the state DB, and is idempotent (the `txpos` cursor), so a
+    telemetry-on session skips it and never double-counts (a `bump-transcript` row
+    alongside `bump-otel` rows is the double-count regression its anomaly flags). The
+    agent-streamer footer (`claude-substream.py`) and `reconcile_spend`
+    (`claude-subagent-fmt.py`) likewise stopped bumping cost — OTEL's
+    `query_source=subagent` books agent spend live, including a crashed streamer's
+    tail — though `reconcile` still records a transcript cross-check row and the footer
+    still prints its `≈ $` estimate.
   - **The `Σ` row is the token display: a per-category breakdown with an all-in total.**
     The `Σ` row (`claude_ops.token_parts()`) shows the four raw
     categories — **input · output · cache read · cache write** — plus a **total** that
     ADDS cache-read replay, so it reconciles with what `claude --resume`'s "Usage by
     model" reports (that total is dominated by cache read on a long session, so it far
-    exceeds *billed* spend — different metrics, on purpose). Both accountants
-    feed four dedicated counters (`tk_in`/`tk_out`/`tk_read`/`tk_create`) from the same
-    `usage_fields` split `cost_usd` prices, so `tk_in + tk_create + tk_out` equals the
-    billed `tokens` counter and `+ tk_read` is the Σ total's extra. Total-first so a
-    narrow pane keeps the headline.
+    exceeds *billed* spend — different metrics, on purpose). The OTLP receiver feeds the
+    four dedicated counters (`tk_in`/`tk_out`/`tk_read`/`tk_create`) straight from
+    OTEL's `token.usage` `type` attribute (input→tk_in, output→tk_out, cacheRead→tk_read,
+    cacheCreation→tk_create), so `tk_in + tk_create + tk_out` equals the billed `tokens`
+    counter and `+ tk_read` is the Σ total's extra — and the display code is unchanged
+    from when the fold fed the same counters. Total-first so a narrow pane keeps the
+    headline.
     One assistant **message** is written as one JSONL line **per content block**, each
     repeating the message's usage (input/cache identical, `output_tokens` a growing
     snapshot), so usage is deduped by `message.id` — counted once, from the last line.
@@ -1660,10 +1696,11 @@ session, and unset they leave shipped behavior bit-identical:
 | `CLAUDE_STREAM_GRACE_S` | 2 s (fg/bg) · 8 s (monitor) | `claude-stream.py` idle-grace before writer-gone is definitive |
 | `CLAUDE_WATCH_POLL_S` | unset | One value replacing every `claude-tab-status.py` watcher/grace sleep (bg-watch 2 s, interrupt-watch 0.5 s, bg-recheck grace 4 s) |
 | `CLAUDE_CODEX_GRACE_S` | 8 s | `plugins/codex/stream.py` rollout completion grace (close the block if no new turn follows `task_complete`) |
+| `CLAUDE_OTEL_PORT` / `CLAUDE_OTEL_GRACE_S` | 4319 / 900 s | The OTLP receiver's bind port / idle-exit timeout (`plugins/otel/receiver.py`). `test_l5_otel.py` picks a free port per test and a short grace so a spawned receiver never lingers; the receiver only spawns when `CLAUDE_CODE_ENABLE_TELEMETRY=1`, which the suite never sets, so it stays inert unless a test opts in |
 
 Any session started with the timing knobs set is self-evident in the audit:
 `session_start` captures `CLAUDE_TAIL_*`/`CLAUDE_STREAM_*`/`CLAUDE_WATCH_*`/
-`CLAUDE_CODEX_*` (and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
+`CLAUDE_CODEX_*`/`CLAUDE_OTEL_*` (and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
 side is injected via the pre-existing `KITTY_KITTEN_BIN` override (a recorder
 script standing in for `kitten`), so no product code special-cases tests.
 

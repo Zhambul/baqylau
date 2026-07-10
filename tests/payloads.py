@@ -128,3 +128,28 @@ def stop(s, failure=False):
 
 def session_end(s, reason="other"):
     return base(s, "SessionEnd", reason=reason)
+
+
+# --- OpenTelemetry OTLP/JSON metrics (the OTEL cost pipeline, plugins/otel/) -----
+
+def _otlp_dp(attrs, val):
+    a = [{"key": k, "value": ({"stringValue": v} if isinstance(v, str)
+                              else {"intValue": v})} for k, v in attrs.items()]
+    return {"attributes": a,
+            ("asInt" if isinstance(val, int) else "asDouble"): val}
+
+
+def otlp_metrics(sid, tokens=(), costs=()):
+    """An OTLP/JSON ExportMetricsServiceRequest body Claude Code would POST to the
+    receiver. `tokens` = [(query_source, type, value), …] for claude_code.token.usage;
+    `costs` = [(query_source, usd), …] for claude_code.cost.usage."""
+    metrics = []
+    if tokens:
+        metrics.append({"name": "claude_code.token.usage", "sum": {"dataPoints": [
+            _otlp_dp({"session.id": sid, "query_source": qs, "type": t}, v)
+            for qs, t, v in tokens]}})
+    if costs:
+        metrics.append({"name": "claude_code.cost.usage", "sum": {"dataPoints": [
+            _otlp_dp({"session.id": sid, "query_source": qs}, v)
+            for qs, v in costs]}})
+    return {"resourceMetrics": [{"scopeMetrics": [{"metrics": metrics}]}]}

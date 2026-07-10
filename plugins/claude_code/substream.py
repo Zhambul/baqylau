@@ -847,34 +847,12 @@ def main(run):
                  {"agent": AGENT, "pos": tail.consumed, "usage_last": usage_last,
                   "in": tot_in, "out": tot_out, "cache": tot_cache,
                   "create": tot_create, "create_1h": tot_create_1h})
-    # Feed this agent's metered spend into the session scoreboard (the main session's
-    # own spend is folded in separately by claude_ops.bump_transcript, called from the
-    # cmd/file hooks — together they cover the whole session). tokens = fresh billed
-    # input + generated output — cache reads are replay, not spend, so they're excluded.
-    # `meta` makes the bump attributable and re-priceable straight from the audit DB
-    # (agent, model priced on, and the five totals cost_usd saw — incl. the 1h
-    # cache-write share, which prices at 2× instead of the 5m 1.25×).
-    deltas = {}
-    if usd:
-        deltas["cost"] = usd
-    if tot_in or tot_out:
-        deltas["tokens"] = tot_in + tot_out
-    if tot_in or tot_out or tot_cache or tot_create:
-        # Per-category split feeding the scoreboard's Σ row — same four totals
-        # cost_usd priced. tk_in is fresh input EXCL. cache creation (tot_in is
-        # input+create), so tk_in+tk_create == tot_in and the Σ total stays
-        # consistent with the ▪-row 'tokens' plus cache read. See O.token_parts.
-        deltas["tk_in"] = tot_in - tot_create
-        deltas["tk_out"] = tot_out
-        deltas["tk_read"] = tot_cache
-        deltas["tk_create"] = tot_create
-    if deltas:
-        O.bump(LOG, meta={"agent_id": AGENT,
-                          "kind": "teammate" if PALETTE == "team" else "subagent",
-                          "model": disp_model(), "in": tot_in, "out": tot_out,
-                          "cache": tot_cache, "create": tot_create,
-                          "create_1h": tot_create_1h, "src": JSONL},
-               **deltas)
+    # NOTE: this agent's token/cost spend is NO LONGER bumped into the scoreboard
+    # here. Cost is now OTEL-authoritative — the OTLP receiver (plugins/otel/) folds
+    # every agent request (query_source=subagent) into the session counters live, so
+    # a footer bump would double-count. The `≈ $usd` above is display-only (priced by
+    # ACC.cost_usd for the footer text). The BILLED_KEY baseline below is retained: it
+    # feeds reconcile_spend's OTEL-vs-transcript cross-check audit row at SubagentStop.
     # Advance the cumulative-billed baseline (across the whole streamer chain — each
     # generation is its own process, so tot_* is just this generation's delta). A
     # crash BEFORE this point leaves the baseline behind the transcript's true total,

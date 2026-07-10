@@ -16,9 +16,12 @@
 
 def all_plugins():
     """The registered agent-tool plugins, host first. Adding a tool = adding
-    its directory and listing it here."""
-    from plugins import claude_code, codex
-    return [claude_code, codex]
+    its directory and listing it here. `otel` is not an agent tool but a
+    cross-cutting subsystem (the per-machine OTLP cost receiver); it rides the
+    on_session_start fan-out and exposes no census, so the getattr guards below
+    skip it cleanly."""
+    from plugins import claude_code, codex, otel
+    return [claude_code, codex, otel]
 
 
 def on_session_start(log, cwd, sid):

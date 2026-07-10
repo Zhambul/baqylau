@@ -298,14 +298,27 @@ def test_task_fmt_created_and_completed(run_hook, test_env, session):
 
 # ------------------------------------------------------------ claude-stop-fmt
 
-def test_stop_fmt_folds_final_turn(run_hook, test_env, session):
+def test_stop_does_not_fold_otel_authoritative(run_hook, test_env, session):
+    # A plain Stop no longer folds the transcript — cost is OTEL-authoritative
+    # (the OTLP receiver updates the scoreboard live). The fold survives only as a
+    # SessionEnd fallback (see test_session_end_fallback_folds_when_no_otel).
     s = session.make()
     s.add_assistant("msg_001", usage={"input_tokens": 100, "output_tokens": 50,
                                       "cache_creation_input_tokens": 0,
                                       "cache_read_input_tokens": 0})
     run_hook("claude-stop-fmt.py", P.stop(s))
-    c = s.counters()
-    assert c.get("tokens", 0) > 0, "final turn was not folded into the scoreboard"
+    assert not s.counters().get("tokens"), "Stop should no longer fold (OTEL owns cost)"
+
+
+def test_session_end_fallback_folds_when_no_otel(run_hook, test_env, session):
+    # SessionEnd with no OTEL data (otel_seen absent) DOES fold, as the resilience
+    # fallback so a telemetry-off session isn't $0.
+    s = session.make()
+    s.add_assistant("msg_001", usage={"input_tokens": 100, "output_tokens": 50,
+                                      "cache_creation_input_tokens": 0,
+                                      "cache_read_input_tokens": 0})
+    run_hook("claude-stop-fmt.py", P.session_end(s))
+    assert s.counters().get("tokens", 0) > 0, "SessionEnd fallback did not fold"
 
 
 def test_stop_fmt_ignores_agent_stops(run_hook, test_env, session):

@@ -17,7 +17,6 @@ from core import ops as O
 from core import render as R
 from core import slots as claude_slots
 from core import state as S
-from plugins.claude_code import accounting as ACC
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -131,7 +130,6 @@ def _render_background(d, cmd, taskid, converted, done):
                O.code(cmd, g=taskid), O.rule())
 
     O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
-    ACC.bump_transcript(LOG, d.get("transcript_path"))
     if taskid:
         # Converted: find_file() locates tasks/<taskid>.output itself, same as any
         # genuine background command — this cmd string's own redirect (if any) is
@@ -210,11 +208,10 @@ def _render_finished(d, tr, cmd, live, done):
 
     # Update the session scoreboard. claude-scorebar.py (its own small window under
     # the mirror) refreshes off this sidecar bump — nothing is emitted into the log.
-    # bump_transcript folds in the main session's own token spend since the last hook
-    # (agents bump theirs at stream end). Best-effort — a failed bump must never
-    # break the command block above.
+    # Token/cost spend is no longer folded here: the OTLP receiver (plugins/otel/)
+    # is the authoritative cost source and updates the scoreboard live. Best-effort —
+    # a failed bump must never break the command block above.
     O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if failed else {}))
-    ACC.bump_transcript(LOG, d.get("transcript_path"))
 
 
 def entry():

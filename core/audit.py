@@ -96,6 +96,9 @@ CREATE TABLE IF NOT EXISTS state_files(
 CREATE TABLE IF NOT EXISTS pane_events(
   id INTEGER PRIMARY KEY, ts REAL, session_id TEXT, action TEXT, ok INTEGER,
   detail TEXT, pid INTEGER);
+CREATE TABLE IF NOT EXISTS otel(
+  id INTEGER PRIMARY KEY, ts REAL, session_id TEXT, metric TEXT, query_source TEXT,
+  model TEXT, type TEXT, value REAL, pid INTEGER);
 CREATE INDEX IF NOT EXISTS ix_hook_sid   ON hook_events(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_tab_sid    ON tab_transitions(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_slot_sid   ON slots(session_id, ts);
@@ -105,6 +108,7 @@ CREATE INDEX IF NOT EXISTS ix_err_sid    ON errors(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_spawn_sid  ON spawns(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_state_sid  ON state_files(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_pane_sid   ON pane_events(session_id, ts);
+CREATE INDEX IF NOT EXISTS ix_otel_sid   ON otel(session_id, ts);
 """
 
 
@@ -392,6 +396,36 @@ def pane(session_id, action, ok, detail=""):
           ok=1 if ok else 0, detail=detail or "", pid=os.getpid())
 
 
+def otel(session_id, rows):
+    """Record the RAW OTLP metric datapoints the OTLP receiver (plugins/otel/) folds
+    into the scoreboard — one row per claude_code.token.usage / cost.usage datapoint,
+    so every OTEL cost/token input is captured verbatim and the aggregated counters
+    (and the bump-otel deltas) are fully reconstructible: SUM(value) GROUP BY
+    session/type == the counter. `rows` = [{metric,query_source,model,type,value}, …].
+    Batched (executemany) with a per-row spool fallback; never raises into the
+    receiver's request handler."""
+    if not enabled() or not rows:
+        return
+    ts = time.time()
+    pid = os.getpid()
+    packed = [(ts, session_id or "", r.get("metric") or "", r.get("query_source") or "",
+               r.get("model") or "", r.get("type") or "", float(r.get("value") or 0), pid)
+              for r in rows]
+    conn = _connect()
+    if conn is not None:
+        try:
+            conn.executemany(
+                "INSERT INTO otel(ts,session_id,metric,query_source,model,type,value,pid)"
+                " VALUES(?,?,?,?,?,?,?,?)", packed)
+            conn.commit()
+            return
+        except Exception:
+            pass
+    for t, sid, metric, qs, model, typ, val, p in packed:
+        _spool("otel", dict(ts=t, session_id=sid, metric=metric, query_source=qs,
+                            model=model, type=typ, value=val, pid=p))
+
+
 def session_start(d):
     """Upsert the session row from a SessionStart payload."""
     if not enabled():
@@ -406,7 +440,7 @@ def session_start(d):
                                 # test-suite seams (README § Testing): a session
                                 # run with altered timing/paths must say so here
                                 "CLAUDE_TAIL_", "CLAUDE_STREAM_", "CLAUDE_WATCH_",
-                                "CLAUDE_CODEX_"))
+                                "CLAUDE_CODEX_", "CLAUDE_OTEL_"))
                or k in ("KITTY_WINDOW_ID",)}
     cols = dict(session_id=sid, cwd=d.get("cwd") or os.getcwd(),
                 project_slug=os.path.basename((d.get("cwd") or os.getcwd()).rstrip("/")),
@@ -468,12 +502,12 @@ def prune(days=PRUNE_DAYS):
         sids = [r[0] for r in rows]
         for sid in sids:
             for t in ("hook_events", "tab_transitions", "slots", "streams", "ops",
-                      "errors", "spawns", "state_files", "pane_events"):
+                      "errors", "spawns", "state_files", "pane_events", "otel"):
                 conn.execute(f"DELETE FROM {t} WHERE session_id=?", (sid,))
             conn.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
         # Orphan rows whose session row never existed (pre-session writes) age out too.
         for t in ("hook_events", "tab_transitions", "slots", "ops", "errors",
-                  "spawns", "state_files", "pane_events"):
+                  "spawns", "state_files", "pane_events", "otel"):
             conn.execute(f"DELETE FROM {t} WHERE ts < ? AND session_id NOT IN "
                          "(SELECT session_id FROM sessions)", (cutoff,))
         conn.execute("DELETE FROM streams WHERE started_at < ? AND session_id NOT IN "
@@ -630,9 +664,11 @@ def cli_anomalies(sid):
     # The inverse is the scoreboard-under-/cost signature: Claude Code runs hidden
     # summarizer-style agents that fire ONLY SubagentStop — no SubagentStart, no
     # substream, and (usually) no transcript file, so their billed spend never
-    # reaches the scoreboard. The stop handler's decision row says whether the
-    # spend was reconciled from a transcript or is unfoldable ("never started …").
-    section("SubagentStop without SubagentStart (hidden agent — spend likely not in scoreboard)",
+    # reaches the scoreboard. Since the OTEL cost pipeline, a hidden agent's spend
+    # IS captured (the OTLP receiver folds query_source=auxiliary/subagent live), so
+    # this is now informational, not a spend gap. The stop handler's decision row
+    # still says whether a transcript existed to cross-check ("never started …").
+    section("SubagentStop without SubagentStart (hidden agent — spend now captured via OTEL)",
             "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
             "h.hook='SubagentStop' AND h.agent_id != '' AND h.agent_id NOT IN "
             "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStart')",
@@ -670,10 +706,11 @@ def cli_anomalies(sid):
     section("tab colour applies where kitten @ failed",
             "SELECT ts, dispatch, new_state, reason FROM tab_transitions "
             "WHERE session_id=? AND reason LIKE '%kitten @ failed%' ORDER BY ts", (sid,))
-    # Agent spend must arrive as 'bump-agent' (attributed: agent_id/model/token
-    # split in meta). A plain 'bump' carrying a tokens/cost delta means some
-    # producer bypassed the attribution — the scoreboard number it fed can only be
-    # traced by timestamp correlation, which is the gap bump-agent closed.
+    # Token/cost spend must arrive as an ATTRIBUTED action: 'bump-otel' (the OTLP
+    # receiver, keyed by session.id + query_source) or 'bump-agent' (codex's own
+    # rollout fold — codex runs in a separate process OTEL can't see). A plain 'bump'
+    # carrying a tokens/cost delta means some producer bypassed attribution — the
+    # scoreboard number it fed can only be traced by timestamp correlation.
     # A --resume/--continue SessionStart should find the parked *.keep state DB and
     # log a `restore-history` (or, after a crash with no SessionEnd, find the DB
     # still live: `reuse-live-db`). A `fresh-db` row on a source=resume start
@@ -687,15 +724,40 @@ def cli_anomalies(sid):
             "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
             "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
             "OR json_extract(content, '$.deltas.cost') IS NOT NULL) ORDER BY ts", (sid,))
-    # The Stop fold (claude-stop-fmt.py) captures a turn's final tool-less reply —
-    # without it the scoreboard cost sits a few % under /cost (the dropped final
-    # turn). If Stop fired (a subscriber row exists) but no claude-stop-fmt.py
-    # decision row ever landed, the hook isn't wired: the tail is being lost.
-    section("Stop fired but the transcript-fold hook (claude-stop-fmt.py) never ran",
-            "SELECT ts FROM hook_events WHERE session_id=? AND hook='Stop' "
-            "AND agent_id='' GROUP BY session_id HAVING COUNT(*) > 0 AND NOT EXISTS "
-            "(SELECT 1 FROM hook_events e WHERE e.session_id=hook_events.session_id "
-            "AND e.handler='claude-stop-fmt.py')", (sid,))
+    # Cost is OTEL-authoritative; the transcript fold survives ONLY as a SessionEnd
+    # fallback that must fire ONLY when the receiver wrote nothing (otel_seen==0). If a
+    # session has BOTH a 'folded transcript fallback' SessionEnd decision AND bump-otel
+    # rows, the fallback fired despite OTEL data — a double-count regression (the
+    # otel_seen gate in stop_fmt broke). A healthy session has exactly one source.
+    section("SessionEnd transcript fallback fired despite OTEL data (double-count regression)",
+            "SELECT ts, decision FROM hook_events WHERE session_id=? AND "
+            "handler='claude-stop-fmt.py' AND decision LIKE 'otel absent%' AND EXISTS "
+            "(SELECT 1 FROM state_files f WHERE f.session_id=? AND f.action='bump-otel') "
+            "ORDER BY ts", (sid, sid))
+
+
+def cli_otel(sid):
+    """The OTEL cost/token breakdown for one session, straight from the raw `otel`
+    datapoints the receiver captured — grouped by query_source × type (so the hidden
+    `auxiliary` agents' share is explicit), plus total cost per query_source. This IS
+    the ground truth the scoreboard counters aggregate; SUM here == the counter."""
+    conn = _connect()
+    if conn is None:
+        print("audit db unavailable"); return
+    print("== token datapoints (SUM value) by query_source × type ==")
+    rows = conn.execute(
+        "SELECT query_source, type, COUNT(*), SUM(value) FROM otel WHERE session_id=? "
+        "AND metric='token' GROUP BY query_source, type ORDER BY query_source, type",
+        (sid,)).fetchall()
+    _print_rows(rows, ["query_source", "type", "n", "tokens"])
+    print("\n== cost (USD) by query_source ==")
+    rows = conn.execute(
+        "SELECT query_source, COUNT(*), SUM(value) FROM otel WHERE session_id=? "
+        "AND metric='cost' GROUP BY query_source ORDER BY query_source", (sid,)).fetchall()
+    _print_rows(rows, ["query_source", "n", "cost_usd"])
+    tot = conn.execute("SELECT SUM(value) FROM otel WHERE session_id=? AND metric='cost'",
+                       (sid,)).fetchone()
+    print(f"\ntotal cost = ${(tot and tot[0]) or 0:.4f}")
 
 
 def cli_sessions(limit=20):
@@ -756,6 +818,8 @@ def main(argv):
         cli_errors(argv[2] if len(argv) > 2 else "")
     elif cmd == "anomalies":
         cli_anomalies(argv[2] if len(argv) > 2 else "")
+    elif cmd == "otel":
+        cli_otel(argv[2] if len(argv) > 2 else "")
     elif cmd == "sql":
         conn = _connect()
         if conn is None:

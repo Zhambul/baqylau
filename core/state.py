@@ -623,6 +623,20 @@ def lock_acquire(db, key, pid=None):
         return "claim-denied:error"
 
 
+def lock_holder(db, key):
+    """The pid currently holding lock `key` in the DB at `db`, or 0. Read-only peek
+    (unlike lock_acquire, which mutates) — used by the OTLP receiver to notice when
+    its own singleton lock has been stolen out from under it."""
+    conn = _connect(db)
+    if conn is None:
+        return 0
+    try:
+        row = conn.execute("SELECT pid FROM claims WHERE key=?", (key,)).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        return 0
+
+
 def lock_release(db, key, pid=None):
     pid = pid or os.getpid()
     conn = _connect(db)

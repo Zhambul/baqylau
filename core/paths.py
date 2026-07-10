@@ -26,6 +26,13 @@ PREFIX = _TMP + "/claude-mirror-"
 # any one session. In /tmp so it self-clears on reboot.
 TAB_DB = _TMP + "/claude-kitty-tab.db"
 
+# The GLOBAL (per-machine, not per-session) OTLP-receiver singleton lock DB. The
+# OTEL metrics receiver is one process per machine — the OTLP endpoint is a
+# process-global env var, so a single receiver serves every session. Its pid-lock
+# lives here (mirrors TAB_DB's convention); relocated by CLAUDE_MIRROR_TMPDIR so
+# the test suite stays hermetic.
+OTLP_DB = _TMP + "/claude-kitty-otlp.db"
+
 
 def sanitize_sid(sid):
     """A session id as it appears in the mirror-log key."""

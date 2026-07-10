@@ -106,9 +106,16 @@ def test_f1_minimal_session(run_hook, test_env, session, fake_kitten):
                                          exclude=("codex-watcher",)),
                desc="streams ended (codex watcher lives until SessionEnd)")
     assert "f1 output" in s.ops_text()
-    c = s.counters()
-    assert c.get("commands") == 1 and c.get("tokens", 0) > 0
+    # Commands are counted live; token/cost is OTEL-authoritative now, so the cmd
+    # hook no longer folds it — tokens stays 0 until the OTLP receiver (absent here)
+    # or the SessionEnd fallback below books it.
+    assert s.counters().get("commands") == 1
 
+    # SessionEnd: with no OTEL data (hermetic), the stop-fmt fallback folds the
+    # transcript so the session isn't $0. In a real session the dispatcher runs this
+    # before claude-split.py parks the DB.
+    run_hook("claude-stop-fmt.py", P.session_end(s))
+    assert s.counters().get("tokens", 0) > 0, "SessionEnd fallback did not fold cost"
     run_hook(TAB, P.session_end(s), argv=("clear",))
     run_hook("claude-split.py", P.session_end(s), argv=("close",))
     assert os.path.exists(s.state_db + ".keep") and not os.path.exists(s.state_db)

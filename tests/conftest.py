@@ -59,6 +59,11 @@ def test_env(tmp_path):
         "CLAUDE_STREAM_GRACE_S": "0.3",
         "CLAUDE_WATCH_POLL_S": "0.1",
         "CLAUDE_CODEX_GRACE_S": "0.3",
+        # OTLP receiver: a short idle-exit so a spawned receiver never lingers.
+        # The port is picked per-test in test_l5_otel (this default is only a
+        # backstop). The receiver only spawns when CLAUDE_CODE_ENABLE_TELEMETRY=1,
+        # which the suite never sets — so it stays inert unless a test opts in.
+        "CLAUDE_OTEL_GRACE_S": "0.5",
         # Hermeticity: claude-split.py's resolve_listen_on() otherwise goes
         # looking for a REAL kitty socket under /tmp/kitty-* (and found the
         # desktop session's when this suite ran on the dev machine). A dead
