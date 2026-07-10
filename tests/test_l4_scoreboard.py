@@ -158,6 +158,31 @@ def test_1h_share_straddling_two_folds_deltas_only(run_hook, session):
         "straddling message re-billed its cache-write premium"
 
 
+# ---------------------------------------------- SessionEnd final-turn backstop
+
+def test_session_end_folds_final_turn_tail(run_hook, test_env, session):
+    """The final turn's Stop can read the transcript before its closing assistant
+    line is flushed, folding short of EOF and dropping that reply's (cache-read-
+    dominated) cost. SessionEnd re-folds the tail via the dispatcher — BEFORE the
+    state DB is parked — so nothing is lost. Idempotent: a Stop that already reached
+    EOF leaves SessionEnd a no-op.
+
+    The dispatcher parks the state DB (rename → *.keep) as its next step, so we read
+    the fold result from the stop-fmt audit decision rather than the (now-moved) DB."""
+    HOOK = "claude-hook.py"
+    s = session.make()
+    s.add_assistant("m1", usage=usage(i=100, o=10))
+    folded = fold(run_hook, s)["tokens"]                 # last turn's Stop folds m1
+    assert folded == 110
+    # The closing reply lands in the transcript only AFTER that Stop read it.
+    s.add_assistant("m2", usage=usage(i=50, o=5))
+    run_hook(HOOK, P.session_end(s))                     # dispatcher: fold THEN park
+    assert os.path.exists(s.state_db + ".keep"), "SessionEnd should have parked the DB"
+    dec = oracle.decisions(test_env, s.sid, handler="claude-stop-fmt.py")
+    assert any("tokens=165" in d for d in dec), \
+        "SessionEnd did not fold the final-turn tail before parking (%r)" % dec
+
+
 # ------------------------------------------------------------- byte cursor
 
 def test_cursor_never_double_counts(run_hook, session):

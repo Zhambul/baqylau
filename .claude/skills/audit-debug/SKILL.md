@@ -357,6 +357,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the `txpos` cursor). On a current build, a `txpos` short of EOF with no later
   `bump-transcript` = the Stop hook never fired or isn't wired (check `hook_events`
   for a `Stop` subscriber row and a `claude-stop-fmt.py` decision row).
+  **Residual final-message tail** *(fixed 2026-07-10)* — the VERY LAST turn's Stop
+  can read the transcript a beat BEFORE Claude Code flushes that turn's closing
+  assistant line, so even with the Stop fold the final `bump-transcript` `txpos`
+  lands one message short of EOF (seen: `7acc012d` scoreboard $3.64 vs `/cost` $3.86,
+  the $0.055 tail one un-folded `claude-opus-4-8` reply). Now `claude-stop-fmt.py` is
+  ALSO wired to `SessionEnd` (dispatch.py, ordered BEFORE the split-close/park step —
+  no longer racing it), so the fully-flushed tail is folded before the state DB is
+  parked. Tell on a current build: a `SessionEnd` with a `claude-stop-fmt.py` decision
+  row whose `txpos` == EOF; its ABSENCE (SessionEnd subscriber row but no stop-fmt
+  decision), or a `txpos` still short of EOF after it, is the regression. Note the
+  hidden-summarizer gap (below) is a SEPARATE, larger, unrecoverable cause of the same
+  symptom — rule it out via the `SubagentStop without SubagentStart` anomaly first.
 
 ## Output contract
 

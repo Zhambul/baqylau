@@ -86,6 +86,16 @@ def _plan(ev, tool, d):
         fmt("claude-stop-fmt.py", stop_fmt)
     elif ev == "SessionEnd":
         tab("clear")
+        # Fold any final-turn tail the last Stop MISSED: Stop fires at each turn
+        # boundary, but the closing assistant line can be flushed to the transcript
+        # a beat AFTER the Stop hook reads it (observed: last Stop folded to txpos
+        # short of EOF, leaving the final reply's cache-read cost unbooked). By
+        # SessionEnd the transcript is fully flushed. Idempotent via the txpos cursor
+        # (a no-op when Stop already reached EOF), and it runs as an ORDERED step
+        # BEFORE the close/park below — the two are no longer separate racing hook
+        # processes, so the old "SessionEnd fold races split.py's park" objection
+        # (see stop_fmt.py header) is moot.
+        fmt("claude-stop-fmt.py", stop_fmt)
         steps.append(("claude-split.py", lambda: split.handle("close", d)))
     elif ev == "SubagentStart":
         steps.append(("claude-subagent-fmt.py", lambda: subagent_fmt.run_phase("start")))

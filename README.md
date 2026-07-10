@@ -982,10 +982,17 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     tool call, so a turn's closing reply (no trailing tool) — and the whole last turn
     of a session — was never folded, dropping its tokens and (cache-read-dominated)
     cost and leaving the scoreboard a few % under `claude --resume`'s real total.
-    `Stop` fires at the end of every turn, so each is folded before the next begins
-    and the last before SessionEnd parks the DB — no SessionEnd fold is needed (it
-    would race the park/rename). The fold is idempotent (the `txpos` cursor guards
-    re-reads), so a repeated `Stop` never double-counts.
+    `Stop` fires at the end of every turn, so each is folded before the next begins.
+    The fold is idempotent (the `txpos` cursor guards re-reads), so a repeated `Stop`
+    never double-counts. **`SessionEnd` also triggers the fold** as a backstop: the
+    very last turn's closing assistant line can be flushed to the transcript a beat
+    AFTER that turn's `Stop` hook read it, leaving the final `Stop` fold one message
+    short of EOF (observed as a scoreboard cost a fraction under `/cost` — the last
+    reply's cache-read cost). By `SessionEnd` the transcript is fully flushed. Since
+    the single-dispatcher refactor `Stop`-fold and pane-close are ORDERED in-process
+    steps, so the `SessionEnd` fold runs *before* `claude-split.py` parks/renames the
+    state DB — the old "a `SessionEnd` fold would race the park/rename" objection (two
+    separate hook processes) no longer holds.
   - **The `Σ` row is the token display: a per-category breakdown with an all-in total.**
     The `Σ` row (`claude_ops.token_parts()`) shows the four raw
     categories — **input · output · cache read · cache write** — plus a **total** that

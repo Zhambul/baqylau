@@ -8,9 +8,14 @@
 # call — was never folded: its tokens and (cache-read-dominated) cost silently
 # dropped, leaving the scoreboard a few % under `claude --resume`'s real total.
 # Wired to Stop (fires at the end of EVERY turn, tool-terminated or not) this
-# closes that tail; every turn is folded before the next begins, and the final
-# turn is folded before SessionEnd parks the state DB — so no SessionEnd trigger is
-# needed (and none is wanted: it would race claude-split.py's park/rename).
+# closes that tail; every turn is folded before the next begins. It is ALSO wired
+# to SessionEnd (dispatch.py) as a backstop: the closing assistant line of the very
+# last turn can be flushed to the transcript a beat AFTER that turn's Stop hook read
+# it, so the final-turn Stop fold lands short of EOF and the last reply's
+# (cache-read-dominated) cost drops. The SessionEnd fold catches it — the transcript
+# is fully flushed by then. It runs as an ORDERED dispatcher step BEFORE claude-split.py
+# parks the state DB (they are no longer separate racing hook processes), and is
+# idempotent via the txpos cursor, so it is a no-op whenever Stop already reached EOF.
 #
 # It ONLY folds accounting — it paints nothing and touches no tab colour. The tab's
 # Stop dispatch stays claude-tab-status.py (which is read-only on the state DB by
