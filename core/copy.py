@@ -16,9 +16,10 @@
 #
 # The handler re-reads the group's ops from the per-session state DB — READ-ONLY
 # (mode=ro), so a click after SessionEnd can never recreate a DB whose
-# file-existence is the session-alive signal — takes `code` ops for "cmd"
-# (preferring the "raw" field: the exact command that ran, before pretty-printing)
-# and ANSI-stripped `gut` ops for "out", pipes the text to the OS clipboard
+# file-existence is the session-alive signal — takes `code` ops for "cmd" (the
+# text AS DISPLAYED, i.e. the pretty-printed form — WYSIWYG, owner's call; it is
+# equivalent runnable bash) and ANSI-stripped `gut` ops for "out", pipes the
+# text to the OS clipboard
 # (pbcopy / wl-copy / xclip / xsel; CLAUDE_COPY_CMD overrides — the test seam),
 # and appends a one-line feedback op to the mirror so the click visibly landed.
 # Copying from the ops table (not the transient .out tee files) is what makes
@@ -75,7 +76,7 @@ def collect(db, gid, what):
             continue
         t = op.get("t")
         if what == "cmd" and t == "code":
-            out.append(op.get("raw") or op.get("s") or "")
+            out.append(op.get("s") or "")
         elif what == "out" and t == "gut":
             out.append(R.strip_ansi(op.get("s") or ""))
     return "\n".join(out)

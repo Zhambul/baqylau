@@ -137,8 +137,9 @@ New always-audited swallow sites (previously silent — their absence used to ma
   after SessionEnd — expected no-op), `read ops` / `no clipboard tool`. `chars: 0`
   with what=`out` on a still-running block just means no output had streamed yet.
   Wrong TEXT copied: compare the group's ops (`SELECT op FROM ops` in the state DB,
-  filter `"g"` = the gid from the audit row) — a `code` op missing its `raw` field
-  when format_code rewrote the command is the exact-command regression.
+  filter `"g"` = the gid from the audit row) — ⧉cmd must equal the `code` op's `s`
+  (the WYSIWYG pretty-printed form, deliberately NOT the pre-reflow original) and
+  ⧉out the ANSI-stripped concatenation of the group's `gut` ops.
 - **Mirror replays a whole existing file as command output** — parse_redirect
   misread an argument as a redirect: check the cmd-pre `hook_events` decision
   ("tailing command's own redirect" for a command with a quoted `>`/heredoc means

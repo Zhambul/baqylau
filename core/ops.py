@@ -27,8 +27,8 @@
 # background job). A g-tagged label is painted with clickable " ⧉cmd ⧉out" OSC 8
 # hyperlinks (claude-copy:// — resolved by kitty's open-actions.conf into
 # claude-copy.py, which re-reads the group's ops and pipes the text to the
-# clipboard). A g-tagged code op also keeps the ORIGINAL command in "raw" when
-# format_code changed it, so the copy is the exact command that ran.
+# clipboard). ⧉cmd copies the code op's text as displayed (the pretty-printed
+# form — owner's call: WYSIWYG; it's equivalent, runnable bash either way).
 import json, os, time
 
 try:
@@ -67,7 +67,6 @@ def code(s, ind="  ", g=None):
     # renderer still wraps the result to the pane). Best-effort and gated by
     # CLAUDE_MIRROR_FORMAT (set to "0" to show commands verbatim). Only producers call
     # code(); the renderer never does, so this never runs in the paint loop.
-    raw = s
     if os.environ.get("CLAUDE_MIRROR_FORMAT", "1") != "0":
         try:
             from core import render as R
@@ -79,8 +78,6 @@ def code(s, ind="  ", g=None):
     o = {"t": "code", "s": s, "ind": ind}
     if g:
         o["g"] = str(g)
-        if s != raw:
-            o["raw"] = raw      # ⧉cmd copies the EXACT command, not the pretty-print
     return o
 
 

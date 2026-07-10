@@ -47,15 +47,19 @@ def test_fg_block_copy_cmd_and_out(session, run_hook, test_env, tmp_path):
     assert "⧉ copied" in s.ops_text()
 
 
-def test_copy_cmd_is_raw_not_pretty_printed(session, run_hook, test_env, tmp_path):
-    """format_code reflows `a; b` one-liners for display — ⧉cmd must copy the
-    EXACT command that ran (the code op's `raw` field)."""
+def test_copy_cmd_is_wysiwyg_pretty_printed(session, run_hook, test_env, tmp_path):
+    """format_code reflows `a; b` one-liners for display — ⧉cmd copies the text
+    AS DISPLAYED (the code op's `s`), not the original one-liner (owner's call:
+    WYSIWYG; the reflowed form is equivalent runnable bash)."""
     s = session.make()
     cmd = "echo one; echo two && echo three"
     run_hook("claude-cmd-fmt.py", P.post_bash(s, cmd, tid="toolu_cp2"))
+    shown = next(op["s"] for op in s.ops()
+                 if op["t"] == "code" and op.get("g") == "toolu_cp2")
+    assert shown != cmd and "\n" in shown          # the reflow actually happened
     clip = str(tmp_path / "clip.txt")
     _copy(run_hook, test_env, s.sid, "toolu_cp2", "cmd", clip)
-    assert open(clip).read() == cmd
+    assert open(clip).read() == shown
 
 
 def test_live_fg_pre_tags_header_and_group_env(session, run_hook, test_env):

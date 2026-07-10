@@ -521,8 +521,10 @@ renderer wraps the affordance in an **OSC 8 hyperlink** with the custom scheme
 rule launches **`claude-copy.py`** (impl `core/copy.py`) with the URL. The
 handler re-reads the group's ops from the state DB **read-only** (`mode=ro` — a
 click after SessionEnd must never recreate a DB whose file-existence is the
-session-alive signal), takes `code` ops for `cmd` — preferring the op's `raw`
-field, the pre-pretty-print original, so what you paste is what actually ran —
+session-alive signal), takes `code` ops for `cmd` — the text **as displayed**,
+i.e. the pretty-printed reflow, WYSIWYG (owner's call; it started as the
+byte-exact original but pasting something other than what you see read as a
+bug — and the reflowed form is equivalent, runnable bash either way) —
 and ANSI-stripped `gut` ops for `out`, pipes the text to the clipboard
 (`pbcopy`, else `wl-copy`/`xclip`/`xsel`; `CLAUDE_COPY_CMD` overrides — the test
 seam), and appends a one-line `⧉ copied …` feedback op so the click visibly
@@ -530,8 +532,7 @@ landed. Why this design and not the alternatives:
 - **Copy from the ops table, not the `.out` tee files** — the tee files are
   transient (deleted when the tailer finishes), while the ops table is the
   session's history, parked/restored across resume: scrolled-back and
-  resumed-session blocks stay copyable. The pretty-printed `code` op is not the
-  literal command, hence the `raw` field on g-tagged code ops.
+  resumed-session blocks stay copyable.
 - **OSC 8 + `open-actions.conf`, not mouse reporting** — a renderer that grabs
   mouse mode would steal normal text selection in the pane and need row→op
   geometry bookkeeping that reflow invalidates. Hyperlinks keep the pane a dumb
