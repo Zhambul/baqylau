@@ -114,18 +114,22 @@ def render(op, w):
 # from the state DB and pipes command/output text to the clipboard (README §
 # Copy links). The links are dim and zero-cost to everything else — a label without
 # "g" renders exactly as before.
-_LINK_TXT = (("cmd", "⧉cmd"), ("out", "⧉out"))
-_LINKW = 10          # display cells of " ⧉cmd ⧉out" (the OSC 8 wrapper is zero-width)
+_LINK_TXT = (("cmd", "⧉cmd"), ("out", "⧉out"))   # default when a label carries no "lk"
 
 
-def _copy_links(g):
+def _copy_links(g, lk):
+    """(rendered links, display width). `lk` is the label's [what, glyph] spec (a
+    command block's default cmd/out pair when absent). The OSC 8 wrapper is
+    zero-width, so the width is just " glyph" per link."""
     from urllib.parse import quote
     key = quote(P.sid_from_log(LOG), safe="")
-    parts = []
-    for what, txt in _LINK_TXT:
+    pairs = lk or _LINK_TXT
+    parts, width = [], 0
+    for what, txt in pairs:
         url = "claude-copy:///%s/%s/%s" % (key, quote(str(g), safe=""), what)
         parts.append(" " + R.hyperlink(url, R.DIM + txt + R.RST))
-    return "".join(parts)
+        width += 1 + R.dwidth(txt)
+    return "".join(parts), width
 
 
 def _render(op, w):
@@ -139,9 +143,11 @@ def _render(op, w):
         avail = w - 2 - (2 if outer else 0)            # chip eats 2 cols; outer bar 2 more
         links = ""
         g = op.get("g")
-        if g and avail >= _LINKW + 24:                 # keep a useful chip width; a very
-            links = _copy_links(g)                     # narrow pane just drops the links
-            avail -= _LINKW
+        if g:
+            rendered, lw = _copy_links(g, op.get("lk"))
+            if avail >= lw + 24:                       # keep a useful chip width; a very
+                links = rendered                       # narrow pane just drops the links
+                avail -= lw
         chip = R.label(fit(op.get("s", ""), max(1, avail)), op["c"]) + links
         if outer:
             return R.fg(*outer) + "│ " + R.RST + chip

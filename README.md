@@ -550,17 +550,23 @@ and the `-`/`#`/`*`/`~` forms must be **bracketed** on both ends (so a diff head
 command-output site — foreground, background/monitor tail, and subagent output —
 but *not* to a subagent's messages/prompts (which share the gutter helper).
 
-**⧉ copy links — click to copy a block's command or output.** Every foreground /
-background command block's header chip (and the finish chip after a streamed
-block) — in the main session **and inside a subagent's stream** (the substream
-tags its fg/bg/monitor blocks by the same `tool_use_id`) — carries two dim
-clickable affordances, ` ⧉cmd ⧉out` — a browser-style copy
-button. Clicking `⧉cmd` puts the block's exact command on the clipboard; `⧉out`
-its output (ANSI styling stripped). Mechanism: producers stamp a **copy-group
-id** (`"g"`) on the block's ops — the Bash `tool_use_id`, or the
-`backgroundTaskId` for a background job; live-fg / bg tailers inherit it via
-`CLAUDE_STREAM_GROUP` so their `gut`/finish ops join the same group — and the
-renderer wraps the affordance in an **OSC 8 hyperlink** with the custom scheme
+**⧉ copy links — click to copy any activity block.** Nearly every block in the
+mirror carries a dim, browser-style copy affordance on its header chip. A
+**command** block (foreground / background, in the main session and inside a
+subagent's or codex run's stream) shows two — ` ⧉cmd ⧉out`: `⧉cmd` puts the
+block's exact command on the clipboard, `⧉out` its output (ANSI styling
+stripped). Every other body-bearing block — an assistant **message**, a
+**result**, a **prompt**, teammate **mail**, codex **reasoning** / **review** /
+**search**, a subagent tool **request** — shows a single ` ⧉copy` that grabs the
+whole block's text. Mechanism: producers stamp a **copy-group id** (`"g"`) on the
+block's ops — the Bash `tool_use_id` / `backgroundTaskId` for a command (live-fg /
+bg tailers inherit it via `CLAUDE_STREAM_GROUP` so their `gut`/finish ops join the
+same group), or a fresh session-unique `O.new_group()` id (a `counters`-table
+sequence, `core/state.py:next_group`) for a block with no natural tool id — and a
+`"lk"` **link spec** on the header (`[[what, glyph], …]`, `what ∈ cmd/out/all`;
+absent → the command block's default `cmd`/`out` pair; body blocks pass
+`O.COPY_ALL` = `[["all", "⧉copy"]]`). The renderer wraps each affordance in an
+**OSC 8 hyperlink** with the custom scheme
 `claude-copy:///<key>/<gid>/<what>`. kitty resolves a plain left-click through
 `~/.config/kitty/open-actions.conf` (see § Wiring), whose `protocol claude-copy`
 rule launches **`claude-copy.py`** (impl `core/copy.py`) with the URL. The
@@ -570,7 +576,8 @@ session-alive signal), takes `code` ops for `cmd` — the text **as displayed**,
 i.e. the pretty-printed reflow, WYSIWYG (owner's call; it started as the
 byte-exact original but pasting something other than what you see read as a
 bug — and the reflowed form is equivalent, runnable bash either way) —
-and ANSI-stripped `gut` ops for `out`, pipes the text to the clipboard
+ANSI-stripped `gut` ops for `out`, and BOTH (interleaved, in insertion order) for
+`all`, pipes the text to the clipboard
 (`pbcopy`, else `wl-copy`/`xclip`/`xsel`; `CLAUDE_COPY_CMD` overrides — the test
 seam), and appends a one-line `⧉ copied …` feedback op so the click visibly
 landed. Why this design and not the alternatives:
@@ -585,11 +592,16 @@ landed. Why this design and not the alternatives:
 - **The links live on the `label` op only** (a short glyph run, never wrapped),
   which sidesteps OSC 8's re-open-per-visual-row requirement for wrapped text;
   a pane too narrow for chip + links (< ~34 cols) just drops the links.
-- **Subagent blocks tag too** — the substream stamps `g` (the inner
-  `tool_use_id`) on its fg/bg/monitor header, `code`, and `gut` ops, and passes
-  it to its nested `claude-stream.py` tailers via `CLAUDE_STREAM_GROUP`, so a
-  subagent's commands are copyable just like the lead's. Genuinely untaggable
-  ops (messages, prompts, file ops) carry no `g` and render link-free.
+- **Subagent & codex blocks tag too** — the substream and codex stream stamp `g`
+  on their fg/bg/monitor command header/`code`/`gut` ops (the inner `tool_use_id`,
+  threaded to nested `claude-stream.py` tailers via `CLAUDE_STREAM_GROUP`) and a
+  fresh `O.new_group()` id on every message/prompt/mail/reasoning/review/result
+  block (with `O.COPY_ALL`), so a subagent's or codex run's activity is copyable
+  just like the lead's commands.
+- **File-op one-liners stay link-free** — a Read/Update/Write line (`file_fmt.py`,
+  and the substream's `render_file`) is a single `line`/`gut` with no header chip
+  to hang a link on, and its only real payload (the path) is trivially retypeable;
+  copying it would need a chip the compact one-liner design deliberately omits.
 
 **Foreground vs background output.** A *foreground* command's output used to be
 unavailable anywhere until it finished — Claude Code streamed it back only through

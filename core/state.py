@@ -169,6 +169,22 @@ def counter_get(conn, key, default=0):
     return row[0] if row else default
 
 
+def next_group(log):
+    """A session-unique monotonic block id, for ⧉ copy groups on blocks that lack a
+    natural tool_use_id (messages, prompts, results, file ops, headers). Atomic across
+    the separate producer processes via the `counters` table. Returns an int, or 0 on
+    failure — callers treat a falsy id as 'no copy group' and skip the affordance."""
+    conn = connect(log)
+    if conn is None:
+        return 0
+    try:
+        with immediate(conn):
+            counter_add(conn, "block_seq", 1)
+            return int(counter_get(conn, "block_seq"))
+    except Exception:
+        return 0
+
+
 # --- mirror paint ops (was the append-only JSONL mirror log) ------------------------
 # The mirror's paint-op stream lives in the `ops` table: producers (hooks, tailers)
 # INSERT rows, the renderer polls `id > last_seen`. One transaction per emit() keeps a

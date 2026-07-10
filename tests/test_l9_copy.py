@@ -135,6 +135,67 @@ def test_subagent_fg_block_copy_cmd_and_out(session, run_hook, test_env, tmp_pat
     assert "src/x.py: bug here" in open(clip).read()
 
 
+def test_subagent_message_block_copy_all(session, run_hook, test_env, tmp_path):
+    """A body-only activity (a subagent's assistant message) is tagged with a fresh
+    O.new_group() id + a single ⧉copy ('all') affordance, and claude-copy.py copies
+    the message body from the block's gut op."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, [
+        {"type": "assistant", "message": {
+            "id": "smsg_1", "model": "claude-opus-4-8", "role": "assistant",
+            "content": [{"type": "text", "text": "here is my analysis"}],
+            "usage": {"input_tokens": 5, "output_tokens": 3,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}},
+        # a following renderable event flushes the buffered message
+        {"type": "assistant", "message": {
+            "id": "smsg_2", "model": "claude-opus-4-8", "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tu_x", "name": "Bash",
+                         "input": {"command": "true"}}],
+            "usage": {"input_tokens": 5, "output_tokens": 3,
+                      "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}},
+    ])
+    wait_until(lambda: "here is my analysis" in s.ops_text(),
+               desc="subagent message rendered")
+
+    # find the message block's group: a label carrying the ⧉copy ('all') link spec
+    msg_label = next(op for op in s.ops()
+                     if op["t"] == "label" and op.get("lk") == [["all", "⧉copy"]]
+                     and "message" in op.get("s", ""))
+    gid = msg_label["g"]
+    clip = str(tmp_path / "clip.txt")
+    _copy(run_hook, test_env, s.sid, gid, "all", clip)
+    assert "here is my analysis" in open(clip).read()
+
+
+def test_renderer_paints_single_copy_link_from_lk(session, seed, reaper, test_env):
+    """A label whose `lk` names one ('all', '⧉copy') affordance renders exactly that
+    link — not the default cmd/out pair."""
+    s = session.make()
+    seed.py(
+        "import claude_ops as O\n"
+        "O.emit(%r, O.label('note', O.SLATE, g='gid-x', lk=O.COPY_ALL),\n"
+        "       O.line('SENTINEL-LK'))" % s.log)
+    out_path = s.log + ".render.out"
+    with open(out_path, "wb") as out:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
+    reaper.append(proc)
+    try:
+        wait_until(lambda: b"SENTINEL-LK" in open(out_path, "rb").read(),
+                   desc="renderer painted the seeded ops")
+    finally:
+        proc.terminate()
+    text = open(out_path, "rb").read().decode("utf-8", "replace")
+    assert "claude-copy:///%s/gid-x/all" % s.sid in text
+    assert "/cmd" not in text and "/out" not in text
+    assert text.count("\x1b]8;;claude-copy") == 1
+
+
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):
     """A click on a dead session's link must NOT create a state DB (its
     file-existence is the session-alive signal) — audited, not fatal."""

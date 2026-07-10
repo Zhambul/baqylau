@@ -4,7 +4,7 @@
 # The renderer (claude-mirror.py) paints " ⧉cmd ⧉out" on every group-tagged label
 # op, wrapped in an OSC 8 hyperlink with the custom scheme
 #
-#     claude-copy:///<key>/<gid>/<what>          what: cmd | out
+#     claude-copy:///<key>/<gid>/<what>          what: cmd | out | all
 #
 # kitty resolves a plain left-click on such a link through
 # ~/.config/kitty/open-actions.conf, whose `protocol claude-copy` rule launches
@@ -51,15 +51,16 @@ def parse_url(url):
     if not sep or scheme != "claude-copy":
         return None
     parts = [unquote(p) for p in rest.strip("/").split("/")]
-    if len(parts) != 3 or parts[2] not in ("cmd", "out") or not all(parts):
+    if len(parts) != 3 or parts[2] not in ("cmd", "out", "all") or not all(parts):
         return None
     return tuple(parts)
 
 
 def collect(db, gid, what):
-    """The copy text for a group: its `code` ops ("cmd") or the visible text of
-    its `gut` ops ("out"), in insertion order. Opens the state DB mode=ro — this
-    handler must never create runtime state (see module docstring)."""
+    """The copy text for a group, in insertion order: its `code` ops ("cmd"), the
+    visible text of its `gut` ops ("out"), or BOTH interleaved ("all" — the whole
+    block, for a body-only activity like a message/prompt/result/file op). Opens the
+    state DB mode=ro — this handler must never create runtime state (see docstring)."""
     from core import render as R
     conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2.0)
     try:
@@ -75,9 +76,9 @@ def collect(db, gid, what):
         if op.get("g") != gid:
             continue
         t = op.get("t")
-        if what == "cmd" and t == "code":
+        if t == "code" and what in ("cmd", "all"):
             out.append(op.get("s") or "")
-        elif what == "out" and t == "gut":
+        elif t == "gut" and what in ("out", "all"):
             out.append(R.strip_ansi(op.get("s") or ""))
     return "\n".join(out)
 
@@ -132,7 +133,8 @@ def main(argv):
         return
     if to_clipboard(text):
         _feedback(log, "copied %s · %d chars"
-                  % ("command" if what == "cmd" else "output", len(text)))
+                  % ({"cmd": "command", "out": "output"}.get(what, "block"),
+                     len(text)))
         A.state_file(log, db, "copy",
                      {"gid": gid, "what": what, "chars": len(text)})
     else:

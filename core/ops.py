@@ -23,12 +23,15 @@
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
 #
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
-# one command block together (the Bash tool_use_id, or the backgroundTaskId for a
-# background job). A g-tagged label is painted with clickable " ⧉cmd ⧉out" OSC 8
-# hyperlinks (claude-copy:// — resolved by kitty's open-actions.conf into
-# claude-copy.py, which re-reads the group's ops and pipes the text to the
-# clipboard). ⧉cmd copies the code op's text as displayed (the pretty-printed
-# form — owner's call: WYSIWYG; it's equivalent, runnable bash either way).
+# one activity block together (the Bash tool_use_id, the backgroundTaskId for a
+# background job, or any synthesised per-block id). A g-tagged label is painted with
+# clickable ⧉ OSC 8 hyperlinks (claude-copy:// — resolved by kitty's
+# open-actions.conf into claude-copy.py, which re-reads the group's ops and pipes the
+# text to the clipboard). WHICH links a header shows is its "lk" spec — a list of
+# [what, glyph] pairs (what ∈ {cmd → the code ops, out → the gut ops, all → both});
+# absent lk defaults to the command block's " ⧉cmd ⧉out" pair. ⧉cmd copies the code
+# op's text as displayed (the pretty-printed form — owner's call: WYSIWYG; it's
+# equivalent, runnable bash either way); ⧉out/⧉copy the ANSI-stripped gut text.
 import json, os, time
 
 try:
@@ -53,12 +56,19 @@ def rule():
     return {"t": "rule"}
 
 
-def label(s, c, outer=None, g=None):
+def label(s, c, outer=None, g=None, lk=None):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if outer is not None:
         o["outer"] = _rgb(outer)
     if g:
         o["g"] = str(g)
+        # lk (link spec): the ⧉ copy affordances to paint on this header, as a list of
+        # [what, glyph] pairs — what ∈ {cmd, out, all} (claude-copy.py maps each to the
+        # group's code/gut/both ops). Omitted → the renderer's default cmd/out pair, so
+        # every existing command block is unchanged. A body-only block (message, prompt,
+        # result, file op) passes lk=[["all", "⧉copy"]] for a single whole-block copy.
+        if lk:
+            o["lk"] = [[w, gl] for w, gl in lk]
     return o
 
 
@@ -92,6 +102,20 @@ def gut(s, c, outer=None, g=None):
 
 def line(s):
     return {"t": "line", "s": s}
+
+
+# The single ⧉ copy affordance for a body-only block (message/prompt/result/…): one
+# whole-block copy link. Producers pass this as label(..., lk=COPY_ALL) alongside a
+# fresh new_group() id (below), and tag the block's gut/code ops with the same id.
+COPY_ALL = [["all", "⧉copy"]]
+
+
+def new_group(log):
+    """Session-unique copy-group id for a block that has no natural tool_use_id, so
+    its ops can be tied together for the ⧉ copy handler. 'b<n>' or None on failure
+    (a falsy id means the producer simply omits the copy affordance)."""
+    n = S.next_group(log)
+    return ("b%d" % n) if n else None
 
 
 def emit(log, *ops):

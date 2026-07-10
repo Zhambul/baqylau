@@ -158,14 +158,16 @@ TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-mess
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 
-def chip(glyph, kind, ctx="", g=None):
+def chip(glyph, kind, ctx="", g=None, lk=None):
     # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
-    # turn, rather than on its own gutter line below it. g (a tool_use_id) ties a
-    # command block's header/code/output ops into one ⧉ copy group — same mechanism
-    # as the main session's fg/bg blocks (core/copy.py), just double-guttered here.
+    # turn, rather than on its own gutter line below it. g ties a block's header + its
+    # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
+    # fresh O.new_group() id for a message/prompt/mail block (lk=O.COPY_ALL then gives
+    # it a single whole-block ⧉copy link). Same mechanism as the main session's fg/bg
+    # blocks (core/copy.py), just double-guttered here.
     tag = op_tag()
     s = f"{LABEL} {glyph} {kind}" + (f"  {tag}" if tag else "") + (f"  {ctx}" if ctx else "")
-    return O.label(s, SUB_RGB, g=g)
+    return O.label(s, SUB_RGB, g=g, lk=lk)
 
 
 def cap(text, n):
@@ -176,13 +178,13 @@ def cap(text, n):
     return "\n".join(lines[:n]) + f"\n… ({more} more line{'s' if more != 1 else ''})"
 
 
-def gutter(text):
-    return O.gut(R.unescape(text), SUB_RGB)
+def gutter(text, g=None):
+    return O.gut(R.unescape(text), SUB_RGB, g=g)
 
 
-def msg_gutter(text):
+def msg_gutter(text, g=None):
     # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).
-    return O.gut(R.markdown(R.unescape(text)), SUB_RGB)
+    return O.gut(R.markdown(R.unescape(text)), SUB_RGB, g=g)
 
 
 kfmt = O.kfmt        # compact token count: 124000 -> "124k"
@@ -391,7 +393,9 @@ def flush_msg(is_result=False):
     if pending_msg is None:
         return
     glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
-    O.emit(LOG, chip(glyph, kind, pending_tag), msg_gutter(cap(pending_msg, 40)))
+    g = O.new_group(LOG)
+    O.emit(LOG, chip(glyph, kind, pending_tag, g=g, lk=O.COPY_ALL),
+           msg_gutter(cap(pending_msg, 40), g=g))
     pending_msg = None
     pending_tag = ""
 
@@ -411,13 +415,17 @@ def render_compact(meta):
 
 def render_prompt(text):
     flush_msg()
-    O.emit(LOG, chip("⇢", "prompt"), gutter(cap(text.strip(), 24)))
+    g = O.new_group(LOG)
+    O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
+           gutter(cap(text.strip(), 24), g=g))
 
 
 def render_teammsg(sender, body):
     # An incoming agent-team message (mail from another teammate or the lead).
     flush_msg()
-    O.emit(LOG, chip("✉", "from " + (sender or "?")), gutter(cap(body.strip(), 24)))
+    g = O.new_group(LOG)
+    O.emit(LOG, chip("✉", "from " + (sender or "?"), g=g, lk=O.COPY_ALL),
+           gutter(cap(body.strip(), 24), g=g))
 
 
 def render_message(text):
@@ -535,7 +543,9 @@ def on_tool_use(b):
         # hits a dict (that AttributeError crashed the streamer mid-run, dropping the
         # agent's un-bumped token tail; reconcile_spend recovers it, but don't crash).
         text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
-        O.emit(LOG, chip("✉", "to " + to, ctx), gutter(cap(text.strip(), 12)))
+        g = O.new_group(LOG)
+        O.emit(LOG, chip("✉", "to " + to, ctx, g=g, lk=O.COPY_ALL),
+               gutter(cap(text.strip(), 12), g=g))
         pend[tid] = ("sendmsg", "")
     elif name in ("Task", "Agent"):
         # A nested subagent gets its OWN block via its own SubagentStart/Stop hooks.
@@ -544,10 +554,11 @@ def on_tool_use(b):
         O.emit(LOG, O.gut(R.DIM + st + RST, SUB_RGB))
         pend[tid] = ("agent", "")
     else:
-        O.emit(LOG, chip("·", name or "tool", ctx))
         req = input_summary(inp)                 # show the request (e.g. the query/url)
+        g = O.new_group(LOG) if req else None
+        O.emit(LOG, chip("·", name or "tool", ctx, g=g, lk=O.COPY_ALL if g else None))
         if req:
-            O.emit(LOG, gutter(cap(req, 10)))
+            O.emit(LOG, gutter(cap(req, 10), g=g))
         pend[tid] = ("other", "")
 
 
