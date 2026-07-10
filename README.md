@@ -552,7 +552,9 @@ but *not* to a subagent's messages/prompts (which share the gutter helper).
 
 **⧉ copy links — click to copy a block's command or output.** Every foreground /
 background command block's header chip (and the finish chip after a streamed
-block) carries two dim clickable affordances, ` ⧉cmd ⧉out` — a browser-style copy
+block) — in the main session **and inside a subagent's stream** (the substream
+tags its fg/bg/monitor blocks by the same `tool_use_id`) — carries two dim
+clickable affordances, ` ⧉cmd ⧉out` — a browser-style copy
 button. Clicking `⧉cmd` puts the block's exact command on the clipboard; `⧉out`
 its output (ANSI styling stripped). Mechanism: producers stamp a **copy-group
 id** (`"g"`) on the block's ops — the Bash `tool_use_id`, or the
@@ -583,9 +585,11 @@ landed. Why this design and not the alternatives:
 - **The links live on the `label` op only** (a short glyph run, never wrapped),
   which sidesteps OSC 8's re-open-per-visual-row requirement for wrapped text;
   a pane too narrow for chip + links (< ~34 cols) just drops the links.
-- **Untagged blocks are untouched** — monitors and a subagent's nested jobs
-  render exactly as before (no `g`, no links); the substream owns those blocks
-  and can grow its own tagging later.
+- **Subagent blocks tag too** — the substream stamps `g` (the inner
+  `tool_use_id`) on its fg/bg/monitor header, `code`, and `gut` ops, and passes
+  it to its nested `claude-stream.py` tailers via `CLAUDE_STREAM_GROUP`, so a
+  subagent's commands are copyable just like the lead's. Genuinely untaggable
+  ops (messages, prompts, file ops) carry no `g` and render link-free.
 
 **Foreground vs background output.** A *foreground* command's output used to be
 unavailable anywhere until it finished — Claude Code streamed it back only through

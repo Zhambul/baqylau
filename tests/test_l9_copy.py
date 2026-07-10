@@ -11,6 +11,7 @@ import sqlite3
 import subprocess
 import sys
 import time
+import uuid
 
 import payloads as P
 from conftest import REPO, wait_until
@@ -94,6 +95,44 @@ def test_renderer_paints_copy_hyperlinks(session, seed, reaper, test_env):
     assert "claude-copy:///%s/gid-1/cmd" % s.sid in text
     assert "claude-copy:///%s/gid-1/out" % s.sid in text
     assert text.count("\x1b]8;;claude-copy") == 2   # the plain label got no links
+
+
+SUB_FG_EVENTS = [
+    {"type": "assistant", "message": {
+        "id": "smsg_1", "model": "claude-opus-4-8", "role": "assistant",
+        "content": [{"type": "tool_use", "id": "tu_cp", "name": "Bash",
+                     "input": {"command": "grep -r bug ."}}],
+        "usage": {"input_tokens": 50, "output_tokens": 9,
+                  "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_cp",
+         "content": "src/x.py: bug here"}]}},
+]
+
+
+def test_subagent_fg_block_copy_cmd_and_out(session, run_hook, test_env, tmp_path):
+    """A subagent's foreground command block (rendered by the substream) is
+    group-tagged by its tool_use_id, so ⧉cmd/⧉out copy the command and output —
+    the same affordance the main session's fg blocks carry."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, SUB_FG_EVENTS)
+    wait_until(lambda: "grep -r bug ." in s.ops_text(),
+               desc="subagent fg command rendered")
+    wait_until(lambda: "src/x.py: bug here" in s.ops_text(),
+               desc="subagent fg output rendered")
+
+    tagged = [op for op in s.ops() if op.get("g") == "tu_cp"]
+    assert {"label", "code", "gut"} <= {op["t"] for op in tagged}
+
+    clip = str(tmp_path / "clip.txt")
+    _copy(run_hook, test_env, s.sid, "tu_cp", "cmd", clip)
+    assert open(clip).read() == "grep -r bug ."
+    _copy(run_hook, test_env, s.sid, "tu_cp", "out", clip)
+    assert "src/x.py: bug here" in open(clip).read()
 
 
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):

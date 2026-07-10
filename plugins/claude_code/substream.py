@@ -158,12 +158,14 @@ TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-mess
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 
-def chip(glyph, kind, ctx=""):
+def chip(glyph, kind, ctx="", g=None):
     # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
-    # turn, rather than on its own gutter line below it.
+    # turn, rather than on its own gutter line below it. g (a tool_use_id) ties a
+    # command block's header/code/output ops into one ⧉ copy group — same mechanism
+    # as the main session's fg/bg blocks (core/copy.py), just double-guttered here.
     tag = op_tag()
     s = f"{LABEL} {glyph} {kind}" + (f"  {tag}" if tag else "") + (f"  {ctx}" if ctx else "")
-    return O.label(s, SUB_RGB)
+    return O.label(s, SUB_RGB, g=g)
 
 
 def cap(text, n):
@@ -262,10 +264,12 @@ def input_summary(inp):
 alive = S.pid_alive                 # EPERM (foreign-owned) counts as alive
 
 
-def spawn_tailer(kind, taskid, cmd=""):
+def spawn_tailer(kind, taskid, cmd="", group=None):
     # Stream a subagent's background/monitor job with a DOUBLE gutter (outer = this
     # subagent's colour, inner = the job's own palette slot). claude-stream.py argv:
     #   KIND TASKID LOG SLOT SIG OUTER
+    # group (a tool_use_id) rides in via CLAUDE_STREAM_GROUP so the tailer's ops join
+    # the block's ⧉ copy group (see core/copy.py / claude-stream.py's GROUP).
     streamer = os.path.join(HERE, "claude-stream.py")
     if not (taskid and os.path.exists(streamer)):
         return
@@ -275,11 +279,14 @@ def spawn_tailer(kind, taskid, cmd=""):
         toks = re.findall(r"[\w./:@=+-]{5,}", cmd or "")
         sig = max(toks, key=len) if toks else ""
     outer = ",".join(str(x) for x in SUB_RGB)
+    env = dict(os.environ)
+    if group:
+        env["CLAUDE_STREAM_GROUP"] = group
     try:
         proc = subprocess.Popen(
             [sys.executable, streamer, kind, taskid, LOG, str(slot), sig, outer],
             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
+            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
         claude_slots.set_owner(marker, proc.pid)
         A.spawn(LOG, proc.pid, [streamer, kind, taskid, str(slot)],
                 purpose=f"stream:{kind} (nested under agent {AGENT[:8]})")
@@ -319,6 +326,7 @@ def spawn_fg_tailer(tid, rec):
     env = dict(os.environ)
     env["CLAUDE_STREAM_SRC"] = rec["src"]
     env["CLAUDE_STREAM_DONE"] = rec["done"]
+    env["CLAUDE_STREAM_GROUP"] = tid       # ⧉ copy group: join the header+code we emitted
     if rec.get("own"):
         env["CLAUDE_STREAM_OWN"] = "1"
     if rec.get("append"):
@@ -495,10 +503,10 @@ def on_tool_use(b):
     if name == "Bash":
         cmd = inp.get("command", "")
         if inp.get("run_in_background"):
-            O.emit(LOG, chip("▷", "background", ctx), O.code(cmd))
+            O.emit(LOG, chip("▷", "background", ctx, g=tid), O.code(cmd, g=tid))
             pend[tid] = ("bg", cmd)
         else:
-            O.emit(LOG, chip("▶", "foreground", ctx), O.code(cmd))
+            O.emit(LOG, chip("▶", "foreground", ctx, g=tid), O.code(cmd, g=tid))
             rec = take_subfg(tid) if (SUB_FG and tid) else None
             if rec and spawn_fg_tailer(tid, rec):
                 # A live fg tailer now owns this command's OUTPUT + finish chip; we
@@ -515,7 +523,7 @@ def on_tool_use(b):
         pend[tid] = ("file", (name, inp, ctx))
     elif name == "Monitor":
         cmd = inp.get("command", "")
-        O.emit(LOG, chip("◉", "monitor", ctx), O.code(cmd))
+        O.emit(LOG, chip("◉", "monitor", ctx, g=tid), O.code(cmd, g=tid))
         pend[tid] = ("monitor", cmd)
     elif name == "SendMessage":
         # Mail this teammate sends to another teammate / the lead. Show recipient +
@@ -582,20 +590,24 @@ def on_tool_result(b, tur=None):
             O.bump(LOG, tool="Bash", commands=1)
         m = re.search(r"with ID:\s*([^\s.]+)", txt)
         if m:
-            spawn_tailer(kind, m.group(1), cmd)
+            # Pass the block's ⧉ copy group (this tool_use_id) so the tailer's
+            # streamed output/finish ops join the header+code we already emitted.
+            spawn_tailer(kind, m.group(1), cmd, group=tid)
         elif txt.strip():
             O.emit(LOG, gutter(cap(txt.strip(), 8)))
         return
     # fg / other: show the command's output (banners emphasised — this is real
     # command output, unlike the messages/prompts that share gutter()).
+    # fg output joins this command's ⧉ copy group (the tool_use_id) so ⧉out copies it.
+    g = tid if kind == "fg" else None
     body = txt.rstrip("\n")
     if body:
-        O.emit(LOG, O.gut(R.emphasize(R.unescape(cap(body, 60))), SUB_RGB))
+        O.emit(LOG, O.gut(R.emphasize(R.unescape(cap(body, 60))), SUB_RGB, g=g))
     else:
-        O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB))
+        O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB, g=g))
     err = bool(b.get("is_error"))
     if err:
-        O.emit(LOG, O.gut(R.fg(224, 108, 117) + "■ failed" + RST, SUB_RGB))
+        O.emit(LOG, O.gut(R.fg(224, 108, 117) + "■ failed" + RST, SUB_RGB, g=g))
     if kind == "fg":
         # Team-wide command accounting, mirroring the main session's
         # claude-cmd-fmt.py — which deliberately SKIPS any agent_id event (the
