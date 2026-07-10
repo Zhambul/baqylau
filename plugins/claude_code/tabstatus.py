@@ -210,8 +210,15 @@ def ensure_interruptwatch(transcript):
         _spawn_watcher("interruptwatch", ["interrupt-watch", transcript])
 
 
+_INJECTED = None   # dispatcher-injected payload (see dispatch()); None = read stdin
+
+
 def read_payload():
-    """The hook's stdin JSON; {} on anything unparsable (a hook must never fail)."""
+    """The hook's stdin JSON; {} on anything unparsable (a hook must never fail).
+    When the single per-event dispatcher (dispatch.py) drives this in-process it
+    has already consumed stdin, so it injects the parsed payload via dispatch()."""
+    if _INJECTED is not None:
+        return _INJECTED
     try:
         return json.loads(sys.stdin.read() or "{}") or {}
     except Exception:
@@ -635,8 +642,8 @@ def resolve(state):
 # core/tabs.py — the paint contract shared by every frontend.
 
 
-def main():
-    state = resolve(STATE)
+def main(state=None):
+    state = resolve(STATE if state is None else state)
     if state is None:
         return
 
@@ -691,6 +698,21 @@ def main():
         audit_tx(prev_state, state, 0,
                  (f"{REASON} — " if REASON else "")
                  + f"kitten @ failed rc={rc} — state row unchanged")
+
+
+def dispatch(state, payload):
+    """In-process entry for the single per-event dispatcher (dispatch.py): paint
+    the tab for `state` (idle/thinking/pretool/posttool/notify/stop/clear) against
+    the dispatcher-injected payload, instead of reading argv[1] + stdin. The
+    detached watcher sub-dispatches (bg-watch / interrupt-watch / bg-recheck /
+    agent-start) still re-invoke the shim by filename with argv, so they keep the
+    module-global STATE path."""
+    global _INJECTED, DISPATCH
+    _INJECTED, DISPATCH = payload, state   # DISPATCH labels the tab_transitions row
+    try:
+        main(state)
+    finally:
+        _INJECTED = None
 
 
 def entry():

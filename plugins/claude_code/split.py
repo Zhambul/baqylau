@@ -141,8 +141,14 @@ FE.export_env()
 
 # --- session identity --------------------------------------------------------
 
+_INJECTED = None   # dispatcher-injected payload (see handle()); None = read stdin
+
+
 def sid_from_stdin():
-    """SessionStart/SessionEnd: (payload, session_id) from the hook's stdin."""
+    """SessionStart/SessionEnd: (payload, session_id) from the hook's stdin — or
+    from the dispatcher-injected payload when driven in-process (dispatch.py)."""
+    if _INJECTED is not None:
+        return _INJECTED, str(_INJECTED.get("session_id") or "")
     try:
         payload = json.loads(sys.stdin.read() or "{}") or {}
     except Exception:
@@ -507,6 +513,19 @@ def main():
         cmd_toggle()
     elif CMD in ("grow", "shrink", "reset", "setpct"):
         cmd_resize(CMD)
+
+
+def handle(cmd, payload):
+    """In-process entry for the single per-event dispatcher (dispatch.py): run the
+    SessionStart(open) / SessionEnd(close) pane lifecycle against the injected
+    payload. Keybinding subcommands (toggle/grow/shrink/reset/setpct) keep the
+    argv path via the module-global CMD."""
+    global CMD, _INJECTED
+    CMD, _INJECTED = cmd, payload
+    try:
+        main()
+    finally:
+        _INJECTED = None
 
 
 def entry():

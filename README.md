@@ -177,12 +177,18 @@ frontends/   terminal adapters — import core/ at most
 plugins/     one directory per agent tool — import core/ + frontends/,
              never each other
 claude-*.py  repo-root entry scripts: the assembly layer. They may import
-             anything. Their FILENAMES are load-bearing twice over: the hook
-             wiring in ~/.claude/settings.json points at them, and argv[0] is
-             the audit DB's handler/script vocabulary (`hook_events.handler`,
+             anything. Their FILENAMES are load-bearing: they name the audit
+             DB's handler/script vocabulary (`hook_events.handler`,
              `errors.script`, spawn parents) — so entries stay at the root
              under their historical names even as implementations move into
-             the packages.
+             the packages. Since the single-dispatcher refactor (§ Wiring) the
+             HOOK wiring in ~/.claude/settings.json points every event at ONE
+             entry, `claude-hook.py`, which runs each subsystem in-process — so
+             argv[0] is `claude-hook.py` for all of them. The vocabulary is
+             preserved by the dispatcher stamping `audit.set_handler(name)`
+             around each call (an explicit override, no longer argv[0] alone).
+             The per-script shims (`claude-cmd-fmt.py` …) still exist and still
+             run standalone — the e2e tests drive them directly.
 ```
 
 `core/` holds: `paths.py` (the mirror-log path format — was
@@ -212,7 +218,11 @@ parsing, the `PRICES` table, `cost_usd`, the `usage_fold` message-id dedup,
 `diff_counts`, `read_extent`, `edit_range`, `FILE_LABEL`/`FILE_RGB`),
 `model.py` (was `claude_model.py`, plus `claude_dirs`), `msgs.py` (was
 `claude_msgs.py`), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
-`file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the two
+`file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the
+single per-event **`dispatch.py`** (behind the `claude-hook.py` entry — reads
+the payload once and fans out in-process to the tab dispatch, the right
+formatter, and the audit subscriber; matcher routing lives in its `_plan()` —
+see § Wiring), the two
 streamers (`stream.py`, `substream.py`), the tab dispatch (`tabstatus.py` —
 maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
 and the pane/session lifecycle (`split.py` — now a thin caller into
@@ -288,36 +298,69 @@ orphan all three.
   protocol claude-copy
   action launch --type=background /path/to/repo/claude-copy.py ${URL}
   ```
-- **`~/.claude/settings.json`** — a `hooks` block:
+- **`~/.claude/settings.json`** — a `hooks` block. **Every** hook event points at
+  a single entry, **`claude-hook.py`** (→ `plugins/claude_code/dispatch.py`), which
+  reads the payload once and fans out **in-process** to whatever that event needs:
 
-  | Hook | Matcher | Runs |
-  |------|---------|------|
-  | `SessionStart`     | —      | `claude-tab-status.py idle` + `claude-split.py open` |
-  | `UserPromptSubmit` | —      | `claude-tab-status.py thinking` |
-  | `PreToolUse`       | `.*`   | `claude-tab-status.py pretool` |
-  | `PreToolUse`       | `Task\|Agent` | `claude-subagent-fmt.py push` (stashes the Task description for the upcoming `SubagentStart` header) |
-  | `PreToolUse`       | `Bash` | `claude-cmd-pre.py` (rewrites the command to stream live — see *Live foreground streaming* below) |
-  | `PostToolUse`      | `.*`   | `claude-tab-status.py posttool` (ignored if the event carries an `agent_id` — a subagent/teammate inner call — else magenta) |
-  | `PostToolUse`      | `Bash` | `claude-cmd-fmt.py` (writes command + output + elapsed to the mirror log) |
-  | `PostToolUse`      | `Read\|Edit\|Write\|MultiEdit\|NotebookEdit` | `claude-file-fmt.py` (writes a one-line `Read(name)`/`Update(name)`/`Write(name)` to the mirror log) |
-  | `PostToolUse`      | `Monitor` | `claude-monitor-fmt.py` (monitor header + spawns `claude-stream.py` to tail the event stream) |
-  | `PostToolUseFailure` | `.*` / `Bash` / `Read\|Edit\|…` / `Monitor` | same handlers as `PostToolUse` — a tool that **fails** (e.g. a non-zero-exit command) fires this event, *not* `PostToolUse`, so it must be wired too or failures never reach the mirror |
-  | `SubagentStart`    | —      | `claude-subagent-fmt.py start` (subagent header `▶ <type> · <desc>` + claims its colour slot; in-process **agent-team teammates** arrive here too) |
-  | `SubagentStop`     | —      | `claude-subagent-fmt.py stop` (subagent footer `■ <type> ended · Ns` + releases the slot) |
-  | `TaskCreated`      | —      | `claude-task-fmt.py` (agent-team shared task list: writes `✚ task #N · <subject>` to the mirror) |
-  | `TaskCompleted`    | —      | `claude-task-fmt.py` (writes `✓ task #N · <subject>` to the mirror) |
-  | `Notification`     | —      | `claude-tab-status.py notify` (reads the message: a permission/approval prompt → red `awaiting-command`; a "waiting for your input" notice → green `awaiting-response`, since that's just your turn) |
-  | `Stop`             | —      | `claude-tab-status.py stop` **+ `claude-stop-fmt.py`** (folds the turn's token/cost spend into the scoreboard — see below) |
-  | `StopFailure`      | —      | `claude-tab-status.py stop` (turn ended on an API error — keep the tab from getting stuck on the "busy" colour) **+ `claude-stop-fmt.py`** (fold whatever landed in the transcript; and when the payload carries an `agent_id` — a subagent that died on an API error, which fires no `SubagentStop` — finalise that agent's block/slot via `subagent_fmt.finalize`, else its streamer hangs and the tab stays blue) |
-  | `SessionEnd`       | —      | `claude-tab-status.py clear` + `claude-split.py close` |
+  ```json
+  "hooks": { "PostToolUse": [ { "hooks": [
+      { "type": "command", "command": "/ABS/PATH/kitty/claude-hook.py" } ] } ],
+      "Stop": [ { "hooks": [ { "type": "command", "command": ".../claude-hook.py" } ] } ],
+      "…every other event…": [ … same single entry … ] }
+  ```
 
-  All seven `*-fmt.py`/`-pre.py` handlers (incl. `claude-stop-fmt.py`) share **`claude_hook.py`** — the harness
-  owning the identical per-hook skeleton (stdin payload parse + mirror-log
-  derivation, audited ignore-decisions, detached streamer spawn with the
-  load-bearing `start_new_session=True`, and the top-level audit-then-swallow).
-  The `agent_id` main-session guard is deliberately NOT in the harness: most
-  handlers skip agent-inner events, but `claude-monitor-fmt.py` renders subagent
-  monitors on purpose, so each handler makes that call explicitly.
+  Previously each event listed several separate command entries — the tab-colour
+  dispatch, a matcher-gated formatter, and the always-on `async` audit subscriber —
+  so Claude Code spawned one python process **per concern per event**. The
+  dispatcher collapses that to one entry per event; the **matcher routing and
+  fan-out now live in `dispatch.py`'s `_plan()`**, reproducing the old wiring
+  exactly (same tools, same order, same subsystem side-effects):
+
+  | Hook | Routes to (in `_plan`) |
+  |------|------------------------|
+  | `SessionStart`     | tab `idle` + `split.handle("open")` |
+  | `UserPromptSubmit` | tab `thinking` |
+  | `PreToolUse`       | tab `pretool` (all tools) · `Task\|Agent` → `subagent_fmt.run_phase("push")` (stashes the Task description for the upcoming `SubagentStart`) · `Bash` → `cmd_pre` (rewrites the command to stream live — see *Live foreground streaming*; its `updatedInput` JSON is printed to the dispatcher's **stdout**, which is the one Claude Code reads) |
+  | `PostToolUse` / `PostToolUseFailure` | tab `posttool` (all tools; ignored for an `agent_id` inner call) · `Bash` → `cmd_fmt` · `Read\|Edit\|Write\|MultiEdit\|NotebookEdit` → `file_fmt` · `Monitor` → `monitor_fmt`. **Failures fire `PostToolUseFailure`, not `PostToolUse`** — the dispatcher routes both identically, so a non-zero-exit command still reaches the mirror |
+  | `SubagentStart`    | `subagent_fmt.run_phase("start")` (header `▶ <type> · <desc>` + colour slot; teammates arrive here too) |
+  | `SubagentStop`     | `subagent_fmt.run_phase("stop")` (footer + releases the slot) |
+  | `TaskCreated` / `TaskCompleted` | `task_fmt` (`✚`/`✓ task #N · <subject>` to the mirror) |
+  | `Notification`     | tab `notify` (permission/approval → red `awaiting-command`; "waiting for your input" → green `awaiting-response`) |
+  | `Stop`             | tab `stop` + `stop_fmt` (folds the turn's token/cost spend into the scoreboard) |
+  | `StopFailure`      | tab `stop` (turn ended on an API error — keep the tab off the "busy" colour) + `stop_fmt` (fold whatever landed in the transcript; and when the payload carries an `agent_id` — a subagent that died on an API error, which fires no `SubagentStop` — finalise that agent's block/slot via `subagent_fmt.finalize`, else its streamer hangs and the tab stays blue) |
+  | `SessionEnd`       | tab `clear` + `split.handle("close")` |
+  | *every other event* (`Setup`, `PreCompact`, `PermissionRequest`, …) | no functional handler — records only the universal audit-subscriber row (below) |
+
+  **Why one dispatcher, and how behaviour is preserved:**
+  - **Audit vocabulary.** Every subsystem still writes its own audit rows under its
+    *entry filename* (`hook_events.handler` / `errors.script` = `claude-cmd-fmt.py`,
+    `claude-tab-status.py`, …), never the `claude-hook.py` the process actually runs
+    under. The dispatcher stamps `A.set_handler("claude-<x>.py")` around each call
+    (argv[0] is no longer the vocabulary — an explicit override is).
+  - **The async audit subscriber is gone as a separate entry.** Its universal row
+    (`handler="subscriber"`, every event's full payload) is now written *in-process*
+    by the dispatcher — `A.hook_event(d, handler="subscriber")`. Audit writes never
+    block and spool on a locked DB (the same property `claude-tab-status.py` relies
+    on for its in-process transitions), so it stays off the turn's failure path. The
+    two-row model (`subscriber` row **+** each handler's own decision row) that the
+    audit queries expect (`handler != 'subscriber'`) is unchanged.
+  - **Isolation.** Each subsystem runs through `hookkit.run()` (audit-then-swallow),
+    exactly the crash isolation separate processes gave it — one failing step never
+    blocks the others or the turn.
+  - **Injected payload.** Since the dispatcher already consumed stdin, the formatters'
+    `hookkit.read_payload()` (and `tabstatus` / `split`'s own readers) return a
+    dispatcher-injected payload instead of re-reading an empty stdin. The old
+    per-script shims (`claude-cmd-fmt.py` …) still exist and still read stdin — the
+    e2e tests drive them directly, and nothing changed for them.
+
+  All seven `*-fmt.py`/`-pre.py` handlers (incl. `claude-stop-fmt.py`) share
+  **`hookkit.py`** (historical name `claude_hook.py`) — the harness owning the
+  identical per-hook skeleton (stdin payload parse + mirror-log derivation, audited
+  ignore-decisions, detached streamer spawn with the load-bearing
+  `start_new_session=True`, and the top-level audit-then-swallow). The `agent_id`
+  main-session guard is deliberately NOT in the harness: most handlers skip
+  agent-inner events, but `claude-monitor-fmt.py` renders subagent monitors on
+  purpose, so each handler makes that call explicitly.
 
   Agent-team support also needs the experimental feature itself enabled, via an
   `env` entry in the same `settings.json` (read at session start):
@@ -1543,9 +1586,11 @@ What's recorded (all tables keyed by `session_id`, written by `claude_audit.py`)
 
 `hook_events` is fed two ways. The mirror's own handlers record the events they
 process, *with* the decision they took. On top of that, a **universal subscriber**
-(`claude_audit.py hook subscriber`, wired **`async`** — non-blocking — into **all 30
-hook events** in `~/.claude/settings.json`) records **every** event with its full
-payload, `handler = 'subscriber'` — including the ones nothing else listens to:
+records **every** event with its full payload, `handler = 'subscriber'`. It used to
+be its own `async` settings entry (`claude_audit.py hook subscriber`); since the
+single-dispatcher refactor (§ Wiring) the dispatcher writes it in-process at the end
+of `route()` — `A.hook_event(d, handler="subscriber")` — for **all 30 hook events**,
+so it still covers the ones nothing else listens to:
 `PermissionRequest`/`PermissionDenied`, `PostToolBatch`, `MessageDisplay`,
 `TeammateIdle`, `Pre`/`PostCompact`, `ConfigChange`, `CwdChanged`, `FileChanged`,
 `WorktreeCreate`/`Remove`, `Elicitation`/`ElicitationResult`, `Setup`,

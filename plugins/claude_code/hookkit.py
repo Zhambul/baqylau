@@ -35,6 +35,23 @@ HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 _LOG = ""  # last mirror log seen by read_payload(); run()'s crash audit uses it
 
+# When the single per-event dispatcher (claude-hook.py -> plugins.claude_code.
+# dispatch) runs a formatter in-process, stdin has ALREADY been consumed by the
+# dispatcher (a stream can only be read once). It injects the parsed payload here
+# so read_payload() returns it instead of re-reading an empty stdin. None = the
+# normal standalone-shim path (read stdin). See dispatch.py.
+_INJECTED = None
+
+
+def set_payload(d):
+    global _INJECTED
+    _INJECTED = d
+
+
+def clear_payload():
+    global _INJECTED
+    _INJECTED = None
+
 
 def log_path(d):
     """The mirror log for a hook payload, keyed by session_id so PARALLEL Claude
@@ -55,11 +72,14 @@ def read_payload():
     Returns (payload, log), or (None, "") after auditing a malformed payload —
     callers just `if d is None: return`."""
     global _LOG
-    try:
-        d = json.load(sys.stdin)
-    except Exception:
-        A.error("", "payload parse (stdin not valid JSON)")
-        return None, ""
+    if _INJECTED is not None:
+        d = _INJECTED                       # dispatcher pre-read stdin for us
+    else:
+        try:
+            d = json.load(sys.stdin)
+        except Exception:
+            A.error("", "payload parse (stdin not valid JSON)")
+            return None, ""
     _LOG = log_path(d)
     return d, _LOG
 

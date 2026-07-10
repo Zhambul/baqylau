@@ -290,5 +290,15 @@ def main():
     finalize(LOG, d, agent_id, atype, tpath)
 
 
+def run_phase(phase):
+    """In-process entry for the single per-event dispatcher (dispatch.py): set the
+    PHASE this call represents (push/start/stop) and run main() against the
+    dispatcher-injected payload (H.set_payload). The standalone shim path keeps
+    reading PHASE from argv[1] via the module global above."""
+    global PHASE
+    PHASE = phase
+    main()
+
+
 def entry():
     H.run(main, phase=PHASE)

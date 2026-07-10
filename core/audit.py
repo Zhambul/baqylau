@@ -223,7 +223,25 @@ def event(table, **cols):
         return None
 
 
+_HANDLER = None   # in-process override for the handler/script name (see set_handler)
+
+
+def set_handler(name):
+    """Override the name _script() reports, for the duration of one subsystem's
+    in-process run. claude-hook.py (the single per-event dispatcher) calls each
+    subsystem's body in ONE process, so argv[0] is always 'claude-hook.py' — the
+    audit's handler/script vocabulary (hook_events.handler, errors.script) would
+    collapse to that one name. The dispatcher stamps the subsystem's ENTRY
+    filename here before the call and clears it (set_handler(None)) after, so the
+    rows keep attributing to claude-cmd-fmt.py / claude-tab-status.py / … exactly
+    as when each ran as its own process."""
+    global _HANDLER
+    _HANDLER = name
+
+
 def _script():
+    if _HANDLER:
+        return _HANDLER
     try:
         return os.path.basename(sys.argv[0]) or "?"
     except Exception:
@@ -630,6 +648,15 @@ def cli_anomalies(sid):
             "SELECT ts, agent_id, decision FROM hook_events WHERE session_id=? AND "
             "hook='StopFailure' AND agent_id != '' AND handler != 'subscriber' "
             "AND decision NOT LIKE 'stopfail:%' ORDER BY ts", (sid,))
+    # Since the single-dispatcher refactor every event runs through claude-hook.py
+    # -> dispatch.py. A crash in the DISPATCHER itself (not a subsystem) records
+    # script='dispatch' — that means route() threw before/around fanning out, so a
+    # whole event may have produced no tab change / no block. A subsystem crash keeps
+    # its own entry-filename script (surfaced by "swallowed errors" above); this
+    # isolates the dispatcher-level failure, which should essentially never fire.
+    section("dispatcher-level crash (route() threw — whole event may be lost)",
+            "SELECT ts, func, substr(traceback,1,120) FROM errors WHERE session_id=? "
+            "AND script='dispatch' ORDER BY ts", (sid,))
     section("failed tools (PostToolUseFailure)",
             "SELECT ts, tool_name, decision FROM hook_events WHERE session_id=? AND "
             "hook LIKE '%Failure%' ORDER BY ts", (sid,))
