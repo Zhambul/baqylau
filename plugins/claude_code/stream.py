@@ -104,6 +104,12 @@ DONE = os.environ.get("CLAUDE_STREAM_DONE") or ""
 # file holds the FULL output from the start; (b) a `>>` append redirect — the target
 # file's prior contents predate the command. Skip whatever exists at spawn time.
 SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
+# The block's copy-group id (⧉ copy links), set by the launcher (claude-cmd-pre.py:
+# the tool_use_id; claude-cmd-fmt.py: the backgroundTaskId) so this tailer's
+# gut/finish ops join the same group as the header/code ops the launcher emitted.
+# Unset for launchers that don't tag (monitors, a subagent's nested jobs) — those
+# blocks just render without copy links, exactly as before.
+GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
 
 
 def find_file(deadline):
@@ -232,7 +238,7 @@ def main(run):
         if lines:
             run.lines += len(lines)
             O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
-                              SLOT_RGB, outer=OUTER_RGB))
+                              SLOT_RGB, outer=OUTER_RGB, g=GROUP))
         return lines                            # None -> file vanished
 
     # Completion signal differs by kind:
@@ -311,12 +317,13 @@ def main(run):
     if converted:
         run.end("converted-ctrl-b")
     if tail.pending.strip():
-        O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB, outer=OUTER_RGB))
+        O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB,
+                          outer=OUTER_RGB, g=GROUP))
     elif KIND == "fg" and tail.pos == 0 and not converted and override and override.get("fallback_body"):
         # Nothing ever landed in SRC — most likely an older Claude Code build that
         # ignored PreToolUse's updatedInput, so the command ran unwrapped. Fall back
         # to the real output PostToolUse captured itself rather than showing nothing.
-        O.emit(LOG, O.gut(override["fallback_body"], SLOT_RGB))
+        O.emit(LOG, O.gut(override["fallback_body"], SLOT_RGB, g=GROUP))
 
     if not converted:
         # Ctrl+B-converted (see claude-cmd-fmt.py): a fresh "bg" tailer against the
@@ -342,7 +349,9 @@ def main(run):
         if OUTER_RGB:
             O.emit(LOG, O.label(chip_txt, chip_rgb, outer=OUTER_RGB))
         else:
-            O.emit(LOG, O.rule(), O.label(chip_txt, chip_rgb), O.rule())
+            # g on the finish chip too: after a long stream the header's ⧉ links are
+            # far up in scrollback — the chip at the bottom offers the same copy.
+            O.emit(LOG, O.rule(), O.label(chip_txt, chip_rgb, g=GROUP), O.rule())
 
     if KIND == "fg" and OWN:
         try:

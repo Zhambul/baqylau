@@ -21,6 +21,14 @@
 #                             when outer is given), wrapped so the gutter repeats on
 #                             every visual row. s may already contain ANSI (zero-width)
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
+#
+# Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
+# one command block together (the Bash tool_use_id, or the backgroundTaskId for a
+# background job). A g-tagged label is painted with clickable " ⧉cmd ⧉out" OSC 8
+# hyperlinks (claude-copy:// — resolved by kitty's open-actions.conf into
+# claude-copy.py, which re-reads the group's ops and pipes the text to the
+# clipboard). A g-tagged code op also keeps the ORIGINAL command in "raw" when
+# format_code changed it, so the copy is the exact command that ran.
 import json, os, time
 
 try:
@@ -45,18 +53,21 @@ def rule():
     return {"t": "rule"}
 
 
-def label(s, c, outer=None):
+def label(s, c, outer=None, g=None):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if outer is not None:
         o["outer"] = _rgb(outer)
+    if g:
+        o["g"] = str(g)
     return o
 
 
-def code(s, ind="  "):
+def code(s, ind="  ", g=None):
     # Pretty-print the command once, here at op creation (width-independent — the
     # renderer still wraps the result to the pane). Best-effort and gated by
     # CLAUDE_MIRROR_FORMAT (set to "0" to show commands verbatim). Only producers call
     # code(); the renderer never does, so this never runs in the paint loop.
+    raw = s
     if os.environ.get("CLAUDE_MIRROR_FORMAT", "1") != "0":
         try:
             from core import render as R
@@ -65,13 +76,20 @@ def code(s, ind="  "):
             # Audited: a broken formatter (pygments regression) otherwise paints
             # every command unformatted with nothing in the DB saying why.
             A.error("", "format_code (command shown verbatim)")
-    return {"t": "code", "s": s, "ind": ind}
+    o = {"t": "code", "s": s, "ind": ind}
+    if g:
+        o["g"] = str(g)
+        if s != raw:
+            o["raw"] = raw      # ⧉cmd copies the EXACT command, not the pretty-print
+    return o
 
 
-def gut(s, c, outer=None):
+def gut(s, c, outer=None, g=None):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if outer is not None:
         o["outer"] = _rgb(outer)
+    if g:
+        o["g"] = str(g)
     return o
 
 

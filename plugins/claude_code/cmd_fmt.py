@@ -30,7 +30,7 @@ LBL_BG   = O.ORANGE   # background header chip / foreground "interrupted"
 LBL_FAIL = O.RED      # a failed tool (PostToolUseFailure)
 
 
-def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
+def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None):
     # Launch claude-stream.py detached so it keeps tailing the job's output file
     # after this hook exits. Passes the claimed slot so its gutter + finish chip
     # match the header colour. If the command redirected stdout to a file (`src`),
@@ -46,6 +46,9 @@ def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False):
         env["CLAUDE_STREAM_SRC"] = src
     if skip_existing:
         env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
+    if group:
+        # ⧉ copy links: the tailer's gut/finish ops join this block's copy group.
+        env["CLAUDE_STREAM_GROUP"] = group
     return H.spawn_streamer("claude-stream.py", [kind, taskid, LOG, slot], LOG,
                             env=env, purpose=f"stream:{kind} task={taskid}",
                             audit_argv=[kind, taskid, str(slot)])
@@ -121,9 +124,11 @@ def _render_background(d, cmd, taskid, converted, done):
             A.state_file(LOG, "state:done:" + done, "write", {"converted": True})
         else:
             A.error(LOG, "write converted handoff", {"done": done})
-        O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG))
+        O.emit(LOG, O.label("▷ backgrounded (ctrl+b) — continuing below", LBL_BG,
+                            g=taskid))
     else:
-        O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb), O.code(cmd), O.rule())
+        O.emit(LOG, O.blank(), O.rule(), O.label("▷ background", head_rgb, g=taskid),
+               O.code(cmd, g=taskid), O.rule())
 
     O.bump(LOG, tool="Bash", commands=1)     # count it; the streamer owns its finish
     ACC.bump_transcript(LOG, d.get("transcript_path"))
@@ -136,7 +141,7 @@ def _render_background(d, cmd, taskid, converted, done):
         # skip_existing for a `>>` redirect: tail only what this job appends, or
         # the target file's entire prior contents would replay into the mirror.
         proc = _spawn_stream("bg", taskid, slot, src,
-                             skip_existing=converted or src_append)
+                             skip_existing=converted or src_append, group=taskid)
         if proc is not None:
             claude_slots.set_owner(slot_marker, proc.pid)
         else:
@@ -196,8 +201,10 @@ def _render_finished(d, tr, cmd, live, done):
             live = None    # couldn't hand off -> fall through to the normal render below
 
     if not live:
-        O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col), O.code(cmd), O.rule(),
-               O.gut(gut_body, col), O.rule(), O.label(chip_txt, col), O.rule())
+        gid = d.get("tool_use_id") or None      # ⧉ copy links: this block's group
+        O.emit(LOG, O.blank(), O.rule(), O.label("▶ foreground", col, g=gid),
+               O.code(cmd, g=gid), O.rule(), O.gut(gut_body, col, g=gid), O.rule(),
+               O.label(chip_txt, col, g=gid), O.rule())
     A.hook_event(d, decision=("handed off to fg tailer: " if live else "rendered: ")
                  + chip_txt)
 

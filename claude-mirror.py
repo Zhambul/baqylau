@@ -71,6 +71,7 @@ def _ensure_pygments():
 _ensure_pygments()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from core import paths as P
 from core import render as R
 from core import state as St
 
@@ -107,6 +108,26 @@ def render(op, w):
     return s
 
 
+# ⧉ copy links: a g-tagged label op gets clickable " ⧉cmd ⧉out" affordances (OSC 8
+# hyperlinks, claude-copy:// scheme). kitty resolves a click via open-actions.conf,
+# which launches claude-copy.py with the URL; that handler re-reads the group's ops
+# from the state DB and pipes command/output text to the clipboard (README §
+# Copy links). The links are dim and zero-cost to everything else — a label without
+# "g" renders exactly as before.
+_LINK_TXT = (("cmd", "⧉cmd"), ("out", "⧉out"))
+_LINKW = 10          # display cells of " ⧉cmd ⧉out" (the OSC 8 wrapper is zero-width)
+
+
+def _copy_links(g):
+    from urllib.parse import quote
+    key = quote(P.sid_from_log(LOG), safe="")
+    parts = []
+    for what, txt in _LINK_TXT:
+        url = "claude-copy:///%s/%s/%s" % (key, quote(str(g), safe=""), what)
+        parts.append(" " + R.hyperlink(url, R.DIM + txt + R.RST))
+    return "".join(parts)
+
+
 def _render(op, w):
     t = op.get("t")
     if t == "blank":
@@ -116,7 +137,12 @@ def _render(op, w):
     if t == "label":
         outer = op.get("outer")
         avail = w - 2 - (2 if outer else 0)            # chip eats 2 cols; outer bar 2 more
-        chip = R.label(fit(op.get("s", ""), max(1, avail)), op["c"])
+        links = ""
+        g = op.get("g")
+        if g and avail >= _LINKW + 24:                 # keep a useful chip width; a very
+            links = _copy_links(g)                     # narrow pane just drops the links
+            avail -= _LINKW
+        chip = R.label(fit(op.get("s", ""), max(1, avail)), op["c"]) + links
         if outer:
             return R.fg(*outer) + "│ " + R.RST + chip
         return chip

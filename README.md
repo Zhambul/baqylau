@@ -196,7 +196,10 @@ counters/parts, the semantic colour table — the tool-agnostic half of the old
 open/close the mirror pane + scoreboard bar, create/restore/park the state DB;
 shared by BOTH hosts, Claude Code's `split.py` and standalone codex's
 `session.py`. Frontend-INJECTED: core imports no frontend, so every terminal-
-touching function takes the caller's `fe` as its first arg), and `tabs.py`
+touching function takes the caller's `fe` as its first arg), `copy.py` (the ⧉
+copy-link handler behind the `claude-copy.py` entry — reads a block's
+group-tagged ops read-only and pipes command/output text to the clipboard; see
+§ Command mirror pane), and `tabs.py`
 (the tab-state vocabulary: state constants, the `COLORS` hex table every
 frontend paints from, and the global window-keyed tab DB + watcher pid locks).
 
@@ -276,6 +279,14 @@ orphan all three.
   ```
   allow_remote_control yes
   listen_on unix:/tmp/kitty
+  ```
+- **`~/.config/kitty/open-actions.conf`** — the ⧉ copy links (see § Command
+  mirror pane) resolve through kitty's open-actions machinery; one rule wires the
+  custom scheme to the handler (picked up on the next config reload —
+  `ctrl+shift+f5` — no kitty restart needed):
+  ```
+  protocol claude-copy
+  action launch --type=background /path/to/repo/claude-copy.py ${URL}
   ```
 - **`~/.claude/settings.json`** — a `hooks` block:
 
@@ -495,6 +506,42 @@ and the `-`/`#`/`*`/`~` forms must be **bracketed** on both ends (so a diff head
 `--- a/file` and a bare `-----` rule stay plain). It's applied at every real
 command-output site — foreground, background/monitor tail, and subagent output —
 but *not* to a subagent's messages/prompts (which share the gutter helper).
+
+**⧉ copy links — click to copy a block's command or output.** Every foreground /
+background command block's header chip (and the finish chip after a streamed
+block) carries two dim clickable affordances, ` ⧉cmd ⧉out` — a browser-style copy
+button. Clicking `⧉cmd` puts the block's exact command on the clipboard; `⧉out`
+its output (ANSI styling stripped). Mechanism: producers stamp a **copy-group
+id** (`"g"`) on the block's ops — the Bash `tool_use_id`, or the
+`backgroundTaskId` for a background job; live-fg / bg tailers inherit it via
+`CLAUDE_STREAM_GROUP` so their `gut`/finish ops join the same group — and the
+renderer wraps the affordance in an **OSC 8 hyperlink** with the custom scheme
+`claude-copy:///<key>/<gid>/<what>`. kitty resolves a plain left-click through
+`~/.config/kitty/open-actions.conf` (see § Wiring), whose `protocol claude-copy`
+rule launches **`claude-copy.py`** (impl `core/copy.py`) with the URL. The
+handler re-reads the group's ops from the state DB **read-only** (`mode=ro` — a
+click after SessionEnd must never recreate a DB whose file-existence is the
+session-alive signal), takes `code` ops for `cmd` — preferring the op's `raw`
+field, the pre-pretty-print original, so what you paste is what actually ran —
+and ANSI-stripped `gut` ops for `out`, pipes the text to the clipboard
+(`pbcopy`, else `wl-copy`/`xclip`/`xsel`; `CLAUDE_COPY_CMD` overrides — the test
+seam), and appends a one-line `⧉ copied …` feedback op so the click visibly
+landed. Why this design and not the alternatives:
+- **Copy from the ops table, not the `.out` tee files** — the tee files are
+  transient (deleted when the tailer finishes), while the ops table is the
+  session's history, parked/restored across resume: scrolled-back and
+  resumed-session blocks stay copyable. The pretty-printed `code` op is not the
+  literal command, hence the `raw` field on g-tagged code ops.
+- **OSC 8 + `open-actions.conf`, not mouse reporting** — a renderer that grabs
+  mouse mode would steal normal text selection in the pane and need row→op
+  geometry bookkeeping that reflow invalidates. Hyperlinks keep the pane a dumb
+  stream; kitty underlines the link on hover and handles the click.
+- **The links live on the `label` op only** (a short glyph run, never wrapped),
+  which sidesteps OSC 8's re-open-per-visual-row requirement for wrapped text;
+  a pane too narrow for chip + links (< ~34 cols) just drops the links.
+- **Untagged blocks are untouched** — monitors and a subagent's nested jobs
+  render exactly as before (no `g`, no links); the substream owns those blocks
+  and can grow its own tagging later.
 
 **Foreground vs background output.** A *foreground* command's output used to be
 unavailable anywhere until it finished — Claude Code streamed it back only through

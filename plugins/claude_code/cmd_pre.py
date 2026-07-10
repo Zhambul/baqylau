@@ -162,9 +162,16 @@ def main():
     # (and there'd be no way to notice a Ctrl+B-backgrounded command at all).
     slot, slot_marker = claude_slots.claim("fg", log)
 
+    # The block's copy-group id (⧉ copy links): this tool call's id, stamped on
+    # the header/code ops below and handed to the tailer so its gut/finish ops
+    # join the same group — claude-copy.py collects a block by this id.
+    gid = d.get("tool_use_id") or None
+
     env = dict(os.environ)
     env["CLAUDE_STREAM_SRC"] = src
     env["CLAUDE_STREAM_DONE"] = done
+    if gid:
+        env["CLAUDE_STREAM_GROUP"] = gid
     if own:
         env["CLAUDE_STREAM_OWN"] = "1"
     if append:
@@ -194,7 +201,8 @@ def main():
         A.error(log, "write fg-live record", {"src": src})
         return                                     # tailer will notice via its own backstop eventually
 
-    O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG), O.code(cmd), O.rule())
+    O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG, g=gid),
+           O.code(cmd, g=gid), O.rule())
     A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s"
                  % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
                     else "tailing command's own redirect"))

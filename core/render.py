@@ -108,6 +108,19 @@ def unescape(s):
 _ANSI = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
 
 
+def strip_ansi(s):
+    """The visible text of an ANSI-styled string (what claude-copy.py puts on the
+    clipboard from a gut op — colours/emphasis are display styling, not content)."""
+    return _ANSI.sub("", s)
+
+
+def hyperlink(url, text):
+    """Wrap `text` in an OSC 8 hyperlink (zero display width). kitty resolves a
+    click through ~/.config/kitty/open-actions.conf — the mirror's ⧉ copy links
+    (claude-copy:// scheme) ride on this."""
+    return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+
+
 def wrap_gutter(text, width, gut, gw):
     cw = max(1, width - gw)                       # visible columns after the gutter
     pieces, lines = [], text.split("\n")
