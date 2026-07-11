@@ -177,6 +177,18 @@ def test_blocks_are_blank_separated():
     assert "\n\n" in plain, "blocks should be blank-line separated"
 
 
+def test_gfm_table_rendered_with_rail():
+    md = "| A | B |\n|---|---|\n| 1 | 2 |\n"
+    out = "".join(_render_all(md))
+    plain = R.strip_ansi(out)
+    # Cells separated by a │ rail; header row bold; a dim rule under the header.
+    assert "│" in plain, "table cells should be joined by a │ rail"
+    assert "A" in plain and "B" in plain and "1" in plain and "2" in plain
+    assert "\033[1m" in out, "header row should be bold"
+    # Each row is ONE logical line (reflow-safe) — the body row has no interior \n.
+    assert "1 │ 2" in plain
+
+
 # ---- JSON ---------------------------------------------------------------------
 
 from core import jsonrender as JSON  # noqa: E402

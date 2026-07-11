@@ -12,7 +12,8 @@
 # core/render.py primitives (BANNER, COL, hyperlink, DIM, pick) so headings/bold/
 # code match the rest of the mirror. This replaces (and supersets) the line-
 # oriented regex subset in core/render.markdown(): real nesting, ordered lists,
-# fenced blocks (syntax-highlighted by language via pygments), blockquotes, plus
+# fenced blocks (syntax-highlighted by language via pygments), blockquotes, GFM
+# tables (dim │ rail, bold header — no column alignment, that's width-dependent), plus
 # two wiki conventions the raw parser doesn't know — YAML frontmatter and
 # Obsidian `[[wikilinks]]`. Why an AST parser and not glow/rich: those bake a
 # fixed width into their output, which the mirror's reflow model can't consume.
