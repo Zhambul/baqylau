@@ -348,7 +348,10 @@ def test_code_source_detection():
               # the PATTERN/SCRIPT arg must not masquerade as the file
               "grep 'foo.py' x.txt", "sed 's/a/b.py/' notes.txt",
               # recursive grep (dir last, no extension) opts out
-              "grep -r pattern src/"]:
+              "grep -r pattern src/",
+              # multi-statement (newline-separated) is mixed output -> verbatim
+              "grep -n def a.py\necho hi\nsed -n 1,5p b.py",
+              "cat a.py\ncat b.py"]:
         assert code_source(c) is None, c
 
 

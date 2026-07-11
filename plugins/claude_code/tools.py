@@ -9,6 +9,15 @@ import difflib, os, re, shlex
 from core.ops import BLUE, GREEN, YELLOW
 
 
+def _multi_statement(cmd):
+    """True when `cmd` runs more than one statement. A newline separates shell
+    statements just like `;` (grep …\\necho …\\nsed …), so its streamed output is
+    several commands' worth — mixed files/languages, never one file verbatim. The
+    per-detector token guards catch `; && || |` but NOT a bare newline (shlex folds
+    it into whitespace), so the single-language source detectors reject it here."""
+    return "\n" in cmd.strip()
+
+
 def parse_redirect(cmd, cwd):
     """If `cmd` sends stdout to a file (… > file / &> file / 1>> file), return
     (absolute_target, append) — else None. Used by BOTH Bash hooks: claude-cmd-pre
@@ -84,6 +93,8 @@ def md_source(cmd):
     argument, or a bare `< file.md` stdin redirect. Conservative: any pipe, output
     redirect, chain (; && ||), or command substitution disqualifies it, because
     then the streamed bytes are filtered/derived, not the document itself."""
+    if _multi_statement(cmd):
+        return False
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
@@ -124,6 +135,8 @@ _JSON_EXT = (".json", ".jsonl", ".ndjson")
 def json_source(cmd):
     """True when `cmd` streams a whole .json file's raw contents — `cat file.json`
     or a bare `< file.json`. Any pipe/redirect/chain disqualifies it."""
+    if _multi_statement(cmd):
+        return False
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
@@ -152,6 +165,8 @@ _YAML_EXT = (".yml", ".yaml")
 def yaml_source(cmd):
     """True when `cmd` streams a .yml/.yaml file's raw contents — an allowlisted
     reader (cat/head/tail) with a .yml/.yaml argument, or a bare `< file.yml`."""
+    if _multi_statement(cmd):
+        return False
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
@@ -187,6 +202,8 @@ def code_source(cmd):
     `< file.py`), return the pygments LEXER NAME (e.g. 'python'); else None. Same
     plumbing guards."""
     from core.coderender import LANGS
+    if _multi_statement(cmd):
+        return None
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:

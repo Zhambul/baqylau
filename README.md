@@ -658,7 +658,10 @@ python and a recursive `grep -r pat src/` (a directory, no extension) correctly 
 out. One generic renderer, `core/coderender.CodeStreamer(lexer)`; adding a language
 is one line in `coderender.LANGS` (extension → lexer name). `code_source` returns the
 lexer name (not just a bool) so the tailer knows which lexer to load. Same guards as
-the others: `cat foo.py | …`, `python foo.py`, and redirects don't qualify.
+the others: a pipe (`cat foo.py | …`), `python foo.py`, a redirect, or a
+**multi-statement** command (statements separated by `;`/`&&` **or a newline** —
+`grep … x.py↵echo …↵sed … y.py` streams several commands' worth of mixed output, not
+one file) all disqualify and stream verbatim.
 
 **Fenced output is markdown — the general mixed-content path.** All of the above
 key off the *filename*, so they miss a command that *prints* markdown to stdout
