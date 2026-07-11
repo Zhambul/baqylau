@@ -97,6 +97,11 @@ class Frontend:
         """Set user-vars {name: value} on window `win_id`. Exit code."""
         return 1
 
+    def scroll_window(self, win_id, lines_up):
+        """Scroll window `win_id`'s viewport UP by `lines_up` lines (the
+        renderer restoring a click-to-view line into view after a reflow)."""
+        return 1
+
     def resize_pane(self, var, axis, increment):
         """Resize the window matched by user-var (name, value) along
         "horizontal"/"vertical" by `increment` cells (negative shrinks)."""

@@ -25,6 +25,13 @@
 #                             renderer (wrap_gutter) does it, not the producer
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
 #
+# A gut op may carry "lex" (a pygments lexer name) and/or "num" (a first line
+# number): the RENDERER then highlights/line-numbers the raw "s" at paint time
+# (producers may run a python without pygments). A line/gut op may carry "v",
+# a click-to-view id: the renderer paints the kv-stashed block `view:<id>`
+# inline under the op while the id is in the `view-open` kv set (toggled by
+# claude-copy.py — the file-op expansion feature; see file_fmt.py).
+#
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
 # one activity block together (the Bash tool_use_id, the backgroundTaskId for a
 # background job, or any synthesised per-block id). A g-tagged label is painted with
@@ -94,8 +101,12 @@ def code(s, ind="  ", g=None):
     return o
 
 
-def gut(s, c, outer=None, g=None, bg=None):
+def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
+    if view:
+        # Click-to-view id (see line()) — a subagent's file-op one-liner is a
+        # gut op, so gut carries the same expansion tag.
+        o["v"] = str(view)
     if outer is not None:
         o["outer"] = _rgb(outer)
     if g:
@@ -105,11 +116,29 @@ def gut(s, c, outer=None, g=None, bg=None):
         # blocks) — width-DEPENDENT, so the fill is the renderer's job (wrap_gutter),
         # not baked in here.
         o["bg"] = _rgb(bg)
+    if lex:
+        # Syntax-highlight `s` with this pygments lexer AT PAINT TIME. Producers
+        # (hook processes) may run under a python without pygments — the renderer
+        # re-execs into one that has it, which is why code highlighting always
+        # belongs there (same reason `code` ops carry raw text). Used by the
+        # file-op click-to-view blocks.
+        o["lex"] = str(lex)
+    if num is not None:
+        # Prefix each line of `s` with a dim line number, counting from `num`,
+        # at paint time (rides with lex — numbering must wrap AFTER highlight).
+        o["num"] = int(num)
     return o
 
 
-def line(s):
-    return {"t": "line", "s": s}
+def line(s, view=None):
+    # view: a click-to-view group id (the file op's tool_use_id). The renderer
+    # paints the kv-stashed block `view:<id>` INLINE under this line while the
+    # id is in the session's `view-open` kv set (toggled by claude-copy.py on a
+    # /view click); the producer bakes the matching OSC 8 hyperlink into `s`.
+    o = {"t": "line", "s": s}
+    if view:
+        o["v"] = str(view)
+    return o
 
 
 # The single ⧉ copy affordance for a body-only block (message/prompt/result/…): one

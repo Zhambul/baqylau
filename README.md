@@ -737,10 +737,73 @@ landed. Why this design and not the alternatives:
   fresh `O.new_group()` id on every message/prompt/mail/reasoning/review/result
   block (with `O.COPY_ALL`), so a subagent's or codex run's activity is copyable
   just like the lead's commands.
-- **File-op one-liners stay link-free** — a Read/Update/Write line (`file_fmt.py`,
-  and the substream's `render_file`) is a single `line`/`gut` with no header chip
-  to hang a link on, and its only real payload (the path) is trivially retypeable;
-  copying it would need a chip the compact one-liner design deliberately omits.
+- **File-op one-liners don't copy — they EXPAND (click-to-view, below).** A
+  Read/Update/Write line's real payload isn't its path, it's the content the op
+  touched; clicking the line shows that content in place instead of putting
+  anything on a clipboard.
+
+**Click-to-view — file-op lines expand in place.** Every successful
+Read/Update/Write one-liner — the main session's (`file_fmt.py`) and a
+subagent's/teammate's (`substream.py` `render_file`) — is itself an OSC 8
+hyperlink (`claude-copy:///<key>/<tool_use_id>/view`, baked into the op's text
+by the producer; the renderer needs no geometry). Clicking it expands the op's
+full content directly under the line; clicking again collapses it. What
+expands: a **Read** shows the text it returned, syntax-highlighted
+(`coderender.LANGS` — python/kotlin/java/bash + friends) with a dim
+line-number gutter from its real start line; a **Write** its written body,
+same treatment; an **Update** (Edit/MultiEdit/NotebookEdit) a delta-style diff
+— every row line-numbered (old numbers on removals, new on
+additions/context; no +/- signs), the code syntax-highlighted with removals on
+a soft red panel and additions on a soft green panel (the tint alone carries
+the meaning), non-adjacent hunks separated by a dim `⋮`. Mechanism, in three
+parts:
+- **The stash** (hook time): the producer pre-renders the block into paint ops
+  and writes them to the state DB kv table under `view:<tool_use_id>`
+  (audited as a `view-stash` state_files row), because the payload
+  (`tool_response` content, `old_string`/`new_string`) exists ONLY while the
+  hook runs and the file on disk drifts afterwards — a click must work forever
+  (the kv table parks/restores across resume with the rest of the DB). Diffs
+  prefer the result's `structuredPatch` (real file line numbers) and fall back
+  to a difflib unified diff over the input strings — which is also what a
+  subagent's op uses, since its transcript result carries no patch (its Read
+  body falls back to a disk re-read at stream time). Code **highlighting is
+  deferred to the renderer** via `lex`/`num` fields on the gut op (plus the
+  raw body), because hook producers may run a bare python3 without pygments —
+  the renderer re-execs into one that has it (the same reason `code` ops ship
+  raw text). Diff runs (contiguous same-signed rows share one op) ride the
+  same fields, with the red/green `bg` panel stashed alongside; only a file
+  with no known lexer falls back to producer-styled red/green foreground
+  rows. The view body is deliberately UNCAPPED.
+- **The toggle** (click time): the emitted one-liner op carries the id as
+  `"v"`; `claude-copy.py`'s `view` verb flips that id in the session's
+  `view-open` kv set (audited as a `view` state_files row with `open:
+  true/false`), then SIGWINCH-nudges the renderer — whose pid is the
+  `renderer-pid` kv row it registers at startup — for an instant reflow
+  instead of the 200ms poll tick (the renderer idles in a
+  `signal.set_wakeup_fd` + `select` wait precisely so a signal actually
+  interrupts it; PEP 475 makes a plain `time.sleep` resume). A click on an id
+  with no stash (pre-feature line) is a feedback no-op.
+- **The expansion** (paint time): the renderer keeps `view-open` mirrored (one
+  kv read per tick), and paints any `v`-tagged op followed by its stashed
+  block whenever its id is open. A toggle takes the **fast path** when the
+  clicked line sits within the bottom screenful — which, since a line must be
+  visible to click and the bottom screenful is only visible un-scrolled, is
+  every click except one made in scrollback: cursor-address to the line's row,
+  clear below, rewrite just the tail ops (`repaint_tail`). Instant,
+  flicker-free, scrollback untouched. A scrollback click falls back to the
+  FULL reflow repaint (the resize path), which parks the viewport at the
+  bottom — so the renderer then scrolls the pane (`Frontend.scroll_window`,
+  `kitten @ scroll-window N-`) to put the toggled line back at the top of the
+  viewport; the same scroll fires after a fast-path expansion whose block grew
+  taller than the screen. Why not the alternatives: *emit the block at the
+  bottom* (append-only friendly, no repaint) reads as a teleport away from
+  the line you clicked; *renderer-side mouse reporting* was already rejected
+  for the copy links; *hiding via mutable op rows* breaks the append-only
+  `ops` contract that resume/park/restore depends on. The OSC 8 sequences the
+  producers now bake into `line`/`gut` text required teaching `render._ANSI`
+  to match whole OSC sequences (before the 2-char branch that ate just
+  `\x1b]`), so hyperlinks are zero-width to `wrap_gutter`/`dwidth` and vanish
+  from `strip_ansi` copies.
 
 **Foreground vs background output.** A *foreground* command's output used to be
 unavailable anywhere until it finished — Claude Code streamed it back only through

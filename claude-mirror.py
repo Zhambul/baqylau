@@ -13,7 +13,7 @@
 # Width is read live from the pane itself (os.get_terminal_size), so producers never
 # need to know it — they only emit width-independent ops. A literal WIDTH argv is
 # accepted for non-tty testing.
-import os, signal, subprocess, sys, time
+import os, select, signal, subprocess, sys
 
 
 def _ensure_pygments():
@@ -162,17 +162,79 @@ def _render(op, w):
         else:
             gprefix = R.fg(*op["c"]) + "│ " + R.RST
             gw = 2
-        return R.wrap_gutter(op.get("s", ""), w, gprefix, gw, bg=op.get("bg"))
+        s = viewbody(op) if (op.get("lex") or op.get("num") is not None) \
+            else op.get("s", "")
+        return R.wrap_gutter(s, w, gprefix, gw, bg=op.get("bg"))
     if t == "line":
         return op.get("s", "")
     return ""
+
+
+# Click-to-view expansion: a line op tagged "v" (a file-op one-liner —
+# file_fmt.py bakes the claude-copy:///…/view hyperlink into its text) expands
+# in place while its id is in the session's `view-open` kv set, which
+# claude-copy.py toggles per click. The expanded body is the kv-stashed
+# pre-rendered op list `view:<id>` (highlighted content / ± diff, stashed at
+# hook time when the payload still existed). The main loop polls the open-set
+# each tick and schedules a FULL repaint on any change — expansion/collapse is
+# a reflow, exactly like a resize.
+VIEW_OPEN = set()      # ids currently expanded (mirror of the `view-open` kv row)
+_VIEW_OPS = {}         # id -> stashed op list (immutable once written; cached)
+
+
+def view_block(gid):
+    ops = _VIEW_OPS.get(gid)
+    if ops is None:
+        try:
+            val = St.kv_get(LOG, "view:" + gid)
+        except Exception:
+            val = None
+        ops = [o for o in (val or []) if isinstance(o, dict)]
+        if ops:                # don't negative-cache a transient read failure
+            _VIEW_OPS[gid] = ops
+    return ops
+
+
+def expanded(op):
+    """The op plus its in-place view block when its id is open."""
+    g = op.get("v")
+    if g and g in VIEW_OPEN:
+        return [op] + view_block(g)
+    return [op]
+
+
+def viewbody(op):
+    """A view-block gut op's paint text: the raw stashed body, syntax-highlighted
+    per its 'lex' lexer (pygments lives HERE — the producer hook may have run a
+    bare python3) and line-numbered from its 'num'. Width-independent, so cached
+    once on the op."""
+    c = op.get("_hl")
+    if c is not None:
+        return c
+    s = op.get("s", "")
+    lex = op.get("lex")
+    if lex:
+        try:
+            from core import coderender as C
+            hi = C.render_code(s, lex)
+            if hi is not None:
+                s = hi
+        except Exception:
+            pass                                   # unhighlighted is still correct
+    num = op.get("num")
+    if num is not None:
+        s = "\n".join(R.DIM + "%5d " % (num + i) + R.RST + ln
+                      for i, ln in enumerate(s.split("\n")))
+    op["_hl"] = s
+    return s
 
 
 def repaint():
     w = width()
     out = ["\033[H\033[2J\033[3J", BANNER, "\n"]    # home, clear screen + scrollback
     for op in OPS:
-        out.append(render(op, w)); out.append("\n")
+        for o in expanded(op):
+            out.append(render(o, w)); out.append("\n")
     try:
         sys.stdout.write("".join(out)); sys.stdout.flush()
     except Exception:
@@ -183,7 +245,8 @@ def paint_new(ops):
     w = width()
     out = []
     for op in ops:
-        out.append(render(op, w)); out.append("\n")
+        for o in expanded(op):
+            out.append(render(o, w)); out.append("\n")
     try:
         sys.stdout.write("".join(out)); sys.stdout.flush()
     except Exception:
@@ -195,6 +258,93 @@ def _on_winch(signum, frame):
     _resized = True
 
 
+def measure(gid):
+    """(op_pos, line_idx, total_lines) of the v-tagged op under the CURRENT
+    expansion state — op_pos its index in OPS, line_idx its 0-based line offset
+    (the banner is line 0), total the full painted line count. line_idx is None
+    when the op isn't in OPS (trimmed / never painted)."""
+    w = width()
+    acc, pos, idx = 1, None, None
+    for i, op in enumerate(OPS):
+        for o in expanded(op):
+            if idx is None and o is op and op.get("v") == gid:
+                pos, idx = i, acc
+            acc += render(o, w).count("\n") + 1
+    return pos, idx, acc
+
+
+def repaint_tail(pos, idx, total_pre):
+    """The toggle FAST PATH: when the toggled line sits within the bottom
+    screenful of the PRE-toggle content — and a line is only clickable while
+    visible, so unless the user has scrolled up this is every click — rewrite
+    just from its row down (cursor address + clear-below) instead of clearing
+    and rewriting the entire scrollback. Instant, flicker-free, and it leaves
+    the scrollback untouched. Returns False when the line lives above the live
+    screen (the user clicked in scrollback) — the caller then takes the full
+    repaint + scroll_to path. `idx`/`total_pre` are measure()d BEFORE the
+    open-set flips; the toggled line's own offset is the same either way (only
+    content BELOW it changes)."""
+    if idx is None:
+        return False
+    try:
+        h = os.get_terminal_size().lines
+    except OSError:
+        return False                       # no pty (tests) -> full repaint
+    row = idx + 1 - max(0, total_pre - h)
+    if row < 1:
+        return False                       # above the live screen: scrollback
+    w = width()
+    out = ["\033[%d;1H\033[J" % row]
+    for op in OPS[pos:]:
+        for o in expanded(op):
+            out.append(render(o, w)); out.append("\n")
+    try:
+        sys.stdout.write("".join(out)); sys.stdout.flush()
+    except Exception:
+        pass
+    return True
+
+
+def scroll_to(gid):
+    """A view toggle just reflowed the pane, which parks the viewport at the
+    bottom — if the user had scrolled up to click an OLD file-op line, their
+    place is gone. Restore it: compute the toggled line's offset in the freshly
+    painted stream (render heights are cached, this is cheap) and scroll the
+    pane so that line sits at the top of the viewport. When the line is already
+    within the bottom screenful (the common just-ran-op case) this is a no-op,
+    so a user sitting at the bottom stays there. Best-effort via the frontend's
+    scroll_window (kitten @ scroll-window N-); silently skipped when anchorless
+    (no KITTY_WINDOW_ID — e.g. the test harness), audited on failure."""
+    win = os.environ.get("KITTY_WINDOW_ID")
+    if not win:
+        return
+    w = width()
+    try:
+        h = os.get_terminal_size().lines
+    except OSError:
+        return
+    acc, idx = 1, None                       # 1: the banner line repaint() leads with
+    for op in OPS:
+        for o in expanded(op):
+            if idx is None and o is op and op.get("v") == gid:
+                idx = acc
+            acc += render(o, w).count("\n") + 1
+    if idx is None:
+        return
+    up = acc - h - idx
+    if up <= 0:
+        return                               # already visible at the bottom
+    try:
+        import frontends
+        frontends.get().scroll_window(win, up)
+    except Exception:
+        try:
+            from core import audit as A
+            A.error(LOG, "scroll_to (view toggle)", {"gid": gid, "up": up})
+        except Exception:
+            pass
+
+
 def main():
     global _resized
     if not LOG:
@@ -203,10 +353,20 @@ def main():
     # across resume by claude-split.py, fresh for a new session). Reading it from
     # id 0 means TOGGLING the pane off/on re-shows everything that happened — and
     # while off there is no process at all, so no resources are used.
+    #
+    # The wakeup pipe makes the idle wait interruptible: a signal writes a byte,
+    # so the select below returns IMMEDIATELY instead of finishing a 200ms sleep
+    # (PEP 475 would otherwise resume it). SIGWINCH is both the resize signal and
+    # the click-to-view nudge claude-copy.py sends after a toggle (it finds this
+    # pid via the `renderer-pid` kv row registered below) — either way the answer
+    # is "reflow now".
+    wake_r, wake_w = os.pipe()
+    os.set_blocking(wake_w, False)
+    signal.set_wakeup_fd(wake_w)
     signal.signal(signal.SIGWINCH, _on_winch)
 
     db = St.db_path(LOG)
-    last, ino = 0, None
+    last, ino, toggled = 0, None, None
     while True:
         # A recreated DB file (new session reusing the key, or a park/restore
         # cycle) leaves the cached connection pointing at the OLD inode — drop it
@@ -231,8 +391,16 @@ def main():
                     except Exception:
                         pass
                 last, OPS[:] = 0, []
+                VIEW_OPEN.clear(); _VIEW_OPS.clear()
                 _resized = True
             ino = cur_ino
+            # Register this renderer's pid so claude-copy.py can SIGWINCH-nudge
+            # an instant reflow after a view toggle (re-registered per inode:
+            # a park/restore cycle starts a fresh kv table).
+            try:
+                St.kv_set(LOG, "renderer-pid", os.getpid())
+            except Exception:
+                pass
 
         # Drain any new ops appended to the table.
         new = []
@@ -252,13 +420,44 @@ def main():
             if len(OPS) > MAX_OPS + 1000:
                 del OPS[:len(OPS) - MAX_OPS]
 
-        if _resized:                         # startup or a resize -> full reflow
+            # Click-to-view toggles: any change to the `view-open` kv set (a
+            # claude-copy.py /view click) reflows the whole pane, expanding or
+            # collapsing the affected blocks in place. Remember the toggled id
+            # so the post-repaint scroll can bring it back into view.
+            try:
+                cur_open = set(St.kv_get(LOG, "view-open") or [])
+            except Exception:
+                cur_open = VIEW_OPEN
+            if cur_open != VIEW_OPEN:
+                delta = cur_open ^ VIEW_OPEN
+                toggled = delta.pop() if len(delta) == 1 else None
+                # Measure the toggled line BEFORE flipping the set (its offset
+                # is state-independent, but the visibility check needs the
+                # pre-toggle total — what's on screen right now).
+                pre = measure(toggled) if (toggled and not _resized) else None
+                VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
+                if pre is not None and repaint_tail(*pre):
+                    scroll_to(toggled)       # only scrolls if it grew off-screen
+                    toggled = None           # painted — no full reflow needed
+                else:
+                    _resized = True
+
+        if _resized:                         # startup / resize / toggle -> reflow
             _resized = False
             repaint()
+            if toggled:
+                scroll_to(toggled)
+                toggled = None
         elif new:
             paint_new(new)
 
-        time.sleep(0.2)                      # SIGWINCH interrupts the sleep early
+        # Wait for the next tick — or an instant SIGWINCH wake (resize, or the
+        # click handler's post-toggle nudge) via the wakeup pipe.
+        try:
+            if select.select([wake_r], [], [], 0.2)[0]:
+                os.read(wake_r, 4096)
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

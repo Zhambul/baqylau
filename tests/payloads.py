@@ -52,8 +52,8 @@ def post_bash(s, cmd, tid="toolu_001", stdout="ok\n", stderr="",
     return d
 
 
-def post_file(s, tool="Edit", path=None, patch=None, failure=False,
-              agent_id=None, old_string="old line", new_string="new line\nmore"):
+def post_file(s, tool="Edit", path=None, patch=None, failure=False, agent_id=None,
+              tid="toolu_001", old_string="old line", new_string="new line\nmore"):
     path = path or os.path.join(s.cwd, "example.py")
     tr = {"file": {"filePath": path}}
     ti = {"file_path": path}
@@ -68,7 +68,7 @@ def post_file(s, tool="Edit", path=None, patch=None, failure=False,
         tr["structuredPatch"] = [{"oldStart": 1, "oldLines": 1, "newStart": 1,
                                   "newLines": 2, "lines": ["-old", "+new", "+more"]}]
     d = base(s, "PostToolUseFailure" if failure else "PostToolUse",
-             tool_name=tool, tool_input=ti, tool_response=tr)
+             tool_name=tool, tool_use_id=tid, tool_input=ti, tool_response=tr)
     if agent_id:
         d["agent_id"] = agent_id
     return d

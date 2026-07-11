@@ -204,6 +204,11 @@ class KittyFrontend(Frontend):
         args = [f"{k}={v}" for k, v in uv.items()]
         return self._run("set-user-vars", "--match", f"id:{win_id}", *args)
 
+    def scroll_window(self, win_id, lines_up):
+        # `N-` = scroll up N lines (kitten @ scroll-window's amount grammar).
+        return self._run("scroll-window", "--match", f"id:{win_id}",
+                         f"{int(lines_up)}-")
+
     def resize_pane(self, var, axis, increment):
         return self._run("resize-window", "--match", f"var:{var[0]}={var[1]}",
                          "--axis", axis, "--increment", str(increment))

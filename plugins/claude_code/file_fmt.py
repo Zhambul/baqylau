@@ -12,9 +12,29 @@
 #
 # Invoked directly as the PostToolUse hook. Verbs mirror Claude Code's own UI: Edit and
 # MultiEdit show as "Update", Write as "Write", Read as "Read".
+#
+# CLICK-TO-VIEW: the one-liner itself is an OSC 8 hyperlink
+# (claude-copy:///<key>/<tool_use_id>/view). The full content — the text a Read
+# returned, a Write's body (both syntax-highlighted, dim line numbers), a
+# Claude-Code-style ± diff for Update — is pre-rendered HERE at hook time
+# (width-independent work: highlight, diff styling; wrapping stays the
+# renderer's) into a list of paint ops stashed in the state DB's kv table under
+# `view:<tool_use_id>`, and the emitted line op carries the id as "v". Clicking
+# the line runs claude-copy.py (open-actions.conf), which TOGGLES the id in the
+# session's `view-open` kv set; the renderer paints the stashed block INLINE
+# under the line while its id is open (a full reflow repaint per toggle — the
+# resize path), so the block expands in place and a second click hides it.
+# Pre-rendering at hook time is what makes the click work FOREVER: the payload
+# (tool_response content, old/new strings) exists only while this hook runs,
+# and the file on disk drifts — the kv stash is parked/restored with the
+# session like the ops history itself.
 import os, sys
+from urllib.parse import quote
 
 from core import ops as O
+from core import paths as PATHS
+from core import render as R
+from core import state as S
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -33,6 +53,127 @@ COLOR = {verb: fg(*rgb) for verb, rgb in CT.FILE_RGB.items()}
 DIM = fg(92, 99, 112)
 DEF = fg(171, 178, 191)
 RST = "\033[0m"
+
+# Click-to-view diff panel tints — the git/delta-style SOFT row backgrounds;
+# the fg stays the shared semantic GREEN/RED; the tint is what reads "diff".
+# The view body is deliberately UNCAPPED (owner's call): the stash lives in
+# SQLite and the pane scrolls — truncating the very content the click asked for
+# would defeat the feature (a bare Read already caps itself at 2000 lines).
+ADD_BG = (36, 52, 40)     # soft green panel behind '+' rows
+DEL_BG = (62, 34, 38)     # soft red panel behind '-' rows
+
+
+def _read_text(path, ti, tr):
+    """(text, first_line_number) a Read actually returned: the result's file
+    content when the payload carries it, else the file re-read from disk at hook
+    time sliced to the input's offset/limit (close enough — the hook runs
+    immediately after the tool). (None, 1) when unreadable."""
+    finfo = tr.get("file") if isinstance(tr, dict) else None
+    if isinstance(finfo, dict) and isinstance(finfo.get("content"), str):
+        return finfo["content"], int(finfo.get("startLine") or 1)
+    try:
+        with open(path, "r", errors="replace") as f:
+            lines = f.read().split("\n")
+    except OSError:
+        return None, 1
+    off = int(ti.get("offset") or 1)
+    lim = ti.get("limit")
+    if off > 1 or lim:
+        end = off - 1 + int(lim) if lim else len(lines)
+        lines = lines[off - 1:end]
+    return "\n".join(lines), off
+
+
+def _lexer(path):
+    """The pygments lexer for a path's extension (python/kotlin/java/bash and
+    friends — the shared coderender.LANGS table), or None."""
+    from core.coderender import LANGS
+    return LANGS.get(os.path.splitext(path)[1].lower())
+
+
+def _code_ops(path, text, start, rgb):
+    """One gut op carrying the RAW body plus the paint-time spec: 'lex' (the
+    extension-picked pygments lexer) and 'num' (first line number).
+    Highlighting and numbering happen in the RENDERER, the one process
+    guaranteed a pygments (hook producers may run a bare python3 — the same
+    reason `code` ops ship raw text). Uncapped — the whole extent the op
+    touched is what a click asks for."""
+    return [O.gut(text.rstrip("\n"), rgb, lex=_lexer(path), num=start)]
+
+
+def _diff_ops(rows, rgb, lexer):
+    """gut ops for diff rows (CT.diff_rows), delta-style: contiguous same-signed
+    runs share one op, every row keeps a dim line-number gutter (the OLD number
+    for a removal, the NEW one for an addition/context — no +/- signs), and
+    when the file's extension maps to a lexer the run ships RAW with a
+    'lex'/'num' spec so the RENDERER syntax-highlights the code at paint time
+    (same deferral as Read/Write bodies) — the soft red/green panel ('bg')
+    alone carries the removal/addition meaning. Without a lexer the run falls
+    back to red/green foreground text. Hunk separators paint a dim ⋮. A run's
+    numbers are sequential by construction (diff_rows walks each hunk in
+    order), which is what lets 'num' number the whole run from its first row."""
+    ops = []
+    buf, cur_sign, cur_start = [], None, None
+
+    def flush():
+        nonlocal buf
+        if not buf:
+            return
+        bg = ADD_BG if cur_sign == "+" else DEL_BG if cur_sign == "-" else None
+        if lexer:
+            ops.append(O.gut("\n".join(buf), rgb, bg=bg, lex=lexer,
+                             num=cur_start))
+        else:
+            col = (fg(*O.GREEN) if cur_sign == "+" else
+                   fg(*O.RED) if cur_sign == "-" else DEF)
+            body = "\n".join(
+                DIM + ("%5d " % (cur_start + i) if cur_start is not None
+                       else " " * 6) + RST + col + t + RST
+                for i, t in enumerate(buf))
+            ops.append(O.gut(body, rgb, bg=bg) if bg else O.gut(body, rgb))
+        buf = []
+
+    for sign, no, text in rows:
+        if sign == "@":
+            flush()
+            cur_sign = None
+            ops.append(O.gut(DIM + "    ⋮" + RST, rgb))
+            continue
+        if sign != cur_sign:
+            flush()
+            cur_sign, cur_start = sign, no
+        buf.append(text)
+    flush()
+    return ops
+
+
+def _view_ops(tool, label, name, path, ti, tr):
+    """The click-to-view block for one file op, as a list of paint-op dicts
+    (JSON-clean — exactly what claude-copy.py O.emit()s on a /view click), or
+    None when there is nothing to show (empty content, unreadable file)."""
+    rgb = CT.FILE_RGB.get(label, O.SLATE)
+    if tool == "Read":
+        text, start = _read_text(path, ti, tr)
+        if text is None or not text.strip():
+            return None
+        body = _code_ops(path, text, start, rgb)
+        suffix = CT.read_extent(tr.get("file") if isinstance(tr, dict) else None, ti)
+    elif tool == "Write":
+        text = ti.get("content") or ""
+        if not text.strip():
+            return None
+        body = _code_ops(path, text, 1, rgb)
+        suffix = "+%d" % len(text.splitlines())
+    else:
+        rows = CT.diff_rows(tool, ti, tr)
+        if not rows:
+            return None
+        body = _diff_ops(rows, rgb, _lexer(path))
+        a, r = CT.diff_counts(tool, ti)
+        suffix = " ".join(p for p in (("+%d" % a) if a else "",
+                                      ("-%d" % r) if r else "") if p)
+    hdr = label + " " + name + ((" · " + suffix) if suffix else "")
+    return [O.rule(), O.label(hdr, rgb)] + body + [O.blank()]
 
 
 def main():
@@ -83,7 +224,29 @@ def main():
             if rng:
                 line += "  " + DIM + rng + RST
     line += mark
-    O.emit(LOG, O.line(line))
+    # Click-to-view: stash the pre-rendered content block under the op's
+    # tool_use_id, wrap the WHOLE one-liner in the claude-copy:///…/view
+    # hyperlink (a `line` op paints verbatim, so the producer bakes the link;
+    # after a sid-fork adoption the old key still resolves through the symlink
+    # adopt.py leaves at the old DB path), and tag the op with the id ("v") so
+    # the renderer knows where to expand the block in place. A failed op or a
+    # stash that came up empty keeps the plain unlinked line.
+    viewed = False
+    gid = d.get("tool_use_id") or None
+    if not failed and gid:
+        try:
+            vops = _view_ops(tool, label, name, path, ti, tr)
+        except Exception:
+            vops = None
+            A.error(LOG, "view-stash (render)", {"tool": tool, "gid": gid})
+        if vops and S.kv_set(LOG, "view:" + gid, vops):
+            url = "claude-copy:///%s/%s/view" % (
+                quote(PATHS.sid_from_log(LOG), safe=""), quote(gid, safe=""))
+            line = R.hyperlink(url, line)
+            viewed = True
+            A.state_file(LOG, S.db_path(LOG), "view-stash",
+                         {"gid": gid, "tool": tool, "ops": len(vops)})
+    O.emit(LOG, O.line(line, view=gid if viewed else None))
     # Feed the session scoreboard (best-effort): the touched path (files counts
     # UNIQUE files — see bump()) plus the mutation's +/- line counts, keyed by the
     # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.
@@ -92,7 +255,8 @@ def main():
     O.bump(LOG, tool=tool, file=path, added=added, removed=removed)
     A.hook_event(d, decision=f"rendered: {label}({name})"
                  + (" FAILED" if failed else
-                    ("" if tool == "Read" else f" +{added} -{removed}")))
+                    ("" if tool == "Read" else f" +{added} -{removed}"))
+                 + (" +view" if viewed else ""))
 
 
 def entry():

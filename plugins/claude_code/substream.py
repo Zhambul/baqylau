@@ -441,7 +441,7 @@ def render_message(text):
     turn_ctx_shown = True
 
 
-def render_file(name_tool, inp, result=None, ctx="", failed=False):
+def render_file(name_tool, inp, result=None, ctx="", failed=False, tid=None):
     label = FILE_LABEL.get(name_tool, "Read")
     path = inp.get("file_path") or inp.get("notebook_path") or ""
     name = os.path.basename(path.rstrip("/")) or path or "?"
@@ -482,7 +482,34 @@ def render_file(name_tool, inp, result=None, ctx="", failed=False):
         line += "  " + R.DIM + tag + RST
     if ctx:
         line += "  " + R.DIM + ctx + RST
-    O.emit(LOG, O.gut(line, SUB_RGB))
+    # Click-to-view, exactly like the main session's file ops (file_fmt.py owns
+    # the block builder): stash the pre-rendered content under the agent's
+    # tool_use_id, bake the /view hyperlink into the line (the OSC 8 sequence is
+    # zero-width to wrap_gutter), and tag the gut op with "v" so the renderer
+    # expands the block in place. A subagent transcript's tool_result rarely
+    # carries the Read content/structuredPatch — _view_ops falls back to the
+    # disk re-read / input-strings difflib for those.
+    vid = None
+    if not failed and tid:
+        from urllib.parse import quote
+        from core import paths as PATHS
+        from plugins.claude_code import file_fmt as FF
+        try:
+            vops = FF._view_ops(name_tool, label, name, path, inp,
+                                result if isinstance(result, dict) else {})
+        except Exception:
+            vops = None
+            A.error(LOG, "view-stash (substream render)",
+                    {"tool": name_tool, "gid": tid})
+        if vops and S.kv_set(LOG, "view:" + tid, vops):
+            url = "claude-copy:///%s/%s/view" % (
+                quote(PATHS.sid_from_log(LOG), safe=""), quote(str(tid), safe=""))
+            line = R.hyperlink(url, line)
+            vid = tid
+            A.state_file(LOG, S.db_path(LOG), "view-stash",
+                         {"gid": tid, "tool": name_tool, "ops": len(vops),
+                          "agent": AGENT})
+    O.emit(LOG, O.gut(line, SUB_RGB, view=vid))
     # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
     # reflect TEAM-WIDE file activity, not just the main session's own file ops
     # (claude-file-fmt.py skips agent_id calls — the substream owns their rendering,
@@ -573,7 +600,8 @@ def on_tool_result(b, tur=None):
         # the main session's claude-file-fmt.py — otherwise a failed Write would
         # inflate +added with lines it never wrote.
         name_tool, saved_inp, saved_ctx = cmd if isinstance(cmd, tuple) else ("Read", {}, "")
-        render_file(name_tool, saved_inp, tur, saved_ctx, failed=bool(b.get("is_error")))
+        render_file(name_tool, saved_inp, tur, saved_ctx,
+                    failed=bool(b.get("is_error")), tid=tid)
         return
     if kind in ("agent", "sendmsg"):
         return                                      # already shown / handled elsewhere

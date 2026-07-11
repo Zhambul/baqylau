@@ -290,6 +290,68 @@ def diff_counts(tool_name, inp):
     return 0, 0
 
 
+def diff_rows(tool_name, inp, resp):
+    """Diff rows for a mutation, Claude-Code-UI style: a list of (sign, lineno,
+    text) tuples — sign ' ' (context, numbered in the NEW file), '-' (removal,
+    numbered in the OLD file), '+' (addition, numbered in the new file), or '@'
+    (a separator row between non-adjacent hunks; lineno None). The raw material
+    for file_fmt's click-to-view diff block. Prefers the result's
+    structuredPatch (real file line numbers, context included, exactly what
+    Claude Code itself computed); falls back to a difflib unified diff over the
+    input's old/new strings when the patch is absent (then numbers are
+    snippet-relative). NotebookEdit has no old text in the payload, so its cell
+    shows as all-additions (or all-removals for a delete), unnumbered. [] when
+    nothing is determinable."""
+    inp = inp or {}
+
+    def walk(hunks):
+        """hunks: [(old_start, new_start, [signed lines])] -> numbered rows."""
+        rows = []
+        for hi, (old, new, lines) in enumerate(hunks):
+            if hi:
+                rows.append(("@", None, "⋮"))
+            for l in lines:
+                sign, body = (l[:1] or " "), l[1:]
+                if sign == "+":
+                    rows.append(("+", new, body)); new += 1
+                elif sign == "-":
+                    rows.append(("-", old, body)); old += 1
+                else:
+                    rows.append((" ", new, body)); old += 1; new += 1
+        return rows
+
+    sp = resp.get("structuredPatch") if isinstance(resp, dict) else None
+    if isinstance(sp, list) and sp and all(
+            isinstance(h, dict) and isinstance(h.get("lines"), list) for h in sp):
+        return walk([(int(h.get("oldStart") or 1), int(h.get("newStart") or 1),
+                      [str(l) for l in h["lines"]]) for h in sp])
+
+    def uni(old, new):
+        hunks = []
+        for l in difflib.unified_diff((old or "").splitlines(),
+                                      (new or "").splitlines(), n=3, lineterm=""):
+            m = re.match(r"^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@", l)
+            if m:
+                hunks.append((int(m.group(1)), int(m.group(2)), []))
+            elif hunks and not l.startswith(("---", "+++")):
+                hunks[-1][2].append(l)
+        return hunks
+
+    if tool_name == "Edit":
+        return walk(uni(inp.get("old_string"), inp.get("new_string")))
+    if tool_name == "MultiEdit":
+        hunks = []
+        for e in inp.get("edits") or []:
+            if isinstance(e, dict):
+                hunks.extend(uni(e.get("old_string"), e.get("new_string")))
+        return walk(hunks)
+    if tool_name == "NotebookEdit":
+        sign = "-" if inp.get("edit_mode") == "delete" else "+"
+        return [(sign, None, l)
+                for l in (inp.get("new_source") or "").splitlines()]
+    return []
+
+
 def read_extent(file_info, inp=None):
     """Compact 'start-end/total' describing how much of a file a Read actually returned,
     or '' when it read the WHOLE file (or the extent can't be determined) — so a plain

@@ -105,7 +105,14 @@ def unescape(s):
 # Prefix every line with a colour-coded gutter; hard-wrap wider-than-pane lines so
 # the gutter repeats on each visual row. ANSI-aware: escape sequences are copied
 # verbatim (zero width) and the active SGR colour re-asserted after each wrap.
-_ANSI = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]|\x1b[@-Z\\-_]")
+# The OSC branch (\x1b]…BEL/ST) must come BEFORE the 2-char branch, which would
+# otherwise eat just "\x1b]" and leave an OSC 8 hyperlink's URL counted as
+# visible text — producers now bake hyperlinks into gut/line text (the file-op
+# click-to-view links), so wrap/strip must treat the whole sequence as
+# zero-width.
+_ANSI = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]"
+                   r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"
+                   r"|\x1b[@-Z\\-_]")
 
 
 def strip_ansi(s):

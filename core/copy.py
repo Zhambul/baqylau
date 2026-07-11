@@ -26,10 +26,20 @@
 # scrolled-back and even resumed-session blocks copyable: the DB holds the whole
 # history and is parked/restored across resume.
 #
-# Every path audits: success/empty as a state_files row (action "copy"), every
-# failure as an errors row — a click that "did nothing" is answerable from the DB.
+# A fourth verb, "view" (a file-op one-liner click — Read/Update/Write lines,
+# whose hyperlink file_fmt.py bakes into the line op itself), doesn't copy:
+# it TOGGLES the block's id in the session's `view-open` kv set, and the
+# renderer expands/collapses the kv-stashed pre-rendered content block
+# (`view:<gid>`) in place under the line. The toggle is a state-DB write, which
+# is fine under the same exists-guard the feedback op already relies on — only
+# the no-DB path must stay read-only.
+#
+# Every path audits: success/empty as a state_files row (action "copy"/"view"),
+# every failure as an errors row — a click that "did nothing" is answerable
+# from the DB.
 import json
 import os
+import signal
 import sqlite3
 import subprocess
 from urllib.parse import unquote
@@ -46,14 +56,49 @@ except Exception:                       # audit must never break the handler
 
 
 def parse_url(url):
-    """claude-copy:///<key>/<gid>/<what> -> (key, gid, what), or None."""
+    """claude-copy:///<key>/<gid>/<what> -> (key, gid, what), or None.
+    what: cmd/out/all copy to the clipboard; view toggles a file-op block's
+    in-place expansion."""
     scheme, sep, rest = (url or "").partition("://")
     if not sep or scheme != "claude-copy":
         return None
     parts = [unquote(p) for p in rest.strip("/").split("/")]
-    if len(parts) != 3 or parts[2] not in ("cmd", "out", "all") or not all(parts):
+    if (len(parts) != 3 or parts[2] not in ("cmd", "out", "all", "view")
+            or not all(parts)):
         return None
     return tuple(parts)
+
+
+def toggle_view(log, db, gid):
+    """Flip `gid` in the session's `view-open` kv set (the renderer expands the
+    kv-stashed `view:<gid>` block in place while its id is in the set). No-op
+    with feedback when there is no stash for the id (a pre-feature line, or the
+    stash write failed — the line then carries no hyperlink anyway, so this is
+    belt-and-braces)."""
+    from core import state as S
+    if not S.kv_get(log, "view:" + gid):
+        _feedback(log, "nothing to show")
+        A.state_file(log, db, "view", {"gid": gid, "open": None, "ops": 0})
+        return
+    cur = set(S.kv_get(log, "view-open") or [])
+    opened = gid not in cur
+    cur = cur | {gid} if opened else cur - {gid}
+    if S.kv_set(log, "view-open", sorted(cur)):
+        # Nudge the renderer for an INSTANT reflow — without this the expansion
+        # waits out the renderer's 200ms poll tick, which reads as lag on a
+        # click. SIGWINCH is its existing "reflow now" signal; the pid is the
+        # kv row the renderer registers at startup. Best-effort: a dead/absent
+        # pid just falls back to the poll. Kill BEFORE the audit write — the
+        # nudge is the user-visible part of the click.
+        pid = S.kv_get(log, "renderer-pid")
+        if pid:
+            try:
+                os.kill(int(pid), signal.SIGWINCH)
+            except Exception:
+                pass
+        A.state_file(log, db, "view", {"gid": gid, "open": opened})
+    else:
+        A.error(log, "view (toggle write)", {"gid": gid})
 
 
 def collect(db, gid, what):
@@ -121,6 +166,12 @@ def main(argv):
         # on screen (the pane's renderer is gone too), but audited.
         A.error(log, "copy (state DB gone — session over?)",
                 {"gid": gid, "what": what})
+        return
+    if what == "view":
+        try:
+            toggle_view(log, db, gid)
+        except Exception:
+            A.error(log, "view (toggle)", {"gid": gid})
         return
     try:
         text = collect(db, gid, what)

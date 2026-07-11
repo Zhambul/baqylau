@@ -196,6 +196,170 @@ def test_renderer_paints_single_copy_link_from_lk(session, seed, reaper, test_en
     assert text.count("\x1b]8;;claude-copy") == 1
 
 
+def _kv(s, key):
+    import json
+    rows = s.query_state("SELECT val FROM kv WHERE key=?", (key,))
+    return json.loads(rows[0][0]) if rows else None
+
+
+def test_file_op_line_carries_view_link_and_stash(session, run_hook, test_env):
+    """A Read one-liner is itself a claude-copy:///…/view hyperlink: the line op
+    carries the tool_use_id as 'v', and the pre-rendered content block (dim line
+    numbers + the file text) is stashed under kv view:<tid> at hook time."""
+    s = session.make()
+    path = os.path.join(s.cwd, "shown.py")
+    with open(path, "w") as f:
+        f.write("def hello():\n    return 42\n")
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
+
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    assert lop.get("v") == "toolu_001"
+    assert "claude-copy:///%s/toolu_001/view" % s.sid in lop["s"]
+
+    stash = _kv(s, "view:toolu_001")
+    assert stash and {"rule", "label", "gut"} <= {o["t"] for o in stash}
+    # the body is stashed RAW + a paint-time lex/num spec — highlighting and
+    # line-numbering are the renderer's job (the hook python may lack pygments)
+    gutop = next(o for o in stash if o["t"] == "gut")
+    assert gutop["s"] == "def hello():\n    return 42"
+    assert gutop["lex"] == "python" and gutop["num"] == 1
+
+
+def test_update_view_is_numbered_diff(session, run_hook, test_env):
+    """An Update's stashed view block is delta-style: contiguous runs carry raw
+    code + a paint-time lex/num spec (the renderer highlights it), removals on
+    a soft red panel, additions on a soft green panel, context bare — with the
+    OLD line number on the removal run and the NEW one elsewhere."""
+    s = session.make()
+    patch = [{"oldStart": 10, "oldLines": 2, "newStart": 10, "newLines": 2,
+              "lines": [" ctx", "-gone", "+here"]}]
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Edit", patch=patch))
+
+    stash = _kv(s, "view:toolu_001")
+    assert stash
+    guts = [o for o in stash if o["t"] == "gut"]
+    red = next(o for o in guts if o["s"] == "gone")
+    green = next(o for o in guts if o["s"] == "here")
+    ctx = next(o for o in guts if o["s"] == "ctx")
+    assert red.get("bg") and green.get("bg") and red["bg"] != green["bg"]
+    assert not ctx.get("bg")
+    # example.py -> python lexer, highlighted at paint time; numbers per run
+    assert red["lex"] == green["lex"] == ctx["lex"] == "python"
+    assert (ctx["num"], red["num"], green["num"]) == (10, 11, 11)
+
+
+def test_update_view_without_lexer_styles_inline(session, run_hook, test_env):
+    """A diff on a file with no known lexer falls back to producer-styled
+    red/green foreground rows with baked line numbers."""
+    s = session.make()
+    path = os.path.join(s.cwd, "notes.txt")
+    patch = [{"oldStart": 3, "oldLines": 1, "newStart": 3, "newLines": 1,
+              "lines": ["-old words", "+new words"]}]
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Edit", path=path,
+                                               patch=patch))
+    stash = _kv(s, "view:toolu_001")
+    guts = [o for o in stash if o["t"] == "gut"]
+    red = next(o for o in guts if "old words" in o["s"])
+    green = next(o for o in guts if "new words" in o["s"])
+    assert "lex" not in red and "lex" not in green
+    assert "38;2;224;108;117" in red["s"]          # RED removal text
+    assert "38;2;152;195;121" in green["s"]        # GREEN addition text
+    assert "    3 " in red["s"] and "    3 " in green["s"]
+
+
+def test_view_click_toggles_in_place_expansion(session, run_hook, test_env):
+    """Clicking the /view link flips the id in the `view-open` kv set (expand),
+    and a second click removes it (collapse) — the renderer reflows on each."""
+    s = session.make()
+    path = os.path.join(s.cwd, "toggle.py")
+    with open(path, "w") as f:
+        f.write("x = 1\n")
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
+
+    url = "claude-copy:///%s/toolu_001/view" % s.sid
+    run_hook("claude-copy.py", raw_stdin="", argv=(url,))
+    assert _kv(s, "view-open") == ["toolu_001"]
+    run_hook("claude-copy.py", raw_stdin="", argv=(url,))
+    assert _kv(s, "view-open") == []
+
+    # a click on an id with no stash is a feedback no-op, not a toggle
+    run_hook("claude-copy.py",
+             raw_stdin="", argv=("claude-copy:///%s/toolu_nope/view" % s.sid,))
+    assert _kv(s, "view-open") == []
+    assert "nothing to show" in s.ops_text()
+
+
+def test_renderer_expands_view_block_in_place(session, run_hook, seed, reaper,
+                                              test_env):
+    """With the id in `view-open`, the renderer paints the stashed block inline
+    after the v-tagged line — and drops it again once the set empties."""
+    s = session.make()
+    path = os.path.join(s.cwd, "inline.py")
+    with open(path, "w") as f:
+        f.write("MAGIC_VIEW_BODY = True\n")
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
+    url = "claude-copy:///%s/toolu_001/view" % s.sid
+    run_hook("claude-copy.py", raw_stdin="", argv=(url,))
+
+    out_path = s.log + ".render.out"
+    with open(out_path, "wb") as out:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
+    reaper.append(proc)
+    try:
+        wait_until(lambda: b"MAGIC_VIEW_BODY" in open(out_path, "rb").read(),
+                   desc="renderer expanded the view block in place")
+        text = open(out_path, "rb").read().decode("utf-8", "replace")
+        assert "    1" in text                        # paint-time line numbers
+        assert "38;2;198;120;221" in text             # pygments highlight applied
+        # the renderer registered itself for the click handler's instant nudge
+        assert _kv(s, "renderer-pid") == proc.pid
+        # collapse: the repaint clears the screen and repaints without the body
+        run_hook("claude-copy.py", raw_stdin="", argv=(url,))
+        wait_until(lambda: b"MAGIC_VIEW_BODY" not in
+                   open(out_path, "rb").read().rpartition(b"\033[2J")[2],
+                   desc="renderer collapsed the view block")
+    finally:
+        proc.terminate()
+
+
+SUB_EDIT_EVENTS = [
+    {"type": "assistant", "message": {
+        "id": "smsg_e1", "model": "claude-opus-4-8", "role": "assistant",
+        "content": [{"type": "tool_use", "id": "tu_ed", "name": "Edit",
+                     "input": {"file_path": "/tmp/agent_target.py",
+                               "old_string": "a = 1", "new_string": "a = 2"}}],
+        "usage": {"input_tokens": 5, "output_tokens": 3,
+                  "cache_creation_input_tokens": 0,
+                  "cache_read_input_tokens": 0}}},
+    {"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "tu_ed", "content": "ok"}]}},
+]
+
+
+def test_subagent_file_op_gets_view_stash(session, run_hook, test_env):
+    """A SUBAGENT's Update line (rendered by the substream) carries the same
+    click-to-view affordance: v-tagged gut op + kv stash, diff built from the
+    input strings (the transcript result has no structuredPatch)."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, SUB_EDIT_EVENTS)
+    wait_until(lambda: any(op.get("v") == "tu_ed" for op in s.ops()),
+               desc="subagent file op rendered with a view tag")
+
+    gutop = next(op for op in s.ops() if op.get("v") == "tu_ed")
+    assert gutop["t"] == "gut"
+    assert "claude-copy:///%s/tu_ed/view" % s.sid in gutop["s"]
+    stash = _kv(s, "view:tu_ed")
+    assert stash
+    body = "\n".join(o.get("s", "") for o in stash)
+    assert "a = 1" in body and "a = 2" in body
+
+
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):
     """A click on a dead session's link must NOT create a state DB (its
     file-existence is the session-alive signal) — audited, not fatal."""
