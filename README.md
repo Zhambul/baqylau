@@ -650,11 +650,15 @@ the same optional pygments for colour.
 `.java`, `.kt`/`.kts`, or `.sh`/`.bash`/`.zsh` (`tools.code_source`, gated by
 `CLAUDE_MIRROR_CODE`) is coloured in place via the matching pygments lexer,
 reusing `render.pick` (keywords magenta, function names blue, strings green,
-numbers orange, comments grey) — no reformat, no panel. One generic renderer,
-`core/coderender.CodeStreamer(lexer)`; adding a language is one line in
-`coderender.LANGS` (extension → lexer name). `code_source` returns the lexer name
-(not just a bool) so the tailer knows which lexer to load. Same guards as the
-others: `cat foo.py | …`, `python foo.py`, and redirects don't qualify.
+numbers orange, comments grey) — no reformat, no panel. `sed`/`grep`/`egrep`/`fgrep`
+of a source file qualify too (`sed -n '80,130p' x.py`, `grep -n def app.py`) — but
+because these put a SCRIPT/PATTERN arg *before* the file, the lexer is read from the
+**trailing** arg only, so a pattern like `grep 'foo.py' x.txt` can't masquerade as
+python and a recursive `grep -r pat src/` (a directory, no extension) correctly opts
+out. One generic renderer, `core/coderender.CodeStreamer(lexer)`; adding a language
+is one line in `coderender.LANGS` (extension → lexer name). `code_source` returns the
+lexer name (not just a bool) so the tailer knows which lexer to load. Same guards as
+the others: `cat foo.py | …`, `python foo.py`, and redirects don't qualify.
 
 **Fenced output is markdown — the general mixed-content path.** All of the above
 key off the *filename*, so they miss a command that *prints* markdown to stdout

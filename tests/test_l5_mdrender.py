@@ -337,10 +337,18 @@ def test_code_source_detection():
     from plugins.claude_code.tools import code_source
     for c, exp in [("cat foo.py", "python"), ("cat Main.java", "java"),
                    ("head -50 App.kt", "kotlin"), ("tail deploy.sh", "bash"),
-                   ("< s.py", "python")]:
+                   ("< s.py", "python"),
+                   # sed/grep of a source file: lexer from the trailing FILE arg
+                   ("sed -n '80,130p' dispatch.py", "python"),
+                   ("grep -n def app.py", "python"),
+                   ("grep foo Main.java", "java")]:
         assert code_source(c) == exp, c
     for c in ["cat foo.txt", "cat foo.py | grep x", "bat foo.py", "python foo.py",
-              "cat foo.py > o", "rm a.py"]:
+              "cat foo.py > o", "rm a.py",
+              # the PATTERN/SCRIPT arg must not masquerade as the file
+              "grep 'foo.py' x.txt", "sed 's/a/b.py/' notes.txt",
+              # recursive grep (dir last, no extension) opts out
+              "grep -r pattern src/"]:
         assert code_source(c) is None, c
 
 

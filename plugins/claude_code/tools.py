@@ -173,13 +173,19 @@ def yaml_source(cmd):
 
 
 # Source files coloured in place (like YAML) — the extension picks the lexer.
+# cat/head/tail take the file among their args; sed/grep put a SCRIPT/PATTERN arg
+# first and the FILE last, so their lexer is read from the trailing arg only — that
+# way a pattern like `grep 'foo.py' x.txt` can't masquerade as python, and a
+# recursive `grep -r pat src/` (dir last, no extension) correctly opts out.
 _CODE_READERS = {"cat", "head", "tail"}
+_CODE_TAILARG_READERS = {"sed", "grep", "egrep", "fgrep"}
 
 
 def code_source(cmd):
     """If `cmd` streams a source file the mirror can syntax-highlight (cat/head/tail
-    of a file whose extension is in coderender.LANGS, or a bare `< file.py`), return
-    the pygments LEXER NAME (e.g. 'python'); else None. Same plumbing guards."""
+    of a file whose extension is in coderender.LANGS, sed/grep of one, or a bare
+    `< file.py`), return the pygments LEXER NAME (e.g. 'python'); else None. Same
+    plumbing guards."""
     from core.coderender import LANGS
     try:
         toks = shlex.split(cmd, posix=False)
@@ -209,6 +215,8 @@ def code_source(cmd):
     head = os.path.basename(toks[0].strip("'\""))
     if head in _CODE_READERS:
         return _lexer_for(toks[1:])
+    if head in _CODE_TAILARG_READERS and len(toks) > 1:
+        return _lexer_for([toks[-1]])       # the FILE is the trailing arg
     return None
 
 
