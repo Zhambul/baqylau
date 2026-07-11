@@ -110,6 +110,40 @@ def test_empty_and_whitespace():
     assert s.feed("\n\n   \n") == [] or all(not b.strip() for b in s.feed("\n"))
 
 
+def test_frontmatter_rendered_as_header():
+    md = "---\ntitle: My Doc\ntags: [a, b]\n---\n\n# Heading\n\nbody\n"
+    joined = "".join(_render_all(md))
+    plain = R.strip_ansi(joined)
+    assert "title" in plain and "My Doc" in plain, "frontmatter key/value shown"
+    assert "---" not in plain, "frontmatter fence should not render as a rule"
+    # The dim key colour is applied (not a heading banner).
+    assert R.DIM + "title" in joined
+
+
+def test_wikilinks_styled_and_unbracketed():
+    md = "See [[casino-router]] and [[target|the alias]].\n"
+    joined = "".join(_render_all(md))
+    plain = R.strip_ansi(joined)
+    assert "[[" not in plain and "]]" not in plain, "brackets stripped"
+    assert "casino-router" in plain, "target shown"
+    assert "the alias" in plain and "target" not in plain, "alias shown, not target"
+    assert R.COL["func"] + "casino-router" in joined, "wikilink coloured like a link"
+
+
+def test_fenced_code_highlighted_by_language():
+    md = "```java\npublic interface Foo {}\n```\n"
+    joined = "".join(_render_all(md))
+    assert R.COL["kw"] + "public" in joined, "java keyword highlighted"
+    assert "java\n" not in R.strip_ansi(joined), "language tag not shown as a bare line"
+
+
+def test_blocks_are_blank_separated():
+    md = "# H\n\npara one\n\npara two\n"
+    plain = R.strip_ansi("".join(_render_all(md)))
+    # A blank line between each block (heading / para / para).
+    assert "\n\n" in plain, "blocks should be blank-line separated"
+
+
 # ---- detection ---------------------------------------------------------------
 
 def test_md_source_positive():

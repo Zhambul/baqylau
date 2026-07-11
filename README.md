@@ -579,9 +579,14 @@ but *not* to a subagent's messages/prompts (which share the gutter helper).
 raw contents — an allowlisted plain-text reader (`cat` / `head` / `tail`) with a
 `.md`/`.markdown` argument, or a bare `< file.md` — the body is rendered as styled
 ANSI instead of raw `#`/`**`/`` ` `` characters: headings become bold-amber
-banners, `**bold**`/`*italic*` become SGR, `` `code` `` and fenced blocks are
-coloured, bullets/ordered lists nest, blockquotes get a rail, and `[links](url)`
-become OSC-8 hyperlinks. Detection (`tools.md_source`) is deliberately narrow —
+banners, `**bold**`/`*italic*`/`~~strike~~` become SGR, `` `code` `` is coloured,
+fenced blocks are **syntax-highlighted by language** (pygments — `` ```java ``,
+`` ```js ``, … not just bash/python), bullets/ordered lists nest, blockquotes get
+a rail, blocks are blank-line separated, and `[links](url)` become OSC-8
+hyperlinks. Two wiki conventions the CommonMark parser doesn't know are handled
+too: **YAML frontmatter** (`--- … ---`) renders as a dim key/value header (not a
+stray rule), and Obsidian **`[[wikilinks]]`** / `[[target|alias]]` are coloured
+like links (brackets stripped). Detection (`tools.md_source`) is deliberately narrow —
 **pipes, redirects, and chains disqualify** (the bytes would be filtered, not the
 document), and `bat`/`glow`/`mdcat`/`less` are excluded (they already style their
 own output — re-rendering would double-format). Set **`CLAUDE_MIRROR_MD=0`** to
@@ -603,6 +608,8 @@ not the old `render.markdown()` regex subset?* It's line-oriented — no real
 nesting, ordered lists, fenced blocks, or blockquotes. `mdrender` supersedes it
 (and is the fallback if `wenmode` is absent). Tables render as lightly-styled
 rows without column alignment (alignment is width-dependent — out of scope).
+Block spacing, frontmatter, wikilinks, and code highlighting live in the
+`OpsRenderer` handlers + `MarkdownStreamer` in `core/mdrender.py`.
 
 **⧉ copy links — click to copy any activity block.** Nearly every block in the
 mirror carries a dim, browser-style copy affordance on its header chip. A
