@@ -360,6 +360,57 @@ def test_subagent_file_op_gets_view_stash(session, run_hook, test_env):
     assert "a = 1" in body and "a = 2" in body
 
 
+def _load_mirror(log, width=80):
+    """Import claude-mirror.py as a module (argv-driven globals patched)."""
+    import importlib.util
+    old = sys.argv
+    sys.argv = ["claude-mirror.py", log, str(width)]
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "cmirror_under_test", os.path.join(REPO, "claude-mirror.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.argv = old
+    return mod
+
+
+def test_viewport_anchor_restores_scroll_offset(session, test_env, monkeypatch):
+    """A scrollback click: viewport_anchor recovers the viewport's top-line
+    offset by matching the captured visible text against the rendered rows —
+    exact-restore ingredient for 'expand in place without moving my scroll'."""
+    s = session.make()
+    mod = _load_mirror(s.log)
+    mod.OPS.extend({"t": "line", "s": "history row %03d" % i} for i in range(60))
+    mod.OPS.append({"t": "line", "s": "Read(anchor.py)", "v": "gid-anchor"})
+    mod.OPS.extend({"t": "line", "s": "later row %03d" % i} for i in range(40))
+
+    pos, idx, total = mod.measure("gid-anchor")
+    assert mod.OPS[pos].get("v") == "gid-anchor" and idx == 61  # banner + 60
+
+    # what the user sees: a 24-row viewport whose top is 5 lines above the link
+    rows = [mod.R.strip_ansi(mod.BANNER).rstrip()]
+    for op in mod.OPS:
+        for o in mod.expanded(op):
+            rows.extend(r.rstrip() for r in
+                        mod.R.strip_ansi(mod.render(o, 80)).split("\n"))
+    j = idx - 5
+    captured = "\n".join(rows[j:j + 24])
+
+    class _FE:
+        def get_text(self, win, extent="screen"):
+            return captured
+    import frontends
+    monkeypatch.setenv("KITTY_WINDOW_ID", "42")
+    monkeypatch.setattr(frontends, "get", lambda: _FE())
+
+    assert mod.viewport_anchor(idx) == j
+    # garbage capture -> no confident match -> None (fallback: line-at-top)
+    monkeypatch.setattr(_FE, "get_text",
+                        lambda self, win, extent="screen": "zzz\nyyy\nxxx")
+    assert mod.viewport_anchor(idx) is None
+
+
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):
     """A click on a dead session's link must NOT create a state DB (its
     file-existence is the session-alive signal) — audited, not fatal."""

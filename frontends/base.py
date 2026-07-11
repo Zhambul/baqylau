@@ -102,6 +102,11 @@ class Frontend:
         renderer restoring a click-to-view line into view after a reflow)."""
         return 1
 
+    def get_text(self, win_id, extent="screen"):
+        """The window's VISIBLE text (the scrolled-to viewport, not the live
+        screen), or None. The renderer's scroll-position anchor."""
+        return None
+
     def resize_pane(self, var, axis, increment):
         """Resize the window matched by user-var (name, value) along
         "horizontal"/"vertical" by `increment` cells (negative shrinks)."""

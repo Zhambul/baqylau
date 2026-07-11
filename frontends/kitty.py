@@ -43,6 +43,20 @@ def kitten_run(kitten, listen, *args):
         return 1
 
 
+def kitten_get_text(kitten, listen, win_id, extent="screen"):
+    """`kitten @ get-text` for a window, or None on failure. extent="screen" is
+    the VISIBLE viewport — verified live: a window scrolled up returns the
+    scrolled-to rows, not the live screen's bottom — which is what lets the
+    mirror renderer restore the exact scroll position across a reflow."""
+    try:
+        r = subprocess.run([kitten, "@", "--to", listen, "get-text",
+                            "--match", f"id:{win_id}", "--extent", extent],
+                           capture_output=True, timeout=5)
+        return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
 def kitten_ls(kitten, listen):
     """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
     try:
@@ -208,6 +222,9 @@ class KittyFrontend(Frontend):
         # `N-` = scroll up N lines (kitten @ scroll-window's amount grammar).
         return self._run("scroll-window", "--match", f"id:{win_id}",
                          f"{int(lines_up)}-")
+
+    def get_text(self, win_id, extent="screen"):
+        return kitten_get_text(self.kitten, self.listen, win_id, extent)
 
     def resize_pane(self, var, axis, increment):
         return self._run("resize-window", "--match", f"var:{var[0]}={var[1]}",

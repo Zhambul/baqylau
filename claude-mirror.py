@@ -273,36 +273,116 @@ def measure(gid):
     return pos, idx, acc
 
 
-def repaint_tail(pos, idx, total_pre):
-    """The toggle FAST PATH: when the toggled line sits within the bottom
-    screenful of the PRE-toggle content — and a line is only clickable while
-    visible, so unless the user has scrolled up this is every click — rewrite
-    just from its row down (cursor address + clear-below) instead of clearing
-    and rewriting the entire scrollback. Instant, flicker-free, and it leaves
-    the scrollback untouched. Returns False when the line lives above the live
-    screen (the user clicked in scrollback) — the caller then takes the full
-    repaint + scroll_to path. `idx`/`total_pre` are measure()d BEFORE the
-    open-set flips; the toggled line's own offset is the same either way (only
-    content BELOW it changes)."""
+def tail_row(idx, total_pre):
+    """The 1-based screen row of line-offset `idx` when the viewport is at the
+    bottom — the toggle FAST PATH precondition. None when the line lives above
+    the live screen (the user clicked in scrollback) or there is no pty
+    (tests): the caller then takes the full repaint path. `idx`/`total_pre`
+    are measure()d BEFORE the open-set flips; the toggled line's own offset is
+    the same either way (only content BELOW it changes)."""
     if idx is None:
-        return False
+        return None
     try:
         h = os.get_terminal_size().lines
     except OSError:
-        return False                       # no pty (tests) -> full repaint
+        return None
     row = idx + 1 - max(0, total_pre - h)
-    if row < 1:
-        return False                       # above the live screen: scrollback
+    return row if row >= 1 else None
+
+
+def repaint_tail(pos, row):
+    """The toggle FAST PATH: the toggled line sits within the bottom screenful
+    — and a line is only clickable while visible, so unless the user has
+    scrolled up this is every click — so rewrite just from its row down
+    (cursor address + clear-below) instead of clearing and rewriting the
+    entire scrollback. Instant, scrollback untouched, and wrapped in a DEC
+    2026 synchronized update so kitty commits the rewrite as one frame."""
     w = width()
-    out = ["\033[%d;1H\033[J" % row]
+    out = ["\033[?2026h\033[%d;1H\033[J" % row]
     for op in OPS[pos:]:
         for o in expanded(op):
             out.append(render(o, w)); out.append("\n")
+    out.append("\033[?2026l")
     try:
         sys.stdout.write("".join(out)); sys.stdout.flush()
     except Exception:
         pass
-    return True
+
+
+def viewport_anchor(idx):
+    """The scrollback-click anchor: the viewport's top line as an OFFSET into
+    the rendered content, recovered by matching the pane's currently VISIBLE
+    text (`kitten @ get-text --extent screen` — verified to return the
+    scrolled-to viewport, not the live screen) against the pre-toggle rendered
+    rows. The clicked line pins the search: its offset `idx` must be visible,
+    so the top is one of rows [idx-h+1, idx]. Everything ABOVE the clicked
+    line is unchanged by the toggle, so scrolling back to this offset after
+    the reflow restores the user's exact view — the expansion just appears
+    under the clicked line. None (fall back to clicked-line-at-top) when
+    anchorless, capture fails, or nothing matches confidently."""
+    win = os.environ.get("KITTY_WINDOW_ID")
+    if not win:
+        return None
+    try:
+        import frontends
+        txt = frontends.get().get_text(win)
+    except Exception:
+        txt = None
+        try:
+            from core import audit as A
+            A.error(LOG, "viewport_anchor (get-text)")
+        except Exception:
+            pass
+    if not txt:
+        return None
+    cap = [l.rstrip() for l in txt.split("\n")]
+    while cap and not cap[-1]:
+        cap.pop()
+    if not cap:
+        return None
+    w = width()
+    rows = [R.strip_ansi(BANNER).rstrip()]
+    for op in OPS:
+        for o in expanded(op):
+            rows.extend(r.rstrip() for r in
+                        R.strip_ansi(render(o, w)).split("\n"))
+    lo, hi = max(0, idx - len(cap) + 1), min(idx, max(0, len(rows) - 1))
+    best, best_score = None, 0
+    for j in range(lo, hi + 1):
+        score = sum(1 for a, b in zip(cap, rows[j:j + len(cap)]) if a == b)
+        if score > best_score:
+            best, best_score = j, score
+    if best is None or best_score < max(3, len(cap) // 2):
+        return None
+    return best
+
+
+def scroll_to_offset(j, gid):
+    """Scroll the pane (viewport currently at the bottom, right after a full
+    repaint) so content line-offset `j` is the viewport's top row again."""
+    win = os.environ.get("KITTY_WINDOW_ID")
+    if not win:
+        return
+    try:
+        h = os.get_terminal_size().lines
+    except OSError:
+        return
+    total = 1
+    for op in OPS:
+        for o in expanded(op):
+            total += render(o, width()).count("\n") + 1
+    up = total - h - j
+    if up <= 0:
+        return
+    try:
+        import frontends
+        frontends.get().scroll_window(win, up)
+    except Exception:
+        try:
+            from core import audit as A
+            A.error(LOG, "scroll_to_offset (view toggle)", {"gid": gid, "up": up})
+        except Exception:
+            pass
 
 
 def scroll_to(gid):
@@ -366,7 +446,7 @@ def main():
     signal.signal(signal.SIGWINCH, _on_winch)
 
     db = St.db_path(LOG)
-    last, ino, toggled = 0, None, None
+    last, ino, toggled, anchor = 0, None, None, None
     while True:
         # A recreated DB file (new session reusing the key, or a park/restore
         # cycle) leaves the cached connection pointing at the OLD inode — drop it
@@ -431,12 +511,21 @@ def main():
             if cur_open != VIEW_OPEN:
                 delta = cur_open ^ VIEW_OPEN
                 toggled = delta.pop() if len(delta) == 1 else None
-                # Measure the toggled line BEFORE flipping the set (its offset
-                # is state-independent, but the visibility check needs the
-                # pre-toggle total — what's on screen right now).
-                pre = measure(toggled) if (toggled and not _resized) else None
+                # Plan the paint BEFORE flipping the set: the fast-path check
+                # needs the pre-toggle total (what's on screen right now), and
+                # the scrollback-click anchor must capture/match the viewport
+                # against the PRE-toggle rendered rows.
+                tail = None
+                if toggled and not _resized:
+                    pos, idx, total = measure(toggled)
+                    row = tail_row(idx, total)
+                    if row is not None:
+                        tail = (pos, row)
+                    else:
+                        anchor = viewport_anchor(idx)
                 VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
-                if pre is not None and repaint_tail(*pre):
+                if tail is not None:
+                    repaint_tail(*tail)
                     scroll_to(toggled)       # only scrolls if it grew off-screen
                     toggled = None           # painted — no full reflow needed
                 else:
@@ -444,10 +533,30 @@ def main():
 
         if _resized:                         # startup / resize / toggle -> reflow
             _resized = False
+            # For a toggle reflow, freeze rendering (DEC 2026 synchronized
+            # update) across repaint + scroll restore so the user never sees
+            # the intermediate viewport-at-bottom frame — the screen goes
+            # straight from the old view to the same view with the block
+            # expanded/collapsed. kitty's sync timeout un-freezes on its own
+            # if the scroll RPC stalls.
+            sync = toggled is not None
+            if sync:
+                try:
+                    sys.stdout.write("\033[?2026h")
+                except Exception:
+                    pass
             repaint()
             if toggled:
-                scroll_to(toggled)
-                toggled = None
+                if anchor is not None:
+                    scroll_to_offset(anchor, toggled)   # exact restore
+                else:
+                    scroll_to(toggled)                  # fallback: line at top
+                toggled, anchor = None, None
+            if sync:
+                try:
+                    sys.stdout.write("\033[?2026l"); sys.stdout.flush()
+                except Exception:
+                    pass
         elif new:
             paint_new(new)
 
