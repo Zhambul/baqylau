@@ -41,8 +41,8 @@ done.
 """
 
 
-def _render_all(md, chunks=1):
-    """Feed `md` through the streamer in `chunks` pieces, return the joined output."""
+def _segments(md, chunks=1):
+    """Feed `md` through the streamer in `chunks` pieces, return the (text, bg) segments."""
     s = M.MarkdownStreamer()
     out = []
     n = max(1, len(md) // chunks)
@@ -50,6 +50,11 @@ def _render_all(md, chunks=1):
         out += s.feed(md[i:i + n])
     out += s.close()
     return out
+
+
+def _render_all(md, chunks=1):
+    """Just the styled text of every segment (bg dropped)."""
+    return [t for t, _bg in _segments(md, chunks)]
 
 
 def test_wenmode_available():
@@ -98,8 +103,8 @@ def test_fallback_when_wenmode_absent(monkeypatch):
     # emitting the inline subset (bold, heading), never raising.
     s = M.MarkdownStreamer()
     monkeypatch.setattr(s, "wen", None)
-    out = s.feed("# Hi\n\nsome **bold** text\n") + s.close()
-    joined = "".join(out)
+    segs = s.feed("# Hi\n\nsome **bold** text\n") + s.close()
+    joined = "".join(t for t, _bg in segs)
     assert joined, "fallback produced nothing"
     assert "\033[1m" in joined, "fallback should still bold"
 
@@ -107,7 +112,7 @@ def test_fallback_when_wenmode_absent(monkeypatch):
 def test_empty_and_whitespace():
     assert M.MarkdownStreamer().close() == []
     s = M.MarkdownStreamer()
-    assert s.feed("\n\n   \n") == [] or all(not b.strip() for b in s.feed("\n"))
+    assert s.feed("\n\n   \n") == []
 
 
 def test_frontmatter_rendered_as_header():
@@ -135,6 +140,34 @@ def test_fenced_code_highlighted_by_language():
     joined = "".join(_render_all(md))
     assert R.COL["kw"] + "public" in joined, "java keyword highlighted"
     assert "java\n" not in R.strip_ansi(joined), "language tag not shown as a bare line"
+
+
+def test_fenced_code_is_its_own_bg_panel():
+    md = "before\n\n```python\nx = 1\n```\n\nafter\n"
+    segs = _segments(md)
+    bgs = [bg for _t, bg in segs]
+    assert M.CODE_BG in bgs, "code block should carry the CODE_BG panel background"
+    # prose segments carry no background.
+    for text, bg in segs:
+        if "x = 1" not in R.strip_ansi(text):
+            assert bg is None, "prose must not have a background"
+    # The bg fills to the pane width at paint time (wrap_gutter), not in the producer.
+    code_text = next(t for t, bg in segs if bg == M.CODE_BG)
+    prefix = R.fg(120, 120, 120) + "│ " + R.RST
+    painted = R.wrap_gutter(code_text, 40, prefix, 2, bg=M.CODE_BG)
+    bg_on = "\033[48;2;%d;%d;%dm" % M.CODE_BG
+    assert bg_on in painted, "background SGR emitted at paint time"
+    # every painted row reaches the pane edge (width 40): visible width == 40.
+    for row in painted.split("\n"):
+        assert R.dwidth(R.strip_ansi(row)) == 40, "code row not filled to pane width"
+
+
+def test_gut_without_bg_is_byte_identical():
+    # The bg feature must not perturb ordinary gut ops (golden stability).
+    prefix = R.fg(120, 120, 120) + "│ " + R.RST
+    a = R.wrap_gutter("hello world\nsecond line", 30, prefix, 2)
+    b = R.wrap_gutter("hello world\nsecond line", 30, prefix, 2, bg=None)
+    assert a == b
 
 
 def test_blocks_are_blank_separated():

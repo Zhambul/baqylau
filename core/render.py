@@ -121,7 +121,7 @@ def hyperlink(url, text):
     return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
 
 
-def wrap_gutter(text, width, gut, gw):
+def wrap_gutter(text, width, gut, gw, bg=None):
     cw = max(1, width - gw)                       # visible columns after the gutter
     pieces, lines = [], text.split("\n")
     for li, line in enumerate(lines):
@@ -174,7 +174,23 @@ def wrap_gutter(text, width, gut, gw):
                 ww = dwidth(word)
             pieces.append(word); col += ww
         pieces.append(RST)
-    return "".join(pieces)
+    result = "".join(pieces)
+    if bg is None:
+        return result
+    # Panel background: fill each visual row from the gutter to the pane edge with
+    # `bg`, so a code block reads as a solid rectangle that reflows on resize.
+    # Post-process the already-wrapped rows (bg=None output is byte-identical, so
+    # no other op changes) — every row starts with `gut`; measure the visible
+    # content width and pad to `cw` under the background.
+    bgon = "\033[48;2;%d;%d;%dm" % (bg[0], bg[1], bg[2])
+    bgoff = "\033[49m"
+    out = []
+    for row in result.split("\n"):
+        rest = row[len(gut):] if row.startswith(gut) else row
+        prefix = gut if row.startswith(gut) else ""
+        pad = max(0, cw - dwidth(strip_ansi(rest)))
+        out.append(prefix + bgon + rest + bgon + (" " * pad) + bgoff)
+    return "\n".join(out)
 
 
 # Section-banner lines that scripts (and Claude Code itself) print to delimit

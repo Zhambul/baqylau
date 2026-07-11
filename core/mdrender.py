@@ -35,6 +35,7 @@ except Exception:                       # not installed / import error
 
 
 _QUOTE = R.DIM + "▏ " + R.RST           # blockquote rail
+CODE_BG = (44, 49, 58)                  # code-block panel background (dark slate)
 # Obsidian wikilinks: [[target]] or [[target|alias]] — not CommonMark, so wenmode
 # leaves them as literal text. Colour them like a link (display the alias if given).
 _WIKILINK = re.compile(r"\[\[([^\]\|]+?)(?:\|([^\]]+?))?\]\]")
@@ -194,12 +195,14 @@ class MarkdownStreamer:
 
     The tailer feeds text as it arrives; we hold the trailing incomplete block
     and only render complete ones, so fenced code / multi-line constructs are
-    never cut mid-block. Output is a list of styled strings — one per flush —
-    each ready for O.gut(); a blank line is prepended to every flush after the
-    first so consecutive gut ops stay visually separated. On close() the buffered
-    remainder is flushed.
+    never cut mid-block. feed()/close() return a list of `(text, bg)` segments —
+    one per O.gut() the caller should emit: `bg` is None for prose and CODE_BG for
+    a fenced code block (so the renderer fills it to a full-width panel). A blank
+    separator segment is inserted between segments so consecutive gut ops stay
+    visually separated.
 
-    If wenmode is unavailable, degrades to the render.markdown() line subset.
+    If wenmode is unavailable, degrades to the render.markdown() line subset (one
+    prose segment).
     """
 
     def __init__(self):
@@ -226,33 +229,58 @@ class MarkdownStreamer:
         return self._emit(region) if region.strip() else []
 
     def _emit(self, region):
-        s = self._render(region).rstrip("\n")
-        if not s.strip():
-            return []
-        if self._emitted:
-            s = "\n" + s                # blank gutter line separating gut ops
-        self._emitted = True
-        return [s]
+        ops = []
+        for text, bg in self._segments(region):
+            text = text.rstrip("\n")
+            if not text.strip() and bg is None:
+                continue
+            if self._emitted:
+                ops.append(("", None))          # blank gutter line between gut ops
+            ops.append((text, bg))
+            self._emitted = True
+        return ops
 
-    def _render(self, region):
-        if self.wen is not None:
-            try:
-                pre = ""
-                if not self._started:   # frontmatter only ever leads the document
-                    stripped = region.lstrip("\n")
-                    m = _FRONTMATTER.match(stripped)
-                    if m:
-                        pre = _render_frontmatter(m.group(1)) + "\n\n"
-                        region = stripped[m.end():]
-                self._started = True
-                out = self.wen.render(region).rstrip("\n")
-                whole = (pre + out).rstrip("\n")
-                return whole if whole.strip() else ""
-            except Exception:
-                pass                    # fall through to the subset renderer
+    def _segments(self, region):
+        """Split a completed region into `(text, bg)` gut segments: consecutive
+        prose blocks coalesce into one prose op; each fenced code block becomes its
+        own CODE_BG panel op so the renderer can fill it to the pane width."""
+        pre = []
+        if not self._started:                   # frontmatter only ever leads the document
+            stripped = region.lstrip("\n")
+            m = _FRONTMATTER.match(stripped)
+            if m:
+                pre.append((_render_frontmatter(m.group(1)), None))
+                region = stripped[m.end():]
         self._started = True
-        sub = _wikilinks(R.markdown(R.unescape(region))).rstrip("\n")
-        return sub if sub.strip() else ""
+
+        if self.wen is None:                    # fallback: one prose segment
+            sub = _wikilinks(R.markdown(R.unescape(region))).rstrip("\n")
+            return pre + ([(sub, None)] if sub.strip() else [])
+
+        try:
+            root = self.wen.parse(region)
+        except Exception:
+            return pre + [(region.rstrip("\n"), None)]
+
+        segs, prose = list(pre), []
+        r = self.wen.renderer
+        ctx = r.create_context(root)
+        for child in getattr(root, "children", []) or []:
+            if child.type == "code":            # its own full-width panel
+                if prose:
+                    segs.append(("\n\n".join(prose), None)); prose = []
+                segs.append((_highlight_code(getattr(child, "value", ""),
+                                             getattr(child, "lang", None)), CODE_BG))
+            else:
+                try:
+                    txt = r.render_node(child, ctx).rstrip("\n")
+                except Exception:
+                    txt = ""
+                if txt:
+                    prose.append(txt)
+        if prose:
+            segs.append(("\n\n".join(prose), None))
+        return segs
 
     def _safe_cut(self):
         """Byte offset after the last blank line that is NOT inside a ``` / ~~~

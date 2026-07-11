@@ -17,9 +17,12 @@
 #   label  s, c[, outer]   -> a header/summary chip (dark text on colour c), truncated
 #                             to width; optional single outer "│ " gutter bar prefix
 #   code   s[, ind]        -> a command: syntax-highlighted + word-wrapped to width
-#   gut    s, c[, outer]   -> body text behind a "│ " gutter in colour c (double gutter
-#                             when outer is given), wrapped so the gutter repeats on
-#                             every visual row. s may already contain ANSI (zero-width)
+#   gut    s, c[, outer][, bg] -> body text behind a "│ " gutter in colour c (double
+#                             gutter when outer is given), wrapped so the gutter repeats
+#                             on every visual row. s may already contain ANSI (zero-width).
+#                             bg=(r,g,b) fills each row to the pane width -> a panel
+#                             (markdown code blocks); the fill is width-dependent so the
+#                             renderer (wrap_gutter) does it, not the producer
 #   line   s               -> a verbatim pre-styled single line (no gutter, no wrap)
 #
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
@@ -91,12 +94,17 @@ def code(s, ind="  ", g=None):
     return o
 
 
-def gut(s, c, outer=None, g=None):
+def gut(s, c, outer=None, g=None, bg=None):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if outer is not None:
         o["outer"] = _rgb(outer)
     if g:
         o["g"] = str(g)
+    if bg is not None:
+        # A panel background filled to the pane width at paint time (markdown code
+        # blocks) — width-DEPENDENT, so the fill is the renderer's job (wrap_gutter),
+        # not baked in here.
+        o["bg"] = _rgb(bg)
     return o
 
 

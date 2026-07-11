@@ -162,7 +162,7 @@ def _render(op, w):
         else:
             gprefix = R.fg(*op["c"]) + "│ " + R.RST
             gw = 2
-        return R.wrap_gutter(op.get("s", ""), w, gprefix, gw)
+        return R.wrap_gutter(op.get("s", ""), w, gprefix, gw, bg=op.get("bg"))
     if t == "line":
         return op.get("s", "")
     return ""

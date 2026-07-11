@@ -581,7 +581,10 @@ raw contents — an allowlisted plain-text reader (`cat` / `head` / `tail`) with
 ANSI instead of raw `#`/`**`/`` ` `` characters: headings become bold-amber
 banners, `**bold**`/`*italic*`/`~~strike~~` become SGR, `` `code` `` is coloured,
 fenced blocks are **syntax-highlighted by language** (pygments — `` ```java ``,
-`` ```js ``, … not just bash/python), bullets/ordered lists nest, blockquotes get
+`` ```js ``, … not just bash/python) and rendered as a **full-width background
+panel** (each code block is emitted as its own gut op with a `bg`, which
+`wrap_gutter` fills to the pane edge at paint time so the panel reflows on
+resize), bullets/ordered lists nest, blockquotes get
 a rail, blocks are blank-line separated, and `[links](url)` become OSC-8
 hyperlinks. Two wiki conventions the CommonMark parser doesn't know are handled
 too: **YAML frontmatter** (`--- … ---`) renders as a dim key/value header (not a

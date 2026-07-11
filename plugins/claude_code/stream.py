@@ -246,10 +246,10 @@ def main(run):
         A.state_file(LOG, "md-render:" + TASKID, "start",
                      {"kind": KIND, "wenmode": MDR.AVAILABLE})
 
-    def emit_md(blocks):
-        for blk in blocks:
+    def emit_md(segments):
+        for text, bg in segments:
             md_count["n"] += 1
-            O.emit(LOG, O.gut(blk, SLOT_RGB, outer=OUTER_RGB, g=GROUP))
+            O.emit(LOG, O.gut(text, SLOT_RGB, outer=OUTER_RGB, g=GROUP, bg=bg))
 
     def pump():
         lines = tail.pump()
