@@ -13,9 +13,11 @@
 # code match the rest of the mirror. This replaces (and supersets) the line-
 # oriented regex subset in core/render.markdown(): real nesting, ordered lists,
 # fenced blocks (syntax-highlighted by language via pygments), blockquotes, GFM
-# tables (dim │ rail, bold header — no column alignment, that's width-dependent), plus
-# two wiki conventions the raw parser doesn't know — YAML frontmatter and
-# Obsidian `[[wikilinks]]`. Why an AST parser and not glow/rich: those bake a
+# tables (dim │ rail, bold header — no column alignment, that's width-dependent),
+# task-list checkboxes (☐/☑), footnotes (`[^id]`), plus two wiki conventions the
+# raw parser doesn't know — YAML frontmatter and Obsidian `[[wikilinks]]`. (Task
+# lists and footnotes ship no plugin in the streaming preset, so they arrive as
+# plain text and are handled at the text level.) Why an AST parser and not glow/rich: those bake a
 # fixed width into their output, which the mirror's reflow model can't consume.
 #
 # wenmode is OPTIONAL (probed for, like pygments). If it is absent we degrade to
@@ -42,11 +44,38 @@ CODE_BG = (44, 49, 58)                  # code-block panel background (dark slat
 _WIKILINK = re.compile(r"\[\[([^\]\|]+?)(?:\|([^\]]+?))?\]\]")
 # Leading YAML frontmatter block (--- … ---) at the very start of a document.
 _FRONTMATTER = re.compile(r"^---\n(.*?)\n---\n?", re.DOTALL)
+# GFM footnotes: the streaming preset ships no footnote plugin, so `[^id]`
+# references and `[^id]: body` definitions arrive as plain text — handle them at
+# the text level (also streaming-robust: a definition may land in a later chunk
+# than its reference). A definition is a whole paragraph starting `[^id]:`.
+_FOOTNOTE_DEF = re.compile(r"^\[\^([^\]]+)\]:\s*")
+_FOOTNOTE_REF = re.compile(r"\[\^([^\]]+)\]")
+# GFM task-list checkbox at the head of a list item ("- [ ] todo" / "- [x] done").
+_CHECK = re.compile(r"^\[([ xX])\]\s+")
+# A line that is (or continues) a list item — an indented line, or a bullet /
+# ordered marker at column 0. Used by the streamer's block cut to avoid slicing a
+# loose list before its indented continuation has arrived.
+_LIST_MARK = re.compile(r"^\s*([-*+]|\d+[.)])\s")
+
+
+def _in_list(line):
+    return line[:1] in (" ", "\t") or bool(_LIST_MARK.match(line))
 
 
 def _wikilinks(s):
     return _WIKILINK.sub(
         lambda m: R.COL["func"] + (m.group(2) or m.group(1)).strip() + R.COL["def"], s)
+
+
+def _footnotes(s):
+    """Colour footnote references `[^id]` as a dim `[id]`, and render a definition
+    line `[^id]: body` as a dim `id.` label + faint body."""
+    m = _FOOTNOTE_DEF.match(s)
+    if m:
+        return (R.DIM + m.group(1) + ". " + R.RST
+                + R.COL["cmt"] + s[m.end():].strip() + R.COL["def"])
+    return _FOOTNOTE_REF.sub(
+        lambda x: R.COL["cmt"] + "[" + x.group(1) + "]" + R.COL["def"], s)
 
 
 def _indent(text, prefix, first=None):
@@ -113,7 +142,7 @@ if AVAILABLE:
 
     @OpsRenderer.register('text')
     def _text(r, n, c):
-        return _wikilinks(n.value or "")
+        return _footnotes(_wikilinks(n.value or ""))
 
     @OpsRenderer.register('paragraph')
     def _para(r, n, c):
@@ -185,7 +214,12 @@ if AVAILABLE:
         out = []
         for i, item in enumerate(n.children):
             body = r.render_node(item, c)
-            marker = ("%d." % (start + i)) if ordered else "•"
+            chk = _CHECK.match(body) if not ordered else None
+            if chk:                                  # GFM task-list checkbox
+                marker = "☑" if chk.group(1) in "xX" else "☐"
+                body = body[chk.end():]
+            else:
+                marker = ("%d." % (start + i)) if ordered else "•"
             colored = (R.COL["op"] + marker + R.RST) + " "
             out.append(_indent(body, " " * (len(marker) + 1), first=colored))
         return "\n".join(out)
@@ -312,15 +346,36 @@ class MarkdownStreamer:
         return segs
 
     def _safe_cut(self):
-        """Byte offset after the last blank line that is NOT inside a ``` / ~~~
-        fenced block — the largest prefix of `buf` that forms complete blocks."""
+        """Byte offset after the last blank line that is a true block boundary —
+        NOT inside a ``` / ~~~ fence, and NOT a blank line inside a loose list.
+
+        A blank line inside a loose list is not a block boundary: the item can
+        take an indented continuation (a nested paragraph or fenced code), and
+        cutting there orphans it (a fenced code inside a list item collapsed). So:
+          - if the next non-blank line is buffered, cut only when it sits at
+            column 0 (an indented line is a continuation of the item above);
+          - if no next line is buffered yet, cut only when the block ABOVE the
+            blank can't take a continuation (it isn't a list item / indented) —
+            otherwise hold, since the next feed may bring the nested block.
+        close() flushes the tail regardless, so holding never loses content."""
+        lines = self.buf.splitlines(keepends=True)
         fence = False
         pos = cut = 0
-        for ln in self.buf.splitlines(keepends=True):
+        prev = None                                  # last non-blank line seen
+        for i, ln in enumerate(lines):
             s = ln.strip()
             if s.startswith("```") or s.startswith("~~~"):
                 fence = not fence
             pos += len(ln)
-            if not fence and s == "":
-                cut = pos
+            if fence or s != "":
+                if s != "":
+                    prev = ln
+                continue
+            nxt = next((lines[j] for j in range(i + 1, len(lines))
+                        if lines[j].strip()), None)
+            if nxt is not None:
+                if nxt[:1] not in (" ", "\t"):
+                    cut = pos
+            elif prev is not None and not _in_list(prev):
+                cut = pos                            # tail block is self-terminating
         return cut

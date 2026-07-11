@@ -189,6 +189,31 @@ def test_gfm_table_rendered_with_rail():
     assert "1 │ 2" in plain
 
 
+def test_nested_code_in_list_keeps_its_lines():
+    # A fenced block inside a loose list item must not collapse (the safe-cut used
+    # to split at the blank line and re-parse the indented fence standalone).
+    md = "- item\n\n  ```py\n  x = 1\n  y = 2\n  ```\n"
+    for chunks in (1, 8):                     # whole, and byte-dribbled
+        plain = R.strip_ansi("\n".join(_render_all(md, chunks=chunks)))
+        assert "x = 1" in plain and "y = 2" in plain, f"code lost (chunks={chunks})"
+        # both code lines survive on their own logical lines under the bullet
+        assert "x = 1\n" in plain + "\n" and "item" in plain
+
+
+def test_task_list_checkboxes():
+    plain = R.strip_ansi("\n".join(_render_all("- [ ] todo\n- [x] done\n- plain\n")))
+    assert "☐ todo" in plain and "☑ done" in plain
+    assert "• plain" in plain, "a non-checkbox item still gets a bullet"
+
+
+def test_footnotes_reference_and_definition():
+    md = "See ref[^1] here.\n\n[^1]: the note body\n"
+    plain = R.strip_ansi("\n".join(_render_all(md)))
+    assert "ref[1] here" in plain, "reference [^1] should render as [1]"
+    assert "1. the note body" in plain, "definition should render as a labelled line"
+    assert "[^1]" not in plain, "raw [^ syntax should not survive"
+
+
 # ---- JSON ---------------------------------------------------------------------
 
 from core import jsonrender as JSON  # noqa: E402

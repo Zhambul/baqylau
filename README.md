@@ -590,10 +590,14 @@ fenced blocks are **syntax-highlighted by language** (pygments — `` ```java ``
 `` ```js ``, … not just bash/python) and rendered as a **full-width background
 panel** (each code block is emitted as its own gut op with a `bg`, which
 `wrap_gutter` fills to the pane edge at paint time so the panel reflows on
-resize), bullets/ordered lists nest, blockquotes get
+resize), bullets/ordered lists nest (a fenced block **inside** a list item keeps its own
+lines — the streamer's block cut is indent-aware, so an indented continuation is
+never orphaned), **GFM task-list** items render `☐`/`☑`, blockquotes get
 a rail, **GFM tables** render row-per-logical-line with a dim `│` rail and a
 bold header (no column alignment — that's width-dependent, so wrap_gutter still
-reflows a wide row), blocks are blank-line separated, and `[links](url)` become OSC-8
+reflows a wide row), **footnotes** (`[^id]` references + `[^id]: …` definitions,
+handled at the text level since the streaming preset ships no footnote plugin)
+are dimmed, blocks are blank-line separated, and `[links](url)` become OSC-8
 hyperlinks. Two wiki conventions the CommonMark parser doesn't know are handled
 too: **YAML frontmatter** (`--- … ---`) renders as a dim key/value header (not a
 stray rule), and Obsidian **`[[wikilinks]]`** / `[[target|alias]]` are coloured
