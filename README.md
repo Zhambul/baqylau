@@ -785,30 +785,30 @@ parts:
   with no stash (pre-feature line) is a feedback no-op.
 - **The expansion** (paint time): the renderer keeps `view-open` mirrored (one
   kv read per tick), and paints any `v`-tagged op followed by its stashed
-  block whenever its id is open. A toggle takes the **fast path** when the
-  clicked line sits within the bottom screenful — which, since a line must be
-  visible to click and the bottom screenful is only visible un-scrolled, is
-  every click except one made in scrollback: cursor-address to the line's row,
-  clear below, rewrite just the tail ops (`repaint_tail`). Instant,
-  flicker-free, scrollback untouched. A **scrollback click** (the line sits
-  above the live screen) needs the FULL reflow repaint (the resize path),
-  which necessarily parks the viewport at the bottom — so the renderer
-  restores the user's EXACT scroll position: before flipping the set it
-  captures the pane's visible text (`Frontend.get_text` → `kitten @ get-text
-  --extent screen`, which returns the *scrolled-to viewport*, verified live —
-  not the live screen), matches it against the pre-toggle rendered rows to
-  recover the viewport's top-line offset (`viewport_anchor` — the clicked
-  line pins the search to the `h` rows above it, and everything above the
-  line is unchanged by the toggle, so the offset survives the reflow), then
-  after repainting scrolls back to that offset (`Frontend.scroll_window`,
-  `kitten @ scroll-window N-`) — the view doesn't move; the block just
-  appears under the clicked line. The whole repaint + scroll is wrapped in a
-  DEC 2026 synchronized update so kitty never renders the intermediate
+  block whenever its id is open. Every toggle is a full reflow repaint (the
+  resize path — a terminal can't insert lines mid-scrollback), which
+  necessarily parks the viewport at the bottom; the renderer then makes the
+  toggle read as **unfolding in place**, like an editor fold. Before flipping
+  the set it captures the pane's visible text (`Frontend.get_text` → `kitten
+  @ get-text --extent screen`, which returns the *scrolled-to viewport*,
+  verified live — not the live screen) and matches it against the pre-toggle
+  rendered rows to recover the viewport's top-line offset (`viewport_anchor`
+  — the clicked line pins the search to the screenful above it, and
+  everything above the line is unchanged by the toggle, so the offset
+  survives the reflow). After repainting, `toggle_scroll` scrolls back
+  (`Frontend.scroll_window`, `kitten @ scroll-window N-`) by the **top-line
+  anchor rule**: the viewport's top line is put back exactly where it was —
+  expand or collapse, any block size, the frame simply does not move; the
+  toggle only changes what renders below the clicked line inside it. (A
+  fold-style rule that raised the frame to reveal a tall block was tried and
+  rejected — any frame movement at all reads as a jump; the user scrolls
+  down themselves if they want the rest of the block.) If the buffer bottom
+  is above that frame (a collapse shrank the content), no scroll is issued
+  and the pane stays bottom-following. The whole repaint + scroll rides inside a DEC
+  2026 synchronized update so kitty never renders the intermediate
   viewport-at-bottom frame (its sync timeout self-heals if the scroll RPC
-  stalls). When the anchor can't be recovered (capture failed, no confident
-  match) the fallback scrolls the clicked line to the top of the viewport;
-  the same scroll fires after a fast-path expansion whose block grew taller
-  than the screen. Why not the alternatives: *emit the block at the
+  stalls). An unrecoverable anchor (capture failed, no confident match)
+  degrades to the clicked-line-at-top frame — audited, never fatal. Why not the alternatives: *emit the block at the
   bottom* (append-only friendly, no repaint) reads as a teleport away from
   the line you clicked; *renderer-side mouse reporting* was already rejected
   for the copy links; *hiding via mutable op rows* breaks the append-only

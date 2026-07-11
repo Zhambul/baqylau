@@ -273,52 +273,16 @@ def measure(gid):
     return pos, idx, acc
 
 
-def tail_row(idx, total_pre):
-    """The 1-based screen row of line-offset `idx` when the viewport is at the
-    bottom — the toggle FAST PATH precondition. None when the line lives above
-    the live screen (the user clicked in scrollback) or there is no pty
-    (tests): the caller then takes the full repaint path. `idx`/`total_pre`
-    are measure()d BEFORE the open-set flips; the toggled line's own offset is
-    the same either way (only content BELOW it changes)."""
-    if idx is None:
-        return None
-    try:
-        h = os.get_terminal_size().lines
-    except OSError:
-        return None
-    row = idx + 1 - max(0, total_pre - h)
-    return row if row >= 1 else None
-
-
-def repaint_tail(pos, row):
-    """The toggle FAST PATH: the toggled line sits within the bottom screenful
-    — and a line is only clickable while visible, so unless the user has
-    scrolled up this is every click — so rewrite just from its row down
-    (cursor address + clear-below) instead of clearing and rewriting the
-    entire scrollback. Instant, scrollback untouched, and wrapped in a DEC
-    2026 synchronized update so kitty commits the rewrite as one frame."""
-    w = width()
-    out = ["\033[?2026h\033[%d;1H\033[J" % row]
-    for op in OPS[pos:]:
-        for o in expanded(op):
-            out.append(render(o, w)); out.append("\n")
-    out.append("\033[?2026l")
-    try:
-        sys.stdout.write("".join(out)); sys.stdout.flush()
-    except Exception:
-        pass
-
-
 def viewport_anchor(idx):
-    """The scrollback-click anchor: the viewport's top line as an OFFSET into
-    the rendered content, recovered by matching the pane's currently VISIBLE
+    """The viewport's top line as an OFFSET into the rendered content,
+    recovered before EVERY toggle by matching the pane's currently VISIBLE
     text (`kitten @ get-text --extent screen` — verified to return the
     scrolled-to viewport, not the live screen) against the pre-toggle rendered
-    rows. The clicked line pins the search: its offset `idx` must be visible,
-    so the top is one of rows [idx-h+1, idx]. Everything ABOVE the clicked
-    line is unchanged by the toggle, so scrolling back to this offset after
-    the reflow restores the user's exact view — the expansion just appears
-    under the clicked line. None (fall back to clicked-line-at-top) when
+    rows. The clicked line pins the search: its offset `idx` must have been
+    visible to be clicked, so the top is one of the rows in [idx-cap+1, idx].
+    Everything ABOVE the clicked line is unchanged by the toggle, so this
+    offset survives the reflow — toggle_scroll uses it to keep the line at the
+    viewport row it already occupied. None (degrade to line-at-top) when
     anchorless, capture fails, or nothing matches confidently."""
     win = os.environ.get("KITTY_WINDOW_ID")
     if not win:
@@ -357,70 +321,38 @@ def viewport_anchor(idx):
     return best
 
 
-def scroll_to_offset(j, gid):
-    """Scroll the pane (viewport currently at the bottom, right after a full
-    repaint) so content line-offset `j` is the viewport's top row again."""
+def toggle_scroll(gid, j0):
+    """Post-reflow scroll for a toggle (viewport parked at the bottom by the
+    repaint): put the viewport's TOP LINE back where it was. `j0` is the
+    pre-toggle top-line offset (viewport_anchor, or the clicked line's own
+    offset as the fallback frame when the anchor couldn't be recovered). The
+    top line is THE anchor — expand or collapse, the frame simply doesn't
+    move; the toggle only changes what's below the clicked line inside it.
+    up<=0 (the buffer bottom is above that frame — e.g. a collapse shrank the
+    content) means no scroll: the pane sits at the bottom, which is as close
+    to the old frame as the buffer allows, and stays bottom-following."""
     win = os.environ.get("KITTY_WINDOW_ID")
     if not win:
         return
     try:
         h = os.get_terminal_size().lines
     except OSError:
-        return
-    total = 1
-    for op in OPS:
-        for o in expanded(op):
-            total += render(o, width()).count("\n") + 1
-    up = total - h - j
-    if up <= 0:
-        return
-    try:
-        import frontends
-        frontends.get().scroll_window(win, up)
-    except Exception:
-        try:
-            from core import audit as A
-            A.error(LOG, "scroll_to_offset (view toggle)", {"gid": gid, "up": up})
-        except Exception:
-            pass
-
-
-def scroll_to(gid):
-    """A view toggle just reflowed the pane, which parks the viewport at the
-    bottom — if the user had scrolled up to click an OLD file-op line, their
-    place is gone. Restore it: compute the toggled line's offset in the freshly
-    painted stream (render heights are cached, this is cheap) and scroll the
-    pane so that line sits at the top of the viewport. When the line is already
-    within the bottom screenful (the common just-ran-op case) this is a no-op,
-    so a user sitting at the bottom stays there. Best-effort via the frontend's
-    scroll_window (kitten @ scroll-window N-); silently skipped when anchorless
-    (no KITTY_WINDOW_ID — e.g. the test harness), audited on failure."""
-    win = os.environ.get("KITTY_WINDOW_ID")
-    if not win:
         return
     w = width()
-    try:
-        h = os.get_terminal_size().lines
-    except OSError:
-        return
-    acc, idx = 1, None                       # 1: the banner line repaint() leads with
+    total = 1                                  # the banner line
     for op in OPS:
         for o in expanded(op):
-            if idx is None and o is op and op.get("v") == gid:
-                idx = acc
-            acc += render(o, w).count("\n") + 1
-    if idx is None:
-        return
-    up = acc - h - idx
+            total += render(o, w).count("\n") + 1
+    up = total - h - j0
     if up <= 0:
-        return                               # already visible at the bottom
+        return
     try:
         import frontends
         frontends.get().scroll_window(win, up)
     except Exception:
         try:
             from core import audit as A
-            A.error(LOG, "scroll_to (view toggle)", {"gid": gid, "up": up})
+            A.error(LOG, "toggle_scroll (view toggle)", {"gid": gid, "up": up})
         except Exception:
             pass
 
@@ -446,7 +378,7 @@ def main():
     signal.signal(signal.SIGWINCH, _on_winch)
 
     db = St.db_path(LOG)
-    last, ino, toggled, anchor = 0, None, None, None
+    last, ino, toggled, t_idx, anchor = 0, None, None, None, None
     while True:
         # A recreated DB file (new session reusing the key, or a park/restore
         # cycle) leaves the cached connection pointing at the OLD inode — drop it
@@ -502,8 +434,10 @@ def main():
 
             # Click-to-view toggles: any change to the `view-open` kv set (a
             # claude-copy.py /view click) reflows the whole pane, expanding or
-            # collapsing the affected blocks in place. Remember the toggled id
-            # so the post-repaint scroll can bring it back into view.
+            # collapsing the affected blocks in place. BEFORE flipping the set,
+            # find the toggled line's offset and recover the current viewport
+            # top (the anchor must match against the PRE-toggle rendered rows —
+            # exactly what's on screen right now).
             try:
                 cur_open = set(St.kv_get(LOG, "view-open") or [])
             except Exception:
@@ -511,34 +445,22 @@ def main():
             if cur_open != VIEW_OPEN:
                 delta = cur_open ^ VIEW_OPEN
                 toggled = delta.pop() if len(delta) == 1 else None
-                # Plan the paint BEFORE flipping the set: the fast-path check
-                # needs the pre-toggle total (what's on screen right now), and
-                # the scrollback-click anchor must capture/match the viewport
-                # against the PRE-toggle rendered rows.
-                tail = None
+                t_idx = anchor = None
                 if toggled and not _resized:
-                    pos, idx, total = measure(toggled)
-                    row = tail_row(idx, total)
-                    if row is not None:
-                        tail = (pos, row)
-                    else:
-                        anchor = viewport_anchor(idx)
+                    _, t_idx, _ = measure(toggled)
+                    if t_idx is not None:
+                        anchor = viewport_anchor(t_idx)
                 VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
-                if tail is not None:
-                    repaint_tail(*tail)
-                    scroll_to(toggled)       # only scrolls if it grew off-screen
-                    toggled = None           # painted — no full reflow needed
-                else:
-                    _resized = True
+                _resized = True
 
         if _resized:                         # startup / resize / toggle -> reflow
             _resized = False
             # For a toggle reflow, freeze rendering (DEC 2026 synchronized
             # update) across repaint + scroll restore so the user never sees
             # the intermediate viewport-at-bottom frame — the screen goes
-            # straight from the old view to the same view with the block
-            # expanded/collapsed. kitty's sync timeout un-freezes on its own
-            # if the scroll RPC stalls.
+            # straight from the old view to the block unfolding in place.
+            # kitty's sync timeout un-freezes on its own if the scroll RPC
+            # stalls.
             sync = toggled is not None
             if sync:
                 try:
@@ -547,11 +469,12 @@ def main():
                     pass
             repaint()
             if toggled:
-                if anchor is not None:
-                    scroll_to_offset(anchor, toggled)   # exact restore
-                else:
-                    scroll_to(toggled)                  # fallback: line at top
-                toggled, anchor = None, None
+                if t_idx is not None:
+                    # anchor None (capture failed / no match) degrades to the
+                    # clicked-line-at-top frame: j0 = the line's own offset.
+                    toggle_scroll(toggled,
+                                  anchor if anchor is not None else t_idx)
+                toggled, t_idx, anchor = None, None, None
             if sync:
                 try:
                     sys.stdout.write("\033[?2026l"); sys.stdout.flush()

@@ -411,6 +411,51 @@ def test_viewport_anchor_restores_scroll_offset(session, test_env, monkeypatch):
     assert mod.viewport_anchor(idx) is None
 
 
+def test_toggle_scroll_pins_top_line(session, test_env, monkeypatch):
+    """The top-line anchor rule: after a toggle reflow the viewport's TOP LINE
+    is exactly where it was — expand or collapse, any block size."""
+    import collections
+    s = session.make()
+    mod = _load_mirror(s.log)
+    mod.OPS.extend({"t": "line", "s": "row %03d" % i} for i in range(100))
+    mod.OPS.append({"t": "line", "s": "Update(x.py)", "v": "g1"})
+    mod.OPS.extend({"t": "line", "s": "tail %03d" % i} for i in range(40))
+    _, idx, _ = mod.measure("g1")
+
+    TS = collections.namedtuple("ts", "columns lines")
+    monkeypatch.setattr(mod.os, "get_terminal_size", lambda: TS(80, 24))
+    monkeypatch.setenv("KITTY_WINDOW_ID", "7")
+    calls = []
+
+    class _FE:
+        def scroll_window(self, win, up):
+            calls.append(up)
+    import frontends
+    monkeypatch.setattr(frontends, "get", lambda: _FE())
+
+    h, j0 = 24, idx - 5                     # viewport top sat 5 lines above the link
+
+    # collapse (id not open): top stays at j0
+    _, _, total = mod.measure("g1")
+    mod.toggle_scroll("g1", j0)
+    assert calls[-1] == total - h - j0
+
+    # expand a 10-row block: top STILL at j0 (block unfolds below, in place)
+    mod._VIEW_OPS["g1"] = [{"t": "line", "s": "body %02d" % i} for i in range(10)]
+    mod.VIEW_OPEN.add("g1")
+    _, _, total = mod.measure("g1")
+    mod.toggle_scroll("g1", j0)
+    assert calls[-1] == total - h - j0
+
+    # expand a screen-filling block: top STILL at j0 — the frame never moves
+    mod._VIEW_OPS["g1"] = [{"t": "line", "s": "big %02d" % i} for i in range(40)]
+    for op in mod.OPS:                      # heights changed: drop caches
+        op.pop("_c", None)
+    _, _, total = mod.measure("g1")
+    mod.toggle_scroll("g1", j0)
+    assert calls[-1] == total - h - j0
+
+
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):
     """A click on a dead session's link must NOT create a state DB (its
     file-existence is the session-alive signal) — audited, not fatal."""

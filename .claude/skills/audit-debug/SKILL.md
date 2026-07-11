@@ -213,12 +213,12 @@ New always-audited swallow sites (previously silent — their absence used to ma
   `renderer-pid` kv row (the copy handler SIGWINCHes it — a stale/dead pid degrades
   to the 200ms poll, i.e. "works but feels slow"; NO renderer-pid row at all = the
   pane is running a pre-feature renderer — toggle the mirror off/on). Expansion
-  moved the user's SCROLL position: a scrollback click is supposed to restore the
-  exact viewport via a get-text anchor — `errors` funcs `viewport_anchor
-  (get-text)` (the capture failed, so it degraded to clicked-line-at-top: the
-  "my scroll jumped" symptom) and `scroll_to (view toggle)` / `scroll_to_offset
-  (view toggle)` (the kitten scroll-window call failed — socket/anchor problem,
-  not geometry). Expanded code
+  MOVED the view (the top-line anchor rule says the viewport's top line stays
+  exactly where it was across any toggle): `errors` funcs `viewport_anchor
+  (get-text)` (the visible-text capture failed, so it degraded to
+  clicked-line-at-top — the "my scroll jumped" symptom) and `toggle_scroll (view
+  toggle)` (the kitten scroll-window call failed — socket/anchor problem, not
+  geometry). Expanded code
   UNHIGHLIGHTED: the stash is raw text + `lex`/`num` fields on the gut op —
   highlighting happens in the renderer, so no colour = the renderer's interpreter
   lacks pygments (its re-exec probe failed), not a stash bug.
