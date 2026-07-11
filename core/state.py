@@ -41,7 +41,7 @@ from contextlib import contextmanager
 
 from core import paths as P
 
-_CONNS = {}                     # path -> connection (streamers are long-lived)
+_CONNS = {}                     # path -> (connection, st_ino) (streamers are long-lived)
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS ops(id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL);
@@ -82,9 +82,37 @@ def pid_alive(pid):
 
 
 def _connect(path):
-    conn = _CONNS.get(path)
-    if conn is not None:
-        return conn
+    # Revalidate the cached connection against the file's CURRENT inode. A
+    # SessionEnd parks the DB with os.replace(db, db+".keep") and a fresh DB is
+    # created at the same path on resume — so a long-lived caller (the OTLP
+    # receiver, the renderer) that cached a connection still holds an fd to the
+    # OLD inode (now the *.keep file), and its writes silently land there,
+    # invisible to everything reading the live path. No error is ever raised
+    # (the stale fd points at a real, valid DB), so the swap can only be caught
+    # proactively: one os.stat per call, cheap next to the reconnect it guards,
+    # and the reopen branch runs ONLY after a park actually happened. This also
+    # evicts+closes the stale fd, which otherwise leaks for the process lifetime.
+    cached = _CONNS.get(path)
+    if cached is not None:
+        conn, ino = cached
+        try:
+            cur = os.stat(path).st_ino
+        except OSError:
+            cur = None
+        # Only reconnect when a FRESH DB with a different inode sits at the path
+        # (a park+resume swapped it out from under this long-lived caller — the
+        # receiver-stranded-on-*.keep bug). When the path is simply GONE (cur is
+        # None: parked, not yet recreated), keep returning the stale cached conn
+        # — NEVER recreate the DB here, because its absence is the session-alive
+        # exit signal watchers/streamers poll (recreating it wedged the substream
+        # open past a park). A first connect (no cache) still creates below.
+        if cur is None or cur == ino:
+            return conn
+        try:
+            conn.close()
+        except Exception:
+            pass
+        del _CONNS[path]
     try:
         conn = sqlite3.connect(path, timeout=5.0)
         conn.execute("PRAGMA journal_mode=WAL")
@@ -93,7 +121,7 @@ def _connect(path):
         conn.executescript(_SCHEMA)
         _migrate(conn)
         conn.commit()
-        _CONNS[path] = conn
+        _CONNS[path] = (conn, os.stat(path).st_ino)
         return conn
     except Exception:
         return None

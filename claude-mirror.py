@@ -225,7 +225,9 @@ def main():
                         # open fds to the DELETED old inode (+ its WAL/SHM),
                         # pinning them for this long-lived renderer's lifetime —
                         # one leak per park/restore or session-recreate cycle.
-                        stale.close()
+                        # (St._connect now also self-evicts on inode change; this
+                        # stays because it drives the paint-state reset below.)
+                        stale[0].close()
                     except Exception:
                         pass
                 last, OPS[:] = 0, []

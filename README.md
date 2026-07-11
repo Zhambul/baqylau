@@ -1123,7 +1123,20 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE=delta`. **Why a global
     singleton**: the OTLP endpoint is a process-global env var, so ONE receiver serves
     every session (dual-guarded by a pid-lock in `core.paths.OTLP_DB` AND the port
-    bind; a duplicate exits with a clean `duplicate` streams row). **Codex is exempt**:
+    bind; a duplicate exits with a clean `duplicate` streams row). **The long-lived
+    receiver must revalidate its cached state-DB connection.** `core.state._connect`
+    caches one connection per DB path (right for the short-lived hook processes it was
+    built for), but a `--compact`/`--resume` cycle parks the DB with
+    `os.replace(db, db+".keep")` and creates a FRESH inode at the same path — a cached
+    connection then keeps writing token counters to the ORPHANED `*.keep` inode while
+    the scorebar reads the new live DB, and *no error is ever raised* (both are valid
+    DBs), so the Σ breakdown silently goes blank. `_connect` therefore revalidates by
+    `st_ino` on every call: same inode → reuse; a DIFFERENT inode at the path → close
+    the stale fd (fixing an fd-leak too) and reconnect to the fresh DB; the path simply
+    GONE (parked, not yet recreated) → keep the stale conn and **never recreate** (the
+    live path's absence is the session-alive exit signal streamers poll). The
+    `anomalies` CLI cross-checks this: `bump-otel` rows for a session whose live state
+    DB has no `tokens`/`tk_read` counter is the stranded-receiver signature. **Codex is exempt**:
     it runs in a separate process OTEL can't see, so it keeps its own rollout fold
     (`bump-agent`, `meta.kind=codex`). Every raw datapoint is captured in the audit
     `otel` table (`python3 claude_audit.py otel <sid>`), so the counters are fully

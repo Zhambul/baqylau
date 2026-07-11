@@ -757,6 +757,44 @@ def cli_anomalies(sid):
             "handler='claude-stop-fmt.py' AND decision LIKE 'otel absent%' AND EXISTS "
             "(SELECT 1 FROM state_files f WHERE f.session_id=? AND f.action='bump-otel') "
             "ORDER BY ts", (sid, sid))
+    # The OTLP receiver is a long-lived singleton that caches its state-DB
+    # connection. A park (os.replace db -> db.keep) + resume swaps the inode under
+    # the path, so a receiver that didn't revalidate kept writing token counters to
+    # the ORPHANED *.keep inode while the scorebar read the fresh live DB — a silent
+    # divergence (no error; both files are valid DBs). Tell: bump-otel rows exist for
+    # the session (OTEL landed) yet the LIVE state DB has no tk_read/tokens counter.
+    # core/state._connect now revalidates by st_ino, so a non-empty row here is that
+    # regression (or the receiver holding an fd on a *.keep path — check `lsof`).
+    _section_otel_stranded(conn, section, sid)
+
+
+def _section_otel_stranded(audit_conn, section, sid):
+    """Cross-check the audit's bump-otel trail against the LIVE state DB counters —
+    the only decisive signal for a receiver whose writes were diverted to a parked
+    *.keep inode (see the caller's note). Reads the state DB read-only; degrades to
+    a clean section if it isn't present (parked/ended session — nothing to check)."""
+    import sqlite3
+    n_otel = audit_conn.execute(
+        "SELECT COUNT(*) FROM state_files WHERE session_id=? AND action='bump-otel'",
+        (sid,)).fetchone()[0]
+    hits = []
+    if n_otel:
+        db = P.mirror_log(sid) + ".state.db"
+        if os.path.exists(db):
+            try:
+                c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.5)
+                have = c.execute(
+                    "SELECT COUNT(*) FROM counters WHERE key IN ('tokens','tk_read')"
+                ).fetchone()[0]
+                c.close()
+                if have == 0:
+                    hits.append((n_otel, db))
+            except Exception:
+                pass
+    print(f"== OTLP writes stranded on a parked inode "
+          f"(bump-otel rows but live DB has no token counters): {len(hits)}")
+    for h in hits:
+        print(f"   bump-otel={h[0]} but no tokens/tk_read in {h[1]}")
 
 
 def cli_otel(sid):
