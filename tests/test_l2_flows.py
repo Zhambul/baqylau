@@ -186,6 +186,33 @@ def test_f2md_markdown_file_is_pretty_rendered(
     oracle.assert_clean(test_env, s.sid)
 
 
+def test_f2json_json_file_is_pretty_printed(
+        run_hook, test_env, session, writer):
+    """`cat data.json` (CT.json_source -> CLAUDE_STREAM_JSON) buffers the file and,
+    at completion, pretty-prints + colours it as a panel."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "cat data.json"))
+    rec = fg_live_record(s)
+    w = writer(rec["src"])
+    with open(rec["src"], "a") as f:
+        f.write('{"name":"adapter","count":3,"enabled":true}\n')
+    # JSON renders only at close, so drive PostToolUse to finish the stream.
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, "cat data.json", duration_ms=120))
+    w.terminate()
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
+               desc="fg stream ends on the done hand-off")
+    # All three keys survive the pretty-print, and a gut op carries the JSON panel
+    # background (bg=[44,49,58], filled to pane width at paint time) — proving the
+    # json-render path engaged.
+    txt = s.ops_text()
+    for key in ('"name"', '"count"', '"enabled"'):
+        assert key in txt, key
+    assert any(op.get("t") == "gut" and op.get("bg") == [44, 49, 58] for op in s.ops()), \
+        "JSON not rendered as a coloured panel op"
+    assert not s.live("fg"), "fg slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
 # --------------------------------------------------------------------- F3
 
 def test_f3_failed_command_chip(run_hook, test_env, session):

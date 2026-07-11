@@ -33,6 +33,7 @@
 # that same sentinel, so a failed rewrite never means silently losing the output.
 import glob, os, subprocess, sys, time
 
+from core import jsonrender as JSONR
 from core import mdrender as MDR
 from core import ops as O
 from core import render as R
@@ -111,10 +112,13 @@ SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
 # Unset for launchers that don't tag (monitors, a subagent's nested jobs) — those
 # blocks just render without copy links, exactly as before.
 GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
-# Set by claude-cmd-pre.py when this fg command streams a markdown file's raw
-# contents (cat/head/tail of a .md) — the body is rendered as styled markdown
-# via core/mdrender instead of emitted verbatim. See CT.md_source / CLAUDE_MIRROR_MD.
+# Set by claude-cmd-pre.py when this fg command streams a markdown or JSON file's
+# raw contents (cat/head/tail of a .md, cat of a .json) — the body is rendered
+# (styled markdown / pretty-printed coloured JSON) via core/mdrender|jsonrender
+# instead of emitted verbatim. See CT.md_source|json_source / CLAUDE_MIRROR_MD|JSON.
 MD = os.environ.get("CLAUDE_STREAM_MD") == "1"
+JSON_MODE = os.environ.get("CLAUDE_STREAM_JSON") == "1"
+RENDER_KIND = "md" if MD else "json" if JSON_MODE else None
 
 
 def find_file(deadline):
@@ -237,14 +241,20 @@ def main(run):
             pos0 = 0
     tail = T.FileTailer(path, pos=pos0)
     run.lines = 0
-    # Markdown mode: feed tailed text through a block-buffering renderer that holds
-    # incomplete blocks and emits each completed one as its own gut op (append-only,
-    # so nothing already painted is re-rendered). Non-md path is unchanged.
-    md_stream = MDR.MarkdownStreamer() if MD else None
+    # Render mode: feed tailed text through a content renderer that returns
+    # (text, bg) segments to emit as gut ops. Markdown holds incomplete blocks and
+    # emits each completed one live (append-only); JSON buffers whole and renders at
+    # close (a partial document is invalid). Non-render path is unchanged.
+    if MD:
+        content_stream = MDR.MarkdownStreamer()
+    elif JSON_MODE:
+        content_stream = JSONR.JsonStreamer()
+    else:
+        content_stream = None
     md_count = {"n": 0}
-    if md_stream is not None:
-        A.state_file(LOG, "md-render:" + TASKID, "start",
-                     {"kind": KIND, "wenmode": MDR.AVAILABLE})
+    if content_stream is not None:
+        A.state_file(LOG, "render:" + TASKID, "start",
+                     {"kind": RENDER_KIND, "wenmode": MDR.AVAILABLE})
 
     def emit_md(segments):
         for text, bg in segments:
@@ -255,11 +265,11 @@ def main(run):
         lines = tail.pump()
         if lines:
             run.lines += len(lines)
-            if md_stream is not None:
+            if content_stream is not None:
                 # pump() strips the trailing \n from each complete line — re-add it
                 # so the streamer sees real line/block boundaries (blank lines).
                 text = "".join(ln.decode("utf-8", "replace") + "\n" for ln in lines)
-                emit_md(md_stream.feed(text))
+                emit_md(content_stream.feed(text))
             else:
                 O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
                                   SLOT_RGB, outer=OUTER_RGB, g=GROUP))
@@ -340,18 +350,19 @@ def main(run):
     converted = KIND == "fg" and override and override.get("converted")
     if converted:
         run.end("converted-ctrl-b")
-    if md_stream is not None:
+    if content_stream is not None:
         # Flush the trailing incomplete block (the last line has no terminating
         # blank, so the buffer held it) plus any fallback body, all through the
         # markdown renderer so the final block is styled like the rest.
         if tail.pending:
-            md_stream.feed(tail.pending.decode("utf-8", "replace"))
+            content_stream.feed(tail.pending.decode("utf-8", "replace"))
         if tail.pos == 0 and KIND == "fg" and not converted and override and override.get("fallback_body"):
-            md_stream.feed(override["fallback_body"])
-        emit_md(md_stream.close())
+            content_stream.feed(override["fallback_body"])
+        emit_md(content_stream.close())
         # Zero blocks from a non-empty markdown stream is the render-failure tell —
         # see claude_audit.py `anomalies` (md-render blocks=0).
-        A.state_file(LOG, "md-render:" + TASKID, "done", {"blocks": md_count["n"]})
+        A.state_file(LOG, "render:" + TASKID, "done",
+                     {"kind": RENDER_KIND, "blocks": md_count["n"]})
     elif tail.pending.strip():
         O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB,
                           outer=OUTER_RGB, g=GROUP))

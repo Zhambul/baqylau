@@ -177,6 +177,43 @@ def test_blocks_are_blank_separated():
     assert "\n\n" in plain, "blocks should be blank-line separated"
 
 
+# ---- JSON ---------------------------------------------------------------------
+
+from core import jsonrender as JSON  # noqa: E402
+
+
+def test_json_pretty_printed_and_coloured():
+    s = JSON.JsonStreamer()
+    raw = '{"name":"adapter","count":3,"on":true,"tags":["a","b"],"n":null}'
+    s.feed(raw[:15]); s.feed(raw[15:])          # chunked
+    segs = s.close()
+    assert len(segs) == 1
+    text, bg = segs[0]
+    assert bg == JSON.CODE_BG, "JSON rendered as a full-width panel"
+    plain = R.strip_ansi(text)
+    assert '\n  "name"' in plain, "pretty-printed with 2-space indent"
+    assert R.COL["func"] + '"name"' in text, "keys coloured (blue)"
+    assert R.COL["str"] + '"adapter"' in text, "string values coloured (green)"
+    assert R.COL["kw"] + "true" in text, "booleans coloured"
+
+
+def test_json_invalid_falls_back_to_raw():
+    s = JSON.JsonStreamer()
+    s.feed("this is not json\njust a log line\n")
+    segs = s.close()
+    assert len(segs) == 1
+    text, bg = segs[0]
+    assert bg is None, "non-JSON must not get a panel"
+    assert "not json" in R.strip_ansi(text)
+
+
+def test_json_partial_is_not_rendered_until_close():
+    s = JSON.JsonStreamer()
+    assert s.feed('{"a":') == [], "JSON never renders on a partial buffer"
+    assert s.feed('1}') == []
+    assert len(s.close()) == 1
+
+
 # ---- detection ---------------------------------------------------------------
 
 def test_md_source_positive():
@@ -190,3 +227,12 @@ def test_md_source_negative():
               "rm old.md", "npm run build", "cat x.txt", "less README.md",
               "cat a.md > b.txt", "echo hi && cat x.md", "mdcat r.md", "cat $(ls).md"]:
         assert not md_source(c), c
+
+
+def test_json_source():
+    from plugins.claude_code.tools import json_source
+    for c in ["cat data.json", "cat dir/x.json", "< r.json", "cat < r.json"]:
+        assert json_source(c), c
+    for c in ["head data.json", "tail x.json", "jq . x.json", "cat x.json | jq",
+              "bat x.json", "cat x.json > y.txt", "cat x.md", "cat data.json && echo hi"]:
+        assert not json_source(c), c
