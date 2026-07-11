@@ -174,6 +174,8 @@ def main():
     md = (os.environ.get("CLAUDE_MIRROR_MD", "1") != "0" and CT.md_source(cmd))
     js = (not md and os.environ.get("CLAUDE_MIRROR_JSON", "1") != "0"
           and CT.json_source(cmd))
+    yaml = (not md and not js and os.environ.get("CLAUDE_MIRROR_YAML", "1") != "0"
+            and CT.yaml_source(cmd))
 
     env = dict(os.environ)
     env["CLAUDE_STREAM_SRC"] = src
@@ -182,6 +184,8 @@ def main():
         env["CLAUDE_STREAM_MD"] = "1"
     if js:
         env["CLAUDE_STREAM_JSON"] = "1"
+    if yaml:
+        env["CLAUDE_STREAM_YAML"] = "1"
     if gid:
         env["CLAUDE_STREAM_GROUP"] = gid
     if own:
@@ -218,7 +222,8 @@ def main():
     A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s%s"
                  % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
                     else "tailing command's own redirect",
-                    " [md-render]" if md else " [json-render]" if js else ""))
+                    " [md-render]" if md else " [json-render]" if js
+                    else " [yaml-render]" if yaml else ""))
 
     if wrapped_cmd:
         # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):

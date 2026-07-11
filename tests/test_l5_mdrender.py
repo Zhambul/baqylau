@@ -189,7 +189,7 @@ def test_json_pretty_printed_and_coloured():
     segs = s.close()
     assert len(segs) == 1
     text, bg = segs[0]
-    assert bg == JSON.CODE_BG, "JSON rendered as a full-width panel"
+    assert bg is None, "JSON has no background panel"
     plain = R.strip_ansi(text)
     assert '\n  "name"' in plain, "pretty-printed with 2-space indent"
     assert R.COL["func"] + '"name"' in text, "keys coloured (blue)"
@@ -214,6 +214,35 @@ def test_json_partial_is_not_rendered_until_close():
     assert len(s.close()) == 1
 
 
+# ---- YAML ---------------------------------------------------------------------
+
+from core import yamlrender as YAML  # noqa: E402
+
+
+def test_yaml_coloured_no_reformat():
+    s = YAML.YamlStreamer()
+    src = "# a config\nname: adapters-api\nreplicas: 3\nitems:\n  - a\n  - b\n"
+    s.feed(src)
+    segs = s.close()
+    assert len(segs) == 1
+    text, bg = segs[0]
+    assert bg is None, "YAML has no background panel"
+    # Raw structure preserved byte-for-byte (comments kept, keys not reordered).
+    assert R.strip_ansi(text).rstrip("\n") == src.rstrip("\n")
+    assert R.COL["func"] + "name" in text, "keys coloured (blue)"
+    assert R.COL["cmt"] + "# a config" in text, "comment coloured (grey)"
+
+
+def test_yaml_fallback_without_pygments(monkeypatch):
+    # render_yaml returns None if the lexer is unavailable; the streamer still emits
+    # the raw text verbatim.
+    monkeypatch.setattr(YAML, "render_yaml", lambda _t: None)
+    s = YAML.YamlStreamer()
+    s.feed("a: 1\nb: 2\n")
+    out = s.close()
+    assert out and "a: 1" in R.strip_ansi(out[0][0])
+
+
 # ---- detection ---------------------------------------------------------------
 
 def test_md_source_positive():
@@ -236,3 +265,12 @@ def test_json_source():
     for c in ["head data.json", "tail x.json", "jq . x.json", "cat x.json | jq",
               "bat x.json", "cat x.json > y.txt", "cat x.md", "cat data.json && echo hi"]:
         assert not json_source(c), c
+
+
+def test_yaml_source():
+    from plugins.claude_code.tools import yaml_source
+    for c in ["cat config.yml", "cat x.yaml", "head -20 c.yml", "tail c.yaml", "< d.yml"]:
+        assert yaml_source(c), c
+    for c in ["cat x.json", "cat x.md", "cat x.yml | grep foo", "bat x.yml",
+              "cat x.yml > o.txt", "yq . x.yml"]:
+        assert not yaml_source(c), c

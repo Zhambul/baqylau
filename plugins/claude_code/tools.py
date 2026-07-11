@@ -144,6 +144,34 @@ def json_source(cmd):
     return head in _JSON_READERS and _has_json_arg(toks[1:])
 
 
+# YAML is coloured in place (not reparsed), so head/tail of a .yml is fine too.
+_YAML_READERS = {"cat", "head", "tail"}
+_YAML_EXT = (".yml", ".yaml")
+
+
+def yaml_source(cmd):
+    """True when `cmd` streams a .yml/.yaml file's raw contents — an allowlisted
+    reader (cat/head/tail) with a .yml/.yaml argument, or a bare `< file.yml`."""
+    try:
+        toks = shlex.split(cmd, posix=False)
+    except ValueError:
+        return False
+    if not toks:
+        return False
+    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
+        return False
+    if "$(" in cmd:
+        return False
+    def _has_yaml_arg(words):
+        return any(w.strip("'\"").lower().endswith(_YAML_EXT) for w in words)
+    if "<" in toks:
+        i = toks.index("<")
+        if i + 1 < len(toks) and toks[i + 1].strip("'\"").lower().endswith(_YAML_EXT):
+            return True
+    head = os.path.basename(toks[0].strip("'\""))
+    return head in _YAML_READERS and _has_yaml_arg(toks[1:])
+
+
 def diff_counts(tool_name, inp):
     """(added, removed) line counts for a file-mutating tool's input, matching Claude
     Code's own additions/removals: a real line-level diff for Edit/MultiEdit, the whole

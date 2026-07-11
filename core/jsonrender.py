@@ -3,9 +3,9 @@
 # Sibling of core/mdrender.py: when a command streams a .json file, the mirror
 # pretty-prints it (json.dumps indent=2) and colours it (keys blue, strings
 # green, numbers orange, true/false/null magenta, punctuation cyan — reusing the
-# render.COL palette), then emits it as a full-width CODE_BG panel like a fenced
-# code block. Colouring uses pygments' JsonLexer when available and degrades to a
-# plain (still pretty-printed) panel otherwise.
+# render.COL palette). Colouring uses pygments' JsonLexer when available and
+# degrades to a plain (still pretty-printed) block otherwise. No background panel
+# (that's reserved for markdown fenced code) — just colour on the normal gutter.
 #
 # Unlike markdown, JSON CANNOT be rendered incrementally — a partial document is
 # invalid — so JsonStreamer buffers the whole output and renders once at close().
@@ -14,7 +14,6 @@
 import json
 
 from core import render as R
-from core.mdrender import CODE_BG          # one shared panel background
 
 
 def _pick(ttype):
@@ -46,10 +45,10 @@ def render_json(text):
 
 
 class JsonStreamer:
-    """Buffer a command's whole output, then at close() emit it as a pretty,
-    coloured JSON panel — or the raw text if it isn't valid JSON. Mirrors
+    """Buffer a command's whole output, then at close() emit it as pretty,
+    coloured JSON — or the raw text if it isn't valid JSON. Mirrors
     mdrender.MarkdownStreamer's feed()/close() -> list[(text, bg)] contract so the
-    tailer drives both the same way."""
+    tailer drives both the same way. bg is always None (no panel)."""
 
     def __init__(self):
         self.buf = ""
@@ -61,7 +60,7 @@ class JsonStreamer:
     def close(self):
         raw, self.buf = self.buf, ""
         body = render_json(raw)
-        if body is not None:
-            return [(body, CODE_BG)]
-        raw = raw.rstrip("\n")                       # not JSON -> verbatim, no panel
-        return [(R.emphasize(R.unescape(raw)), None)] if raw.strip() else []
+        if body is None:
+            body = R.emphasize(R.unescape(raw))      # not JSON -> verbatim
+        body = body.rstrip("\n")
+        return [(body, None)] if body.strip() else []

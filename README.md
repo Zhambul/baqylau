@@ -199,9 +199,10 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
 markdown → styled ANSI for the mirror: an `OpsRenderer(BaseRenderer)` over the
 optional `wenmode` CommonMark parser + a block-buffering `MarkdownStreamer`;
 supersedes `render.markdown()` and falls back to it when `wenmode` is absent),
-`jsonrender.py` (its JSON sibling: a `JsonStreamer` that buffers a `.json` stream
-whole and pretty-prints + colours it as a panel at completion — stdlib `json` +
-optional pygments), `audit.py` (the audit
+`jsonrender.py` / `yamlrender.py` (its JSON/YAML siblings: `JsonStreamer` buffers a
+`.json` stream whole and pretty-prints + colours it at completion — stdlib `json`;
+`YamlStreamer` colours a `.yml` in place without reformatting — both optional
+pygments, no background panel), `audit.py` (the audit
 trail — was `claude_audit.py`), `ops.py` (paint ops, `emit`, the scoreboard
 counters/parts, the semantic colour table — the tool-agnostic half of the old
 `claude_ops.py`), `hostpane.py` (the tool-AGNOSTIC host mirror lifecycle —
@@ -616,16 +617,22 @@ rows without column alignment (alignment is width-dependent — out of scope).
 Block spacing, frontmatter, wikilinks, and code highlighting live in the
 `OpsRenderer` handlers + `MarkdownStreamer` in `core/mdrender.py`.
 
-**JSON files are pretty-printed the same way.** `cat file.json` (allowlisted the
-same as markdown — `tools.json_source`, gated by `CLAUDE_MIRROR_JSON`, excludes
-`jq`/`bat` which self-colour, and `head`/`tail` since JSON needs the whole file)
-is re-indented (`json.dumps` indent 2) and syntax-highlighted (keys blue, strings
-green, numbers orange, `true`/`false`/`null` magenta) into the same full-width
-`CODE_BG` panel as fenced code. Unlike markdown, JSON can't render incrementally —
-a partial document is invalid — so `core/jsonrender.JsonStreamer` buffers the whole
-stream and renders once at completion, falling back to the raw text verbatim if it
-isn't valid JSON (truncated, JSON Lines, a plain log). No new dependency: stdlib
-`json` for the pretty-print, the same optional pygments for colour.
+**JSON and YAML files are colourised the same way.** `cat file.json`
+(`tools.json_source`, gated by `CLAUDE_MIRROR_JSON`; excludes `jq`/`bat` which
+self-colour, and `head`/`tail` since JSON needs the whole file) is re-indented
+(`json.dumps` indent 2) and syntax-highlighted (keys blue, strings green, numbers
+orange, `true`/`false`/`null` magenta). `cat`/`head`/`tail` of a `.yml`/`.yaml`
+(`tools.yaml_source`, `CLAUDE_MIRROR_YAML`) is syntax-highlighted **in place** —
+NOT reparsed, because a YAML round-trip drops comments and reorders keys, which is
+destructive for hand-written config; it's coloured raw via pygments' `YamlLexer`
+(all plain scalars read green — YAML scalars are genuinely ambiguous). Neither
+gets a background panel (that's reserved for markdown fenced code) — just colour on
+the normal gutter. Both render **once at completion** (a partial JSON document is
+invalid; YAML block scalars make partial colouring unreliable), so
+`core/jsonrender.JsonStreamer` / `core/yamlrender.YamlStreamer` buffer the whole
+stream and fall back to the raw text verbatim if it isn't valid (truncated JSON,
+JSON Lines, a plain log; or pygments absent). No new dependency: stdlib `json` +
+the same optional pygments for colour.
 
 **⧉ copy links — click to copy any activity block.** Nearly every block in the
 mirror carries a dim, browser-style copy affordance on its header chip. A

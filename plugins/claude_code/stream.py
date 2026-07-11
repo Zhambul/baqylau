@@ -36,6 +36,7 @@ import glob, os, subprocess, sys, time
 from core import jsonrender as JSONR
 from core import mdrender as MDR
 from core import ops as O
+from core import yamlrender as YAMLR
 from core import render as R
 from core import slots as claude_slots
 from core import state as S
@@ -112,13 +113,15 @@ SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
 # Unset for launchers that don't tag (monitors, a subagent's nested jobs) — those
 # blocks just render without copy links, exactly as before.
 GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
-# Set by claude-cmd-pre.py when this fg command streams a markdown or JSON file's
-# raw contents (cat/head/tail of a .md, cat of a .json) — the body is rendered
-# (styled markdown / pretty-printed coloured JSON) via core/mdrender|jsonrender
-# instead of emitted verbatim. See CT.md_source|json_source / CLAUDE_MIRROR_MD|JSON.
+# Set by claude-cmd-pre.py when this fg command streams a markdown / JSON / YAML
+# file's raw contents (cat/head/tail of a .md|.yml, cat of a .json) — the body is
+# rendered (styled markdown / pretty coloured JSON / coloured YAML) via
+# core/mdrender|jsonrender|yamlrender instead of emitted verbatim. See
+# CT.md_source|json_source|yaml_source / CLAUDE_MIRROR_MD|JSON|YAML.
 MD = os.environ.get("CLAUDE_STREAM_MD") == "1"
 JSON_MODE = os.environ.get("CLAUDE_STREAM_JSON") == "1"
-RENDER_KIND = "md" if MD else "json" if JSON_MODE else None
+YAML_MODE = os.environ.get("CLAUDE_STREAM_YAML") == "1"
+RENDER_KIND = "md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE else None
 
 
 def find_file(deadline):
@@ -249,6 +252,8 @@ def main(run):
         content_stream = MDR.MarkdownStreamer()
     elif JSON_MODE:
         content_stream = JSONR.JsonStreamer()
+    elif YAML_MODE:
+        content_stream = YAMLR.YamlStreamer()
     else:
         content_stream = None
     md_count = {"n": 0}
