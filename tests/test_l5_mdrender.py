@@ -341,17 +341,22 @@ def test_code_source_detection():
                    # sed/grep of a source file: lexer from the trailing FILE arg
                    ("sed -n '80,130p' dispatch.py", "python"),
                    ("grep -n def app.py", "python"),
-                   ("grep foo Main.java", "java")]:
+                   ("grep foo Main.java", "java"),
+                   # a trailing truncation pipe (| head / | tail) is stripped
+                   ("grep server_bind r.py | head -40", "python"),
+                   ("cat App.kt | tail -20", "kotlin"),
+                   ("grep x file.py | head | tail -5", "python"),
+                   # multi-statement: the LAST statement's file picks the lexer
+                   ("grep -n def a.py\nprintf hi\nsed -n 1,5p b.java", "java")]:
         assert code_source(c) == exp, c
-    for c in ["cat foo.txt", "cat foo.py | grep x", "bat foo.py", "python foo.py",
+    for c in ["cat foo.txt", "bat foo.py", "python foo.py",
               "cat foo.py > o", "rm a.py",
               # the PATTERN/SCRIPT arg must not masquerade as the file
               "grep 'foo.py' x.txt", "sed 's/a/b.py/' notes.txt",
               # recursive grep (dir last, no extension) opts out
               "grep -r pattern src/",
-              # multi-statement (newline-separated) is mixed output -> verbatim
-              "grep -n def a.py\necho hi\nsed -n 1,5p b.py",
-              "cat a.py\ncat b.py"]:
+              # a TRANSFORM pipe (not head/tail) still disqualifies — output derived
+              "cat foo.py | grep x", "cat foo.py | awk '{print}'"]:
         assert code_source(c) is None, c
 
 
@@ -359,14 +364,16 @@ def test_code_source_detection():
 
 def test_md_source_positive():
     for c in ["cat README.md", "head -50 notes.md", "tail -n 20 a.markdown",
-              "cat docs/x.md", "cat 'my file.md'", "< r.md", "cat < r.md"]:
+              "cat docs/x.md", "cat 'my file.md'", "< r.md", "cat < r.md",
+              # last statement is a clean md read (multi-statement keys off it)
+              "echo hi && cat x.md", "cat README.md | head -40"]:
         assert md_source(c), c
 
 
 def test_md_source_negative():
     for c in ["bat README.md", "glow x.md", "cat x.md | grep foo", "grep x notes.md",
               "rm old.md", "npm run build", "cat x.txt", "less README.md",
-              "cat a.md > b.txt", "echo hi && cat x.md", "mdcat r.md", "cat $(ls).md"]:
+              "cat a.md > b.txt", "mdcat r.md", "cat $(ls).md"]:
         assert not md_source(c), c
 
 

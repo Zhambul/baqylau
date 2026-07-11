@@ -9,13 +9,27 @@ import difflib, os, re, shlex
 from core.ops import BLUE, GREEN, YELLOW
 
 
-def _multi_statement(cmd):
-    """True when `cmd` runs more than one statement. A newline separates shell
-    statements just like `;` (grep …\\necho …\\nsed …), so its streamed output is
-    several commands' worth — mixed files/languages, never one file verbatim. The
-    per-detector token guards catch `; && || |` but NOT a bare newline (shlex folds
-    it into whitespace), so the single-language source detectors reject it here."""
-    return "\n" in cmd.strip()
+_STMT_SEP = re.compile(r"\n|;|&&|\|\|")             # shell statement separators
+_TRUNC_PIPE = re.compile(r"\|\s*(?:head|tail)\b[^|]*$")   # a trailing | head / | tail
+
+
+def _effective(cmd):
+    """Reduce a command to the single read that determines the mirror's rendering.
+
+    A multi-statement command (`grep … a.py↵echo …↵sed … b.py`, or `; && ||`
+    -separated) streams every statement's output in order; the LAST statement's
+    file is what a single lexer is keyed on (earlier statements/banners get that
+    lexer too — imperfect but chosen). And a trailing truncation pipe
+    (`… | head -40`, `| tail`) only shortens that output, so it's stripped and the
+    base read still colours. A NON-truncation pipe (`| awk`, `| grep`) is left in
+    place so the per-detector `|` guard rejects it — that output is transformed,
+    not the file. Returns the cleaned statement."""
+    parts = [p for p in _STMT_SEP.split(cmd) if p.strip()]
+    stmt = parts[-1] if parts else cmd
+    prev = None
+    while prev != stmt:                             # peel nested `| head | tail`
+        prev, stmt = stmt, _TRUNC_PIPE.sub("", stmt)
+    return stmt.strip()
 
 
 def parse_redirect(cmd, cwd):
@@ -93,8 +107,7 @@ def md_source(cmd):
     argument, or a bare `< file.md` stdin redirect. Conservative: any pipe, output
     redirect, chain (; && ||), or command substitution disqualifies it, because
     then the streamed bytes are filtered/derived, not the document itself."""
-    if _multi_statement(cmd):
-        return False
+    cmd = _effective(cmd)
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
@@ -135,8 +148,7 @@ _JSON_EXT = (".json", ".jsonl", ".ndjson")
 def json_source(cmd):
     """True when `cmd` streams a whole .json file's raw contents — `cat file.json`
     or a bare `< file.json`. Any pipe/redirect/chain disqualifies it."""
-    if _multi_statement(cmd):
-        return False
+    cmd = _effective(cmd)
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
@@ -165,8 +177,7 @@ _YAML_EXT = (".yml", ".yaml")
 def yaml_source(cmd):
     """True when `cmd` streams a .yml/.yaml file's raw contents — an allowlisted
     reader (cat/head/tail) with a .yml/.yaml argument, or a bare `< file.yml`."""
-    if _multi_statement(cmd):
-        return False
+    cmd = _effective(cmd)
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
@@ -199,11 +210,12 @@ _CODE_TAILARG_READERS = {"sed", "grep", "egrep", "fgrep"}
 def code_source(cmd):
     """If `cmd` streams a source file the mirror can syntax-highlight (cat/head/tail
     of a file whose extension is in coderender.LANGS, sed/grep of one, or a bare
-    `< file.py`), return the pygments LEXER NAME (e.g. 'python'); else None. Same
-    plumbing guards."""
+    `< file.py`), return the pygments LEXER NAME (e.g. 'python'); else None. Runs on
+    the command's `_effective` read, so a trailing `| head`/`| tail` (truncation)
+    still colours and a multi-statement block keys off its LAST statement's file; a
+    transform pipe (`| awk`) or command substitution still disqualifies."""
     from core.coderender import LANGS
-    if _multi_statement(cmd):
-        return None
+    cmd = _effective(cmd)
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:

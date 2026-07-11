@@ -657,11 +657,14 @@ because these put a SCRIPT/PATTERN arg *before* the file, the lexer is read from
 python and a recursive `grep -r pat src/` (a directory, no extension) correctly opts
 out. One generic renderer, `core/coderender.CodeStreamer(lexer)`; adding a language
 is one line in `coderender.LANGS` (extension → lexer name). `code_source` returns the
-lexer name (not just a bool) so the tailer knows which lexer to load. Same guards as
-the others: a pipe (`cat foo.py | …`), `python foo.py`, a redirect, or a
-**multi-statement** command (statements separated by `;`/`&&` **or a newline** —
-`grep … x.py↵echo …↵sed … y.py` streams several commands' worth of mixed output, not
-one file) all disqualify and stream verbatim.
+lexer name (not just a bool) so the tailer knows which lexer to load. Detection runs
+on the command's **effective read** (`tools._effective`): a trailing **truncation
+pipe** (`grep … x.py | head -40`, `| tail`) is stripped — it only shortens the same
+output, so it still colours — and a **multi-statement** command (`;`/`&&`/newline-
+separated: `grep … a.py↵echo …↵sed … b.py`) keys off its **last statement's** file
+(earlier statements/banners inherit that lexer — imperfect but chosen). What still
+disqualifies: a **transform pipe** (`| awk`, `| grep …` — the bytes are derived, not
+the file), `python foo.py`, an output redirect, and command substitution.
 
 **Fenced output is markdown — the general mixed-content path.** All of the above
 key off the *filename*, so they miss a command that *prints* markdown to stdout
