@@ -161,15 +161,20 @@ class KittyFrontend(Frontend):
         return iter_windows(self.ls() if tree is None else tree)
 
     # --- pane management --------------------------------------------------------
-    def goto_splits_layout(self):
-        # vsplit sizing only works in the splits layout.
+    def goto_splits_layout(self, win=None):
+        # vsplit sizing only works in the splits layout. `--match window_id:`
+        # targets the tab holding `win` — a hook without focus (daemon-origin
+        # SessionStart) must not re-layout whatever tab the user is looking at.
+        if win:
+            return self._run("goto-layout", "--match", f"window_id:{win}",
+                             "splits")
         return self._run("goto-layout", "splits")
 
     def launch_pane(self, argv, location, bias=None, var=None, title=None,
                     next_to=None, cwd="current", keep_focus=True):
         args = ["launch", f"--location={location}"]
         if next_to is not None:
-            args += ["--next-to", f"var:{next_to[0]}={next_to[1]}"]
+            args += ["--next-to", next_to]
         if bias is not None:
             args += ["--bias", str(bias)]
         if keep_focus:

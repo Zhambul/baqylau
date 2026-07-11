@@ -291,13 +291,13 @@ def mirror_exists(sid):
     return HP.mirror_exists(FE, sid)
 
 
-def close_stale_mirrors(keep):
-    HP.close_stale_mirrors(FE, keep)
+def close_stale_mirrors(keep, anchor=None):
+    HP.close_stale_mirrors(FE, keep, anchor)
 
 
-def open_mirror(sid, log, bias):
+def open_mirror(sid, log, bias, anchor=None):
     """Does NOT truncate — the caller decides the state DB's fate."""
-    HP.open_mirror(FE, HERE, sid, log, bias, BIAS)
+    HP.open_mirror(FE, HERE, sid, log, bias, BIAS, anchor)
 
 
 def close_mirror(sid):
@@ -362,6 +362,22 @@ def cmd_open():                              # SessionStart (payload on stdin)
     log = log_for(sid)
     if not log:
         return
+    # Where does this session's pane live? The hook's own window when the env
+    # says so (KITTY_WINDOW_ID — the normal interactive case), else the window
+    # already tagged claude_session=<sid> (a daemon-origin SessionStart: the
+    # agents view spawns `claude daemon run`, whose hook processes carry a
+    # SCRUBBED env — re-entering a chat fires a `source=resume` SessionStart
+    # with no kitty vars at all). Neither exists for a session that has no pane
+    # anywhere (the agents view's own agent sessions — their SessionStart
+    # carries `agent_type` — or a headless `claude -p` reaching the socket via
+    # the lone-socket fallback): the old focused-tab fallback made such a
+    # session hijack whatever tab the user was looking at — closing ITS mirror
+    # as "stale" and splitting in an empty one — so skip the whole lifecycle
+    # instead: no pane, no state DB, no watchers.
+    anchor = FE.current_window() or FE.window_for_session(sid)
+    if not anchor:
+        audit_pane(sid, "open", 1, "skipped: no host pane (daemon/headless session)")
+        return
     log_fate = decide_log_fate(sid, log)
     audit_state(log, log + ".state.db.keep", log_fate,
                 f"source={payload.get('source') or ''}")
@@ -371,9 +387,9 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # design's `: > "$log"` provided this same guarantee for the log file).
     HP.ensure_db(log)
     tag_window(sid)
-    close_stale_mirrors(sid)   # drop a prior-sid mirror (resume/clear) so it can't double up
+    close_stale_mirrors(sid, anchor)   # drop a prior-sid mirror (resume/clear) so it can't double up
     bias = project_bias()
-    open_mirror(sid, log, bias)              # restore this project's remembered size
+    open_mirror(sid, log, bias, anchor)      # restore this project's remembered size
     # Verify the panes actually exist now — open_mirror's kitten calls are silent.
     if mirror_exists(sid):
         if window_exists("claude_scorebar", sid):
@@ -458,9 +474,12 @@ def cmd_toggle():                            # keybinding
         close_mirror(sid)                    # keep the log -> history preserved
         audit_pane(sid, "toggle-off", 1, "")
     else:
-        close_stale_mirrors(sid)             # clear any prior-sid pane in this tab first
+        # Keybinding launches carry no KITTY_WINDOW_ID; anchor to the session's
+        # own tagged pane (it is in the focused tab — sid_from_focus found it).
+        anchor = FE.current_window() or FE.window_for_session(sid)
+        close_stale_mirrors(sid, anchor)     # clear any prior-sid pane in this tab first
         bias = project_bias()
-        open_mirror(sid, log_for(sid), bias)     # remembered size, keep history
+        open_mirror(sid, log_for(sid), bias, anchor)  # remembered size, keep history
         if mirror_exists(sid):
             audit_pane(sid, "toggle-on", 1, f"bias={bias}%")
         else:

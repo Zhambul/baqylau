@@ -21,6 +21,7 @@
 import os
 import time
 
+from core import audit as A
 from core import state as S
 
 # kitty bias is approximate ("you cannot use this method to create windows of
@@ -58,19 +59,24 @@ def size_bar(fe, sid):
 
 # --- open / close ------------------------------------------------------------
 
-def open_mirror(fe, here, sid, log, bias, default_bias=25):
+def open_mirror(fe, here, sid, log, bias, default_bias=25, anchor=None):
     """Open this session's mirror pane (+ scoreboard bar). Does NOT truncate —
     the caller decides the state DB's fate (decide_log_fate). `bias` is the
-    mirror width %, `default_bias` the fallback when it is 0/None."""
+    mirror width %, `default_bias` the fallback when it is 0/None. `anchor` is
+    the host pane's window id: the vsplit lands next to IT, not next to
+    whatever window happens to be focused — a hook can fire while the user is
+    looking at a different tab (daemon-origin SessionStart, keybinding)."""
     if not mirror_exists(fe, sid):
-        # vsplit sizing only works in the splits layout; switch the active tab to it.
-        fe.goto_splits_layout()
+        # vsplit sizing only works in the splits layout; switch the anchor's
+        # tab (or, unanchored, the active tab) to it.
+        fe.goto_splits_layout(anchor)
         fe.launch_pane([os.path.join(here, "claude-mirror.py"), log],
                        "vsplit", bias=(bias or default_bias),
+                       next_to=(f"id:{anchor}" if anchor else None),
                        var={"claude_mirror": sid}, title="◧ cmd mirror")
     if not window_exists(fe, "claude_scorebar", sid):   # checked separately so a
         fe.launch_pane([os.path.join(here, "claude-scorebar.py"), log],  # crashed/
-                       "hsplit", bias=BAR_ROWS, next_to=("claude_mirror", sid),
+                       "hsplit", bias=BAR_ROWS, next_to=f"var:claude_mirror={sid}",
                        var={"claude_scorebar": sid}, title="▪ session")
         size_bar(fe, sid)                          # closed bar comes back on toggle
 
@@ -81,16 +87,19 @@ def close_mirror(fe, sid):
     fe.close_pane(var=("claude_mirror", sid))
 
 
-def close_stale_mirrors(fe, keep):
+def close_stale_mirrors(fe, keep, anchor=None):
     """Close any STALE mirror/scoreboard in the tab whose sid differs from `keep`.
     A session's id changes on --resume/--continue (and often /clear): SessionStart
     then re-tags the host pane and opens a mirror keyed by the NEW sid, while the
     OLD-sid mirror lingers in the same tab — tailing a DB nothing writes to anymore
     (frozen) and doubling the pane. One tab holds exactly one host session, so a
-    mirror there with a different sid is always stale. Anchored to the hook's own
-    pane (KITTY_WINDOW_ID) when present, else the focused tab (keybinding).
+    mirror there with a different sid is always stale. Anchored to the caller's
+    `anchor` window id when given, else the hook's own pane (KITTY_WINDOW_ID),
+    else the focused tab (keybinding). Every close is audited (pane_events
+    action `close-stale` naming the closed sid) — an unaudited sweep is exactly
+    how a cross-session pane hijack stays invisible.
     No-op when there's nothing stale to close."""
-    anchor = fe.current_window()
+    anchor = anchor or fe.current_window()
     stale = []
     for osw in fe.ls():
         for t in osw.get("tabs", []):
@@ -103,10 +112,14 @@ def close_stale_mirrors(fe, keep):
                 uv = w.get("user_vars", {})
                 sid = uv.get("claude_mirror") or uv.get("claude_scorebar")
                 if sid and sid != keep:
-                    stale.append(w.get("id"))
+                    stale.append((w.get("id"), sid))
             break
-    for wid in stale:
+    for wid, sid in stale:
         fe.close_pane(win_id=wid)
+        try:
+            A.pane(keep, "close-stale", 1, "closed sid=%s win=%s" % (sid, wid))
+        except Exception:
+            pass
 
 
 def tab_host_sid(fe, exclude_sid=""):

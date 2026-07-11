@@ -675,6 +675,72 @@ def test_f10_resume_restores_mirror_history(run_hook, test_env, session,
     oracle.assert_clean(test_env, s.sid)   # incl. 'resume lost history' == 0
 
 
+# ------------------------------------------------------------------- F10b
+
+def test_f10b_daemon_origin_start_skips_pane(run_hook, test_env, session,
+                                             fake_kitten):
+    """A SessionStart with NO KITTY_WINDOW_ID and no claude_session-tagged pane
+    (the agents view spawns `claude daemon run`, whose hooks carry a scrubbed
+    env) must not touch the terminal: the old focused-tab fallback closed the
+    focused session's mirror as "stale" and split an empty one in its place."""
+    victim = session.make()                  # an innocent session, focused tab
+    run_hook("claude-split.py", P.session_start(victim), argv=("open",))
+    assert any(w["user_vars"].get("claude_mirror") == victim.sid
+               for w in fake_kitten.windows())
+    fake_kitten.clear()
+
+    daemon = session.make()
+    env = dict(test_env)
+    env.pop("KITTY_WINDOW_ID", None)         # daemon-origin: no kitty env
+    run_hook("claude-split.py", P.session_start(daemon), argv=("open",), env=env)
+
+    assert fake_kitten.calls("launch") == [], "daemon session opened a pane"
+    assert fake_kitten.calls("close-window") == [], "daemon session swept a pane"
+    assert any(w["user_vars"].get("claude_mirror") == victim.sid
+               for w in fake_kitten.windows()), "victim's mirror was hijacked"
+    assert not os.path.exists(daemon.state_db), "daemon session grew a state DB"
+    rows = oracle.q(test_env, "SELECT action, detail FROM pane_events "
+                              "WHERE session_id=?", (daemon.sid,))
+    assert rows == [("open", "skipped: no host pane (daemon/headless session)")]
+    run_hook("claude-split.py", P.session_end(victim), argv=("close",))
+    wait_until(lambda: streams_all_ended(test_env, victim.sid), desc="all ended")
+    oracle.assert_clean(test_env, victim.sid)
+    oracle.assert_clean(test_env, daemon.sid)
+
+
+# ------------------------------------------------------------------- F10c
+
+def test_f10c_daemon_origin_resume_reopens_anchored(run_hook, test_env, session,
+                                                    fake_kitten):
+    """Re-entering a chat from the agents view fires a source=resume
+    SessionStart from the daemon (scrubbed env). The session's pane is still
+    tagged claude_session=<sid>, so the mirror reopens anchored to IT
+    (--next-to id:<win>), not to whichever window happens to be focused."""
+    s = session.make()
+    run_hook("claude-split.py", P.session_start(s), argv=("open",))
+    wins = [w for w in fake_kitten.windows()   # simulate the mirror being gone
+            if not ({"claude_mirror", "claude_scorebar"} & set(w["user_vars"]))]
+    with open(os.path.join(fake_kitten.root, "kitten-windows.json"), "w") as f:
+        json.dump(wins, f)
+    fake_kitten.clear()
+
+    env = dict(test_env)
+    env.pop("KITTY_WINDOW_ID", None)         # daemon-origin resume: no kitty env
+    run_hook("claude-split.py", P.session_start(s, source="resume"),
+             argv=("open",), env=env)
+
+    assert any(w["user_vars"].get("claude_mirror") == s.sid
+               for w in fake_kitten.windows()), "mirror not reopened on resume"
+    mirror_launch = next(c for c in fake_kitten.calls("launch")
+                         if f"claude_mirror={s.sid}" in c)
+    i = mirror_launch.index("--next-to")
+    assert mirror_launch[i + 1] == "id:" + fake_kitten.window_id, \
+        "mirror not anchored to the session's own pane"
+    run_hook("claude-split.py", P.session_end(s), argv=("close",))
+    wait_until(lambda: streams_all_ended(test_env, s.sid), desc="all ended")
+    oracle.assert_clean(test_env, s.sid)
+
+
 # -------------------------------------------------------------------- F11
 
 def test_f11_session_end_parks_db_and_substream_exits(run_hook, test_env,

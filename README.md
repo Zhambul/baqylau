@@ -1596,6 +1596,38 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   `state_files` row (action = the fate, content = the payload's `source`), so a
   resume that came back empty is a `fresh-db` row on a `source=resume` start — a
   canned `anomalies` query.
+
+  **Anchoring, and daemon-origin SessionStarts (the agents view).** `open` must
+  decide *where* the pane belongs. The normal interactive case is trivial — the
+  hook process runs with the Claude pane's env, so `KITTY_WINDOW_ID` **is** the
+  host pane. But Claude Code's **agents view** (left arrow from the chat) spawns
+  a `claude daemon run --origin transient` process whose hook children carry a
+  **scrubbed env** — no `KITTY_WINDOW_ID`, no `KITTY_LISTEN_ON` (the socket still
+  resolves via the ppid walk / lone-socket fallback, so the pane calls *work*,
+  they just don't know where they are). Two distinct SessionStarts arrive that
+  way: the view's own **agent sessions** (`source=startup`, payload carries
+  `agent_type` — sessions with **no terminal pane anywhere**), and a
+  **`source=resume` for the real chat** when the user re-enters it. The old
+  fallback — "no `KITTY_WINDOW_ID` → use the focused tab" (designed for
+  keybindings) — made the first kind **hijack whatever tab the user was looking
+  at**: `close_stale_mirrors` swept the focused session's mirror as "stale"
+  (different sid, same tab) and vsplit an **empty mirror keyed to a session that
+  lives nowhere**; the resume 3s later then shuffled panes again wherever focus
+  happened to be. So `open` now resolves an **anchor** in order:
+  `KITTY_WINDOW_ID` (own pane) → the window already tagged
+  `var:claude_session=<sid>` (a daemon-origin resume of a real session — the tag
+  survives from the original SessionStart) → **neither = no host pane at all →
+  skip the entire lifecycle** (no pane, no state DB, no codex watcher; audited as
+  a `pane_events` `open` row, detail `skipped: no host pane (daemon/headless
+  session)`). This also covers a headless `claude -p` that reaches the socket
+  via the lone-socket fallback. The anchor then makes every pane op
+  focus-independent: `goto-layout --match window_id:<anchor>` (not the active
+  tab), the mirror launches `--next-to id:<anchor>` (not next to the focused
+  window), and `close_stale_mirrors` sweeps the *anchor's* tab — each sweep now
+  audited (`pane_events` action `close-stale` naming the closed sid; sweeping a
+  still-open session's mirror is the canned `pane hijack` anomaly). The
+  keybinding `toggle` anchors the same way (env, else the focused tab's
+  `claude_session` window — `sid_from_focus` already proved it's there).
   `toggle` closes the pane if present **without** touching the DB, so reopening re-shows
   the whole session history — and while closed there is **no process at all** (no
   resources, nothing to leak). `grow`/`shrink [N]` resize by N cells

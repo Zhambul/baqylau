@@ -71,16 +71,19 @@ class Frontend:
         return str(w.get("id")) if w else None
 
     # --- pane management --------------------------------------------------------
-    def goto_splits_layout(self):
-        """Switch the active tab to a layout where directional splits with a
-        size bias work (kitty: `goto-layout splits`). Exit code."""
+    def goto_splits_layout(self, win=None):
+        """Switch a tab to a layout where directional splits with a size bias
+        work (kitty: `goto-layout splits`) — the tab holding window `win` when
+        given, else the active tab. Exit code."""
         return 1
 
     def launch_pane(self, argv, location, bias=None, var=None, title=None,
                     next_to=None, cwd="current", keep_focus=True):
         """Open a new pane running `argv`. location is "vsplit"/"hsplit";
-        `var` is a {name: value} user-var tag dict; `next_to` is a (var, value)
-        anchor. Exit code."""
+        `var` is a {name: value} user-var tag dict; `next_to` is a raw window
+        match string anchoring the split (e.g. "id:42",
+        "var:claude_mirror=<sid>") — without it the terminal splits whatever
+        window happens to be active. Exit code."""
         return 1
 
     def close_pane(self, var=None, win_id=None):

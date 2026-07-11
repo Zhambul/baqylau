@@ -69,6 +69,7 @@ Script edits take effect immediately (hooks re-exec them). Only `kitty.conf` cha
 - **Release slot rows *before* calling `bg-recheck`**, or the recheck sees its own row. `bg-recheck` flips only a currently-blue tab and only when no live row remains.
 - **Duplicate events are real:** `SubagentStart` and `SubagentStop` can each fire more than once for background agents — both handlers guard on slot state.
 - **Failures arrive on `PostToolUseFailure`, not `PostToolUse`** — any new PostToolUse hook must be wired to both or failures silently vanish.
+- **SessionStart can arrive with a SCRUBBED env** — Claude Code's agents view spawns `claude daemon run`, whose hook children have no `KITTY_WINDOW_ID`/`KITTY_LISTEN_ON` (the socket still resolves via the ppid walk, so pane calls *work*, anchorless). Pane ops must anchor to `KITTY_WINDOW_ID` or the `claude_session=<sid>`-tagged window and SKIP the whole lifecycle when neither exists (a daemon agent session / headless `claude -p` has no pane) — the focused-tab fallback let a phantom session close the focused tab's mirror and open an empty one (README § Command mirror pane, *Anchoring*).
 - Empirically-confirmed but undocumented Claude Code behaviors this repo depends on (`updatedInput` command rewriting, Ctrl+B's `backgroundTaskId`+`backgroundedByUser` payload, `stoppedByUser` in meta.json, the interrupted-transcript line) are called out in README.md — check there before assuming a payload field exists or not.
 
 ## Every new feature must be audit-covered

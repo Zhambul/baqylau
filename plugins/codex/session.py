@@ -141,9 +141,13 @@ def main():
     win = fe.current_window()                 # tag the codex pane for keybindings
     if win:
         fe.set_user_vars(win, {"claude_session": sid})
-    HP.close_stale_mirrors(fe, sid)           # a prior-sid pane (resume/clear)
+    # Anchor pane ops to the codex pane (env, else a prior tag); "" keeps the
+    # old focused-tab fallback — codex has no daemon-origin SessionStart, so an
+    # anchorless standalone start is still the user's own tab.
+    anchor = win or fe.window_for_session(sid)
+    HP.close_stale_mirrors(fe, sid, anchor)   # a prior-sid pane (resume/clear)
     b = bias()
-    HP.open_mirror(fe, REPO, sid, log, b, 25)
+    HP.open_mirror(fe, REPO, sid, log, b, 25, anchor)
 
     ok = HP.mirror_exists(fe, sid)
     try:

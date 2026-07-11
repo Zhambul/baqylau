@@ -726,6 +726,17 @@ def cli_anomalies(sid):
     section("pane operations that failed",
             "SELECT ts, action, detail FROM pane_events WHERE session_id=? AND ok=0 "
             "ORDER BY ts", (sid,))
+    # close_stale_mirrors audits every window it sweeps (action=close-stale,
+    # detail "closed sid=<sid> win=<id>"). Sweeping a mirror whose session is
+    # still OPEN is the cross-session pane-hijack shape (a daemon-origin
+    # SessionStart anchored to the wrong tab — the agents-view bug); the benign
+    # exception is a predecessor that crashed without SessionEnd in the same tab.
+    section("stale-mirror sweep closed a LIVE session's mirror (pane hijack)",
+            "SELECT p.ts, p.session_id, p.detail FROM pane_events p JOIN sessions s "
+            "ON p.detail LIKE ('closed sid=' || s.session_id || ' %') "
+            "WHERE p.action='close-stale' AND s.ended_at IS NULL "
+            "AND s.session_id != p.session_id "
+            "AND (p.session_id=? OR s.session_id=?) ORDER BY p.ts", (sid, sid))
     section("tab colour applies where kitten @ failed",
             "SELECT ts, dispatch, new_state, reason FROM tab_transitions "
             "WHERE session_id=? AND reason LIKE '%kitten @ failed%' ORDER BY ts", (sid,))
