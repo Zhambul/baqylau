@@ -812,7 +812,15 @@ parts:
   restore scroll fire, over a **raw unix-socket rc write**
   (`Frontend.scroll_window_fast`/`get_text`'s `_rc_raw` — the same
   `ESC P @kitty-cmd` DCS bytes the kitten client sends, ~1ms). The gap
-  between frame and scroll is thus ~1ms — under one display frame. Why not
+  between frame and scroll is thus ~1ms — under one display frame. The
+  restore itself is ABSOLUTE: scroll-to-END (`Frontend.scroll_window_end`, a
+  deterministic base) then up by the computed amount — never relative to
+  wherever the viewport happened to be, because a reflow that clears
+  scrollback under a still-SCROLLED viewport (collapsing a block that was
+  expanded-and-pinned, mid-parse states while output streams) leaves kitty's
+  scroll state undefined, and relative math from there landed at random
+  offsets ("hide jumps to random places", observed live; verified pinned
+  under concurrent op streaming after the fix). Why not
   the obvious alternatives: a `kitten @` **subprocess** (~100ms) leaves the
   bottom frame visible — the original flicker; a **DEC 2026 freeze bracket**
   can't work because kitty *buffers* (does not parse) input while frozen, so

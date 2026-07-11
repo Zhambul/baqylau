@@ -108,6 +108,11 @@ class Frontend:
         back to scroll_window."""
         return False
 
+    def scroll_window_end(self, win_id):
+        """Scroll the viewport to the absolute bottom — the deterministic
+        base for a relative restore scroll. False on failure."""
+        return False
+
     def get_text(self, win_id, extent="screen"):
         """The window's VISIBLE text (the scrolled-to viewport, not the live
         screen), or None. The renderer's scroll-position anchor."""

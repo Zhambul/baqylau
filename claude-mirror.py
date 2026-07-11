@@ -415,9 +415,14 @@ def toggle_repaint(gid, j0):
     subprocess here was the original flicker; the raw-socket scroll is what
     actually closes the visible gap.
 
-    `j0` is the top-line anchor to restore (top-line rule). The parked-at-
-    bottom frame top is (total+1)-h — the +1 is the cursor row the final
-    newline leaves. up<=0 → plain repaint, pane stays bottom-following.
+    `j0` is the top-line anchor to restore (top-line rule). The restore is
+    ABSOLUTE, not relative-to-wherever: the frame's clear-scrollback under a
+    SCROLLED viewport (e.g. collapsing a block that was expanded-and-pinned)
+    leaves kitty's scroll state clamped somewhere undefined — relative math
+    from there landed at random offsets (the "hide jumps to random places"
+    bug). So after the parse handshake the restore is scroll-to-END (a
+    deterministic base) then up by (total+1)-h-j0 — the +1 is the cursor row
+    the final newline leaves; up<=0 means the bottom IS the target frame.
     Returns (up, applied) for the caller's view-reflow audit row."""
     win = os.environ.get("KITTY_WINDOW_ID")
     w = width()
@@ -433,7 +438,7 @@ def toggle_repaint(gid, j0):
             for o in expanded(op):
                 total += render(o, w).count("\n") + 1
         up = total + 1 - h - j0
-    if not win or up is None or up <= 0:
+    if not win or up is None:
         try:
             sys.stdout.write(body); sys.stdout.flush()
         except Exception:
@@ -450,11 +455,18 @@ def toggle_repaint(gid, j0):
         import frontends
         fe = frontends.get()
         try:
-            applied = bool(fe.scroll_window_fast(win, up))
+            applied = bool(fe.scroll_window_end(win))
         except Exception:
             applied = False
-        if not applied:
-            applied = fe.scroll_window(win, up) == 0
+        if up > 0:
+            ok = False
+            try:
+                ok = bool(fe.scroll_window_fast(win, up))
+            except Exception:
+                ok = False
+            if not ok:
+                ok = fe.scroll_window(win, up) == 0
+            applied = ok
     except Exception:
         try:
             from core import audit as A

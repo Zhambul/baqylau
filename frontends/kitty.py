@@ -273,6 +273,18 @@ class KittyFrontend(Frontend):
                             {"amount": [-float(lines_up), "l"],
                              "match": "id:%s" % win_id}) is True
 
+    def scroll_window_end(self, win_id):
+        """Scroll the window's viewport to the absolute BOTTOM (raw socket,
+        subprocess fallback). The mirror's toggle restore issues this before
+        its relative up-scroll: a repaint's clear-scrollback under a SCROLLED
+        viewport leaves kitty's scroll state clamped somewhere undefined, so
+        relative math needs this deterministic base first."""
+        if self._rc_raw("scroll-window", {"amount": ["end", None],
+                                          "match": "id:%s" % win_id}) is True:
+            return True
+        return self._run("scroll-window", "--match", f"id:{win_id}",
+                         "end") == 0
+
     def get_text(self, win_id, extent="screen"):
         # Raw socket first (~0.4ms; it runs on every click-to-view toggle),
         # kitten subprocess as the fallback.
