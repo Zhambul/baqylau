@@ -71,7 +71,11 @@ from core.tabs import (  # noqa: E402  (the core tab vocabulary + tab DB — see
     AWAITING_RESPONSE, COLORS, sq, tab_get, tab_set, tab_clear,
     watcher_pid, watcher_set, watcher_del)
 
-FE = frontends.get()      # env-detected; painting goes through the Frontend interface
+# resolve=True: a daemon-origin session's hook processes carry a SCRUBBED env
+# (no KITTY_LISTEN_ON), same as split.py's keybinding launches — the kitty
+# frontend walks the ppid chain / lone-socket fallback only when the env var is
+# absent, so the normal interactive path pays nothing.
+FE = frontends.get(resolve=True)
 WIN = FE.current_window()
 
 # Test-suite-only cadence override (README § Testing): one value that replaces
@@ -161,11 +165,20 @@ _alive = St.pid_alive               # canonical probe: EPERM (foreign-owned) = a
 
 def _spawn_watcher(kind, args):
     """Detached self re-invocation (start_new_session so the long-lived watcher
-    never sits in the hook's process group, which Claude Code waits to drain)."""
+    never sits in the hook's process group, which Claude Code waits to drain).
+    The resolved window + socket are passed explicitly: a detached watcher is
+    re-parented, so the ppid walk can't find the socket, and WIN may have been
+    fallback-resolved (_ensure_win) rather than inherited from the env."""
     try:
+        env = dict(os.environ)
+        if WIN:
+            env["KITTY_WINDOW_ID"] = str(WIN)
+        if FE.available():
+            env["KITTY_LISTEN_ON"] = FE.listen
         p = subprocess.Popen([sys.executable or "python3", SELF] + args,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True)
+                             stderr=subprocess.DEVNULL, start_new_session=True,
+                             env=env)
         watcher_set(kind, WIN, p.pid)
     except Exception:
         pass
@@ -211,18 +224,51 @@ def ensure_interruptwatch(transcript):
 
 
 _INJECTED = None   # dispatcher-injected payload (see dispatch()); None = read stdin
+_PAYLOAD = None    # cached stdin parse — stdin can only be read once, and both
+                   # _ensure_win() and the dispatch handler need the payload
 
 
 def read_payload():
     """The hook's stdin JSON; {} on anything unparsable (a hook must never fail).
     When the single per-event dispatcher (dispatch.py) drives this in-process it
-    has already consumed stdin, so it injects the parsed payload via dispatch()."""
+    has already consumed stdin, so it injects the parsed payload via dispatch().
+    The standalone-shim parse is cached — a second caller must not re-read a
+    drained stdin and get {}."""
+    global _PAYLOAD
     if _INJECTED is not None:
         return _INJECTED
-    try:
-        return json.loads(sys.stdin.read() or "{}") or {}
-    except Exception:
-        return {}
+    if _PAYLOAD is None:
+        try:
+            _PAYLOAD = json.loads(sys.stdin.read() or "{}") or {}
+        except Exception:
+            _PAYLOAD = {}
+    return _PAYLOAD
+
+
+def _ensure_win():
+    """Resolve WIN when KITTY_WINDOW_ID is absent (a daemon-origin session's
+    hook processes carry a scrubbed env — same sessions whose sid can fork on
+    resume, see adopt.py): the pane split.py tagged claude_session=<sid> at
+    SessionStart (or adopt retagged) IS this session's window. Must run before
+    resolve() — the dispatch handlers themselves consult WIN (d_notify's
+    mid-turn check, d_stop's bg path, the watchers' tab_get loops)."""
+    global WIN
+    if WIN or not FE.usable():
+        return
+    sid = ""
+    if DISPATCH in ("bg-recheck", "bg-watch", "agent-start"):
+        sid = sid_from_key(sys.argv[2] if len(sys.argv) > 2 else "")
+    elif DISPATCH == "interrupt-watch":
+        t = sys.argv[2] if len(sys.argv) > 2 else ""
+        sid = os.path.basename(t)[:-len(".jsonl")] if t.endswith(".jsonl") else ""
+    else:
+        try:
+            if _INJECTED is not None or not sys.stdin.isatty():
+                sid = (read_payload().get("session_id") or "").strip()
+        except Exception:
+            sid = ""
+    if sid:
+        WIN = FE.window_for_session(sid) or ""
 
 
 # --- long-lived watcher dispatches (each runs detached, spawned above) -----------
@@ -643,6 +689,7 @@ def resolve(state):
 
 
 def main(state=None):
+    _ensure_win()                            # daemon-origin env has no KITTY_WINDOW_ID
     state = resolve(STATE if state is None else state)
     if state is None:
         return

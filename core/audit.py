@@ -754,6 +754,22 @@ def cli_anomalies(sid):
             "h.hook='SessionStart' AND json_extract(h.payload,'$.source')='resume' "
             "AND EXISTS (SELECT 1 FROM state_files f WHERE f.session_id=h.session_id "
             "AND f.action='fresh-db' AND abs(f.ts - h.ts) < 30)", (sid,))
+    # Claude Code can FORK the sid on --resume: SessionStart fires under the OLD
+    # sid while every later event carries a NEW sid that never gets its own
+    # SessionStart (see plugins/claude_code/adopt.py). On a current build the
+    # fork's first event ADOPTS the predecessor — renaming its state DB,
+    # retagging the panes, and writing the sessions row the fork never got.
+    # Functional hook traffic under a sid with NO sessions row means the fork
+    # was never adopted: its events fed a state DB nothing renders while the
+    # old sid's mirror/scorebar/tab froze (the 19a42746→ebcecfcc shape). Every
+    # legitimate session — interactive, headless, agents-view — gets a sessions
+    # row from its own SessionStart (A.session_start runs before the pane-skip
+    # check), so this only fires on an unadopted fork.
+    section("hook traffic under a sid with no sessions row (resume fork never adopted)",
+            "SELECT MIN(ts), MAX(ts), COUNT(*) FROM hook_events WHERE session_id=? "
+            "AND handler='subscriber' AND NOT EXISTS "
+            "(SELECT 1 FROM sessions WHERE session_id=?) HAVING COUNT(*) > 0",
+            (sid, sid))
     section("unattributed token/cost bumps (should be bump-agent with meta)",
             "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
             "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "

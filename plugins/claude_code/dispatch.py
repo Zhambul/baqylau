@@ -32,6 +32,7 @@ import re
 import sys
 
 from core import audit as A
+from plugins.claude_code import adopt
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tabstatus
 from plugins.claude_code import split
@@ -131,6 +132,14 @@ def route(d):
     tool = d.get("tool_name") or ""
     H.set_payload(d)                         # every formatter reads this, not stdin
     try:
+        # Resume-fork adoption runs FIRST: if this event belongs to a sid that
+        # forked off a resumed session (SessionStart fired under the OLD sid —
+        # see adopt.py), the predecessor's state DB / pane tags must be adopted
+        # BEFORE any subsystem below keys off the new sid, or the formatters
+        # write into a fresh DB nothing renders. Runs under the dispatcher's
+        # own identity (claude-hook.py) — it is dispatch plumbing, not a
+        # subsystem of its own.
+        _step("claude-hook.py", lambda: adopt.on_event(d))
         for name, fn in _plan(ev, tool, d):
             _step(name, fn)
     finally:

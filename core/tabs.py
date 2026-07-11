@@ -9,6 +9,7 @@
 # cross-module READER of the DB this module owns.
 import os
 import sqlite3
+import time
 
 from core import paths as P
 
@@ -26,7 +27,7 @@ AWAITING_RESPONSE = "awaiting-response"     # green — done, your turn
 
 # --- read-only sqlite (never creates a DB whose absence is a liveness signal) ----
 
-def sq(db, sql):
+def sq(db, sql, params=()):
     """Query a DB read-only; first column of every row. Silent on any failure
     (missing db, lock). mode=ro so a probe can never create the state DB — its
     file-existence is the session-alive signal watchers poll."""
@@ -35,7 +36,7 @@ def sq(db, sql):
     try:
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.2)
         try:
-            return [r[0] for r in conn.execute(sql).fetchall()]
+            return [r[0] for r in conn.execute(sql, params).fetchall()]
         finally:
             conn.close()
     except Exception:
@@ -51,22 +52,31 @@ TABDB = P.TAB_DB
 TABDB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tab(win TEXT PRIMARY KEY, state TEXT);
 CREATE TABLE IF NOT EXISTS watchers(kind TEXT, win TEXT, pid INTEGER, PRIMARY KEY(kind, win));
+CREATE TABLE IF NOT EXISTS sids(sid TEXT PRIMARY KEY, ts REAL);
+CREATE TABLE IF NOT EXISTS resume_pending(cwd TEXT PRIMARY KEY, sid TEXT, ts REAL);
 """
 
 
 def tw(sql, params=()):
     """Write against the tab DB (creates it + schema on first use); silent."""
+    twc(sql, params)
+
+
+def twc(sql, params=()):
+    """Like tw() but returns the statement's rowcount (-1 on any failure) — the
+    take-once primitive resume_take needs it (DELETE … → did WE delete it?)."""
     try:
         conn = sqlite3.connect(TABDB, timeout=0.2)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(TABDB_SCHEMA)
-            conn.execute(sql, params)
+            cur = conn.execute(sql, params)
             conn.commit()
+            return cur.rowcount
         finally:
             conn.close()
     except Exception:
-        pass
+        return -1
 
 
 def tab_get(win):
@@ -95,6 +105,52 @@ def watcher_set(kind, win, pid):
 
 def watcher_del(kind, win):
     tw("DELETE FROM watchers WHERE kind=? AND win=?", (kind, win))
+
+
+# --- session registry (resume-fork adoption — plugins/claude_code/adopt.py) ------
+# Claude Code can FORK a session id on --resume: SessionStart fires with the OLD
+# sid while every subsequent event carries a NEW sid that never gets its own
+# SessionStart. `sids` records every sid whose SessionStart we actually saw (so
+# an unknown-sid event is distinguishable from a headless/agents-view session
+# that legitimately started); `resume_pending` is the take-once note a
+# source=resume SessionStart leaves (keyed by cwd) that the fork's first event
+# consumes to find its predecessor. Both live here because this is the one
+# GLOBAL runtime DB every hook process can reach.
+
+def sid_mark(sid):
+    """Record that this sid had a real SessionStart (prunes 30-day-old rows)."""
+    if not sid:
+        return
+    tw("INSERT OR REPLACE INTO sids(sid, ts) VALUES(?, ?)", (sid, time.time()))
+    tw("DELETE FROM sids WHERE ts < ?", (time.time() - 30 * 86400,))
+
+
+def sid_seen(sid):
+    return bool(sq(TABDB, "SELECT 1 FROM sids WHERE sid=?", (sid,)))
+
+
+def resume_note(cwd, sid):
+    """A source=resume SessionStart happened for `sid` in `cwd` — the candidate
+    predecessor if an unknown sid shows up there next (keyed by cwd: a newer
+    SessionStart in the same project supersedes the note)."""
+    tw("INSERT OR REPLACE INTO resume_pending(cwd, sid, ts) VALUES(?, ?, ?)",
+       (cwd, sid, time.time()))
+
+
+def resume_peek(cwd):
+    rows = sq(TABDB, "SELECT sid FROM resume_pending WHERE cwd=?", (cwd,))
+    return rows[0] if rows else ""
+
+
+def resume_take(cwd, sid):
+    """Consume the note — take-once, so concurrent hook processes racing to
+    adopt the same predecessor see exactly one winner."""
+    return twc("DELETE FROM resume_pending WHERE cwd=? AND sid=?",
+               (cwd, sid)) == 1
+
+
+def resume_drop(cwd, sid):
+    resume_take(cwd, sid)
 
 
 

@@ -1597,6 +1597,49 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   resume that came back empty is a `fresh-db` row on a `source=resume` start — a
   canned `anomalies` query.
 
+  **Resume can FORK the sid (adoption).** "keeps the same `session_id`" above has
+  an observed exception (2026-07-11, a daemon-origin resume from the agents
+  view): Claude Code fired the `source=resume` SessionStart with the **old** sid
+  — so the mirror, scorebar, state DB and pane tags all keyed to it — while
+  **every subsequent hook event and OTEL datapoint carried a new sid** that never
+  got a SessionStart of its own (its first `InstructionsLoaded` even arrived a
+  second *before* the old-sid SessionStart). Result: the old sid received nothing
+  but ConfigChange, the new sid accrued 1,100+ events into a state DB nothing
+  rendered, the scorebar cost froze at the pre-resume total, and the tab never
+  repainted. The fix is **adoption** (`plugins/claude_code/adopt.py`, run by
+  `dispatch.py` before anything else touches the payload): every SessionStart
+  registers its sid in the global tab DB (`sids` table — "this sid really
+  started") and a `source=resume` start additionally leaves a **take-once
+  pending-resume note** keyed by cwd (`resume_pending`). An event whose sid has
+  **no state DB, no parked `*.keep`, and no prior SessionStart** consumes a
+  matching note and adopts the predecessor: `os.replace` its state DB (+`-wal`/
+  `-shm`) to the new sid's path — the rename preserves the inode, so the running
+  renderer/scorebar/OTLP-receiver connections keep working — leaving **symlinks
+  at the old paths** (old-key pollers and any old-path reopen resolve to the
+  adopted DB; SQLite derives `-wal`/`-shm` names from the path a connection was
+  opened with, hence all three), then retags `claude_session`/`claude_mirror`/
+  `claude_scorebar` to the new sid and writes the `sessions` audit row the fork
+  never got. Guards, each closing a mis-adoption path: an existing DB or `*.keep`
+  = a known session (also the one-`stat` fast path every normal event takes); a
+  sid with its **own** SessionStart (headless `claude -p`, agents-view agent
+  sessions — both skip the pane lifecycle so they have no DB either) is a genuine
+  new session, never a fork; the note only captures while the predecessor's DB is
+  still **live**; and the take-once delete makes concurrent hook processes elect
+  exactly one adopter. Audited as a `state_files` `adopt` row (`from`/`moved`/
+  `retagged`) plus a `hook_events` decision row (handler `claude-hook.py`,
+  `adopt: resume forked sid — adopted <old>`); the un-adopted regression is the
+  canned anomaly *"hook traffic under a sid with no sessions row"*. The same
+  forked events also arrive with the **scrubbed daemon env** (no
+  `KITTY_WINDOW_ID`/`KITTY_LISTEN_ON`), which used to skip every tab paint
+  ("not inside kitty") — `tabstatus` now resolves like `split.py` does
+  (`frontends.get(resolve=True)`: ppid walk / lone-socket, only when the env var
+  is absent) and falls back to the `claude_session=<sid>`-tagged window for the
+  window id (`_ensure_win`, run before the dispatch handlers because d_stop/
+  d_notify and the watchers consult `WIN` themselves); the detached bg-watch/
+  interrupt-watch children get the resolved `KITTY_WINDOW_ID`/`KITTY_LISTEN_ON`
+  stamped into their env at spawn, since re-parented processes can't repeat the
+  ppid walk.
+
   **Anchoring, and daemon-origin SessionStarts (the agents view).** `open` must
   decide *where* the pane belongs. The normal interactive case is trivial — the
   hook process runs with the Claude pane's env, so `KITTY_WINDOW_ID` **is** the
