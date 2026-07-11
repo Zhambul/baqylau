@@ -27,6 +27,7 @@ import gzip
 import json
 import os
 import socket
+import socketserver
 import sys
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -219,6 +220,17 @@ class _Server(HTTPServer):
     # the main thread's connection, tripping check_same_thread and silently spooling
     # every audit row). OTLP exports arrive every couple seconds, so one thread is
     # ample; a slow write only delays the next export's ingest, never the session.
+    def server_bind(self):
+        # Skip HTTPServer.server_bind's socket.getfqdn(host) reverse-DNS lookup. It
+        # runs BETWEEN bind and listen, and on a host with slow/absent reverse DNS
+        # (observed: macOS CI runners) it blocks for seconds-to-minutes — leaving
+        # the socket bound but NOT yet listening (server_activate never runs), which
+        # looks exactly like "the receiver never came up". We never use server_name.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
     def __init__(self, addr, run):
         super().__init__(addr, _Handler)
         self.run = run                  # the stream_lifecycle handle (for .lines)
