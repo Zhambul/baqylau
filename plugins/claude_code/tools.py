@@ -11,6 +11,11 @@ from core.ops import BLUE, GREEN, YELLOW
 
 _STMT_SEP = re.compile(r"\n|;|&&|\|\|")             # shell statement separators
 _TRUNC_PIPE = re.compile(r"\|\s*(?:head|tail)\b[^|]*$")   # a trailing | head / | tail
+# Shell line-continuation: a line ending in a pipe / && / || / backslash continues
+# onto the next line — that newline is NOT a statement break. Join it first so a
+# pipeline split across lines (`grep … x.py |↵head`) isn't mis-cut at the newline.
+_CONT_OP = re.compile(r"(\|\||&&|\|)[ \t]*\n[ \t]*")
+_CONT_BSLASH = re.compile(r"\\[ \t]*\n[ \t]*")
 
 
 def _effective(cmd):
@@ -24,6 +29,8 @@ def _effective(cmd):
     base read still colours. A NON-truncation pipe (`| awk`, `| grep`) is left in
     place so the per-detector `|` guard rejects it — that output is transformed,
     not the file. Returns the cleaned statement."""
+    cmd = _CONT_BSLASH.sub(" ", cmd)                # `foo \↵bar` -> `foo bar`
+    cmd = _CONT_OP.sub(r"\1 ", cmd)                 # `… |↵head` -> `… | head`
     parts = [p for p in _STMT_SEP.split(cmd) if p.strip()]
     stmt = parts[-1] if parts else cmd
     prev = None

@@ -660,8 +660,11 @@ is one line in `coderender.LANGS` (extension → lexer name). `code_source` retu
 lexer name (not just a bool) so the tailer knows which lexer to load. Detection runs
 on the command's **effective read** (`tools._effective`): a trailing **truncation
 pipe** (`grep … x.py | head -40`, `| tail`) is stripped — it only shortens the same
-output, so it still colours — and a **multi-statement** command (`;`/`&&`/newline-
-separated: `grep … a.py↵echo …↵sed … b.py`) keys off its **last statement's** file
+output, so it still colours — a **line-continued** pipeline (a line ending in
+`|`/`&&`/`||`/`\` that spills onto the next line, e.g. `grep … x.py |↵head`) is
+rejoined before splitting so it isn't mis-cut at the newline, and a
+**multi-statement** command (`;`/`&&`/newline-separated: `grep … a.py↵echo …↵sed …
+b.py`) keys off its **last statement's** file
 (earlier statements/banners inherit that lexer — imperfect but chosen). What still
 disqualifies: a **transform pipe** (`| awk`, `| grep …` — the bytes are derived, not
 the file), `python foo.py`, an output redirect, and command substitution.

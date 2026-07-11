@@ -346,6 +346,9 @@ def test_code_source_detection():
                    ("grep server_bind r.py | head -40", "python"),
                    ("cat App.kt | tail -20", "kotlin"),
                    ("grep x file.py | head | tail -5", "python"),
+                   # a pipeline broken across a line (trailing | / \\ continuation)
+                   ("grep -n def base.py |\nhead", "python"),
+                   ("grep foo \\\n  Main.java", "java"),
                    # multi-statement: the LAST statement's file picks the lexer
                    ("grep -n def a.py\nprintf hi\nsed -n 1,5p b.java", "java")]:
         assert code_source(c) == exp, c
