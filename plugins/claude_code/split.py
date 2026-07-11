@@ -503,12 +503,20 @@ def cmd_resize(action):
 
 
 def main():
+    # SessionEnd close must ALWAYS run: parking the state DB (→ *.keep) is core
+    # session-lifecycle, not frontend work — a --resume replays that history, and
+    # the codex watcher / scorebar poll for the DB path vanishing as their exit
+    # signal. It runs headless (no kitty / no kitten binary → FE.usable() False)
+    # too; the pane-close calls inside self-no-op (kitten_run swallows). Gating it
+    # behind usable() skipped the park on any host without kitten (e.g. CI), losing
+    # the parked history and leaking the watchers.
+    if CMD == "close":
+        cmd_close()
+        return
     if not FE.usable():
         return
     if CMD == "open":
         cmd_open()
-    elif CMD == "close":
-        cmd_close()
     elif CMD == "toggle":
         cmd_toggle()
     elif CMD in ("grow", "shrink", "reset", "setpct"):

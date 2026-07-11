@@ -26,16 +26,29 @@ def _free_port():
     return port
 
 
-def _spawn_receiver(env, port, grace="3"):
+# Grace = the receiver's no-metrics idle-exit. Kept generously LONG (every test
+# kills its receiver in a finally, so it never needs to self-exit) — a short grace
+# raced the test driver on a slow/loaded CI runner: the receiver idle-exited before
+# the driver connected + POSTed, surfacing as a spurious "receiver listening"
+# timeout. The singleton test needs no shorter grace either (it terminates r1).
+def _spawn_receiver(env, port, grace="30"):
     e = dict(env)
     e["CLAUDE_OTEL_PORT"] = str(port)
     e["CLAUDE_OTEL_GRACE_S"] = grace
     return subprocess.Popen([sys.executable, RECEIVER], env=e,
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
 
 
-def _wait_listening(port, timeout=5):
+def _wait_listening(port, recv=None, timeout=15):
     def up():
+        if recv is not None and recv.poll() is not None:   # crashed before binding
+            err = ""
+            try:
+                err = (recv.stderr.read() or b"").decode("utf-8", "replace")[-2000:]
+            except Exception:
+                pass
+            raise AssertionError("receiver exited early rc=%s:\n%s"
+                                 % (recv.returncode, err))
         c = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         c.settimeout(0.2)
         try:
@@ -72,7 +85,7 @@ def test_receiver_folds_tokens_cost_including_auxiliary(run_hook, test_env, sess
     port = _free_port()
     recv = _spawn_receiver(test_env, port)
     try:
-        _wait_listening(port)
+        _wait_listening(port, recv)
         _post(port, P.otlp_metrics(
             s.sid,
             tokens=[("main", "input", 100), ("main", "output", 50),
@@ -108,7 +121,7 @@ def test_receiver_sums_deltas_across_batches(run_hook, test_env, session):
     port = _free_port()
     recv = _spawn_receiver(test_env, port)
     try:
-        _wait_listening(port)
+        _wait_listening(port, recv)
         _post(port, P.otlp_metrics(s.sid, costs=[("main", 0.05)]))
         wait_until(lambda: s.counters().get("cost"), desc="batch 1")
         _post(port, P.otlp_metrics(s.sid, costs=[("main", 0.07)]))
@@ -124,9 +137,9 @@ def test_receiver_sums_deltas_across_batches(run_hook, test_env, session):
 def test_receiver_registers_stream_and_singleton(run_hook, test_env, session):
     s = session.make()
     port = _free_port()
-    r1 = _spawn_receiver(test_env, port, grace="1")
+    r1 = _spawn_receiver(test_env, port)
     try:
-        _wait_listening(port)
+        _wait_listening(port, r1)
         # A second receiver on the same port loses the dual guard and exits fast
         # with a clean duplicate streams row (no lingering process).
         r2 = _spawn_receiver(test_env, port)
@@ -153,7 +166,7 @@ def test_sessionend_fallback_skipped_when_otel_present(run_hook, test_env, sessi
     port = _free_port()
     recv = _spawn_receiver(test_env, port)
     try:
-        _wait_listening(port)
+        _wait_listening(port, recv)
         _post(port, P.otlp_metrics(s.sid, costs=[("main", 0.09)]))
         wait_until(lambda: s.counters().get("otel_seen"), desc="otel_seen set")
     finally:

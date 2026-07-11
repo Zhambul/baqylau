@@ -1542,7 +1542,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   (SessionEnd) closes that session's mirror + bar and **parks** its state DB
   (`<log>.state.db*` — ops history, scoreboard, coordination state) as `*.keep`
   files, and sweeps stale debris (parked/orphaned session files older than 7
-  days, pre-migration leftovers).
+  days, pre-migration leftovers). The `close` path runs **even when the frontend
+  is unusable** (`FE.usable()` false — no kitty / no `kitten` binary, e.g. a
+  headless CI host): parking the state DB is core session-lifecycle, not pane
+  work (a `--resume` replays that history; the codex watcher / scorebar poll for
+  the DB path vanishing as their exit signal), and the pane-close calls inside
+  self-no-op. Only `open` (which has nothing to set up without a terminal) and the
+  keybindings stay gated behind `FE.usable()`.
 
   **History across resume.** `--resume`/`--continue` keeps the same `session_id`,
   so `open` decides the DB's fate purely from **file existence**, never from the
