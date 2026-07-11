@@ -804,18 +804,44 @@ parts:
   rejected — any frame movement at all reads as a jump; the user scrolls
   down themselves if they want the rest of the block.) If the buffer bottom
   is above that frame (a collapse shrank the content), no scroll is issued
-  and the pane stays bottom-following. The whole repaint + scroll rides inside a DEC
-  2026 synchronized update so kitty never renders the intermediate
-  viewport-at-bottom frame (its sync timeout self-heals if the scroll RPC
-  stalls). An unrecoverable anchor (capture failed, no confident match)
-  degrades to the clicked-line-at-top frame — audited, never fatal. Every
-  toggle the renderer processes leaves a `view-reflow` audit row
-  (gid/idx/anchor/up/applied), which is what cracked two live regressions:
-  the nudge SIGWINCH setting `_resized`, whose planning guard then skipped
-  the anchor entirely (every nudged toggle parked at the bottom — the guard
-  is gone), and an off-by-one in the restore amount (the repaint's trailing
-  newline leaves the cursor on an extra row, so the parked frame top is
-  `total+1-h`, verified against `get-text`). Why not the alternatives: *emit the block at the
+  and the pane stays bottom-following. The intermediate viewport-at-bottom
+  frame is closed off by LATENCY, not by freezing: the repaint write ends
+  with a **DSR probe** (`\033[6n`; the pane tty is switched to
+  no-echo/non-canonical at startup so the renderer can read the reply),
+  whose answer proves kitty has parsed the frame — only then does the
+  restore scroll fire, over a **raw unix-socket rc write**
+  (`Frontend.scroll_window_fast`/`get_text`'s `_rc_raw` — the same
+  `ESC P @kitty-cmd` DCS bytes the kitten client sends, ~1ms). The gap
+  between frame and scroll is thus ~1ms — under one display frame. Why not
+  the obvious alternatives: a `kitten @` **subprocess** (~100ms) leaves the
+  bottom frame visible — the original flicker; a **DEC 2026 freeze bracket**
+  can't work because kitty *buffers* (does not parse) input while frozen, so
+  the DSR handshake starves and the scroll races the unparsed frame (landed
+  at the buffer start, observed live); *tty-injected* rc scroll commands
+  misbehave in kitty 0.45 (any amount scrolls to start — also why replayed
+  poisoned output was so violent, below). An unrecoverable anchor (capture
+  failed, no confident match) degrades to the clicked-line-at-top frame —
+  audited, never fatal. Every toggle leaves a `view-reflow` audit row
+  (gid/idx/anchor/up/applied) and every full reflow a `paint` row
+  (width/rows/ops/open) — the pair that cracked three live regressions: the
+  nudge SIGWINCH setting `_resized`, whose planning guard then skipped the
+  anchor entirely (guard removed); an off-by-one in the restore amount (the
+  repaint's trailing newline leaves the cursor on an extra row, so the
+  parked frame top is `total+1-h`, verified against `get-text`); and the
+  poisoned-output replay (next paragraph).
+
+**Paint-time neutralization — replayed output must not execute.** The ops
+stream carries RAW command output, and the renderer replays it on EVERY
+reflow (resize, toggle, pane re-open) — so a stray escape sequence in some
+command's output doesn't execute once, like in a normal terminal; it
+re-executes forever. This was found live: a wire-capture experiment tee'd a
+raw `ESC P @kitty-cmd scroll-window` DCS into the mirror, and every repaint
+re-ran it, scrolling the pane to the very top (masquerading as a scroll-
+restore bug). `render.neutralize()` — applied by the renderer to every op's
+text — strips ALL control sequences except SGR styling (the mirror's own,
+plus legitimate colours in tailed output) and OSC 8 hyperlinks (the copy/
+view links). Neutralizing at paint time (not at ingestion) means already-
+recorded poisoned history is defused too, with no data scrubbing. Why not the alternatives: *emit the block at the
   bottom* (append-only friendly, no repaint) reads as a teleport away from
   the line you clicked; *renderer-side mouse reporting* was already rejected
   for the copy links; *hiding via mutable op rows* breaks the append-only

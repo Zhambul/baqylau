@@ -76,7 +76,13 @@ def toggle_view(log, db, gid):
     stash write failed — the line then carries no hyperlink anyway, so this is
     belt-and-braces)."""
     from core import state as S
-    if not S.kv_get(log, "view:" + gid):
+    # Existence check only — do NOT kv_get the stash: an uncapped Read view
+    # can be megabytes, and json-parsing it here just to test truthiness was
+    # a visible chunk of the click latency.
+    conn = S.connect(log)
+    row = conn.execute("SELECT 1 FROM kv WHERE key=?",
+                       ("view:" + gid,)).fetchone() if conn is not None else None
+    if not row:
         _feedback(log, "nothing to show")
         A.state_file(log, db, "view", {"gid": gid, "open": None, "ops": 0})
         return

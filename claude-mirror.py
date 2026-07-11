@@ -13,7 +13,7 @@
 # Width is read live from the pane itself (os.get_terminal_size), so producers never
 # need to know it — they only emit width-independent ops. A literal WIDTH argv is
 # accepted for non-tty testing.
-import os, select, signal, subprocess, sys
+import os, select, signal, subprocess, sys, time
 
 
 def _ensure_pygments():
@@ -133,6 +133,10 @@ def _copy_links(g, lk):
 
 
 def _render(op, w):
+    # Every op's text passes R.neutralize on its way to the pane: the ops
+    # stream carries RAW command output, and a replayed escape sequence
+    # EXECUTES on every repaint (a tee'd @kitty-cmd DCS scrolled the pane to
+    # the top on each reflow — observed live). SGR + OSC 8 survive.
     t = op.get("t")
     if t == "blank":
         return ""
@@ -148,12 +152,13 @@ def _render(op, w):
             if avail >= lw + 24:                       # keep a useful chip width; a very
                 links = rendered                       # narrow pane just drops the links
                 avail -= lw
-        chip = R.label(fit(op.get("s", ""), max(1, avail)), op["c"]) + links
+        chip = R.label(fit(R.neutralize(op.get("s", "")), max(1, avail)),
+                       op["c"]) + links
         if outer:
             return R.fg(*outer) + "│ " + R.RST + chip
         return chip
     if t == "code":
-        return R.render(op.get("s", ""), w, op.get("ind", "  "))
+        return R.render(R.neutralize(op.get("s", "")), w, op.get("ind", "  "))
     if t == "gut":
         outer = op.get("outer")
         if outer:
@@ -164,9 +169,9 @@ def _render(op, w):
             gw = 2
         s = viewbody(op) if (op.get("lex") or op.get("num") is not None) \
             else op.get("s", "")
-        return R.wrap_gutter(s, w, gprefix, gw, bg=op.get("bg"))
+        return R.wrap_gutter(R.neutralize(s), w, gprefix, gw, bg=op.get("bg"))
     if t == "line":
-        return op.get("s", "")
+        return R.neutralize(op.get("s", ""))
     return ""
 
 
@@ -229,14 +234,36 @@ def viewbody(op):
     return s
 
 
-def repaint():
-    w = width()
+def frame_bytes(w):
+    """The full-reflow byte string: clear screen + scrollback, banner, every
+    op (with open view blocks expanded) at width `w`."""
     out = ["\033[H\033[2J\033[3J", BANNER, "\n"]    # home, clear screen + scrollback
     for op in OPS:
         for o in expanded(op):
             out.append(render(o, w)); out.append("\n")
+    return "".join(out)
+
+
+def repaint():
+    w = width()
+    body = frame_bytes(w)
     try:
-        sys.stdout.write("".join(out)); sys.stdout.flush()
+        sys.stdout.write(body); sys.stdout.flush()
+    except Exception:
+        pass
+    _audit_paint("repaint", w, body)
+
+
+def _audit_paint(kind, w, body):
+    """One audit row per full reflow: what was actually painted (rows/width/
+    ops/open-set). This is the ground truth against the toggle math — a
+    view-reflow whose `up` disagrees with the painted row count is exactly
+    the model-vs-buffer divergence class of bug."""
+    try:
+        from core import audit as A
+        A.state_file(LOG, St.db_path(LOG), "paint",
+                     {"kind": kind, "w": w, "rows": body.count("\n"),
+                      "ops": len(OPS), "open": len(VIEW_OPEN)})
     except Exception:
         pass
 
@@ -321,45 +348,120 @@ def viewport_anchor(idx):
     return best
 
 
-def toggle_scroll(gid, j0):
-    """Post-reflow scroll for a toggle (viewport parked at the bottom by the
-    repaint): put the viewport's TOP LINE back where it was. `j0` is the
-    pre-toggle top-line offset (viewport_anchor, or the clicked line's own
-    offset as the fallback frame when the anchor couldn't be recovered). The
-    top line is THE anchor — expand or collapse, the frame simply doesn't
-    move; the toggle only changes what's below the clicked line inside it.
-    up<=0 (the buffer bottom is above that frame — e.g. a collapse shrank the
-    content) means no scroll: the pane sits at the bottom, which is as close
-    to the old frame as the buffer allows, and stays bottom-following.
+_TTY_OK = False      # stdin switched to no-echo/non-canonical (DSR handshake usable)
+
+
+def tty_setup():
+    """Put the pane's tty into no-echo, non-canonical mode so the renderer can
+    read kitty's DSR cursor-position reply (the toggle bracket's ordering
+    handshake) without the line discipline echoing it onto the screen or
+    holding it for a newline. The pane is display-only, so losing canonical
+    input costs nothing. Best-effort: without it the handshake is skipped."""
+    global _TTY_OK
+    try:
+        import termios
+        fd = sys.stdin.fileno()
+        if not os.isatty(fd):
+            return
+        a = termios.tcgetattr(fd)
+        a[3] &= ~(termios.ECHO | termios.ICANON)
+        a[6][termios.VMIN], a[6][termios.VTIME] = 0, 0
+        termios.tcsetattr(fd, termios.TCSANOW, a)
+        _TTY_OK = True
+    except Exception:
+        pass
+
+
+def await_dsr(timeout=0.2):
+    """Wait for kitty's cursor-position report (the reply to the \\033[6n we
+    append to the toggle frame). Its arrival PROVES kitty has parsed every
+    byte written before it — the ordering handshake that lets the scroll
+    command (a different channel: the rc socket) run against the final buffer
+    instead of racing the pty stream. True when the reply (…R) arrived."""
+    if not _TTY_OK:
+        return False
+    fd = sys.stdin.fileno()
+    deadline = time.monotonic() + timeout
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            return False
+        try:
+            if not select.select([fd], [], [], left)[0]:
+                return False
+            chunk = os.read(fd, 512)
+        except Exception:
+            return False
+        if not chunk:
+            return False
+        if b"R" in chunk:
+            return True
+
+
+def toggle_repaint(gid, j0):
+    """The toggle reflow, tuned so the intermediate viewport-at-bottom frame
+    lives for ~1ms — under one display frame, i.e. no visible flicker:
+
+        full frame + DSR     ─ one pty write, one flush
+        await_dsr()          ─ kitty's cursor report proves the frame is
+                               parsed (the scroll goes over a DIFFERENT
+                               channel, so without this it races the pty)
+        scroll_window_fast() ─ raw-socket rc scroll, ~1ms
+
+    Deliberately NO DEC 2026 freeze around this: kitty BUFFERS (does not
+    parse) input while frozen, so the DSR reply stalls until the freeze ends
+    — the handshake and the freeze are mutually exclusive, and a raced
+    scroll landed at the buffer start (observed live). A ~100ms kitten
+    subprocess here was the original flicker; the raw-socket scroll is what
+    actually closes the visible gap.
+
+    `j0` is the top-line anchor to restore (top-line rule). The parked-at-
+    bottom frame top is (total+1)-h — the +1 is the cursor row the final
+    newline leaves. up<=0 → plain repaint, pane stays bottom-following.
     Returns (up, applied) for the caller's view-reflow audit row."""
     win = os.environ.get("KITTY_WINDOW_ID")
-    if not win:
-        return None, False
+    w = width()
+    body = frame_bytes(w)
     try:
         h = os.get_terminal_size().lines
     except OSError:
-        return None, False
-    w = width()
-    total = 1                                  # the banner line
-    for op in OPS:
-        for o in expanded(op):
-            total += render(o, w).count("\n") + 1
-    # +1: the repaint's final newline leaves the cursor on an extra empty
-    # screen row, so the parked-at-bottom frame's top is (total+1)-h — without
-    # it every restore landed one row low (verified against get-text).
-    up = total + 1 - h - j0
-    if up <= 0:
+        h = None
+    up = None
+    if h is not None:
+        total = 1                              # the banner line
+        for op in OPS:
+            for o in expanded(op):
+                total += render(o, w).count("\n") + 1
+        up = total + 1 - h - j0
+    if not win or up is None or up <= 0:
+        try:
+            sys.stdout.write(body); sys.stdout.flush()
+        except Exception:
+            pass
         return up, False
     try:
+        sys.stdout.write(body + "\033[6n"); sys.stdout.flush()
+    except Exception:
+        return up, False
+    _audit_paint("toggle", w, body)
+    await_dsr()
+    applied = False
+    try:
         import frontends
-        return up, frontends.get().scroll_window(win, up) == 0
+        fe = frontends.get()
+        try:
+            applied = bool(fe.scroll_window_fast(win, up))
+        except Exception:
+            applied = False
+        if not applied:
+            applied = fe.scroll_window(win, up) == 0
     except Exception:
         try:
             from core import audit as A
             A.error(LOG, "toggle_scroll (view toggle)", {"gid": gid, "up": up})
         except Exception:
             pass
-        return up, False
+    return up, applied
 
 
 def main():
@@ -381,6 +483,7 @@ def main():
     os.set_blocking(wake_w, False)
     signal.set_wakeup_fd(wake_w)
     signal.signal(signal.SIGWINCH, _on_winch)
+    tty_setup()
 
     db = St.db_path(LOG)
     last, ino, toggled, t_idx, anchor = 0, None, None, None, None
@@ -467,26 +570,15 @@ def main():
 
         if _resized:                         # startup / resize / toggle -> reflow
             _resized = False
-            # For a toggle reflow, freeze rendering (DEC 2026 synchronized
-            # update) across repaint + scroll restore so the user never sees
-            # the intermediate viewport-at-bottom frame — the screen goes
-            # straight from the old view to the block unfolding in place.
-            # kitty's sync timeout un-freezes on its own if the scroll RPC
-            # stalls.
-            sync = toggled is not None
-            if sync:
-                try:
-                    sys.stdout.write("\033[?2026h")
-                except Exception:
-                    pass
-            repaint()
             if toggled:
                 up, applied = (None, False)
                 if t_idx is not None:
                     # anchor None (capture failed / no match) degrades to the
                     # clicked-line-at-top frame: j0 = the line's own offset.
-                    up, applied = toggle_scroll(
+                    up, applied = toggle_repaint(
                         toggled, anchor if anchor is not None else t_idx)
+                else:
+                    repaint()
                 # The one row that makes "the view jumped" diagnosable: what
                 # the plan saw and what the scroll did.
                 try:
@@ -498,11 +590,8 @@ def main():
                 except Exception:
                     pass
                 toggled, t_idx, anchor = None, None, None
-            if sync:
-                try:
-                    sys.stdout.write("\033[?2026l"); sys.stdout.flush()
-                except Exception:
-                    pass
+            else:
+                repaint()
         elif new:
             paint_new(new)
 

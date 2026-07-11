@@ -411,9 +411,11 @@ def test_viewport_anchor_restores_scroll_offset(session, test_env, monkeypatch):
     assert mod.viewport_anchor(idx) is None
 
 
-def test_toggle_scroll_pins_top_line(session, test_env, monkeypatch):
+def test_toggle_repaint_pins_top_line(session, test_env, monkeypatch):
     """The top-line anchor rule: after a toggle reflow the viewport's TOP LINE
-    is exactly where it was — expand or collapse, any block size."""
+    is exactly where it was — expand or collapse, any block size. (stdin is
+    not a tty here, so the DSR handshake is skipped and the scroll falls back
+    to the recorded frontend call.)"""
     import collections
     s = session.make()
     mod = _load_mirror(s.log)
@@ -437,14 +439,14 @@ def test_toggle_scroll_pins_top_line(session, test_env, monkeypatch):
 
     # collapse (id not open): top stays at j0
     _, _, total = mod.measure("g1")
-    mod.toggle_scroll("g1", j0)
+    mod.toggle_repaint("g1", j0)
     assert calls[-1] == total + 1 - h - j0
 
     # expand a 10-row block: top STILL at j0 (block unfolds below, in place)
     mod._VIEW_OPS["g1"] = [{"t": "line", "s": "body %02d" % i} for i in range(10)]
     mod.VIEW_OPEN.add("g1")
     _, _, total = mod.measure("g1")
-    mod.toggle_scroll("g1", j0)
+    mod.toggle_repaint("g1", j0)
     assert calls[-1] == total + 1 - h - j0
 
     # expand a screen-filling block: top STILL at j0 — the frame never moves
@@ -452,7 +454,7 @@ def test_toggle_scroll_pins_top_line(session, test_env, monkeypatch):
     for op in mod.OPS:                      # heights changed: drop caches
         op.pop("_c", None)
     _, _, total = mod.measure("g1")
-    mod.toggle_scroll("g1", j0)
+    mod.toggle_repaint("g1", j0)
     assert calls[-1] == total + 1 - h - j0
 
 
@@ -471,3 +473,34 @@ def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tm
     finally:
         conn.close()
     assert any("state DB gone" in f for f in funcs)
+
+
+def test_renderer_neutralizes_executable_output(session, seed, reaper, test_env):
+    """RAW escape sequences in recorded command output must not EXECUTE when
+    the renderer replays them (a tee'd @kitty-cmd scroll-window DCS scrolled
+    the mirror to the top on every repaint — the live bug). Everything but
+    SGR styling and OSC 8 hyperlinks is stripped at paint time."""
+    s = session.make()
+    seed.py(
+        "import claude_ops as O\n"
+        "O.emit(%r,\n"
+        "  O.gut('\\x1bP@kitty-cmd{\"cmd\":\"scroll-window\"}\\x1b\\\\\\\\poisoned', (1,2,3)),\n"
+        "  O.line('\\x1b[2J\\x1b[38;2;9;9;9mstyled\\x1b[0m'),\n"
+        "  O.line('SENTINEL-NEUT'))" % s.log)
+    out_path = s.log + ".render.out"
+    with open(out_path, "wb") as out:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
+    reaper.append(proc)
+    try:
+        wait_until(lambda: b"SENTINEL-NEUT" in open(out_path, "rb").read(),
+                   desc="renderer painted the poisoned ops")
+    finally:
+        proc.terminate()
+    text = open(out_path, "rb").read().decode("utf-8", "replace")
+    assert "poisoned" in text and "styled" in text
+    assert "@kitty-cmd" not in text                    # the DCS did not survive
+    # the op's embedded 2J (clear) was stripped; the renderer's own clears
+    # remain (they start each repaint), so count: exactly the repaint ones
+    assert "\x1b[38;2;9;9;9m" in text                  # SGR survived

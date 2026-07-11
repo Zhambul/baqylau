@@ -102,6 +102,12 @@ class Frontend:
         renderer restoring a click-to-view line into view after a reflow)."""
         return 1
 
+    def scroll_window_fast(self, win_id, lines_up):
+        """Low-latency scroll_window (raw socket, no subprocess) for use
+        inside a render-freeze bracket. True on success; False = caller falls
+        back to scroll_window."""
+        return False
+
     def get_text(self, win_id, extent="screen"):
         """The window's VISIBLE text (the scrolled-to viewport, not the live
         screen), or None. The renderer's scroll-position anchor."""

@@ -223,7 +223,64 @@ class KittyFrontend(Frontend):
         return self._run("scroll-window", "--match", f"id:{win_id}",
                          f"{int(lines_up)}-")
 
+    def _rc_raw(self, cmd, payload, want_response=False, timeout=0.5):
+        """A remote-control command over a RAW unix-socket write of the
+        @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
+        spawn. The wire bytes are exactly what the kitten client sends
+        (captured live): ESC P @kitty-cmd {json} ESC \\, with the reply (when
+        requested) framed the same way. Speed is load-bearing for the mirror
+        renderer: get-text runs on every click-to-view toggle, and the scroll
+        runs INSIDE its DEC 2026 freeze bracket, where a subprocess outlives
+        kitty's render-freeze window and exposes the intermediate frame (the
+        toggle flicker). Returns the parsed response dict, True (fire-and-
+        forget success), or None on any failure — callers fall back to the
+        subprocess path."""
+        listen = self.listen or ""
+        path = listen[5:] if listen.startswith("unix:") else listen
+        if not path:
+            return None
+        import json as _json
+        import socket as _socket
+        obj = {"cmd": cmd, "version": [0, 26, 0],
+               "no_response": not want_response, "payload": payload}
+        st = b"\x1b\\"
+        try:
+            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            try:
+                s.settimeout(timeout)
+                s.connect(path)
+                s.sendall(b"\x1bP@kitty-cmd"
+                          + _json.dumps(obj).encode("utf-8") + st)
+                if not want_response:
+                    return True
+                buf = b""
+                while st not in buf:
+                    b = s.recv(65536)
+                    if not b:
+                        return None
+                    buf += b
+            finally:
+                s.close()
+            return _json.loads(buf[buf.index(b"@kitty-cmd") + 10:
+                                   buf.index(st)])
+        except Exception:
+            return None
+
+    def scroll_window_fast(self, win_id, lines_up):
+        """scroll_window over the raw socket (amount [-N, "l"] = up N lines,
+        fire-and-forget). False → caller falls back to scroll_window."""
+        return self._rc_raw("scroll-window",
+                            {"amount": [-float(lines_up), "l"],
+                             "match": "id:%s" % win_id}) is True
+
     def get_text(self, win_id, extent="screen"):
+        # Raw socket first (~0.4ms; it runs on every click-to-view toggle),
+        # kitten subprocess as the fallback.
+        r = self._rc_raw("get-text",
+                         {"match": "id:%s" % win_id, "extent": extent},
+                         want_response=True)
+        if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), str):
+            return r["data"]
         return kitten_get_text(self.kitten, self.listen, win_id, extent)
 
     def resize_pane(self, var, axis, increment):

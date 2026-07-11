@@ -121,6 +121,35 @@ def strip_ansi(s):
     return _ANSI.sub("", s)
 
 
+# Control sequences that would EXECUTE in the pane when painted. The mirror
+# replays raw command output on EVERY repaint (reflow, resize, click-to-view
+# toggle, pane re-open) — worse than a normal terminal, which executes stray
+# output once. Observed live: a tee'd wire-capture containing a raw
+# ESC P @kitty-cmd scroll-window DCS scrolled the mirror to the top on every
+# repaint. neutralize() strips everything except SGR (colours/styles — both
+# the mirror's own and legitimate colours in tailed output) and OSC 8
+# hyperlinks (the mirror's copy/view links).
+_CTRL = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]"              # CSI
+                   r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"      # OSC (BEL/ST)
+                   r"|\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)?"     # DCS/SOS/PM/APC
+                   r"|\x1b[@-Z\\-_]")                          # other 2-char C1
+
+
+def neutralize(s):
+    """Strip executable terminal control sequences from op text at paint time,
+    keeping only SGR styling and OSC 8 hyperlinks. Applied by the renderer to
+    every op's text, so even already-recorded (poisoned) session history
+    paints harmlessly."""
+    def keep(m):
+        seq = m.group(0)
+        if seq.startswith("\x1b[") and seq.endswith("m"):
+            return seq                        # SGR: colours/styles
+        if seq.startswith("\x1b]8;"):
+            return seq                        # OSC 8 hyperlink (ours)
+        return ""
+    return _CTRL.sub(keep, s)
+
+
 def hyperlink(url, text):
     """Wrap `text` in an OSC 8 hyperlink (zero display width). kitty resolves a
     click through ~/.config/kitty/open-actions.conf — the mirror's ⧉ copy links
