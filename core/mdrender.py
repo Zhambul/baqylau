@@ -189,6 +189,34 @@ if AVAILABLE:
             out.append(_indent(body, " " * (len(marker) + 1), first=colored))
         return "\n".join(out)
 
+    @OpsRenderer.register('table')
+    def _table(r, n, c):
+        # GFM table: cells joined by a dim │ rail into one LOGICAL line per row
+        # (so wrap_gutter still reflows a wide row at paint time — no column math,
+        # alignment is width-dependent and out of scope). First row is the bold
+        # header, followed by a dim rule; remaining rows are plain.
+        rail = R.DIM + " │ " + R.RST
+        rows = getattr(n, "children", []) or []
+        out = []
+        for i, row in enumerate(rows):
+            cells = [r.render_node(cell, c).replace("\n", " ").strip()
+                     for cell in (getattr(row, "children", []) or [])]
+            line = rail.join(cells)
+            if i == 0:                              # header row
+                out.append("\033[1m" + line + "\033[22m")
+                out.append(R.DIM + "─────────" + R.RST)
+            else:
+                out.append(line)
+        return "\n".join(out)
+
+    @OpsRenderer.register('tableCell')
+    def _cell(r, n, c):
+        return _kids(r, n, c)
+
+    @OpsRenderer.register('tableRow')               # handled inline by _table
+    def _row(r, n, c):
+        return _kids(r, n, c)
+
 
 class MarkdownStreamer:
     """Incremental markdown → styled-ANSI, block by block.

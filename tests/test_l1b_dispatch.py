@@ -25,9 +25,18 @@ def test_garbage_stdin_exits_zero(run_hook):
 
 def test_unknown_event_only_subscriber(run_hook, test_env, session):
     s = session.make()
-    run_hook(HOOK, P.base(s, "PreCompact"))
+    run_hook(HOOK, P.base(s, "PermissionRequest"))
     # An event with no functional handler still gets its universal subscriber row.
     assert handlers(test_env, s.sid) == {"subscriber"}
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_precompact_paints_busy(run_hook, test_env, session):
+    s = session.make()
+    run_hook(HOOK, P.base(s, "PreCompact"))
+    # Compaction has no tool/reply signal of its own — the tab dispatch paints the
+    # busy magenta (working) so the tab doesn't sit stale through it.
+    assert any(t[0] == "working" for t in oracle.transitions(test_env, s.sid))
     assert not oracle.errors(test_env, s.sid)
 
 

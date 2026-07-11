@@ -103,7 +103,13 @@ def _plan(ev, tool, d):
         steps.append(("claude-subagent-fmt.py", lambda: subagent_fmt.run_phase("stop")))
     elif ev in ("TaskCreated", "TaskCompleted"):
         fmt("claude-task-fmt.py", task_fmt)
-    # Every other event (Setup, PreCompact, PermissionRequest, …) has no functional
+    elif ev == "PreCompact":
+        # Compaction is Claude busy with no tool/reply signal of its own — paint the
+        # busy magenta so the tab doesn't sit stale (grey/green) through it. Use
+        # WORKING, not THINKING: no interrupt-watch to start (this isn't a turn
+        # boundary), just the colour. The next turn's hooks repaint from there.
+        tab("working")
+    # Every other event (Setup, PermissionRequest, …) has no functional
     # handler — it only ever fed the universal audit subscriber, which route() still
     # records below.
     return steps

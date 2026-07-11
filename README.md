@@ -6,7 +6,7 @@ a session's state at a glance — even from another tab.
 | Tab color | State | Fires on |
 |-----------|-------|----------|
 | ⬜ grey `#5c6370`    | **idle** — session ready, nothing running                  | `SessionStart` |
-| 🟪 magenta `#c678dd` | **busy** — thinking / non-shell tool (Read/Edit/Write/MCP) / writing the reply (merged — no signal tells them apart) | `UserPromptSubmit`, `PreToolUse` (main-agent non-Bash), `PostToolUse` (main agent) |
+| 🟪 magenta `#c678dd` | **busy** — thinking / non-shell tool (Read/Edit/Write/MCP) / writing the reply (merged — no signal tells them apart) / compacting the transcript | `UserPromptSubmit`, `PreToolUse` (main-agent non-Bash), `PostToolUse` (main agent), `PreCompact` |
 | 🟦 blue `#61afef`    | **the main session is running / awaiting** — a foreground shell command (`executing`, kept blue for its **whole real duration** even past Ctrl+B — see below), or the main session **awaiting an agent** (a foreground subagent/teammate keeps the turn blocked → blue; a background one → `awaiting-bg`) or a background command / monitor (`awaiting-bg`) | `PreToolUse` Bash/Task/Agent · `Stop` w/ a bg job/monitor/agent running |
 | 🟥 red `#e06c75`     | **awaiting-command** — Claude is asking *you* a question | `PreToolUse` `AskUserQuestion`/`ExitPlanMode` · `Notification` (permission/approval message) |
 | 🟩 green `#98c379`   | **awaiting-response** — done, your turn                     | `Stop` w/ nothing running · `Notification` ("waiting for your input") |
@@ -334,11 +334,12 @@ orphan all three.
   | `SubagentStart`    | `subagent_fmt.run_phase("start")` (header `▶ <type> · <desc>` + colour slot; teammates arrive here too) |
   | `SubagentStop`     | `subagent_fmt.run_phase("stop")` (footer + releases the slot) |
   | `TaskCreated` / `TaskCompleted` | `task_fmt` (`✚`/`✓ task #N · <subject>` to the mirror) |
+  | `PreCompact`       | tab `working` (compaction is busy with no tool/reply signal of its own — paint the busy magenta so the tab doesn't sit stale through it; `working`, not `thinking`, so no interrupt-watch is started) |
   | `Notification`     | tab `notify` (permission/approval → red `awaiting-command`; "waiting for your input" → green `awaiting-response`) |
   | `Stop`             | tab `stop` + `stop_fmt` (folds the turn's token/cost spend into the scoreboard) |
   | `StopFailure`      | tab `stop` (turn ended on an API error — keep the tab off the "busy" colour) + `stop_fmt` (fold whatever landed in the transcript; and when the payload carries an `agent_id` — a subagent that died on an API error, which fires no `SubagentStop` — finalise that agent's block/slot via `subagent_fmt.finalize`, else its streamer hangs and the tab stays blue) |
   | `SessionEnd`       | tab `clear` + `split.handle("close")` |
-  | *every other event* (`Setup`, `PreCompact`, `PermissionRequest`, …) | no functional handler — records only the universal audit-subscriber row (below) |
+  | *every other event* (`Setup`, `PermissionRequest`, …) | no functional handler — records only the universal audit-subscriber row (below) |
 
   **Why one dispatcher, and how behaviour is preserved:**
   - **Audit vocabulary.** Every subsystem still writes its own audit rows under its
