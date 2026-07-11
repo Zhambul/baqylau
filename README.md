@@ -1597,20 +1597,26 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   resume that came back empty is a `fresh-db` row on a `source=resume` start — a
   canned `anomalies` query.
 
-  **Resume can FORK the sid (adoption).** "keeps the same `session_id`" above has
-  an observed exception (2026-07-11, a daemon-origin resume from the agents
-  view): Claude Code fired the `source=resume` SessionStart with the **old** sid
+  **Resume (and backgrounding) can FORK the sid (adoption).** "keeps the same
+  `session_id`" above has observed exceptions (both 2026-07-11). On a
+  daemon-origin resume from the agents view, Claude Code fired the
+  `source=resume` SessionStart with the **old** sid
   — so the mirror, scorebar, state DB and pane tags all keyed to it — while
   **every subsequent hook event and OTEL datapoint carried a new sid** that never
   got a SessionStart of its own (its first `InstructionsLoaded` even arrived a
   second *before* the old-sid SessionStart). Result: the old sid received nothing
   but ConfigChange, the new sid accrued 1,100+ events into a state DB nothing
   rendered, the scorebar cost froze at the pre-resume total, and the tab never
-  repainted. The fix is **adoption** (`plugins/claude_code/adopt.py`, run by
-  `dispatch.py` before anything else touches the payload): every SessionStart
-  registers its sid in the global tab DB (`sids` table — "this sid really
-  started") and a `source=resume` start additionally leaves a **take-once
-  pending-resume note** keyed by cwd (`resume_pending`). An event whose sid has
+  repainted. **Backgrounding a session forks the sid the same way** (observed
+  12e32815 → 0ed3231c: the conversation continues under the background-job id
+  with no SessionStart at all), so the recovery is trigger-agnostic. The fix is
+  **adoption** (`plugins/claude_code/adopt.py`, run by `dispatch.py` before
+  anything else touches the payload): every SessionStart registers its sid in
+  the global tab DB (`sids` table — "this sid really started") and every
+  **hosted** start (split.py `cmd_open`, once the pane + state DB really exist —
+  a skipped daemon/headless start must never shadow the real predecessor)
+  additionally leaves a **take-once note** keyed by cwd (`adopt_pending`). An
+  event whose sid has
   **no state DB, no parked `*.keep`, and no prior SessionStart** consumes a
   matching note and adopts the predecessor: `os.replace` its state DB (+`-wal`/
   `-shm`) to the new sid's path — the rename preserves the inode, so the running

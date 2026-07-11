@@ -47,6 +47,7 @@ import frontends                          # noqa: E402
 from core import audit as A               # noqa: E402
 from core import hostpane as HP           # noqa: E402  (shared host pane lifecycle)
 from core import paths as P               # noqa: E402
+from core import tabs as T                # noqa: E402  (adopt_note — sid-fork registry)
 from plugins.claude_code import hookkit as HK  # noqa: E402  (log_path)
 
 # Keymap-launched background processes can inherit a minimal PATH; guarantee the
@@ -387,6 +388,14 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # design's `: > "$log"` provided this same guarantee for the log file).
     HP.ensure_db(log)
     tag_window(sid)
+    # Register this as the last HOSTED session in this cwd — the predecessor
+    # candidate adopt.py consumes if the sid forks (on --resume AND on
+    # backgrounding a session — see plugins/claude_code/adopt.py). Written here,
+    # not at every SessionStart: only a session whose pane + state DB really
+    # exist can be adopted, so a skipped daemon/headless start (the early return
+    # above) must never shadow the real predecessor.
+    if sid:
+        T.adopt_note(payload.get("cwd") or os.getcwd(), sid)
     close_stale_mirrors(sid, anchor)   # drop a prior-sid mirror (resume/clear) so it can't double up
     bias = project_bias()
     open_mirror(sid, log, bias, anchor)      # restore this project's remembered size

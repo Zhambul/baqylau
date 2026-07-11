@@ -53,7 +53,7 @@ TABDB_SCHEMA = """
 CREATE TABLE IF NOT EXISTS tab(win TEXT PRIMARY KEY, state TEXT);
 CREATE TABLE IF NOT EXISTS watchers(kind TEXT, win TEXT, pid INTEGER, PRIMARY KEY(kind, win));
 CREATE TABLE IF NOT EXISTS sids(sid TEXT PRIMARY KEY, ts REAL);
-CREATE TABLE IF NOT EXISTS resume_pending(cwd TEXT PRIMARY KEY, sid TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS adopt_pending(cwd TEXT PRIMARY KEY, sid TEXT, ts REAL);
 """
 
 
@@ -64,7 +64,7 @@ def tw(sql, params=()):
 
 def twc(sql, params=()):
     """Like tw() but returns the statement's rowcount (-1 on any failure) — the
-    take-once primitive resume_take needs it (DELETE … → did WE delete it?)."""
+    take-once primitive adopt_take needs it (DELETE … → did WE delete it?)."""
     try:
         conn = sqlite3.connect(TABDB, timeout=0.2)
         try:
@@ -107,15 +107,17 @@ def watcher_del(kind, win):
     tw("DELETE FROM watchers WHERE kind=? AND win=?", (kind, win))
 
 
-# --- session registry (resume-fork adoption — plugins/claude_code/adopt.py) ------
-# Claude Code can FORK a session id on --resume: SessionStart fires with the OLD
-# sid while every subsequent event carries a NEW sid that never gets its own
-# SessionStart. `sids` records every sid whose SessionStart we actually saw (so
-# an unknown-sid event is distinguishable from a headless/agents-view session
-# that legitimately started); `resume_pending` is the take-once note a
-# source=resume SessionStart leaves (keyed by cwd) that the fork's first event
-# consumes to find its predecessor. Both live here because this is the one
-# GLOBAL runtime DB every hook process can reach.
+# --- session registry (sid-fork adoption — plugins/claude_code/adopt.py) ---------
+# Claude Code can FORK a session id mid-flight: on --resume (SessionStart fires
+# with the OLD sid while every subsequent event carries a NEW sid that never
+# gets its own SessionStart) and on BACKGROUNDING a session (the conversation
+# continues under the background-job id, again with no SessionStart). `sids`
+# records every sid whose SessionStart we actually saw (so an unknown-sid event
+# is distinguishable from a headless/agents-view session that legitimately
+# started); `adopt_pending` is the take-once note every HOSTED SessionStart
+# leaves (written by split.cmd_open once the pane+DB really exist, keyed by
+# cwd) that the fork's first event consumes to find its predecessor. Both live
+# here because this is the one GLOBAL runtime DB every hook process can reach.
 
 def sid_mark(sid):
     """Record that this sid had a real SessionStart (prunes 30-day-old rows)."""
@@ -129,28 +131,28 @@ def sid_seen(sid):
     return bool(sq(TABDB, "SELECT 1 FROM sids WHERE sid=?", (sid,)))
 
 
-def resume_note(cwd, sid):
-    """A source=resume SessionStart happened for `sid` in `cwd` — the candidate
-    predecessor if an unknown sid shows up there next (keyed by cwd: a newer
-    SessionStart in the same project supersedes the note)."""
-    tw("INSERT OR REPLACE INTO resume_pending(cwd, sid, ts) VALUES(?, ?, ?)",
+def adopt_note(cwd, sid):
+    """A HOSTED session (pane + state DB) started for `sid` in `cwd` — the
+    candidate predecessor if an unknown sid shows up there next (keyed by cwd:
+    a newer hosted SessionStart in the same project supersedes the note)."""
+    tw("INSERT OR REPLACE INTO adopt_pending(cwd, sid, ts) VALUES(?, ?, ?)",
        (cwd, sid, time.time()))
 
 
-def resume_peek(cwd):
-    rows = sq(TABDB, "SELECT sid FROM resume_pending WHERE cwd=?", (cwd,))
+def adopt_peek(cwd):
+    rows = sq(TABDB, "SELECT sid FROM adopt_pending WHERE cwd=?", (cwd,))
     return rows[0] if rows else ""
 
 
-def resume_take(cwd, sid):
+def adopt_take(cwd, sid):
     """Consume the note — take-once, so concurrent hook processes racing to
     adopt the same predecessor see exactly one winner."""
-    return twc("DELETE FROM resume_pending WHERE cwd=? AND sid=?",
+    return twc("DELETE FROM adopt_pending WHERE cwd=? AND sid=?",
                (cwd, sid)) == 1
 
 
-def resume_drop(cwd, sid):
-    resume_take(cwd, sid)
+def adopt_drop(cwd, sid):
+    adopt_take(cwd, sid)
 
 
 

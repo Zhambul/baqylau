@@ -1,13 +1,15 @@
-# L2-adopt — resume-fork session adoption (plugins/claude_code/adopt.py) and
+# L2-adopt — sid-fork session adoption (plugins/claude_code/adopt.py) and
 # the daemon-env tab-paint fallback (tabstatus._ensure_win).
 #
-# Claude Code can FORK the sid on --resume: SessionStart fires under the OLD
-# sid (source=resume) while every later event carries a NEW sid with no
-# SessionStart of its own. The fork's first event must ADOPT the predecessor —
-# rename its state DB to the new sid's path (symlinks at the old paths),
-# retag the panes, and write the sessions row — or the mirror/scorebar/tab all
-# freeze on the old sid while the real session's data lands in a DB nothing
-# renders (observed live 2026-07-11, 19a42746→ebcecfcc).
+# Claude Code can FORK the sid mid-flight — on --resume (SessionStart fires
+# under the OLD sid while every later event carries a NEW sid with no
+# SessionStart of its own) and on BACKGROUNDING a session (it continues under
+# the background-job id, no SessionStart at all). The fork's first event must
+# ADOPT the predecessor — rename its state DB to the new sid's path (symlinks
+# at the old paths), retag the panes, and write the sessions row — or the
+# mirror/scorebar/tab all freeze on the old sid while the real session's data
+# lands in a DB nothing renders (observed live 2026-07-11, 19a42746→ebcecfcc
+# on resume and 12e32815→0ed3231c on backgrounding).
 import os
 
 import oracle
@@ -82,15 +84,25 @@ def test_adoption_is_take_once(run_hook, test_env, fake_kitten, session):
     assert len(adopts) == 1
 
 
-def test_no_adoption_without_resume_note(run_hook, test_env, fake_kitten,
-                                         session):
+def test_background_fork_after_plain_startup_adopts(run_hook, test_env,
+                                                    fake_kitten, session):
+    # BACKGROUNDING a session forks the sid exactly like --resume does (the
+    # conversation continues under the background-job id, no SessionStart), so
+    # the note is written for EVERY hosted start, not just resumes.
     a = session.make()
     run_hook(HOOK, P.session_start(a, source="startup"))
     b = session.make()
     run_hook(HOOK, P.post_file(b, tool="Edit"))
-    # No pending note (the start wasn't a resume) → no adoption: A's DB stays a
-    # real file and B just accrues its own fresh DB.
-    assert not os.path.islink(a.state_db)
+    assert os.path.islink(a.state_db)
+    assert any(r[1] == "adopt" for r in oracle.state_files(test_env, b.sid))
+
+
+def test_no_adoption_without_any_hosted_start(run_hook, test_env, fake_kitten,
+                                              session):
+    # No hosted SessionStart in this cwd → no note → an unknown sid is just a
+    # session we don't manage; it accrues its own fresh DB, nothing is captured.
+    b = session.make()
+    run_hook(HOOK, P.post_file(b, tool="Edit"))
     assert not any(r[1] == "adopt" for r in oracle.state_files(test_env, b.sid))
 
 
