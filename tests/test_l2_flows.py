@@ -186,6 +186,51 @@ def test_f2md_markdown_file_is_pretty_rendered(
     oracle.assert_clean(test_env, s.sid)
 
 
+def test_f2sniff_fenced_output_renders_as_markdown(
+        run_hook, test_env, session, writer):
+    """A fg command with NO render extension (cat report.txt) whose OUTPUT contains
+    a fenced code block is auto-detected as markdown (CLAUDE_MIRROR_MD_SNIFF): the
+    fence highlights by language even though the filename gave no hint."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "cat report.txt"))
+    rec = fg_live_record(s)
+    w = writer(rec["src"])
+    with open(rec["src"], "a") as f:
+        f.write("# Report\n\nSome **prose**.\n\n```json\n{\"replicas\": 3}\n```\n\n")
+    # The heading became an amber banner and the json fence is colour-highlighted.
+    wait_until(lambda: "38;2;229;192;123" in s.ops_text(),
+               desc="fenced output auto-rendered as markdown")
+    wait_until(lambda: '"replicas"' in s.ops_text(), desc="json fence content shown")
+    assert "# Report" not in s.ops_text(), "heading shown raw, not rendered"
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, "cat report.txt", duration_ms=150))
+    w.terminate()
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
+               desc="fg stream ends")
+    assert not s.live("fg"), "fg slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
+def test_f2sniff_plain_output_stays_verbatim(
+        run_hook, test_env, session, writer):
+    """A fg command whose output has NO fence streams verbatim, live, line by line
+    (the sniff must never delay or swallow ordinary output)."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "make build"))
+    rec = fg_live_record(s)
+    w = writer(rec["src"])
+    with open(rec["src"], "a") as f:
+        f.write("compiling module A\n")
+    wait_until(lambda: "compiling module A" in s.ops_text(), desc="plain line live")
+    with open(rec["src"], "a") as f:
+        f.write("# not a heading, just a log\n")
+    wait_until(lambda: "# not a heading" in s.ops_text(),
+               desc="a stray # is NOT treated as markdown (no fence)")
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, "make build", duration_ms=150))
+    w.terminate()
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid), desc="fg ends")
+    oracle.assert_clean(test_env, s.sid)
+
+
 def test_f2json_json_file_is_pretty_printed(
         run_hook, test_env, session, writer):
     """`cat data.json` (CT.json_source -> CLAUDE_STREAM_JSON) buffers the file and,

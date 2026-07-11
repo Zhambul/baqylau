@@ -646,6 +646,26 @@ numbers orange, comments grey) — no reformat, no panel. One generic renderer,
 (not just a bool) so the tailer knows which lexer to load. Same guards as the
 others: `cat foo.py | …`, `python foo.py`, and redirects don't qualify.
 
+**Fenced output is markdown — the general mixed-content path.** All of the above
+key off the *filename*, so they miss a command that *prints* markdown to stdout
+(an agent, a report generator, a `write-then-cat` one-liner). The fallback keys
+off the *content* instead: when no filename mode was picked, a fg command's output
+is sniffed for a **fenced code block** (` ```lang `) — the one markdown token that's
+unambiguous and essentially never appears by accident in logs or diffs (unlike a
+bare `#`/`*`, which is why general markdown-sniffing is a false-positive swamp).
+If the **first data-bearing read** contains a fence, the whole stream renders as
+markdown — prose plus each fence highlighted by its language (json/python/yaml/…);
+otherwise it streams verbatim, exactly as before. This is *the* answer to mixed
+content ("partly prose, partly JSON, partly Python"): a fence is the boundary
+declaration that makes the regions unambiguous — auto-segmenting an *undeclared*
+stream is not attempted (there are no boundaries to honour, only guesses). The
+decision is made on that first read **only** — never buffered across polls — so
+live line-by-line streaming is untouched (a plain `make build` shows each line as
+it lands). A fence that first appears in a *later* chunk than the first is missed
+by design (that liveness guarantee is worth more than catching the rare late
+fence); a `cat` of a file always delivers its fence in the first read. Gated
+default-on by `CLAUDE_MIRROR_MD_SNIFF`; filename detection always wins when present.
+
 **⧉ copy links — click to copy any activity block.** Nearly every block in the
 mirror carries a dim, browser-style copy affordance on its header chip. A
 **command** block (foreground / background, in the main session and inside a

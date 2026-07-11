@@ -31,7 +31,7 @@
 # even got wrapped to write SRC) it falls back to a generic chip after a grace
 # period — and if SRC ended up empty, to the real output PostToolUse hands it in
 # that same sentinel, so a failed rewrite never means silently losing the output.
-import glob, os, subprocess, sys, time
+import glob, os, re, subprocess, sys, time
 
 from core import coderender as CODER
 from core import jsonrender as JSONR
@@ -125,6 +125,16 @@ YAML_MODE = os.environ.get("CLAUDE_STREAM_YAML") == "1"
 CODE_LEXER = os.environ.get("CLAUDE_STREAM_CODE") or ""   # pygments lexer name, else ""
 RENDER_KIND = ("md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE
                else ("code:" + CODE_LEXER) if CODE_LEXER else None)
+# "Fenced output is markdown": when NO filename render mode was picked, sniff a fg
+# command's output for a fenced code block (```lang) — the one markdown signal that's
+# both unambiguous and rare in logs. If the FIRST data-bearing read contains a fence,
+# the whole stream renders as markdown (prose + per-language fences); otherwise it
+# streams verbatim, exactly as before. The decision is made on that first read only —
+# never buffered across polls — so live line-by-line streaming is preserved. Off with
+# CLAUDE_MIRROR_MD_SNIFF=0.
+SNIFF = (RENDER_KIND is None and KIND == "fg"
+         and os.environ.get("CLAUDE_MIRROR_MD_SNIFF", "1") != "0")
+_FENCE = re.compile(r"(?m)^[ \t]{0,3}(```|~~~)[^\n`]*$")
 
 
 def find_file(deadline):
@@ -262,6 +272,8 @@ def main(run):
     else:
         content_stream = None
     md_count = {"n": 0}
+    render_meta = {"kind": RENDER_KIND}
+    sniff = {"mode": "sniff" if SNIFF else "off"}   # sniff -> md/raw on first data read
     if content_stream is not None:
         A.state_file(LOG, "render:" + TASKID, "start",
                      {"kind": RENDER_KIND, "wenmode": MDR.AVAILABLE})
@@ -271,18 +283,40 @@ def main(run):
             md_count["n"] += 1
             O.emit(LOG, O.gut(text, SLOT_RGB, outer=OUTER_RGB, g=GROUP, bg=bg))
 
+    def emit_verbatim(text):
+        # text = complete lines joined with "\n" (a trailing "\n" per line); drop the
+        # one trailing empty so we don't paint a spurious blank gutter row.
+        parts = text.split("\n")
+        if parts and parts[-1] == "":
+            parts = parts[:-1]
+        if parts:
+            O.emit(LOG, O.gut("\n".join(unescape(p) for p in parts),
+                              SLOT_RGB, outer=OUTER_RGB, g=GROUP))
+
     def pump():
+        nonlocal content_stream
         lines = tail.pump()
         if lines:
             run.lines += len(lines)
+            # Re-add the \n pump() stripped from each complete line, so a renderer
+            # sees real line/block boundaries.
+            text = "".join(ln.decode("utf-8", "replace") + "\n" for ln in lines)
             if content_stream is not None:
-                # pump() strips the trailing \n from each complete line — re-add it
-                # so the streamer sees real line/block boundaries (blank lines).
-                text = "".join(ln.decode("utf-8", "replace") + "\n" for ln in lines)
                 emit_md(content_stream.feed(text))
+            elif sniff["mode"] == "sniff":
+                # First data read decides — no cross-poll buffering (liveness).
+                if _FENCE.search(text):
+                    content_stream = MDR.MarkdownStreamer()
+                    render_meta["kind"] = "md-sniff"
+                    A.state_file(LOG, "render:" + TASKID, "start",
+                                 {"kind": "md-sniff", "wenmode": MDR.AVAILABLE})
+                    sniff["mode"] = "md"
+                    emit_md(content_stream.feed(text))
+                else:
+                    sniff["mode"] = "raw"
+                    emit_verbatim(text)
             else:
-                O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
-                                  SLOT_RGB, outer=OUTER_RGB, g=GROUP))
+                emit_verbatim(text)
         return lines                            # None -> file vanished
 
     # Completion signal differs by kind:
@@ -369,10 +403,10 @@ def main(run):
         if tail.pos == 0 and KIND == "fg" and not converted and override and override.get("fallback_body"):
             content_stream.feed(override["fallback_body"])
         emit_md(content_stream.close())
-        # Zero blocks from a non-empty markdown stream is the render-failure tell —
-        # see claude_audit.py `anomalies` (md-render blocks=0).
+        # Zero blocks from a non-empty render stream is the render-failure tell —
+        # see claude_audit.py `anomalies` (render blocks=0).
         A.state_file(LOG, "render:" + TASKID, "done",
-                     {"kind": RENDER_KIND, "blocks": md_count["n"]})
+                     {"kind": render_meta["kind"], "blocks": md_count["n"]})
     elif tail.pending.strip():
         O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB,
                           outer=OUTER_RGB, g=GROUP))
