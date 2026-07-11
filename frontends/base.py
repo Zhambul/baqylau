@@ -78,12 +78,15 @@ class Frontend:
         return 1
 
     def launch_pane(self, argv, location, bias=None, var=None, title=None,
-                    next_to=None, cwd="current", keep_focus=True):
+                    next_to=None, in_tab_of=None, cwd="current",
+                    keep_focus=True):
         """Open a new pane running `argv`. location is "vsplit"/"hsplit";
         `var` is a {name: value} user-var tag dict; `next_to` is a raw window
         match string anchoring the split (e.g. "id:42",
         "var:claude_mirror=<sid>") — without it the terminal splits whatever
-        window happens to be active. Exit code."""
+        window happens to be active. `in_tab_of` is a window id whose TAB the
+        pane must open in — next_to alone cannot cross tabs (see
+        frontends/kitty.py). Exit code."""
         return 1
 
     def close_pane(self, var=None, win_id=None):

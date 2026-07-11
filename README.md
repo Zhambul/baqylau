@@ -1671,8 +1671,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   session)`). This also covers a headless `claude -p` that reaches the socket
   via the lone-socket fallback. The anchor then makes every pane op
   focus-independent: `goto-layout --match window_id:<anchor>` (not the active
-  tab), the mirror launches `--next-to id:<anchor>` (not next to the focused
-  window), and `close_stale_mirrors` sweeps the *anchor's* tab — each sweep now
+  tab), the mirror launches `--match window_id:<anchor> --next-to id:<anchor>`
+  — BOTH flags are load-bearing: `--next-to` alone is resolved only within
+  the ACTIVE tab, so an anchored open while the user looked at a different
+  tab silently vsplit THAT tab (observed live 2026-07-11: two mirrors in one
+  tab, none in the session's own); `--match` picks the anchor's TAB first,
+  `--next-to` the window inside it — and `close_stale_mirrors` sweeps the
+  *anchor's* tab — each sweep now
   audited (`pane_events` action `close-stale` naming the closed sid; sweeping a
   still-open session's mirror is the canned `pane hijack` anomaly). The
   keybinding `toggle` anchors the same way (env, else the focused tab's

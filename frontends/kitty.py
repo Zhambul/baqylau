@@ -171,8 +171,18 @@ class KittyFrontend(Frontend):
         return self._run("goto-layout", "splits")
 
     def launch_pane(self, argv, location, bias=None, var=None, title=None,
-                    next_to=None, cwd="current", keep_focus=True):
-        args = ["launch", f"--location={location}"]
+                    next_to=None, in_tab_of=None, cwd="current",
+                    keep_focus=True):
+        args = ["launch"]
+        if in_tab_of is not None:
+            # `--next-to` alone CANNOT cross tabs: kitty resolves it only
+            # within the ACTIVE tab, so an open anchored to a window in an
+            # unfocused tab silently split whatever tab the user was looking
+            # at instead (observed live 2026-07-11 — the two-mirrors bug).
+            # `--match window_id:N` selects the TAB containing the anchor
+            # first; --next-to then picks the right window inside it.
+            args += ["--match", f"window_id:{in_tab_of}"]
+        args += [f"--location={location}"]
         if next_to is not None:
             args += ["--next-to", next_to]
         if bias is not None:

@@ -68,15 +68,20 @@ def open_mirror(fe, here, sid, log, bias, default_bias=25, anchor=None):
     looking at a different tab (daemon-origin SessionStart, keybinding)."""
     if not mirror_exists(fe, sid):
         # vsplit sizing only works in the splits layout; switch the anchor's
-        # tab (or, unanchored, the active tab) to it.
+        # tab (or, unanchored, the active tab) to it. `in_tab_of` is
+        # load-bearing alongside next_to: next_to alone cannot cross tabs, so
+        # an anchored open while the user looks at a DIFFERENT tab split that
+        # tab instead (see frontends/kitty.py launch_pane).
         fe.goto_splits_layout(anchor)
         fe.launch_pane([os.path.join(here, "claude-mirror.py"), log],
                        "vsplit", bias=(bias or default_bias),
                        next_to=(f"id:{anchor}" if anchor else None),
+                       in_tab_of=anchor,
                        var={"claude_mirror": sid}, title="◧ cmd mirror")
     if not window_exists(fe, "claude_scorebar", sid):   # checked separately so a
         fe.launch_pane([os.path.join(here, "claude-scorebar.py"), log],  # crashed/
                        "hsplit", bias=BAR_ROWS, next_to=f"var:claude_mirror={sid}",
+                       in_tab_of=anchor,
                        var={"claude_scorebar": sid}, title="▪ session")
         size_bar(fe, sid)                          # closed bar comes back on toggle
 
