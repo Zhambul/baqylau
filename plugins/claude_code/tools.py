@@ -118,7 +118,7 @@ def md_source(cmd):
 # `cat` (or `< file.json`) qualifies — head/tail would truncate it. jq is excluded
 # (it already pretty-prints + colours). Same plumbing guard as md_source.
 _JSON_READERS = {"cat"}
-_JSON_EXT = (".json",)
+_JSON_EXT = (".json", ".jsonl", ".ndjson")
 
 
 def json_source(cmd):

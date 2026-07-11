@@ -630,7 +630,10 @@ Block spacing, frontmatter, wikilinks, and code highlighting live in the
 (`tools.json_source`, gated by `CLAUDE_MIRROR_JSON`; excludes `jq`/`bat` which
 self-colour, and `head`/`tail` since JSON needs the whole file) is re-indented
 (`json.dumps` indent 2) and syntax-highlighted (keys blue, strings green, numbers
-orange, `true`/`false`/`null` magenta). `cat`/`head`/`tail` of a `.yml`/`.yaml`
+orange, `true`/`false`/`null` magenta). **JSON Lines / NDJSON** (`.jsonl`/`.ndjson`,
+one JSON value per line) is rendered the same way — every non-blank line pretty-
+printed and blank-line separated; a single non-JSON line taints the whole stream
+back to verbatim (never a misleading partial view). `cat`/`head`/`tail` of a `.yml`/`.yaml`
 (`tools.yaml_source`, `CLAUDE_MIRROR_YAML`) is syntax-highlighted **in place** —
 NOT reparsed, because a YAML round-trip drops comments and reorders keys, which is
 destructive for hand-written config; it's coloured raw via pygments' `YamlLexer`

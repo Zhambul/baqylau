@@ -244,6 +244,28 @@ def test_json_invalid_falls_back_to_raw():
     assert "not json" in R.strip_ansi(text)
 
 
+def test_jsonl_each_line_pretty_printed():
+    s = JSON.JsonStreamer()
+    s.feed('{"a":1}\n{"b":2}\n{"c":[1,2]}')
+    segs = s.close()
+    assert len(segs) == 1
+    text, bg = segs[0]
+    assert bg is None
+    plain = R.strip_ansi(text)
+    # every doc pretty-printed (indent=2), blank-line separated
+    assert '"a": 1' in plain and '"b": 2' in plain and '"c"' in plain
+    assert '\n\n' in plain, "JSONL docs are blank-line separated"
+    assert R.COL["func"] + '"a"' in text, "keys coloured per doc"
+
+
+def test_jsonl_with_a_bad_line_falls_back_to_verbatim():
+    # A single non-JSON line taints the whole stream -> raw, never a partial view.
+    s = JSON.JsonStreamer()
+    s.feed('{"a":1}\nnot json here\n{"b":2}')
+    plain = R.strip_ansi("".join(t for t, _ in s.close()))
+    assert "not json here" in plain and '"a": 1' not in plain
+
+
 def test_json_partial_is_not_rendered_until_close():
     s = JSON.JsonStreamer()
     assert s.feed('{"a":') == [], "JSON never renders on a partial buffer"
@@ -339,7 +361,8 @@ def test_md_source_negative():
 
 def test_json_source():
     from plugins.claude_code.tools import json_source
-    for c in ["cat data.json", "cat dir/x.json", "< r.json", "cat < r.json"]:
+    for c in ["cat data.json", "cat dir/x.json", "< r.json", "cat < r.json",
+              "cat events.jsonl", "cat logs.ndjson"]:   # JSON Lines / NDJSON too
         assert json_source(c), c
     for c in ["head data.json", "tail x.json", "jq . x.json", "cat x.json | jq",
               "bat x.json", "cat x.json > y.txt", "cat x.md", "cat data.json && echo hi"]:
