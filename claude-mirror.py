@@ -330,31 +330,36 @@ def toggle_scroll(gid, j0):
     move; the toggle only changes what's below the clicked line inside it.
     up<=0 (the buffer bottom is above that frame — e.g. a collapse shrank the
     content) means no scroll: the pane sits at the bottom, which is as close
-    to the old frame as the buffer allows, and stays bottom-following."""
+    to the old frame as the buffer allows, and stays bottom-following.
+    Returns (up, applied) for the caller's view-reflow audit row."""
     win = os.environ.get("KITTY_WINDOW_ID")
     if not win:
-        return
+        return None, False
     try:
         h = os.get_terminal_size().lines
     except OSError:
-        return
+        return None, False
     w = width()
     total = 1                                  # the banner line
     for op in OPS:
         for o in expanded(op):
             total += render(o, w).count("\n") + 1
-    up = total - h - j0
+    # +1: the repaint's final newline leaves the cursor on an extra empty
+    # screen row, so the parked-at-bottom frame's top is (total+1)-h — without
+    # it every restore landed one row low (verified against get-text).
+    up = total + 1 - h - j0
     if up <= 0:
-        return
+        return up, False
     try:
         import frontends
-        frontends.get().scroll_window(win, up)
+        return up, frontends.get().scroll_window(win, up) == 0
     except Exception:
         try:
             from core import audit as A
             A.error(LOG, "toggle_scroll (view toggle)", {"gid": gid, "up": up})
         except Exception:
             pass
+        return up, False
 
 
 def main():
@@ -446,7 +451,14 @@ def main():
                 delta = cur_open ^ VIEW_OPEN
                 toggled = delta.pop() if len(delta) == 1 else None
                 t_idx = anchor = None
-                if toggled and not _resized:
+                # Plan UNCONDITIONALLY — in particular do NOT skip when
+                # _resized is set: the click handler's own SIGWINCH nudge sets
+                # it before this branch ever runs, so gating on it silently
+                # disabled the anchor for every nudged toggle (the pane then
+                # parked at the bottom — the "scrolls to the very end" bug).
+                # A genuine concurrent resize just changes width() under the
+                # match, which fails confidence and degrades to the fallback.
+                if toggled:
                     _, t_idx, _ = measure(toggled)
                     if t_idx is not None:
                         anchor = viewport_anchor(t_idx)
@@ -469,11 +481,22 @@ def main():
                     pass
             repaint()
             if toggled:
+                up, applied = (None, False)
                 if t_idx is not None:
                     # anchor None (capture failed / no match) degrades to the
                     # clicked-line-at-top frame: j0 = the line's own offset.
-                    toggle_scroll(toggled,
-                                  anchor if anchor is not None else t_idx)
+                    up, applied = toggle_scroll(
+                        toggled, anchor if anchor is not None else t_idx)
+                # The one row that makes "the view jumped" diagnosable: what
+                # the plan saw and what the scroll did.
+                try:
+                    from core import audit as A
+                    A.state_file(LOG, St.db_path(LOG), "view-reflow",
+                                 {"gid": toggled, "idx": t_idx,
+                                  "anchor": anchor, "up": up,
+                                  "applied": applied})
+                except Exception:
+                    pass
                 toggled, t_idx, anchor = None, None, None
             if sync:
                 try:

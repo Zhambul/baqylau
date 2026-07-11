@@ -438,14 +438,14 @@ def test_toggle_scroll_pins_top_line(session, test_env, monkeypatch):
     # collapse (id not open): top stays at j0
     _, _, total = mod.measure("g1")
     mod.toggle_scroll("g1", j0)
-    assert calls[-1] == total - h - j0
+    assert calls[-1] == total + 1 - h - j0
 
     # expand a 10-row block: top STILL at j0 (block unfolds below, in place)
     mod._VIEW_OPS["g1"] = [{"t": "line", "s": "body %02d" % i} for i in range(10)]
     mod.VIEW_OPEN.add("g1")
     _, _, total = mod.measure("g1")
     mod.toggle_scroll("g1", j0)
-    assert calls[-1] == total - h - j0
+    assert calls[-1] == total + 1 - h - j0
 
     # expand a screen-filling block: top STILL at j0 — the frame never moves
     mod._VIEW_OPS["g1"] = [{"t": "line", "s": "big %02d" % i} for i in range(40)]
@@ -453,7 +453,7 @@ def test_toggle_scroll_pins_top_line(session, test_env, monkeypatch):
         op.pop("_c", None)
     _, _, total = mod.measure("g1")
     mod.toggle_scroll("g1", j0)
-    assert calls[-1] == total - h - j0
+    assert calls[-1] == total + 1 - h - j0
 
 
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):

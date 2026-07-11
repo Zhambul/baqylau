@@ -808,7 +808,14 @@ parts:
   2026 synchronized update so kitty never renders the intermediate
   viewport-at-bottom frame (its sync timeout self-heals if the scroll RPC
   stalls). An unrecoverable anchor (capture failed, no confident match)
-  degrades to the clicked-line-at-top frame — audited, never fatal. Why not the alternatives: *emit the block at the
+  degrades to the clicked-line-at-top frame — audited, never fatal. Every
+  toggle the renderer processes leaves a `view-reflow` audit row
+  (gid/idx/anchor/up/applied), which is what cracked two live regressions:
+  the nudge SIGWINCH setting `_resized`, whose planning guard then skipped
+  the anchor entirely (every nudged toggle parked at the bottom — the guard
+  is gone), and an off-by-one in the restore amount (the repaint's trailing
+  newline leaves the cursor on an extra row, so the parked frame top is
+  `total+1-h`, verified against `get-text`). Why not the alternatives: *emit the block at the
   bottom* (append-only friendly, no repaint) reads as a teleport away from
   the line you clicked; *renderer-side mouse reporting* was already rejected
   for the copy links; *hiding via mutable op rows* breaks the append-only
