@@ -176,6 +176,9 @@ def main():
           and CT.json_source(cmd))
     yaml = (not md and not js and os.environ.get("CLAUDE_MIRROR_YAML", "1") != "0"
             and CT.yaml_source(cmd))
+    # code_source returns a pygments lexer name (e.g. "python") or None.
+    code = (None if (md or js or yaml) or os.environ.get("CLAUDE_MIRROR_CODE", "1") == "0"
+            else CT.code_source(cmd))
 
     env = dict(os.environ)
     env["CLAUDE_STREAM_SRC"] = src
@@ -186,6 +189,8 @@ def main():
         env["CLAUDE_STREAM_JSON"] = "1"
     if yaml:
         env["CLAUDE_STREAM_YAML"] = "1"
+    if code:
+        env["CLAUDE_STREAM_CODE"] = code
     if gid:
         env["CLAUDE_STREAM_GROUP"] = gid
     if own:
@@ -223,7 +228,8 @@ def main():
                  % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
                     else "tailing command's own redirect",
                     " [md-render]" if md else " [json-render]" if js
-                    else " [yaml-render]" if yaml else ""))
+                    else " [yaml-render]" if yaml
+                    else (" [code-render:%s]" % code) if code else ""))
 
     if wrapped_cmd:
         # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):

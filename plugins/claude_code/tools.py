@@ -172,6 +172,46 @@ def yaml_source(cmd):
     return head in _YAML_READERS and _has_yaml_arg(toks[1:])
 
 
+# Source files coloured in place (like YAML) — the extension picks the lexer.
+_CODE_READERS = {"cat", "head", "tail"}
+
+
+def code_source(cmd):
+    """If `cmd` streams a source file the mirror can syntax-highlight (cat/head/tail
+    of a file whose extension is in coderender.LANGS, or a bare `< file.py`), return
+    the pygments LEXER NAME (e.g. 'python'); else None. Same plumbing guards."""
+    from core.coderender import LANGS
+    try:
+        toks = shlex.split(cmd, posix=False)
+    except ValueError:
+        return None
+    if not toks:
+        return None
+    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
+        return None
+    if "$(" in cmd:
+        return None
+
+    def _lexer_for(words):
+        for w in words:
+            w = w.strip("'\"").lower()
+            for ext, lexer in LANGS.items():
+                if w.endswith(ext):
+                    return lexer
+        return None
+
+    if "<" in toks:
+        i = toks.index("<")
+        if i + 1 < len(toks):
+            lx = _lexer_for([toks[i + 1]])
+            if lx:
+                return lx
+    head = os.path.basename(toks[0].strip("'\""))
+    if head in _CODE_READERS:
+        return _lexer_for(toks[1:])
+    return None
+
+
 def diff_counts(tool_name, inp):
     """(added, removed) line counts for a file-mutating tool's input, matching Claude
     Code's own additions/removals: a real line-level diff for Edit/MultiEdit, the whole

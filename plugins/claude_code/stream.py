@@ -33,6 +33,7 @@
 # that same sentinel, so a failed rewrite never means silently losing the output.
 import glob, os, subprocess, sys, time
 
+from core import coderender as CODER
 from core import jsonrender as JSONR
 from core import mdrender as MDR
 from core import ops as O
@@ -121,7 +122,9 @@ GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
 MD = os.environ.get("CLAUDE_STREAM_MD") == "1"
 JSON_MODE = os.environ.get("CLAUDE_STREAM_JSON") == "1"
 YAML_MODE = os.environ.get("CLAUDE_STREAM_YAML") == "1"
-RENDER_KIND = "md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE else None
+CODE_LEXER = os.environ.get("CLAUDE_STREAM_CODE") or ""   # pygments lexer name, else ""
+RENDER_KIND = ("md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE
+               else ("code:" + CODE_LEXER) if CODE_LEXER else None)
 
 
 def find_file(deadline):
@@ -254,6 +257,8 @@ def main(run):
         content_stream = JSONR.JsonStreamer()
     elif YAML_MODE:
         content_stream = YAMLR.YamlStreamer()
+    elif CODE_LEXER:
+        content_stream = CODER.CodeStreamer(CODE_LEXER)
     else:
         content_stream = None
     md_count = {"n": 0}

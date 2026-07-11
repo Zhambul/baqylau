@@ -243,6 +243,48 @@ def test_yaml_fallback_without_pygments(monkeypatch):
     assert out and "a: 1" in R.strip_ansi(out[0][0])
 
 
+# ---- source code --------------------------------------------------------------
+
+from core import coderender as CODE  # noqa: E402
+
+
+def test_code_highlighted_per_language():
+    cases = {
+        "python": "import os\ndef greet(n):\n    return f'hi {n}'  # c\n",
+        "java": 'public class Foo { int n = 3; // c\n String s = "x"; }\n',
+        "kotlin": 'fun greet(n: String): String {\n  val x = 42  // c\n  return "hi"\n}\n',
+        "bash": '#!/bin/bash\nset -e\nfor i in 1 2 3; do echo "$i"; done  # loop\n',
+    }
+    for lexer, src in cases.items():
+        s = CODE.CodeStreamer(lexer)
+        s.feed(src)
+        text, bg = s.close()[0]
+        assert bg is None, lexer + " must have no background panel"
+        assert R.COL["kw"] in text, lexer + " keyword coloured"
+        assert R.COL["cmt"] in text, lexer + " comment coloured"
+        # source preserved verbatim (no reformat).
+        assert R.strip_ansi(text).rstrip("\n") == src.rstrip("\n")
+
+
+def test_code_fallback_without_pygments(monkeypatch):
+    monkeypatch.setattr(CODE, "render_code", lambda _t, _l: None)
+    s = CODE.CodeStreamer("python")
+    s.feed("x = 1\n")
+    out = s.close()
+    assert out and "x = 1" in R.strip_ansi(out[0][0])
+
+
+def test_code_source_detection():
+    from plugins.claude_code.tools import code_source
+    for c, exp in [("cat foo.py", "python"), ("cat Main.java", "java"),
+                   ("head -50 App.kt", "kotlin"), ("tail deploy.sh", "bash"),
+                   ("< s.py", "python")]:
+        assert code_source(c) == exp, c
+    for c in ["cat foo.txt", "cat foo.py | grep x", "bat foo.py", "python foo.py",
+              "cat foo.py > o", "rm a.py"]:
+        assert code_source(c) is None, c
+
+
 # ---- detection ---------------------------------------------------------------
 
 def test_md_source_positive():

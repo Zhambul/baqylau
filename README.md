@@ -202,7 +202,9 @@ supersedes `render.markdown()` and falls back to it when `wenmode` is absent),
 `jsonrender.py` / `yamlrender.py` (its JSON/YAML siblings: `JsonStreamer` buffers a
 `.json` stream whole and pretty-prints + colours it at completion — stdlib `json`;
 `YamlStreamer` colours a `.yml` in place without reformatting — both optional
-pygments, no background panel), `audit.py` (the audit
+pygments, no background panel), `coderender.py` (a generic `CodeStreamer(lexer)`
+that colours a source file — `.py`/`.java`/`.kt`/`.sh` — via the pygments lexer
+named by its extension in `LANGS`; reuses `render.pick`), `audit.py` (the audit
 trail — was `claude_audit.py`), `ops.py` (paint ops, `emit`, the scoreboard
 counters/parts, the semantic colour table — the tool-agnostic half of the old
 `claude_ops.py`), `hostpane.py` (the tool-AGNOSTIC host mirror lifecycle —
@@ -633,6 +635,16 @@ invalid; YAML block scalars make partial colouring unreliable), so
 stream and fall back to the raw text verbatim if it isn't valid (truncated JSON,
 JSON Lines, a plain log; or pygments absent). No new dependency: stdlib `json` +
 the same optional pygments for colour.
+
+**Source files are syntax-highlighted too.** `cat`/`head`/`tail` of a `.py`,
+`.java`, `.kt`/`.kts`, or `.sh`/`.bash`/`.zsh` (`tools.code_source`, gated by
+`CLAUDE_MIRROR_CODE`) is coloured in place via the matching pygments lexer,
+reusing `render.pick` (keywords magenta, function names blue, strings green,
+numbers orange, comments grey) — no reformat, no panel. One generic renderer,
+`core/coderender.CodeStreamer(lexer)`; adding a language is one line in
+`coderender.LANGS` (extension → lexer name). `code_source` returns the lexer name
+(not just a bool) so the tailer knows which lexer to load. Same guards as the
+others: `cat foo.py | …`, `python foo.py`, and redirects don't qualify.
 
 **⧉ copy links — click to copy any activity block.** Nearly every block in the
 mirror carries a dim, browser-style copy affordance on its header chip. A
