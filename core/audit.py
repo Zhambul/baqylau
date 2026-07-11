@@ -696,6 +696,16 @@ def cli_anomalies(sid):
     section("failed tools (PostToolUseFailure)",
             "SELECT ts, tool_name, decision FROM hook_events WHERE session_id=? AND "
             "hook LIKE '%Failure%' ORDER BY ts", (sid,))
+    # A markdown-render stream (claude-stream.py MD mode: cat/head/tail of a .md,
+    # decision '[md-render]' in hook_events) records a 'done' state_file row with the
+    # block count it emitted. Zero blocks from a stream that ran means the renderer
+    # produced nothing — a wenmode parse failure or an empty fallback. The paired
+    # 'start' row records whether wenmode was even importable (else it degraded to the
+    # render.markdown subset). See core/mdrender.py.
+    section("markdown-render streams that emitted zero blocks (render failure)",
+            "SELECT ts, path, content FROM state_files WHERE session_id=? AND "
+            "path LIKE 'md-render:%' AND action='done' AND content LIKE '%\"blocks\": 0%' "
+            "ORDER BY ts", (sid,))
     section("spawned processes that never registered a stream",
             "SELECT s.ts, s.child_pid, s.purpose FROM spawns s WHERE s.session_id=? "
             "AND s.purpose LIKE 'stream%' AND s.child_pid NOT IN "

@@ -70,6 +70,50 @@ def parse_redirect(cmd, cwd):
     return target, append
 
 
+# Plain-text readers whose stdout is a markdown file verbatim — the mirror can
+# pretty-render it. Deliberately EXCLUDES bat/glow/mdcat/less/more (they already
+# style their output — re-rendering would double-format) and grep/rg/head-of-a-
+# match (they emit fragments, not a document).
+_MD_READERS = {"cat", "head", "tail"}
+_MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
+
+
+def md_source(cmd):
+    """True when `cmd` is a single simple command whose body streams a markdown
+    file's raw contents — an allowlisted reader (cat/head/tail) with a .md/.markdown
+    argument, or a bare `< file.md` stdin redirect. Conservative: any pipe, output
+    redirect, chain (; && ||), or command substitution disqualifies it, because
+    then the streamed bytes are filtered/derived, not the document itself."""
+    try:
+        toks = shlex.split(cmd, posix=False)
+    except ValueError:
+        return False
+    if not toks:
+        return False
+    # Any shell plumbing means the output is no longer the file verbatim.
+    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
+        return False
+    if any(c in cmd for c in "`$(") and "$(" in cmd:
+        return False
+    def _has_md_arg(words):
+        for w in words:
+            w = w.strip("'\"")
+            if w.lower().endswith(_MD_EXT):
+                return True
+        return False
+    # `< file.md` (with or without a leading command)
+    if "<" in toks:
+        i = toks.index("<")
+        if i + 1 < len(toks):
+            tgt = toks[i + 1].strip("'\"")
+            if tgt.lower().endswith(_MD_EXT):
+                return True
+    head = os.path.basename(toks[0].strip("'\""))
+    if head in _MD_READERS and _has_md_arg(toks[1:]):
+        return True
+    return False
+
+
 def diff_counts(tool_name, inp):
     """(added, removed) line counts for a file-mutating tool's input, matching Claude
     Code's own additions/removals: a real line-level diff for Edit/MultiEdit, the whole

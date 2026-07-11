@@ -1,7 +1,9 @@
 # Dev-only: the e2e test suite (make test). The runtime scripts stay
-# stdlib-only (pygments is the one optional runtime nicety, pinned here so
-# renderer goldens are reproducible).
+# stdlib-only; pygments (syntax highlighting) and wenmode (markdown rendering in
+# the mirror, core/mdrender.py) are the two optional runtime niceties, pinned
+# here so renderer goldens/tests are reproducible.
 pytest>=8
 pytest-timeout>=2.3
 pytest-xdist>=3.5
 pygments>=2.17
+wenmode>=0.9

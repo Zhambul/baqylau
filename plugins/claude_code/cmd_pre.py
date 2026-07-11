@@ -167,9 +167,17 @@ def main():
     # join the same group — claude-copy.py collects a block by this id.
     gid = d.get("tool_use_id") or None
 
+    # Markdown pretty-rendering: when this command streams a markdown file's raw
+    # contents (cat/head/tail of a .md, or `< file.md`), tell the tailer to render
+    # the body as styled markdown instead of verbatim text. Gated (default-on) by
+    # CLAUDE_MIRROR_MD, mirroring CLAUDE_MIRROR_LIVE_FG above.
+    md = (os.environ.get("CLAUDE_MIRROR_MD", "1") != "0" and CT.md_source(cmd))
+
     env = dict(os.environ)
     env["CLAUDE_STREAM_SRC"] = src
     env["CLAUDE_STREAM_DONE"] = done
+    if md:
+        env["CLAUDE_STREAM_MD"] = "1"
     if gid:
         env["CLAUDE_STREAM_GROUP"] = gid
     if own:
@@ -203,9 +211,10 @@ def main():
 
     O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG, g=gid),
            O.code(cmd, g=gid), O.rule())
-    A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s"
+    A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s%s"
                  % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
-                    else "tailing command's own redirect"))
+                    else "tailing command's own redirect",
+                    " [md-render]" if md else ""))
 
     if wrapped_cmd:
         # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):

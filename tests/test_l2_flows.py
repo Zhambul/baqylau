@@ -152,6 +152,40 @@ def test_f2_fg_lifecycle_streams_live_and_takes_real_outcome(
     oracle.assert_clean(test_env, s.sid)
 
 
+# ------------------------------------------------------------------ F2-md
+
+# The amber SGR core/render.BANNER emits for a heading — present only if the body
+# was markdown-RENDERED, never in raw `cat` output. The discriminator for this test.
+_BANNER_SGR = "38;2;229;192;123"
+
+
+def test_f2md_markdown_file_is_pretty_rendered(
+        run_hook, test_env, session, writer):
+    """`cat notes.md` (CT.md_source -> CLAUDE_STREAM_MD) streams the file through
+    core/mdrender: headings become bold-amber banners, **bold** becomes SGR — not
+    the raw `#`/`**` characters."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "cat notes.md"))
+    rec = fg_live_record(s)
+    w = writer(rec["src"])                       # the running command holds the tee open
+    # A complete block (heading + terminating blank) flushes live; likewise the paragraph.
+    with open(rec["src"], "a") as f:
+        f.write("# Bold Heading\n\nThis is **strong** text.\n\n")
+    wait_until(lambda: "Bold Heading" in s.ops_text(), desc="heading text in mirror")
+    wait_until(lambda: _BANNER_SGR in s.ops_text(),
+               desc="heading rendered as a banner (markdown mode active)")
+    assert "\x1b[1m" in s.ops_text(), "bold SGR from **strong**"
+    # The raw markdown metacharacters should NOT survive as literal text.
+    assert "# Bold Heading" not in s.ops_text(), "heading shown raw, not rendered"
+
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, "cat notes.md", duration_ms=200))
+    w.terminate()
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
+               desc="fg stream ends on the done hand-off")
+    assert not s.live("fg"), "fg slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
 # --------------------------------------------------------------------- F3
 
 def test_f3_failed_command_chip(run_hook, test_env, session):

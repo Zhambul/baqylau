@@ -195,7 +195,11 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
 `claude_paths.py`), `state.py` (per-session runtime SQLite — was
 `claude_state.py`), `slots.py` (palette/liveness slots — was
 `claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
-`render.py` (ANSI rendering — was `claude_render.py`), `audit.py` (the audit
+`render.py` (ANSI rendering — was `claude_render.py`), `mdrender.py` (AST-driven
+markdown → styled ANSI for the mirror: an `OpsRenderer(BaseRenderer)` over the
+optional `wenmode` CommonMark parser + a block-buffering `MarkdownStreamer`;
+supersedes `render.markdown()` and falls back to it when `wenmode` is absent),
+`audit.py` (the audit
 trail — was `claude_audit.py`), `ops.py` (paint ops, `emit`, the scoreboard
 counters/parts, the semantic colour table — the tool-agnostic half of the old
 `claude_ops.py`), `hostpane.py` (the tool-AGNOSTIC host mirror lifecycle —
@@ -570,6 +574,35 @@ and the `-`/`#`/`*`/`~` forms must be **bracketed** on both ends (so a diff head
 `--- a/file` and a bare `-----` rule stay plain). It's applied at every real
 command-output site — foreground, background/monitor tail, and subagent output —
 but *not* to a subagent's messages/prompts (which share the gutter helper).
+
+**Markdown files are pretty-rendered.** When a command streams a markdown file's
+raw contents — an allowlisted plain-text reader (`cat` / `head` / `tail`) with a
+`.md`/`.markdown` argument, or a bare `< file.md` — the body is rendered as styled
+ANSI instead of raw `#`/`**`/`` ` `` characters: headings become bold-amber
+banners, `**bold**`/`*italic*` become SGR, `` `code` `` and fenced blocks are
+coloured, bullets/ordered lists nest, blockquotes get a rail, and `[links](url)`
+become OSC-8 hyperlinks. Detection (`tools.md_source`) is deliberately narrow —
+**pipes, redirects, and chains disqualify** (the bytes would be filtered, not the
+document), and `bat`/`glow`/`mdcat`/`less` are excluded (they already style their
+own output — re-rendering would double-format). Set **`CLAUDE_MIRROR_MD=0`** to
+stream markdown verbatim.
+
+It's an **AST-driven** renderer (`core/mdrender.py`): the `wenmode` CommonMark
+parser produces an mdast tree, and an `OpsRenderer(BaseRenderer)` subclass turns
+each node into styled text reusing the same primitives as everything else
+(`render.BANNER`, `render.COL`, `render.hyperlink`). Output carries only
+zero-width SGR + **logical** newlines, so it stays width-INDEPENDENT and the
+renderer reflows it on resize like any other gut op — it runs in the tailer
+(`claude-stream.py`), block by block via `mdrender.MarkdownStreamer`, which holds
+an incomplete trailing block (fence-aware) so a partially-arrived file never
+splits mid-construct. *Why not `glow` (or `rich`, `mdcat`, …)?* Every terminal
+markdown **renderer** hard-wraps its output to a fixed width — which the mirror's
+reflow-on-SIGWINCH model can't consume (content wouldn't re-wrap when the pane
+resizes). A **parser** we drive keeps the producer/renderer split intact. *Why
+not the old `render.markdown()` regex subset?* It's line-oriented — no real
+nesting, ordered lists, fenced blocks, or blockquotes. `mdrender` supersedes it
+(and is the fallback if `wenmode` is absent). Tables render as lightly-styled
+rows without column alignment (alignment is width-dependent — out of scope).
 
 **⧉ copy links — click to copy any activity block.** Nearly every block in the
 mirror carries a dim, browser-style copy affordance on its header chip. A
@@ -1568,6 +1601,13 @@ Behaviour & limits:
   the command still shows with its line structure intact, just uncoloured. (A
   change here only takes effect on a **fresh** pane — toggle the mirror off/on, as
   the running renderer keeps its interpreter.)
+- **Markdown rendering needs `wenmode`** (optional, pure-Python — `pip install
+  wenmode`). Unlike pygments, this runs in the **tailer** (`claude-stream.py`),
+  not the renderer pane, so it needs `wenmode` importable by whatever `python3`
+  the hooks spawn — no re-exec probe. If it's absent, `mdrender` degrades to the
+  `render.markdown()` regex subset (headings/bold/italic/inline-code only), so a
+  `.md` still renders, just with less structure. Disable the whole feature with
+  `CLAUDE_MIRROR_MD=0`.
 - **Cost**: the tab uses the `splits` layout, leaving the Claude pane at ~75%
   (or `100 − CLAUDE_MIRROR_BIAS`%).
 - **Sizing & on/off — settings + keys.** The default width is `CLAUDE_MIRROR_BIAS`

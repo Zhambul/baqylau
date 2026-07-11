@@ -33,6 +33,7 @@
 # that same sentinel, so a failed rewrite never means silently losing the output.
 import glob, os, subprocess, sys, time
 
+from core import mdrender as MDR
 from core import ops as O
 from core import render as R
 from core import slots as claude_slots
@@ -110,6 +111,10 @@ SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
 # Unset for launchers that don't tag (monitors, a subagent's nested jobs) — those
 # blocks just render without copy links, exactly as before.
 GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
+# Set by claude-cmd-pre.py when this fg command streams a markdown file's raw
+# contents (cat/head/tail of a .md) — the body is rendered as styled markdown
+# via core/mdrender instead of emitted verbatim. See CT.md_source / CLAUDE_MIRROR_MD.
+MD = os.environ.get("CLAUDE_STREAM_MD") == "1"
 
 
 def find_file(deadline):
@@ -232,13 +237,32 @@ def main(run):
             pos0 = 0
     tail = T.FileTailer(path, pos=pos0)
     run.lines = 0
+    # Markdown mode: feed tailed text through a block-buffering renderer that holds
+    # incomplete blocks and emits each completed one as its own gut op (append-only,
+    # so nothing already painted is re-rendered). Non-md path is unchanged.
+    md_stream = MDR.MarkdownStreamer() if MD else None
+    md_count = {"n": 0}
+    if md_stream is not None:
+        A.state_file(LOG, "md-render:" + TASKID, "start",
+                     {"kind": KIND, "wenmode": MDR.AVAILABLE})
+
+    def emit_md(blocks):
+        for blk in blocks:
+            md_count["n"] += 1
+            O.emit(LOG, O.gut(blk, SLOT_RGB, outer=OUTER_RGB, g=GROUP))
 
     def pump():
         lines = tail.pump()
         if lines:
             run.lines += len(lines)
-            O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
-                              SLOT_RGB, outer=OUTER_RGB, g=GROUP))
+            if md_stream is not None:
+                # pump() strips the trailing \n from each complete line — re-add it
+                # so the streamer sees real line/block boundaries (blank lines).
+                text = "".join(ln.decode("utf-8", "replace") + "\n" for ln in lines)
+                emit_md(md_stream.feed(text))
+            else:
+                O.emit(LOG, O.gut("\n".join(unescape(ln.decode("utf-8", "replace")) for ln in lines),
+                                  SLOT_RGB, outer=OUTER_RGB, g=GROUP))
         return lines                            # None -> file vanished
 
     # Completion signal differs by kind:
@@ -316,7 +340,19 @@ def main(run):
     converted = KIND == "fg" and override and override.get("converted")
     if converted:
         run.end("converted-ctrl-b")
-    if tail.pending.strip():
+    if md_stream is not None:
+        # Flush the trailing incomplete block (the last line has no terminating
+        # blank, so the buffer held it) plus any fallback body, all through the
+        # markdown renderer so the final block is styled like the rest.
+        if tail.pending:
+            md_stream.feed(tail.pending.decode("utf-8", "replace"))
+        if tail.pos == 0 and KIND == "fg" and not converted and override and override.get("fallback_body"):
+            md_stream.feed(override["fallback_body"])
+        emit_md(md_stream.close())
+        # Zero blocks from a non-empty markdown stream is the render-failure tell —
+        # see claude_audit.py `anomalies` (md-render blocks=0).
+        A.state_file(LOG, "md-render:" + TASKID, "done", {"blocks": md_count["n"]})
+    elif tail.pending.strip():
         O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB,
                           outer=OUTER_RGB, g=GROUP))
     elif KIND == "fg" and tail.pos == 0 and not converted and override and override.get("fallback_body"):
@@ -389,6 +425,6 @@ def main(run):
 
 def entry():
     with T.stream_lifecycle(LOG, KIND, task_id=TASKID, src_path=SRC,
-                            ctx={"kind": KIND, "taskid": TASKID},
+                            ctx={"kind": KIND, "taskid": TASKID, "md": MD},
                             on_exit=release_slot) as run:
         main(run)
