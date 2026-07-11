@@ -1254,17 +1254,27 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
       keying on the parent's own completion record has no such failure mode. The
       detector is `model.parent_tool_result` (a pure function, sibling to
       `parent_resolved_model`, which already scans the parent for this agent's Task
-      result). *Cancel-before-first-`SubagentStart`* still has no streamer to
-      recover and is left unhandled, as elsewhere.
+      result). **The async-launch-ack exception:** an **async (background) agent**'s
+      Task resolves the parent `tool_result` *immediately* — but with a synthetic
+      *"Async agent launched successfully"* ack (`is_error` absent) that means
+      *launched*, not *finished*; the agent then runs for minutes writing its whole
+      transcript. `parent_tool_result` explicitly returns `None` for that ack (a
+      falsy `is_error` **and** `"launched successfully"` text), so the streamer keeps
+      tailing to the real `SubagentStop`. Treating the ack as a resolution ended the
+      streamer ~2s in with **zero lines rendered** — the async agent's entire block
+      never reached the mirror (found 2026-07-11, session `1c5e842c`; anomaly *"async
+      launch-ack ended the substream early"*). *Cancel-before-first-`SubagentStart`*
+      still has no streamer to recover and is left unhandled, as elsewhere.
     - **A subagent turn that dies on an API error** (e.g. `529 Overloaded`) is a
       *fifth* end-shape. Claude Code fires **`StopFailure` carrying the subagent's
       `agent_id`** — not `SubagentStop`, and no `stoppedByUser` stamp (confirmed
       empirically: payload `error: "server_error"`, `last_assistant_message` the
       API-error text). For an **async background agent** the rejected-Task recovery
       above also can't help: its parent `tool_result` is only the "Async agent
-      launched successfully" ack (`is_error` absent), which never resolves — so the
-      streamer had *no* end signal and hung on its 6h backstop, `sub.pid` `live` row
-      keeping the tab **stuck blue** the whole time. `StopFailure` is wired to
+      launched successfully" ack, which the detector deliberately ignores (see the
+      async-launch-ack exception above), so the streamer had *no* other end signal
+      and hung on its 6h backstop, `sub.pid` `live` row keeping the tab **stuck
+      blue** the whole time. `StopFailure` is wired to
       `claude-stop-fmt.py`, which ignores an `agent_id` payload for accounting (the
       inner turn is the substream's to bill) — but a `StopFailure` *is* the agent's
       only stop signal, so stop-fmt now hands it to the same finaliser

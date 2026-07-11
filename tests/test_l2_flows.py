@@ -544,6 +544,44 @@ def test_f9d_rejected_subagent_stops_via_parent_result(run_hook, test_env,
                         allow=("SubagentStart without SubagentStop",))  # the reject
 
 
+def test_f9f_async_launch_ack_does_not_end_streamer(run_hook, test_env, session):
+    """An ASYNC (background) agent's Task resolves IMMEDIATELY in the parent
+    transcript with a synthetic "Async agent launched successfully" tool_result
+    (is_error absent) — meaning launched, NOT finished. f9d's parent-result
+    recovery must NOT treat that ack as a resolution (doing so ended the streamer
+    ~2s in with 0 lines, so the agent's whole transcript never reached the
+    mirror). The streamer keeps tailing and exits only on the real SubagentStop."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    tid = "toolu_" + uuid.uuid4().hex[:12]
+    s.write_meta(agent, toolUseId=tid)
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, SUB_EVENTS[:3])
+    wait_until(lambda: "scanning the tree now" in s.ops_text(), desc="running")
+    # The async launch ack lands in the PARENT transcript right away — is_error
+    # absent, text "launched successfully". It must NOT end the streamer.
+    s.add_line({"type": "user", "message": {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": tid, "content": [
+            {"type": "text", "text": "Async agent launched successfully. "
+             "agentId: " + agent}]}]}})
+    # Give the parent scan (2s throttle) time to (wrongly, if regressed) fire.
+    time.sleep(3.0)
+    assert not any("parent-task-resolved" in (r or "")
+                   for r in end_reasons(test_env, s.sid)), \
+        "launch ack must not end the streamer"
+    assert s.live(), "slot still held while the async agent runs"
+    # The rest of the transcript streams, then the real SubagentStop finalises.
+    s.write_subagent_jsonl(agent, SUB_EVENTS)
+    run_hook("claude-subagent-fmt.py", P.subagent_stop(s, agent_id=agent),
+             argv=("stop",))
+    wait_until(lambda: "stop-sentinel" in end_reasons(test_env, s.sid),
+               desc="substream finalises on the real stop sentinel")
+    wait_until(lambda: not s.live(), desc="slot released")
+    oracle.assert_clean(test_env, s.sid)
+
+
 def test_f9e_api_error_subagent_stops_via_stopfailure(run_hook, test_env, session):
     """A subagent turn that dies on an API error (529) fires StopFailure carrying
     its agent_id and NO SubagentStop (nor stoppedByUser). For an async agent the

@@ -684,6 +684,19 @@ def cli_anomalies(sid):
             "SELECT ts, agent_id, decision FROM hook_events WHERE session_id=? AND "
             "hook='StopFailure' AND agent_id != '' AND handler != 'subscriber' "
             "AND decision NOT LIKE 'stopfail:%' ORDER BY ts", (sid,))
+    # An ASYNC (background) agent's Task resolves IMMEDIATELY in the parent
+    # transcript with a synthetic "Async agent launched successfully" tool_result
+    # (is_error absent) meaning launched-not-finished. parent_tool_result() must
+    # ignore that ack; treating it as a resolution ended the substream ~2s in with
+    # 0 lines rendered, so the agent's whole transcript never reached the mirror.
+    # Tell: a subagent/teammate stream ending 'parent-task-resolved' (NOT rejected)
+    # with lines_emitted=0 while a real SubagentStop later fired for that agent.
+    section("async launch-ack ended the substream early (0 lines rendered)",
+            "SELECT s.agent_id, s.ended_at, s.end_reason FROM streams s WHERE "
+            "s.session_id=? AND s.kind IN ('subagent','teammate') AND "
+            "s.end_reason='parent-task-resolved' AND COALESCE(s.lines_emitted,0)=0 "
+            "AND s.agent_id IN (SELECT agent_id FROM hook_events WHERE session_id=? "
+            "AND hook='SubagentStop')", (sid, sid))
     # Since the single-dispatcher refactor every event runs through claude-hook.py
     # -> dispatch.py. A crash in the DISPATCHER itself (not a subsystem) records
     # script='dispatch' — that means route() threw before/around fanning out, so a

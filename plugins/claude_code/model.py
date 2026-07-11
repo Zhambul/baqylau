@@ -235,7 +235,15 @@ def parent_tool_result(line, tool_use_id):
     never come. The parent transcript still records the Task's tool_result the
     instant the call resolves (completed, rejected, or cancelled) — an EVENT, not
     an idle timeout, so watching for it recovers the gap without the backstop that
-    false-positived on long thinks."""
+    false-positived on long thinks.
+
+    EXCEPTION — the async-launch ack: an ASYNC (background) agent's Task resolves
+    IMMEDIATELY with a synthetic "Async agent launched successfully" tool_result
+    (is_error absent) that means "launched", NOT "finished" — the agent then runs
+    for minutes producing its whole transcript. Treating that ack as resolution
+    ended the streamer ~2s in with 0 lines rendered (the agent's work never
+    reached the mirror). So the ack is NOT a resolution: return None for it and
+    let the streamer tail on to the authoritative SubagentStop sentinel."""
     if not tool_use_id or tool_use_id not in line:
         return None
     try:
@@ -247,6 +255,13 @@ def parent_tool_result(line, tool_use_id):
     for b in content:
         if (isinstance(b, dict) and b.get("type") == "tool_result"
                 and b.get("tool_use_id") == tool_use_id):
+            if not b.get("is_error"):
+                txt = b.get("content")
+                if isinstance(txt, list):
+                    txt = " ".join(x.get("text", "") for x in txt
+                                   if isinstance(x, dict))
+                if isinstance(txt, str) and "launched successfully" in txt:
+                    return None   # async launch ack — not a real resolution
             return bool(b.get("is_error"))
     return None
 
