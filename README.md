@@ -827,23 +827,50 @@ parts:
   expanded-and-pinned, mid-parse states while output streams) leaves kitty's
   scroll state undefined, and relative math from there landed at random
   offsets ("hide jumps to random places", observed live; verified pinned
-  under concurrent op streaming after the fix). Why not
+  under concurrent op streaming after the fix). **Follow-mode exception**: if
+  the pre-toggle viewport was AT the bottom (anchor within a few rows of
+  `total+1-h` — the tolerance absorbs the logical-vs-visual line bias of
+  wrapped rows), the restore targets the NEW bottom instead of pinning —
+  pinning an at-bottom viewport to an absolute offset silently detaches it
+  from the live tail, and the user later finds the pane parked on stale
+  content (observed live: an `anchor: 0` click minutes after an at-bottom
+  toggle). Why not
   the obvious alternatives: a `kitten @` **subprocess** (~100ms) leaves the
   bottom frame visible — the original flicker; a **DEC 2026 freeze bracket**
   can't work because kitty *buffers* (does not parse) input while frozen, so
   the DSR handshake starves and the scroll races the unparsed frame (landed
   at the buffer start, observed live); *tty-injected* rc scroll commands
   misbehave in kitty 0.45 (any amount scrolls to start — also why replayed
-  poisoned output was so violent, below). An unrecoverable anchor (capture
-  failed, no confident match) degrades to the clicked-line-at-top frame —
-  audited, never fatal. Every toggle leaves a `view-reflow` audit row
-  (gid/idx/anchor/up/applied) and every full reflow a `paint` row
-  (width/rows/ops/open) — the pair that cracked three live regressions: the
-  nudge SIGWINCH setting `_resized`, whose planning guard then skipped the
-  anchor entirely (guard removed); an off-by-one in the restore amount (the
-  repaint's trailing newline leaves the cursor on an extra row, so the
-  parked frame top is `total+1-h`, verified against `get-text`); and the
-  poisoned-output replay (next paragraph).
+  poisoned output was so violent, below). An unrecoverable anchor degrades to
+  the clicked-line-at-top frame — and EVERY null path is audited with its
+  reason (`no window` / `no capture` / `empty capture` / `no match`), with
+  the capture itself retried 3× under load, because the no-capture path was
+  once silent and four `anchor: null` jump-to-end clicks were undiagnosable
+  until it wasn't. Three more hard-won rules live here. **The frame must fit
+  the scrollback** (`ROW_BUDGET`, default 4800, tune via
+  `CLAUDE_MIRROR_SCROLLBACK` to match kitty.conf's `scrollback_lines` minus a
+  screenful): every reflow rewrites the whole buffer, so painted rows beyond
+  the ceiling don't exist afterwards — a restore targeting them CLAMPS
+  (observed live: `landed == total+1-h-5000`, "the expand jumped somewhere
+  random"); trimming the oldest ops to the budget loses nothing that could
+  ever be scrolled to. **Startup adopts, never toggles**: the persisted
+  `view-open` kv set inherited at renderer start (or park/restore reset) is
+  state, not a click — letting the kv poll see it as a delta planned a
+  toggle restore toward some op's line, and a freshly toggled pane opened
+  scrolled deep into history instead of at the bottom (observed live).
+  **A WINCH at an unchanged size with no toggle plan repaints nothing**
+  (audited as `paint` kind `skip`): a full repaint there isn't just wasted —
+  its clear-scrollback clamps a scrolled-up viewport to the bottom with no
+  restore (observed live via a bare SIGWINCH probe), so stray or duplicate
+  click-nudges must not reach the repaint path. Every toggle leaves a
+  `view-reflow` audit row (gid/idx/anchor/cap0/up/applied/dsr/landed/
+  retried/follow) and every full reflow a `paint` row (width/rows/ops/open)
+  — the pair that cracked three live regressions: the nudge SIGWINCH setting
+  `_resized`, whose planning guard then skipped the anchor entirely (guard
+  removed); an off-by-one in the restore amount (the repaint's trailing
+  newline leaves the cursor on an extra row, so the parked frame top is
+  `total+1-h`, verified against `get-text`); and the poisoned-output replay
+  (next paragraph).
 
 **Paint-time neutralization — replayed output must not execute.** The ops
 stream carries RAW command output, and the renderer replays it on EVERY

@@ -458,6 +458,71 @@ def test_toggle_repaint_pins_top_line(session, test_env, monkeypatch):
     assert calls[-1] == total + 1 - h - j0
 
 
+def test_toggle_repaint_follow_mode_targets_new_bottom(session, test_env,
+                                                       monkeypatch):
+    """follow=True (the viewport was AT the bottom before the click) restores
+    to the NEW bottom instead of pinning an absolute offset — an at-bottom
+    viewport pinned to a fixed line silently stops following the live tail."""
+    import collections
+    s = session.make()
+    mod = _load_mirror(s.log)
+    mod.OPS.extend({"t": "line", "s": "row %03d" % i} for i in range(100))
+    mod.OPS.append({"t": "line", "s": "Update(x.py)", "v": "g1"})
+
+    TS = collections.namedtuple("ts", "columns lines")
+    monkeypatch.setattr(mod.os, "get_terminal_size", lambda: TS(80, 24))
+    monkeypatch.setenv("KITTY_WINDOW_ID", "7")
+    calls = []
+
+    class _FE:
+        def scroll_window_end(self, win):
+            calls.append("end")
+            return True
+
+        def scroll_window(self, win, up):
+            calls.append(up)
+            return 0
+    import frontends
+    monkeypatch.setattr(frontends, "get", lambda: _FE())
+
+    mod._VIEW_OPS["g1"] = [{"t": "line", "s": "body %02d" % i} for i in range(10)]
+    mod.VIEW_OPEN.add("g1")
+    res = mod.toggle_repaint("g1", 999, follow=True)   # j0 overridden by follow
+    assert res["follow"] is True and res["up"] == 0
+    assert calls == ["end"]                 # end only — no relative up-scroll
+
+
+def test_viewport_anchor_failure_paths_are_audited(session, test_env,
+                                                   monkeypatch):
+    """EVERY null return of a tagged locate_viewport leaves an errors row —
+    the no-capture path was silent once and hid a live jump-to-end bug."""
+    s = session.make()
+    mod = _load_mirror(s.log)
+    mod.OPS.append({"t": "line", "s": "just one row"})
+
+    class _FE:
+        def get_text(self, win, extent="screen"):
+            return None
+    import frontends
+    from core import audit as A
+    monkeypatch.setenv("KITTY_WINDOW_ID", "42")
+    monkeypatch.setenv("CLAUDE_AUDIT_DIR", test_env["CLAUDE_AUDIT_DIR"])
+    # the audit module caches its connection per-process — point it at THIS
+    # test's audit dir regardless of what earlier tests in the worker did
+    monkeypatch.setattr(A, "_CONN", None)
+    monkeypatch.setattr(A, "_FAILED", False)
+    monkeypatch.setattr(frontends, "get", lambda: _FE())
+    assert mod.locate_viewport(80, tag="anchor") is None
+
+    audit_db = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "audit.db")
+    conn = sqlite3.connect("file:%s?mode=ro" % audit_db, uri=True, timeout=5)
+    try:
+        funcs = [r[0] for r in conn.execute("SELECT func FROM errors").fetchall()]
+    finally:
+        conn.close()
+    assert any("viewport_anchor (no capture)" in f for f in funcs)
+
+
 def test_copy_after_session_end_never_creates_db(session, run_hook, test_env, tmp_path):
     """A click on a dead session's link must NOT create a state DB (its
     file-existence is the session-alive signal) — audited, not fatal."""
