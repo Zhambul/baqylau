@@ -509,7 +509,12 @@ def restore_to(j0):
             total += render(o, w).count("\n") + 1
     try:
         import frontends
-        return _restore(frontends.get(), win, total + 1 - h - j0)
+        fe = frontends.get()
+        ok = _restore(fe, win, total + 1 - h - j0)
+        landed = locate_viewport(w, near=j0)
+        if landed is not None and landed != j0 and abs(landed - j0) <= 400:
+            fe.scroll_window_fast(win, landed - j0)   # converge exactly
+        return ok
     except Exception:
         return False
 
@@ -603,31 +608,35 @@ def toggle_repaint(gid, j0, follow=False):
         # "random places" bug). The locate read itself came back AFTER the
         # parse, so one retry from that point is deterministic.
         landed = locate_viewport(w, near=j0)
-        if (landed is not None and landed != j0 and up > 0
-                and abs(landed - j0) <= 200):
-            # CORRECTIVE retry: scroll by the measured error, not by re-running
-            # the same absolute restore — a systematic bias (kitty scrolls
-            # VISUAL lines, this math counts logical rows, wrapped rows make
-            # them differ) reproduces identically on a re-run and never
-            # converges (observed live: landed 17 short, retried, still 17
-            # short). landed > j0 = viewport below target → scroll UP by the
-            # difference; negative goes down over the same wire. The 200-row
-            # cap keeps a residual matcher misread from being AMPLIFIED into
-            # a giant correction (a misread chased once landed 1476 off).
-            retried = True
-            try:
-                fe.scroll_window_fast(win, landed - j0)
-            except Exception:
-                pass
-            landed = locate_viewport(w, near=j0)
+        if up is not None and up > 0:
+            # CONVERGE onto j0 exactly — "in place" means ZERO rows off, a
+            # 17-row near-miss reads as "where did my expand go?". Each pass
+            # scrolls by the measured error (never by re-running the same
+            # absolute amount — a systematic bias like kitty's visual-line
+            # scroll units vs these logical rows reproduces identically and
+            # never converges). A GROSS first miss (>400) means residual
+            # trackpad momentum raced the restore itself — redo the absolute
+            # restore once, then delta-correct.
+            for i in range(3):
+                if landed is None or landed == j0:
+                    break
+                retried = True
+                try:
+                    if abs(landed - j0) > 400 and i == 0:
+                        _restore(fe, win, up)
+                    else:
+                        fe.scroll_window_fast(win, landed - j0)
+                except Exception:
+                    pass
+                landed = locate_viewport(w, near=j0)
     except Exception:
         try:
             from core import audit as A
             A.error(LOG, "toggle_scroll (view toggle)", {"gid": gid, "up": up})
         except Exception:
             pass
-    return {"up": up, "applied": applied, "dsr": dsr,
-            "landed": landed, "retried": retried, "follow": follow}
+    return {"up": up, "applied": applied, "dsr": dsr, "landed": landed,
+            "retried": retried, "follow": follow, "home": j0}
 
 
 def main():
@@ -763,7 +772,7 @@ def main():
                         # bias in the bottom math (wrapped rows).
                         h = _height()
                         if (anchor is not None and h and _LOC_ROWS
-                                and anchor >= _LOC_ROWS + 1 - h - 3):
+                                and anchor >= _LOC_ROWS + 1 - h - 1):
                             follow = True
                 VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
                 _resized = True
@@ -803,7 +812,13 @@ def main():
                 # instant leap.
                 if res.get("landed") is not None:
                     _WATCH_UNTIL = time.monotonic() + 8.0
-                    _WATCH_POS = _WATCH_HOME = res["landed"]
+                    _WATCH_POS = res["landed"]
+                    # The guard defends the INTENDED anchor, not the measured
+                    # landing — momentum in flight DURING the restore corrupts
+                    # the landing itself, and adopting it as home left the
+                    # guard defending the wrong place (observed: landed 1176
+                    # off, guard content).
+                    _WATCH_HOME = res.get("home", res["landed"])
                     _GUARD_UNTIL = time.monotonic() + 0.7
                     _GUARD_LEFT = 2
             elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
@@ -846,7 +861,7 @@ def main():
                     corrected = False
                     if (now < _GUARD_UNTIL and _GUARD_LEFT > 0
                             and _WATCH_HOME is not None
-                            and abs(j - _WATCH_HOME) > 30):
+                            and abs(j - _WATCH_HOME) > 5):
                         corrected = restore_to(_WATCH_HOME)
                         if corrected:
                             _GUARD_LEFT -= 1
@@ -866,9 +881,13 @@ def main():
                 _WATCH_UNTIL, _WATCH_POS = 0.0, None
 
         # Wait for the next tick — or an instant SIGWINCH wake (resize, or the
-        # click handler's post-toggle nudge) via the wakeup pipe.
+        # click handler's post-toggle nudge) via the wakeup pipe. While the
+        # settle guard is active, tick fast: momentum hits within ~200ms of
+        # the landing, and the sooner a displacement is caught the smaller
+        # the visible wobble.
         try:
-            if select.select([wake_r], [], [], 0.2)[0]:
+            guarding = _GUARD_UNTIL and time.monotonic() < _GUARD_UNTIL
+            if select.select([wake_r], [], [], 0.08 if guarding else 0.2)[0]:
                 os.read(wake_r, 4096)
         except Exception:
             pass

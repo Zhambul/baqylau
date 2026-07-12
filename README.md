@@ -889,9 +889,15 @@ parts:
   clicked line for the anchor — the user clicked a VISIBLE line, so the true
   viewport is near it, as a prior, not the old windowed-search constraint —
   the restore target for the verify, the previous sample for the drift
-  watch. The watch's first ~700ms is a **settle guard**: the
-  position belongs to the toggle, and any displacement >30 rows is snapped
-  back by an ABSOLUTE restore (max 2 per toggle, `corrected: true`).
+  watch. The watch's first ~700ms is a **settle guard** (sampled at
+  ~80ms): the position belongs to the toggle's INTENDED anchor — never the
+  measured landing, which momentum in flight during the restore can corrupt
+  (observed adopted 1176 rows off) — and any displacement >5 rows is
+  snapped back by an ABSOLUTE restore (max 2 per toggle, `corrected:
+  true`). Restores themselves CONVERGE: up to 3 delta passes until landed
+  == target, because "in place" means zero rows off — a 17-row near-miss
+  reads as a lost scroll position — and a first miss >400 rows (momentum
+  raced the restore) redoes the absolute restore before delta-correcting.
   What it guards against — the last unexplained jump class — is the user's
   own **residual trackpad momentum**: they flick-scroll to reach the line,
   click while the flick's momentum is still alive, the reflow rebuilds the
