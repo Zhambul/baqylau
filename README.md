@@ -875,7 +875,18 @@ parts:
   between), every toggle also arms an 8-second **drift watch**: the renderer
   re-locates the viewport each poll tick and records every movement as a
   `view-drift` row (from/to offsets + timing) — turning "it jumped and
-  nobody saw it" into a stored trajectory.
+  nobody saw it" into a stored trajectory. The watch also SELF-HEALS: a
+  movement within ~600ms of the landing is the instant-leap bug (a verified
+  landing yanked ~1000 rows in one tick — observed live at +224ms, only on
+  real mouse clicks, never reproducible via socket-driven toggles, no rc
+  actor, no repaint; the leading suspect is trackpad momentum landing after
+  the reflow) and is scrolled back once per toggle (`corrected: true` on the
+  drift row); deliberate post-click navigation (observed starting at
+  +1100ms) is never fought. Restore retries are CORRECTIVE — scroll by the
+  measured landing error rather than re-running the same absolute amount,
+  which reproduces the same miss when wrapped rows make kitty's visual-line
+  scroll units diverge from the renderer's logical row math (observed live:
+  17 short, retried, still 17 short).
 
 **Paint-time neutralization — replayed output must not execute.** The ops
 stream carries RAW command output, and the renderer replays it on EVERY

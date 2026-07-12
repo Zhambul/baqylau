@@ -348,6 +348,8 @@ _PAINTED_SIZE = None  # (w, h) of the last full frame — the spurious-WINCH gat
 _FORCE_PAINT = True  # next plain repaint must run even at an unchanged size
 _WATCH_UNTIL = 0.0   # post-toggle drift watch deadline (monotonic)
 _WATCH_POS = None    # last verified viewport offset during the watch
+_WATCH_HOME = None   # the toggle's verified landing — the self-heal target
+_WATCH_HEALED = False  # at most one self-heal correction per toggle
 
 
 def tty_setup():
@@ -564,8 +566,18 @@ def toggle_repaint(gid, j0, follow=False):
         # parse, so one retry from that point is deterministic.
         landed = locate_viewport(w)
         if landed is not None and landed != j0 and up > 0:
+            # CORRECTIVE retry: scroll by the measured error, not by re-running
+            # the same absolute restore — a systematic bias (kitty scrolls
+            # VISUAL lines, this math counts logical rows, wrapped rows make
+            # them differ) reproduces identically on a re-run and never
+            # converges (observed live: landed 17 short, retried, still 17
+            # short). landed > j0 = viewport below target → scroll UP by the
+            # difference; negative goes down over the same wire.
             retried = True
-            applied = _restore(fe, win, up)
+            try:
+                fe.scroll_window_fast(win, landed - j0)
+            except Exception:
+                pass
             landed = locate_viewport(w)
     except Exception:
         try:
@@ -578,7 +590,8 @@ def toggle_repaint(gid, j0, follow=False):
 
 
 def main():
-    global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS
+    global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS, \
+        _WATCH_HOME, _WATCH_HEALED
     if not LOG:
         return
     # Do NOT clear the ops table: it is the session's history (parked/restored
@@ -743,7 +756,8 @@ def main():
                 # instant leap.
                 if res.get("landed") is not None:
                     _WATCH_UNTIL = time.monotonic() + 8.0
-                    _WATCH_POS = res["landed"]
+                    _WATCH_POS = _WATCH_HOME = res["landed"]
+                    _WATCH_HEALED = False
             elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
                 _FORCE_PAINT = False
                 repaint()
@@ -760,19 +774,40 @@ def main():
         # record every movement (state_files `view-drift`) until the watch
         # expires. locate_viewport with the probe index is ~ms-cheap at this
         # cadence (one sample per 200ms tick, for 8s after a toggle).
+        # SELF-HEAL: a movement in the first ~600ms is the instant-leap bug
+        # (a verified landing yanked ~1000 rows within one tick, observed
+        # live at +224ms with no rc actor and no repaint) — scroll it back,
+        # once per toggle. Deliberate post-click navigation starts later
+        # (observed at +1100ms) and is never fought.
         if _WATCH_UNTIL:
-            if time.monotonic() < _WATCH_UNTIL:
+            now = time.monotonic()
+            if now < _WATCH_UNTIL:
                 j = locate_viewport(width())
                 if j is not None and _WATCH_POS is not None and j != _WATCH_POS:
+                    corrected = False
+                    if (_WATCH_UNTIL - now > 7.4 and not _WATCH_HEALED
+                            and _WATCH_HOME is not None):
+                        try:
+                            import frontends
+                            win = os.environ.get("KITTY_WINDOW_ID")
+                            if win:
+                                frontends.get().scroll_window_fast(
+                                    win, j - _WATCH_HOME)
+                                corrected = True
+                                _WATCH_HEALED = True
+                        except Exception:
+                            pass
                     try:
                         from core import audit as A
                         A.state_file(LOG, St.db_path(LOG), "view-drift",
                                      {"from": _WATCH_POS, "to": j,
-                                      "left_ms": int((_WATCH_UNTIL
-                                                      - time.monotonic()) * 1000)})
+                                      "left_ms": int((_WATCH_UNTIL - now)
+                                                     * 1000),
+                                      "corrected": corrected})
                     except Exception:
                         pass
-                if j is not None:
+                    _WATCH_POS = _WATCH_HOME if corrected else j
+                elif j is not None:
                     _WATCH_POS = j
             else:
                 _WATCH_UNTIL, _WATCH_POS = 0.0, None

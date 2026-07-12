@@ -134,6 +134,13 @@ _CTRL = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]"              # CSI
                    r"|\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)?"     # DCS/SOS/PM/APC
                    r"|\x1b[@-Z\\-_]")                          # other 2-char C1
 
+# Any ESC left over after _CTRL — a MALFORMED sequence (e.g. a truncated CSI
+# whose parameter run hits a non-CSI byte) matches none of _CTRL's branches,
+# and its raw ESC would reach the pane where the terminal parses it against
+# whatever text happens to follow. Keep only an ESC that opens one of the two
+# sanctioned forms (checked again by `keep`); drop every other ESC byte.
+_ESC_LEFT = re.compile(r"\x1b(?!\[[0-9;:]*m|\]8;|\\)")  # \\ = OSC 8's own ST
+
 
 def neutralize(s):
     """Strip executable terminal control sequences from op text at paint time,
@@ -147,7 +154,7 @@ def neutralize(s):
         if seq.startswith("\x1b]8;"):
             return seq                        # OSC 8 hyperlink (ours)
         return ""
-    return _CTRL.sub(keep, s)
+    return _ESC_LEFT.sub("", _CTRL.sub(keep, s))
 
 
 def hyperlink(url, text):
