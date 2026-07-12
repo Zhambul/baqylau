@@ -346,6 +346,8 @@ _LAST_CAP0 = None    # first line of locate_viewport's last capture (audit evide
 _LOC_ROWS = None     # rendered row count from locate_viewport's last successful run
 _PAINTED_SIZE = None  # (w, h) of the last full frame — the spurious-WINCH gate
 _FORCE_PAINT = True  # next plain repaint must run even at an unchanged size
+_WATCH_UNTIL = 0.0   # post-toggle drift watch deadline (monotonic)
+_WATCH_POS = None    # last verified viewport offset during the watch
 
 
 def tty_setup():
@@ -576,7 +578,7 @@ def toggle_repaint(gid, j0, follow=False):
 
 
 def main():
-    global _resized, _FORCE_PAINT
+    global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS
     if not LOG:
         return
     # Do NOT clear the ops table: it is the session's history (parked/restored
@@ -732,6 +734,16 @@ def main():
                 except Exception:
                     pass
                 toggled, t_idx, anchor, follow = None, None, None, False
+                # Arm the post-toggle DRIFT WATCH: a toggle can verify its
+                # landing and the pane still end up somewhere else moments
+                # later ("transported to the top", observed live, with zero
+                # audit rows in between). For the next few seconds every
+                # viewport movement is recorded with its offset and timing —
+                # a user wheel-scroll shows as gradual steps, a bug as one
+                # instant leap.
+                if res.get("landed") is not None:
+                    _WATCH_UNTIL = time.monotonic() + 8.0
+                    _WATCH_POS = res["landed"]
             elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
                 _FORCE_PAINT = False
                 repaint()
@@ -743,6 +755,27 @@ def main():
                 _audit_paint("skip", width(), "")
         elif new:
             paint_new(new)
+
+        # Post-toggle drift watch: sample where the viewport actually is and
+        # record every movement (state_files `view-drift`) until the watch
+        # expires. locate_viewport with the probe index is ~ms-cheap at this
+        # cadence (one sample per 200ms tick, for 8s after a toggle).
+        if _WATCH_UNTIL:
+            if time.monotonic() < _WATCH_UNTIL:
+                j = locate_viewport(width())
+                if j is not None and _WATCH_POS is not None and j != _WATCH_POS:
+                    try:
+                        from core import audit as A
+                        A.state_file(LOG, St.db_path(LOG), "view-drift",
+                                     {"from": _WATCH_POS, "to": j,
+                                      "left_ms": int((_WATCH_UNTIL
+                                                      - time.monotonic()) * 1000)})
+                    except Exception:
+                        pass
+                if j is not None:
+                    _WATCH_POS = j
+            else:
+                _WATCH_UNTIL, _WATCH_POS = 0.0, None
 
         # Wait for the next tick — or an instant SIGWINCH wake (resize, or the
         # click handler's post-toggle nudge) via the wakeup pipe.

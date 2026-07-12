@@ -870,7 +870,12 @@ parts:
   removed); an off-by-one in the restore amount (the repaint's trailing
   newline leaves the cursor on an extra row, so the parked frame top is
   `total+1-h`, verified against `get-text`); and the poisoned-output replay
-  (next paragraph).
+  (next paragraph). Because a toggle can verify its landing and the pane
+  still end up elsewhere MOMENTS later (reported live, zero audit rows in
+  between), every toggle also arms an 8-second **drift watch**: the renderer
+  re-locates the viewport each poll tick and records every movement as a
+  `view-drift` row (from/to offsets + timing) — turning "it jumped and
+  nobody saw it" into a stored trajectory.
 
 **Paint-time neutralization — replayed output must not execute.** The ops
 stream carries RAW command output, and the renderer replays it on EVERY
