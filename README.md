@@ -875,14 +875,25 @@ parts:
   between), every toggle also arms an 8-second **drift watch**: the renderer
   re-locates the viewport each poll tick and records every movement as a
   `view-drift` row (from/to offsets + timing) — turning "it jumped and
-  nobody saw it" into a stored trajectory. The watch also SELF-HEALS: a
-  movement within ~600ms of the landing is the instant-leap bug (a verified
-  landing yanked ~1000 rows in one tick — observed live at +224ms, only on
-  real mouse clicks, never reproducible via socket-driven toggles, no rc
-  actor, no repaint; the leading suspect is trackpad momentum landing after
-  the reflow) and is scrolled back once per toggle (`corrected: true` on the
-  drift row); deliberate post-click navigation (observed starting at
-  +1100ms) is never fought. Restore retries are CORRECTIVE — scroll by the
+  nobody saw it" into a stored trajectory. The trajectory data cracked the
+  deepest bug in this feature: **twin content**. A session's mirror fills
+  with near-identical blocks (many expanded views of the same file's
+  regions, repeated command outputs), and a global text match then scores
+  EQUALLY at multiple offsets — the anchor picked the wrong copy, the
+  restore teleported there, and the verify CONFIRMED the same wrong copy: an
+  audit-perfect row for a real user-visible jump ("hide jumps to a random
+  location", repeatedly reported while every row looked healthy; the
+  matcher's misread signature in drift rows is a physically impossible
+  there-and-back bounce, 4808→1270→4880 in 400ms). `locate_viewport` now
+  tie-breaks near-best matches toward the caller's prior (`near`): the
+  clicked line for the anchor — the user clicked a VISIBLE line, so the true
+  viewport is near it, as a prior, not the old windowed-search constraint —
+  the restore target for the verify, the previous sample for the drift
+  watch. The watch also SELF-HEALS: the SAME divergent position on two
+  consecutive samples within ~1.2s of the landing is a real leap and is
+  scrolled back, once per toggle (`corrected: true`); a misread bounces back
+  by the next sample and never confirms, deliberate navigation keeps moving
+  and never confirms either (observed starting at +1100ms). Restore retries are CORRECTIVE — scroll by the
   measured landing error rather than re-running the same absolute amount,
   which reproduces the same miss when wrapped rows make kitty's visual-line
   scroll units diverge from the renderer's logical row math (observed live:

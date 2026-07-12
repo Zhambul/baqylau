@@ -458,6 +458,36 @@ def test_toggle_repaint_pins_top_line(session, test_env, monkeypatch):
     assert calls[-1] == total + 1 - h - j0
 
 
+def test_viewport_anchor_disambiguates_twin_content(session, test_env,
+                                                    monkeypatch):
+    """A buffer with near-identical repeated blocks (many expanded views of
+    the same file) matches the capture at MULTIPLE offsets — the anchor must
+    pick the copy nearest the `near` prior (the clicked line / restore
+    target), not the first best-scorer, or restores teleport to the wrong
+    twin while the verify confirms that same wrong twin (audit-perfect,
+    user-visible jump — observed live)."""
+    s = session.make()
+    mod = _load_mirror(s.log)
+    twin = [{"t": "line", "s": "twin row %02d" % i} for i in range(30)]
+    mod.OPS.extend(twin)                                   # copy A: rows 1..30
+    mod.OPS.extend({"t": "line", "s": "middle %03d" % i} for i in range(50))
+    mod.OPS.extend(dict(o) for o in twin)                  # copy B: rows 81..110
+    mod.OPS.extend({"t": "line", "s": "tail %03d" % i} for i in range(30))
+
+    captured = "\n".join("twin row %02d" % i for i in range(24))
+
+    class _FE:
+        def get_text(self, win, extent="screen"):
+            return captured
+    import frontends
+    monkeypatch.setenv("KITTY_WINDOW_ID", "42")
+    monkeypatch.setattr(frontends, "get", lambda: _FE())
+
+    assert mod.locate_viewport(80) == 1               # no prior: first copy
+    assert mod.locate_viewport(80, near=85) == 81     # prior picks copy B
+    assert mod.locate_viewport(80, near=10) == 1      # prior picks copy A
+
+
 def test_toggle_repaint_follow_mode_targets_new_bottom(session, test_env,
                                                        monkeypatch):
     """follow=True (the viewport was AT the bottom before the click) restores

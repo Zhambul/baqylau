@@ -350,6 +350,7 @@ _WATCH_UNTIL = 0.0   # post-toggle drift watch deadline (monotonic)
 _WATCH_POS = None    # last verified viewport offset during the watch
 _WATCH_HOME = None   # the toggle's verified landing — the self-heal target
 _WATCH_HEALED = False  # at most one self-heal correction per toggle
+_WATCH_CAND = None   # divergent position awaiting its second confirmation
 
 
 def tty_setup():
@@ -399,7 +400,7 @@ def await_dsr(timeout=1.0):
             return True
 
 
-def locate_viewport(w, tag=None):
+def locate_viewport(w, tag=None, near=None):
     """Where the viewport ACTUALLY is: match the pane's visible text (raw-
     socket get-text) against the current rendered rows — a GLOBAL search.
     This is both the pre-toggle anchor and the post-restore verifier. It
@@ -464,16 +465,31 @@ def locate_viewport(w, tag=None):
                 break
     if not cands:
         cands = range(max(1, len(rows) - len(cap) + 1))
-    best, best_score = None, 0
+    scored = []
     for j in cands:
         sc = sum(1 for a, b in zip(cap, rows[j:j + len(cap)]) if a == b)
-        if sc > best_score:
-            best, best_score = j, sc
-    if best is None or best_score < max(3, len(cap) // 2):
+        scored.append((sc, j))
+    best_score = max((sc for sc, _ in scored), default=0)
+    if best_score < max(3, len(cap) // 2):
         return _bail("no match", {"cap": len(cap), "rows": len(rows),
-                                  "best": best, "score": best_score,
+                                  "score": best_score,
                                   "cap0": cap[0][:60]})
-    return best
+    # TWIN DISAMBIGUATION: a buffer full of near-identical content (many
+    # expanded views of the same file, repeated command outputs) makes the
+    # capture match at MULTIPLE offsets — and picking the first best-scorer
+    # teleported restores to the wrong copy while the verify then confirmed
+    # that same wrong copy (a perfect-looking audit row for a real
+    # user-visible jump — the "hide jumps to a random location" bug, and the
+    # impossible 3600-row there-and-back "bounces" in drift rows). Every
+    # caller has a natural prior (`near`): the clicked line for the anchor,
+    # the restore target for the verify, the previous sample for the drift
+    # watch — among near-best matches, take the one closest to it.
+    ties = [j for sc, j in scored if sc >= best_score - 1]
+    if near is not None:
+        return min(ties, key=lambda j: abs(j - near))
+    for sc, j in scored:                     # no prior: first best match
+        if sc == best_score:
+            return j
 
 
 def _restore(fe, win, up):
@@ -564,21 +580,24 @@ def toggle_repaint(gid, j0, follow=False):
         # clamped against a partial buffer (landed near the top — the
         # "random places" bug). The locate read itself came back AFTER the
         # parse, so one retry from that point is deterministic.
-        landed = locate_viewport(w)
-        if landed is not None and landed != j0 and up > 0:
+        landed = locate_viewport(w, near=j0)
+        if (landed is not None and landed != j0 and up > 0
+                and abs(landed - j0) <= 200):
             # CORRECTIVE retry: scroll by the measured error, not by re-running
             # the same absolute restore — a systematic bias (kitty scrolls
             # VISUAL lines, this math counts logical rows, wrapped rows make
             # them differ) reproduces identically on a re-run and never
             # converges (observed live: landed 17 short, retried, still 17
             # short). landed > j0 = viewport below target → scroll UP by the
-            # difference; negative goes down over the same wire.
+            # difference; negative goes down over the same wire. The 200-row
+            # cap keeps a residual matcher misread from being AMPLIFIED into
+            # a giant correction (a misread chased once landed 1476 off).
             retried = True
             try:
                 fe.scroll_window_fast(win, landed - j0)
             except Exception:
                 pass
-            landed = locate_viewport(w)
+            landed = locate_viewport(w, near=j0)
     except Exception:
         try:
             from core import audit as A
@@ -591,7 +610,7 @@ def toggle_repaint(gid, j0, follow=False):
 
 def main():
     global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS, \
-        _WATCH_HOME, _WATCH_HEALED
+        _WATCH_HOME, _WATCH_HEALED, _WATCH_CAND
     if not LOG:
         return
     # Do NOT clear the ops table: it is the session's history (parked/restored
@@ -708,7 +727,13 @@ def main():
                     trim_to_budget(width())
                     _, t_idx, _ = measure(toggled)
                     if t_idx is not None:
-                        anchor = locate_viewport(width(), tag="anchor")
+                        # near=t_idx: the user clicked a VISIBLE line, so the
+                        # true viewport is near it — a tie-breaking prior
+                        # among twin matches, NOT a search constraint (the
+                        # old windowed search that mistook this for a hard
+                        # assumption missed real viewports).
+                        anchor = locate_viewport(width(), tag="anchor",
+                                                 near=t_idx)
                         # An at-bottom viewport follows the live tail; pinning
                         # it to an absolute offset would silently detach it —
                         # so the restore target becomes the NEW bottom. The
@@ -757,7 +782,7 @@ def main():
                 if res.get("landed") is not None:
                     _WATCH_UNTIL = time.monotonic() + 8.0
                     _WATCH_POS = _WATCH_HOME = res["landed"]
-                    _WATCH_HEALED = False
+                    _WATCH_HEALED, _WATCH_CAND = False, None
             elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
                 _FORCE_PAINT = False
                 repaint()
@@ -782,11 +807,20 @@ def main():
         if _WATCH_UNTIL:
             now = time.monotonic()
             if now < _WATCH_UNTIL:
-                j = locate_viewport(width())
-                if j is not None and _WATCH_POS is not None and j != _WATCH_POS:
+                j = locate_viewport(width(), near=_WATCH_POS)
+                if j is not None:
+                    # Self-heal only a CONFIRMED leap away from the landing:
+                    # the SAME divergent position on two consecutive samples,
+                    # within the first ~1.2s, once per toggle. A matcher
+                    # misread bounces back by the next sample (observed:
+                    # 4808→1270→4880) and must never be chased — a
+                    # correction toward a phantom IS the jump it is meant to
+                    # prevent. Deliberate navigation starts later (observed
+                    # +1100ms) and keeps moving, so it never confirms either.
                     corrected = False
-                    if (_WATCH_UNTIL - now > 7.4 and not _WATCH_HEALED
-                            and _WATCH_HOME is not None):
+                    if (j != _WATCH_HOME and _WATCH_HOME is not None
+                            and not _WATCH_HEALED and j == _WATCH_CAND
+                            and _WATCH_UNTIL - now > 6.8):
                         try:
                             import frontends
                             win = os.environ.get("KITTY_WINDOW_ID")
@@ -797,20 +831,21 @@ def main():
                                 _WATCH_HEALED = True
                         except Exception:
                             pass
-                    try:
-                        from core import audit as A
-                        A.state_file(LOG, St.db_path(LOG), "view-drift",
-                                     {"from": _WATCH_POS, "to": j,
-                                      "left_ms": int((_WATCH_UNTIL - now)
-                                                     * 1000),
-                                      "corrected": corrected})
-                    except Exception:
-                        pass
+                    if corrected or (_WATCH_POS is not None
+                                     and j != _WATCH_POS):
+                        try:
+                            from core import audit as A
+                            A.state_file(LOG, St.db_path(LOG), "view-drift",
+                                         {"from": _WATCH_POS, "to": j,
+                                          "left_ms": int((_WATCH_UNTIL - now)
+                                                         * 1000),
+                                          "corrected": corrected})
+                        except Exception:
+                            pass
+                    _WATCH_CAND = j if j != _WATCH_HOME else None
                     _WATCH_POS = _WATCH_HOME if corrected else j
-                elif j is not None:
-                    _WATCH_POS = j
             else:
-                _WATCH_UNTIL, _WATCH_POS = 0.0, None
+                _WATCH_UNTIL, _WATCH_POS, _WATCH_CAND = 0.0, None, None
 
         # Wait for the next tick — or an instant SIGWINCH wake (resize, or the
         # click handler's post-toggle nudge) via the wakeup pipe.
