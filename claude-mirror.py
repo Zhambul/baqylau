@@ -300,54 +300,6 @@ def measure(gid):
     return pos, idx, acc
 
 
-def viewport_anchor(idx):
-    """The viewport's top line as an OFFSET into the rendered content,
-    recovered before EVERY toggle by matching the pane's currently VISIBLE
-    text (`kitten @ get-text --extent screen` — verified to return the
-    scrolled-to viewport, not the live screen) against the pre-toggle rendered
-    rows. The clicked line pins the search: its offset `idx` must have been
-    visible to be clicked, so the top is one of the rows in [idx-cap+1, idx].
-    Everything ABOVE the clicked line is unchanged by the toggle, so this
-    offset survives the reflow — toggle_scroll uses it to keep the line at the
-    viewport row it already occupied. None (degrade to line-at-top) when
-    anchorless, capture fails, or nothing matches confidently."""
-    win = os.environ.get("KITTY_WINDOW_ID")
-    if not win:
-        return None
-    try:
-        import frontends
-        txt = frontends.get().get_text(win)
-    except Exception:
-        txt = None
-        try:
-            from core import audit as A
-            A.error(LOG, "viewport_anchor (get-text)")
-        except Exception:
-            pass
-    if not txt:
-        return None
-    cap = [l.rstrip() for l in txt.split("\n")]
-    while cap and not cap[-1]:
-        cap.pop()
-    if not cap:
-        return None
-    w = width()
-    rows = [R.strip_ansi(BANNER).rstrip()]
-    for op in OPS:
-        for o in expanded(op):
-            rows.extend(r.rstrip() for r in
-                        R.strip_ansi(render(o, w)).split("\n"))
-    lo, hi = max(0, idx - len(cap) + 1), min(idx, max(0, len(rows) - 1))
-    best, best_score = None, 0
-    for j in range(lo, hi + 1):
-        score = sum(1 for a, b in zip(cap, rows[j:j + len(cap)]) if a == b)
-        if score > best_score:
-            best, best_score = j, score
-    if best is None or best_score < max(3, len(cap) // 2):
-        return None
-    return best
-
-
 _TTY_OK = False      # stdin switched to no-echo/non-canonical (DSR handshake usable)
 
 
@@ -372,7 +324,7 @@ def tty_setup():
         pass
 
 
-def await_dsr(timeout=0.2):
+def await_dsr(timeout=1.0):
     """Wait for kitty's cursor-position report (the reply to the \\033[6n we
     append to the toggle frame). Its arrival PROVES kitty has parsed every
     byte written before it — the ordering handshake that lets the scroll
@@ -396,6 +348,86 @@ def await_dsr(timeout=0.2):
             return False
         if b"R" in chunk:
             return True
+
+
+def locate_viewport(w, tag=None):
+    """Where the viewport ACTUALLY is: match the pane's visible text (raw-
+    socket get-text) against the current rendered rows — a GLOBAL search.
+    This is both the pre-toggle anchor and the post-restore verifier. It
+    replaced a click-pinned window search ([idx-h+1, idx], on the assumption
+    the clicked line must be visible): a confident global match is stronger
+    evidence than that assumption, and the window version missed real
+    viewports (observed live — score 1/58 inside the window while the global
+    match was 58/58 elsewhere), silently degrading to line-at-top jumps. A
+    probe row (the first distinctive visible line) narrows the candidate set
+    so this stays ~O(matches) instead of O(rows·h); full scan is the
+    fallback. None (audited when `tag` names the caller) when anchorless or
+    nothing matches confidently."""
+    win = os.environ.get("KITTY_WINDOW_ID")
+    if not win:
+        return None
+    try:
+        import frontends
+        txt = frontends.get().get_text(win)
+    except Exception:
+        return None
+    if not txt:
+        return None
+    cap = [l.rstrip() for l in txt.split("\n")]
+    while cap and not cap[-1]:
+        cap.pop()
+    if not cap:
+        return None
+    rows = [R.strip_ansi(BANNER).rstrip()]
+    for op in OPS:
+        for o in expanded(op):
+            rows.extend(r.rstrip() for r in
+                        R.strip_ansi(render(o, w)).split("\n"))
+    # Candidate offsets from a distinctive probe row; full scan as fallback.
+    cands = None
+    for k, line in enumerate(cap[:12]):
+        if len(line) > 8:
+            cands = [j - k for j, r in enumerate(rows) if r == line and j >= k]
+            if cands:
+                break
+    if not cands:
+        cands = range(max(1, len(rows) - len(cap) + 1))
+    best, best_score = None, 0
+    for j in cands:
+        sc = sum(1 for a, b in zip(cap, rows[j:j + len(cap)]) if a == b)
+        if sc > best_score:
+            best, best_score = j, sc
+    if best is None or best_score < max(3, len(cap) // 2):
+        if tag:
+            # A failed anchor silently degrades the restore to line-at-top —
+            # that MUST leave evidence (this exact silence hid a live bug).
+            try:
+                from core import audit as A
+                A.error(LOG, "viewport_anchor (no match)",
+                        {"tag": tag, "cap": len(cap), "rows": len(rows),
+                         "best": best, "score": best_score,
+                         "cap0": cap[0][:60]})
+            except Exception:
+                pass
+        return None
+    return best
+
+
+def _restore(fe, win, up):
+    """The absolute restore: scroll to END (deterministic base), then up.
+    True when the up-scroll (or the end, for up<=0) was delivered."""
+    try:
+        ok = bool(fe.scroll_window_end(win))
+    except Exception:
+        ok = False
+    if up <= 0:
+        return ok
+    try:
+        if fe.scroll_window_fast(win, up):
+            return True
+    except Exception:
+        pass
+    return fe.scroll_window(win, up) == 0
 
 
 def toggle_repaint(gid, j0):
@@ -423,7 +455,10 @@ def toggle_repaint(gid, j0):
     bug). So after the parse handshake the restore is scroll-to-END (a
     deterministic base) then up by (total+1)-h-j0 — the +1 is the cursor row
     the final newline leaves; up<=0 means the bottom IS the target frame.
-    Returns (up, applied) for the caller's view-reflow audit row."""
+    The landing is then VERIFIED (locate_viewport) and the restore retried
+    once on a miss — a DSR timeout means the scrolls raced the frame parse.
+    Returns the result dict merged into the caller's view-reflow audit row
+    (up / applied / dsr / landed / retried)."""
     win = os.environ.get("KITTY_WINDOW_ID")
     w = width()
     body = frame_bytes(w)
@@ -443,37 +478,36 @@ def toggle_repaint(gid, j0):
             sys.stdout.write(body); sys.stdout.flush()
         except Exception:
             pass
-        return up, False
+        return {"up": up, "applied": False}
     try:
         sys.stdout.write(body + "\033[6n"); sys.stdout.flush()
     except Exception:
-        return up, False
+        return {"up": up, "applied": False}
     _audit_paint("toggle", w, body)
-    await_dsr()
-    applied = False
+    dsr = await_dsr(1.0)
+    applied, landed, retried = False, None, False
     try:
         import frontends
         fe = frontends.get()
-        try:
-            applied = bool(fe.scroll_window_end(win))
-        except Exception:
-            applied = False
-        if up > 0:
-            ok = False
-            try:
-                ok = bool(fe.scroll_window_fast(win, up))
-            except Exception:
-                ok = False
-            if not ok:
-                ok = fe.scroll_window(win, up) == 0
-            applied = ok
+        applied = _restore(fe, win, up)
+        # Verify-and-retry: where did the viewport actually land? A DSR
+        # timeout means the scrolls raced kitty's parse of the frame and
+        # clamped against a partial buffer (landed near the top — the
+        # "random places" bug). The locate read itself came back AFTER the
+        # parse, so one retry from that point is deterministic.
+        landed = locate_viewport(w)
+        if landed is not None and landed != j0 and up > 0:
+            retried = True
+            applied = _restore(fe, win, up)
+            landed = locate_viewport(w)
     except Exception:
         try:
             from core import audit as A
             A.error(LOG, "toggle_scroll (view toggle)", {"gid": gid, "up": up})
         except Exception:
             pass
-    return up, applied
+    return {"up": up, "applied": applied, "dsr": dsr,
+            "landed": landed, "retried": retried}
 
 
 def main():
@@ -576,29 +610,30 @@ def main():
                 if toggled:
                     _, t_idx, _ = measure(toggled)
                     if t_idx is not None:
-                        anchor = viewport_anchor(t_idx)
+                        anchor = locate_viewport(width(), tag="anchor")
                 VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
                 _resized = True
 
         if _resized:                         # startup / resize / toggle -> reflow
             _resized = False
             if toggled:
-                up, applied = (None, False)
+                res = {}
                 if t_idx is not None:
                     # anchor None (capture failed / no match) degrades to the
                     # clicked-line-at-top frame: j0 = the line's own offset.
-                    up, applied = toggle_repaint(
+                    res = toggle_repaint(
                         toggled, anchor if anchor is not None else t_idx)
                 else:
                     repaint()
                 # The one row that makes "the view jumped" diagnosable: what
-                # the plan saw and what the scroll did.
+                # the plan saw, what the scroll did, and where the viewport
+                # VERIFIABLY landed (plus whether the DSR handshake made it
+                # and whether the restore had to be retried).
                 try:
                     from core import audit as A
                     A.state_file(LOG, St.db_path(LOG), "view-reflow",
-                                 {"gid": toggled, "idx": t_idx,
-                                  "anchor": anchor, "up": up,
-                                  "applied": applied})
+                                 dict({"gid": toggled, "idx": t_idx,
+                                       "anchor": anchor}, **res))
                 except Exception:
                     pass
                 toggled, t_idx, anchor = None, None, None

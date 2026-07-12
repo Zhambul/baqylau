@@ -792,14 +792,21 @@ parts:
   the set it captures the pane's visible text (`Frontend.get_text` → `kitten
   @ get-text --extent screen`, which returns the *scrolled-to viewport*,
   verified live — not the live screen) and matches it against the pre-toggle
-  rendered rows to recover the viewport's top-line offset (`viewport_anchor`
-  — the clicked line pins the search to the screenful above it, and
-  everything above the line is unchanged by the toggle, so the offset
-  survives the reflow). After repainting, `toggle_scroll` scrolls back
-  (`Frontend.scroll_window`, `kitten @ scroll-window N-`) by the **top-line
-  anchor rule**: the viewport's top line is put back exactly where it was —
-  expand or collapse, any block size, the frame simply does not move; the
-  toggle only changes what renders below the clicked line inside it. (A
+  rendered rows to recover the viewport's top-line offset (`locate_viewport`
+  — a GLOBAL text match, sped up by a distinctive-probe-row candidate index;
+  an earlier version pinned the search to the screenful above the clicked
+  line on the assumption "the clicked line must be visible", but a confident
+  global match is stronger evidence than that assumption, and the windowed
+  version missed real viewports — score 1/58 in-window vs 58/58 global,
+  observed live — silently degrading to line-at-top jumps). After
+  repainting, the restore scrolls back by the **top-line anchor rule**: the
+  viewport's top line is put back exactly where it was — expand or collapse,
+  any block size, the frame simply does not move; the toggle only changes
+  what renders below the clicked line inside it. The SAME matcher then
+  VERIFIES where the viewport actually landed, retrying the restore once on
+  a miss (a DSR-handshake timeout means the scrolls raced kitty's parse; the
+  verify read itself serializes the retry) — landed/dsr/retried all recorded
+  on the `view-reflow` audit row. (A
   fold-style rule that raised the frame to reveal a tall block was tried and
   rejected — any frame movement at all reads as a jump; the user scrolls
   down themselves if they want the rest of the block.) If the buffer bottom

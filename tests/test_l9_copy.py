@@ -376,8 +376,8 @@ def _load_mirror(log, width=80):
 
 
 def test_viewport_anchor_restores_scroll_offset(session, test_env, monkeypatch):
-    """A scrollback click: viewport_anchor recovers the viewport's top-line
-    offset by matching the captured visible text against the rendered rows —
+    """locate_viewport recovers the viewport's top-line offset by matching the
+    captured visible text against the rendered rows (global search) — the
     exact-restore ingredient for 'expand in place without moving my scroll'."""
     s = session.make()
     mod = _load_mirror(s.log)
@@ -404,11 +404,11 @@ def test_viewport_anchor_restores_scroll_offset(session, test_env, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "42")
     monkeypatch.setattr(frontends, "get", lambda: _FE())
 
-    assert mod.viewport_anchor(idx) == j
+    assert mod.locate_viewport(80) == j
     # garbage capture -> no confident match -> None (fallback: line-at-top)
     monkeypatch.setattr(_FE, "get_text",
                         lambda self, win, extent="screen": "zzz\nyyy\nxxx")
-    assert mod.viewport_anchor(idx) is None
+    assert mod.locate_viewport(80) is None
 
 
 def test_toggle_repaint_pins_top_line(session, test_env, monkeypatch):
