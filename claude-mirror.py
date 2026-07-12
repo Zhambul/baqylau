@@ -348,9 +348,10 @@ _PAINTED_SIZE = None  # (w, h) of the last full frame — the spurious-WINCH gat
 _FORCE_PAINT = True  # next plain repaint must run even at an unchanged size
 _WATCH_UNTIL = 0.0   # post-toggle drift watch deadline (monotonic)
 _WATCH_POS = None    # last verified viewport offset during the watch
-_WATCH_HOME = None   # the toggle's verified landing — the self-heal target
-_WATCH_HEALED = False  # at most one self-heal correction per toggle
-_WATCH_CAND = None   # divergent position awaiting its second confirmation
+_WATCH_HOME = None   # the toggle's verified landing — the settle-guard target
+_GUARD_UNTIL = 0.0   # settle-guard deadline (monotonic) — the pane's position
+#                      belongs to the TOGGLE until then, not to input
+_GUARD_LEFT = 0      # settle-guard corrections remaining for this toggle
 
 
 def tty_setup():
@@ -492,6 +493,27 @@ def locate_viewport(w, tag=None, near=None):
             return j
 
 
+def restore_to(j0):
+    """ABSOLUTE re-restore of the viewport top to row `j0`, computed against
+    the CURRENT content (appends may have grown the doc since the toggle).
+    Used by the settle guard — a relative correction against a moving target
+    (trackpad momentum mid-flight) amplifies instead of fixing."""
+    win = os.environ.get("KITTY_WINDOW_ID")
+    h = _height()
+    if not win or h is None:
+        return False
+    w = width()
+    total = 1
+    for op in OPS:
+        for o in expanded(op):
+            total += render(o, w).count("\n") + 1
+    try:
+        import frontends
+        return _restore(frontends.get(), win, total + 1 - h - j0)
+    except Exception:
+        return False
+
+
 def _restore(fe, win, up):
     """The absolute restore: scroll to END (deterministic base), then up.
     True when the up-scroll (or the end, for up<=0) was delivered."""
@@ -610,7 +632,7 @@ def toggle_repaint(gid, j0, follow=False):
 
 def main():
     global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS, \
-        _WATCH_HOME, _WATCH_HEALED, _WATCH_CAND
+        _WATCH_HOME, _GUARD_UNTIL, _GUARD_LEFT
     if not LOG:
         return
     # Do NOT clear the ops table: it is the session's history (parked/restored
@@ -782,7 +804,8 @@ def main():
                 if res.get("landed") is not None:
                     _WATCH_UNTIL = time.monotonic() + 8.0
                     _WATCH_POS = _WATCH_HOME = res["landed"]
-                    _WATCH_HEALED, _WATCH_CAND = False, None
+                    _GUARD_UNTIL = time.monotonic() + 0.7
+                    _GUARD_LEFT = 2
             elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
                 _FORCE_PAINT = False
                 repaint()
@@ -809,28 +832,24 @@ def main():
             if now < _WATCH_UNTIL:
                 j = locate_viewport(width(), near=_WATCH_POS)
                 if j is not None:
-                    # Self-heal only a CONFIRMED leap away from the landing:
-                    # the SAME divergent position on two consecutive samples,
-                    # within the first ~1.2s, once per toggle. A matcher
-                    # misread bounces back by the next sample (observed:
-                    # 4808→1270→4880) and must never be chased — a
-                    # correction toward a phantom IS the jump it is meant to
-                    # prevent. Deliberate navigation starts later (observed
-                    # +1100ms) and keeps moving, so it never confirms either.
+                    # SETTLE GUARD: for the first ~700ms after a verified
+                    # landing the pane's position belongs to the TOGGLE, not
+                    # to input — the user's residual trackpad MOMENTUM (they
+                    # flick-scrolled to reach the line, clicked, and the
+                    # leftover momentum applies on top of the fresh restore)
+                    # is what every "hide jumped me ~1000 rows" trace shows:
+                    # a huge displacement within one or two ticks of the
+                    # landing. Deliberate post-click navigation starts later
+                    # (observed at +1100ms) and is never fought. Corrections
+                    # are ABSOLUTE (recomputed against current content) —
+                    # a relative fix against a still-moving target amplifies.
                     corrected = False
-                    if (j != _WATCH_HOME and _WATCH_HOME is not None
-                            and not _WATCH_HEALED and j == _WATCH_CAND
-                            and _WATCH_UNTIL - now > 6.8):
-                        try:
-                            import frontends
-                            win = os.environ.get("KITTY_WINDOW_ID")
-                            if win:
-                                frontends.get().scroll_window_fast(
-                                    win, j - _WATCH_HOME)
-                                corrected = True
-                                _WATCH_HEALED = True
-                        except Exception:
-                            pass
+                    if (now < _GUARD_UNTIL and _GUARD_LEFT > 0
+                            and _WATCH_HOME is not None
+                            and abs(j - _WATCH_HOME) > 30):
+                        corrected = restore_to(_WATCH_HOME)
+                        if corrected:
+                            _GUARD_LEFT -= 1
                     if corrected or (_WATCH_POS is not None
                                      and j != _WATCH_POS):
                         try:
@@ -842,10 +861,9 @@ def main():
                                           "corrected": corrected})
                         except Exception:
                             pass
-                    _WATCH_CAND = j if j != _WATCH_HOME else None
                     _WATCH_POS = _WATCH_HOME if corrected else j
             else:
-                _WATCH_UNTIL, _WATCH_POS, _WATCH_CAND = 0.0, None, None
+                _WATCH_UNTIL, _WATCH_POS = 0.0, None
 
         # Wait for the next tick — or an instant SIGWINCH wake (resize, or the
         # click handler's post-toggle nudge) via the wakeup pipe.

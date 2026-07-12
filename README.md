@@ -889,11 +889,22 @@ parts:
   clicked line for the anchor — the user clicked a VISIBLE line, so the true
   viewport is near it, as a prior, not the old windowed-search constraint —
   the restore target for the verify, the previous sample for the drift
-  watch. The watch also SELF-HEALS: the SAME divergent position on two
-  consecutive samples within ~1.2s of the landing is a real leap and is
-  scrolled back, once per toggle (`corrected: true`); a misread bounces back
-  by the next sample and never confirms, deliberate navigation keeps moving
-  and never confirms either (observed starting at +1100ms). Restore retries are CORRECTIVE — scroll by the
+  watch. The watch's first ~700ms is a **settle guard**: the
+  position belongs to the toggle, and any displacement >30 rows is snapped
+  back by an ABSOLUTE restore (max 2 per toggle, `corrected: true`).
+  What it guards against — the last unexplained jump class — is the user's
+  own **residual trackpad momentum**: they flick-scroll to reach the line,
+  click while the flick's momentum is still alive, the reflow rebuilds the
+  buffer and restores the anchor, and the leftover momentum then applies on
+  top of the fresh restore ("I clicked hide and it jumped 1000 rows").
+  Diagnosed by elimination: kitty's socket scroll measured EXACT (12/12 in a
+  sterile window), batch writes while scrolled leave the viewport stable,
+  reflow-free displacement bursts appear only with a human at the trackpad,
+  and the drift trajectories show classic momentum decay (149→131→121→75
+  rows/tick). Deliberate post-click navigation (observed starting at
+  +1100ms) is outside the guard window and never fought; corrections are
+  absolute because a relative fix against a still-moving target amplifies
+  (observed: a chased phantom landed 1476 rows off). Restore retries are CORRECTIVE — scroll by the
   measured landing error rather than re-running the same absolute amount,
   which reproduces the same miss when wrapped rows make kitty's visual-line
   scroll units diverge from the renderer's logical row math (observed live:
