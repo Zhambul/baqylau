@@ -1854,11 +1854,22 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   `claude_scorebar` to the new sid and writes the `sessions` audit row the fork
   never got. Guards, each closing a mis-adoption path: an existing DB or `*.keep`
   = a known session (also the one-`stat` fast path every normal event takes); a
-  sid with its **own** SessionStart (headless `claude -p`, agents-view agent
+  sid with its **own** start (headless `claude -p`, agents-view agent
   sessions — both skip the pane lifecycle so they have no DB either) is a genuine
   new session, never a fork; the note only captures while the predecessor's DB is
   still **live**; and the take-once delete makes concurrent hook processes elect
-  exactly one adopter. Audited as a `state_files` `adopt` row (`from`/`moved`/
+  exactly one adopter. That "own start" mark is set on **both** `SessionStart`
+  **and the earlier-firing `InstructionsLoaded`** — because `InstructionsLoaded`
+  precedes `SessionStart` for a real new session but is *never* emitted by a fork
+  (a resumed/backgrounded continuation already has its instructions). Marking only
+  on SessionStart left a TOCTOU: a new session's pre-SessionStart
+  `InstructionsLoaded` reached the adopter with `sid_seen` still false and, if a
+  *concurrent* independent session shared the cwd, consumed **its** note and stole
+  its panes (live 2026-07-13: `507fc4c8`'s InstructionsLoaded adopted the unrelated
+  live `db081e65` — toggling 507's mirror then toggled db081e65's, because 507's
+  `claude_mirror` tag had been moved to db081e65's tab). Flagged by the canned
+  anomaly *"adopted a predecessor despite having its OWN SessionStart
+  (mis-adoption — pane theft)"*. Audited as a `state_files` `adopt` row (`from`/`moved`/
   `retagged`) plus a `hook_events` decision row (handler `claude-hook.py`,
   `adopt: resume forked sid — adopted <old>`); the un-adopted regression is the
   canned anomaly *"hook traffic under a sid with no sessions row"*. The same

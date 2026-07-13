@@ -782,6 +782,18 @@ def cli_anomalies(sid):
             "AND handler='subscriber' AND NOT EXISTS "
             "(SELECT 1 FROM sessions WHERE session_id=?) HAVING COUNT(*) > 0",
             (sid, sid))
+    # A genuine sid-fork NEVER gets its own SessionStart — that is the whole basis
+    # for adoption. So a sid that ADOPTED a predecessor yet ALSO has its own
+    # SessionStart is a MIS-adoption: an independent new session wrongly consumed a
+    # concurrent same-cwd session's adopt_pending note and stole its panes (live
+    # bug: 507fc4c8's pre-SessionStart InstructionsLoaded adopted the unrelated live
+    # db081e65 — toggling 507's mirror then toggled db081e65's). Fixed by marking the
+    # sid on InstructionsLoaded (adopt.py); a non-empty row here is the regression.
+    section("adopted a predecessor despite having its OWN SessionStart (mis-adoption — pane theft)",
+            "SELECT a.ts, a.decision FROM hook_events a WHERE a.session_id=? "
+            "AND a.decision LIKE 'adopt:%' AND EXISTS (SELECT 1 FROM hook_events s "
+            "WHERE s.session_id=a.session_id AND s.hook='SessionStart') ORDER BY a.ts",
+            (sid,))
     section("unattributed token/cost bumps (should be bump-agent with meta)",
             "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
             "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "

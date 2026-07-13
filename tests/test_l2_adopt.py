@@ -124,6 +124,28 @@ def test_own_sessionstart_blocks_adoption(run_hook, test_env, fake_kitten,
     assert not any(r[1] == "adopt" for r in oracle.state_files(test_env, b.sid))
 
 
+def test_instructionsloaded_before_own_sessionstart_blocks_adoption(
+        run_hook, test_env, fake_kitten, session):
+    # A real NEW session's InstructionsLoaded fires ~100ms BEFORE its own
+    # SessionStart. If a CONCURRENT independent session shares the cwd (its
+    # adopt_pending note is live), that pre-SessionStart event must NOT consume
+    # the note and steal the other session's panes (live bug 2026-07-13:
+    # 507fc4c8's InstructionsLoaded adopted the unrelated live db081e65 —
+    # toggling 507's mirror then toggled db081e65's). InstructionsLoaded, which a
+    # fork never emits, marks the sid so sid_seen blocks the adoption.
+    a = session.make()
+    run_hook(HOOK, P.session_start(a, source="startup"))   # live, leaves a note
+    b = session.make()
+    run_hook(HOOK, P.base(b, "InstructionsLoaded"))         # b's true first event
+    assert not os.path.islink(a.state_db)                   # a's DB untouched
+    assert not any(r[1] == "adopt" for r in oracle.state_files(test_env, b.sid))
+    # b then starts normally; still no adoption of the concurrent session.
+    run_hook(HOOK, P.session_start(b, source="startup"))
+    run_hook(HOOK, P.post_file(b, tool="Edit"))
+    assert not os.path.islink(a.state_db)
+    assert not any(r[1] == "adopt" for r in oracle.state_files(test_env, b.sid))
+
+
 def test_tab_paint_without_window_env(run_hook, test_env, fake_kitten, session):
     # A daemon-origin hook process has no KITTY_WINDOW_ID: tabstatus must fall
     # back to the claude_session-tagged window instead of bailing "not inside

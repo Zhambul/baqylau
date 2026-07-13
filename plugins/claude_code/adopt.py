@@ -17,8 +17,9 @@
 #
 # The fix: dispatch.route() calls on_event() before anything else touches the
 # payload.
-#   - SessionStart registers its sid in the global registry (core.tabs `sids` —
-#     "this sid had a real start"). split.cmd_open additionally leaves a
+#   - SessionStart (and the earlier-firing InstructionsLoaded, which a fork never
+#     emits) registers its sid in the global registry (core.tabs `sids` — "this
+#     sid had a real start"). split.cmd_open additionally leaves a
 #     take-once note keyed by cwd (core.tabs `adopt_pending`) for every HOSTED
 #     session — written only once the pane + state DB really exist, so an
 #     agents-view agent session or a headless `claude -p` (whose lifecycle is
@@ -40,9 +41,11 @@
 #   - a state DB (or a parked *.keep) at the sid's path → a known session;
 #     never touch it. This is also the fast path every normal event takes
 #     (one os.path.exists).
-#   - tabs.sid_seen(sid) → the sid had its OWN SessionStart (a headless
-#     `claude -p`, an agents-view agent session — both skip the pane lifecycle
-#     and so have no state DB) — a genuinely new session, not a fork.
+#   - tabs.sid_seen(sid) → the sid had its OWN start (SessionStart, or the
+#     earlier InstructionsLoaded — a headless `claude -p`, an agents-view agent
+#     session, or ANY real new session whose first pre-SessionStart event raced
+#     ahead of its own start; all skip/precede the pane lifecycle and so have no
+#     state DB yet) — a genuinely new session, not a fork.
 #   - the note's predecessor DB must still be LIVE (not parked/deleted) — a
 #     stale note from a long-ended session can never capture anything.
 #   - adopt_take is take-once — concurrent hook processes race to adopt;
@@ -60,9 +63,18 @@ def on_event(d):
     cwd = str(d.get("cwd") or "")
     if not sid:
         return
-    if ev == "SessionStart":
-        T.sid_mark(sid)                     # the note is split.cmd_open's job —
-        return                              # hosted sessions only (see header)
+    if ev in ("SessionStart", "InstructionsLoaded"):
+        # InstructionsLoaded fires BEFORE SessionStart for a real new session and
+        # is NOT emitted by a fork (a resumed/backgrounded continuation already has
+        # its instructions) — so it is the earliest reliable "this sid had a real
+        # start" signal. Marking here closes a TOCTOU: without it, a new session's
+        # pre-SessionStart InstructionsLoaded reaches _maybe_adopt() with sid_seen
+        # still false and could adopt a CONCURRENT same-cwd session's note (live
+        # bug: 507fc4c8's InstructionsLoaded adopted the unrelated live db081e65,
+        # stealing its panes). The note stays split.cmd_open's job — SessionStart
+        # only, hosted sessions (see header).
+        T.sid_mark(sid)
+        return
     if ev == "SessionEnd":
         T.adopt_drop(cwd, sid)              # a clean end retires its own note
         return
