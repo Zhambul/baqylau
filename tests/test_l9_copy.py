@@ -225,6 +225,29 @@ def test_file_op_line_carries_view_link_and_stash(session, run_hook, test_env):
     assert gutop["lex"] == "python" and gutop["num"] == 1
 
 
+def test_md_read_view_is_pretty_rendered(session, run_hook, test_env):
+    """A Read of a .md file expands to markdown pretty-rendered by the same AST
+    renderer the streaming path uses — already-styled gut ops (a heading banner,
+    a fenced-code CODE_BG panel), NOT raw text with a lex/num spec."""
+    s = session.make()
+    path = os.path.join(s.cwd, "doc.md")
+    with open(path, "w") as f:
+        f.write("# Title\n\nsome **bold** prose\n\n```python\nx = 1\n```\n")
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
+
+    stash = _kv(s, "view:toolu_001")
+    assert stash
+    guts = [o for o in stash if o["t"] == "gut"]
+    assert guts
+    # rendered, not raw: no lex/num spec, and the heading became an amber banner
+    assert all("lex" not in o and "num" not in o for o in guts)
+    from core import render as R
+    assert any(R.BANNER in o["s"] and "Title" in o["s"] for o in guts)
+    # the fenced code block is its own CODE_BG panel
+    from core import mdrender as MDR
+    assert any(o.get("bg") == list(MDR.CODE_BG) for o in guts)
+
+
 def test_update_view_is_numbered_diff(session, run_hook, test_env):
     """An Update's stashed view block is delta-style: contiguous runs carry raw
     code + a paint-time lex/num spec (the renderer highlights it), removals on

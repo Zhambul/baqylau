@@ -697,6 +697,18 @@ def cli_anomalies(sid):
             "s.end_reason='parent-task-resolved' AND COALESCE(s.lines_emitted,0)=0 "
             "AND s.agent_id IN (SELECT agent_id FROM hook_events WHERE session_id=? "
             "AND hook='SubagentStop')", (sid, sid))
+    # Claude Code creates tasks/<id>.output LAZILY, on the monitor's first output
+    # byte — a quiet persistent monitor has no file for minutes or hours. The
+    # monitor tailer waits for it keyed on the monitor PROCESS's liveness
+    # (stream.py monitor_wait_file); a monitor stream ending plain
+    # 'output-file-not-found' is the pre-fix bounded 12s give-up — the block closed
+    # "■ output not found" and the tab cleared to green while the monitor ran on.
+    # Post-fix the only legitimate not-found end carries the
+    # '(monitor process never found)' suffix (nothing to key liveness on), so a
+    # bare match here IS the regression.
+    section("monitor gave up on a lazily-created output file (tab wrongly cleared)",
+            "SELECT id, task_id, started_at, ended_at FROM streams WHERE session_id=? "
+            "AND kind='monitor' AND end_reason='output-file-not-found'", (sid,))
     # Since the single-dispatcher refactor every event runs through claude-hook.py
     # -> dispatch.py. A crash in the DISPATCHER itself (not a subsystem) records
     # script='dispatch' — that means route() threw before/around fanning out, so a

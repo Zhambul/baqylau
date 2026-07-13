@@ -24,6 +24,7 @@ from core import slots as claude_slots
 from core import state as S
 from core import tail as T
 from plugins.claude_code import accounting as ACC
+from plugins.claude_code import hookkit as HK
 from plugins.claude_code import model as M
 from plugins.claude_code import tools as CT
 
@@ -281,9 +282,7 @@ def spawn_tailer(kind, taskid, cmd="", group=None):
         toks = re.findall(r"[\w./:@=+-]{5,}", cmd or "")
         sig = max(toks, key=len) if toks else ""
     outer = ",".join(str(x) for x in SUB_RGB)
-    env = dict(os.environ)
-    if group:
-        env["CLAUDE_STREAM_GROUP"] = group
+    env = HK.stream_env(cmd=cmd, group=group)
     try:
         proc = subprocess.Popen(
             [sys.executable, streamer, kind, taskid, LOG, str(slot), sig, outer],
@@ -314,25 +313,23 @@ def take_subfg(tid):
         time.sleep(0.05)
 
 
-def spawn_fg_tailer(tid, rec):
+def spawn_fg_tailer(tid, rec, cmd=""):
     # Live-tail a subagent's FOREGROUND command (tee'd by claude-cmd-pre.py) with the
     # main fg tailer (claude-stream.py KIND=fg), double-guttered in THIS subagent's
     # colour — the foreground analogue of spawn_tailer's nested bg/monitor jobs. The
     # fg tailer waits for the outcome hand-off we drop in on_tool_result (keyed by
-    # rec["done"]), or falls back to writer-liveness.
+    # rec["done"]), or falls back to writer-liveness. `cmd` is the transcript's
+    # tool_use command (the model-authored original — updatedInput rewrites the
+    # EXECUTED input, not the assistant message), so the tailer's content-render
+    # detection sees the same clean command the main-session path passes.
     streamer = os.path.join(HERE, "claude-stream.py")
     if not os.path.exists(streamer):
         return None
     slot, marker = claude_slots.claim("fg", LOG)
     outer = ",".join(str(x) for x in SUB_RGB)
-    env = dict(os.environ)
-    env["CLAUDE_STREAM_SRC"] = rec["src"]
-    env["CLAUDE_STREAM_DONE"] = rec["done"]
-    env["CLAUDE_STREAM_GROUP"] = tid       # ⧉ copy group: join the header+code we emitted
-    if rec.get("own"):
-        env["CLAUDE_STREAM_OWN"] = "1"
-    if rec.get("append"):
-        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
+    env = HK.stream_env(src=rec["src"], done=rec["done"], cmd=cmd, group=tid,
+                        own=bool(rec.get("own")),
+                        skip_existing=bool(rec.get("append")))
     try:
         proc = subprocess.Popen(
             [sys.executable, streamer, "fg", "subfg-" + tid, LOG, str(slot), "", outer],
@@ -543,7 +540,7 @@ def on_tool_use(b):
         else:
             O.emit(LOG, chip("▶", "foreground", ctx, g=tid), O.code(cmd, g=tid))
             rec = take_subfg(tid) if (SUB_FG and tid) else None
-            if rec and spawn_fg_tailer(tid, rec):
+            if rec and spawn_fg_tailer(tid, rec, cmd):
                 # A live fg tailer now owns this command's OUTPUT + finish chip; we
                 # only hand it the outcome (below) and skip re-rendering the body.
                 fg_live[tid] = rec

@@ -7,6 +7,9 @@
 # hook fires while they run — so this process (spawned detached by the launch
 # hook) tails that file and appends each new line to the mirror log (as structured
 # paint ops via claude_ops), then a closing rule + finish chip when the job ends.
+# NB Claude Code creates that file LAZILY, on the first output byte — a quiet
+# persistent monitor has none for minutes/hours, so a monitor waits for it keyed
+# on its command process's liveness (monitor_wait_file), not a bounded deadline.
 #
 #   KIND  "bg" | "monitor" | "fg"  — only changes the gutter colour + finish label
 #   TASKID                  — backgroundTaskId / Monitor taskId (globally unique);
@@ -114,15 +117,37 @@ SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
 # Unset for launchers that don't tag (monitors, a subagent's nested jobs) — those
 # blocks just render without copy links, exactly as before.
 GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
-# Set by claude-cmd-pre.py when this fg command streams a markdown / JSON / YAML
-# file's raw contents (cat/head/tail of a .md|.yml, cat of a .json) — the body is
-# rendered (styled markdown / pretty coloured JSON / coloured YAML) via
-# core/mdrender|jsonrender|yamlrender instead of emitted verbatim. See
-# CT.md_source|json_source|yaml_source / CLAUDE_MIRROR_MD|JSON|YAML.
-MD = os.environ.get("CLAUDE_STREAM_MD") == "1"
-JSON_MODE = os.environ.get("CLAUDE_STREAM_JSON") == "1"
-YAML_MODE = os.environ.get("CLAUDE_STREAM_YAML") == "1"
-CODE_LEXER = os.environ.get("CLAUDE_STREAM_CODE") or ""   # pygments lexer name, else ""
+# The ORIGINAL (pre-tee-wrap) command whose output this stream carries, passed by
+# every launcher via hookkit.stream_env. Content-render detection — does this fg
+# command stream a markdown / JSON / YAML / source file's raw contents
+# (cat/head/tail of a .md|.json|.yml|.kt, `sed -n … x.py`, a bare `< file.md`)?
+# — runs HERE, in the presenting process, not at the launch site. It's a pure
+# function of the command (CT.md_source|json_source|yaml_source|code_source,
+# gated default-on by CLAUDE_MIRROR_MD|JSON|YAML|CODE), and when it lived in
+# claude-cmd-pre.py's main path the OTHER fg launch site (a subagent's command,
+# substream.spawn_fg_tailer) silently missed it — every launcher gets rendering
+# by passing the command, and a new render mode is one change in one place.
+# fg-only, as before: bg/monitor output is a job log, not a file's contents
+# (the fence-sniff below stays the only content-keyed fallback).
+CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
+
+
+def _detect_render(cmd):
+    """(md, json, yaml, code_lexer) for this stream's command — all falsy for a
+    non-fg stream, an empty command, or a command that streams no such file."""
+    if not cmd or KIND != "fg":
+        return False, False, False, ""
+    from plugins.claude_code import tools as CT
+    on = lambda k: os.environ.get(k, "1") != "0"
+    md = bool(on("CLAUDE_MIRROR_MD") and CT.md_source(cmd))
+    js = bool(not md and on("CLAUDE_MIRROR_JSON") and CT.json_source(cmd))
+    ya = bool(not (md or js) and on("CLAUDE_MIRROR_YAML") and CT.yaml_source(cmd))
+    code = ("" if (md or js or ya or not on("CLAUDE_MIRROR_CODE"))
+            else (CT.code_source(cmd) or ""))
+    return md, js, ya, code
+
+
+MD, JSON_MODE, YAML_MODE, CODE_LEXER = _detect_render(CMD)
 RENDER_KIND = ("md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE
                else ("code:" + CODE_LEXER) if CODE_LEXER else None)
 # "Fenced output is markdown": when NO filename render mode was picked, sniff a fg
@@ -135,12 +160,26 @@ RENDER_KIND = ("md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE
 SNIFF = (RENDER_KIND is None and KIND == "fg"
          and os.environ.get("CLAUDE_MIRROR_MD_SNIFF", "1") != "0")
 _FENCE = re.compile(r"(?m)^[ \t]{0,3}(```|~~~)[^\n`]*$")
+# Timing seams (README § Testing): how long bg/fg wait for the task output file
+# to appear (a monitor waits on process liveness instead — monitor_wait_file),
+# and how long to keep trying to identify the monitor's process (find_proc)
+# before concluding there is nothing to key liveness on.
+FIND_S = float(os.environ.get("CLAUDE_STREAM_FIND_S") or 12)
+PROCFIND_S = float(os.environ.get("CLAUDE_STREAM_PROCFIND_S") or 20)
 
 
-def find_file(deadline):
+def glob_task_output():
     pats = [f"/private/tmp/claude-*/*/*/tasks/{TASKID}.output",
             f"/private/tmp/claude-*/*/tasks/{TASKID}.output",
             f"/private/tmp/claude-*/*/*/*/tasks/{TASKID}.output"]
+    for p in pats:
+        m = glob.glob(p)
+        if m:
+            return m[0]
+    return None
+
+
+def find_file(deadline):
     while time.time() < deadline:
         if SRC:                                   # redirect target preferred while we wait
             try:
@@ -149,17 +188,12 @@ def find_file(deadline):
             except Exception:
                 pass
         else:
-            for p in pats:
-                m = glob.glob(p)
-                if m:
-                    return m[0]
+            m = glob_task_output()
+            if m:
+                return m
         time.sleep(0.3)
     # SRC was named but never appeared — fall back to the task output file.
-    for p in pats:
-        m = glob.glob(p)
-        if m:
-            return m[0]
-    return None
+    return glob_task_output()
 
 
 _LSOF_STATE = {"missing": False, "audited": False}
@@ -239,15 +273,59 @@ def find_proc(sig):
     return hits[0] if len(hits) == 1 else None
 
 
+def monitor_wait_file(run, start):
+    # Claude Code creates tasks/<id>.output LAZILY, on the monitor's first output
+    # byte — a quiet persistent monitor (poll every N seconds, print only on
+    # activity) legitimately has NO file for minutes or hours. A bounded wait here
+    # painted "■ output not found", released the slot, and let the tab clear to
+    # green while the monitor ran on by design. So a monitor waits for the file
+    # for as long as its command PROCESS is alive (the same find_proc/alive
+    # liveness completion detection uses); the process dying with no file ever
+    # written is the real "nothing to show" signal. If the process can't be
+    # identified at all (ambiguous argv match — see find_proc) there is nothing to
+    # key liveness on, so fall back to the old bounded give-up rather than hold
+    # the tab blue forever.
+    # Returns (path, pid); path None means the stream was ended here.
+    pid, find_deadline = None, start + PROCFIND_S
+    while True:
+        m = glob_task_output()
+        if m:
+            return m, pid
+        if not os.path.exists(S.db_path(LOG)):
+            # SessionEnd parked the state DB — session over, quit footer-less
+            # (same shape as the substream/codex tailers).
+            run.end("state-db-parked (session end)")
+            return None, None
+        now = time.time()
+        if pid is None:
+            pid = find_proc(SIG)
+            if pid is None and now > find_deadline:
+                O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
+                run.end("output-file-not-found (monitor process never found)")
+                return None, None
+        elif not alive(pid):
+            O.emit(LOG, O.rule(),
+                   O.label("■ monitor ended · no output", SLOT_RGB), O.rule())
+            run.end("monitor-exited-silent")
+            return None, None
+        time.sleep(T.POLL_S)
+
+
 def main(run):
     if not (TASKID and LOG):
         return
     start = time.time()
-    path = find_file(start + 12)
-    if not path:
-        O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
-        run.end("output-file-not-found")
-        return
+    mon_pid = None
+    if KIND == "monitor" and not SRC:
+        path, mon_pid = monitor_wait_file(run, start)
+        if not path:
+            return
+    else:
+        path = find_file(start + FIND_S)
+        if not path:
+            O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
+            run.end("output-file-not-found")
+            return
 
     pos0 = 0
     if SKIP_EXISTING:
@@ -337,7 +415,11 @@ def main(run):
     GRACE = float(os.environ.get("CLAUDE_STREAM_GRACE_S") or
                   (2.0 if KIND in ("bg", "fg") else 8.0))
     sentinel = ("done:" + (DONE or path + ".done")) if KIND == "fg" else None
-    mon = {"pid": None, "deadline": start + 20}
+    # mon_pid: already resolved by monitor_wait_file while waiting for a lazily
+    # created output file. The find-deadline is keyed to NOW, not launch — the
+    # file may have appeared minutes in, and a launch-keyed deadline would leave
+    # no time to find the process before the idle fallback could fire.
+    mon = {"pid": mon_pid, "deadline": time.time() + PROCFIND_S}
     # Backstop for fg ONLY (and shorter than the tailers' shared 6h cap): an
     # interactive foreground command past 2h is far likelier a wedged tailer than
     # a real command, and its live fg slot row keeps the tab blue the whole time.

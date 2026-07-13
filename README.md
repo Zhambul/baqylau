@@ -669,6 +669,24 @@ b.py`) keys off its **last statement's** file
 disqualifies: a **transform pipe** (`| awk`, `| grep …` — the bytes are derived, not
 the file), `python foo.py`, an output redirect, and command substitution.
 
+**Where detection runs: in the tailer, not the launch hook.** All four
+filename-keyed modes (md/JSON/YAML/code) are decided by `claude-stream.py`
+itself (`_detect_render`), from the ORIGINAL pre-tee-wrap command every launch
+site passes via `CLAUDE_STREAM_CMD`. The env contract has ONE builder,
+`hookkit.stream_env` — `claude-cmd-pre.py` (main fg), `claude-cmd-fmt.py` (bg),
+and `claude-substream.py` (a subagent's live fg, `spawn_fg_tailer` — the
+transcript's `tool_use` command, which is the model-authored original;
+`updatedInput` rewrites the *executed* input, not the assistant message) all go
+through it. *Why not decide at the launch site and pass the decision (the
+original design)?* Detection is a pure function of the command — presentation
+logic, which belongs to the presenting process — and with per-launcher env
+assembly the subagent fg launch site silently missed the render keys, so a
+subagent's `cat Foo.kt` streamed uncoloured while the main session's coloured
+(the general failure mode: any launcher-side feature must be re-plumbed once
+per launch site, and the forgotten one fails silently). Rendering stays
+**fg-only** inside the tailer (bg/monitor output is a job log, not a file's
+contents), so bg launchers passing the command changes nothing today.
+
 **Fenced output is markdown — the general mixed-content path.** All of the above
 key off the *filename*, so they miss a command that *prints* markdown to stdout
 (an agent, a report generator, a `write-then-cat` one-liner). The fallback keys
@@ -750,8 +768,14 @@ by the producer; the renderer needs no geometry). Clicking it expands the op's
 full content directly under the line; clicking again collapses it. What
 expands: a **Read** shows the text it returned, syntax-highlighted
 (`coderender.LANGS` — python/kotlin/java/bash + friends) with a dim
-line-number gutter from its real start line; a **Write** its written body,
-same treatment; an **Update** (Edit/MultiEdit/NotebookEdit) a delta-style diff
+line-number gutter from its real start line — **except a `.md`/`.markdown`
+file, which is instead pretty-rendered as markdown** (headings→amber banners,
+bold/emphasis, lists, blockquotes, GFM tables, fenced code in its own CODE_BG
+panel) by the same `core/mdrender.py` AST renderer the live streaming path uses
+(`file_fmt._md_ops` → `mdrender.MarkdownStreamer`, gated by `tools.is_md`), with
+no line-number gutter (prose isn't source); a **Write** its written body,
+same treatment (markdown when `.md`, else syntax-highlighted code); an
+**Update** (Edit/MultiEdit/NotebookEdit) a delta-style diff
 — every row line-numbered (old numbers on removals, new on
 additions/context; no +/- signs), the code syntax-highlighted with removals on
 a soft red panel and additions on a soft green panel (the tint alone carries
@@ -773,7 +797,11 @@ parts:
   raw text). Diff runs (contiguous same-signed rows share one op) ride the
   same fields, with the red/green `bg` panel stashed alongside; only a file
   with no known lexer falls back to producer-styled red/green foreground
-  rows. The view body is deliberately UNCAPPED.
+  rows. A **markdown** Read/Write body is the exception to the deferral: it is
+  rendered to already-styled gut ops AT hook time (no `lex`/`num`, `bg=CODE_BG`
+  on code panels — exactly what `stream.py`'s `emit_md` emits), because
+  `mdrender` degrades gracefully when `wenmode`/`pygments` are absent, just as
+  the streaming path already relies on. The view body is deliberately UNCAPPED.
 - **The toggle** (click time): the emitted one-liner op carries the id as
   `"v"`; `claude-copy.py`'s `view` verb flips that id in the session's
   `view-open` kv set (audited as a `view` state_files row with `open:
@@ -1137,6 +1165,10 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     chip. Gated by `CLAUDE_MIRROR_LIVE_FG_SUB` (default on; `=0` opts out, as does
     the parent `CLAUDE_MIRROR_LIVE_FG=0`) — and it inherits the auto-approve
     trade-off above, now extended to subagent commands (deny rules still apply).
+    Content pretty-rendering (markdown/JSON/YAML/source colouring) applies here
+    exactly as in the main session: the substream hands the tailer the raw
+    command (`hookkit.stream_env` → `CLAUDE_STREAM_CMD`) and the tailer decides
+    (see *Where detection runs* above) — so a subagent's `cat Foo.kt` colours too.
   - **Per-turn context fill.** Every assistant turn carries a `message.usage`, so the
     streamer prints a colour-coded `<type> ctx N% · used/max` line once per turn —
     `input + cache_creation + cache_read` tokens over the window (**< 30% green,

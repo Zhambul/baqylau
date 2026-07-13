@@ -256,6 +256,78 @@ def test_f2json_json_file_is_pretty_printed(
     oracle.assert_clean(test_env, s.sid)
 
 
+# The magenta SGR render.pick assigns pygments Keyword tokens — present only if
+# the body went through coderender, never in verbatim output.
+_KEYWORD_SGR = "38;2;198;120;221"
+
+
+def test_f2code_source_file_is_syntax_highlighted(
+        run_hook, test_env, session, writer):
+    """`sed -n '1,3p' Foo.kt` colours the body with the kotlin lexer. Detection
+    runs in the TAILER, from the raw command passed via CLAUDE_STREAM_CMD
+    (hookkit.stream_env) — launch sites pass the command, never the decision."""
+    s = session.make()
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "sed -n '1,3p' Foo.kt"))
+    rec = fg_live_record(s)
+    w = writer(rec["src"])
+    with open(rec["src"], "a") as f:
+        f.write("fun main() {\n    val x = 3\n}\n")
+    # Code renders only at close (partial colouring is unreliable) — finish it.
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, "sed -n '1,3p' Foo.kt",
+                                              duration_ms=100))
+    w.terminate()
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
+               desc="fg stream ends on the done hand-off")
+    txt = s.ops_text()
+    assert "fun" in txt and "val" in txt, "kotlin body missing from mirror"
+    assert _KEYWORD_SGR in txt, "keywords not coloured (code-render didn't run)"
+    assert not s.live("fg"), "fg slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
+def test_f2code_subagent_fg_is_syntax_highlighted(run_hook, test_env, session):
+    """A SUBAGENT's `cat Foo.kt` colours too: the substream's fg tailer gets the
+    same content-render detection as the main session, because every launch site
+    now passes the raw command (the regression here was a subagent's source read
+    streaming uncoloured — the launch sites each hand-assembled the tailer env
+    and the subagent one silently missed the render key)."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    # The subagent's PreToolUse tees the command and leaves the subfg:<tid>
+    # hand-off; the substream consumes it at the transcript's tool_use.
+    run_hook("claude-cmd-pre.py",
+             P.pre_bash(s, "cat Foo.kt", tid="tu_kt", agent_id=agent))
+    src = s.log + ".subfg.tu_kt.out"
+    with open(src, "a") as f:
+        f.write("fun main() {\n    val x = 3\n}\n")
+    s.write_subagent_jsonl(agent, [
+        {"type": "assistant", "message": {
+            "id": "smsg_kt", "model": "claude-opus-4-8", "role": "assistant",
+            "content": [{"type": "tool_use", "id": "tu_kt", "name": "Bash",
+                         "input": {"command": "cat Foo.kt"}}],
+            "usage": {"input_tokens": 5, "output_tokens": 3,
+                      "cache_creation_input_tokens": 0,
+                      "cache_read_input_tokens": 0}}},
+        {"type": "user", "message": {"role": "user", "content": [
+            {"type": "tool_result", "tool_use_id": "tu_kt",
+             "content": "fun main() {\n    val x = 3\n}"}]}},
+    ])
+    wait_until(lambda: "cat Foo.kt" in s.ops_text(),
+               desc="subagent fg command rendered")
+    wait_until(lambda: _KEYWORD_SGR in s.ops_text(),
+               desc="subagent fg output kotlin-coloured (render key reached "
+                    "the substream-spawned tailer)")
+    run_hook("claude-subagent-fmt.py", P.subagent_stop(s, agent_id=agent),
+             argv=("stop",))
+    wait_until(lambda: "stop-sentinel" in end_reasons(test_env, s.sid),
+               desc="substream finalises on the stop sentinel")
+    wait_until(lambda: not s.live(), desc="all slots released")
+    oracle.assert_clean(test_env, s.sid)
+
+
 # --------------------------------------------------------------------- F3
 
 def test_f3_failed_command_chip(run_hook, test_env, session):
@@ -465,6 +537,86 @@ def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     wait_until(lambda: any("monitor-process-exited" in (r or "")
                            for r in end_reasons(test_env, s.sid)),
                timeout=15, desc="monitor ends when its process exits")
+    assert not s.live("monitor"), "monitor slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
+@needs_private_tmp
+def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
+                                                task_dir, reaper):
+    """Claude Code creates tasks/<id>.output LAZILY on the monitor's first
+    output byte — a quiet monitor has NO file for minutes. The tailer must keep
+    waiting while the monitor PROCESS is alive (slot held, tab stays blue); the
+    old bounded wait painted "output not found" and released the slot at 12s."""
+    s = session.make()
+    env = dict(test_env)
+    env["CLAUDE_STREAM_FIND_S"] = "0.3"   # any bounded-wait regression trips fast
+    token = "monsig%s" % uuid.uuid4().hex[:8]
+    cmd = "sleep 8; true #%s" % token
+    proc = subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True)
+    reaper.append(proc)
+    taskid = "mon-" + uuid.uuid4().hex[:8]
+    run_hook("claude-monitor-fmt.py",
+             P.post_monitor(s, description="quiet monitor", command=cmd,
+                            task_id=taskid), env=env)
+    time.sleep(1.5)                       # well past FIND_S: must still be waiting
+    assert "output not found" not in s.ops_text(), \
+        "tailer gave up on the lazily-created output file"
+    assert s.live("monitor"), "monitor slot released while the monitor runs"
+    assert not any(end_reasons(test_env, s.sid)), "monitor stream ended early"
+    out = os.path.join(task_dir, taskid + ".output")   # first output, minutes in
+    with open(out, "w") as f:
+        f.write("late event\n")
+    wait_until(lambda: "late event" in s.ops_text(),
+               desc="late-created output streams")
+    proc.terminate()
+    proc.wait()          # reap — a zombie still reads as alive to pid_alive
+    wait_until(lambda: any("monitor-process-exited" in (r or "")
+                           for r in end_reasons(test_env, s.sid)),
+               timeout=15, desc="monitor ends when its process exits")
+    assert not s.live("monitor"), "monitor slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
+@needs_private_tmp
+def test_f7c_monitor_dies_before_any_output(run_hook, test_env, session,
+                                            task_dir, reaper):
+    """Monitor process exits without ever writing output: the block closes
+    ("monitor ended · no output") and the slot releases so the tab can clear —
+    the process's death, not a timeout, is the "nothing to show" signal."""
+    s = session.make()
+    token = "monsig%s" % uuid.uuid4().hex[:8]
+    cmd = "sleep 1.2; true #%s" % token
+    proc = subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True)
+    reaper.append(proc)
+    run_hook("claude-monitor-fmt.py",
+             P.post_monitor(s, description="silent monitor", command=cmd,
+                            task_id="mon-" + uuid.uuid4().hex[:8]))
+    proc.wait()          # reap — a zombie still reads as alive to pid_alive
+    wait_until(lambda: any("monitor-exited-silent" in (r or "")
+                           for r in end_reasons(test_env, s.sid)),
+               timeout=15, desc="silent monitor closes on process exit")
+    assert "monitor ended · no output" in s.ops_text()
+    assert not s.live("monitor"), "monitor slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
+@needs_private_tmp
+def test_f7d_monitor_process_never_found(run_hook, test_env, session, task_dir):
+    """No output file AND no identifiable monitor process (nothing to key
+    liveness on): fall back to the bounded give-up rather than wedge the slot
+    (and the blue tab) forever."""
+    s = session.make()
+    env = dict(test_env)
+    env["CLAUDE_STREAM_PROCFIND_S"] = "0.4"
+    cmd = "true #no-such-proc-%s" % uuid.uuid4().hex[:8]   # matches no live argv
+    run_hook("claude-monitor-fmt.py",
+             P.post_monitor(s, description="ghost monitor", command=cmd,
+                            task_id="mon-" + uuid.uuid4().hex[:8]), env=env)
+    wait_until(lambda: any("monitor process never found" in (r or "")
+                           for r in end_reasons(test_env, s.sid)),
+               timeout=15, desc="ghost monitor gives up on the bounded wait")
+    assert "output not found" in s.ops_text()
     assert not s.live("monitor"), "monitor slot not released"
     oracle.assert_clean(test_env, s.sid)
 

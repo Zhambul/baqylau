@@ -101,6 +101,24 @@ def _code_ops(path, text, start, rgb):
     return [O.gut(text.rstrip("\n"), rgb, lex=_lexer(path), num=start)]
 
 
+def _md_ops(text, rgb):
+    """gut ops for a markdown Read/Write body, pretty-rendered by the SAME
+    AST renderer the live streaming path uses (core.mdrender.MarkdownStreamer):
+    headings→amber banners, bold/emphasis, lists, blockquotes, GFM tables, and
+    fenced code blocks in their own CODE_BG panel. Each `(text, bg)` segment
+    becomes one already-styled gut op (mirrors stream.py's emit_md) — no
+    'lex'/'num', so it paints verbatim (no line-number gutter; prose isn't
+    source). mdrender degrades gracefully when wenmode/pygments are absent
+    (this hook may run a bare python3), exactly as the streaming path relies on.
+    Falls back to a plain code op if rendering yields nothing."""
+    from core import mdrender as MDR
+    stream = MDR.MarkdownStreamer()
+    segs = stream.feed(text) + stream.close()
+    ops = [O.gut(t.rstrip("\n"), rgb, bg=bg) for t, bg in segs
+           if t.strip() or bg is not None]
+    return ops
+
+
 def _diff_ops(rows, rgb, lexer):
     """gut ops for diff rows (CT.diff_rows), delta-style: contiguous same-signed
     runs share one op, every row keeps a dim line-number gutter (the OLD number
@@ -156,13 +174,13 @@ def _view_ops(tool, label, name, path, ti, tr):
         text, start = _read_text(path, ti, tr)
         if text is None or not text.strip():
             return None
-        body = _code_ops(path, text, start, rgb)
+        body = _md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, start, rgb)
         suffix = CT.read_extent(tr.get("file") if isinstance(tr, dict) else None, ti)
     elif tool == "Write":
         text = ti.get("content") or ""
         if not text.strip():
             return None
-        body = _code_ops(path, text, 1, rgb)
+        body = _md_ops(text, rgb) if CT.is_md(path) else _code_ops(path, text, 1, rgb)
         suffix = "+%d" % len(text.splitlines())
     else:
         rows = CT.diff_rows(tool, ti, tr)

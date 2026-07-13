@@ -123,6 +123,30 @@ def spawn_streamer(name, argv, log, env=None, purpose="", audit_argv=None):
     return proc
 
 
+def stream_env(src=None, done=None, cmd=None, group=None, own=False,
+               skip_existing=False):
+    """The ONE builder of claude-stream.py's env contract (CLAUDE_STREAM_*).
+    Every tailer launch site — main-session fg (cmd_pre), bg (cmd_fmt), a
+    subagent's fg (substream.spawn_fg_tailer) — goes through here, so a new key
+    reaches all of them at once; assembling the env by hand per launch site is
+    how the subagent fg path silently missed the content-render key and a
+    subagent's `cat foo.kt` streamed uncoloured. `cmd` is the ORIGINAL
+    (pre-tee-wrap) command: the tailer derives its own content-render mode
+    (md/json/yaml/code) from it — launchers pass the command, never the
+    decision. `skip_existing` tails the file from its size at spawn (a `>>`
+    append target / a Ctrl+B hand-off — the prior bytes are not this job's)."""
+    env = dict(os.environ)
+    for k, v in (("CLAUDE_STREAM_SRC", src), ("CLAUDE_STREAM_DONE", done),
+                 ("CLAUDE_STREAM_CMD", cmd), ("CLAUDE_STREAM_GROUP", group)):
+        if v:
+            env[k] = v
+    if own:
+        env["CLAUDE_STREAM_OWN"] = "1"
+    if skip_existing:
+        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
+    return env
+
+
 def notify_tab(dispatch, args, log):
     """Fire the tab-status dispatcher synchronously, best-effort (it exits fast;
     failures must never break the calling hook)."""

@@ -108,6 +108,13 @@ _MD_READERS = {"cat", "head", "tail"}
 _MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
 
 
+def is_md(path):
+    """True when `path`'s extension is a markdown one (the same set the streaming
+    md_source() reader-allowlist uses). Lets the file-op click-to-view blocks
+    pretty-render a .md Read/Write instead of plain-text/lexer highlighting."""
+    return (path or "").lower().endswith(_MD_EXT)
+
+
 def md_source(cmd):
     """True when `cmd` is a single simple command whose body streams a markdown
     file's raw contents — an allowlisted reader (cat/head/tail) with a .md/.markdown

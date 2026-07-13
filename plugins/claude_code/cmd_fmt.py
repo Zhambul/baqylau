@@ -29,7 +29,8 @@ LBL_BG   = O.ORANGE   # background header chip / foreground "interrupted"
 LBL_FAIL = O.RED      # a failed tool (PostToolUseFailure)
 
 
-def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None):
+def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None,
+                  cmd=None):
     # Launch claude-stream.py detached so it keeps tailing the job's output file
     # after this hook exits. Passes the claimed slot so its gutter + finish chip
     # match the header colour. If the command redirected stdout to a file (`src`),
@@ -40,14 +41,7 @@ def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None)
     # file rather than re-showing it from the start. Returns the Popen (or None).
     if not taskid:
         return None
-    env = dict(os.environ)
-    if src:
-        env["CLAUDE_STREAM_SRC"] = src
-    if skip_existing:
-        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
-    if group:
-        # ⧉ copy links: the tailer's gut/finish ops join this block's copy group.
-        env["CLAUDE_STREAM_GROUP"] = group
+    env = H.stream_env(src=src, cmd=cmd, group=group, skip_existing=skip_existing)
     return H.spawn_streamer("claude-stream.py", [kind, taskid, LOG, slot], LOG,
                             env=env, purpose=f"stream:{kind} task={taskid}",
                             audit_argv=[kind, taskid, str(slot)])
@@ -139,7 +133,8 @@ def _render_background(d, cmd, taskid, converted, done):
         # skip_existing for a `>>` redirect: tail only what this job appends, or
         # the target file's entire prior contents would replay into the mirror.
         proc = _spawn_stream("bg", taskid, slot, src,
-                             skip_existing=converted or src_append, group=taskid)
+                             skip_existing=converted or src_append, group=taskid,
+                             cmd=cmd)
         if proc is not None:
             claude_slots.set_owner(slot_marker, proc.pid)
         else:

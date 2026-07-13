@@ -167,38 +167,11 @@ def main():
     # join the same group — claude-copy.py collects a block by this id.
     gid = d.get("tool_use_id") or None
 
-    # Content pretty-rendering: when this command streams a markdown or JSON file's
-    # raw contents (cat/head/tail of a .md, cat of a .json, or `< file`), tell the
-    # tailer to render the body instead of showing it verbatim. Gated (default-on)
-    # by CLAUDE_MIRROR_MD / CLAUDE_MIRROR_JSON, mirroring CLAUDE_MIRROR_LIVE_FG.
-    md = (os.environ.get("CLAUDE_MIRROR_MD", "1") != "0" and CT.md_source(cmd))
-    js = (not md and os.environ.get("CLAUDE_MIRROR_JSON", "1") != "0"
-          and CT.json_source(cmd))
-    yaml = (not md and not js and os.environ.get("CLAUDE_MIRROR_YAML", "1") != "0"
-            and CT.yaml_source(cmd))
-    # code_source returns a pygments lexer name (e.g. "python") or None.
-    code = (None if (md or js or yaml) or os.environ.get("CLAUDE_MIRROR_CODE", "1") == "0"
-            else CT.code_source(cmd))
-
-    env = dict(os.environ)
-    env["CLAUDE_STREAM_SRC"] = src
-    env["CLAUDE_STREAM_DONE"] = done
-    if md:
-        env["CLAUDE_STREAM_MD"] = "1"
-    if js:
-        env["CLAUDE_STREAM_JSON"] = "1"
-    if yaml:
-        env["CLAUDE_STREAM_YAML"] = "1"
-    if code:
-        env["CLAUDE_STREAM_CODE"] = code
-    if gid:
-        env["CLAUDE_STREAM_GROUP"] = gid
-    if own:
-        env["CLAUDE_STREAM_OWN"] = "1"
-    if append:
-        # A `>>` redirect appends to an EXISTING file — tail only what this command
-        # adds, or the whole prior file contents would be replayed into the mirror.
-        env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
+    # Content pretty-rendering (markdown/JSON/YAML/source colouring) is the
+    # TAILER's decision, derived from the raw command passed here — the launch
+    # site never computes it (see stream.py's _detect_render / hookkit.stream_env).
+    env = H.stream_env(src=src, done=done, cmd=cmd, group=gid, own=own,
+                       skip_existing=append)
     proc = H.spawn_streamer("claude-stream.py",
                             ["fg", f"fg-{os.getpid()}-{int(time.time())}", log, slot],
                             log, env=env, purpose="stream:fg live tail",
@@ -224,12 +197,11 @@ def main():
 
     O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG, g=gid),
            O.code(cmd, g=gid), O.rule())
-    A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s%s"
+    # (Any content-render mode the tailer picks is audited by the tailer itself —
+    # the state_files "render:<taskid> start" row.)
+    A.hook_event(d, decision="live fg stream: slot=%s tailer=%s %s"
                  % (slot, proc.pid, "rewrote command (tee)" if wrapped_cmd
-                    else "tailing command's own redirect",
-                    " [md-render]" if md else " [json-render]" if js
-                    else " [yaml-render]" if yaml
-                    else (" [code-render:%s]" % code) if code else ""))
+                    else "tailing command's own redirect"))
 
     if wrapped_cmd:
         # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):
