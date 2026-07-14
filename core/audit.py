@@ -162,31 +162,51 @@ def _spool(table, cols):
 
 
 def _ingest_spool(conn):
-    # Drain spool.jsonl into the DB under an exclusive rename so two processes
-    # opening at once don't double-ingest.
+    # Drain spool.jsonl — and any orphaned claim files a hard-killed drainer left
+    # behind — into the DB. Every drain claims its file first by an exclusive
+    # rename to OUR pid suffix (spool.jsonl.<pid>), so two processes ingesting at
+    # once can never double-insert: exactly one rename wins. A claimer that dies
+    # between claim and remove leaves its file behind with a now-dead pid; each
+    # pass ADOPTS those by the same claim-by-rename (dead-pid check via
+    # core.state.pid_alive — EPERM = alive foreign-owned, left alone), so no rows
+    # are ever permanently stranded. Canonical-spool-then-orphans ordering is
+    # arbitrary: an orphan's rows are older, but audit chronology comes from each
+    # row's own ts column, never from insert order.
+    from core.state import pid_alive        # the ONE liveness probe
     p = spool_path()
-    if not os.path.exists(p):
-        return
-    claimed = p + f".{os.getpid()}"
+    todo = [p] if os.path.exists(p) else []
     try:
-        os.rename(p, claimed)
-    except OSError:
-        return                              # another process claimed it
-    try:
-        with open(claimed, encoding="utf-8") as f:
-            for ln in f:
-                try:
-                    o = json.loads(ln)
-                    _insert(conn, o["table"], o["cols"])
-                except Exception:
-                    continue
-        conn.commit()
-        os.remove(claimed)
+        import glob
+        me = os.getpid()
+        for orphan in glob.glob(p + ".*"):
+            pid = orphan[len(p) + 1:]
+            if pid.isdigit() and int(pid) != me and not pid_alive(int(pid)):
+                todo.append(orphan)
     except Exception:
+        pass                                # orphan scan is best-effort
+    claimed = p + f".{os.getpid()}"
+    for src in todo:
         try:
-            os.rename(claimed, p)           # put it back for a later attempt
+            os.rename(src, claimed)
+        except OSError:
+            continue                        # another process claimed/adopted it
+        try:
+            with open(claimed, encoding="utf-8") as f:
+                for ln in f:
+                    try:
+                        o = json.loads(ln)
+                        _insert(conn, o["table"], o["cols"])
+                    except Exception:
+                        continue
+            conn.commit()
+            os.remove(claimed)
         except Exception:
-            pass
+            # Leave the claim at our own pid suffix: once this process exits the
+            # pid is dead and a later pass adopts it. (Renaming back to the
+            # canonical spool could clobber rows freshly spooled there — POSIX
+            # rename replaces — and `claimed` must be free before the next
+            # rename above, so stop the pass here.)
+            return
 
 
 def _insert(conn, table, cols):

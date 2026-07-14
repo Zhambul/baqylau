@@ -248,6 +248,56 @@ def test_spool_fallback_and_ingest(run_hook, test_env, session):
     assert len(hooks) >= 2, "spooled row lost during ingest: %s" % hooks
 
 
+def _fake_orphan(test_env, suffix, sid, decisions):
+    """Write a claimed-spool file (spool.jsonl.<suffix>) with valid hook_events
+    rows — what a drainer hard-killed between claim and remove leaves behind."""
+    path = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl.%s" % suffix)
+    os.makedirs(test_env["CLAUDE_AUDIT_DIR"], exist_ok=True)
+    with open(path, "w") as f:
+        for d in decisions:
+            f.write(json.dumps({"table": "hook_events", "cols": {
+                "ts": 1.0, "session_id": sid, "hook": "PostToolUse",
+                "tool_name": "Bash", "agent_id": "", "handler": "orphan-test",
+                "decision": d, "pid": 1, "payload": "{}"}}) + "\n")
+    return path
+
+
+def _dead_pid(start=None):
+    """A pid that is certainly not a live process."""
+    pid = start or (os.getpid() + 40000)
+    while pid < 2 ** 22:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        except OSError:
+            pass
+        pid += 1
+    raise RuntimeError("no dead pid found")
+
+
+def test_orphaned_spool_claim_is_adopted(test_env):
+    """A spool.jsonl.<dead-pid> orphan (drainer hard-killed mid-claim) must be
+    adopted and drained on the next ingest pass; a claim held by a LIVE pid must
+    be left alone; a double ingest must not duplicate the adopted rows."""
+    dead = _dead_pid()
+    _fake_orphan(test_env, dead, "orphan-sid", ["o1"])
+    _fake_orphan(test_env, _dead_pid(dead + 1), "orphan-sid", ["o2"])
+    live = _fake_orphan(test_env, os.getpid(), "live-sid", ["still-mine"])
+    # Two ingest passes (concurrent-ish): claim-by-rename must yield each row once.
+    _audit_calls(test_env, "assert A._connect() is not None\nA._ingest_spool(A._CONN)")
+    _audit_calls(test_env, "assert A._connect() is not None")
+    rows = oracle.q(test_env, "SELECT decision FROM hook_events"
+                    " WHERE session_id='orphan-sid' ORDER BY decision")
+    assert rows == [("o1",), ("o2",)], rows
+    leftovers = [f for f in os.listdir(test_env["CLAUDE_AUDIT_DIR"])
+                 if f.startswith("spool.jsonl.")]
+    assert leftovers == [os.path.basename(live)], leftovers
+    assert oracle.q(test_env, "SELECT COUNT(*) FROM hook_events"
+                    " WHERE session_id='live-sid'") == [(0,)], \
+        "a claim file with a LIVE pid was drained"
+
+
 def test_audit_disabled_still_works(run_hook, test_env, session):
     env = dict(test_env, CLAUDE_AUDIT="0")
     s = session.make()

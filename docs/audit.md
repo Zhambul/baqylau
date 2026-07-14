@@ -15,8 +15,17 @@ stuck blue or a block never closed, the evidence evaporated with the processes.
   disable — every audit call becomes a no-op. The DB and spool are gitignored.
 - **Never breaks a hook:** a failed DB write degrades to an append-only
   `spool.jsonl`, re-ingested on the next successful open — including failures of
-  the auditor itself. The tab-status path writes fire-and-forget in the background,
-  so the latency-sensitive colour path is never blocked.
+  the auditor itself. Ingest claims the spool by an exclusive rename to
+  `spool.jsonl.<pid>` (exactly one concurrent drainer can win), and each pass also
+  ADOPTS orphaned claim files whose pid is dead (`core.state.pid_alive`; EPERM =
+  alive foreign-owned, left alone) via the same claim-by-rename — a drainer
+  hard-killed between claim and remove no longer strands its rows forever. A
+  drain that fails mid-pass leaves the claim at the drainer's own pid suffix
+  (renaming back could clobber a freshly re-created spool); it becomes an
+  adoptable orphan the moment that process exits. Row chronology is each row's
+  own `ts` column, so late-adopted rows land in the right place. The tab-status
+  path writes fire-and-forget in the background, so the latency-sensitive colour
+  path is never blocked.
 - **Retention:** sessions older than 30 days are pruned at SessionEnd — every
   per-session table including `pane_events` (once omitted from the prune loops,
   which grew it unboundedly with permanently orphaned rows).
