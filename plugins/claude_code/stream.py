@@ -49,32 +49,75 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-KIND   = sys.argv[1] if len(sys.argv) > 1 else "bg"
-TASKID = sys.argv[2] if len(sys.argv) > 2 else ""
-LOG    = sys.argv[3] if len(sys.argv) > 3 else ""
-SIG    = sys.argv[5] if len(sys.argv) > 5 else ""   # monitor: signature to find its process
-OUTER  = sys.argv[6] if len(sys.argv) > 6 else ""   # "r,g,b" subagent colour -> double gutter
-
-# The launcher (claude-cmd-fmt / claude-monitor-fmt) claims a palette slot, colours
-# the header chip with it, and passes the index here so the gutter + finish chip
-# match — header, gutter, and finish all share one colour, and parallel jobs differ.
-# (If no slot is passed we claim our own, as a fallback.)
-if len(sys.argv) > 4 and sys.argv[4].lstrip("-").isdigit():
-    SLOT, _MARKER = int(sys.argv[4]), None
-else:
-    SLOT, _MARKER = claude_slots.claim(KIND, LOG)
-SLOT_RGB = claude_slots.color(KIND, SLOT)
-if KIND == "fg":
-    SLOT_RGB = O.SLATE           # matches claude-cmd-pre.py's "▶ foreground" header
-# When this background/monitor job was launched *by a subagent*, a second gutter bar
-# in the subagent's colour (outer = which subagent, inner = which bg/monitor job)
-# keeps nested parallel jobs distinguishable. claude-substream.py passes "r,g,b".
+# --- run identity (argv/env contract) --------------------------------------------
+# All of this used to be parsed at module top level — importing the module read
+# argv and could even CLAIM a palette slot (a state-DB write). It now lives in
+# _init(), called from entry(), so IMPORTING this module (tests, tooling) reads
+# no argv and touches no DB — only running it does. The placeholders below just
+# name the module globals every phase function reads at call time.
+KIND   = "bg"
+TASKID = LOG = SIG = OUTER = ""
+SLOT, _MARKER = 0, None
+SLOT_RGB = (0, 0, 0)
 OUTER_RGB = None
-if OUTER:
-    try:
-        OUTER_RGB = tuple(int(x) for x in OUTER.split(","))
-    except Exception:
-        OUTER_RGB = None
+SRC = DONE = CMD = ""
+OWN = SKIP_EXISTING = False
+GROUP = None
+RKIND = RVALUE = RENDER_KIND = None
+MD = SNIFF = False
+
+
+def _init(argv):
+    """Bind this run's identity from the shim's argv:
+      claude-stream.py KIND TASKID MIRROR_LOG SLOT [SIG] [OUTER]
+    plus the CLAUDE_STREAM_* env contract and everything derived from them
+    (slot claim/colour, outer gutter colour, content-render detection)."""
+    global KIND, TASKID, LOG, SIG, OUTER, SLOT, _MARKER, SLOT_RGB, OUTER_RGB
+    global SRC, OWN, DONE, SKIP_EXISTING, GROUP, CMD
+    global RKIND, RVALUE, MD, RENDER_KIND, SNIFF
+    KIND   = argv[1] if len(argv) > 1 else "bg"
+    TASKID = argv[2] if len(argv) > 2 else ""
+    LOG    = argv[3] if len(argv) > 3 else ""
+    SIG    = argv[5] if len(argv) > 5 else ""   # monitor: signature to find its process
+    OUTER  = argv[6] if len(argv) > 6 else ""   # "r,g,b" subagent colour -> double gutter
+
+    # The launcher (claude-cmd-fmt / claude-monitor-fmt) claims a palette slot, colours
+    # the header chip with it, and passes the index here so the gutter + finish chip
+    # match — header, gutter, and finish all share one colour, and parallel jobs differ.
+    # (If no slot is passed we claim our own, as a fallback.)
+    if len(argv) > 4 and argv[4].lstrip("-").isdigit():
+        SLOT, _MARKER = int(argv[4]), None
+    else:
+        SLOT, _MARKER = claude_slots.claim(KIND, LOG)
+    SLOT_RGB = claude_slots.color(KIND, SLOT)
+    if KIND == "fg":
+        SLOT_RGB = O.SLATE           # matches claude-cmd-pre.py's "▶ foreground" header
+    # When this background/monitor job was launched *by a subagent*, a second gutter bar
+    # in the subagent's colour (outer = which subagent, inner = which bg/monitor job)
+    # keeps nested parallel jobs distinguishable. claude-substream.py passes "r,g,b".
+    OUTER_RGB = None
+    if OUTER:
+        try:
+            OUTER_RGB = tuple(int(x) for x in OUTER.split(","))
+        except Exception:
+            OUTER_RGB = None
+
+    # (env contract — see the comments on each name above the placeholders' old
+    # top-level homes, kept below at their point of use)
+    SRC = os.environ.get("CLAUDE_STREAM_SRC") or ""
+    OWN = os.environ.get("CLAUDE_STREAM_OWN") == "1"
+    DONE = os.environ.get("CLAUDE_STREAM_DONE") or ""
+    SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
+    GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
+    CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
+
+    RKIND, RVALUE = _detect_render(CMD)
+    MD = bool(RKIND and RKIND.name == "md")
+    RENDER_KIND = (None if RKIND is None
+                   else RKIND.name + ":" + RVALUE if RKIND.streamer_takes_value
+                   else RKIND.name)
+    SNIFF = (RENDER_KIND is None and KIND == "fg"
+             and os.environ.get("CLAUDE_MIRROR_MD_SNIFF", "1") != "0")
 
 
 def release_slot():
@@ -93,27 +136,33 @@ def unescape(s):
 # tail THAT instead — live data lands there. We wait for it to appear (a `>` truncate
 # may create it a beat after launch) and fall back to the task output file if it never
 # does. Tailing from offset 0 is right for `>` (the file is freshly truncated).
-SRC = os.environ.get("CLAUDE_STREAM_SRC") or ""
+# -> SRC = $CLAUDE_STREAM_SRC (bound in _init)
+#
+# OWN ($CLAUDE_STREAM_OWN):
 # Set only for a "fg" job whose output file we created ourselves (a tee target, not
 # the command's own explicit redirect) — safe to delete once fully read.
-OWN = os.environ.get("CLAUDE_STREAM_OWN") == "1"
+#
+# DONE ($CLAUDE_STREAM_DONE):
 # The ".done" sentinel path claude-cmd-pre.py agreed with claude-cmd-fmt.py on — a
 # session-keyed /tmp path, deliberately NOT derived from SRC (when SRC is the
 # command's own redirect target, `SRC + ".done"` would land next to a user file).
 # Falls back to `path + ".done"` below for launchers predating this env var.
-DONE = os.environ.get("CLAUDE_STREAM_DONE") or ""
+#
+# SKIP_EXISTING ($CLAUDE_STREAM_SKIP_EXISTING):
 # Set in two cases where the tailed file already holds bytes that are NOT this job's
 # output: (a) a Ctrl+B-converted command's replacement "bg" tailer — the departing fg
 # tailer already showed everything up to the hand-off, and Claude Code's task-output
 # file holds the FULL output from the start; (b) a `>>` append redirect — the target
 # file's prior contents predate the command. Skip whatever exists at spawn time.
-SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
+#
+# GROUP ($CLAUDE_STREAM_GROUP):
 # The block's copy-group id (⧉ copy links), set by the launcher (claude-cmd-pre.py:
 # the tool_use_id; claude-cmd-fmt.py: the backgroundTaskId) so this tailer's
 # gut/finish ops join the same group as the header/code ops the launcher emitted.
 # Unset for launchers that don't tag (monitors, a subagent's nested jobs) — those
 # blocks just render without copy links, exactly as before.
-GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
+#
+# CMD ($CLAUDE_STREAM_CMD):
 # The ORIGINAL (pre-tee-wrap) command whose output this stream carries, passed by
 # every launcher via hookkit.stream_env. Content-render detection — does this fg
 # command stream a markdown / JSON / YAML / source file's raw contents
@@ -126,7 +175,6 @@ GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
 # by passing the command, and a new render mode is one change in one place.
 # fg-only, as before: bg/monitor output is a job log, not a file's contents
 # (the fence-sniff below stays the only content-keyed fallback).
-CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
 
 
 def _detect_render(cmd):
@@ -147,13 +195,6 @@ def _detect_render(cmd):
     return None, None
 
 
-RKIND, RVALUE = _detect_render(CMD)
-MD = bool(RKIND and RKIND.name == "md")
-RENDER_KIND = (None if RKIND is None
-               else RKIND.name + ":" + RVALUE if RKIND.streamer_takes_value
-               else RKIND.name)
-
-
 def _content_streamer():
     """Instantiate RKIND's core content streamer from its registry-declared
     "module:Class" spec (passing the detection value — the lexer — when the
@@ -170,9 +211,7 @@ def _content_streamer():
 # the whole stream renders as markdown (prose + per-language fences); otherwise it
 # streams verbatim, exactly as before. The decision is made on that first read only —
 # never buffered across polls — so live line-by-line streaming is preserved. Off with
-# CLAUDE_MIRROR_MD_SNIFF=0.
-SNIFF = (RENDER_KIND is None and KIND == "fg"
-         and os.environ.get("CLAUDE_MIRROR_MD_SNIFF", "1") != "0")
+# CLAUDE_MIRROR_MD_SNIFF=0. (SNIFF, bound in _init.)
 _FENCE = re.compile(r"(?m)^[ \t]{0,3}(```|~~~)[^\n`]*$")
 # Timing seams (docs/testing.md): how long bg/fg wait for the task output file
 # to appear (a monitor waits on process liveness instead — monitor_wait_file),
@@ -632,6 +671,7 @@ def main(run):
 
 
 def entry():
+    _init(sys.argv)
     with T.stream_lifecycle(LOG, KIND, task_id=TASKID, src_path=SRC,
                             ctx={"kind": KIND, "taskid": TASKID, "md": MD},
                             on_exit=release_slot) as run:

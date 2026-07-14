@@ -202,8 +202,8 @@ def test_stream_build_chip_branches():
     body (plugins/claude_code/stream.py build_chip) — the override branches:
     precomputed PostToolUse chip (its colour, slot fallback), the subagent
     pass/fail hand-off, and the per-kind generic texts. Run in a fresh
-    interpreter with a controlled argv: the module still parses argv at
-    import (deliberately unchanged), and a digit SLOT avoids a slot claim."""
+    interpreter (import is side-effect free since _init() took over argv
+    parsing — build_chip is a pure function of its arguments)."""
     import os
     import subprocess
     prog = """

@@ -47,6 +47,35 @@ def test_substream_imports_clean():
     _import_fresh("plugins.claude_code.substream")
 
 
+_STREAM_PROG = """
+import sys, os
+sys.argv = ["import-safety-test"]          # no argv contract available
+# Importing stream must claim no palette slot and write no state DB — the old
+# top-level `SLOT, _MARKER = claude_slots.claim(KIND, LOG)` did both.
+from core import slots as claude_slots
+from core import state as S
+def _boom(*a, **k):
+    raise AssertionError("slot claim / state-DB write at import time")
+claude_slots.claim = _boom
+S.connect = _boom
+import plugins.claude_code.stream as ST
+assert ST.SLOT == 0 and ST._MARKER is None, "slot bound at import"
+print("OK")
+"""
+
+
+def test_stream_imports_clean():
+    """stream must not parse argv, read the CLAUDE_STREAM_* env contract, or
+    — worst of all — claim a palette slot (a state-DB WRITE) at import; the
+    run identity is bound by _init(), called only from entry()."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("KITTY_", "CLAUDE_"))}
+    r = subprocess.run([sys.executable, "-c", _STREAM_PROG], cwd=REPO, env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "OK" in r.stdout, (
+        f"import of plugins.claude_code.stream had side effects:\n{r.stderr}")
+
+
 _SPLIT_PROG = """
 import sys, os
 sys.argv = ["import-safety-test"]          # no argv contract available
