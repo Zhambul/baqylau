@@ -163,6 +163,20 @@ charter fits, document the owner here, and (if cheap) add a grep test.
 - Every bug fix ships the test that would have caught it. Refactors extend
   the contract/import-safety/grep tests that guard their rule.
 
+## Linting
+
+- **ruff is the repo's linter** (pinned in `requirements-dev.txt`); the config
+  in `ruff.toml` encodes the house rules above — pyflakes + pycodestyle-error +
+  pylint-equivalent + bugbear, with every ignore mapped to a documented rule
+  (deferred imports = import purity, `global` = the renderer loop state,
+  check-less `subprocess.run` = silenced kitten calls, compact one-liners and
+  short names allowed, complexity limits off). Don't silence a finding with an
+  inline `noqa` when it reflects a house rule — move the rule into `ruff.toml`
+  with a comment; `noqa` is for genuine one-off sites (e.g. the mirror's
+  pygments availability probe).
+- `make lint` must stay clean — CI runs it before the test suite. `make
+  lint-fix` applies the safe auto-fixes.
+
 ## Docs
 
 - `docs/` is the design record: update the mechanism's doc **in the same

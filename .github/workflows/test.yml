@@ -24,6 +24,9 @@ jobs:
       # (hookkit.notify_tab) resolve on the runner.
       - run: python3 bin/retarget-python.py --revert
       - run: python3 -m pip install -r requirements-dev.txt
+      # Lint before test: ruff is pinned in requirements-dev.txt, config in
+      # ruff.toml — the tree must stay finding-free.
+      - run: make lint
       # pytest-timeout must scale in LOCKSTEP with conftest's WAIT_SCALE (6x on
       # CI): pytest.ini's 30s is sized for local runs, and an unscaled per-test
       # timeout kills a slow-but-passing wait_until at 30s as an opaque thread

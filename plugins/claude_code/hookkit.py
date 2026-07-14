@@ -116,7 +116,6 @@ def ignore(d, reason):
     """Audit an early-return decision (the decision column is what makes
     hook_events diagnostic). Returns None so handlers can `return ignore(...)`."""
     A.hook_event(d, decision="ignored: " + reason)
-    return None
 
 
 def is_failure(d):

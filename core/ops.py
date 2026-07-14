@@ -42,7 +42,7 @@
 # absent lk defaults to the command block's " ⧉cmd ⧉out" pair. ⧉cmd copies the code
 # op's text as displayed (the pretty-printed form — owner's call: WYSIWYG; it's
 # equivalent, runnable bash either way); ⧉out/⧉copy the ANSI-stripped gut text.
-import json, os, time
+import os
 
 from core.noaudit import load_audit
 

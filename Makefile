@@ -17,4 +17,11 @@ test-all:
 # Alias for the (now default-parallel) suite; kept for muscle memory.
 test-par: test
 
-.PHONY: test test-seq test-all test-par
+# Lint (ruff — config in ruff.toml encodes docs/styleguide.md; CI-enforced).
+lint:
+	$(PY) -m ruff check .
+
+lint-fix:
+	$(PY) -m ruff check . --fix
+
+.PHONY: test test-seq test-all test-par lint lint-fix

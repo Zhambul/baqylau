@@ -26,7 +26,6 @@
 import gzip
 import json
 import os
-import socket
 import socketserver
 import sys
 import time

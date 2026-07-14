@@ -452,13 +452,12 @@ def locate_viewport(w, tag=None, near=None):
                         dict({"tag": tag}, **(extra or {})))
             except Exception:
                 pass
-        return None
 
     win = os.environ.get("KITTY_WINDOW_ID")
     if not win:
         return _bail("no window")
     txt, exc = None, None
-    for attempt in range(3):        # the capture flakes under load — transient
+    for _attempt in range(3):        # the capture flakes under load — transient
         try:
             txt = _fe().get_text(win)
         except Exception as e:

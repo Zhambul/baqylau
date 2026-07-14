@@ -7,7 +7,6 @@
 # regression net for the cancel-recovery / hand-off / park-restore machinery.
 import json
 import os
-import signal
 import subprocess
 import time
 import uuid
@@ -86,7 +85,7 @@ def test_f1_minimal_session(run_hook, test_env, session, fake_kitten):
 
     run_hook(TAB, P.pre_bash(s, "echo f1"), argv=("pretool",))
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "executing"
-    p = run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo f1"))
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo f1"))
     src = fg_live_record(s)["src"]
     with open(src, "a") as f:
         f.write("f1 output\n")

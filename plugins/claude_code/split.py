@@ -31,10 +31,8 @@
 
 import glob
 import os
-import re
 import shutil
 import sqlite3
-import subprocess
 import sys
 import time
 
@@ -471,8 +469,10 @@ def sweep_tmp_debris():
     for p in glob.glob(tmp + "/claude-mirror-*"):
         try:
             if os.lstat(p).st_mtime < cutoff:
-                shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) \
-                    else os.remove(p)
+                if os.path.isdir(p):
+                    shutil.rmtree(p, ignore_errors=True)
+                else:
+                    os.remove(p)
         except OSError:
             continue
 

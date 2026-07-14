@@ -10,7 +10,6 @@ import os
 import sqlite3
 import subprocess
 import sys
-import time
 import uuid
 
 import payloads as P

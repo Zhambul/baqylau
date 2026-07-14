@@ -38,6 +38,10 @@ done
 make test        # the whole hermetic suite (parallel by default, pytest-xdist)
 make test-seq    # same, sequential (debugging / no xdist)
 make test-all    # + the opt-in real-kitty smoke tests
+
+# Lint (ruff, pinned in requirements-dev.txt; ruff.toml encodes docs/styleguide.md; CI-enforced)
+make lint        # must stay clean
+make lint-fix    # apply safe auto-fixes
 ```
 
 To debug a reported session bug, prefer the **`audit-debug` skill** (`.claude/skills/audit-debug/SKILL.md`) — it walks the triage order (anomalies → errors → timeline → targeted SQL) and documents the full audit schema.

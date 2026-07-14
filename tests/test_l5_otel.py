@@ -135,7 +135,7 @@ def test_receiver_sums_deltas_across_batches(run_hook, test_env, session):
 # ------------------------------------------------------------------- lifecycle
 
 def test_receiver_registers_stream_and_singleton(run_hook, test_env, session):
-    s = session.make()
+    session.make()
     port = _free_port()
     r1 = _spawn_receiver(test_env, port)
     try:

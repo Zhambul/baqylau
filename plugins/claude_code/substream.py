@@ -21,7 +21,7 @@
 # resolution, nested-tailer spawning, resume checkpointing, the four cancellation
 # signals, and the ended-footer. Turning transcript records into paint ops lives
 # in substream_render.py (the Renderer instance `REN`).
-import json, os, re, subprocess, sys, time
+import json, os, subprocess, sys, time
 
 from core import ops as O
 from core import render as R

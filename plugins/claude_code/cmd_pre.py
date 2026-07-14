@@ -20,7 +20,7 @@
 # the main loop, which always awaits one Bash call's Pre->exec->Post cycle before
 # starting the next, but not for concurrent subagents — those keep the old bundled
 # rendering (already excluded below via the agent_id check, same as claude-cmd-fmt.py).
-import json, os, shlex, sys, time
+import json, os, shlex, time
 
 from core import ops as O
 from core import slots as claude_slots

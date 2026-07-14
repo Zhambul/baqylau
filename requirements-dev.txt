@@ -7,3 +7,5 @@ pytest-timeout>=2.3
 pytest-xdist>=3.5
 pygments>=2.17
 wenmode>=0.9
+# Linter (make lint) — pinned exactly so CI findings match local runs.
+ruff==0.15.21

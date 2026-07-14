@@ -1,0 +1,52 @@
+# Ruff config — the repo's linter (make lint / make lint-fix, CI-enforced).
+# A standalone ruff.toml (not pyproject.toml) keeps the repo's stated
+# no-build-system / no-package-manifest property.
+#
+# The rule set encodes docs/styleguide.md; every ignore below maps to a
+# documented house rule, not a taste call. Interpreter is the retargeted
+# pyenv 3.12.1 (bin/retarget-python.py).
+
+target-version = "py312"
+line-length = 120           # longest existing line is 118; not a style target
+
+# bin/ entries are hyphenated executables (un-importable by design) — lint
+# them explicitly alongside the packages and tests.
+include = ["*.py", "bin/claude-*.py", "bin/retarget-python.py"]
+
+[lint]
+select = [
+    "F",    # pyflakes — dead imports/variables, undefined names
+    "E",    # pycodestyle errors (subset via ignores below)
+    "PL",   # pylint-equivalent (subset via ignores below)
+    "B",    # bugbear (subset via ignores below)
+]
+ignore = [
+    # -- house style: compactness ---------------------------------------
+    "E401",     # `import os, sys` one-liners are the house import shape
+    "E701",     # one-line `if x: y` compound statements are idiomatic here
+    "E702",     # ditto semicolon-joined statements
+    "E741",     # single-letter names/aliases are allowed (l, A, P, R, ...)
+    # -- house style: import purity / deferred imports -------------------
+    "E402",     # bin/ entries sys.path.insert before imports; modules defer
+                # frontend/DB imports below module setup (styleguide: no
+                # import-time side effects)
+    "PLC0415",  # imports inside functions ARE the import-purity pattern
+    # -- documented mechanisms ruff would misread ------------------------
+    "PLW0603",  # `global` — the mirror's documented renderer loop state
+    "PLW1510",  # subprocess.run without check= — silenced fire-and-forget
+                # kitten calls are the norm (hooks must never fail)
+    "PLW2901",  # rewriting the loop var mid-loop is used deliberately
+    "B905",     # lenient zip() is deliberate at both sites (padding /
+                # sliding-window scoring truncate by design)
+    "PLW0108",  # monkeypatch(..., lambda: f()) shims are idiomatic in tests;
+                # the one product site (audit) defers evaluation on purpose
+    # -- complexity limits off (long named-phase main()s are house shape) -
+    "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+    "PLR2004",  # magic-value comparisons — tuning literals are handled by
+                # the styleguide's named-constant rule, not a lint gate
+]
+
+[lint.per-file-ignores]
+# markdown(): lambdas capture `codes` late but every sub() runs synchronously
+# within the same loop iteration — no escape, no bug.
+"core/render.py" = ["B023"]

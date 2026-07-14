@@ -12,7 +12,6 @@ import os
 import re
 import subprocess
 import sys
-import time
 import uuid
 from datetime import datetime, timezone
 
@@ -100,7 +99,7 @@ def codex(test_env, session, seed, reaper):
 
 
 def test_companion_job_discovered_streamed_and_completed(test_env, codex):
-    w = codex.start_watcher()
+    codex.start_watcher()
     jf, logfile = codex.add_job(title="codex Fix the thing",
                                 session_id=codex.s.sid)
     codex.log_event(logfile, "Running command: echo codex-hi")
@@ -134,7 +133,7 @@ def test_companion_job_discovered_streamed_and_completed(test_env, codex):
 
 
 def test_other_sessions_and_stale_jobs_skipped(test_env, codex):
-    w = codex.start_watcher()
+    codex.start_watcher()
     # a job owned by ANOTHER session, and one predating this session
     codex.add_job(title="codex Not ours", session_id="some-other-session")
     codex.add_job(title="codex Ancient",
@@ -149,7 +148,7 @@ def test_other_sessions_and_stale_jobs_skipped(test_env, codex):
 def test_rollout_adopted_and_tui_dropped(test_env, codex):
     """A raw `codex exec` rollout in this repo is adopted (after the
     companion grace); a human codex-tui rollout never is."""
-    w = codex.start_watcher()
+    codex.start_watcher()
     codex.add_rollout(originator="codex-tui", events=[
         {"type": "event_msg", "payload": {"type": "user_message",
                                           "message": "tui secret"}}])
@@ -352,7 +351,7 @@ def test_rollout_malformed_lines_audited_once_with_count(test_env, codex):
     ONE errors row per run — the FIRST bad line, with src/offset/snippet — the
     rest only counted, the total stamped onto the stream_end reason
     (`… · malformed-lines:N`). No audit flood however broken the writer."""
-    w = codex.start_watcher()
+    codex.start_watcher()
     path, u = codex.add_rollout(events=[
         {"type": "event_msg", "payload": {"type": "user_message",
                                           "message": "count my garbage"}}])

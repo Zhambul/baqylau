@@ -4,7 +4,6 @@
 # MUST hold (like everything a producer emits): zero-width SGR + LOGICAL newlines
 # only, never a hard wrap to a column — so wrap_gutter can reflow it at paint time.
 # These are pure-Python unit tests (no mirror subprocess needed).
-import re
 import sys
 
 from conftest import REPO

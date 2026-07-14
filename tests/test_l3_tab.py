@@ -8,8 +8,7 @@ import pytest
 
 import oracle
 import payloads as P
-from colors import COLOR_TABLE, clear_argv, tab_color_argv
-from conftest import wait_until
+from colors import clear_argv, tab_color_argv
 
 TAB = "claude-tab-status.py"
 LITERAL_STATES = ["idle", "working", "executing", "awaiting-bg",

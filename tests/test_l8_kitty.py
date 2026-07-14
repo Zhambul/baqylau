@@ -11,14 +11,12 @@ import json
 import os
 import shutil
 import subprocess
-import sys
-import time
 
 import pytest
 
 import oracle
 import payloads as P
-from conftest import REPO, wait_until
+from conftest import wait_until
 
 KITTY = shutil.which("kitty") or "/Applications/kitty.app/Contents/MacOS/kitty"
 

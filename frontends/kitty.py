@@ -336,7 +336,6 @@ class KittyFrontend(Frontend):
         `neighbors`. `neighbors` holds GROUP ids (confirmed live), which
         coincide with window ids only for never-regrouped windows — resolve
         through the tab's groups map first, then as a plain window id."""
-        name, value = var
         for osw in self.ls():
             for t in osw.get("tabs", []):
                 wins, pane = self._geometry_windows(t, var, exclude_var)
