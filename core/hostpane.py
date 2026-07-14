@@ -21,7 +21,9 @@
 import os
 import time
 
-from core import audit as A
+from core.noaudit import load_audit
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import paths as P
 from core import state as S
 

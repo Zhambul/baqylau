@@ -62,7 +62,9 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SELF = os.path.join(REPO, "claude-tab-status.py")
 import frontends  # noqa: E402  (the terminal adapter — kitty today)
-from core import audit as A  # noqa: E402  (in-process; every write swallows + spools)
+from core.noaudit import load_audit  # noqa: E402  (in-process; every write swallows + spools)
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import paths as P  # noqa: E402  (the one owner of the mirror-log path format)
 from core import state as St  # noqa: E402  (pid_alive only — DB reads stay mode=ro via sq())
 from core.tabs import (  # noqa: E402  (the core tab vocabulary + tab DB — see core/tabs.py)

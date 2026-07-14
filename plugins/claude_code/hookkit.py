@@ -20,13 +20,9 @@ import os
 import subprocess
 import sys
 
-try:
-    from core import audit as A         # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:                       # audit must never break a hook
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 from core import paths as P
 
 # The repo root, where the entry scripts live (this file is two package levels

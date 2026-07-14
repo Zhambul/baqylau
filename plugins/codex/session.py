@@ -35,7 +35,9 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 LAUNCH = os.path.join(REPO, "claude-codex-launch.py")
 
 import frontends                                   # noqa: E402
-from core import audit as A                        # noqa: E402
+from core.noaudit import load_audit                # noqa: E402
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import hostpane as HP                    # noqa: E402
 from core import paths as P                        # noqa: E402
 

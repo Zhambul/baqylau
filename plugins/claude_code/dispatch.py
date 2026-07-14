@@ -31,7 +31,9 @@ import json
 import re
 import sys
 
-from core import audit as A
+from core.noaudit import load_audit
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from plugins.claude_code import adopt
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tabstatus

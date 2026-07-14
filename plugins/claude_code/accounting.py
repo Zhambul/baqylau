@@ -7,13 +7,9 @@
 # its own transcript format + price table and bumps the same core counters.
 import json, os, time
 
-try:
-    from core import audit as A         # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:                       # audit must never break a producer
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 from core import ops as O
 from core import state as S
 

@@ -35,7 +35,9 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from core import paths as P
 from core import state as S
 from core import tail as T
-from core import audit as A
+from core.noaudit import load_audit
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 
 # token.usage `type` attribute -> the scoreboard's per-category counter key.
 _TYPE_KEY = {

@@ -42,13 +42,9 @@ from datetime import datetime, timedelta
 from core.slots import CODEX_PALETTE
 from core import state as S
 
-try:
-    from core import audit as A         # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 # The repo root, where the sibling ENTRY scripts live (this module is two
 # package levels below it) — the per-run streamer is spawned by entry filename.

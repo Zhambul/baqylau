@@ -37,8 +37,8 @@ def on_session_start(log, cwd, sid):
             fn(log, cwd, sid)
         except Exception:
             try:
-                from core import audit as A
-                A.error(log, "plugin on_session_start (%s)" % p.__name__)
+                from core.noaudit import load_audit
+                load_audit().error(log, "plugin on_session_start (%s)" % p.__name__)
             except Exception:
                 pass
 

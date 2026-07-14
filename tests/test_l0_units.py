@@ -53,6 +53,38 @@ def test_load_audit_returns_real_module():
     assert load_audit() is core.audit
 
 
+def test_no_module_bypasses_load_audit():
+    """core/noaudit.py is the ONE audit-import-degradation helper: no other
+    module may define its own _NoAudit-style stub, and every module gets its
+    audit handle via load_audit() rather than importing core.audit directly
+    (claude_audit.py, the CLI compat shim over the audit module itself, is
+    the sole sanctioned direct import). Grep-style pin, like the semantic
+    colour-table test in test_l5_render.py."""
+    import os
+    import re
+    stub_pat = re.compile(r"class\s+_?NoAudit\b")
+    imp_pat = re.compile(r"^\s*from core import audit\b|^\s*import core\.audit\b",
+                         re.MULTILINE)
+    allowed_import = {"core/noaudit.py", "claude_audit.py"}
+    offenders = []
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in
+                   (".git", "__pycache__", "tests", ".claude")]
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            rel = os.path.relpath(os.path.join(root, f), REPO)
+            with open(os.path.join(root, f), encoding="utf-8",
+                      errors="replace") as fh:
+                text = fh.read()
+            if rel != "core/noaudit.py" and stub_pat.search(text):
+                offenders.append("%s: defines its own NoAudit stub" % rel)
+            if rel not in allowed_import and imp_pat.search(text):
+                offenders.append("%s: imports core.audit directly "
+                                 "(use core.noaudit.load_audit)" % rel)
+    assert not offenders, "\n".join(offenders)
+
+
 # ---- core.hostpane._anchored_tab_windows — the shared anchor traversal ------
 # One helper now backs both close_stale_mirrors and tab_host_sid; these pins
 # hold the anchoring invariant (docs/mirror-pane.md § Anchoring): an anchor

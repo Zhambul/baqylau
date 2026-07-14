@@ -44,7 +44,9 @@ import time
 # launcher are spawned by entry filename.
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import frontends                          # noqa: E402
-from core import audit as A               # noqa: E402
+from core.noaudit import load_audit       # noqa: E402
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import hostpane as HP           # noqa: E402  (shared host pane lifecycle)
 from core import paths as P               # noqa: E402
 from core import tabs as T                # noqa: E402  (adopt_note — sid-fork registry)

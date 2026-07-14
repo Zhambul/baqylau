@@ -52,7 +52,9 @@
 #     exactly one wins, the losers see the note gone and fall through.
 import os
 
-from core import audit as A
+from core.noaudit import load_audit
+
+A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import paths as P
 from core import tabs as T
 

@@ -9,13 +9,9 @@ import time
 from core import paths as P
 from core import state as S
 
-try:
-    from core import audit as A         # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:                       # audit must never break a producer
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 # --- team message tracker (the "✉ messages" scoreboard row + mirror events) -----
 # A second, separate scoreboard line rendered ABOVE the session line by
