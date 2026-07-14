@@ -289,9 +289,13 @@ New always-audited swallow sites (previously silent — their absence used to ma
   idle-fallback end with NO proc-found row = find_proc never matched (it died
   before the tailer ran `ps`, or its argv was unmatchable); one WITH the row =
   the latch broke later. A `■ monitor failed` chip with no stream row is normal — a failed
-  Monitor call closes inline, no tailer is spawned. Substream/codex streams
+  Monitor call closes inline, no tailer is spawned. Substream/codex AND (since
+  2026-07-14) bg/fg/monitor streams
   ending `state-db-parked (session end)` (and codex `(before header)`) are the
-  healthy quit-while-running shape — deliberately footer-less, NOT a lost block.
+  healthy quit-while-running shape — deliberately footer-less, NOT a lost block
+  (before that date a bg/fg tailer outliving SessionEnd spun on, and its first
+  post-park emit RECREATED an empty state DB at the live path — see the
+  reuse-live-db tell under "Mirror came back empty" below).
 - **Stream ended too early / output missing at the end** — check `errors` for
   "lsof failed — assuming writer still present" (transient lsof trouble is now
   survivable; a `writer-gone` end *without* such an error row and with the
@@ -338,7 +342,14 @@ New always-audited swallow sites (previously silent — their absence used to ma
   (`core/paths.parked_db`), which survives a reboot — a current-build `fresh-db`-on-resume
   is NOT the reboot cause; look to a missing `keep-history` or the sweep instead.
   Pre-2026-07-04 builds always truncated on SessionStart — empty-on-resume there is the
-  old design, not a bug.
+  old design, not a bug. A **`reuse-live-db` on a resume with an EMPTY mirror**
+  *(fixed 2026-07-14)* is the zombie-tailer shape: a background job silent
+  across SessionEnd printed after the park, the still-running bg/fg tailer's
+  emit recreated a fresh empty DB at the live path, and the resume trusted it —
+  the real history sits in the park untouched. Tell: a `bg`/`fg` stream row
+  whose `ended_at` is AFTER the SessionEnd's `keep-history` row with an
+  end_reason other than `state-db-parked (session end)`; current builds exit
+  with that reason before pumping, so the shape means a regression.
 - **Cost/scoreboard/tab/mirror ALL frozen after a `--resume` — the session
   "works" but nothing updates** *(resume forked the sid, fixed 2026-07-11)* —
   Claude Code fired the `source=resume` SessionStart under the **old** sid (so

@@ -7,6 +7,7 @@
 # regression net for the cancel-recovery / hand-off / park-restore machinery.
 import json
 import os
+import sqlite3
 import subprocess
 import time
 import uuid
@@ -401,6 +402,46 @@ def test_f4b_ctrl_b_conversion(run_hook, test_env, session, task_dir, writer):
     wbg.terminate()
     wait_until(lambda: streams_all_ended(test_env, s.sid), desc="all ended")
     oracle.assert_clean(test_env, s.sid)
+
+
+def test_f4c_bg_tailer_exits_on_park_without_recreating_db(
+        run_hook, test_env, session, writer):
+    """A background job silent across SessionEnd: parking the state DB is the
+    bg tailer's exit signal (same probe the substream/codex tailers poll). The
+    check runs BEFORE the pump, so output landing after the park is never
+    emitted — a post-park emit recreated a fresh empty DB at the live path
+    (whose absence is the session-alive signal), turning the next resume into
+    reuse-live-db with the real history stranded in the park."""
+    s = session.make()
+    out = os.path.join(s.cwd, "bg.log")
+    w = writer(out)                # long-lived; terminated below
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, "quiet_job > %s" % out, run_in_background=True,
+                         background_task_id="bg-" + uuid.uuid4().hex[:8]))
+    with open(out, "a") as f:
+        f.write("before park\n")
+    wait_until(lambda: "before park" in s.ops_text(), desc="bg output streams")
+
+    run_hook("claude-split.py", P.session_end(s), argv=("close",))  # parks it
+    assert os.path.exists(s.parked_db) and not os.path.exists(s.state_db)
+    with open(out, "a") as f:
+        f.write("after park\n")    # the losing interleaving: job prints post-park
+
+    wait_until(lambda: streams_all_ended(test_env, s.sid),
+               desc="bg tailer exits once the DB is parked")
+    assert any("state-db-parked" in (r or "")
+               for r in end_reasons(test_env, s.sid))
+    assert not os.path.exists(s.state_db), \
+        "post-park emit recreated the live state DB"
+    conn = sqlite3.connect("file:%s?mode=ro" % s.parked_db, uri=True, timeout=5)
+    try:
+        parked_ops = "\n".join(r[0] for r in conn.execute("SELECT op FROM ops"))
+    finally:
+        conn.close()
+    assert "after park" not in parked_ops, "post-park output polluted the park"
+    w.terminate()
+    oracle.assert_clean(test_env, s.sid,
+                        allow=("slot claims without a matching release",))
 
 
 # --------------------------------------------------------------------- F5

@@ -126,6 +126,13 @@ def _init(argv):
 
 
 def release_slot():
+    # No-op once the session's state DB is parked: the live table went with it,
+    # and slots.release's connect would CREATE a fresh empty DB at the live
+    # path — the exact hazard the completion loops' parked() exits avoid. This
+    # runs as stream_lifecycle's on_exit, i.e. also ON the parked exit path,
+    # and a silent-so-far tailer has no cached connection to hide behind.
+    if S.parked(LOG):
+        return
     claude_slots.release(KIND, LOG, SLOT, os.getpid())
 
 
@@ -748,6 +755,18 @@ def main(run):
     is_done = make_is_done(tail, path, mon_pid, st)
     backstop = start + FG_BACKSTOP_S if KIND == "fg" else None
     while True:
+        if S.parked(LOG):
+            # SessionEnd parked the state DB — session over, quit footer-less
+            # (S.parked, the shared probe the substream/codex tailers poll too;
+            # monitor_wait_file above runs the same check while waiting for a
+            # lazily-created file). Checked BEFORE the pump, and returning past
+            # drain/chip/cleanup: a post-park pump's O.emit would either
+            # recreate a fresh empty DB at the live path — whose absence IS the
+            # session-alive signal, so the next resume sees reuse-live-db and
+            # strands the real history in the park — or, through a cached
+            # connection, pollute the parked snapshot (docs/streaming.md).
+            run.end("state-db-parked (session end)")
+            return
         if pump() is None:
             run.end("src-file-vanished")
             break

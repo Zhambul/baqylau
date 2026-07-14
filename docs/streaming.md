@@ -96,6 +96,19 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     Monitor call** (`PostToolUseFailure` — no `taskId`, nothing will ever stream)
     gets its block closed inline by `claude-monitor-fmt.py` with a
     `■ monitor failed` chip, instead of a dangling open header.
+  - **All kinds also poll `state.parked()`** (the shared session-over probe the
+    substream, codex tailers, codex watcher and scorebar run): SessionEnd parks
+    the state DB away from the live path, and a bg/monitor job can keep printing
+    long after — with no session left, the tailer quits footer-less
+    (`state-db-parked (session end)`), releasing nothing. The check runs at the
+    **top of each loop iteration, before the pump**: a post-park `O.emit` either
+    *recreates a fresh empty DB at the live path* — whose absence IS the
+    session-alive signal, so the next `--resume`'s `decide_log_fate` reads
+    `reuse-live-db` and strands the real history in the park — or, through a
+    cached connection, pollutes the parked snapshot. For the same reason the
+    tailer's slot release (`stream_lifecycle`'s `on_exit`) no-ops once parked:
+    the `live` table went with the DB, and `slots.release`'s connect would mint
+    the file a never-emitted silent tailer has no cached connection to hide.
   - **All tailers handle truncation**: if the tailed file *shrinks* (the command
     runs `> file` again, or the file is rotated in place), `FileTailer.pump`
     restarts from byte 0 — the old offset pointed past EOF, so nothing would ever
