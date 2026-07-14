@@ -43,6 +43,25 @@ def _tee_wrap(cmd, src):
     return "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
 
 
+def _prepare_tee(cmd, stem, cwd):
+    # Shared orchestration for both live-fg paths (main session + subagent):
+    # if the command already redirects its own stdout to a file, tail THAT
+    # (no rewrite); otherwise create `stem + ".out"` and tee into it.
+    # Returns (src, own, append, wrapped_cmd) — wrapped_cmd is None on the
+    # redirect path — or None if the tee file could not be created (the
+    # caller picks its own failure response).
+    redirect = CT.parse_redirect(cmd, cwd)
+    if redirect:
+        src, append = redirect                       # tail the command's own redirect target
+        return src, False, append, None
+    src = stem + ".out"
+    try:
+        open(src, "a").close()
+    except Exception:
+        return None
+    return src, True, False, _tee_wrap(cmd, src)
+
+
 def _emit_updated_input(ti, wrapped_cmd):
     # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):
     # updatedInput only takes effect with "allow" (auto-approve) or "ask"
@@ -78,20 +97,12 @@ def sub_fg(d, log):
     if not cmd.strip() or ti.get("run_in_background") or not tid:
         return H.ignore(d, "agent_id (not a live-fg subagent command)")
 
-    redirect = CT.parse_redirect(cmd, d.get("cwd"))
     stem = f"{log}.subfg.{tid}"
     done = stem + ".done"
-    wrapped_cmd, own, append = None, False, False
-    if redirect:
-        src, append = redirect                       # tail the command's own redirect target
-    else:
-        src = stem + ".out"
-        try:
-            open(src, "a").close()
-        except Exception:
-            return H.ignore(d, "agent_id (could not create tee file)")
-        own = True
-        wrapped_cmd = _tee_wrap(cmd, src)
+    prep = _prepare_tee(cmd, stem, d.get("cwd"))
+    if prep is None:
+        return H.ignore(d, "agent_id (could not create tee file)")
+    src, own, append, wrapped_cmd = prep
 
     rec = {"src": src, "done": done, "own": own, "append": append, "tid": tid}
     if not S.hand_put(log, "subfg:" + tid, rec):
@@ -142,25 +153,16 @@ def main():
 
     # If the command already sends its own stdout to a file, tail THAT instead of
     # tee-ing into a second file (shared tokenizer — see claude_ops.parse_redirect).
-    redirect = CT.parse_redirect(cmd, d.get("cwd"))
-    wrapped_cmd, own, append = None, False, False
     # The ".done" sentinel gets its own session-keyed /tmp path, NEVER derived from
     # the command's redirect target — deriving it from `src` used to drop stray
     # `<target>.done` files (even literal `$VAR.done`) into the project directory
     # whenever the command redirected to a relative path.
     stem = f"{log}.fg.{os.getpid()}.{int(time.time() * 1000)}"
     done = stem + ".done"
-
-    if redirect:
-        src, append = redirect
-    else:
-        src = stem + ".out"
-        try:
-            open(src, "a").close()
-        except Exception:
-            return
-        own = True
-        wrapped_cmd = _tee_wrap(cmd, src)
+    prep = _prepare_tee(cmd, stem, d.get("cwd"))
+    if prep is None:
+        return
+    src, own, append, wrapped_cmd = prep
 
     if not os.path.exists(H.script("claude-stream.py")):
         if own:

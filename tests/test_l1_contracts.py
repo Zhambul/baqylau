@@ -150,6 +150,25 @@ def test_cmd_pre_wrap_and_envelope_identical_both_paths(run_hook, test_env,
     assert ".out" in cmd
 
 
+@pytest.mark.parametrize("agent_id", [None, "agent-x"])
+def test_cmd_pre_redirect_branch_identical_both_paths(run_hook, test_env,
+                                                      session, agent_id):
+    # Both fg paths go through the shared _prepare_tee orchestration: a command
+    # that already redirects its own stdout is NOT rewritten (no updatedInput,
+    # its own target is tailed instead) on the main path AND the subagent path.
+    s = session.make()
+    kw = dict(agent_id=agent_id) if agent_id else {}
+    p = run_hook("claude-cmd-pre.py", P.pre_bash(s, "ls -la > files.txt", **kw))
+    assert p.stdout.strip() == "", "redirecting command must not be rewritten"
+    assert any("own redirect" in d for d in oracle.decisions(test_env, s.sid))
+    if agent_id:
+        assert not s.live("fg"), "subagent fg must NOT claim the fg slot"
+        assert any(a == "write" and ":subfg:" in path
+                   for (path, a, _c) in oracle.state_files(test_env, s.sid))
+    else:
+        assert s.live("fg"), "redirect path still claims the fg slot"
+
+
 def test_cmd_pre_subagent_fg_optout(run_hook, test_env, session):
     s = session.make()
     env = dict(test_env, CLAUDE_MIRROR_LIVE_FG_SUB="0")
