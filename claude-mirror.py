@@ -244,13 +244,33 @@ def viewbody(op):
     return s
 
 
+def iter_painted(w, ops=None):
+    """THE painted-row walk, shared by every site that must agree on what a
+    full frame contains: each (op_index, op, inner_op, rendered_text) in
+    paint order — every op with its open view blocks expanded, rendered at
+    width `w`. Any two of these walks disagreeing is a model-vs-buffer
+    divergence (a restore lands where the frame math said, not where the
+    frame is), so there is exactly one."""
+    for i, op in enumerate(ops if ops is not None else OPS):
+        for o in expanded(op):
+            yield i, op, o, render(o, w)
+
+
+def painted_rows(w):
+    """Total painted rows of a full frame at width `w`: the banner line (the
+    leading 1) plus, per rendered op, its newline count + 1 — the +1 is the
+    row the op's own trailing newline occupies. Callers computing a restore
+    amount add ONE more (+1) themselves for the cursor row the frame's final
+    newline leaves; that cursor +1 is scroll math, not frame content."""
+    return 1 + sum(txt.count("\n") + 1 for _, _, _, txt in iter_painted(w))
+
+
 def frame_bytes(w):
     """The full-reflow byte string: clear screen + scrollback, banner, every
     op (with open view blocks expanded) at width `w`."""
     out = ["\033[H\033[2J\033[3J", BANNER, "\n"]    # home, clear screen + scrollback
-    for op in OPS:
-        for o in expanded(op):
-            out.append(render(o, w)); out.append("\n")
+    for _, _, _, txt in iter_painted(w):
+        out.append(txt); out.append("\n")
     return "".join(out)
 
 
@@ -290,9 +310,8 @@ def _audit_paint(kind, w, body):
 def paint_new(ops):
     w = width()
     out = []
-    for op in ops:
-        for o in expanded(op):
-            out.append(render(o, w)); out.append("\n")
+    for _, _, _, txt in iter_painted(w, ops):
+        out.append(txt); out.append("\n")
     try:
         sys.stdout.write("".join(out)); sys.stdout.flush()
     except Exception:
@@ -310,13 +329,10 @@ def trim_to_budget(w):
     draws — already-painted lines stay in the terminal's scrollback until
     the next reflow rewrites it (at which point the trimmed rows would have
     fallen off the scrollback ceiling anyway)."""
-    total, heights = 1, []
-    for op in OPS:
-        n = 0
-        for o in expanded(op):
-            n += render(o, w).count("\n") + 1
-        heights.append(n)
-        total += n
+    heights = [0] * len(OPS)
+    for i, _, _, txt in iter_painted(w):
+        heights[i] += txt.count("\n") + 1
+    total = 1 + sum(heights)
     if total <= ROW_BUDGET:
         return
     drop, acc = 0, 0
@@ -333,11 +349,10 @@ def measure(gid):
     when the op isn't in OPS (trimmed / never painted)."""
     w = width()
     acc, pos, idx = 1, None, None
-    for i, op in enumerate(OPS):
-        for o in expanded(op):
-            if idx is None and o is op and op.get("v") == gid:
-                pos, idx = i, acc
-            acc += render(o, w).count("\n") + 1
+    for i, op, o, txt in iter_painted(w):
+        if idx is None and o is op and op.get("v") == gid:
+            pos, idx = i, acc
+        acc += txt.count("\n") + 1
     return pos, idx, acc
 
 
@@ -452,10 +467,8 @@ def locate_viewport(w, tag=None, near=None):
         return _bail("empty capture")
     _LAST_CAP0 = cap[0][:60]
     rows = [R.strip_ansi(BANNER).rstrip()]
-    for op in OPS:
-        for o in expanded(op):
-            rows.extend(r.rstrip() for r in
-                        R.strip_ansi(render(o, w)).split("\n"))
+    for _, _, _, rtxt in iter_painted(w):
+        rows.extend(r.rstrip() for r in R.strip_ansi(rtxt).split("\n"))
     _LOC_ROWS = len(rows)
     # Candidate offsets from a distinctive probe row; full scan as fallback.
     cands = None
@@ -503,10 +516,7 @@ def restore_to(j0):
     if not win or h is None:
         return False
     w = width()
-    total = 1
-    for op in OPS:
-        for o in expanded(op):
-            total += render(o, w).count("\n") + 1
+    total = painted_rows(w)
     try:
         import frontends
         fe = frontends.get()
@@ -577,10 +587,7 @@ def toggle_repaint(gid, j0, follow=False):
     h = _height()
     up = None
     if h is not None:
-        total = 1                              # the banner line
-        for op in OPS:
-            for o in expanded(op):
-                total += render(o, w).count("\n") + 1
+        total = painted_rows(w)                # 1 (banner) + every op's rows
         if follow:
             j0 = total + 1 - h                 # the POST-toggle bottom
         up = total + 1 - h - j0
@@ -639,9 +646,278 @@ def toggle_repaint(gid, j0, follow=False):
             "retried": retried, "follow": follow, "home": j0}
 
 
-def main():
+# --- main-loop phases -------------------------------------------------------
+# main() is a fixed sequence of phase functions sharing one small mutable
+# context (`_Loop`) plus the module globals above. The ORDER of phases is
+# load-bearing (toggle planning must precede the reflow dispatch; the settle
+# guard runs after it; the wait picks its tick from the guard) — each phase
+# below is the corresponding block of the old monolithic loop, moved verbatim.
+
+
+class _Loop:
+    """The per-iteration loop state the phases hand each other."""
+    __slots__ = ("db", "wake_r", "last", "ino", "cur_ino",
+                 "toggled", "t_idx", "anchor", "follow")
+
+    def __init__(self, db, wake_r):
+        self.db, self.wake_r = db, wake_r
+        self.last, self.ino, self.cur_ino = 0, None, None
+        self.toggled, self.t_idx, self.anchor, self.follow = \
+            None, None, None, False
+
+
+def sync_inode(L):
+    """Connection/inode lifecycle: detect a recreated DB file and reset.
+    A recreated DB file (new session reusing the key, or a park/restore
+    cycle) leaves the cached connection pointing at the OLD inode — drop it
+    and re-read from the top. A missing DB just means no producer has
+    written yet (or a resume is mid-restore): keep waiting, don't reset."""
+    global _resized, _FORCE_PAINT
+    try:
+        L.cur_ino = os.stat(L.db).st_ino
+    except OSError:
+        L.cur_ino = None
+    if L.cur_ino is not None and L.cur_ino != L.ino:
+        if L.ino is not None:
+            stale = St._CONNS.pop(L.db, None)
+            if stale is not None:
+                try:
+                    # Close, don't just drop: the discarded connection holds
+                    # open fds to the DELETED old inode (+ its WAL/SHM),
+                    # pinning them for this long-lived renderer's lifetime —
+                    # one leak per park/restore or session-recreate cycle.
+                    # (St._connect now also self-evicts on inode change; this
+                    # stays because it drives the paint-state reset below.)
+                    stale[0].close()
+                except Exception:
+                    pass
+            L.last, OPS[:] = 0, []
+            VIEW_OPEN.clear(); _VIEW_OPS.clear()
+            _resized = _FORCE_PAINT = True
+        L.ino = L.cur_ino
+        # ADOPT the persisted open-set silently: at startup (and after a
+        # park/restore reset) the kv `view-open` rows are inherited state,
+        # not a click — letting the poll below see them as a delta planned
+        # a toggle restore toward some op's line, so a freshly toggled
+        # pane opened scrolled deep into history instead of at the bottom.
+        try:
+            VIEW_OPEN.update(St.kv_get(LOG, "view-open") or [])
+        except Exception:
+            pass
+        # Register this renderer's pid so claude-copy.py can SIGWINCH-nudge
+        # an instant reflow after a view toggle (re-registered per inode:
+        # a park/restore cycle starts a fresh kv table).
+        try:
+            St.kv_set(LOG, "renderer-pid", os.getpid())
+        except Exception:
+            pass
+
+
+def drain_ops(L):
+    """Drain any new ops appended to the table. Returns (new_ops, restart) —
+    restart True means the table shrank under us and the loop must start the
+    iteration over (the old `continue`)."""
+    global _resized, _FORCE_PAINT
+    L.last, new = St.ops_after(LOG, L.last)
+    if L.last < 0:                       # table shrank under us — restart
+        L.last, OPS[:] = 0, []
+        _resized = _FORCE_PAINT = True
+        return new, True
+    OPS.extend(new)
+    # Bound memory on a long session by dropping oldest ops from the in-memory
+    # list. This only affects what a FUTURE full repaint (on resize) draws — the
+    # already-printed lines stay in the terminal's scrollback — so we must NOT
+    # repaint here. Repainting on every append once over the cap was the cause of
+    # the per-message flicker on big sessions. Trim with hysteresis to avoid
+    # slicing the list on literally every append.
+    if len(OPS) > MAX_OPS + 1000:
+        del OPS[:len(OPS) - MAX_OPS]
+    if new:
+        trim_to_budget(width())
+    return new, False
+
+
+def poll_toggles(L):
+    """Click-to-view toggles: any change to the `view-open` kv set (a
+    claude-copy.py /view click) reflows the whole pane, expanding or
+    collapsing the affected blocks in place. BEFORE flipping the set,
+    find the toggled line's offset and recover the current viewport
+    top (the anchor must match against the PRE-toggle rendered rows —
+    exactly what's on screen right now)."""
+    global _resized
+    try:
+        cur_open = set(St.kv_get(LOG, "view-open") or [])
+    except Exception:
+        cur_open = VIEW_OPEN
+    if cur_open != VIEW_OPEN:
+        # Multiple gids in one delta (fast clicks coalescing into one
+        # poll tick) still get the anchored restore — any one of them
+        # serves as the plan's gid; the anchor is gid-independent.
+        delta = cur_open ^ VIEW_OPEN
+        L.toggled = min(delta) if delta else None
+        L.t_idx = L.anchor = None
+        L.follow = False
+        # Plan UNCONDITIONALLY — in particular do NOT skip when
+        # _resized is set: the click handler's own SIGWINCH nudge sets
+        # it before this branch ever runs, so gating on it silently
+        # disabled the anchor for every nudged toggle (the pane then
+        # parked at the bottom — the "scrolls to the very end" bug).
+        # A genuine concurrent resize just changes width() under the
+        # match, which fails confidence and degrades to the fallback.
+        if L.toggled:
+            # Trim BEFORE measuring: dropping rows after the plan
+            # would shift every index the plan just computed.
+            trim_to_budget(width())
+            _, L.t_idx, _ = measure(L.toggled)
+            if L.t_idx is not None:
+                # near=t_idx: the user clicked a VISIBLE line, so the
+                # true viewport is near it — a tie-breaking prior
+                # among twin matches, NOT a search constraint (the
+                # old windowed search that mistook this for a hard
+                # assumption missed real viewports).
+                L.anchor = locate_viewport(width(), tag="anchor",
+                                           near=L.t_idx)
+                # An at-bottom viewport follows the live tail; pinning
+                # it to an absolute offset would silently detach it —
+                # so the restore target becomes the NEW bottom. The
+                # small tolerance absorbs the logical-vs-visual line
+                # bias in the bottom math (wrapped rows).
+                h = _height()
+                if (L.anchor is not None and h and _LOC_ROWS
+                        and L.anchor >= _LOC_ROWS + 1 - h - 1):
+                    L.follow = True
+        VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
+        _resized = True
+
+
+def dispatch_reflow(L, new):
+    """Reflow dispatch: startup / resize / toggle -> full reflow (toggle plan
+    wins over a plain repaint); otherwise just append-paint the new ops."""
     global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS, \
         _WATCH_HOME, _GUARD_UNTIL, _GUARD_LEFT
+    if _resized:                         # startup / resize / toggle -> reflow
+        _resized = False
+        if L.toggled:
+            res = {}
+            if L.t_idx is not None:
+                # anchor None (capture failed / no match) degrades to the
+                # clicked-line-at-top frame: j0 = the line's own offset.
+                res = toggle_repaint(
+                    L.toggled, L.anchor if L.anchor is not None else L.t_idx,
+                    follow=L.follow)
+            else:
+                repaint()
+            # The one row that makes "the view jumped" diagnosable: what
+            # the plan saw, what the scroll did, and where the viewport
+            # VERIFIABLY landed (plus whether the DSR handshake made it,
+            # whether the restore had to be retried, and what the top of
+            # the pre-toggle capture actually said).
+            try:
+                from core import audit as A
+                A.state_file(LOG, St.db_path(LOG), "view-reflow",
+                             dict({"gid": L.toggled, "idx": L.t_idx,
+                                   "anchor": L.anchor,
+                                   "cap0": _LAST_CAP0}, **res))
+            except Exception:
+                pass
+            L.toggled, L.t_idx, L.anchor, L.follow = None, None, None, False
+            # Arm the post-toggle DRIFT WATCH: a toggle can verify its
+            # landing and the pane still end up somewhere else moments
+            # later ("transported to the top", observed live, with zero
+            # audit rows in between). For the next few seconds every
+            # viewport movement is recorded with its offset and timing —
+            # a user wheel-scroll shows as gradual steps, a bug as one
+            # instant leap.
+            if res.get("landed") is not None:
+                _WATCH_UNTIL = time.monotonic() + 8.0
+                _WATCH_POS = res["landed"]
+                # The guard defends the INTENDED anchor, not the measured
+                # landing — momentum in flight DURING the restore corrupts
+                # the landing itself, and adopting it as home left the
+                # guard defending the wrong place (observed: landed 1176
+                # off, guard content).
+                _WATCH_HOME = res.get("home", res["landed"])
+                _GUARD_UNTIL = time.monotonic() + 0.7
+                _GUARD_LEFT = 2
+        elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
+            _FORCE_PAINT = False
+            repaint()
+        else:
+            # A WINCH with an UNCHANGED size and no toggle plan (a stray
+            # or duplicate click-nudge). A full repaint here is not just
+            # wasted work — its clear-scrollback CLAMPS a scrolled-up
+            # viewport to the bottom with no restore (observed live).
+            _audit_paint("skip", width(), "")
+    elif new:
+        paint_new(new)
+
+
+def drift_watch():
+    """Post-toggle drift watch: sample where the viewport actually is and
+    record every movement (state_files `view-drift`) until the watch
+    expires. locate_viewport with the probe index is ~ms-cheap at this
+    cadence (one sample per 200ms tick, for 8s after a toggle).
+    SELF-HEAL: a movement in the first ~600ms is the instant-leap bug
+    (a verified landing yanked ~1000 rows within one tick, observed
+    live at +224ms with no rc actor and no repaint) — scroll it back,
+    once per toggle. Deliberate post-click navigation starts later
+    (observed at +1100ms) and is never fought."""
+    global _WATCH_UNTIL, _WATCH_POS, _GUARD_LEFT
+    if not _WATCH_UNTIL:
+        return
+    now = time.monotonic()
+    if now < _WATCH_UNTIL:
+        j = locate_viewport(width(), near=_WATCH_POS)
+        if j is not None:
+            # SETTLE GUARD: for the first ~700ms after a verified
+            # landing the pane's position belongs to the TOGGLE, not
+            # to input — the user's residual trackpad MOMENTUM (they
+            # flick-scrolled to reach the line, clicked, and the
+            # leftover momentum applies on top of the fresh restore)
+            # is what every "hide jumped me ~1000 rows" trace shows:
+            # a huge displacement within one or two ticks of the
+            # landing. Deliberate post-click navigation starts later
+            # (observed at +1100ms) and is never fought. Corrections
+            # are ABSOLUTE (recomputed against current content) —
+            # a relative fix against a still-moving target amplifies.
+            corrected = False
+            if (now < _GUARD_UNTIL and _GUARD_LEFT > 0
+                    and _WATCH_HOME is not None
+                    and abs(j - _WATCH_HOME) > 5):
+                corrected = restore_to(_WATCH_HOME)
+                if corrected:
+                    _GUARD_LEFT -= 1
+            if corrected or (_WATCH_POS is not None
+                             and j != _WATCH_POS):
+                try:
+                    from core import audit as A
+                    A.state_file(LOG, St.db_path(LOG), "view-drift",
+                                 {"from": _WATCH_POS, "to": j,
+                                  "left_ms": int((_WATCH_UNTIL - now)
+                                                 * 1000),
+                                  "corrected": corrected})
+                except Exception:
+                    pass
+            _WATCH_POS = _WATCH_HOME if corrected else j
+    else:
+        _WATCH_UNTIL, _WATCH_POS = 0.0, None
+
+
+def wait_tick(L):
+    """Wait for the next tick — or an instant SIGWINCH wake (resize, or the
+    click handler's post-toggle nudge) via the wakeup pipe. While the
+    settle guard is active, tick fast: momentum hits within ~200ms of
+    the landing, and the sooner a displacement is caught the smaller
+    the visible wobble."""
+    try:
+        guarding = _GUARD_UNTIL and time.monotonic() < _GUARD_UNTIL
+        if select.select([L.wake_r], [], [], 0.08 if guarding else 0.2)[0]:
+            os.read(L.wake_r, 4096)
+    except Exception:
+        pass
+
+
+def main():
     if not LOG:
         return
     # Do NOT clear the ops table: it is the session's history (parked/restored
@@ -650,247 +926,29 @@ def main():
     # while off there is no process at all, so no resources are used.
     #
     # The wakeup pipe makes the idle wait interruptible: a signal writes a byte,
-    # so the select below returns IMMEDIATELY instead of finishing a 200ms sleep
-    # (PEP 475 would otherwise resume it). SIGWINCH is both the resize signal and
-    # the click-to-view nudge claude-copy.py sends after a toggle (it finds this
-    # pid via the `renderer-pid` kv row registered below) — either way the answer
-    # is "reflow now".
+    # so the select in wait_tick returns IMMEDIATELY instead of finishing a 200ms
+    # sleep (PEP 475 would otherwise resume it). SIGWINCH is both the resize
+    # signal and the click-to-view nudge claude-copy.py sends after a toggle (it
+    # finds this pid via the `renderer-pid` kv row sync_inode registers) — either
+    # way the answer is "reflow now".
     wake_r, wake_w = os.pipe()
     os.set_blocking(wake_w, False)
     signal.set_wakeup_fd(wake_w)
     signal.signal(signal.SIGWINCH, _on_winch)
     tty_setup()
 
-    db = St.db_path(LOG)
-    last, ino, toggled, t_idx, anchor, follow = 0, None, None, None, None, False
+    L = _Loop(St.db_path(LOG), wake_r)
     while True:
-        # A recreated DB file (new session reusing the key, or a park/restore
-        # cycle) leaves the cached connection pointing at the OLD inode — drop it
-        # and re-read from the top. A missing DB just means no producer has
-        # written yet (or a resume is mid-restore): keep waiting, don't reset.
-        try:
-            cur_ino = os.stat(db).st_ino
-        except OSError:
-            cur_ino = None
-        if cur_ino is not None and cur_ino != ino:
-            if ino is not None:
-                stale = St._CONNS.pop(db, None)
-                if stale is not None:
-                    try:
-                        # Close, don't just drop: the discarded connection holds
-                        # open fds to the DELETED old inode (+ its WAL/SHM),
-                        # pinning them for this long-lived renderer's lifetime —
-                        # one leak per park/restore or session-recreate cycle.
-                        # (St._connect now also self-evicts on inode change; this
-                        # stays because it drives the paint-state reset below.)
-                        stale[0].close()
-                    except Exception:
-                        pass
-                last, OPS[:] = 0, []
-                VIEW_OPEN.clear(); _VIEW_OPS.clear()
-                _resized = _FORCE_PAINT = True
-            ino = cur_ino
-            # ADOPT the persisted open-set silently: at startup (and after a
-            # park/restore reset) the kv `view-open` rows are inherited state,
-            # not a click — letting the poll below see them as a delta planned
-            # a toggle restore toward some op's line, so a freshly toggled
-            # pane opened scrolled deep into history instead of at the bottom.
-            try:
-                VIEW_OPEN.update(St.kv_get(LOG, "view-open") or [])
-            except Exception:
-                pass
-            # Register this renderer's pid so claude-copy.py can SIGWINCH-nudge
-            # an instant reflow after a view toggle (re-registered per inode:
-            # a park/restore cycle starts a fresh kv table).
-            try:
-                St.kv_set(LOG, "renderer-pid", os.getpid())
-            except Exception:
-                pass
-
-        # Drain any new ops appended to the table.
+        sync_inode(L)
         new = []
-        if cur_ino is not None:
-            last, new = St.ops_after(LOG, last)
-            if last < 0:                     # table shrank under us — restart
-                last, OPS[:] = 0, []
-                _resized = _FORCE_PAINT = True
+        if L.cur_ino is not None:
+            new, restart = drain_ops(L)
+            if restart:
                 continue
-            OPS.extend(new)
-            # Bound memory on a long session by dropping oldest ops from the in-memory
-            # list. This only affects what a FUTURE full repaint (on resize) draws — the
-            # already-printed lines stay in the terminal's scrollback — so we must NOT
-            # repaint here. Repainting on every append once over the cap was the cause of
-            # the per-message flicker on big sessions. Trim with hysteresis to avoid
-            # slicing the list on literally every append.
-            if len(OPS) > MAX_OPS + 1000:
-                del OPS[:len(OPS) - MAX_OPS]
-            if new:
-                trim_to_budget(width())
-
-            # Click-to-view toggles: any change to the `view-open` kv set (a
-            # claude-copy.py /view click) reflows the whole pane, expanding or
-            # collapsing the affected blocks in place. BEFORE flipping the set,
-            # find the toggled line's offset and recover the current viewport
-            # top (the anchor must match against the PRE-toggle rendered rows —
-            # exactly what's on screen right now).
-            try:
-                cur_open = set(St.kv_get(LOG, "view-open") or [])
-            except Exception:
-                cur_open = VIEW_OPEN
-            if cur_open != VIEW_OPEN:
-                # Multiple gids in one delta (fast clicks coalescing into one
-                # poll tick) still get the anchored restore — any one of them
-                # serves as the plan's gid; the anchor is gid-independent.
-                delta = cur_open ^ VIEW_OPEN
-                toggled = min(delta) if delta else None
-                t_idx = anchor = None
-                follow = False
-                # Plan UNCONDITIONALLY — in particular do NOT skip when
-                # _resized is set: the click handler's own SIGWINCH nudge sets
-                # it before this branch ever runs, so gating on it silently
-                # disabled the anchor for every nudged toggle (the pane then
-                # parked at the bottom — the "scrolls to the very end" bug).
-                # A genuine concurrent resize just changes width() under the
-                # match, which fails confidence and degrades to the fallback.
-                if toggled:
-                    # Trim BEFORE measuring: dropping rows after the plan
-                    # would shift every index the plan just computed.
-                    trim_to_budget(width())
-                    _, t_idx, _ = measure(toggled)
-                    if t_idx is not None:
-                        # near=t_idx: the user clicked a VISIBLE line, so the
-                        # true viewport is near it — a tie-breaking prior
-                        # among twin matches, NOT a search constraint (the
-                        # old windowed search that mistook this for a hard
-                        # assumption missed real viewports).
-                        anchor = locate_viewport(width(), tag="anchor",
-                                                 near=t_idx)
-                        # An at-bottom viewport follows the live tail; pinning
-                        # it to an absolute offset would silently detach it —
-                        # so the restore target becomes the NEW bottom. The
-                        # small tolerance absorbs the logical-vs-visual line
-                        # bias in the bottom math (wrapped rows).
-                        h = _height()
-                        if (anchor is not None and h and _LOC_ROWS
-                                and anchor >= _LOC_ROWS + 1 - h - 1):
-                            follow = True
-                VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
-                _resized = True
-
-        if _resized:                         # startup / resize / toggle -> reflow
-            _resized = False
-            if toggled:
-                res = {}
-                if t_idx is not None:
-                    # anchor None (capture failed / no match) degrades to the
-                    # clicked-line-at-top frame: j0 = the line's own offset.
-                    res = toggle_repaint(
-                        toggled, anchor if anchor is not None else t_idx,
-                        follow=follow)
-                else:
-                    repaint()
-                # The one row that makes "the view jumped" diagnosable: what
-                # the plan saw, what the scroll did, and where the viewport
-                # VERIFIABLY landed (plus whether the DSR handshake made it,
-                # whether the restore had to be retried, and what the top of
-                # the pre-toggle capture actually said).
-                try:
-                    from core import audit as A
-                    A.state_file(LOG, St.db_path(LOG), "view-reflow",
-                                 dict({"gid": toggled, "idx": t_idx,
-                                       "anchor": anchor,
-                                       "cap0": _LAST_CAP0}, **res))
-                except Exception:
-                    pass
-                toggled, t_idx, anchor, follow = None, None, None, False
-                # Arm the post-toggle DRIFT WATCH: a toggle can verify its
-                # landing and the pane still end up somewhere else moments
-                # later ("transported to the top", observed live, with zero
-                # audit rows in between). For the next few seconds every
-                # viewport movement is recorded with its offset and timing —
-                # a user wheel-scroll shows as gradual steps, a bug as one
-                # instant leap.
-                if res.get("landed") is not None:
-                    _WATCH_UNTIL = time.monotonic() + 8.0
-                    _WATCH_POS = res["landed"]
-                    # The guard defends the INTENDED anchor, not the measured
-                    # landing — momentum in flight DURING the restore corrupts
-                    # the landing itself, and adopting it as home left the
-                    # guard defending the wrong place (observed: landed 1176
-                    # off, guard content).
-                    _WATCH_HOME = res.get("home", res["landed"])
-                    _GUARD_UNTIL = time.monotonic() + 0.7
-                    _GUARD_LEFT = 2
-            elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
-                _FORCE_PAINT = False
-                repaint()
-            else:
-                # A WINCH with an UNCHANGED size and no toggle plan (a stray
-                # or duplicate click-nudge). A full repaint here is not just
-                # wasted work — its clear-scrollback CLAMPS a scrolled-up
-                # viewport to the bottom with no restore (observed live).
-                _audit_paint("skip", width(), "")
-        elif new:
-            paint_new(new)
-
-        # Post-toggle drift watch: sample where the viewport actually is and
-        # record every movement (state_files `view-drift`) until the watch
-        # expires. locate_viewport with the probe index is ~ms-cheap at this
-        # cadence (one sample per 200ms tick, for 8s after a toggle).
-        # SELF-HEAL: a movement in the first ~600ms is the instant-leap bug
-        # (a verified landing yanked ~1000 rows within one tick, observed
-        # live at +224ms with no rc actor and no repaint) — scroll it back,
-        # once per toggle. Deliberate post-click navigation starts later
-        # (observed at +1100ms) and is never fought.
-        if _WATCH_UNTIL:
-            now = time.monotonic()
-            if now < _WATCH_UNTIL:
-                j = locate_viewport(width(), near=_WATCH_POS)
-                if j is not None:
-                    # SETTLE GUARD: for the first ~700ms after a verified
-                    # landing the pane's position belongs to the TOGGLE, not
-                    # to input — the user's residual trackpad MOMENTUM (they
-                    # flick-scrolled to reach the line, clicked, and the
-                    # leftover momentum applies on top of the fresh restore)
-                    # is what every "hide jumped me ~1000 rows" trace shows:
-                    # a huge displacement within one or two ticks of the
-                    # landing. Deliberate post-click navigation starts later
-                    # (observed at +1100ms) and is never fought. Corrections
-                    # are ABSOLUTE (recomputed against current content) —
-                    # a relative fix against a still-moving target amplifies.
-                    corrected = False
-                    if (now < _GUARD_UNTIL and _GUARD_LEFT > 0
-                            and _WATCH_HOME is not None
-                            and abs(j - _WATCH_HOME) > 5):
-                        corrected = restore_to(_WATCH_HOME)
-                        if corrected:
-                            _GUARD_LEFT -= 1
-                    if corrected or (_WATCH_POS is not None
-                                     and j != _WATCH_POS):
-                        try:
-                            from core import audit as A
-                            A.state_file(LOG, St.db_path(LOG), "view-drift",
-                                         {"from": _WATCH_POS, "to": j,
-                                          "left_ms": int((_WATCH_UNTIL - now)
-                                                         * 1000),
-                                          "corrected": corrected})
-                        except Exception:
-                            pass
-                    _WATCH_POS = _WATCH_HOME if corrected else j
-            else:
-                _WATCH_UNTIL, _WATCH_POS = 0.0, None
-
-        # Wait for the next tick — or an instant SIGWINCH wake (resize, or the
-        # click handler's post-toggle nudge) via the wakeup pipe. While the
-        # settle guard is active, tick fast: momentum hits within ~200ms of
-        # the landing, and the sooner a displacement is caught the smaller
-        # the visible wobble.
-        try:
-            guarding = _GUARD_UNTIL and time.monotonic() < _GUARD_UNTIL
-            if select.select([wake_r], [], [], 0.08 if guarding else 0.2)[0]:
-                os.read(wake_r, 4096)
-        except Exception:
-            pass
+            poll_toggles(L)
+        dispatch_reflow(L, new)
+        drift_watch()
+        wait_tick(L)
 
 
 if __name__ == "__main__":

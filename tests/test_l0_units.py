@@ -140,3 +140,58 @@ def test_split_tokens_codex_shape():
     # split must leave its `fresh` untouched as tk_in.
     assert split_tokens(42, 9, 12345, 0) == {
         "tk_in": 42, "tk_out": 9, "tk_read": 12345, "tk_create": 0}
+
+
+# ---- claude-mirror.py iter_painted / painted_rows — the ONE row walk --------
+# frame_bytes, trim_to_budget, measure, locate_viewport, restore_to and
+# toggle_repaint all used to hand-roll the same "for op in OPS: for o in
+# expanded(op)" walk; any two disagreeing is a model-vs-buffer divergence
+# (restores land where the math said, not where the frame is). These pins hold
+# the shared helper's row accounting: the leading 1 is the banner line, each
+# rendered op contributes newline-count + 1.
+
+def _load_mirror():
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location(
+        "claude_mirror_script", os.path.join(REPO, "claude-mirror.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    m.FIXED_WIDTH = 80          # deterministic width() under a non-tty pytest
+    return m
+
+
+def test_painted_rows_counts_banner_plus_ops():
+    m = _load_mirror()
+    m.OPS[:] = [{"t": "line", "s": "one"},            # 1 row
+                {"t": "line", "s": "two\nthree"}]     # 2 rows
+    m.VIEW_OPEN.clear()
+    assert m.painted_rows(80) == 1 + 1 + 2
+
+
+def test_painted_rows_includes_open_view_blocks():
+    m = _load_mirror()
+    m.OPS[:] = [{"t": "line", "s": "Read(x.py)", "v": "g1"}]
+    m.VIEW_OPEN.clear()
+    m._VIEW_OPS["g1"] = [{"t": "line", "s": "body1\nbody2"}]
+    closed = m.painted_rows(80)
+    m.VIEW_OPEN.add("g1")
+    assert m.painted_rows(80) == closed + 2           # the expanded block's rows
+
+
+def test_painted_rows_agrees_with_frame_bytes_and_measure():
+    m = _load_mirror()
+    m.OPS[:] = [{"t": "line", "s": "a"},
+                {"t": "line", "s": "b\nc", "v": "g2"},
+                {"t": "rule"}]
+    m.VIEW_OPEN.clear()
+    m._VIEW_OPS["g2"] = [{"t": "line", "s": "vv"}]
+    m.VIEW_OPEN.add("g2")
+    total = m.painted_rows(80)
+    # frame_bytes paints banner + every op, one trailing newline each — its
+    # newline count IS the painted row total (the scroll math's ground truth).
+    assert m.frame_bytes(80).count("\n") == total
+    # measure's third return is the same full painted line count.
+    pos, idx, acc = m.measure("g2")
+    assert acc == total
+    assert pos == 1 and idx == 2                      # banner=0, "a"=1, op at 2
