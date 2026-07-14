@@ -202,6 +202,35 @@ def view_ops(tool, label, name, path, ti, tr):
     return [O.rule(), O.label(hdr, rgb)] + body + [O.blank()]
 
 
+def stash_view(log, tid, tool, label, name, path, ti, tr, line,
+               who="render", extra=None):
+    """The stash-and-link half of click-to-view, shared by this formatter and
+    the subagent substream renderer (substream_render.render_file): build the
+    view block (view_ops above), park it in the state DB kv table under
+    `view:<tid>`, wrap `line` in the claude-copy:///<sid>/<tid>/view OSC 8
+    hyperlink, and audit the stash as a `view-stash` state_files row.
+
+    Returns (line, vid): the (possibly hyperlinked) line plus the id to tag the
+    emitted op with ("v"), or (line-unchanged, None) when there is nothing to
+    show or the stash failed — the caller keeps the plain unlinked line.
+    `who` names the caller in the render-failure error row; `extra` merges
+    extra context (e.g. the subagent's name) into the audit row."""
+    try:
+        vops = view_ops(tool, label, name, path, ti, tr)
+    except Exception:
+        vops = None
+        A.error(log, "view-stash (%s)" % who, {"tool": tool, "gid": tid})
+    if not (vops and S.kv_set(log, "view:" + str(tid), vops)):
+        return line, None
+    url = "claude-copy:///%s/%s/view" % (
+        quote(PATHS.sid_from_log(log), safe=""), quote(str(tid), safe=""))
+    info = {"gid": tid, "tool": tool, "ops": len(vops)}
+    if extra:
+        info.update(extra)
+    A.state_file(log, S.db_path(log), "view-stash", info)
+    return R.hyperlink(url, line), tid
+
+
 def main():
     d, LOG = H.read_payload()
     if d is None:
@@ -247,22 +276,12 @@ def main():
     # adopt.py leaves at the old DB path), and tag the op with the id ("v") so
     # the renderer knows where to expand the block in place. A failed op or a
     # stash that came up empty keeps the plain unlinked line.
-    viewed = False
+    vid = None
     gid = d.get("tool_use_id") or None
     if not failed and gid:
-        try:
-            vops = view_ops(tool, label, name, path, ti, tr)
-        except Exception:
-            vops = None
-            A.error(LOG, "view-stash (render)", {"tool": tool, "gid": gid})
-        if vops and S.kv_set(LOG, "view:" + gid, vops):
-            url = "claude-copy:///%s/%s/view" % (
-                quote(PATHS.sid_from_log(LOG), safe=""), quote(gid, safe=""))
-            line = R.hyperlink(url, line)
-            viewed = True
-            A.state_file(LOG, S.db_path(LOG), "view-stash",
-                         {"gid": gid, "tool": tool, "ops": len(vops)})
-    O.emit(LOG, O.line(line, view=gid if viewed else None))
+        line, vid = stash_view(LOG, gid, tool, label, name, path, ti, tr, line)
+    viewed = vid is not None
+    O.emit(LOG, O.line(line, view=vid))
     # Feed the session scoreboard (best-effort): the touched path (files counts
     # UNIQUE files — see bump()) plus the mutation's +/- line counts, keyed by the
     # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.

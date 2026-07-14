@@ -268,24 +268,11 @@ class Renderer:
         # disk re-read / input-strings difflib for those.
         vid = None
         if not failed and tid:
-            from urllib.parse import quote
-            from core import paths as PATHS
             from plugins.claude_code import file_fmt as FF
-            try:
-                vops = FF.view_ops(name_tool, label, name, path, inp,
-                                   result if isinstance(result, dict) else {})
-            except Exception:
-                vops = None
-                A.error(self.log, "view-stash (substream render)",
-                        {"tool": name_tool, "gid": tid})
-            if vops and S.kv_set(self.log, "view:" + tid, vops):
-                url = "claude-copy:///%s/%s/view" % (
-                    quote(PATHS.sid_from_log(self.log), safe=""), quote(str(tid), safe=""))
-                line = R.hyperlink(url, line)
-                vid = tid
-                A.state_file(self.log, S.db_path(self.log), "view-stash",
-                             {"gid": tid, "tool": name_tool, "ops": len(vops),
-                              "agent": self.agent})
+            line, vid = FF.stash_view(
+                self.log, tid, name_tool, label, name, path, inp,
+                result if isinstance(result, dict) else {}, line,
+                who="substream render", extra={"agent": self.agent})
         O.emit(self.log, O.gut(line, self.rgb, view=vid))
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
         # reflect TEAM-WIDE file activity, not just the main session's own file ops

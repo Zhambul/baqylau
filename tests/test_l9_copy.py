@@ -225,6 +225,38 @@ def test_file_op_line_carries_view_link_and_stash(session, run_hook, test_env):
     assert gutop["lex"] == "python" and gutop["num"] == 1
 
 
+def test_stash_view_pins_shared_kv_and_url_shape(session, seed, test_env):
+    """file_fmt.stash_view — the ONE stash-and-link implementation shared by the
+    main session's formatter and the substream renderer — pins the protocol:
+    the kv key is view:<tid>, the URL claude-copy:///<sid>/<tid>/view, the line
+    comes back wrapped in an OSC 8 hyperlink, and vid echoes the tid. A stash
+    that comes up empty (unreadable file) returns the line unchanged, vid None."""
+    s = session.make()
+    path = os.path.join(s.cwd, "pin.py")
+    with open(path, "w") as f:
+        f.write("a = 1\n")
+    out = seed.py(
+        "from plugins.claude_code import file_fmt as FF\n"
+        "line, vid = FF.stash_view(%r, 'tid-9', 'Read', 'Read', 'pin.py', %r,\n"
+        "                          {}, {}, 'LINE-TEXT',\n"
+        "                          who='substream render', extra={'agent': 'kim'})\n"
+        "print(repr((line, vid)))\n"
+        "line2, vid2 = FF.stash_view(%r, 'tid-x', 'Read', 'Read', 'gone.py',\n"
+        "                            %r, {}, {}, 'PLAIN')\n"
+        "print(repr((line2, vid2)))\n"
+        % (s.log, path, s.log, os.path.join(s.cwd, "gone.py")))
+    line_s, line2_s = out.strip().split("\n")
+    line, vid = eval(line_s)
+    assert vid == "tid-9"
+    url = "claude-copy:///%s/tid-9/view" % s.sid
+    assert line == "\x1b]8;;" + url + "\x1b\\" + "LINE-TEXT" + "\x1b]8;;\x1b\\"
+    stash = _kv(s, "view:tid-9")
+    assert stash and {"rule", "label", "gut"} <= {o["t"] for o in stash}
+    line2, vid2 = eval(line2_s)
+    assert (line2, vid2) == ("PLAIN", None)
+    assert _kv(s, "view:tid-x") is None
+
+
 def test_md_read_view_is_pretty_rendered(session, run_hook, test_env):
     """A Read of a .md file expands to markdown pretty-rendered by the same AST
     renderer the streaming path uses — already-styled gut ops (a heading banner,

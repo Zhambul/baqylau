@@ -79,7 +79,10 @@ the meaning), non-adjacent hunks separated by a dim `⋮`. Mechanism, in three
 parts:
 - **The stash** (hook time): the producer pre-renders the block into paint ops
   (`file_fmt.view_ops` — the ONE block builder, public API shared by the
-  substream renderer, so a subagent's op expands identically)
+  substream renderer, so a subagent's op expands identically; the whole
+  stash-and-link step — stash, URL, hyperlink wrap, audit row — is likewise
+  ONE shared function, `file_fmt.stash_view`, parameterized only by the audit
+  `who`/`extra` context)
   and writes them to the state DB kv table under `view:<tool_use_id>`
   (audited as a `view-stash` state_files row), because the payload
   (`tool_response` content, `old_string`/`new_string`) exists ONLY while the
