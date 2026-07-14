@@ -528,6 +528,8 @@ def agent_set(log, agent_id, **fields):
     try:
         sets = ", ".join(f"{k} = excluded.{k}" for k in allowed)
         cols = ["agent_id"] + list(allowed)
+        # Interpolated identifiers only: every column name is filtered through the
+        # `allowed` whitelist above, never user input; values are bound.
         conn.execute(
             f"INSERT INTO agents({', '.join(cols)}) "
             f"VALUES({', '.join('?' * len(cols))}) "

@@ -57,7 +57,8 @@ python3 bin/claude-audit.py sessions            # recent sessions
 python3 bin/claude-audit.py timeline  <sid>     # merged chronological story
 python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
 python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug signatures
-python3 bin/claude-audit.py sql "<query>"       # free-form SQL
+python3 bin/claude-audit.py sql "<query>"       # free-form read-only SQL (mode=ro)
+python3 bin/claude-audit.py sql-write "<query>" # read-write SQL for deliberate manual fixups
 python3 bin/claude-audit.py prune [days]        # manual retention pass
 ```
 

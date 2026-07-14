@@ -23,7 +23,7 @@ python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug s
 python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
 python3 bin/claude-audit.py timeline  <sid>     # merged chronological story of a session
 python3 bin/claude-audit.py otel      <sid>     # OTEL cost/token breakdown by query_source (main/subagent/auxiliary)
-python3 bin/claude-audit.py sql "<query>"       # free-form SQL
+python3 bin/claude-audit.py sql "<query>"       # free-form read-only SQL (sql-write for fixups)
 
 # Manual smoke test — cycle the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do

@@ -372,6 +372,13 @@ _TTY_OK = False      # stdin switched to no-echo/non-canonical (DSR handshake us
 # this far off must not be "converged" onto by restore_to.
 GROSS_MISS_ROWS = 400
 
+DRIFT_WATCH_S = 8.0      # post-toggle drift-watch window: how long every viewport movement is recorded
+SETTLE_GUARD_S = 0.7     # settle-guard window: the landing owns the viewport this long (momentum hits early)
+GUARD_CORRECTIONS = 2    # correction budget per toggle — never fight the user more than this
+GUARD_SLACK_ROWS = 5     # displacement (rows) the guard tolerates before it corrects (wrapped-row bias)
+TICK_S = 0.2             # idle tick cadence of the renderer loop (drift-watch sampling rate)
+TICK_GUARD_S = 0.08      # faster tick while the settle guard is armed — catch momentum small
+
 
 def tty_setup():
     """Put the pane's tty into no-echo, non-canonical mode so the renderer can
@@ -851,7 +858,7 @@ def dispatch_reflow(L, new):
             # a user wheel-scroll shows as gradual steps, a bug as one
             # instant leap.
             if res.get("landed") is not None:
-                L.watch_until = time.monotonic() + 8.0
+                L.watch_until = time.monotonic() + DRIFT_WATCH_S
                 L.watch_pos = res["landed"]
                 # The guard defends the INTENDED anchor, not the measured
                 # landing — momentum in flight DURING the restore corrupts
@@ -859,8 +866,8 @@ def dispatch_reflow(L, new):
                 # guard defending the wrong place (observed: landed 1176
                 # off, guard content).
                 L.watch_home = res.get("home", res["landed"])
-                L.guard_until = time.monotonic() + 0.7
-                L.guard_left = 2
+                L.guard_until = time.monotonic() + SETTLE_GUARD_S
+                L.guard_left = GUARD_CORRECTIONS
         elif L.force_paint or (width(), _height()) != L.painted_size:
             L.force_paint = False
             repaint()
@@ -904,7 +911,7 @@ def drift_watch():
             corrected = False
             if (now < L.guard_until and L.guard_left > 0
                     and L.watch_home is not None
-                    and abs(j - L.watch_home) > 5):
+                    and abs(j - L.watch_home) > GUARD_SLACK_ROWS):
                 corrected = restore_to(L.watch_home)
                 if corrected:
                     L.guard_left -= 1
@@ -931,7 +938,8 @@ def wait_tick(L):
     the visible wobble."""
     try:
         guarding = L.guard_until and time.monotonic() < L.guard_until
-        if select.select([L.wake_r], [], [], 0.08 if guarding else 0.2)[0]:
+        if select.select([L.wake_r], [], [],
+                         TICK_GUARD_S if guarding else TICK_S)[0]:
             os.read(L.wake_r, 4096)
     except Exception:
         pass

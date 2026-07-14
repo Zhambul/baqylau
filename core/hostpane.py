@@ -31,6 +31,7 @@ from core import state as S
 # fixed sizes"), so after launching the bar we iterate relative resizes until it
 # is exactly BAR_ROWS tall (or kitty's minimum stops shrinking it).
 BAR_ROWS = 5   # ⬡ session id + ✉ census + ▪ summary + Σ token breakdown + tools
+BAR_SETTLE_S = 0.08   # pause between resize_pane and re-measure — kitty applies the resize async
 
 
 # --- window lookups ----------------------------------------------------------
@@ -57,7 +58,7 @@ def size_bar(fe, sid):
         if not d:
             return
         fe.resize_pane(("claude_scorebar", sid), "vertical", d)
-        time.sleep(0.08)                     # let kitty apply before re-measuring
+        time.sleep(BAR_SETTLE_S)             # let kitty apply before re-measuring
 
 
 # --- open / close ------------------------------------------------------------

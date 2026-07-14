@@ -67,6 +67,8 @@ KIND  = {"fail": R.fg(*O.RED), "rem": R.fg(*O.RED),
 SEP   = R.DIM + " · " + R.RST
 _NUM  = re.compile(r"\d[\d.,]*")
 
+TICK_S   = 0.25  # main tick cadence: poll the state DB / inboxes 4x/s (SIGWINCH wakes early)
+
 SEP_W    = 3     # plain-text width of the " · " joiner between segments
 PREFIX_W = 3     # every row's 3-column glyph prefix (" ⬡ " / " ✉ " / " ▪ " / " Σ ")
 
@@ -288,7 +290,7 @@ def main():
                 sys.stdout.flush()
             except Exception:
                 pass
-        time.sleep(0.25)                    # SIGWINCH interrupts the sleep early
+        time.sleep(TICK_S)                  # SIGWINCH interrupts the sleep early
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ real session, and unset they leave shipped behavior bit-identical:
 |---|---|---|
 | `CLAUDE_MIRROR_TMPDIR` | `/tmp` | Relocates everything `core/paths.py` derives: `claude-mirror-<key>.log*` state DBs/sidecars/parks **and** the global `claude-kitty-tab.db` — per-test isolation |
 | `CLAUDE_TAIL_POLL_S` / `CLAUDE_TAIL_BACKSTOP_S` | `0.4` / 6 h | `tail.py` poll cadence / absolute tailer cap |
+| `CLAUDE_TAIL_WAIT_POLL_S` | `0.2` | `tail.py wait_for` source-appearance poll (deliberately faster than `POLL_S` — runs only until the file lands) |
 | `CLAUDE_STREAM_GRACE_S` | 2 s (fg/bg) · 8 s (monitor) | `claude-stream.py` idle-grace before writer-gone is definitive |
 | `CLAUDE_STREAM_LSOF_S` | 1 s | `claude-stream.py has_writer` lsof re-check throttle — `lsof` scans the whole fd table, and unthrottled per-tick calls from several concurrent tailers were the CI lsof storm (once one lsof exceeds its timeout, "assume still writing" starves writer-gone indefinitely — the flake class no wait-ceiling fixes) |
 | `CLAUDE_WATCH_POLL_S` | unset | One value replacing every `claude-tab-status.py` watcher/grace sleep (bg-watch 2 s, interrupt-watch 0.5 s, bg-recheck grace 4 s) |

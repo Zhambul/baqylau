@@ -57,6 +57,9 @@ New always-audited swallow sites (previously silent — their absence used to ma
    Find the symptom's moment, then read the surrounding ~30 lines both ways.
 4. **Free-form**: `python3 bin/claude-audit.py sql "<query>"` — e.g. pull the full
    payload of one hook event, or diff `ops` against what the pane actually showed.
+   `sql` opens the DB read-only (`mode=ro`) so triage can never mutate the
+   evidence; a deliberate manual fixup (e.g. closing a stuck "(open)" session
+   row) uses `sql-write` instead.
 
 ## Known bug shapes → what to look for
 

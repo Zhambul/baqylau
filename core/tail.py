@@ -21,6 +21,10 @@ POLL_S = float(os.environ.get("CLAUDE_TAIL_POLL_S") or 0.4)
                             # main poll cadence of every tailer loop
 BACKSTOP_S = float(os.environ.get("CLAUDE_TAIL_BACKSTOP_S") or 6 * 3600)
                             # absolute cap so a stuck/lost tailer can't run forever
+WAIT_POLL_S = float(os.environ.get("CLAUDE_TAIL_WAIT_POLL_S") or 0.2)
+                            # wait_for's source-appearance poll — deliberately faster
+                            # than POLL_S: it runs only until the file lands, and a
+                            # snappier first line is worth the brief tighter loop
 
 
 class FileTailer:
@@ -91,7 +95,7 @@ def wait_for(path, deadline, alive=None):
             return True
         if alive is not None and not alive():
             return False
-        time.sleep(0.2)
+        time.sleep(WAIT_POLL_S)
     return os.path.exists(path)
 
 

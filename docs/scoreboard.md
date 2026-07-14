@@ -12,7 +12,8 @@ see [otel.md](otel.md).
     write; parked as `*.keep` with the log at SessionEnd and restored on resume, so
     the scoreboard's counters survive a `--resume`/`--continue`). The scorebar repaints when the
     state's change counter moves (a `v` counter bumped by every write — WAL commits
-    don't reliably touch the db file's mtime). **`claude-scorebar.py`** renders it in a
+    don't reliably touch the db file's mtime), polled on a 0.25 s main tick
+    (`TICK_S` in `bin/claude-scorebar.py`; SIGWINCH wakes it early). **`claude-scorebar.py`** renders it in a
     **dedicated 5-row window hsplit under the mirror** (`var:claude_scorebar=<sid>`,
     `BAR_ROWS` in `claude-split.py`, opened/closed with the mirror by it) — an always-on
     session-id line, a team-message census, the session summary, then a token breakdown:

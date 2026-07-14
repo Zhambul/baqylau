@@ -157,6 +157,31 @@ def test_unknown_command_prints_usage(test_env):
         assert "see module docstring" not in p.stdout
 
 
+def test_sql_command_is_read_only(test_env):
+    """`sql` opens the DB mode=ro: a query works, a mutation is refused, and a
+    run against a missing DB never creates the file. Deliberate fixups go
+    through the explicit `sql-write` command."""
+    db = oracle.audit_db(test_env)
+    # missing DB: refuse without creating it
+    p = cli(test_env, "sql", "SELECT 1")
+    assert p.returncode == 0 and "audit db unavailable" in p.stdout
+    assert not os.path.exists(db)
+    # seed a row through the product write path, then query + attempt mutation
+    poison(test_env, "INSERT INTO sessions(session_id,project_slug,started_at)"
+                     " VALUES(?, 'slug', 1)", (SID,))
+    p = cli(test_env, "sql", "SELECT session_id FROM sessions")
+    assert SID in p.stdout
+    p = cli(test_env, "sql", "DELETE FROM sessions")
+    assert "sql error" in p.stdout                      # ro connection refused it
+    p = cli(test_env, "sql", "SELECT count(*) FROM sessions")
+    assert "1" in p.stdout                              # row survived
+    # sql-write is the sanctioned mutation path
+    p = cli(test_env, "sql-write", "DELETE FROM sessions")
+    assert "sql error" not in p.stdout, p.stdout
+    p = cli(test_env, "sql", "SELECT count(*) FROM sessions")
+    assert "0" in p.stdout
+
+
 def test_swallow_set_derived_from_command_table():
     """The shim's never-fail-loudly set is WRITE_COMMANDS, derived from the one
     command table — the hand-maintained copy it replaced had already drifted."""

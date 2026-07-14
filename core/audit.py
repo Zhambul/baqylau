@@ -31,7 +31,8 @@ CLI (what the audit-debug skill drives):
   bin/claude-audit.py timeline <sid>        merged chronological event timeline
   bin/claude-audit.py errors <sid>          swallowed exceptions for a session
   bin/claude-audit.py anomalies <sid>       canned queries for known bug signatures
-  bin/claude-audit.py sql "<query>"         free-form read-only SQL
+  bin/claude-audit.py sql "<query>"         free-form read-only SQL (opens mode=ro)
+  bin/claude-audit.py sql-write "<query>"   free-form read-write SQL for manual fixups
   bin/claude-audit.py prune [days]          drop sessions older than N days (default 30)
   bin/claude-audit.py session-start|session-end|hook <handler>|transition …
                                         write entry points for the shell scripts
@@ -206,6 +207,8 @@ def _insert(conn, table, cols):
             (cols.get("ended_at") or time.time(), cols.get("end_reason"),
              cols.get("session_id")))
     keys = list(cols.keys())
+    # Interpolated identifiers only: `table`/`keys` come from this module's own
+    # callers (the _SCHEMA vocabulary), never user input; values are bound.
     sql = (f"INSERT INTO {table}({','.join(keys)}) "
            f"VALUES({','.join('?' * len(keys))})")
     return conn.execute(sql, [cols[k] for k in keys])
@@ -511,10 +514,13 @@ def prune(days=PRUNE_DAYS):
             (cutoff,)).fetchall()
         sids = [r[0] for r in rows]
         for sid in sids:
+            # Interpolated identifier only: `t` comes from the _SCHEMA-derived
+            # prunable_tables() list, never user input; values are bound.
             for t in prunable_tables() + ["streams"]:
                 conn.execute(f"DELETE FROM {t} WHERE session_id=?", (sid,))
             conn.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
         # Orphan rows whose session row never existed (pre-session writes) age out too.
+        # (Same trusted-identifier note: `t` is _SCHEMA-derived, values bound.)
         for t in prunable_tables():
             conn.execute(f"DELETE FROM {t} WHERE ts < ? AND session_id NOT IN "
                          "(SELECT session_id FROM sessions)", (cutoff,))
@@ -913,6 +919,29 @@ def cli_sessions(limit=20):
 
 
 def cli_sql(argv):
+    """`sql` — free-form READ-ONLY SQL. Opens the DB `mode=ro` so a debugging
+    query can never mutate the evidence (or create the file); ad-hoc fixups go
+    through the explicit `sql-write` command instead."""
+    try:
+        import sqlite3
+        conn = sqlite3.connect(f"file:{db_path()}?mode=ro", uri=True, timeout=3.0)
+    except Exception:
+        print("audit db unavailable"); return
+    q = argv[2] if len(argv) > 2 else ""
+    try:
+        cur = conn.execute(q)
+        headers = [c[0] for c in cur.description] if cur.description else []
+        _print_rows(cur.fetchall(), headers)
+    except Exception as e:
+        print(f"sql error: {e}")
+    finally:
+        conn.close()
+
+
+def cli_sql_write(argv):
+    """`sql-write` — free-form READ-WRITE SQL for deliberate manual fixups
+    (e.g. closing a stuck "(open)" session row). Separate from `sql` so a
+    routine debugging query can never mutate the audit trail by accident."""
     conn = _connect()
     if conn is None:
         print("audit db unavailable"); return
@@ -1022,6 +1051,7 @@ COMMANDS = {
     "anomalies":     (_cmd_anomalies,     False),
     "otel":          (_cmd_otel,          False),
     "sql":           (cli_sql,            False),
+    "sql-write":     (cli_sql_write,      False),
     "prune":         (_cmd_prune,         False),
 }
 
