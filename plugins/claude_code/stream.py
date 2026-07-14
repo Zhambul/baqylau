@@ -180,6 +180,13 @@ _FENCE = re.compile(r"(?m)^[ \t]{0,3}(```|~~~)[^\n`]*$")
 # before concluding there is nothing to key liveness on.
 FIND_S = float(os.environ.get("CLAUDE_STREAM_FIND_S") or 12)
 PROCFIND_S = float(os.environ.get("CLAUDE_STREAM_PROCFIND_S") or 20)
+# Backstop for fg ONLY (and shorter than the tailers' shared 6h cap): an
+# interactive foreground command past 2h is far likelier a wedged tailer than
+# a real command, and its live fg slot row keeps the tab blue the whole time.
+# bg/monitor deliberately have NO backstop — their completion signals
+# (write-holder vanishing / monitor process exit) are definitive, and a
+# legitimately long background job must keep streaming past any cap.
+FG_BACKSTOP_S = 7200
 
 
 def glob_task_output():
@@ -325,46 +332,60 @@ def monitor_wait_file(run, start):
         time.sleep(T.POLL_S)
 
 
-def main(run):
-    if not (TASKID and LOG):
-        return
-    start = time.time()
+def wait_source(run, start):
+    """Locate the output file to tail — the wait differs by kind (a monitor
+    waits on its process's liveness, bg/fg on a bounded deadline). Returns
+    (path, mon_pid); path None means the stream already ended here (the
+    "not found" chip / silent-monitor exit was painted and run.end called)."""
     mon_pid = None
     if KIND == "monitor" and not SRC:
         path, mon_pid = monitor_wait_file(run, start)
-        if not path:
-            return
     else:
         path = find_file(start + FIND_S)
         if not path:
             O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
             run.end("output-file-not-found")
-            return
+    return path, mon_pid
 
+
+def open_tailer(path):
+    """A FileTailer positioned at the start of THIS job's output: offset 0
+    normally, or the file's spawn-time size when the existing bytes predate the
+    job (Ctrl+B hand-off / `>>` append — see SKIP_EXISTING above)."""
     pos0 = 0
     if SKIP_EXISTING:
         try:
             pos0 = os.path.getsize(path)
         except OSError:
             pos0 = 0
-    tail = T.FileTailer(path, pos=pos0)
-    run.lines = 0
+    return T.FileTailer(path, pos=pos0)
+
+
+def make_pump(run, tail):
+    """Build the line pump: read new complete lines and emit them as gut ops
+    through one of three paths — a registry-picked content renderer (markdown/
+    JSON/…), the fence-sniff (first data read decides md vs raw), or verbatim.
+    Returns (pump, ctx); ctx carries the mutable render state the drain needs
+    afterwards: cs (the live content streamer, possibly sniff-created),
+    md_count, render_meta, and emit_md."""
     # Render mode: feed tailed text through a content renderer that returns
     # (text, bg) segments to emit as gut ops. Markdown holds incomplete blocks and
     # emits each completed one live (append-only); JSON buffers whole and renders at
     # close (a partial document is invalid). Non-render path is unchanged.
-    content_stream = _content_streamer()
-    md_count = {"n": 0}
-    render_meta = {"kind": RENDER_KIND}
-    sniff = {"mode": "sniff" if SNIFF else "off"}   # sniff -> md/raw on first data read
-    if content_stream is not None:
+    run.lines = 0
+    ctx = {"cs": _content_streamer(),
+           "md_count": {"n": 0},
+           "render_meta": {"kind": RENDER_KIND},
+           "sniff": {"mode": "sniff" if SNIFF else "off"}}   # sniff -> md/raw on first data read
+    if ctx["cs"] is not None:
         A.state_file(LOG, "render:" + TASKID, "start",
                      {"kind": RENDER_KIND, "wenmode": MDR.AVAILABLE})
 
     def emit_md(segments):
         for text, bg in segments:
-            md_count["n"] += 1
+            ctx["md_count"]["n"] += 1
             O.emit(LOG, O.gut(text, SLOT_RGB, outer=OUTER_RGB, g=GROUP, bg=bg))
+    ctx["emit_md"] = emit_md
 
     def emit_verbatim(text):
         # text = complete lines joined with "\n" (a trailing "\n" per line); drop the
@@ -377,46 +398,53 @@ def main(run):
                               SLOT_RGB, outer=OUTER_RGB, g=GROUP))
 
     def pump():
-        nonlocal content_stream
         lines = tail.pump()
         if lines:
             run.lines += len(lines)
             # Re-add the \n pump() stripped from each complete line, so a renderer
             # sees real line/block boundaries.
             text = "".join(ln.decode("utf-8", "replace") + "\n" for ln in lines)
-            if content_stream is not None:
-                emit_md(content_stream.feed(text))
-            elif sniff["mode"] == "sniff":
+            if ctx["cs"] is not None:
+                emit_md(ctx["cs"].feed(text))
+            elif ctx["sniff"]["mode"] == "sniff":
                 # First data read decides — no cross-poll buffering (liveness).
                 if _FENCE.search(text):
-                    content_stream = MDR.MarkdownStreamer()
-                    render_meta["kind"] = "md-sniff"
+                    ctx["cs"] = MDR.MarkdownStreamer()
+                    ctx["render_meta"]["kind"] = "md-sniff"
                     A.state_file(LOG, "render:" + TASKID, "start",
                                  {"kind": "md-sniff", "wenmode": MDR.AVAILABLE})
-                    sniff["mode"] = "md"
-                    emit_md(content_stream.feed(text))
+                    ctx["sniff"]["mode"] = "md"
+                    emit_md(ctx["cs"].feed(text))
                 else:
-                    sniff["mode"] = "raw"
+                    ctx["sniff"]["mode"] = "raw"
                     emit_verbatim(text)
             else:
                 emit_verbatim(text)
         return lines                            # None -> file vanished
+    return pump, ctx
 
-    # Completion signal differs by kind:
-    #   bg / fg — the command holds its output file open the whole time, so the
-    #             write-holder vanishing (plus a short idle grace) is definitive
-    #             (works for long silent jobs). For fg it is what keeps a
-    #             still-running command's tab BLUE however long it runs, whether
-    #             or not PostToolUse ever shows up (a Ctrl+B-backgrounded
-    #             command's process — and our tee pipe — runs on well past when
-    #             the original tool call's Post would have fired; a flat timeout
-    #             would have wrongly declared it done). fg first checks the
-    #             PostToolUse outcome hand-off (take-once state-DB record keyed
-    #             by CLAUDE_STREAM_DONE — was a .done sentinel file).
-    #   monitor — writes in bursts (no held file), but its command PROCESS is
-    #             persistent and identifiable, and exits exactly when the monitor
-    #             ends, so we track that process — robust at ANY cadence, no
-    #             grace. Idle fallback only if the process was never found.
+
+def make_is_done(tail, path, mon_pid, st):
+    """Build this kind's completion predicate `is_done(now) -> reason|None`
+    (the closure dispatch below). st is the shared mutable state: st["override"]
+    receives the fg PostToolUse outcome hand-off when the sentinel fires.
+
+    Completion signal differs by kind:
+      bg / fg — the command holds its output file open the whole time, so the
+                write-holder vanishing (plus a short idle grace) is definitive
+                (works for long silent jobs). For fg it is what keeps a
+                still-running command's tab BLUE however long it runs, whether
+                or not PostToolUse ever shows up (a Ctrl+B-backgrounded
+                command's process — and our tee pipe — runs on well past when
+                the original tool call's Post would have fired; a flat timeout
+                would have wrongly declared it done). fg first checks the
+                PostToolUse outcome hand-off (take-once state-DB record keyed
+                by CLAUDE_STREAM_DONE — was a .done sentinel file).
+      monitor — writes in bursts (no held file), but its command PROCESS is
+                persistent and identifiable, and exits exactly when the monitor
+                ends, so we track that process — robust at ANY cadence, no
+                grace. Idle fallback only if the process was never found.
+    """
     GRACE = float(os.environ.get("CLAUDE_STREAM_GRACE_S") or
                   (2.0 if KIND in ("bg", "fg") else 8.0))
     sentinel = ("done:" + (DONE or path + ".done")) if KIND == "fg" else None
@@ -425,24 +453,15 @@ def main(run):
     # file may have appeared minutes in, and a launch-keyed deadline would leave
     # no time to find the process before the idle fallback could fire.
     mon = {"pid": mon_pid, "deadline": time.time() + PROCFIND_S}
-    # Backstop for fg ONLY (and shorter than the tailers' shared 6h cap): an
-    # interactive foreground command past 2h is far likelier a wedged tailer than
-    # a real command, and its live fg slot row keeps the tab blue the whole time.
-    # bg/monitor deliberately have NO backstop — their completion signals
-    # (write-holder vanishing / monitor process exit) are definitive, and a
-    # legitimately long background job must keep streaming past any cap.
-    backstop = start + 7200 if KIND == "fg" else None
-    override = None
 
     def writer_gone(now):
         return (not has_writer(path) and tail.idle_for(now) >= GRACE
                 and tail.size >= 0)
 
     def fg_done(now):
-        nonlocal override
         taken = S.hand_take(LOG, sentinel) if sentinel else None
         if taken is not None:
-            override = taken
+            st["override"] = taken
             return "sentinel"
         if writer_gone(now):
             return "writer-gone"                # process gone, sentinel never showed
@@ -462,38 +481,32 @@ def main(run):
     def bg_done(now):
         return "writer-gone" if writer_gone(now) else None
 
-    is_done = {"fg": fg_done, "monitor": monitor_done}.get(KIND, bg_done)
-    while True:
-        if pump() is None:
-            run.end("src-file-vanished")
-            break
-        now = time.time()
-        reason = is_done(now)
-        if reason:
-            run.end(reason)
-            break
-        if backstop and now > backstop:         # stuck fg tailer can't run forever
-            run.end("backstop-timeout")
-            break
-        time.sleep(T.POLL_S)
+    return {"fg": fg_done, "monitor": monitor_done}.get(KIND, bg_done)
 
+
+def drain(run, pump, tail, ctx, override):
+    """Final catch-up after the completion loop: one last pump, then flush
+    whatever the render/verbatim path still holds (the trailing incomplete
+    block or partial line), or fall back to the PostToolUse-captured output
+    when nothing ever landed in SRC. Returns `converted` (Ctrl+B hand-off —
+    the replacement bg tailer owns the rest of the block)."""
     pump()                                      # final catch-up read
     converted = KIND == "fg" and override and override.get("converted")
     if converted:
         run.end("converted-ctrl-b")
-    if content_stream is not None:
+    if ctx["cs"] is not None:
         # Flush the trailing incomplete block (the last line has no terminating
         # blank, so the buffer held it) plus any fallback body, all through the
         # markdown renderer so the final block is styled like the rest.
         if tail.pending:
-            content_stream.feed(tail.pending.decode("utf-8", "replace"))
+            ctx["cs"].feed(tail.pending.decode("utf-8", "replace"))
         if tail.pos == 0 and KIND == "fg" and not converted and override and override.get("fallback_body"):
-            content_stream.feed(override["fallback_body"])
-        emit_md(content_stream.close())
+            ctx["cs"].feed(override["fallback_body"])
+        ctx["emit_md"](ctx["cs"].close())
         # Zero blocks from a non-empty render stream is the render-failure tell —
         # see claude_audit.py `anomalies` (render blocks=0).
         A.state_file(LOG, "render:" + TASKID, "done",
-                     {"kind": render_meta["kind"], "blocks": md_count["n"]})
+                     {"kind": ctx["render_meta"]["kind"], "blocks": ctx["md_count"]["n"]})
     elif tail.pending.strip():
         O.emit(LOG, O.gut(unescape(tail.pending.decode("utf-8", "replace")), SLOT_RGB,
                           outer=OUTER_RGB, g=GROUP))
@@ -502,35 +515,49 @@ def main(run):
         # ignored PreToolUse's updatedInput, so the command ran unwrapped. Fall back
         # to the real output PostToolUse captured itself rather than showing nothing.
         O.emit(LOG, O.gut(override["fallback_body"], SLOT_RGB, g=GROUP))
+    return converted
 
-    if not converted:
-        # Ctrl+B-converted (see claude-cmd-fmt.py): a fresh "bg" tailer against the
-        # REAL backgroundTaskId output now owns the rest of this block (header, body,
-        # finish chip) — this tailer just bows out quietly, no chip of its own, so the
-        # two don't race or double-render.
-        elapsed = max(0.0, tail.changed_at - start)  # active duration, excluding any idle wait
-        dur = O.fmt_dur(elapsed)
-        if KIND == "fg" and override and override.get("chip"):
-            chip_txt = override["chip"]
-            chip_rgb = tuple(override.get("color") or SLOT_RGB)
-        elif KIND == "fg" and override and override.get("failed"):
-            # A subagent fg command whose outcome hand-off (claude-substream.py) carries
-            # only pass/fail — no precomputed chip (the tailer owns the duration).
-            chip_txt, chip_rgb = "■ failed · " + dur, O.RED
-        else:
-            text = {"bg": "background finished", "fg": "foreground finished"}.get(KIND, "monitor ended")
-            chip_txt, chip_rgb = "■ " + text + " · " + dur, SLOT_RGB
-        # Finish chip uses this stream's slot colour (same as its gutter) so you can
-        # tell which stream finished. Top-level jobs get a RULE-bracketed finish; a
-        # subagent's nested job gets just the chip behind its single outer gutter bar
-        # (the subagent block already frames it), so it stays visually contained.
-        if OUTER_RGB:
-            O.emit(LOG, O.label(chip_txt, chip_rgb, outer=OUTER_RGB))
-        else:
-            # g on the finish chip too: after a long stream the header's ⧉ links are
-            # far up in scrollback — the chip at the bottom offers the same copy.
-            O.emit(LOG, O.rule(), O.label(chip_txt, chip_rgb, g=GROUP), O.rule())
 
+def build_chip(kind, override, dur, slot_rgb):
+    """(chip_txt, chip_rgb) for the finish chip — the four override branches:
+      1. fg with a precomputed PostToolUse chip (the outcome hand-off carries
+         the exact duration/exit/interrupted text) -> use it, in its colour.
+      2. fg whose hand-off carries only pass/FAIL (a subagent fg command via
+         claude-substream.py — no precomputed chip, the tailer owns the
+         duration) -> "■ failed · <dur>" in red.
+      3. default (bg / monitor / fg with no override) -> the kind's generic
+         "■ <kind> finished/ended · <dur>" in the stream's slot colour.
+    (The fourth case, a Ctrl+B-converted fg, never reaches here — the caller
+    skips the chip entirely; see emit_finish_chip.)"""
+    if kind == "fg" and override and override.get("chip"):
+        return override["chip"], tuple(override.get("color") or slot_rgb)
+    if kind == "fg" and override and override.get("failed"):
+        return "■ failed · " + dur, O.RED
+    text = {"bg": "background finished", "fg": "foreground finished"}.get(kind, "monitor ended")
+    return "■ " + text + " · " + dur, slot_rgb
+
+
+def emit_finish_chip(start, tail, override):
+    """Paint the closing chip for this stream (rule-bracketed at top level, bare
+    behind the outer gutter for a subagent's nested job)."""
+    elapsed = max(0.0, tail.changed_at - start)  # active duration, excluding any idle wait
+    chip_txt, chip_rgb = build_chip(KIND, override, O.fmt_dur(elapsed), SLOT_RGB)
+    # Finish chip uses this stream's slot colour (same as its gutter) so you can
+    # tell which stream finished. Top-level jobs get a RULE-bracketed finish; a
+    # subagent's nested job gets just the chip behind its single outer gutter bar
+    # (the subagent block already frames it), so it stays visually contained.
+    if OUTER_RGB:
+        O.emit(LOG, O.label(chip_txt, chip_rgb, outer=OUTER_RGB))
+    else:
+        # g on the finish chip too: after a long stream the header's ⧉ links are
+        # far up in scrollback — the chip at the bottom offers the same copy.
+        O.emit(LOG, O.rule(), O.label(chip_txt, chip_rgb, g=GROUP), O.rule())
+
+
+def cleanup(path):
+    """Post-stream teardown: remove our own tee file and fg-live record, release
+    the slot, then ask the tab tracker to clear a stale red — in that order (the
+    recheck must not see this tailer's own slot marker)."""
     if KIND == "fg" and OWN:
         try:
             os.remove(path)
@@ -563,6 +590,45 @@ def main(run):
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:
         pass
+
+
+def main(run):
+    if not (TASKID and LOG):
+        return
+    start = time.time()
+    path, mon_pid = wait_source(run, start)
+    if not path:
+        return
+
+    tail = open_tailer(path)
+    pump, ctx = make_pump(run, tail)
+
+    st = {"override": None}          # the fg PostToolUse outcome hand-off, if any
+    is_done = make_is_done(tail, path, mon_pid, st)
+    backstop = start + FG_BACKSTOP_S if KIND == "fg" else None
+    while True:
+        if pump() is None:
+            run.end("src-file-vanished")
+            break
+        now = time.time()
+        reason = is_done(now)
+        if reason:
+            run.end(reason)
+            break
+        if backstop and now > backstop:         # stuck fg tailer can't run forever
+            run.end("backstop-timeout")
+            break
+        time.sleep(T.POLL_S)
+
+    converted = drain(run, pump, tail, ctx, st["override"])
+    if not converted:
+        # Ctrl+B-converted (see claude-cmd-fmt.py): a fresh "bg" tailer against the
+        # REAL backgroundTaskId output now owns the rest of this block (header, body,
+        # finish chip) — this tailer just bows out quietly, no chip of its own, so the
+        # two don't race or double-render.
+        emit_finish_chip(start, tail, st["override"])
+
+    cleanup(path)
 
 
 def entry():

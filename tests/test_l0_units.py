@@ -195,3 +195,44 @@ def test_painted_rows_agrees_with_frame_bytes_and_measure():
     pos, idx, acc = m.measure("g2")
     assert acc == total
     assert pos == 1 and idx == 2                      # banner=0, "a"=1, op at 2
+
+
+def test_stream_build_chip_branches():
+    """Pin the finish-chip builder extracted from claude-stream.py's tailer
+    body (plugins/claude_code/stream.py build_chip) — the override branches:
+    precomputed PostToolUse chip (its colour, slot fallback), the subagent
+    pass/fail hand-off, and the per-kind generic texts. Run in a fresh
+    interpreter with a controlled argv: the module still parses argv at
+    import (deliberately unchanged), and a digit SLOT avoids a slot claim."""
+    import os
+    import subprocess
+    prog = """
+import sys
+sys.argv = ["claude-stream.py", "bg", "tid", "/tmp/claude-mirror-x.log", "0"]
+from plugins.claude_code import stream
+from core import ops as O
+SLOT = (7, 7, 7)
+# 1. fg with a precomputed chip: text verbatim, its own colour...
+assert stream.build_chip("fg", {"chip": "chipped", "color": [1, 2, 3]},
+                         "9.9s", SLOT) == ("chipped", (1, 2, 3))
+# ...falling back to the slot colour when the hand-off carries none,
+# and winning over a simultaneous failed flag (chip is checked first).
+assert stream.build_chip("fg", {"chip": "chipped", "failed": True},
+                         "9.9s", SLOT) == ("chipped", SLOT)
+# 2. fg pass/fail-only hand-off (subagent path): red, tailer-owned duration.
+assert stream.build_chip("fg", {"failed": True}, "3.0s", SLOT) == \
+    ("\\u25a0 failed \\u00b7 3.0s", O.RED)
+# 3. defaults per kind (no override / fg override with neither key).
+assert stream.build_chip("bg", None, "5.0s", SLOT) == \
+    ("\\u25a0 background finished \\u00b7 5.0s", SLOT)
+assert stream.build_chip("fg", {}, "5.0s", SLOT) == \
+    ("\\u25a0 foreground finished \\u00b7 5.0s", SLOT)
+assert stream.build_chip("monitor", None, "5.0s", SLOT) == \
+    ("\\u25a0 monitor ended \\u00b7 5.0s", SLOT)
+print("OK")
+"""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("KITTY_", "CLAUDE_"))}
+    r = subprocess.run([sys.executable, "-c", prog], cwd=REPO, env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "OK" in r.stdout, r.stderr
