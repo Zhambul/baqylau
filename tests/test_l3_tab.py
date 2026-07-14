@@ -334,3 +334,21 @@ def test_spawn_watcher_kitty_exports_socket(monkeypatch):
     spawned = _spawn_watcher_with(monkeypatch, fe)
     assert spawned["env"]["KITTY_LISTEN_ON"] == "unix:/tmp/fe-test.sock"
     assert spawned["env"]["KITTY_WINDOW_ID"] == "9"
+
+
+def test_tab_db_readers_bind_values(monkeypatch, tmp_path):
+    """tab_get/watcher_pid must use bound parameters, not string-interpolated
+    SQL — a value with a quote character used to break the query (and was an
+    injection surface). Round-trip through the real DB with hostile keys."""
+    from core import tabs
+    monkeypatch.setattr(tabs, "TABDB", str(tmp_path / "tab.db"))
+    win = "9'; DROP TABLE tab;--"
+    tabs.tab_set(win, "executing")
+    assert tabs.tab_get(win) == "executing"
+    kind = "bg'watch"
+    tabs.watcher_set(kind, win, 4242)
+    assert tabs.watcher_pid(kind, win) == 4242
+    tabs.watcher_del(kind, win)
+    assert tabs.watcher_pid(kind, win) is None
+    tabs.tab_clear(win)
+    assert tabs.tab_get(win) == ""

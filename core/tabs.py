@@ -80,7 +80,7 @@ def twc(sql, params=()):
 
 
 def tab_get(win):
-    rows = sq(TABDB, f"SELECT state FROM tab WHERE win='{win}'")
+    rows = sq(TABDB, "SELECT state FROM tab WHERE win=?", (win,))
     return rows[0] if rows else ""
 
 
@@ -94,7 +94,7 @@ def tab_clear(win):
 
 
 def watcher_pid(kind, win):
-    rows = sq(TABDB, f"SELECT pid FROM watchers WHERE kind='{kind}' AND win='{win}'")
+    rows = sq(TABDB, "SELECT pid FROM watchers WHERE kind=? AND win=?", (kind, win))
     return rows[0] if rows else None
 
 
