@@ -389,9 +389,21 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   additionally leaves a **take-once note** keyed by cwd (`adopt_pending`). An
   event whose sid has
   **no state DB, no parked `*.keep`, and no prior SessionStart** consumes a
-  matching note and adopts the predecessor: `os.replace` its state DB (+`-wal`/
-  `-shm`) to the new sid's path — the rename preserves the inode, so the running
-  renderer/scorebar/OTLP-receiver connections keep working — leaving **symlinks
+  matching note and adopts the predecessor: its state DB (+`-wal`/`-shm`) moves
+  to the new sid's path via **hardlink-then-atomic-symlink-swap** — `os.link`
+  gives the inode the new name (so the running renderer/scorebar/OTLP-receiver
+  connections keep working) *while the old name stays resolvable*, then a
+  symlink created under a tmp name (`.adopt-tmp`, removed and audited on
+  failure) is `os.rename`d over the old path, so **the old path exists at
+  every instant**. Why not the earlier `os.replace`-then-`os.symlink` pair:
+  between those two syscalls the old path was ABSENT — an old-key poller
+  sampling `parked()` (a bare `exists`) in that window read it as SessionEnd
+  and exited permanently (frozen scoreboard for the continuing session), and a
+  straggler old-key writer's `_connect` created a fresh orphan DB there
+  (writes lost from the adopted DB, the symlink then failing EEXIST). If the
+  hardlink itself fails while the original still exists, the symlink swap is
+  skipped — renaming over it would destroy the un-adopted data — and the
+  old-path miss is audited as before. The result leaves **symlinks
   at the old paths** (old-key pollers and any old-path reopen resolve to the
   adopted DB; SQLite derives `-wal`/`-shm` names from the path a connection was
   opened with, hence all three), then retags `claude_session`/`claude_mirror`/

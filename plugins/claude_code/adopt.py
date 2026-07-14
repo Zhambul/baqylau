@@ -25,10 +25,17 @@
 #     agents-view agent session or a headless `claude -p` (whose lifecycle is
 #     skipped) can never shadow the real predecessor.
 #   - Any LATER event whose sid has NO state DB, NO prior SessionStart, and a
-#     matching note ADOPTS the predecessor: its state DB is renamed to the new
-#     sid's path — os.replace preserves the inode, so the running renderer /
-#     scorebar / OTLP-receiver connections keep working — with symlinks left at
-#     the old paths so old-key pollers (the scorebar's liveness stat, the
+#     matching note ADOPTS the predecessor: its state DB is moved to the new
+#     sid's path — a HARDLINK first (the inode keeps both names, so the running
+#     renderer / scorebar / OTLP-receiver connections keep working), then a
+#     symlink is atomically renamed over the old path. The old path therefore
+#     exists at EVERY instant: the earlier replace-then-symlink pair had a
+#     window where it was absent, and an old-key poller sampling parked() (a
+#     bare exists) in that window concluded SessionEnd and quit — frozen
+#     scoreboard — while a straggler old-key writer's _connect created a fresh
+#     orphan DB there, losing its writes and failing the symlink with EEXIST.
+#     Symlinks are left at all the old paths so old-key pollers (the
+#     scorebar's liveness stat, the
 #     renderer's reopen, a straggler OTEL datapoint under the old sid) land on
 #     the adopted DB. The kitty windows are retagged (claude_session /
 #     claude_mirror / claude_scorebar → new sid) so pane toggles, tab painting,
@@ -100,26 +107,42 @@ def _maybe_adopt(d, sid, cwd):
     T.sid_mark(sid)
     moved = []
     for suf in ("", "-wal", "-shm"):
+        src, dst = old_db + suf, db + suf
+        linked = False
         try:
-            os.replace(old_db + suf, db + suf)
+            # Hardlink, not os.replace: the inode gains the NEW name while the
+            # OLD one stays resolvable — a replace-then-symlink pair left a
+            # window where the old path was ABSENT, which an old-key poller
+            # (parked() is a bare exists) read as SessionEnd and quit on, and a
+            # straggler old-key _connect filled with a fresh orphan DB.
+            os.link(src, dst)
+            linked = True
             moved.append(suf or "db")
         except FileNotFoundError:
             if not suf:                     # -wal/-shm may legitimately not exist
                 A.error(sid, "adopt: move state db",
-                        {"src": old_db + suf, "dst": db + suf, "old": old})
+                        {"src": src, "dst": dst, "old": old})
         except OSError:
             A.error(sid, "adopt: move state db",
-                    {"src": old_db + suf, "dst": db + suf, "old": old})
+                    {"src": src, "dst": dst, "old": old})
+        if not linked and os.path.exists(src):
+            # The link failed with the original still in place — renaming a
+            # symlink over it would DESTROY the un-adopted data, so leave it
+            # (same shape the pre-atomic sequence's EEXIST swallow had).
+            A.error(sid, "adopt: symlink old path",
+                    {"target": dst, "link": src, "old": old})
+            continue
         try:
             # Even where nothing moved (-wal/-shm may not exist), a symlink at
             # the old path routes any future write/create through to the
             # adopted DB — SQLite derives sidecar paths from the path a
             # connection was OPENED with, so an old-path connection needs all
-            # three names to resolve to the new file set.
-            os.symlink(db + suf, old_db + suf)
+            # three names to resolve to the new file set. The swap goes via a
+            # tmp name + rename so the old path is never absent mid-flip.
+            _swap_in_symlink(sid, src, dst)
         except OSError:
             A.error(sid, "adopt: symlink old path",
-                    {"target": db + suf, "link": old_db + suf, "old": old})
+                    {"target": dst, "link": src, "old": old})
     retag = _retag_windows(old, sid)
     try:
         A.session_start(d)                  # the sessions row the fork never got
@@ -135,6 +158,33 @@ def _maybe_adopt(d, sid, cwd):
                      decision="adopt: sid forked — adopted %s" % old)
     except Exception:
         pass
+
+
+_TMP_SYMLINK_SUF = ".adopt-tmp"    # scratch name for the rename-over swap
+
+
+def _swap_in_symlink(sid, src, dst):
+    """Leave a symlink src → dst by creating it under a tmp name and renaming
+    it over src — rename atomically replaces whatever entry is at src (the
+    hardlinked original, or nothing for a missing sidecar), so at no instant is
+    src absent. Removes the tmp name on failure (audited) and re-raises for
+    the caller's audit."""
+    tmp = src + _TMP_SYMLINK_SUF
+    try:
+        os.remove(tmp)                      # a crashed prior attempt's leftover
+    except OSError:
+        pass
+    try:
+        os.symlink(dst, tmp)
+        os.rename(tmp, src)
+    except OSError:
+        try:
+            os.remove(tmp)
+        except FileNotFoundError:
+            pass
+        except OSError:
+            A.error(sid, "adopt: tmp symlink cleanup", {"tmp": tmp, "dst": dst})
+        raise
 
 
 def _retag_windows(old, sid):

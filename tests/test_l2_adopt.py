@@ -146,6 +146,70 @@ def test_instructionsloaded_before_own_sessionstart_blocks_adoption(
     assert not any(r[1] == "adopt" for r in oracle.state_files(test_env, b.sid))
 
 
+def test_adoption_swap_old_path_never_absent(tmp_path, monkeypatch):
+    # The move must never leave the OLD path absent, even for an instant: an
+    # old-key poller samples parked() (a bare os.path.exists) at any time, and
+    # a single False sample makes it conclude SessionEnd and exit permanently
+    # (frozen scoreboard); an old-key writer connecting in the gap creates a
+    # fresh orphan DB. The old replace-then-symlink pair had exactly that
+    # window. Step through the new hardlink + rename-over-tmp-symlink sequence
+    # in-process, asserting old_db resolves at EVERY syscall boundary.
+    monkeypatch.setenv("CLAUDE_AUDIT", "0")
+    from plugins.claude_code import adopt
+    src = str(tmp_path / "old.db")
+    dst = str(tmp_path / "new.db")
+    with open(src, "w") as f:
+        f.write("history")
+    samples = []
+    real = {n: getattr(os, n) for n in ("link", "symlink", "rename", "remove")}
+
+    def wrap(name):
+        def stepped(*a, **k):
+            samples.append((name, "pre", os.path.exists(src)))
+            r = real[name](*a, **k)
+            samples.append((name, "post", os.path.exists(src)))
+            return r
+        return stepped
+    for n in real:
+        monkeypatch.setattr(os, n, wrap(n))
+
+    os.link(src, dst)                        # step 1, as _maybe_adopt performs it
+    adopt._swap_in_symlink("sid", src, dst)  # step 2, the atomic symlink swap
+
+    absent = [s for s in samples if not s[2]]
+    assert not absent, "old path vanished at: %r" % absent
+    # End state identical to the pre-fix sequence: real file at the new path,
+    # symlink at the old, same inode, no tmp leftover.
+    assert os.path.isfile(dst) and not os.path.islink(dst)
+    assert os.path.islink(src) and os.path.samefile(src, dst)
+    assert open(src).read() == "history"
+    assert not os.path.lexists(src + adopt._TMP_SYMLINK_SUF)
+
+
+def test_adoption_swap_cleans_tmp_on_failure(tmp_path, monkeypatch):
+    # A failed rename must not strand the .adopt-tmp scratch symlink (or the
+    # original file): the swap removes it and re-raises for the caller's audit.
+    monkeypatch.setenv("CLAUDE_AUDIT", "0")
+    from plugins.claude_code import adopt
+    src = str(tmp_path / "old.db")
+    dst = str(tmp_path / "new.db")
+    with open(src, "w") as f:
+        f.write("history")
+    os.link(src, dst)
+
+    def boom(*a, **k):
+        raise OSError("rename failed")
+    monkeypatch.setattr(os, "rename", boom)
+    raised = False
+    try:
+        adopt._swap_in_symlink("sid", src, dst)
+    except OSError:
+        raised = True
+    assert raised, "expected OSError to propagate"
+    assert not os.path.lexists(src + adopt._TMP_SYMLINK_SUF)
+    assert os.path.isfile(src) and not os.path.islink(src)  # original intact
+
+
 def test_tab_paint_without_window_env(run_hook, test_env, fake_kitten, session):
     # A daemon-origin hook process has no KITTY_WINDOW_ID: tabstatus must fall
     # back to the claude_session-tagged window instead of bailing "not inside
