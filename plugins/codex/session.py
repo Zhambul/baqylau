@@ -150,7 +150,7 @@ def main():
         pass
     fate = HP.decide_log_fate(sid, log)
     try:
-        A.state_file(log, log + ".state.db.keep", fate, "source=" + source)
+        A.state_file(log, P.parked_db(log), fate, "source=" + source)
     except Exception:
         pass
     HP.ensure_db(log)

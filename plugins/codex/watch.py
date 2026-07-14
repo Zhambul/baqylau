@@ -301,8 +301,9 @@ def teardown():
     the finally's lock_release writes to the parked inode, never recreating the
     file."""
     from core import hostpane as HP
+    from core import paths as P
     action = HP.park_db(SID, LOG)
-    A.state_file(LOG, S.db_path(LOG) + ".keep", action, "codex host pid gone")
+    A.state_file(LOG, P.parked_db(LOG), action, "codex host pid gone")
     try:
         import frontends
         fe = frontends.get(resolve=True)

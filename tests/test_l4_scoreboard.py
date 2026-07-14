@@ -173,8 +173,8 @@ def test_session_end_folds_final_turn_tail(run_hook, test_env, session):
     state DB is parked — so nothing is lost. Idempotent: a Stop that already reached
     EOF leaves SessionEnd a no-op.
 
-    The dispatcher parks the state DB (rename → *.keep) as its next step, so we read
-    the fold result from the stop-fmt audit decision rather than the (now-moved) DB."""
+    The dispatcher parks the state DB (move → durable park) as its next step, so we
+    read the fold result from the stop-fmt audit decision rather than the (moved) DB."""
     HOOK = "claude-hook.py"
     s = session.make()
     s.add_assistant("m1", usage=usage(i=100, o=10))
@@ -183,7 +183,7 @@ def test_session_end_folds_final_turn_tail(run_hook, test_env, session):
     # The closing reply lands in the transcript only AFTER that Stop read it.
     s.add_assistant("m2", usage=usage(i=50, o=5))
     run_hook(HOOK, P.session_end(s))                     # dispatcher: fold THEN park
-    assert os.path.exists(s.state_db + ".keep"), "SessionEnd should have parked the DB"
+    assert os.path.exists(s.parked_db), "SessionEnd should have parked the DB"
     dec = oracle.decisions(test_env, s.sid, handler="claude-stop-fmt.py")
     assert any("tokens=165" in d for d in dec), \
         "SessionEnd did not fold the final-turn tail before parking (%r)" % dec

@@ -294,6 +294,11 @@ class Session:
         open(self.transcript, "a").close()
         self.log = env["CLAUDE_MIRROR_TMPDIR"] + "/claude-mirror-" + self.sid + ".log"
         self.state_db = self.log + ".state.db"
+        # The DURABLE park (core/paths.parked_db) — under HISTORY_DIR, which the
+        # CLAUDE_MIRROR_TMPDIR seam relocates into the hermetic tmpdir. Re-stated
+        # here (like the paths above) to pin the format.
+        self.parked_db = (env["CLAUDE_MIRROR_TMPDIR"]
+                          + "/kitty-mirror-history/" + self.sid + ".state.db")
 
     # ---- transcript writers (shapes per plugins/claude_code/accounting.py bump_transcript) ----
     def add_line(self, obj):

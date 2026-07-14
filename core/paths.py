@@ -39,6 +39,21 @@ PREFIX = _TMP + "/claude-mirror-"
 # any one session. In /tmp so it self-clears on reboot.
 TAB_DB = _TMP + "/claude-kitty-tab.db"
 
+# Durable park location for parked session state DBs (the mirror/scoreboard
+# HISTORY). The LIVE state DB stays under _TMP — its existence is the
+# session-alive signal watchers poll, and stale runtime state SHOULD self-clear
+# on reboot — but the PARKED history must OUTLIVE a reboot so a --resume after a
+# machine restart replays the prior session instead of starting from scratch.
+# macOS wipes /tmp on reboot, which silently dropped the old in-place *.keep
+# parks; parking here (durable ~/.claude) is the fix. Relocated under the
+# hermetic tmpdir when the test seam is set, so the suite never touches real
+# ~/.claude.
+HISTORY_DIR = os.path.join(
+    _TMP if os.environ.get("CLAUDE_MIRROR_TMPDIR")
+    else os.path.expanduser("~/.claude"),
+    "kitty-mirror-history",
+)
+
 # The GLOBAL (per-machine, not per-session) OTLP-receiver singleton lock DB. The
 # OTEL metrics receiver is one process per machine — the OTLP endpoint is a
 # process-global env var, so a single receiver serves every session. Its pid-lock
@@ -90,3 +105,11 @@ def log_for_key(key):
 def state_db(log):
     """The per-session runtime state DB for a mirror log (see core/state.py)."""
     return log + ".state.db"
+
+
+def parked_db(log):
+    """The DURABLE park path for a session's state DB (see core/hostpane.park_db).
+    Base path only — callers append '', '-wal', '-shm' as for state_db(). Lives
+    under HISTORY_DIR (~/.claude), NOT next to the live DB, so a machine reboot
+    that wipes /tmp cannot drop the parked mirror/scoreboard history."""
+    return os.path.join(HISTORY_DIR, sid_from_log(log) + ".state.db")

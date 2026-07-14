@@ -377,7 +377,7 @@ def cmd_open():                              # SessionStart (payload on stdin)
         audit_pane(sid, "open", 1, "skipped: no host pane (daemon/headless session)")
         return
     log_fate = decide_log_fate(sid, log)
-    audit_state(log, log + ".state.db.keep", log_fate,
+    audit_state(log, P.parked_db(log), log_fate,
                 f"source={payload.get('source') or ''}")
     # The DB file's EXISTENCE is the session-alive signal the scoreboard bar and
     # the codex watcher poll — create it (with schema) BEFORE launching them, or
@@ -436,9 +436,9 @@ def cmd_close():                             # SessionEnd (payload on stdin)
     # pruned on every close ("log" itself is a pre-migration leftover: removed).
     if not log:
         return
-    action = HP.park_db(sid, log)            # rename->*.keep (resume) or delete
+    action = HP.park_db(sid, log)            # move->durable park (resume) or delete
     if action == "keep-history":
-        audit_state(log, log + ".state.db.keep", "keep-history", "parked for resume")
+        audit_state(log, P.parked_db(log), "keep-history", "parked for resume")
     for f in (log, log + ".keep"):           # legacy JSONL log, if any
         try:
             os.remove(f)
@@ -450,11 +450,21 @@ def cmd_close():                             # SessionEnd (payload on stdin)
 def sweep_tmp_debris():
     """Global /tmp janitor, run at every SessionEnd: pre-migration leftovers
     (marker dirs, tab-state/watcher-pid files — nothing reads or writes them
-    anymore) and anything session-scoped older than 7 days (parked *.keep never
-    resumed, state DBs of crashed sessions, orphaned fg .out/.done side files —
-    a LIVE session's files are always younger). Sweeps the SAME root everything
-    else derives paths from (core.paths honours CLAUDE_MIRROR_TMPDIR) — a
-    hardcoded /tmp here made every test's SessionEnd rummage in the REAL /tmp."""
+    anymore) and anything session-scoped older than 7 days (state DBs of crashed
+    sessions, orphaned fg .out/.done side files — a LIVE session's files are
+    always younger). Sweeps the SAME root everything else derives paths from
+    (core.paths honours CLAUDE_MIRROR_TMPDIR) — a hardcoded /tmp here made every
+    test's SessionEnd rummage in the REAL /tmp. The DURABLE park dir (HISTORY_DIR,
+    under ~/.claude, deliberately NOT in /tmp so a reboot can't drop it) is swept
+    on the same 7-day cutoff — a never-resumed park must still eventually age out,
+    it just no longer lives where the /tmp glob would catch it."""
+    cutoff = time.time() - 7 * 86400
+    for p in glob.glob(os.path.join(P.HISTORY_DIR, "*.state.db*")):
+        try:
+            if os.lstat(p).st_mtime < cutoff:
+                os.remove(p)
+        except OSError:
+            continue
     tmp = os.path.dirname(P.TAB_DB)
     for p in glob.glob(tmp + "/claude-mirror-*.log.slots"):
         shutil.rmtree(p, ignore_errors=True)
@@ -465,7 +475,6 @@ def sweep_tmp_debris():
                 os.remove(p)
             except OSError:
                 pass
-    cutoff = time.time() - 7 * 86400
     for p in glob.glob(tmp + "/claude-mirror-*"):
         try:
             if os.lstat(p).st_mtime < cutoff:

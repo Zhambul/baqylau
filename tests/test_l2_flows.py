@@ -114,7 +114,7 @@ def test_f1_minimal_session(run_hook, test_env, session, fake_kitten):
     assert s.counters().get("tokens", 0) > 0, "SessionEnd fallback did not fold cost"
     run_hook(TAB, P.session_end(s), argv=("clear",))
     run_hook("claude-split.py", P.session_end(s), argv=("close",))
-    assert os.path.exists(s.state_db + ".keep") and not os.path.exists(s.state_db)
+    assert os.path.exists(s.parked_db) and not os.path.exists(s.state_db)
     wait_until(lambda: streams_all_ended(test_env, s.sid),
                desc="codex watcher exits once the DB is parked")
     oracle.assert_clean(test_env, s.sid)
@@ -835,7 +835,7 @@ def test_f10_resume_restores_mirror_history(run_hook, test_env, session,
     assert ops_before >= 2
 
     run_hook("claude-split.py", P.session_end(s), argv=("close",))
-    assert os.path.exists(s.state_db + ".keep")
+    assert os.path.exists(s.parked_db)
     assert not os.path.exists(s.state_db)
 
     run_hook("claude-split.py", P.session_start(s, source="resume"),
@@ -931,7 +931,7 @@ def test_f11_session_end_parks_db_and_substream_exits(run_hook, test_env,
     wait_until(lambda: "scanning the tree now" in s.ops_text(), desc="live")
 
     run_hook("claude-split.py", P.session_end(s), argv=("close",))
-    assert os.path.exists(s.state_db + ".keep")
+    assert os.path.exists(s.parked_db)
     wait_until(lambda: streams_all_ended(test_env, s.sid),
                desc="substream exits once the DB is parked")
     assert any("parked" in (r or "") for r in end_reasons(test_env, s.sid))

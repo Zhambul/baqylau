@@ -327,8 +327,10 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   fires **`claude-codex-launch.py`** (see [codex.md](codex.md)),
   which detaches this session's codex watcher and returns immediately. `close`
   (SessionEnd) closes that session's mirror + bar and **parks** its state DB
-  (`<log>.state.db*` — ops history, scoreboard, coordination state) as `*.keep`
-  files, and sweeps stale debris (parked/orphaned session files older than 7
+  (`<log>.state.db*` — ops history, scoreboard, coordination state) by MOVING it
+  into the **durable** park dir `~/.claude/kitty-mirror-history/` (`core/paths.py`
+  `HISTORY_DIR`/`parked_db`), and sweeps stale debris (parked/orphaned session
+  files older than 7
   days, pre-migration leftovers). The `close` path runs **even when the frontend
   is unusable** (`FE.usable()` false — no kitty / no `kitten` binary, e.g. a
   headless CI host): parking the state DB is core session-lifecycle, not pane
@@ -340,9 +342,11 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   **History across resume.** `--resume`/`--continue` keeps the same `session_id`,
   so `open` decides the DB's fate purely from **file existence**, never from the
   payload's `source` field (which would miss resume-after-crash):
-  - `<db>.keep` exists → a prior SessionEnd parked this sid; move the DB back and
-    the renderer replays the entire prior session, scoreboard included
-    (**restore-history**).
+  - a durable park (`HISTORY_DIR/<sid>.state.db*`) exists → a prior SessionEnd
+    parked this sid; move the DB back to the live `/tmp` path and the renderer
+    replays the entire prior session, scoreboard included (**restore-history**).
+    A legacy in-place `<db>.keep` (parked by an older build) is still honoured, so
+    a resume across the upgrade restores too.
   - the DB itself exists → SessionStart fired mid-session (`compact`) or the prior
     run crashed without a SessionEnd; leave it alone (**reuse-live-db**).
     (Truncating unconditionally here — the pre-DB design — wiped the live mirror
@@ -351,9 +355,15 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
     DB (**fresh-db**). The sid-less cwd-slug fallback removes any leftover DB
     instead — it may belong to another session.
 
-  Why *park-and-rename* rather than simply not deleting: the DB **path** vanishing
+  Why *park-and-move* rather than simply not deleting: the DB **path** vanishing
   is the exit signal the codex watcher and the bar's renderer poll for — leaving
-  it in place at SessionEnd would leak both. Each fate is audited as a
+  it in place at SessionEnd would leak both. Why the park lives under `~/.claude`
+  rather than next to the live DB in `/tmp` (the original `*.keep`-in-place design):
+  **macOS wipes `/tmp` on reboot**, so an in-place park was silently dropped when
+  the machine restarted between SessionEnd and a `--resume`, and the resume started
+  `fresh-db` — an empty mirror + zeroed scoreboard. The live DB stays in `/tmp` (its
+  existence is the session-alive signal, and stale runtime state *should* clear on
+  reboot); only the parked history is durable. Each fate is audited as a
   `state_files` row (action = the fate, content = the payload's `source`), so a
   resume that came back empty is a `fresh-db` row on a `source=resume` start — a
   canned `anomalies` query.

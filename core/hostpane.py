@@ -19,6 +19,7 @@
 # `here` is the repo's bin/ (where the entry scripts — claude-mirror.py,
 # claude-scorebar.py — live), likewise passed by the caller.
 import os
+import shutil
 import time
 
 from core.noaudit import load_audit
@@ -190,22 +191,30 @@ def decide_log_fate(sid, log):
     rest is scoreboard/coordination state. Keyed on file existence, NOT the
     payload's `source` field, so a resume-after-crash (no SessionEnd, DB still
     live) is covered too. Returns the fate the caller audits:
-      restore-history — SessionEnd parked this sid's state DB at *.keep; a
-                        resume keeps the sid, so move it back and the renderer
-                        replays the whole prior session.
+      restore-history — SessionEnd parked this sid's state DB DURABLY (under
+                        HISTORY_DIR); a resume keeps the sid, so move it back to
+                        the live path and the renderer replays the whole prior
+                        session. A legacy in-place *.keep (older builds / a
+                        park that predates this durable location) is also
+                        honoured, so a resume across the upgrade still restores.
       reuse-live-db   — the DB already exists (compact fires SessionStart
                         mid-session; a crash skips SessionEnd). Leave it alone.
       fresh-db        — brand-new session. With no sid (the shared cwd-slug
                         fallback) any leftover DB may be another session's —
                         remove it."""
     db = P.state_db(log)
-    if sid and os.path.isfile(db + ".keep"):
-        for f in (db, db + "-wal", db + "-shm"):
-            if os.path.isfile(f + ".keep"):
-                try:
-                    os.replace(f + ".keep", f)
-                except OSError:
-                    pass
+    pk = P.parked_db(log)
+    if sid and (os.path.isfile(pk) or os.path.isfile(db + ".keep")):
+        for suf in ("", "-wal", "-shm"):
+            dst = db + suf
+            # durable park first, then a legacy in-place *.keep (transition).
+            for src in (pk + suf, dst + ".keep"):
+                if os.path.isfile(src):
+                    try:
+                        shutil.move(src, dst)
+                    except OSError:
+                        pass
+                    break
         return "restore-history"
     if os.path.isfile(db):
         if sid:
@@ -219,18 +228,32 @@ def decide_log_fate(sid, log):
 
 
 def park_db(sid, log):
-    """Tear down the state DB at session end. Renaming the DB (+ -wal/-shm) to
-    *.keep makes the DB PATH vanish — the exit signal the codex watcher and the
-    scoreboard bar poll for — while preserving the session's history so a
-    same-sid resume replays it (decide_log_fate → restore-history). Only the
+    """Tear down the state DB at session end. MOVING the DB (+ -wal/-shm) out to
+    the durable park (HISTORY_DIR) makes the live DB PATH vanish — the exit
+    signal the codex watcher and the scoreboard bar poll for — while preserving
+    the session's history DURABLY so a same-sid resume replays it even across a
+    machine reboot (decide_log_fate → restore-history). The park lives under
+    ~/.claude, not /tmp, precisely because macOS wipes /tmp on reboot. Only the
     anonymous cwd-slug fallback (no sid) is deleted outright. Returns the action
     string the caller audits."""
     db = P.state_db(log)
     if sid:
-        for f in (db, db + "-wal", db + "-shm"):
-            if os.path.isfile(f):
+        pk = P.parked_db(log)
+        try:
+            os.makedirs(os.path.dirname(pk), exist_ok=True)
+        except OSError:
+            pass
+        for suf in ("", "-wal", "-shm"):
+            src = db + suf
+            if os.path.isfile(src):
+                dst = pk + suf
+                try:            # a stale prior park would block a cross-device move
+                    if os.path.exists(dst):
+                        os.remove(dst)
+                except OSError:
+                    pass
                 try:
-                    os.replace(f, f + ".keep")
+                    shutil.move(src, dst)
                 except OSError:
                     pass
         return "keep-history"

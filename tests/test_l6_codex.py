@@ -283,8 +283,8 @@ def test_standalone_watcher_ignores_foreign_rollouts(test_env, codex, reaper):
 
 def test_standalone_teardown_parks_db_on_host_exit(test_env, codex, reaper):
     """Codex fires no SessionEnd hook, so the standalone watcher owns teardown:
-    when the codex host pid dies (here: killed), it parks the state DB (-> *.keep,
-    so a codex `resume` replays) and exits — the SessionEnd surrogate."""
+    when the codex host pid dies (here: killed), it parks the state DB (-> durable
+    park, so a codex `resume` replays) and exits — the SessionEnd surrogate."""
     host = subprocess.Popen(["sleep", "60"])
     reaper.append(host)
     w = codex.start_watcher(host_pid=host.pid)
@@ -293,7 +293,7 @@ def test_standalone_teardown_parks_db_on_host_exit(test_env, codex, reaper):
                desc="standalone watcher registered")
     host.terminate()
     host.wait()
-    wait_until(lambda: os.path.exists(codex.s.state_db + ".keep"),
+    wait_until(lambda: os.path.exists(codex.s.parked_db),
                desc="state DB parked when codex host exits")
     assert not os.path.exists(codex.s.state_db)
     wait_until(lambda: w.poll() is not None, desc="watcher exits after teardown")

@@ -95,10 +95,10 @@ def pid_alive(pid):
 
 def _connect(path):
     # Revalidate the cached connection against the file's CURRENT inode. A
-    # SessionEnd parks the DB with os.replace(db, db+".keep") and a fresh DB is
-    # created at the same path on resume — so a long-lived caller (the OTLP
-    # receiver, the renderer) that cached a connection still holds an fd to the
-    # OLD inode (now the *.keep file), and its writes silently land there,
+    # SessionEnd parks the DB (moving it out to the durable HISTORY_DIR) and a
+    # fresh DB is created at the same path on resume — so a long-lived caller (the
+    # OTLP receiver, the renderer) that cached a connection still holds an fd to
+    # the OLD inode (now the parked file), and its writes silently land there,
     # invisible to everything reading the live path. No error is ever raised
     # (the stale fd points at a real, valid DB), so the swap can only be caught
     # proactively: one os.stat per call, cheap next to the reconnect it guards,

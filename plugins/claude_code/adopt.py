@@ -84,8 +84,10 @@ def on_event(d):
 
 
 def _maybe_adopt(d, sid, cwd):
-    db = P.state_db(P.mirror_log(sid))
-    if os.path.exists(db) or os.path.exists(db + ".keep") or not cwd:
+    log = P.mirror_log(sid)
+    db = P.state_db(log)
+    if (os.path.exists(db) or os.path.exists(P.parked_db(log))
+            or os.path.exists(db + ".keep") or not cwd):
         return                              # known session — the normal fast path
     old = T.adopt_peek(cwd)
     if not old or old == sid or T.sid_seen(sid):
