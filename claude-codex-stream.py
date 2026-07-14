@@ -1,6 +1,6 @@
 #!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-codex-stream.py — entry point; the implementation lives in
-# plugins/codex/stream.py (README § Architecture). This filename is load-bearing:
+# plugins/codex/stream.py (docs/architecture.md). This filename is load-bearing:
 # it is spawned by filename and argv[0] is the audit DB's spawn/handler
 # vocabulary.
 import os, sys

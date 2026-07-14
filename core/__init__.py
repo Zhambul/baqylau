@@ -2,7 +2,7 @@
 #
 # Everything here must stay importable with zero knowledge of WHICH agent tool
 # (Claude Code, codex, …) produced an event or WHICH terminal (kitty, …) shows
-# it. The dependency rule for the whole repo (see README § Architecture):
+# it. The dependency rule for the whole repo (see docs/architecture.md):
 #
 #   core/       imports nothing outside core/ (stdlib + optional pygments only)
 #   frontends/  imports core/ at most

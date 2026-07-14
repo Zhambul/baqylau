@@ -1,4 +1,4 @@
-# frontends/ — terminal adapters (the "frontend" layer of README § Architecture).
+# frontends/ — terminal adapters (the "frontend" layer of docs/architecture.md).
 #
 # A frontend is the ONE place that knows how to talk to a terminal emulator:
 # paint a tab colour, enumerate windows/panes, open the mirror split, resize it.

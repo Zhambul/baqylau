@@ -98,7 +98,7 @@ def _win():
         WIN = _fe().current_window() or ""
     return WIN
 
-# Test-suite-only cadence override (README § Testing): one value that replaces
+# Test-suite-only cadence override (docs/testing.md): one value that replaces
 # every watcher/grace sleep below (bg-watch 2s, interrupt-watch 0.5s, bg-recheck
 # grace 4s). Unset (the shipped default) leaves each sleep its literal value —
 # written as `time.sleep(WATCH_POLL_S or <literal>)` so the defaults stay

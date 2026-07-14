@@ -437,7 +437,7 @@ def session_start(d):
     envkeys = {k: v for k, v in os.environ.items()
                if k.startswith(("CLAUDE_MIRROR", "CLAUDE_TAB", "CLAUDE_CODE_EFFORT",
                                 "CLAUDE_AUDIT",
-                                # test-suite seams (README § Testing): a session
+                                # test-suite seams (docs/testing.md): a session
                                 # run with altered timing/paths must say so here
                                 "CLAUDE_TAIL_", "CLAUDE_STREAM_", "CLAUDE_WATCH_",
                                 "CLAUDE_CODEX_", "CLAUDE_OTEL_"))

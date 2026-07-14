@@ -1,4 +1,4 @@
-# plugins/ — one directory per agent tool (README § Architecture).
+# plugins/ — one directory per agent tool (docs/architecture.md).
 #
 # A plugin is the adapter between ONE agent tool's own signals (hook payloads,
 # transcripts, sidecar files, rollout logs) and the core runtime (paint ops,

@@ -372,7 +372,7 @@ def main(run):
                 feed_line(s)
 
     # rollout: close the block if no new turn starts within grace. Env override
-    # exists solely for the test suite (README § Testing).
+    # exists solely for the test suite (docs/testing.md).
     GRACE = float(os.environ.get("CLAUDE_CODEX_GRACE_S") or 8.0)
     while True:
         pump()

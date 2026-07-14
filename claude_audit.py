@@ -1,6 +1,6 @@
 #!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_audit.py — compat shim + the audit CLI entry point. The implementation
-# moved to core/audit.py (README § Architecture); `import claude_audit` yields
+# moved to core/audit.py (docs/architecture.md); `import claude_audit` yields
 # that same module object, and this file remains the documented CLI:
 #
 #   python3 claude_audit.py sessions|timeline|errors|anomalies|sql|prune|…

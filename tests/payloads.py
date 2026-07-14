@@ -1,7 +1,7 @@
-# payloads.py — synthetic hook payload builders, one per README § Wiring row.
+# payloads.py — synthetic hook payload builders, one per docs/wiring.md row.
 #
 # Shapes mirror what Claude Code actually sends (the empirically-confirmed
-# fields are documented in README — updatedInput, backgroundTaskId +
+# fields are documented in docs/streaming.md — updatedInput, backgroundTaskId +
 # backgroundedByUser, stoppedByUser, "[Request interrupted by user]").
 # Every builder takes the Session fixture object for the identity fields.
 import os

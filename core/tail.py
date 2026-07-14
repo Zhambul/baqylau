@@ -15,7 +15,7 @@ from core.noaudit import load_audit
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
-# Env overrides exist solely for the test suite (README § Testing) — real
+# Env overrides exist solely for the test suite (docs/testing.md) — real
 # sessions never set them, so the shipped cadence stays the literal defaults.
 POLL_S = float(os.environ.get("CLAUDE_TAIL_POLL_S") or 0.4)
                             # main poll cadence of every tailer loop

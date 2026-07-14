@@ -7,9 +7,9 @@
 # fold used to. It is the AUTHORITATIVE cost source; the transcript fold survives
 # only as a SessionEnd fallback (plugins/claude_code/stop_fmt.py) for sessions that
 # ran without telemetry. See plugins/otel/receiver.py for the full rationale, and
-# README § Scoreboard.
+# docs/scoreboard.md.
 #
-# Requires the telemetry env in ~/.claude/settings.json (README § Wiring):
+# Requires the telemetry env in ~/.claude/settings.json (docs/wiring.md):
 #   CLAUDE_CODE_ENABLE_TELEMETRY=1, OTEL_METRICS_EXPORTER=otlp,
 #   OTEL_EXPORTER_OTLP_PROTOCOL=http/json,
 #   OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:<CLAUDE_OTEL_PORT>,
@@ -29,7 +29,7 @@ def on_session_start(log, cwd, sid):
     session is safe."""
     # Only run a receiver if this session actually exports telemetry — otherwise
     # there is nothing to receive (and hermetic tests, which don't set this, stay
-    # inert). The env is set in ~/.claude/settings.json (README § Wiring).
+    # inert). The env is set in ~/.claude/settings.json (docs/wiring.md).
     if os.environ.get("CLAUDE_CODE_ENABLE_TELEMETRY") != "1":
         return
     launcher = os.path.join(_REPO, "claude-otlp-launch.py")

@@ -49,7 +49,7 @@ def _emit_updated_input(ti, wrapped_cmd):
     # (prompt on EVERY rewritten command, even allowlisted ones — there is no
     # "rewrite, then fall through to normal permission rules" option). "ask"
     # is unusably noisy, so rewritten foreground commands never
-    # permission-prompt; deny rules still apply. See README § Live foreground
+    # permission-prompt; deny rules still apply. See docs/streaming.md, Live foreground
     # streaming. (Applies to both the main path and a subagent's fg command,
     # the latter gated by CLAUDE_MIRROR_LIVE_FG_SUB.)
     new_ti = dict(ti); new_ti["command"] = wrapped_cmd

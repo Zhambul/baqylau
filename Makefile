@@ -1,6 +1,6 @@
 PY ?= python3
 
-# The hermetic e2e suite (fake kitten, per-test tmp dirs). See README § Testing.
+# The hermetic e2e suite (fake kitten, per-test tmp dirs). See docs/testing.md.
 test:
 	$(PY) -m pytest -q -m "not kitty"
 

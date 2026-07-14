@@ -174,7 +174,7 @@ def _content_streamer():
 SNIFF = (RENDER_KIND is None and KIND == "fg"
          and os.environ.get("CLAUDE_MIRROR_MD_SNIFF", "1") != "0")
 _FENCE = re.compile(r"(?m)^[ \t]{0,3}(```|~~~)[^\n`]*$")
-# Timing seams (README § Testing): how long bg/fg wait for the task output file
+# Timing seams (docs/testing.md): how long bg/fg wait for the task output file
 # to appear (a monitor waits on process liveness instead — monitor_wait_file),
 # and how long to keep trying to identify the monitor's process (find_proc)
 # before concluding there is nothing to key liveness on.

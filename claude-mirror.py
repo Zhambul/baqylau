@@ -121,8 +121,8 @@ def render(op, w):
 # ⧉ copy links: a g-tagged label op gets clickable " ⧉cmd ⧉out" affordances (OSC 8
 # hyperlinks, claude-copy:// scheme). kitty resolves a click via open-actions.conf,
 # which launches claude-copy.py with the URL; that handler re-reads the group's ops
-# from the state DB and pipes command/output text to the clipboard (README §
-# Copy links). The links are dim and zero-cost to everything else — a label without
+# from the state DB and pipes command/output text to the clipboard
+# (docs/click-to-view.md). The links are dim and zero-cost to everything else — a label without
 # "g" renders exactly as before.
 _LINK_TXT = (("cmd", "⧉cmd"), ("out", "⧉out"))   # default when a label carries no "lk"
 

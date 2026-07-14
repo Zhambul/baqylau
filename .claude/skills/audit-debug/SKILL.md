@@ -78,7 +78,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   not under `/tmp/claude-mirror-…`, a tailer that gave up in under a second) —
   check the session's `sessions.env` column for test-suite seams
   (`CLAUDE_MIRROR_TMPDIR`, `CLAUDE_TAIL_*`, `CLAUDE_STREAM_*`,
-  `CLAUDE_WATCH_*`, README § Testing): the "session" is probably a test run,
+  `CLAUDE_WATCH_*`, docs/testing.md): the "session" is probably a test run,
   not a real one.
 - **Tab stuck blue** — a `slots` claim (bg/fg/monitor/sub) with no release (cross-check
   the live truth: `sqlite3 .../claude-mirror-<sid>.log.state.db "SELECT * FROM live"` —
@@ -165,8 +165,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   *different* command means the tid keying regressed (the cross-wire bug).
 - **A `.md`/`.json`/`.yml`/source file rendered raw (or garbled) instead of
   pretty** — content render mode (markdown: `.md`; JSON: `.json`; YAML:
-  `.yml`/`.yaml`; source code: `.py`/`.java`/`.kt`/`.sh` etc; README § Command
-  mirror pane). Detection runs in the TAILER (from the raw command every launch
+  `.yml`/`.yaml`; source code: `.py`/`.java`/`.kt`/`.sh` etc; docs/mirror-pane.md). Detection runs in the TAILER (from the raw command every launch
   site passes via `CLAUDE_STREAM_CMD` — `hookkit.stream_env`), for main-session
   AND subagent fg commands alike; launcher `hook_events` decisions say nothing
   about render mode (pre-2026-07-12 they carried a `[*-render]` suffix). First
@@ -193,7 +192,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
 - **⧉ copy link does nothing / copies the wrong thing** — a healthy click leaves a
   `state_files` row, action `copy` (content: gid/what/chars). NO row at all for the
   click means kitty never launched the handler — the `open-actions.conf` wiring
-  (README § Wiring), not this repo's code; otherwise check `errors` for func
+  (docs/wiring.md), not this repo's code; otherwise check `errors` for func
   `copy (…)`: `bad url` (renderer built a malformed link), `state DB gone` (clicked
   after SessionEnd — expected no-op), `read ops` / `no clipboard tool`. `chars: 0`
   with what=`out` on a still-running block just means no output had streamed yet.

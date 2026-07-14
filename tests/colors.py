@@ -1,5 +1,5 @@
 # colors.py — the tab colour contract (mirrors COLORS in claude-tab-status.py
-# and the README colour table). This is the exact surface a terminal-
+# and the docs/tab-colors.md colour table). This is the exact surface a terminal-
 # abstraction layer must keep painting; L3 asserts the recorded backend argv
 # against it.
 COLOR_TABLE = {

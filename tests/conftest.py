@@ -1,11 +1,11 @@
-# conftest.py — the e2e harness (see README § Testing).
+# conftest.py — the e2e harness (see docs/testing.md).
 #
 # Philosophy: drive the REAL hook scripts as subprocesses with synthetic JSON
 # payloads (exactly how Claude Code invokes them), then assert on the three
 # observable state surfaces: the per-session state DB, the global tab DB, and
 # the audit DB. The terminal is faked at the pre-existing $KITTY_KITTEN_BIN
 # seam (a recorder script standing in for `kitten`); everything else is the
-# shipped code, isolated per-test via the env knobs in README § Testing.
+# shipped code, isolated per-test via the env knobs in docs/testing.md.
 import json
 import os
 import signal

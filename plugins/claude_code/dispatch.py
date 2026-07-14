@@ -9,7 +9,7 @@
 # reads the payload once and fans out IN-PROCESS to whichever subsystems the event
 # needs, then records the universal audit-subscriber row itself.
 #
-# Behaviour is preserved exactly (README § Wiring):
+# Behaviour is preserved exactly (docs/wiring.md):
 #   - matcher routing (Bash / Read|Edit|… / Monitor / Task|Agent) moves from
 #     settings.json matchers into _plan() below — same gating, same tools.
 #   - each subsystem still writes its OWN audit rows under its ENTRY filename:
@@ -51,7 +51,7 @@ def _match(tool, pattern):
 
 def _plan(ev, tool, d):
     """The routing table: (entry-filename, thunk) steps for this event, in order.
-    Mirrors the old settings.json wiring one-for-one — see README § Wiring."""
+    Mirrors the old settings.json wiring one-for-one — see docs/wiring.md."""
     steps = []
 
     def tab(state):

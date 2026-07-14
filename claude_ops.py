@@ -1,6 +1,6 @@
 #!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude_ops.py — compat AGGREGATOR. The old grab-bag split along the
-# architecture seams (README § Architecture):
+# architecture seams (docs/architecture.md):
 #
 #   core/ops.py                        paint ops, emit, bump/counters,
 #                                      scoreboard/token parts, semantic colours
