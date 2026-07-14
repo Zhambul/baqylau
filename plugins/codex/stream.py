@@ -192,6 +192,13 @@ class Renderer:
         self.ro_model = ""    # bare model id from turn_context — prices the footer
         self.ro_tag = ""      # "model · effort" chip last shown (re-shown on change)
         self.ro_usage = None  # CUMULATIVE total_token_usage from the last token_count
+        self.ro_malformed = 0  # complete-but-unparseable rollout lines this run
+
+    def _emit_exit_chip(self, code):
+        # The red failed-exit chip, shared by both sources (companion
+        # "Command failed (exit N)" heads and rollout function_call_output
+        # records — the extraction regexes legitimately differ per-site).
+        O.emit(LOG, O.gut(FAIL + "■ exit " + code + RST, SLOT_RGB))
 
     # --- companion (.log) parse: the pre-digested `[ts] …` activity stream ----------
     # Kept as a prefix-match LADDER, deliberately not a dispatch table: the
@@ -215,7 +222,7 @@ class Renderer:
         if head.startswith(("Command completed:", "Command failed:")):
             m = re.search(r"\(exit (\d+)\)", head)
             if m and m.group(1) != "0":
-                O.emit(LOG, O.gut(FAIL + "■ exit " + m.group(1) + RST, SLOT_RGB))
+                self._emit_exit_chip(m.group(1))
             return
         if head.startswith("Reviewer started"):
             what = head.split(":", 1)[-1].strip() if ":" in head else head
@@ -345,7 +352,7 @@ class Renderer:
         m = re.search(r"(?:^|\n)(?:Exit code|Process exited with code)[: ]+(\d+)",
                       out[:300])
         if m and m.group(1) != "0":
-            O.emit(LOG, O.gut(FAIL + "■ exit " + m.group(1) + RST, SLOT_RGB))
+            self._emit_exit_chip(m.group(1))
 
     def _rsp_function_call(self, p):
         if p.get("name") != "exec_command":
@@ -425,9 +432,28 @@ def main(run):
                     try:
                         rd.feed_rollout(json.loads(s))
                     except Exception:
-                        pass
+                        # A COMPLETE line (FileTailer only surfaces newline-
+                        # terminated lines — mid-write partials stay pending)
+                        # that still isn't JSON is genuinely malformed, but a
+                        # broken writer could produce thousands: audit the
+                        # FIRST one per run in full (A.error), just count the
+                        # rest — end() folds the total into the stream_end
+                        # reason, so the audit sees ≤1 error row per run.
+                        rd.ro_malformed += 1
+                        if rd.ro_malformed == 1:
+                            A.error(LOG, "codex rollout parse",
+                                    {"src": LOGFILE, "offset": tail.consumed,
+                                     "line": s[:200]})
             else:
                 rd.feed_line(s)
+
+    def end(reason):
+        # Stream-end wrapper: stamp the malformed-rollout-line count (if any)
+        # onto the audited end reason — the once-per-stream summary half of
+        # the first-line-only A.error above.
+        if rd.ro_malformed:
+            reason += " · malformed-lines:%d" % rd.ro_malformed
+        run.end(reason)
 
     # rollout: close the block if no new turn starts within grace. Env override
     # exists solely for the test suite (docs/testing.md).
@@ -435,19 +461,19 @@ def main(run):
     while True:
         pump()
         if S.parked(LOG):                        # session ended (state DB parked) -> stop
-            run.end("state-db-parked (session end)")
+            end("state-db-parked (session end)")
             # No footer: writing it would go into the parked *.keep snapshot via
             # the cached connection — or recreate the DB file outright.
             return
         if ROLLOUT:
             if rd.ro_done_wall and not rd.ro_active and (time.time() - rd.ro_done_wall) >= GRACE:
-                pump(); run.end("task-complete"); break
+                pump(); end("task-complete"); break
         elif read_status() in ("completed", "failed", "cancelled"):
             time.sleep(0.2); pump(); pump()  # drain the tail
-            run.end("sidecar-status: " + read_status())
+            end("sidecar-status: " + read_status())
             break
         if time.time() - start > T.BACKSTOP_S:   # backstop for a stuck run
-            run.end("backstop-timeout")
+            end("backstop-timeout")
             break
         time.sleep(T.POLL_S)
 

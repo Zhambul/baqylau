@@ -179,3 +179,39 @@ def test_sessionend_fallback_skipped_when_otel_present(run_hook, test_env, sessi
     assert s.counters().get("tokens", 0) == before
     dec = oracle.decisions(test_env, s.sid, "claude-stop-fmt.py")
     assert any("fold skipped" in d for d in dec), dec
+
+
+# ------------------------------------------------------------- malformed input
+
+def test_gzip_decompress_failure_audited_not_fatal(run_hook, test_env, session):
+    """A body claiming Content-Encoding: gzip that won't gunzip is AUDITED (an
+    errors row carrying the encoding header + byte count) and degraded to an
+    empty batch — the receiver still answers 200 (an OTLP exporter retries on
+    error responses, and the same bytes would fail forever) and keeps
+    ingesting later exports."""
+    s = session.make()
+    _materialize_db(run_hook, s)
+    port = _free_port()
+    recv = _spawn_receiver(test_env, port)
+    try:
+        _wait_listening(port, recv)
+        req = urllib.request.Request(
+            "http://127.0.0.1:%d/v1/metrics" % port, data=b"\x1f\x8bnot-gzip",
+            headers={"Content-Type": "application/json",
+                     "Content-Encoding": "gzip"})
+        urllib.request.urlopen(req, timeout=3).read()      # still HTTP 200
+        wait_until(lambda: [r for r in oracle.errors(test_env)
+                            if r[2] == "otel gzip decompress"],
+                   desc="gzip-failure errors row")
+        # the receiver survived and a later valid export still folds
+        _post(port, P.otlp_metrics(s.sid, costs=[("main", 0.05)]))
+        wait_until(lambda: s.counters().get("cost"),
+                   desc="post-failure export still ingested")
+    finally:
+        recv.terminate()
+        recv.wait(timeout=5)
+    rows = [r for r in oracle.errors(test_env)
+            if r[2] == "otel gzip decompress"]
+    assert len(rows) == 1, rows
+    ctx = rows[0][3] or ""
+    assert '"content_encoding": "gzip"' in ctx and '"bytes":' in ctx, ctx

@@ -114,6 +114,13 @@ def test_companion_job_discovered_streamed_and_completed(test_env, codex):
     codex.log_event(logfile, "Turn completed")     # flushes the message block
     wait_until(lambda: "all fixed now" in codex.s.ops_text(),
                desc="assistant message rendered")
+    # a failed command surfaces the shared red exit chip (companion-side path
+    # of Renderer._emit_exit_chip; the rollout side is pinned in
+    # test_rollout_deepening_files_tokens_search_model)
+    codex.log_event(logfile, "Command failed: false (exit 3)")
+    codex.log_event(logfile, "Turn started")       # flushes the failed head
+    wait_until(lambda: "■ exit 3" in codex.s.ops_text(),
+               desc="companion failed-exit chip")
 
     with open(jf) as f:
         data = json.load(f)
@@ -335,3 +342,56 @@ def test_standalone_session_handler_nested_skips(run_hook, test_env, session,
         "nested codex must not open a second mirror"
     assert any("nested-skip" in d
                for d in oracle.decisions(test_env, s.sid, handler="codex-session"))
+
+
+# ---- audit coverage of the codex degrade paths -------------------------------
+
+def test_rollout_malformed_lines_audited_once_with_count(test_env, codex):
+    """Complete-but-unparseable rollout lines (FileTailer only surfaces
+    newline-terminated lines, so these are never mid-write partials): exactly
+    ONE errors row per run — the FIRST bad line, with src/offset/snippet — the
+    rest only counted, the total stamped onto the stream_end reason
+    (`… · malformed-lines:N`). No audit flood however broken the writer."""
+    w = codex.start_watcher()
+    path, u = codex.add_rollout(events=[
+        {"type": "event_msg", "payload": {"type": "user_message",
+                                          "message": "count my garbage"}}])
+    wait_until(lambda: "count my garbage" in codex.s.ops_text(),
+               timeout=20, desc="rollout adopted")
+    with open(path, "a") as f:
+        f.write("{not json\n")
+        f.write("also not json\n")
+        f.write(json.dumps({"type": "event_msg",
+                            "payload": {"type": "task_complete"}}) + "\n")
+    wait_until(lambda: any(r[0] == "codex" and r[1]
+                           for r in oracle.streams(test_env, codex.s.sid)),
+               timeout=25, desc="codex stream ended")
+    rows = [r for r in oracle.errors(test_env, codex.s.sid)
+            if r[2] == "codex rollout parse"]
+    assert len(rows) == 1, "expected exactly one first-line error row: %r" % rows
+    ctx = rows[0][3] or ""
+    assert "{not json" in ctx and '"offset":' in ctx and path in ctx, ctx
+    ends = [r[1] for r in oracle.streams(test_env, codex.s.sid)
+            if r[0] == "codex" and r[1]]
+    assert any("malformed-lines:2" in e for e in ends), ends
+
+
+def test_claims_db_makedirs_failure_audited(monkeypatch):
+    """A failed claims-dir makedirs degrades (lock_acquire surfaces the unusable
+    path) but must leave an errors row naming the path first."""
+    from plugins.codex import watch as W
+    rec = []
+
+    class RecA:
+        def error(self, log, func, context=None):
+            rec.append((func, context))
+
+    monkeypatch.setattr(W, "A", RecA())
+
+    def boom(*a, **k):
+        raise OSError("disk says no")
+    monkeypatch.setattr(W.os, "makedirs", boom)
+    db = W.claims_db()
+    assert db.endswith("mirror-claims.db")     # still degrades to a usable path
+    assert rec and rec[0][0] == "codex claims_db makedirs", rec
+    assert "codex-companion" in (rec[0][1] or {}).get("path", ""), rec

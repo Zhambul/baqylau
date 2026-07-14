@@ -127,7 +127,9 @@ def claims_db():
     try:
         os.makedirs(d, exist_ok=True)
     except Exception:
-        pass
+        # Degrade (lock_acquire will surface the unusable path) — but leave
+        # evidence: "why did no session claim that codex run" starts here.
+        A.error(LOG, "codex claims_db makedirs", {"path": d})
     return os.path.join(d, "mirror-claims.db")
 
 

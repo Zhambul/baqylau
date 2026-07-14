@@ -192,7 +192,17 @@ class _Handler(BaseHTTPRequestHandler):
             try:
                 raw = gzip.decompress(raw)
             except Exception:
-                pass
+                # Audit-then-degrade, matching do_POST's malformed-JSON
+                # convention (swallow, still answer 200 — an OTLP exporter
+                # retries on error responses, and bytes that failed to gunzip
+                # once will fail forever, so an error status only earns a
+                # resend loop). Degrade to an EMPTY body rather than falling
+                # through: json.loads on the still-compressed bytes would fail
+                # too, masking the real cause as a generic do_POST JSON error.
+                A.error(SELF_LOG, "otel gzip decompress",
+                        {"content_encoding": self.headers.get("Content-Encoding"),
+                         "bytes": len(raw)})
+                raw = b""
         return raw
 
     def do_POST(self):
