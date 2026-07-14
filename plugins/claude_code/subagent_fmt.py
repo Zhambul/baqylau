@@ -48,7 +48,7 @@ def is_teammate(tpath, agent_id):
 alive = S.pid_alive
 
 
-def reconcile_spend(log, tpath, agent_id, team, ajsonl=""):
+def reconcile_spend(log, tpath, agent_id, ajsonl=""):
     """Cross-check an agent's transcript-derived spend against the OTEL-authoritative
     scoreboard at SubagentStop. Cost is now folded live by the OTLP receiver
     (plugins/otel/, query_source=subagent) — including the tail a crashed streamer
@@ -153,7 +153,7 @@ def finalize(log, d, agent_id, atype, tpath, tag="stop"):
         # clean finish recovers nothing. The payload's agent_transcript_path (when
         # present) beats the derived path.
         team = is_teammate(tpath, agent_id)   # once — each probe is a retry-read
-        rec_st = reconcile_spend(log, tpath, agent_id, team,
+        rec_st = reconcile_spend(log, tpath, agent_id,
                                  d.get("agent_transcript_path") or "")
         got = claude_slots.lookup_id("sub", log, agent_id)
         # Release FIRST, emit only if THIS call deleted the row: two overlapping
