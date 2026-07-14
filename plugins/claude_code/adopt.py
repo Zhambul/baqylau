@@ -99,8 +99,13 @@ def _maybe_adopt(d, sid, cwd):
         try:
             os.replace(old_db + suf, db + suf)
             moved.append(suf or "db")
+        except FileNotFoundError:
+            if not suf:                     # -wal/-shm may legitimately not exist
+                A.error(sid, "adopt: move state db",
+                        {"src": old_db + suf, "dst": db + suf, "old": old})
         except OSError:
-            pass
+            A.error(sid, "adopt: move state db",
+                    {"src": old_db + suf, "dst": db + suf, "old": old})
         try:
             # Even where nothing moved (-wal/-shm may not exist), a symlink at
             # the old path routes any future write/create through to the
@@ -109,7 +114,8 @@ def _maybe_adopt(d, sid, cwd):
             # three names to resolve to the new file set.
             os.symlink(db + suf, old_db + suf)
         except OSError:
-            pass
+            A.error(sid, "adopt: symlink old path",
+                    {"target": db + suf, "link": old_db + suf, "old": old})
     retag = _retag_windows(old, sid)
     try:
         A.session_start(d)                  # the sessions row the fork never got
@@ -136,6 +142,7 @@ def _retag_windows(old, sid):
         if not fe.usable():
             return []
     except Exception:
+        A.error(sid, "adopt: frontend unavailable", {"old": old})
         return []
     out = []
     for var in ("claude_session", "claude_mirror", "claude_scorebar"):
@@ -144,5 +151,6 @@ def _retag_windows(old, sid):
             if w and fe.set_user_vars(str(w.get("id")), {var: sid}) == 0:
                 out.append(var)
         except Exception:
-            pass
+            A.error(sid, "adopt: retag window",
+                    {"var": var, "old": old, "sid": sid})
     return out

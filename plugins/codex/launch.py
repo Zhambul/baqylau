@@ -45,4 +45,5 @@ def entry():
     try:
         main()
     except Exception:
-        pass
+        A.error(sys.argv[1] if len(sys.argv) > 1 else "", "codex launch",
+                {"argv": sys.argv[1:]})

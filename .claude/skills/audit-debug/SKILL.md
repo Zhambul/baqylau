@@ -334,7 +334,13 @@ New always-audited swallow sites (previously silent — their absence used to ma
   via `dispatch.py`): look for the `state_files` `adopt` row + the
   `claude-hook.py` `adopt:` decision (see the state_files schema row above) —
   the state DB moves to the new sid's path (symlinks at the old), panes are
-  retagged, and the sessions row is written. The `anomalies` **"hook traffic
+  retagged, and the sessions row is written. A PARTIAL adoption (the `adopt`
+  row's `moved` misses `db`, or `retagged` is short) now leaves `errors` rows
+  under the NEW sid, funcs `adopt: move state db` / `adopt: symlink old path` /
+  `adopt: retag window` / `adopt: frontend unavailable` — context carries the
+  src/dst paths (or the pane var) plus the old sid, so which half failed reads
+  directly off the row; a thin `moved`/`retagged` with NO such errors row is a
+  pre-fix build (2026-07-14). The `anomalies` **"hook traffic
   under a sid with no sessions row (resume fork never adopted)"** section flags
   the regression directly — run it against the sid CARRYING the traffic, not
   the frozen one. The tab-side half is `tabstatus._ensure_win` (falls back to

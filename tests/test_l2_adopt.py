@@ -160,3 +160,31 @@ def test_tab_paint_without_window_env(run_hook, test_env, fake_kitten, session):
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "awaiting-response"
     assert any(t[2] == "awaiting-response" and t[3] == 1
                for t in oracle.transitions(test_env, a.sid))
+
+
+def test_partial_adoption_leaves_error_rows(run_hook, test_env, fake_kitten,
+                                            session):
+    # A botched half-adoption (some sidecars moved, some didn't) must leave
+    # errors rows — a silent partial adoption was undebuggable after the fact.
+    # Force it: the predecessor has a -wal sidecar, and a non-empty DIRECTORY
+    # squats at the new sid's -wal path, so os.replace fails; the old -wal then
+    # still exists, so the old-path symlink fails too.
+    a = session.make()
+    run_hook(HOOK, P.session_start(a, source="resume"))
+    with open(a.state_db + "-wal", "w") as f:
+        f.write("x")
+    b = session.make()
+    os.makedirs(os.path.join(b.state_db + "-wal", "occupied"))
+    run_hook(HOOK, P.post_file(b, tool="Edit"))
+
+    # The main DB still adopted; only the -wal half failed.
+    assert os.path.isfile(b.state_db) and not os.path.islink(b.state_db)
+    adopts = [r for r in oracle.state_files(test_env, b.sid) if r[1] == "adopt"]
+    assert adopts and '"db"' in adopts[0][2] and '"-wal"' not in adopts[0][2]
+
+    errs = oracle.errors(test_env, b.sid)
+    funcs = [e[2] for e in errs]
+    assert "adopt: move state db" in funcs
+    assert "adopt: symlink old path" in funcs
+    move = next(e for e in errs if e[2] == "adopt: move state db")
+    assert a.sid in (move[3] or "") and "-wal" in (move[3] or "")

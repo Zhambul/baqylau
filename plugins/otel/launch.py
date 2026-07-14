@@ -67,4 +67,4 @@ def entry():
     try:
         main()
     except Exception:
-        pass
+        A.error("", "otlp launch", {"receiver": RECEIVER, "port": _port()})
