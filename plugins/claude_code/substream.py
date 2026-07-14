@@ -16,6 +16,11 @@
 # footer, then releases the slot. A subagent's BACKGROUND command / monitor is
 # streamed by claude-stream.py with a DOUBLE gutter (outer = this subagent's
 # colour, inner = the job's own palette slot) so nested parallel jobs stay distinct.
+#
+# This module owns the LIFECYCLE: the argv/env contract, model/effort/ctx
+# resolution, nested-tailer spawning, resume checkpointing, the four cancellation
+# signals, and the ended-footer. Turning transcript records into paint ops lives
+# in substream_render.py (the Renderer instance `REN`).
 import json, os, re, subprocess, sys, time
 
 from core import ops as O
@@ -26,7 +31,7 @@ from core import tail as T
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import hookkit as HK
 from plugins.claude_code import model as M
-from plugins.claude_code import tools as CT
+from plugins.claude_code import substream_render as SR
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -56,7 +61,6 @@ RST  = R.RST
 # opts out, matching claude-cmd-pre.py's gate so the two agree on when a marker exists.
 SUB_FG = (os.environ.get("CLAUDE_MIRROR_LIVE_FG_SUB", "1") != "0"
           and os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") != "0")
-fg_live = {}          # tool_use_id -> the subfg hand-off rec, while its fg tailer runs
 # The repo root, where the sibling ENTRY scripts live (this module is two
 # package levels below it) — nested tailers/the tab dispatcher are entry files.
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -67,9 +71,6 @@ HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 # CLAUDE_MIRROR_BIAS — e.g. a [1m] session wants higher cutoffs.
 CTX_WARN = M.int_env("CLAUDE_MIRROR_CTX_WARN", 30)
 CTX_CRIT = M.int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
-CTX_GREEN = R.fg(*O.GREEN)
-CTX_AMBER = R.fg(*O.YELLOW)
-CTX_RED   = R.fg(*O.RED)
 
 # Model / effort / context-window resolution lives in claude_model.py; this block
 # just binds it to THIS agent's identity (its meta.json, definition file, and the
@@ -92,7 +93,7 @@ def disp_model():
     # The model to display, best-known-first: the agent's own resolved id > this agent's
     # configured model (meta) or an explicit frontmatter override > the parent session's
     # version (for inheriting agents, before the first turn) > footer id > config alias.
-    return (last_model or META.get("model") or AGENT_DEF_MODEL or SESSION_MODEL
+    return (REN.last_model or META.get("model") or AGENT_DEF_MODEL or SESSION_MODEL
             or RESOLVED_MODEL or SETTINGS_MODEL)
 
 
@@ -146,47 +147,6 @@ def cancelled_by_user():
     except Exception:
         return False
 
-# Verbs + colours for file ops — the shared claude_ops table (claude-file-fmt.py
-# renders the main session's file ops with the same).
-FILE_LABEL = CT.FILE_LABEL
-FILE_COL   = {verb: R.fg(*rgb) for verb, rgb in CT.FILE_RGB.items()}
-
-# A message DELIVERED to this teammate appears in its transcript as a plain user
-# record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
-# </teammate-message> (the very first one is the lead's spawn prompt). We render it
-# as "✉ from <sender>" + the unwrapped body, rather than as a raw ⇢ prompt.
-TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>\s*$', re.S)
-_TM_ID  = re.compile(r'teammate_id="([^"]*)"')
-
-
-def chip(glyph, kind, ctx="", g=None, lk=None):
-    # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
-    # turn, rather than on its own gutter line below it. g ties a block's header + its
-    # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
-    # fresh O.new_group() id for a message/prompt/mail block (lk=O.COPY_ALL then gives
-    # it a single whole-block ⧉copy link). Same mechanism as the main session's fg/bg
-    # blocks (core/copy.py), just double-guttered here.
-    tag = op_tag()
-    s = f"{LABEL} {glyph} {kind}" + (f"  {tag}" if tag else "") + (f"  {ctx}" if ctx else "")
-    return O.label(s, SUB_RGB, g=g, lk=lk)
-
-
-def cap(text, n):
-    lines = text.split("\n")
-    if len(lines) <= n:
-        return text
-    more = len(lines) - n
-    return "\n".join(lines[:n]) + f"\n… ({more} more line{'s' if more != 1 else ''})"
-
-
-def gutter(text, g=None):
-    return O.gut(R.unescape(text), SUB_RGB, g=g)
-
-
-def msg_gutter(text, g=None):
-    # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).
-    return O.gut(R.markdown(R.unescape(text)), SUB_RGB, g=g)
-
 
 kfmt = O.kfmt        # compact token count: 124000 -> "124k"
 
@@ -197,71 +157,32 @@ def model_ctx():
     #   0. CLAUDE_CODE_DISABLE_1M_CONTEXT — Claude Code's own kill-switch, caps at 200k
     #   1. RESOLVED_MODEL — authoritative id from the parent transcript (footer only)
     #   2. AGENT_DEF_MODEL — an explicit `model:` in this agent's definition frontmatter
-    #   3. last_model — the bare id the agent actually ran (family is reliable; the
+    #   3. REN.last_model — the bare id the agent actually ran (family is reliable; the
     #      known-1M table covers Opus 4.8 etc. even though the [1m] suffix is stripped)
     #   4. SETTINGS_MODEL — the session default, for agents that inherit
-    return M.context_window(RESOLVED_MODEL, AGENT_DEF_MODEL, last_model, SETTINGS_MODEL)
+    return M.context_window(RESOLVED_MODEL, AGENT_DEF_MODEL, REN.last_model, SETTINGS_MODEL)
 
 
 def ctx_used():
     # The occupied context window for the latest assistant turn: every input token the
     # model saw — fresh + just-cached + replayed-from-cache. output_tokens is excluded
     # (that's what it produced back, not context). 0 if no usage seen yet.
-    if not last_usage:
+    if not REN.last_usage:
         return 0
-    return (last_usage.get("input_tokens", 0)
-            + last_usage.get("cache_creation_input_tokens", 0)
-            + last_usage.get("cache_read_input_tokens", 0))
+    return (REN.last_usage.get("input_tokens", 0)
+            + REN.last_usage.get("cache_creation_input_tokens", 0)
+            + REN.last_usage.get("cache_read_input_tokens", 0))
 
 
 def ctx_tag():
     # Plain "ctx 42% · 84k/200k" for the current turn, or "" if no usage. Rendered as
-    # dark text inside the operation chip (see chip()), so no inline threshold colour —
-    # the chip's own solid background carries the identity hue.
+    # dark text inside the operation chip (see Renderer.chip()), so no inline threshold
+    # colour — the chip's own solid background carries the identity hue.
     used = ctx_used()
     if used <= 0:
         return ""
     mx = model_ctx()
     return f"ctx {used * 100 // mx}% · {kfmt(used)}/{kfmt(mx)}"
-
-
-def result_text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):       # a lone content block — normalise to a 1-list
-        content = [content]
-    if isinstance(content, list):
-        parts = []
-        for b in content:
-            if isinstance(b, dict):
-                t = b.get("type")
-                if t == "text" or isinstance(b.get("text"), str):
-                    parts.append(b.get("text", ""))
-                elif t == "tool_reference":                 # ToolSearch result
-                    parts.append("→ loaded tool: " + str(b.get("tool_name", "")))
-                elif t == "image":
-                    parts.append("[image]")
-                else:                                        # unknown block -> show it
-                    try:
-                        parts.append(json.dumps(b, ensure_ascii=False))
-                    except Exception:
-                        parts.append(str(b))
-            elif isinstance(b, str):
-                parts.append(b)
-        return "\n".join(p for p in parts if p)
-    return str(content)
-
-
-def input_summary(inp):
-    # Compact "key: value" view of a tool's input, so the REQUEST is visible (e.g.
-    # a WebSearch query, a WebFetch url). Used for tools we don't render specially.
-    if not isinstance(inp, dict) or not inp:
-        return ""
-    lines = []
-    for k, v in inp.items():
-        vs = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        lines.append(f"{k}: {vs}")
-    return "\n".join(lines)
 
 
 alive = S.pid_alive                 # EPERM (foreign-owned) counts as alive
@@ -345,384 +266,24 @@ def spawn_fg_tailer(tid, rec, cmd=""):
         return None
 
 
-# --- rendering of transcript blocks --------------------------------------------
-pend = {}                 # tool_use_id -> (kind, cmd)
-pending_msg = None        # latest assistant text, held so the LAST one (the result) can be labelled
-last_usage = None         # most recent assistant message.usage — drives the context-fill %
-last_model = None         # model id from that message — picks the context-window size
-cur_tag = ""              # colour-coded ctx token for the turn being processed right now
-turn_ctx_shown = False    # have we already emitted the ctx line for the current turn?
-pending_tag = ""          # ctx token snapshotted when the pending_msg was buffered (see below)
-
-# Cumulative usage over the WHOLE run, for the ended-footer rollup. Distinct from
-# last_usage (a single turn's snapshot, which drives the live ctx %): these sum every
-# assistant turn. tot_in is FRESH billed input (input_tokens + cache_creation) — the
-# tokens actually sent, not replayed; tot_cache is cache_read (cheap replay); tot_create
-# is the cache_creation share of tot_in, kept separately so cost_usd can bill its write
-# premium (5m TTL 1.25×; tot_create_1h is the 1h-TTL share, which bills 2×).
-# So the footer's "cache %" = tot_cache / (tot_in + tot_cache) is the
-# share of all context reads served from cache — a thrash/reuse signal. tool_n counts
-# tool_use blocks.
-#
-# Counted once per MESSAGE, not per line: one assistant message is written as one
-# JSONL line PER CONTENT BLOCK, each repeating that message's usage (input/cache
-# fields identical, output_tokens a growing snapshot — the last line has the final
-# count). Summing per line inflated the rollup ~2.2× (same bug as the main session's
-# bump_transcript, fixed there first). usage_last remembers the last counted id and
-# what was counted for it, so later lines of the same message only add the delta; it
-# is persisted in the state DB next to the byte checkpoint so a successor streamer
-# (idle-teammate restart) doesn't recount a message straddling the handoff.
-tot_in = 0
-tot_out = 0
-tot_cache = 0
-tot_create = 0
-tot_create_1h = 0         # 1-hour-TTL share of tot_create — bills 2× input, not 1.25×
-tool_n = 0
-usage_last = None         # O.usage_fold carry record {"id", "f"} of the last counted message
+# The block renderer: transcript records -> mirror paint ops (substream_render.py).
+# Everything identity-shaped is injected here; the Renderer holds the per-run render
+# state (pending message, pend ledger, ctx-tag turn tracking, the footer's rollup).
+REN = SR.Renderer(log=LOG, agent=AGENT, label=LABEL, rgb=SUB_RGB, sub_fg=SUB_FG,
+                  op_tag=op_tag, ctx_tag=ctx_tag, take_subfg=take_subfg,
+                  spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer)
 
 
-def flush_msg(is_result=False):
-    # Commit the buffered assistant message. The final one before the subagent ends
-    # is its returned *result* (labelled ⇠ result); earlier ones are ✎ message. The
-    # message's ctx % was snapshotted when it was buffered (last_usage may since have
-    # advanced to the next turn), so emit that, not the live value.
-    global pending_msg, pending_tag
-    if pending_msg is None:
-        return
-    glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
-    g = O.new_group(LOG)
-    O.emit(LOG, chip(glyph, kind, pending_tag, g=g, lk=O.COPY_ALL),
-           msg_gutter(cap(pending_msg, 40), g=g))
-    pending_msg = None
-    pending_tag = ""
-
-
-def render_compact(meta):
-    # A "compact_boundary" system record: the conversation was compacted. Show it
-    # inline (amber) so the gap in history makes sense. preTokens is always present;
-    # postTokens is NOT always there, so degrade to "→ ?" when it's missing.
-    flush_msg()
-    pre, post, trig = meta.get("preTokens"), meta.get("postTokens"), meta.get("trigger") or "?"
-    txt = "⟳ compacted"
-    if pre:
-        txt += f" · {kfmt(pre)} → " + (kfmt(post) if post else "?")
-    txt += f" ({trig})"
-    O.emit(LOG, O.gut(CTX_AMBER + txt + RST, SUB_RGB))
-
-
-def render_prompt(text):
-    flush_msg()
-    g = O.new_group(LOG)
-    O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-           gutter(cap(text.strip(), 24), g=g))
-
-
-def render_teammsg(sender, body):
-    # An incoming agent-team message (mail from another teammate or the lead).
-    flush_msg()
-    g = O.new_group(LOG)
-    O.emit(LOG, chip("✉", "from " + (sender or "?"), g=g, lk=O.COPY_ALL),
-           gutter(cap(body.strip(), 24), g=g))
-
-
-def render_message(text):
-    global pending_msg, pending_tag, turn_ctx_shown
-    text = text.strip()
-    if not text:
-        return
-    flush_msg()               # commit the previous message; buffer this one
-    pending_msg = text
-    # Tie this turn's ctx % to its message (shown at flush). If the turn already
-    # showed it on a tool line, don't repeat it.
-    pending_tag = "" if turn_ctx_shown else cur_tag
-    turn_ctx_shown = True
-
-
-def render_file(name_tool, inp, result=None, ctx="", failed=False, tid=None):
-    label = FILE_LABEL.get(name_tool, "Read")
-    path = inp.get("file_path") or inp.get("notebook_path") or ""
-    name = os.path.basename(path.rstrip("/")) or path or "?"
-    col = R.fg(*O.RED) if failed else FILE_COL.get(label, R.COL["def"])   # red verb on failure
-    # Lead with WHO did it — the agent's name/type in its own colour — so a Read/Update/
-    # Write is attributable to the subagent (or teammate) that ran it, the same identity
-    # cue chip() puts on this agent's Bash ops. The gutter bar already carries the colour,
-    # but the explicit name is what the eye reads.
-    who = R.fg(*SUB_RGB) + LABEL + " " + RST
-    line = who + col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
-    # A read shows how much of the file it took ('' == the whole file); a mutation shows
-    # its added/removed line counts plus the line range(s) it touched. All go before the
-    # model tag so they survive truncation on a narrow pane. Extent/range come from the
-    # tool_result (`result`); counts from the input.
-    added = removed = 0
-    if failed:
-        # A failed op: no extent, no counts (diff_counts would count lines never
-        # written) — just the ✗ mark, same as claude-file-fmt.py's `if not failed`.
-        line += "  " + R.DIM + "✗" + RST
-    elif name_tool == "Read":
-        ext = CT.read_extent(result.get("file") if isinstance(result, dict) else None, inp)
-        if ext:
-            line += "  " + R.DIM + ext + RST
-    else:
-        added, removed = CT.diff_counts(name_tool, inp)
-        d = []
-        if added:
-            d.append(R.fg(*O.GREEN) + f"+{added}" + RST)   # green additions
-        if removed:
-            d.append(R.fg(*O.RED) + f"-{removed}" + RST)  # red removals
-        if d:
-            line += "  " + " ".join(d)
-        rng = CT.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
-        if rng:
-            line += "  " + R.DIM + rng + RST
-    tag = op_tag()
-    if tag:
-        line += "  " + R.DIM + tag + RST
-    if ctx:
-        line += "  " + R.DIM + ctx + RST
-    # Click-to-view, exactly like the main session's file ops (file_fmt.py owns
-    # the block builder): stash the pre-rendered content under the agent's
-    # tool_use_id, bake the /view hyperlink into the line (the OSC 8 sequence is
-    # zero-width to wrap_gutter), and tag the gut op with "v" so the renderer
-    # expands the block in place. A subagent transcript's tool_result rarely
-    # carries the Read content/structuredPatch — _view_ops falls back to the
-    # disk re-read / input-strings difflib for those.
-    vid = None
-    if not failed and tid:
-        from urllib.parse import quote
-        from core import paths as PATHS
-        from plugins.claude_code import file_fmt as FF
-        try:
-            vops = FF._view_ops(name_tool, label, name, path, inp,
-                                result if isinstance(result, dict) else {})
-        except Exception:
-            vops = None
-            A.error(LOG, "view-stash (substream render)",
-                    {"tool": name_tool, "gid": tid})
-        if vops and S.kv_set(LOG, "view:" + tid, vops):
-            url = "claude-copy:///%s/%s/view" % (
-                quote(PATHS.sid_from_log(LOG), safe=""), quote(str(tid), safe=""))
-            line = R.hyperlink(url, line)
-            vid = tid
-            A.state_file(LOG, S.db_path(LOG), "view-stash",
-                         {"gid": tid, "tool": name_tool, "ops": len(vops),
-                          "agent": AGENT})
-    O.emit(LOG, O.gut(line, SUB_RGB, view=vid))
-    # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
-    # reflect TEAM-WIDE file activity, not just the main session's own file ops
-    # (claude-file-fmt.py skips agent_id calls — the substream owns their rendering,
-    # and now their accounting too, mirroring how the ended-footer already folds each
-    # agent's token spend into the scoreboard). `files` is a UNIQUE-path set, so an
-    # agent re-touching a path — or touching one the main session already did — never
-    # inflates it; added/removed sum. Handoff-safe: each transcript line is consumed
-    # exactly once across the streamer chain (the `pos` checkpoint), so an idle-teammate
-    # restart can't double-count, same as the per-streamer tool_n above. Emitted as a
-    # plain `bump` (no meta) — the deltas are files/lines, not the tokens/cost that the
-    # unattributed-bump anomaly guards.
-    O.bump(LOG, tool=name_tool, file=path, added=added, removed=removed)
-
-
-def on_tool_use(b):
-    global turn_ctx_shown, tool_n
-    tool_n += 1                   # count every tool call, for the ended-footer rollup
-    flush_msg()
-    ctx = ""                      # ctx rides the FIRST op header of a turn (if no msg led it)
-    if not turn_ctx_shown:
-        ctx = cur_tag
-        turn_ctx_shown = True
-    name = b.get("name") or ""
-    inp = b.get("input") or {}
-    tid = b.get("id")
-    if name == "Bash":
-        cmd = inp.get("command", "")
-        if inp.get("run_in_background"):
-            O.emit(LOG, chip("▷", "background", ctx, g=tid), O.code(cmd, g=tid))
-            pend[tid] = ("bg", cmd)
-        else:
-            O.emit(LOG, chip("▶", "foreground", ctx, g=tid), O.code(cmd, g=tid))
-            rec = take_subfg(tid) if (SUB_FG and tid) else None
-            if rec and spawn_fg_tailer(tid, rec, cmd):
-                # A live fg tailer now owns this command's OUTPUT + finish chip; we
-                # only hand it the outcome (below) and skip re-rendering the body.
-                fg_live[tid] = rec
-                pend[tid] = ("fg-live", cmd)
-            else:
-                pend[tid] = ("fg", cmd)
-    elif name in FILE_LABEL:
-        # Defer to the result: absolute line info — a Read's EXTENT
-        # (startLine/numLines/totalLines) and an edit's touched hunks (structuredPatch)
-        # — lives only on the tool_result, which lands in the very next record, so
-        # ordering is preserved. Carry (tool, input, ctx) for rendering there.
-        pend[tid] = ("file", (name, inp, ctx))
-    elif name == "Monitor":
-        cmd = inp.get("command", "")
-        O.emit(LOG, chip("◉", "monitor", ctx, g=tid), O.code(cmd, g=tid))
-        pend[tid] = ("monitor", cmd)
-    elif name == "SendMessage":
-        # Mail this teammate sends to another teammate / the lead. Show recipient +
-        # the message body; the tool_result is just a "{success:true,…}" ack (noise),
-        # so it's suppressed in on_tool_result.
-        to = inp.get("to") or inp.get("recipient") or "?"
-        # message/content may be a plain string OR a structured content block
-        # (dict / list of blocks) — normalise through result_text so .strip() never
-        # hits a dict (that AttributeError crashed the streamer mid-run, dropping the
-        # agent's un-bumped token tail; reconcile_spend recovers it, but don't crash).
-        text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
-        g = O.new_group(LOG)
-        O.emit(LOG, chip("✉", "to " + to, ctx, g=g, lk=O.COPY_ALL),
-               gutter(cap(text.strip(), 12), g=g))
-        pend[tid] = ("sendmsg", "")
-    elif name in ("Task", "Agent"):
-        # A nested subagent gets its OWN block via its own SubagentStart/Stop hooks.
-        sub = (inp.get("subagent_type") or "subagent")
-        st = "⊂ spawns " + sub + ("  " + op_tag() if op_tag() else "") + ("  " + ctx if ctx else "")
-        O.emit(LOG, O.gut(R.DIM + st + RST, SUB_RGB))
-        pend[tid] = ("agent", "")
-    else:
-        req = input_summary(inp)                 # show the request (e.g. the query/url)
-        g = O.new_group(LOG) if req else None
-        O.emit(LOG, chip("·", name or "tool", ctx, g=g, lk=O.COPY_ALL if g else None))
-        if req:
-            O.emit(LOG, gutter(cap(req, 10), g=g))
-        pend[tid] = ("other", "")
-
-
-def on_tool_result(b, tur=None):
-    flush_msg()
-    tid = b.get("tool_use_id")
-    kind, cmd = pend.pop(tid, ("other", ""))
-    if kind == "file":
-        # Deferred from on_tool_use: render the file op now, with the extent (Read) or
-        # touched range (edit) the result carries. cmd holds the saved (tool, input).
-        # A FAILED op (is_error) counts the path + tool but NO line deltas, matching
-        # the main session's claude-file-fmt.py — otherwise a failed Write would
-        # inflate +added with lines it never wrote.
-        name_tool, saved_inp, saved_ctx = cmd if isinstance(cmd, tuple) else ("Read", {}, "")
-        render_file(name_tool, saved_inp, tur, saved_ctx,
-                    failed=bool(b.get("is_error")), tid=tid)
-        return
-    if kind in ("agent", "sendmsg"):
-        return                                      # already shown / handled elsewhere
-    if kind == "fg-live":
-        # A live fg tailer streamed this command's output and owns its finish chip.
-        # Hand it the real outcome (this is the ONLY place the subagent's transcript
-        # reveals pass/fail) via the "done:" sentinel the tailer polls, and SUPPRESS
-        # our own body render so the block isn't drawn twice. The tailer computes the
-        # duration itself; fallback_body covers the (unexpected) empty-tee case. Still
-        # feed the team-wide command tally, exactly as the plain fg path does below.
-        rec = fg_live.pop(tid, None)
-        err = bool(b.get("is_error"))
-        if rec:
-            body = result_text(b.get("content")).rstrip("\n")
-            fb = R.emphasize(R.unescape(cap(body, 60))) if body else R.DIM + "(no output)" + RST
-            if S.hand_put(LOG, "done:" + rec["done"], {"failed": err, "fallback_body": fb}):
-                A.state_file(LOG, "state:done:" + rec["done"], "write", {"failed": err})
-        O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if err else {}))
-        return
-    txt = result_text(b.get("content"))
-    if kind in ("bg", "monitor"):
-        if kind == "bg":
-            # A background Bash launch is a command — count it (its finish is owned
-            # by the tailer), same as the main session's _render_background.
-            O.bump(LOG, tool="Bash", commands=1)
-        m = re.search(r"with ID:\s*([^\s.]+)", txt)
-        if m:
-            # Pass the block's ⧉ copy group (this tool_use_id) so the tailer's
-            # streamed output/finish ops join the header+code we already emitted.
-            spawn_tailer(kind, m.group(1), cmd, group=tid)
-        elif txt.strip():
-            O.emit(LOG, gutter(cap(txt.strip(), 8)))
-        return
-    # fg / other: show the command's output (banners emphasised — this is real
-    # command output, unlike the messages/prompts that share gutter()).
-    # fg output joins this command's ⧉ copy group (the tool_use_id) so ⧉out copies it.
-    g = tid if kind == "fg" else None
-    body = txt.rstrip("\n")
-    if body:
-        O.emit(LOG, O.gut(R.emphasize(R.unescape(cap(body, 60))), SUB_RGB, g=g))
-    else:
-        O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB, g=g))
-    err = bool(b.get("is_error"))
-    if err:
-        O.emit(LOG, O.gut(R.fg(*O.RED) + "■ failed" + RST, SUB_RGB, g=g))
-    if kind == "fg":
-        # Team-wide command accounting, mirroring the main session's
-        # claude-cmd-fmt.py — which deliberately SKIPS any agent_id event (the
-        # substream owns subagent rendering AND, now, its command tally). Without
-        # this, a subagent's Bash calls and their FAILURES never reached the
-        # scoreboard's ▪ `N cmds (M✗)` (only its file ops were team-wide, via
-        # render_file). Count every foreground Bash call + its failure, exactly as
-        # _render_finished does for the lead.
-        O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if err else {}))
-
-
-def handle_line(s):
-    global last_usage, last_model, cur_tag, turn_ctx_shown, \
-        tot_in, tot_out, tot_cache, tot_create, tot_create_1h, usage_last
-    try:
-        o = json.loads(s)
-    except Exception:
-        A.error(LOG, "handle_line", {"agent": AGENT, "line": s[:300]})
-        return
-    t = o.get("type")
-    msg = o.get("message") or {}
-    content = msg.get("content")
-    if t == "system" and o.get("subtype") == "compact_boundary":
-        render_compact(o.get("compactMetadata") or {})
-        return
-    if t == "user":
-        if isinstance(content, str):
-            if content.strip():
-                m = TEAMMSG.match(content)
-                if m:
-                    sid = _TM_ID.search(m.group(1))
-                    render_teammsg(sid.group(1) if sid else "", m.group(2))
-                else:
-                    render_prompt(content)
-        elif isinstance(content, list):
-            for blk in content:
-                if isinstance(blk, dict) and blk.get("type") == "tool_result":
-                    on_tool_result(blk, o.get("toolUseResult"))
-    elif t == "assistant":
-        u = msg.get("usage")
-        if isinstance(u, dict):           # refresh the live context fill for this turn
-            last_usage = u
-            last_model = msg.get("model") or last_model
-            # Accumulate for the ended-footer rollup — once per message.id, deltas
-            # only for repeat lines of the same message (O.usage_fold, the shared
-            # dedup — see usage_last above).
-            d, usage_last = ACC.usage_fold(msg.get("id"), ACC.usage_fields(u), usage_last)
-            tot_in += d[0]; tot_out += d[1]; tot_cache += d[2]
-            tot_create += d[3]; tot_create_1h += d[4]
-        cur_tag = ctx_tag()
-        turn_ctx_shown = False            # each turn shows its ctx % once (msg or tool)
-        if isinstance(content, list):
-            for blk in content:
-                if not isinstance(blk, dict):
-                    continue
-                if blk.get("type") == "text":
-                    render_message(blk.get("text", ""))
-                elif blk.get("type") == "tool_use":
-                    on_tool_use(blk)
-
-
-def main(run):
-    start = time.time()
-    # Wait for the transcript to appear.
-    if not T.wait_for(JSONL, start + 15):
-        O.emit(LOG, O.rule(), O.label(f"■ {LABEL} (no transcript)", SUB_RGB), O.rule())
-        run.end("transcript-never-appeared")
-        return
-
-    pos = 0
+def restore_checkpoint():
     # Resume from the previous streamer's checkpoint (idle-teammate restart) so
-    # already-rendered history isn't replayed. Line 2 (optional JSON) is the
-    # predecessor's last-counted usage record, restored so a message straddling
-    # the handoff isn't recounted from zero. Ignore a checkpoint past EOF (a
-    # rewritten/foreign transcript) and start over. The adopted-vs-fresh outcome is
-    # audited (one row per streamer, not per pump — the per-tick writes are too hot):
-    # paired with the predecessor's 'final' row it makes a bad handoff (recounted or
-    # skipped transcript, dropped dedup state) visible in `state_files`.
-    global usage_last
+    # already-rendered history isn't replayed. The persisted usage record is the
+    # predecessor's last-counted usage, restored so a message straddling the handoff
+    # isn't recounted from zero. Ignore a checkpoint past EOF (a rewritten/foreign
+    # transcript) and start over. The adopted-vs-fresh outcome is audited (one row
+    # per streamer, not per pump — the per-tick writes are too hot): paired with the
+    # predecessor's 'final' row it makes a bad handoff (recounted or skipped
+    # transcript, dropped dedup state) visible in `state_files`.
+    pos = 0
     resume = {"agent": AGENT}
     try:
         saved = int(S.agent_get(LOG, AGENT).get("pos") or 0)
@@ -733,8 +294,8 @@ def main(run):
                 if "f" not in lu:   # predecessor predates O.usage_fold's record shape
                     lu = {"id": lu.get("id"),
                           "f": [int(lu.get(k) or 0) for k in ("in", "out", "cache", "create")]}
-                usage_last = lu
-            resume.update({"adopted_pos": pos, "usage_last": usage_last})
+                REN.usage_last = lu
+            resume.update({"adopted_pos": pos, "usage_last": REN.usage_last})
         elif saved:
             resume["fresh"] = f"checkpoint {saved} empty or past EOF"
         else:
@@ -742,28 +303,31 @@ def main(run):
     except Exception:
         resume["fresh"] = "unreadable checkpoint"
     A.state_file(LOG, STATE_KEY, "resume", resume)
+    return pos
 
-    tail = T.FileTailer(JSONL, pos=pos)
-    ckpt = {"pos": -1}
 
+def make_pump(tail, ckpt):
     def pump():
         lines = tail.pump()
         for ln in (lines or ()):
             s = ln.decode("utf-8", "replace").strip()
             if s:
-                handle_line(s)
+                REN.handle_line(s)
         # Checkpoint only what was fully consumed — a trailing partial line
         # stays uncounted so a successor re-reads it whole. The last-counted
         # usage record rides along for the successor's dedup.
         if tail.consumed != ckpt["pos"]:
             ckpt["pos"] = tail.consumed
             S.agent_set(LOG, AGENT, pos=tail.consumed)
-            if usage_last:
-                S.kv_set(LOG, USAGE_KEY, usage_last)
+            if REN.usage_last:
+                S.kv_set(LOG, USAGE_KEY, REN.usage_last)
+    return pump
 
+
+def make_parent_resolved(start):
     # A REJECTED (or otherwise abandoned) Task fires no SubagentStop AND leaves
-    # meta.json without stoppedByUser, so neither signal below ever comes — the
-    # streamer (and its sub.pid slot row, the tab's liveness signal → a stuck-blue
+    # meta.json without stoppedByUser, so neither of the other signals ever comes —
+    # the streamer (and its sub.pid slot row, the tab's liveness signal → a stuck-blue
     # tab) would then hang until the 6h backstop. But the PARENT transcript records
     # the Task's tool_result the instant the call resolves, keyed by meta.json's
     # toolUseId. Tail it (from its current end — the result lands later) as a
@@ -778,15 +342,14 @@ def main(run):
             parent_tail = T.FileTailer(TPATH, pos=os.path.getsize(TPATH))
         except Exception:
             parent_tail = None
-    parent_next = start + 2.0                # next time the parent scan is allowed
+    state = {"next": start + 2.0}            # next time the parent scan is allowed
 
     def parent_resolved():
         # None = not resolved (or throttled); bool = resolved, value is is_error
         # (True == user rejected/cancelled the Task).
-        nonlocal parent_next
-        if parent_tail is None or time.time() < parent_next:
+        if parent_tail is None or time.time() < state["next"]:
             return None
-        parent_next = time.time() + 2.0
+        state["next"] = time.time() + 2.0
         res = None
         try:
             for ln in (parent_tail.pump() or ()):
@@ -796,7 +359,10 @@ def main(run):
         except Exception:
             return None
         return res
+    return parent_resolved
 
+
+def completion_loop(run, pump, parent_resolved, start):
     # Completion: the SubagentStop sentinel (the authoritative end signal — written
     # by the stop hook) for a normal finish, OR meta.json's stoppedByUser for a
     # manual cancel (see cancelled_by_user() above — no hook fires for that case),
@@ -807,37 +373,30 @@ def main(run):
     # full backstop as a zombie while its checkpoint writes mutated the parked
     # snapshot through the cached connection; the codex tailers run the same check).
     # A long cap is a backstop for a stuck/lost streamer either way.
-    cancelled = False
+    # Returns (parked, cancelled).
     while True:
         pump()
         if not os.path.exists(S.db_path(LOG)):
             run.end("state-db-parked (session end)")
-            # No footer, no bumps, no checkpoint past this point: every write
-            # would either recreate the state DB (whose file-existence IS the
-            # session-alive signal watchers poll) or land in the parked snapshot.
-            return
+            return True, False
         if S.agent_get(LOG, AGENT).get("done"):
             run.end("stop-sentinel")
-            break
+            return False, False
         if cancelled_by_user():
-            cancelled = True
             run.end("stoppedByUser (manual cancel)")
-            break
+            return False, True
         pr = parent_resolved()
         if pr is not None:
-            cancelled = bool(pr)             # rejected -> "cancelled" footer
+            # rejected -> "cancelled" footer
             run.end("parent-task-resolved" + (" (rejected)" if pr else ""))
-            break
+            return False, bool(pr)
         if time.time() - start > T.BACKSTOP_S:
             run.end("backstop-timeout")
-            break
+            return False, False
         time.sleep(T.POLL_S)
 
-    # Final drain — let the last lines land, then read them.
-    time.sleep(0.3)
-    pump(); pump()
-    flush_msg(is_result=True)        # the last buffered message is the returned result
 
+def emit_footer(cancelled, start, tail):
     got = claude_slots.lookup_id("sub", LOG, AGENT)
     ts = got[1] if (got and got[1]) else start
     sec = max(0.0, time.time() - ts)
@@ -850,18 +409,18 @@ def main(run):
         mx = model_ctx()
         foot += f" · ctx {used * 100 // mx}% ({kfmt(used)}/{kfmt(mx)})"
     # Cumulative rollup: fresh in / generated out / cache-hit share / tool count.
-    if tot_in or tot_out:
-        foot += f" · {kfmt(tot_in)} in · {kfmt(tot_out)} out"
-        reads = tot_in + tot_cache
+    if REN.tot_in or REN.tot_out:
+        foot += f" · {kfmt(REN.tot_in)} in · {kfmt(REN.tot_out)} out"
+        reads = REN.tot_in + REN.tot_cache
         if reads > 0:
-            foot += f" · cache {tot_cache * 100 // reads}%"
-    if tool_n:
-        foot += f" · {tool_n} tool" + ("s" if tool_n != 1 else "")
+            foot += f" · cache {REN.tot_cache * 100 // reads}%"
+    if REN.tool_n:
+        foot += f" · {REN.tool_n} tool" + ("s" if REN.tool_n != 1 else "")
     # Cost estimate from the tokens already summed, priced on the resolved model
     # (cache_creation billed at its write premium via tot_create — 1.25×, plus the
     # tot_create_1h share's extra to reach the 1h TTL's 2×).
-    usd = ACC.cost_usd(disp_model(), tot_in, tot_out, tot_cache, tot_create,
-                       tot_create_1h)
+    usd = ACC.cost_usd(disp_model(), REN.tot_in, REN.tot_out, REN.tot_cache,
+                       REN.tot_create, REN.tot_create_1h)
     if usd:
         foot += " · ≈ " + O.fmt_usd(usd)
     O.emit(LOG, O.rule(), O.label(foot, SUB_RGB), O.rule())
@@ -869,9 +428,9 @@ def main(run):
     # consumed and last counted. A successor whose 'resume' row disagrees with this
     # 'final' row is the handoff bug the persisted usage_last exists to prevent.
     A.state_file(LOG, STATE_KEY, "final",
-                 {"agent": AGENT, "pos": tail.consumed, "usage_last": usage_last,
-                  "in": tot_in, "out": tot_out, "cache": tot_cache,
-                  "create": tot_create, "create_1h": tot_create_1h})
+                 {"agent": AGENT, "pos": tail.consumed, "usage_last": REN.usage_last,
+                  "in": REN.tot_in, "out": REN.tot_out, "cache": REN.tot_cache,
+                  "create": REN.tot_create, "create_1h": REN.tot_create_1h})
     # NOTE: this agent's token/cost spend is NO LONGER bumped into the scoreboard
     # here. Cost is now OTEL-authoritative — the OTLP receiver (plugins/otel/) folds
     # every agent request (query_source=subagent) into the session counters live, so
@@ -884,11 +443,39 @@ def main(run):
     # and reconcile_spend bumps exactly that gap at SubagentStop. Single writer (no
     # concurrent streamer for one agent_id), so a plain read-add-write is safe.
     _pv = S.kv_get(LOG, BILLED_KEY) or {}
-    S.kv_set(LOG, BILLED_KEY, {"in": int(_pv.get("in") or 0) + tot_in,
-                               "out": int(_pv.get("out") or 0) + tot_out,
-                               "cache": int(_pv.get("cache") or 0) + tot_cache,
-                               "create": int(_pv.get("create") or 0) + tot_create,
-                               "create_1h": int(_pv.get("create_1h") or 0) + tot_create_1h})
+    S.kv_set(LOG, BILLED_KEY, {"in": int(_pv.get("in") or 0) + REN.tot_in,
+                               "out": int(_pv.get("out") or 0) + REN.tot_out,
+                               "cache": int(_pv.get("cache") or 0) + REN.tot_cache,
+                               "create": int(_pv.get("create") or 0) + REN.tot_create,
+                               "create_1h": int(_pv.get("create_1h") or 0) + REN.tot_create_1h})
+
+
+def main(run):
+    start = time.time()
+    # Wait for the transcript to appear.
+    if not T.wait_for(JSONL, start + 15):
+        O.emit(LOG, O.rule(), O.label(f"■ {LABEL} (no transcript)", SUB_RGB), O.rule())
+        run.end("transcript-never-appeared")
+        return
+
+    pos = restore_checkpoint()
+    tail = T.FileTailer(JSONL, pos=pos)
+    pump = make_pump(tail, {"pos": -1})
+    parent_resolved = make_parent_resolved(start)
+
+    parked, cancelled = completion_loop(run, pump, parent_resolved, start)
+    if parked:
+        # No footer, no bumps, no checkpoint past this point: every write
+        # would either recreate the state DB (whose file-existence IS the
+        # session-alive signal watchers poll) or land in the parked snapshot.
+        return
+
+    # Final drain — let the last lines land, then read them.
+    time.sleep(0.3)
+    pump(); pump()
+    REN.flush_msg(is_result=True)    # the last buffered message is the returned result
+
+    emit_footer(cancelled, start, tail)
 
 
 def cleanup():
@@ -914,7 +501,7 @@ def entry():
                             agent_id=AGENT, src_path=JSONL,
                             ctx={"agent": AGENT, "type": ATYPE}) as run:
         def _finalize():
-            run.lines = tool_n          # tools seen — recorded even on a crash
+            run.lines = REN.tool_n      # tools seen — recorded even on a crash
             cleanup()
         run.on_exit = _finalize
         main(run)

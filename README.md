@@ -232,7 +232,10 @@ single per-event **`dispatch.py`** (behind the `claude-hook.py` entry — reads
 the payload once and fans out in-process to the tab dispatch, the right
 formatter, and the audit subscriber; matcher routing lives in its `_plan()` —
 see § Wiring), the two
-streamers (`stream.py`, `substream.py`), the tab dispatch (`tabstatus.py` —
+streamers (`stream.py`, `substream.py` — the latter's block rendering lives
+in `substream_render.py`: an import-safe `Renderer` class with per-tool-kind
+dispatch tables, into which the lifecycle module injects its identity and
+tailer hooks), the tab dispatch (`tabstatus.py` —
 maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
 and the pane/session lifecycle (`split.py` — now a thin caller into
 `core/hostpane.py`, which it shares with the codex host). Each repo-root `claude-*.py`
@@ -762,7 +765,7 @@ landed. Why this design and not the alternatives:
 
 **Click-to-view — file-op lines expand in place.** Every successful
 Read/Update/Write one-liner — the main session's (`file_fmt.py`) and a
-subagent's/teammate's (`substream.py` `render_file`) — is itself an OSC 8
+subagent's/teammate's (`substream_render.py` `render_file`) — is itself an OSC 8
 hyperlink (`claude-copy:///<key>/<tool_use_id>/view`, baked into the op's text
 by the producer; the renderer needs no geometry). Clicking it expands the op's
 full content directly under the line; clicking again collapses it. What
