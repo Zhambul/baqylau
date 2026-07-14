@@ -38,11 +38,12 @@
 # plain SELECTs (WAL — never block the producers). Exits when the mirror log
 # disappears (SessionEnd removes it), which auto-closes the window;
 # claude-split.py close is the safety net.
-import os, re, signal, sys, time
+import os, re, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import frontends
 from core import ops as O
+from core import panescript as PS
 from core import paths as P
 from core import render as R
 from core import state as St
@@ -51,8 +52,7 @@ import plugins as PLUGINS
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
-LOG = sys.argv[1] if len(sys.argv) > 1 else ""
-FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
+LOG, FIXED_WIDTH = PS.parse_argv()
 
 # Muted styling — the scoreboard is ambient context, not an event, so no background
 # chips: dim separators, slate words, slightly brighter numbers, and colour only
@@ -82,7 +82,7 @@ def fit_parts(parts, avail, min_keep=1, text=lambda p: p[1]):
     return parts
 
 
-fit = R.fit
+fit = PS.fit
 
 
 def style(kind, text):
@@ -230,14 +230,12 @@ def compose(w, mparts, st):
     return [line_sid, line_msg, line_sess, line_tok, line_tools]
 
 
-def width():
-    return R.term_width(FIXED_WIDTH)
-
+width = PS.make_width(FIXED_WIDTH)
 
 _winch = False
 
 
-def _on_winch(signum, frame):
+def _on_winch():
     global _winch
     _winch = True
 
@@ -246,7 +244,7 @@ def main():
     global _winch
     if not LOG:
         return
-    signal.signal(signal.SIGWINCH, _on_winch)
+    PS.install_winch(_on_winch)
     last, mt_seen = 0.0, None
     win, win_retry, prev_ts, pend = None, 0.0, None, 0.0
     while True:
@@ -294,13 +292,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        pass
-    except Exception:
-        try:
-            A.error(LOG, "main (renderer crashed)")
-        except Exception:
-            pass
-        raise
+    PS.run_renderer(main, LOG, A)

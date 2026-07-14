@@ -71,6 +71,7 @@ def _ensure_pygments():
 _ensure_pygments()
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from core import panescript as PS
 from core import paths as P
 from core import render as R
 from core import state as St
@@ -88,8 +89,7 @@ def _fe():
         _FE = frontends.get()
     return _FE
 
-LOG = sys.argv[1] if len(sys.argv) > 1 else ""
-FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
+LOG, FIXED_WIDTH = PS.parse_argv()
 
 BANNER = "\033[38;5;244m ◧ command mirror — waiting for commands… \033[0m"
 
@@ -111,11 +111,9 @@ ROW_BUDGET = int(os.environ.get("CLAUDE_MIRROR_SCROLLBACK", "4800"))
 OPS = []            # parsed ops (capped), for repaint-on-resize
 
 
-def width():
-    return R.term_width(FIXED_WIDTH)
+width = PS.make_width(FIXED_WIDTH)
 
-
-fit = R.fit
+fit = PS.fit
 
 
 def render(op, w):
@@ -328,7 +326,7 @@ def paint_new(ops):
         pass
 
 
-def _on_winch(signum, frame):
+def _on_winch():
     L.resized = True
 
 
@@ -955,7 +953,7 @@ def main():
     wake_r, wake_w = os.pipe()
     os.set_blocking(wake_w, False)
     signal.set_wakeup_fd(wake_w)
-    signal.signal(signal.SIGWINCH, _on_winch)
+    PS.install_winch(_on_winch)
     tty_setup()
 
     L.db, L.wake_r = St.db_path(LOG), wake_r
@@ -973,13 +971,4 @@ def main():
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        pass
-    except Exception:
-        try:
-            A.error(LOG, "main (renderer crashed)")
-        except Exception:
-            pass
-        raise
+    PS.run_renderer(main, LOG, A)

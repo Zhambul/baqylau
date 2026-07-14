@@ -40,7 +40,14 @@ hand-build it; the per-caller extras — who-prefix, model/ctx tags, ✗ mark, t
 click-to-view hyperlink — stay caller-side; extracted from the byte-identical
 copies the renderers each grew — shared surface lives in core because the
 dependency rule forbids codex importing claude_code),
-`render.py` (ANSI rendering — was `claude_render.py`), `mdrender.py` (AST-driven
+`render.py` (ANSI rendering — was `claude_render.py`), `panescript.py` (the
+shared skeleton of the two pane-renderer ENTRY scripts, `claude-mirror.py` and
+`claude-scorebar.py`: the `MIRROR_LOG [WIDTH]` argv contract (`parse_argv`),
+the `width()` closure (`make_width`), the SIGWINCH flag-setter shape
+(`install_winch` — the handler body is just the caller's zero-arg flag-setter;
+what the flag drives stays per-script), the `fit` re-export, and
+`run_renderer` — the `__main__` crash wrapper whose "main (renderer crashed)"
+audit detail string both scripts must keep byte-identical), `mdrender.py` (AST-driven
 markdown → styled ANSI for the mirror: an `OpsRenderer(BaseRenderer)` over the
 optional `wenmode` CommonMark parser + a block-buffering `MarkdownStreamer`;
 supersedes `render.markdown()` and falls back to it when `wenmode` is absent),

@@ -190,6 +190,7 @@ def _load_mirror():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     m.FIXED_WIDTH = 80          # deterministic width() under a non-tty pytest
+    m.width = m.PS.make_width(80)   # width is a panescript closure — rebind it too
     return m
 
 
