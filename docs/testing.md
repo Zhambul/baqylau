@@ -18,6 +18,7 @@ real session, and unset they leave shipped behavior bit-identical:
 | `CLAUDE_CODEX_WATCH_POLL_S` / `CLAUDE_CODEX_RO_GRACE_S` | `0.4` / 8 s | `plugins/codex/watch.py` discovery poll cadence / companion grace (how long a rollout with no companion job waits before being adopted as TUI-origin) |
 | `CLAUDE_STREAM_PARENT_SCAN_S` | 2 s | `plugins/claude_code/substream.py` throttle on the parent-transcript `tool_result` scan (the rejected/abandoned-Task fallback end signal) |
 | `CLAUDE_OTEL_PORT` / `CLAUDE_OTEL_GRACE_S` | 4319 / 900 s | The OTLP receiver's bind port / idle-exit timeout (`plugins/otel/receiver.py`). `test_l5_otel.py` picks a free port per test and a short grace so a spawned receiver never lingers; the receiver only spawns when `CLAUDE_CODE_ENABLE_TELEMETRY=1`, which the suite never sets, so it stays inert unless a test opts in |
+| `CLAUDE_TEST_WAIT_SCALE` / `PYTEST_TIMEOUT` | 1x (6x when `CI=true`) / 30 s | `conftest.wait_until`'s timeout multiplier for slow shared runners, and pytest-timeout's per-test budget. They must move in LOCKSTEP: an unscaled 30s budget kills a slow-but-passing scaled wait as an opaque pytest-timeout thread dump before its 60s ceiling is reachable (the macOS-runner flake class). The CI workflow sets `PYTEST_TIMEOUT=180`; pinned by `test_pytest_timeout_budget_outlives_scaled_waits` |
 
 Any session started with the timing knobs set is self-evident in the audit:
 `session_start` captures `CLAUDE_TAIL_*`/`CLAUDE_STREAM_*`/`CLAUDE_WATCH_*`/

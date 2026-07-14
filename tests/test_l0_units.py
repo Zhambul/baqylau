@@ -475,6 +475,25 @@ def test_wait_until_ceiling_scales(monkeypatch):
     assert C.wait_until(lambda: 7, timeout=0.1) == 7
 
 
+def test_pytest_timeout_budget_outlives_scaled_waits(request):
+    """The per-test pytest-timeout budget must exceed the suite's largest
+    scaled wait_until ceiling, or the CI headroom (80f8615's 6x WAIT_SCALE)
+    is unreachable: a slow-but-passing wait is killed at pytest.ini's unscaled
+    30s as an opaque pytest-timeout thread dump instead of ever using its 60s
+    ceiling (test_f10b on 06efef6, test_f4a on a3d5de8 — macOS runner). The CI
+    workflow keeps them in lockstep via PYTEST_TIMEOUT=180 on the test step."""
+    import os as _os
+
+    import conftest as C
+    budget = float(_os.environ.get("PYTEST_TIMEOUT")
+                   or request.config.getini("timeout"))
+    longest = 20.0        # largest explicit wait_until timeout= in the suite
+    assert budget > longest * C.WAIT_SCALE, (
+        "pytest-timeout budget %ss can't outlive a scaled %ss wait — set "
+        "PYTEST_TIMEOUT alongside WAIT_SCALE (see .github/workflows/test.yml)"
+        % (budget, longest * C.WAIT_SCALE))
+
+
 # --- model.claude_dirs / model.settings_env (the ONE settings walk) ----------
 # split.py's private nearest-.claude walk + env-block layering was consolidated
 # onto model.py. Pin both walk modes and the layering order so the consolidation

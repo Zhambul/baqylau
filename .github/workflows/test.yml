@@ -24,4 +24,12 @@ jobs:
       # (claude_hook.notify_tab) resolve on the runner.
       - run: python3 retarget-python.py --revert
       - run: python3 -m pip install -r requirements-dev.txt
+      # pytest-timeout must scale in LOCKSTEP with conftest's WAIT_SCALE (6x on
+      # CI): pytest.ini's 30s is sized for local runs, and an unscaled per-test
+      # timeout kills a slow-but-passing wait_until at 30s as an opaque thread
+      # dump before its scaled 60s ceiling is ever reachable (test_f10b /
+      # test_f4a on the shared macOS runner). 180 = 30 * WAIT_SCALE; pinned by
+      # test_pytest_timeout_budget_outlives_scaled_waits.
       - run: make test
+        env:
+          PYTEST_TIMEOUT: 180

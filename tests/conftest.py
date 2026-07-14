@@ -27,6 +27,11 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # the code was fine. Scale every wait there — a passing wait returns as soon
 # as the predicate holds, so the larger ceiling costs nothing when green.
 # CLAUDE_TEST_WAIT_SCALE overrides; CI=true (GitHub Actions) defaults to 6x.
+# The per-test pytest-timeout budget must scale in LOCKSTEP: with pytest.ini's
+# local 30s left unscaled, a slow-but-passing wait dies at 30s as an opaque
+# pytest-timeout thread dump before its scaled ceiling is ever reachable (the
+# workflow sets PYTEST_TIMEOUT=180 = 30 * 6; pinned by
+# test_pytest_timeout_budget_outlives_scaled_waits).
 WAIT_SCALE = float(os.environ.get(
     "CLAUDE_TEST_WAIT_SCALE", "6" if os.environ.get("CI") else "1"))
 
