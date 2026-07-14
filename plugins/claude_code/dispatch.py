@@ -49,44 +49,58 @@ def _match(tool, pattern):
     return re.fullmatch(pattern, tool or "") is not None
 
 
-def _plan(ev, tool, d):
-    """The routing table: (entry-filename, thunk) steps for this event, in order.
-    Mirrors the old settings.json wiring one-for-one — see docs/wiring.md."""
-    steps = []
+# ------------------------------------------------------------- routing registry
+# Each event maps to an ORDERED list of (entry-filename, matcher, factory):
+#   entry-filename — the audit identity the step runs under (A.set_handler);
+#   matcher        — a fullmatch pattern over tool_name, or None for always
+#                    (the tool-name matchers that lived in settings.json);
+#   factory(d)     — builds the thunk to run, given the event payload.
+# Order within a list is LOAD-BEARING (docs/wiring.md): the tab dispatch runs
+# before the formatters, and SessionEnd's stop-fold runs before split-close.
+# Matchers within one event are mutually disjoint, so "run every matching step"
+# is exactly the old if/elif ladder.
 
-    def tab(state):
-        steps.append(("claude-tab-status.py", lambda: tabstatus.dispatch(state, d)))
+def _tab(state):
+    return ("claude-tab-status.py", None,
+            lambda d: (lambda: tabstatus.dispatch(state, d)))
 
-    def fmt(name, mod):
-        steps.append((name, mod.main))
 
-    if ev == "SessionStart":
-        tab("idle")
-        steps.append(("claude-split.py", lambda: split.handle("open", d)))
-    elif ev == "UserPromptSubmit":
-        tab("thinking")
-    elif ev == "PreToolUse":
-        tab("pretool")                       # matcher .* in the old wiring
-        if _match(tool, "Task|Agent"):
-            steps.append(("claude-subagent-fmt.py",
-                          lambda: subagent_fmt.run_phase("push")))
-        if tool == "Bash":
-            fmt("claude-cmd-pre.py", cmd_pre)
-    elif ev in ("PostToolUse", "PostToolUseFailure"):
-        tab("posttool")                      # matcher .* in the old wiring
-        if tool == "Bash":
-            fmt("claude-cmd-fmt.py", cmd_fmt)
-        elif _match(tool, "Read|Edit|Write|MultiEdit|NotebookEdit"):
-            fmt("claude-file-fmt.py", file_fmt)
-        elif tool == "Monitor":
-            fmt("claude-monitor-fmt.py", monitor_fmt)
-    elif ev == "Notification":
-        tab("notify")
-    elif ev in ("Stop", "StopFailure"):
-        tab("stop")
-        fmt("claude-stop-fmt.py", stop_fmt)
-    elif ev == "SessionEnd":
-        tab("clear")
+def _fmt(name, mod, matcher=None):
+    return (name, matcher, lambda d: mod.main)
+
+
+def _phase(phase, matcher=None):
+    return ("claude-subagent-fmt.py", matcher,
+            lambda d: (lambda: subagent_fmt.run_phase(phase)))
+
+
+def _split(cmd):
+    return ("claude-split.py", None, lambda d: (lambda: split.handle(cmd, d)))
+
+
+_STOP_FOLD = _fmt("claude-stop-fmt.py", stop_fmt)
+
+_ROUTES = {
+    "SessionStart": [_tab("idle"), _split("open")],
+    "UserPromptSubmit": [_tab("thinking")],
+    "PreToolUse": [
+        _tab("pretool"),                     # matcher .* in the old wiring
+        _phase("push", matcher="Task|Agent"),
+        _fmt("claude-cmd-pre.py", cmd_pre, matcher="Bash"),
+    ],
+    # Failures arrive on PostToolUseFailure, not PostToolUse — both events get the
+    # same routing or failures silently vanish (CLAUDE.md invariant).
+    "PostToolUse": [
+        _tab("posttool"),                    # matcher .* in the old wiring
+        _fmt("claude-cmd-fmt.py", cmd_fmt, matcher="Bash"),
+        _fmt("claude-file-fmt.py", file_fmt,
+             matcher="Read|Edit|Write|MultiEdit|NotebookEdit"),
+        _fmt("claude-monitor-fmt.py", monitor_fmt, matcher="Monitor"),
+    ],
+    "Notification": [_tab("notify")],
+    "Stop": [_tab("stop"), _STOP_FOLD],
+    "SessionEnd": [
+        _tab("clear"),
         # Fold any final-turn tail the last Stop MISSED: Stop fires at each turn
         # boundary, but the closing assistant line can be flushed to the transcript
         # a beat AFTER the Stop hook reads it (observed: last Stop folded to txpos
@@ -96,24 +110,32 @@ def _plan(ev, tool, d):
         # BEFORE the close/park below — the two are no longer separate racing hook
         # processes, so the old "SessionEnd fold races split.py's park" objection
         # (see stop_fmt.py header) is moot.
-        fmt("claude-stop-fmt.py", stop_fmt)
-        steps.append(("claude-split.py", lambda: split.handle("close", d)))
-    elif ev == "SubagentStart":
-        steps.append(("claude-subagent-fmt.py", lambda: subagent_fmt.run_phase("start")))
-    elif ev == "SubagentStop":
-        steps.append(("claude-subagent-fmt.py", lambda: subagent_fmt.run_phase("stop")))
-    elif ev in ("TaskCreated", "TaskCompleted"):
-        fmt("claude-task-fmt.py", task_fmt)
-    elif ev == "PreCompact":
-        # Compaction is Claude busy with no tool/reply signal of its own — paint the
-        # busy magenta so the tab doesn't sit stale (grey/green) through it. Use
-        # WORKING, not THINKING: no interrupt-watch to start (this isn't a turn
-        # boundary), just the colour. The next turn's hooks repaint from there.
-        tab("working")
-    # Every other event (Setup, PermissionRequest, …) has no functional
-    # handler — it only ever fed the universal audit subscriber, which route() still
-    # records below.
-    return steps
+        _STOP_FOLD,
+        _split("close"),
+    ],
+    "SubagentStart": [_phase("start")],
+    "SubagentStop": [_phase("stop")],
+    "TaskCreated": [_fmt("claude-task-fmt.py", task_fmt)],
+    # Compaction is Claude busy with no tool/reply signal of its own — paint the
+    # busy magenta so the tab doesn't sit stale (grey/green) through it. Use
+    # WORKING, not THINKING: no interrupt-watch to start (this isn't a turn
+    # boundary), just the colour. The next turn's hooks repaint from there.
+    "PreCompact": [_tab("working")],
+}
+_ROUTES["PostToolUseFailure"] = _ROUTES["PostToolUse"]
+_ROUTES["StopFailure"] = _ROUTES["Stop"]
+_ROUTES["TaskCompleted"] = _ROUTES["TaskCreated"]
+
+
+def _plan(ev, tool, d):
+    """The routing table: (entry-filename, thunk) steps for this event, in order.
+    Mirrors the old settings.json wiring one-for-one — see docs/wiring.md.
+    Every event absent from _ROUTES (Setup, PermissionRequest, …) has no
+    functional handler — it only ever fed the universal audit subscriber, which
+    route() still records after the steps."""
+    return [(name, factory(d))
+            for name, matcher, factory in _ROUTES.get(ev, ())
+            if matcher is None or _match(tool, matcher)]
 
 
 def _step(name, fn):

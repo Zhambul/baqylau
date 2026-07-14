@@ -95,6 +95,47 @@ def test_pretool_bash_emits_updated_input(run_hook, test_env, session):
     assert "claude-cmd-pre.py" in handlers(test_env, s.sid)
 
 
+# --------------------------------------------------- _plan registry: pinned order
+# The routing registry (_ROUTES) must reproduce the old if/elif ladder exactly:
+# same subsystems, same ORDER (tab dispatch before formatters; SessionEnd's
+# stop-fold before split-close), same matcher gating, same empty plan for
+# unknown events.
+
+def _names(ev, tool=""):
+    from plugins.claude_code import dispatch
+    return [name for name, _fn in dispatch._plan(ev, tool, {"tool_name": tool})]
+
+
+def test_plan_sequences_pinned():
+    tab = "claude-tab-status.py"
+    assert _names("SessionStart") == [tab, "claude-split.py"]
+    assert _names("UserPromptSubmit") == [tab]
+    assert _names("PreToolUse", "Bash") == [tab, "claude-cmd-pre.py"]
+    assert _names("PreToolUse", "Task") == [tab, "claude-subagent-fmt.py"]
+    assert _names("PreToolUse", "Agent") == [tab, "claude-subagent-fmt.py"]
+    assert _names("PreToolUse", "Read") == [tab]
+    for ev in ("PostToolUse", "PostToolUseFailure"):  # failure pairing
+        assert _names(ev, "Bash") == [tab, "claude-cmd-fmt.py"]
+        for t in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
+            assert _names(ev, t) == [tab, "claude-file-fmt.py"]
+        assert _names(ev, "Monitor") == [tab, "claude-monitor-fmt.py"]
+        assert _names(ev, "WebFetch") == [tab]
+        assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
+    assert _names("Notification") == [tab]
+    for ev in ("Stop", "StopFailure"):
+        assert _names(ev) == [tab, "claude-stop-fmt.py"]
+    # SessionEnd: the stop-fold step is ORDERED before split-close.
+    assert _names("SessionEnd") == [tab, "claude-stop-fmt.py", "claude-split.py"]
+    assert _names("SubagentStart") == ["claude-subagent-fmt.py"]
+    assert _names("SubagentStop") == ["claude-subagent-fmt.py"]
+    for ev in ("TaskCreated", "TaskCompleted"):
+        assert _names(ev) == ["claude-task-fmt.py"]
+    assert _names("PreCompact") == [tab]
+    # Unknown/other events: empty plan (subscriber-only, recorded by route()).
+    for ev in ("PermissionRequest", "Setup", ""):
+        assert _names(ev) == []
+
+
 # ---------------------------------------------------- agent_id main-session guard
 
 def test_posttool_bash_agent_id_ignored_but_audited(run_hook, test_env, session):
