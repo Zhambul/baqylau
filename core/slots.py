@@ -77,6 +77,15 @@ def _token(log, kind, idx):
     return f"{log}::live:{kind}.{idx}"
 
 
+def _untoken(token):
+    """Inverse of _token(): (log, kind, key). The key is the raw string tail —
+    a numeric slot index for palette slots, an agent_id for sub.pid rows —
+    matching the `live` table's TEXT key column."""
+    log, _, tail = token.partition("::live:")
+    kind, _, key = tail.rpartition(".")
+    return log, kind, key
+
+
 def _next(log, kind, n):
     """Round-robin counter per kind (counters key 'slotnext:<kind>'): returns the
     next index and advances it atomically, so concurrent launches each get a
@@ -140,15 +149,17 @@ def set_owner(token, pid):
     if not token:
         return
     try:
-        log, _, tail = token.partition("::live:")
-        kind, _, idx = tail.rpartition(".")
+        log, kind, idx = _untoken(token)
         conn = St.connect(log)
         if conn is None:
             return
         conn.execute("UPDATE live SET pid=? WHERE kind=? AND key=?", (pid, kind, idx))
         conn.commit()
-        A.event("slots", session_id=A.sid_from_log(log), kind=kind,
-                action="set-owner", owner_pid=pid, marker_path=token)
+        # A.slot (not raw A.event) WITH slot_n: the "claims without a release"
+        # anomaly groups by (kind, slot_n, agent) — a slot_n-less set-owner row
+        # lands in its own group instead of alongside its claim/release rows.
+        A.slot(log, kind, "set-owner", slot_n=int(idx) if idx.isdigit() else None,
+               owner_pid=pid, marker_path=token)
     except Exception:
         A.error(token, "set_owner", {"pid": pid})
 
@@ -269,7 +280,7 @@ def pid_set(log, ident, pid):
                      (ident, pid, time.time()))
         conn.commit()
         A.slot(log, "sub", "claim-pid", agent_id=ident, owner_pid=pid,
-               marker_path=f"{log}::live:sub.pid.{ident}")
+               marker_path=_token(log, "sub.pid", ident))
     except Exception:
         A.error(log, "pid_set", {"ident": ident, "pid": pid})
 

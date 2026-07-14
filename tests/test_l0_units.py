@@ -375,3 +375,49 @@ def test_tab_state_missing_db_default_and_no_create(tmp_path, monkeypatch):
     monkeypatch.setattr(tabs, "TABDB", str(db))
     assert state.tab_state("7") == ""
     assert not db.exists() and not db.parent.exists()
+
+
+# ---- core.slots token format ownership ---------------------------------------
+# _token()/_untoken() are the ONE owner of the "<log>::live:<kind>.<key>" claim
+# token in BOTH directions — set_owner used to hand-parse it, and pid_set used
+# to hand-build the sub.pid sibling form inline.
+
+
+def test_slots_token_roundtrip():
+    from core import slots
+    for log, kind, key in [("/tmp/claude-mirror-abc.log", "bg", 3),
+                           ("/tmp/x.y.log", "sub.id", 0),
+                           ("/tmp/x.log", "sub.pid", "agent-01HXYZ")]:
+        tok = slots._token(log, kind, key)
+        assert slots._untoken(tok) == (log, kind, str(key))
+
+
+def test_slots_pid_marker_matches_old_literal():
+    from core import slots
+    log, ident = "/tmp/claude-mirror-s1.log", "agent-42"
+    assert slots._token(log, "sub.pid", ident) == f"{log}::live:sub.pid.{ident}"
+
+
+def test_set_owner_audits_via_slot_with_slot_n(tmp_path, monkeypatch):
+    from core import slots
+    log = str(tmp_path / "claude-mirror-sess1.log")
+    calls = []
+
+    class Rec:
+        def __getattr__(self, name):
+            def f(*a, **kw):
+                calls.append((name, a, kw))
+            return f
+
+    monkeypatch.setattr(slots, "A", Rec())
+    idx, token = slots.claim("bg", log)
+    assert token == slots._token(log, "bg", idx)
+    calls.clear()
+    slots.set_owner(token, 12345)
+    assert len(calls) == 1
+    name, a, kw = calls[0]
+    assert name == "slot"                             # A.slot, not raw A.event
+    assert a[:3] == (log, "bg", "set-owner")
+    assert kw["slot_n"] == idx                        # groups with its claim/release
+    assert kw["owner_pid"] == 12345
+    assert kw["marker_path"] == token
