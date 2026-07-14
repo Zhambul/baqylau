@@ -156,6 +156,69 @@ def test_module_window_for_session_delegates_to_class(monkeypatch):
     assert fe.window_for_session("nope") is None
 
 
+def _geometry_fe(monkeypatch, tree):
+    from frontends import kitty as fk
+    monkeypatch.setattr(fk, "kitten_ls", lambda kitten, listen: tree)
+    return KittyFrontend(listen="unix:/tmp/x", kitten="/bin/true")
+
+
+def test_split_geometry_groups_path(monkeypatch):
+    """The neighbors walk sums ONE window per horizontal segment, resolving
+    group ids through the tab's groups map: the mirror (30 cols) has two
+    hsplit-stacked windows on its left, both reporting the full 90-col column
+    — the plain sum would say 30+90+90=210; the correct row total is 120.
+    The scorebar (exclude_var) shares the mirror's column and is dropped."""
+    tree = [{"tabs": [{
+        "groups": [{"id": 101, "windows": [1, 2]},   # hsplit stack (left col)
+                   {"id": 103, "windows": [3, 4]}],  # mirror + scorebar
+        "windows": [
+            {"id": 1, "columns": 90, "user_vars": {},
+             "neighbors": {"left": [], "right": [103]}},
+            {"id": 2, "columns": 90, "user_vars": {},
+             "neighbors": {"left": [], "right": [103]}},
+            {"id": 3, "columns": 30,
+             "user_vars": {"claude_mirror": "sid-1"},
+             "neighbors": {"left": [101], "right": []}},
+            {"id": 4, "columns": 30,
+             "user_vars": {"claude_scorebar": "sid-1"},
+             "neighbors": {"left": [101], "right": []}},
+        ]}]}]
+    fe = _geometry_fe(monkeypatch, tree)
+    assert fe.split_geometry(("claude_mirror", "sid-1"),
+                             exclude_var="claude_scorebar") == (30, 120)
+    # Without the exclusion the fallback-free walk is unchanged (the scorebar
+    # is stacked, never a horizontal neighbor) — but the pane must be found.
+    assert fe.split_geometry(("claude_mirror", "sid-1")) == (30, 120)
+    assert fe.split_geometry(("claude_mirror", "nope")) is None
+
+
+def test_split_geometry_old_kitty_fallback(monkeypatch):
+    """No `neighbors` key (older kitty) → the plain per-window sum, with
+    exclude_var-tagged panes dropped from that sum."""
+    tree = [{"tabs": [{"windows": [
+        {"id": 1, "columns": 90, "user_vars": {}},
+        {"id": 3, "columns": 30, "user_vars": {"claude_mirror": "sid-1"}},
+        {"id": 4, "columns": 30, "user_vars": {"claude_scorebar": "sid-1"}},
+    ]}]}]
+    fe = _geometry_fe(monkeypatch, tree)
+    assert fe.split_geometry(("claude_mirror", "sid-1"),
+                             exclude_var="claude_scorebar") == (30, 120)
+    assert fe.split_geometry(("claude_mirror", "sid-1")) == (30, 150)
+
+
+def test_split_geometry_group_id_is_window_id(monkeypatch):
+    """Never-regrouped windows: neighbor ids resolve as plain window ids when
+    absent from the groups map."""
+    tree = [{"tabs": [{"groups": [], "windows": [
+        {"id": 1, "columns": 90, "user_vars": {},
+         "neighbors": {"left": [], "right": [3]}},
+        {"id": 3, "columns": 30, "user_vars": {"claude_mirror": "sid-1"},
+         "neighbors": {"left": [1], "right": []}},
+    ]}]}]
+    fe = _geometry_fe(monkeypatch, tree)
+    assert fe.split_geometry(("claude_mirror", "sid-1")) == (30, 120)
+
+
 def test_kitty_wire_constants_unchanged():
     """The named constants must keep the wire values captured live — renaming
     them was behavior-preserving; changing them would not be."""

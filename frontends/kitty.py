@@ -339,37 +339,64 @@ class KittyFrontend(Frontend):
         name, value = var
         for osw in self.ls():
             for t in osw.get("tabs", []):
-                wins = {w.get("id"): w for w in t.get("windows", [])
-                        if not (exclude_var
-                                and w.get("user_vars", {}).get(exclude_var))}
-                pane = next((w for w in wins.values()
-                             if w.get("user_vars", {}).get(name) == value), None)
+                wins, pane = self._geometry_windows(t, var, exclude_var)
                 if not pane or not pane.get("columns"):
                     continue
                 cur = pane.get("columns", 0)
                 if "neighbors" not in pane:               # older kitty: old behavior
                     return cur, sum(w.get("columns", 0) for w in wins.values())
-                groups = {g.get("id"): (g.get("windows") or [])
-                          for g in t.get("groups", [])}
-
-                def resolve(i):
-                    for wid in groups.get(i, [i]):
-                        if wid in wins:
-                            return wins[wid]
-                    return None
-
-                total, seen = cur, {pane.get("id")}
-                for side in ("left", "right"):
-                    w = pane
-                    while True:
-                        cands = ((w.get("neighbors") or {}).get(side)) or []
-                        nxt = next((ww for ww in map(resolve, cands)
-                                    if ww is not None and ww.get("id") not in seen),
-                                   None)
-                        if nxt is None:
-                            break
-                        seen.add(nxt.get("id"))
-                        total += nxt.get("columns", 0)
-                        w = nxt
-                return cur, total
+                resolve = self._resolve_groups(t, wins)
+                return cur, self._neighbor_span(pane, resolve)
         return None
+
+    @staticmethod
+    def _geometry_windows(tab, var, exclude_var):
+        """One tab's window map (exclude_var-tagged panes dropped — the
+        scorebar shares the mirror's column, so counting it would double-count
+        that column) plus the `var`-tagged pane within it, or None."""
+        name, value = var
+        wins = {w.get("id"): w for w in tab.get("windows", [])
+                if not (exclude_var
+                        and w.get("user_vars", {}).get(exclude_var))}
+        pane = next((w for w in wins.values()
+                     if w.get("user_vars", {}).get(name) == value), None)
+        return wins, pane
+
+    @staticmethod
+    def _resolve_groups(tab, wins):
+        """A resolver from a `neighbors` entry to a window dict. `neighbors`
+        holds GROUP ids (confirmed live), which coincide with window ids only
+        for never-regrouped windows — resolve through the tab's groups map
+        first, then as a plain window id."""
+        groups = {g.get("id"): (g.get("windows") or [])
+                  for g in tab.get("groups", [])}
+
+        def resolve(i):
+            for wid in groups.get(i, [i]):
+                if wid in wins:
+                    return wins[wid]
+            return None
+        return resolve
+
+    @staticmethod
+    def _neighbor_span(pane, resolve):
+        """The pane's row total: walk the `neighbors` chain left and right,
+        summing ONE window per horizontal segment — NOT every window's
+        columns: two windows hsplit-stacked in the same column each report the
+        full column width, so the plain sum double-counted it, under-reported
+        the pane's %, and drove reset/setpct (and the remembered size) far
+        off."""
+        total, seen = pane.get("columns", 0), {pane.get("id")}
+        for side in ("left", "right"):
+            w = pane
+            while True:
+                cands = ((w.get("neighbors") or {}).get(side)) or []
+                nxt = next((ww for ww in map(resolve, cands)
+                            if ww is not None and ww.get("id") not in seen),
+                           None)
+                if nxt is None:
+                    break
+                seen.add(nxt.get("id"))
+                total += nxt.get("columns", 0)
+                w = nxt
+        return total
