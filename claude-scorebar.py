@@ -56,11 +56,11 @@ FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() el
 # where it carries meaning (failures/removed red, added green, cost orange).
 SLATE = R.fg(*O.SCORE_RGB)          # words: cmds / files / tool names
 VAL   = R.fg(171, 178, 191)         # numbers — the part your eye scans for
-KIND  = {"fail": R.fg(224, 108, 117), "rem": R.fg(224, 108, 117),
-         "add": R.fg(152, 195, 121), "cost": R.fg(209, 154, 102),
+KIND  = {"fail": R.fg(*O.RED), "rem": R.fg(*O.RED),
+         "add": R.fg(*O.GREEN), "cost": R.fg(*O.ORANGE),
          # message-census kinds (✉ row): unread yellow, stale orange, read green
-         "unread": R.fg(229, 192, 123), "stale": R.fg(209, 154, 102),
-         "read": R.fg(152, 195, 121)}
+         "unread": R.fg(*O.YELLOW), "stale": R.fg(*O.ORANGE),
+         "read": R.fg(*O.GREEN)}
 SEP   = R.DIM + " · " + R.RST
 _NUM  = re.compile(r"\d[\d.,]*")
 
@@ -84,8 +84,8 @@ def joiner(prev_kind, kind):
 
 # Mirror-event colours: a delivered/unread message is yellow, a read one green —
 # matching the ●/◉ glyphs the census row uses, so the two surfaces read as one system.
-MSG_NEW_RGB  = (229, 192, 123)
-MSG_READ_RGB = (152, 195, 121)
+MSG_NEW_RGB  = O.YELLOW
+MSG_READ_RGB = O.GREEN
 
 
 def emit_events(events):

@@ -466,9 +466,9 @@ def render_file(name_tool, inp, result=None, ctx="", failed=False, tid=None):
         added, removed = CT.diff_counts(name_tool, inp)
         d = []
         if added:
-            d.append(R.fg(152, 195, 121) + f"+{added}" + RST)   # green additions
+            d.append(R.fg(*O.GREEN) + f"+{added}" + RST)   # green additions
         if removed:
-            d.append(R.fg(224, 108, 117) + f"-{removed}" + RST)  # red removals
+            d.append(R.fg(*O.RED) + f"-{removed}" + RST)  # red removals
         if d:
             line += "  " + " ".join(d)
         rng = CT.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
@@ -643,7 +643,7 @@ def on_tool_result(b, tur=None):
         O.emit(LOG, O.gut(R.DIM + "(no output)" + RST, SUB_RGB, g=g))
     err = bool(b.get("is_error"))
     if err:
-        O.emit(LOG, O.gut(R.fg(224, 108, 117) + "■ failed" + RST, SUB_RGB, g=g))
+        O.emit(LOG, O.gut(R.fg(*O.RED) + "■ failed" + RST, SUB_RGB, g=g))
     if kind == "fg":
         # Team-wide command accounting, mirroring the main session's
         # claude-cmd-fmt.py — which deliberately SKIPS any agent_id event (the

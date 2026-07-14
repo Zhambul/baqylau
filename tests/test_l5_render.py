@@ -105,3 +105,34 @@ def test_same_ops_reflow_differently_by_width(test_env, session, reaper):
     assert wide != narrow
     assert narrow.count(b"\n") > wide.count(b"\n"), \
         "narrower pane should need more wrapped lines"
+
+
+def test_semantic_color_table_not_reencoded_by_producers():
+    """CLAUDE.md invariant: the semantic colour table in core/ops.py is shared
+    vocabulary producers must not re-encode. Grep every .py outside core/ops.py
+    (and core/render.py's own palette) for raw occurrences of those triplets."""
+    import re
+    from core import ops as O
+    assert O.GREEN == (152, 195, 121)
+    assert O.RED == (224, 108, 117)
+    triplets = [O.SLATE, O.ORANGE, O.RED, O.GREEN, O.YELLOW, O.BLUE, O.AMBER]
+    pats = [re.compile(r"\b%d,\s*%d,\s*%d\b" % t) for t in triplets]
+    offenders = []
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs if d not in
+                   (".git", "__pycache__", "tests", ".claude")]
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, REPO)
+            if rel in ("core/ops.py", "core/render.py"):
+                continue
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh, 1):
+                    for p in pats:
+                        if p.search(line):
+                            offenders.append("%s:%d: %s" % (rel, i, line.strip()))
+    assert not offenders, \
+        "raw semantic-table RGB triplets re-encoded (use core.ops constants):\n" \
+        + "\n".join(offenders)
