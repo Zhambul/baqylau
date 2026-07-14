@@ -116,6 +116,40 @@ def test_cmd_pre_subagent_fg_rewrites(run_hook, test_env, session):
                for (path, a, _c) in oracle.state_files(test_env, s.sid))
 
 
+def test_cmd_pre_tee_wrap_shape_unit():
+    # Pin the exact wrap shape — the blank line before "}" is load-bearing
+    # (a trailing "\" in the command eats one newline; see cmd_pre._tee_wrap).
+    from plugins.claude_code import cmd_pre
+    w = cmd_pre._tee_wrap("echo hi", "/tmp/x y.out")
+    assert w == ("{ echo hi\n\n} > >(tee -a '/tmp/x y.out')"
+                 " 2> >(tee -a '/tmp/x y.out' >&2)")
+
+
+@pytest.mark.parametrize("agent_id", [None, "agent-x"])
+def test_cmd_pre_wrap_and_envelope_identical_both_paths(run_hook, test_env,
+                                                        session, agent_id):
+    # Main-session and subagent fg rewrites must produce the SAME tee-wrap
+    # string shape and the SAME updatedInput JSON envelope (both come from the
+    # shared _tee_wrap/_emit_updated_input helpers).
+    s = session.make()
+    kw = dict(agent_id=agent_id) if agent_id else {}
+    p = run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo hello", **kw))
+    out = json.loads(p.stdout)
+    hso = out["hookSpecificOutput"]
+    assert set(out) == {"hookSpecificOutput"}
+    assert set(hso) == {"hookEventName", "permissionDecision", "updatedInput"}
+    assert hso["hookEventName"] == "PreToolUse"
+    assert hso["permissionDecision"] == "allow"
+    cmd = hso["updatedInput"]["command"]
+    assert cmd.startswith("{ echo hello\n\n} > >(tee -a "), \
+        "blank line before '}' is load-bearing"
+    assert cmd.endswith(" >&2)")
+    assert cmd.count("tee -a") == 2
+    # the tee target is a session-keyed sidecar (.out for main, .subfg.<tid>.out sub)
+    assert (".subfg." in cmd) == bool(agent_id)
+    assert ".out" in cmd
+
+
 def test_cmd_pre_subagent_fg_optout(run_hook, test_env, session):
     s = session.make()
     env = dict(test_env, CLAUDE_MIRROR_LIVE_FG_SUB="0")

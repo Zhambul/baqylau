@@ -33,6 +33,33 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 LBL_FG = O.SLATE   # same colour claude-cmd-fmt.py uses for an OK foreground block
 
 
+def _tee_wrap(cmd, src):
+    # Wrap `cmd` so its stdout/stderr ALSO tee into `src` (the live-tail file).
+    # The blank line before "}" is load-bearing: a command ENDING in a
+    # line-continuation backslash consumes the first newline, which used to
+    # weld the closing "}" onto the last line — a syntax error for a command
+    # that ran fine unwrapped. The extra newline gives it one to eat.
+    q = shlex.quote(src)
+    return "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+
+
+def _emit_updated_input(ti, wrapped_cmd):
+    # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):
+    # updatedInput only takes effect with "allow" (auto-approve) or "ask"
+    # (prompt on EVERY rewritten command, even allowlisted ones — there is no
+    # "rewrite, then fall through to normal permission rules" option). "ask"
+    # is unusably noisy, so rewritten foreground commands never
+    # permission-prompt; deny rules still apply. See README § Live foreground
+    # streaming. (Applies to both the main path and a subagent's fg command,
+    # the latter gated by CLAUDE_MIRROR_LIVE_FG_SUB.)
+    new_ti = dict(ti); new_ti["command"] = wrapped_cmd
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "allow",
+        "updatedInput": new_ti,
+    }}))
+
+
 def sub_fg(d, log):
     # A SUBAGENT's foreground Bash command. claude-cmd-fmt.py still SKIPS agent_id
     # events (the substream owns subagent RENDERING), but the substream can only
@@ -64,9 +91,7 @@ def sub_fg(d, log):
         except Exception:
             return H.ignore(d, "agent_id (could not create tee file)")
         own = True
-        q = shlex.quote(src)
-        # The blank line before "}" is load-bearing — see the identical wrap below.
-        wrapped_cmd = "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+        wrapped_cmd = _tee_wrap(cmd, src)
 
     rec = {"src": src, "done": done, "own": own, "append": append, "tid": tid}
     if not S.hand_put(log, "subfg:" + tid, rec):
@@ -80,15 +105,7 @@ def sub_fg(d, log):
                  % (tid[:8], "rewrote command (tee)" if wrapped_cmd else "own redirect"))
 
     if wrapped_cmd:
-        # permissionDecision "allow" is required for updatedInput to take effect (see
-        # the main path below) — so a subagent's rewritten fg command is auto-approved
-        # (deny rules still apply). Gated by CLAUDE_MIRROR_LIVE_FG_SUB above.
-        new_ti = dict(ti); new_ti["command"] = wrapped_cmd
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "updatedInput": new_ti,
-        }}))
+        _emit_updated_input(ti, wrapped_cmd)
 
 
 def main():
@@ -143,12 +160,7 @@ def main():
         except Exception:
             return
         own = True
-        q = shlex.quote(src)
-        # The blank line before "}" is load-bearing: a command ENDING in a
-        # line-continuation backslash consumes the first newline, which used to
-        # weld the closing "}" onto the last line — a syntax error for a command
-        # that ran fine unwrapped. The extra newline gives it one to eat.
-        wrapped_cmd = "{ " + cmd + "\n\n} > >(tee -a " + q + ") 2> >(tee -a " + q + " >&2)"
+        wrapped_cmd = _tee_wrap(cmd, src)
 
     if not os.path.exists(H.script("claude-stream.py")):
         if own:
@@ -204,19 +216,7 @@ def main():
                     else "tailing command's own redirect"))
 
     if wrapped_cmd:
-        # permissionDecision "allow" is DELIBERATE (owner's call, do not "fix"):
-        # updatedInput only takes effect with "allow" (auto-approve) or "ask"
-        # (prompt on EVERY rewritten command, even allowlisted ones — there is no
-        # "rewrite, then fall through to normal permission rules" option). "ask"
-        # is unusably noisy, so rewritten foreground commands never
-        # permission-prompt; deny rules still apply. See README § Live foreground
-        # streaming.
-        new_ti = dict(ti); new_ti["command"] = wrapped_cmd
-        print(json.dumps({"hookSpecificOutput": {
-            "hookEventName": "PreToolUse",
-            "permissionDecision": "allow",
-            "updatedInput": new_ti,
-        }}))
+        _emit_updated_input(ti, wrapped_cmd)   # "allow" is deliberate — see the helper
 
 
 def entry():
