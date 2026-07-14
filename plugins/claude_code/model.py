@@ -23,6 +23,11 @@ import json
 import os
 import time
 
+# How much of a transcript's tail session_model() scans for the last assistant
+# turn: the latest turn is near the end, so a bounded read stays cheap even on
+# long sessions.
+TAIL_SCAN_BYTES = 256 * 1024
+
 
 def claude_dirs(start=None):
     """Every `.claude` directory to consult for project-level config (agents, settings),
@@ -180,7 +185,7 @@ def session_model(tpath):
     """The model VERSION the parent session runs (e.g. "claude-opus-4-8"), from
     the last assistant turn in its transcript. Gives a precise version for agents
     that INHERIT, before the agent's own first turn reveals it. Tail-scan only
-    (the latest turn is near the end) so it stays cheap even on long sessions."""
+    (TAIL_SCAN_BYTES — see its comment)."""
     try:
         with open(tpath, "rb") as fh:
             fh.seek(0, 2)

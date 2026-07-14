@@ -16,6 +16,28 @@ import shutil
 
 from frontends.base import Frontend, INACTIVE_FG, TAB_COLOR_NONE
 
+# Timeout for mutating `kitten @` calls (kitten_run): kitten has its own
+# client-side response timeout, but a hang on socket CONNECT is unbounded, and
+# every tab paint and split op runs through here from hook processes — which
+# must never block.
+KITTEN_TIMEOUT_S = 10
+# Tighter timeout for read-only queries (get-text / ls): they run on hot paths
+# (renderer reflow, geometry probes) where a stale answer is useless anyway.
+KITTEN_QUERY_TIMEOUT_S = 5
+# Timeout for a raw unix-socket remote-control exchange (_rc_raw): the whole
+# point of the raw path is sub-millisecond latency, so give up fast and let
+# the caller fall back to the kitten subprocess.
+RC_SOCKET_TIMEOUT_S = 0.5
+# The remote-control protocol version stamped into every @kitty-cmd envelope
+# (what a current kitten client sends; kitty accepts any version <= its own).
+KITTY_RC_VERSION = [0, 26, 0]
+# The @kitty-cmd wire framing: ESC P (DCS) + key + {json} + ESC \ (ST). The
+# reply, when requested, is framed the same way — locate its payload by the
+# key, not the DCS introducer (the reply may arrive mid-buffer).
+RC_CMD_KEY = b"@kitty-cmd"
+RC_CMD_DCS = b"\x1bP" + RC_CMD_KEY
+RC_ST = b"\x1b\\"
+
 
 def find_kitten():
     """Locate the kitten binary: $KITTY_KITTEN_BIN override, PATH, then the macOS
@@ -32,13 +54,13 @@ def find_kitten():
 
 def kitten_run(kitten, listen, *args):
     """A silenced `kitten @ …` call; returns the exit code (1 on any failure).
-    The timeout matches kitten_ls's: kitten has its own client-side response
-    timeout, but a hang on socket CONNECT is unbounded, and every tab paint and
-    split op runs through here from hook processes — which must never block."""
+    Bounded by KITTEN_TIMEOUT_S (see its comment): hook processes must never
+    block on a hung socket connect."""
     try:
         return subprocess.run([kitten, "@", "--to", listen, *args],
                               stdout=subprocess.DEVNULL,
-                              stderr=subprocess.DEVNULL, timeout=10).returncode
+                              stderr=subprocess.DEVNULL,
+                              timeout=KITTEN_TIMEOUT_S).returncode
     except Exception:
         return 1
 
@@ -51,7 +73,7 @@ def kitten_get_text(kitten, listen, win_id, extent="screen"):
     try:
         r = subprocess.run([kitten, "@", "--to", listen, "get-text",
                             "--match", f"id:{win_id}", "--extent", extent],
-                           capture_output=True, timeout=5)
+                           capture_output=True, timeout=KITTEN_QUERY_TIMEOUT_S)
         return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
     except Exception:
         return None
@@ -61,7 +83,8 @@ def kitten_ls(kitten, listen):
     """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
     try:
         out = subprocess.run([kitten, "@", "--to", listen, "ls"],
-                             capture_output=True, text=True, timeout=5).stdout
+                             capture_output=True, text=True,
+                             timeout=KITTEN_QUERY_TIMEOUT_S).stdout
         return json.loads(out)
     except Exception:
         return []
@@ -78,11 +101,10 @@ def iter_windows(ls):
 
 def window_for_session(kitten, listen, sid):
     """Kitty window id (str) of the Claude pane carrying claude_session=<sid>
-    (tagged by claude-split.py at SessionStart), or None."""
-    for _osw, _t, w in iter_windows(kitten_ls(kitten, listen)):
-        if (w.get("user_vars") or {}).get("claude_session") == sid:
-            return str(w.get("id"))
-    return None
+    (tagged by claude-split.py at SessionStart), or None. Kept only for the
+    claude_kitty compat shim — in-repo callers use Frontend.window_for_session;
+    this delegates to that one scan implementation."""
+    return KittyFrontend(listen=listen, kitten=kitten).window_for_session(sid)
 
 
 def set_tab_color(kitten, listen, win, active_bg, active_fg, inactive_bg,
@@ -224,7 +246,8 @@ class KittyFrontend(Frontend):
         return self._run("scroll-window", "--match", f"id:{win_id}",
                          f"{int(lines_up)}-")
 
-    def _rc_raw(self, cmd, payload, want_response=False, timeout=0.5):
+    def _rc_raw(self, cmd, payload, want_response=False,
+                timeout=RC_SOCKET_TIMEOUT_S):
         """A remote-control command over a RAW unix-socket write of the
         @kitty-cmd DCS — sub-millisecond vs the ~30-100ms kitten subprocess
         spawn. The wire bytes are exactly what the kitten client sends
@@ -242,28 +265,26 @@ class KittyFrontend(Frontend):
             return None
         import json as _json
         import socket as _socket
-        obj = {"cmd": cmd, "version": [0, 26, 0],
+        obj = {"cmd": cmd, "version": KITTY_RC_VERSION,
                "no_response": not want_response, "payload": payload}
-        st = b"\x1b\\"
         try:
             s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
             try:
                 s.settimeout(timeout)
                 s.connect(path)
-                s.sendall(b"\x1bP@kitty-cmd"
-                          + _json.dumps(obj).encode("utf-8") + st)
+                s.sendall(RC_CMD_DCS + _json.dumps(obj).encode("utf-8") + RC_ST)
                 if not want_response:
                     return True
                 buf = b""
-                while st not in buf:
+                while RC_ST not in buf:
                     b = s.recv(65536)
                     if not b:
                         return None
                     buf += b
             finally:
                 s.close()
-            return _json.loads(buf[buf.index(b"@kitty-cmd") + 10:
-                                   buf.index(st)])
+            return _json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
+                                   buf.index(RC_ST)])
         except Exception:
             return None
 

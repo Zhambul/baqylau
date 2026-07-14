@@ -136,3 +136,41 @@ def test_get_honours_claude_frontend(monkeypatch):
 
     monkeypatch.delenv("CLAUDE_FRONTEND", raising=False)
     assert type(frontends.get()) is KittyFrontend            # unset → kitty
+
+
+def test_module_window_for_session_delegates_to_class(monkeypatch):
+    """The module-level window_for_session (kept only for the claude_kitty
+    compat shim) must be the SAME scan as Frontend.window_for_session — one
+    implementation, identical answers on the same tree."""
+    from frontends import kitty as fk
+    tree = [{"tabs": [{"windows": [
+        {"id": 3, "user_vars": {"claude_mirror": "sid-1"}},
+        {"id": 7, "user_vars": {"claude_session": "sid-1"}},
+        {"id": 9, "user_vars": {}},
+    ]}]}]
+    monkeypatch.setattr(fk, "kitten_ls", lambda kitten, listen: tree)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/bin/true")
+    assert fk.window_for_session("/bin/true", "unix:/tmp/x", "sid-1") == "7"
+    assert fe.window_for_session("sid-1") == "7"
+    assert fk.window_for_session("/bin/true", "unix:/tmp/x", "nope") is None
+    assert fe.window_for_session("nope") is None
+
+
+def test_kitty_wire_constants_unchanged():
+    """The named constants must keep the wire values captured live — renaming
+    them was behavior-preserving; changing them would not be."""
+    from frontends import kitty as fk
+    assert fk.KITTEN_TIMEOUT_S == 10
+    assert fk.KITTEN_QUERY_TIMEOUT_S == 5
+    assert fk.RC_SOCKET_TIMEOUT_S == 0.5
+    assert fk.KITTY_RC_VERSION == [0, 26, 0]
+    assert fk.RC_CMD_KEY == b"@kitty-cmd"
+    assert fk.RC_CMD_DCS == b"\x1bP@kitty-cmd"
+    assert fk.RC_ST == b"\x1b\\"
+    assert len(fk.RC_CMD_KEY) == 10          # the old bare "+ 10" reply offset
+
+
+def test_model_tail_scan_bytes():
+    sys.path.insert(0, REPO)
+    from plugins.claude_code import model as cm
+    assert cm.TAIL_SCAN_BYTES == 262144
