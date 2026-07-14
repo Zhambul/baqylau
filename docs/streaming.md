@@ -106,9 +106,26 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     session-alive signal, so the next `--resume`'s `decide_log_fate` reads
     `reuse-live-db` and strands the real history in the park — or, through a
     cached connection, pollutes the parked snapshot. For the same reason the
-    tailer's slot release (`stream_lifecycle`'s `on_exit`) no-ops once parked:
-    the `live` table went with the DB, and `slots.release`'s connect would mint
-    the file a never-emitted silent tailer has no cached connection to hide.
+    tailer's teardown is parked-aware: `slots.release` no-ops once parked (the
+    `live` table went with the DB, and its connect would mint the file a
+    never-emitted silent tailer has no cached connection to hide), the fg-live
+    reclaim is skipped (a state-DB write, same hazard), and the `bg-recheck`
+    isn't spawned (the session is over and SessionEnd already cleared the tab)
+    — only the removal of our own tee `.out` (a plain /tmp file, not a DB)
+    still runs. The substream's `cleanup()` runs the same gate: its
+    `release_id`/`agent_set`/`pid_del` are all state-DB writes, and post-park
+    it returns without them (and without the recheck).
+  - **Teardown is crash-safe.** The whole teardown (`stream.py cleanup()` —
+    tee-file removal, fg-live reclaim, slot release, stale-red `bg-recheck`,
+    in that order: release-before-recheck so the recheck never sees the
+    tailer's own slot marker) is `stream_lifecycle`'s `on_exit`, not just
+    main()'s last statement — so it runs on EVERY exit path, crash included.
+    Before that, a main() that raised after `open_tailer` (renderer exception,
+    signal) had its crash audited and its slot released, but leaked the tee
+    `.out` until the 7-day sweep, the `fg-live` record until the next Bash
+    `PreToolUse` noticed its dead pid, and never cleared a stale red tab. A
+    ran-flag makes cleanup once-only, so the happy path's ordering
+    (finish chip → cleanup → `stream_end`) is unchanged.
   - **All tailers handle truncation**: if the tailed file *shrinks* (the command
     runs `> file` again, or the file is rotated in place), `FileTailer.pump`
     restarts from byte 0 — the old offset pointed past EOF, so nothing would ever

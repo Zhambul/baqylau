@@ -235,7 +235,13 @@ for the counters these streams feed).
       backstop as a zombie whose checkpoint writes mutate the parked `*.keep`
       snapshot through its cached connection. No footer/bumps after that: any
       write would either land in the snapshot or recreate the DB file — whose
-      existence IS the session-alive signal watchers poll.
+      existence IS the session-alive signal watchers poll. The streamer's
+      `cleanup()` (its `stream_lifecycle` on_exit) honours the same rule: once
+      parked it returns without its `release_id`/`agent_set`/`pid_del` writes
+      — through the cached connection they deleted the slot rows out of the
+      parked snapshot, and with no cached connection they'd recreate the live
+      DB — and without spawning the `bg-recheck` (the session is over and
+      SessionEnd already cleared the tab).
   - **Nested background / monitor → double gutter.** When a subagent launches a
     `run_in_background` command (or a Monitor), the streamer extracts the task id
     from the tool_result and spawns `claude-stream.py` with the subagent's colour

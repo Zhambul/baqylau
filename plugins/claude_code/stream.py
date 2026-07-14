@@ -65,6 +65,11 @@ POS0 = None
 GROUP = None
 RKIND = RVALUE = RENDER_KIND = None
 MD = SNIFF = False
+# cleanup()'s run-once state: the ran-flag (teardown must not run twice — it is
+# both main()'s tail step by way of stream_lifecycle's on_exit AND the crash
+# path's) plus the tailed path, bound in main() the moment wait_source resolves
+# it so a crash after that point can still remove our own tee file.
+_CLEANED = {"done": False, "path": None}
 
 
 def _init(argv):
@@ -116,6 +121,8 @@ def _init(argv):
     GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
     CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
 
+    _CLEANED["done"], _CLEANED["path"] = False, None   # fresh run, fresh teardown
+
     RKIND, RVALUE = _detect_render(CMD)
     MD = bool(RKIND and RKIND.name == "md")
     RENDER_KIND = (None if RKIND is None
@@ -129,8 +136,9 @@ def release_slot():
     # No-op once the session's state DB is parked: the live table went with it,
     # and slots.release's connect would CREATE a fresh empty DB at the live
     # path — the exact hazard the completion loops' parked() exits avoid. This
-    # runs as stream_lifecycle's on_exit, i.e. also ON the parked exit path,
-    # and a silent-so-far tailer has no cached connection to hide behind.
+    # runs inside cleanup() (stream_lifecycle's on_exit), i.e. also ON the
+    # parked exit path, and a silent-so-far tailer has no cached connection to
+    # hide behind.
     if S.parked(LOG):
         return
     claude_slots.release(KIND, LOG, SLOT, os.getpid())
@@ -702,17 +710,36 @@ def emit_finish_chip(start, tail, override):
         O.emit(LOG, O.rule(), O.label(chip_txt, chip_rgb, g=GROUP), O.rule())
 
 
-def cleanup(path):
+def cleanup():
     """Post-stream teardown: remove our own tee file and fg-live record, release
     the slot, then ask the tab tracker to clear a stale red — in that order (the
-    recheck must not see this tailer's own slot marker)."""
-    if KIND == "fg" and OWN:
+    recheck must not see this tailer's own slot marker).
+
+    Runs as stream_lifecycle's on_exit, so it fires on EVERY exit path — happy,
+    crash, parked. It used to be main()'s last statement only: a main() that
+    raised after open_tailer (renderer exception, signal) had its crash audited
+    and its slot released, but leaked the tee .out until the 7-day sweep, the
+    fg-live record until the next Bash PreToolUse noticed the dead pid, and
+    never cleared a stale red tab. The ran-flag makes it once-only, so the
+    happy path's ordering (chip -> cleanup -> stream_end) is unchanged.
+    Parked-aware, per the invariant release_slot's guard documents: past a park
+    only the tee-file removal (a plain /tmp file of ours, not a DB) survives —
+    the fg-live take is a state-DB write whose connect would recreate the live
+    DB or pollute the parked snapshot, and the bg-recheck is moot (the session
+    is over and SessionEnd already cleared the tab)."""
+    if _CLEANED["done"]:
+        return
+    _CLEANED["done"] = True
+    path = _CLEANED["path"]
+
+    if KIND == "fg" and OWN and path:
         try:
             os.remove(path)
         except Exception:
             pass
 
-    if KIND == "fg":
+    parked = S.parked(LOG)
+    if KIND == "fg" and not parked:
         # Remove our own fg-live record (matched on our pid so a NEWER command's
         # record is never touched). Normally PostToolUse consumes it — but a
         # cancelled command fires no hook at all, and the surviving record made
@@ -725,8 +752,11 @@ def cleanup(path):
     # Release this job's slot marker BEFORE the recheck below — bg_command_running
     # now detects running jobs via live slot markers, so the recheck must not see
     # this (now-finished) tailer's own marker, or it would refuse to clear the red.
+    # (release_slot carries its own parked no-op.)
     release_slot()
 
+    if parked:
+        return
     # No "background finished" hook exists, so if the tab went red while Claude
     # handed back to the user, it would stay red. Now that this job is done, ask
     # claude-tab-status.py to flip a *stale red* back to green (it no-ops unless
@@ -747,6 +777,7 @@ def main(run):
     path, mon_pid = wait_source(run, start)
     if not path:
         return
+    _CLEANED["path"] = path      # from here a crash can still remove the tee file
 
     tail = open_tailer(path)
     pump, ctx = make_pump(run, tail)
@@ -760,7 +791,8 @@ def main(run):
             # (S.parked, the shared probe the substream/codex tailers poll too;
             # monitor_wait_file above runs the same check while waiting for a
             # lazily-created file). Checked BEFORE the pump, and returning past
-            # drain/chip/cleanup: a post-park pump's O.emit would either
+            # drain/chip (cleanup still runs, parked-gated, as on_exit): a
+            # post-park pump's O.emit would either
             # recreate a fresh empty DB at the live path — whose absence IS the
             # session-alive signal, so the next resume sees reuse-live-db and
             # strands the real history in the park — or, through a cached
@@ -787,13 +819,14 @@ def main(run):
         # finish chip) — this tailer just bows out quietly, no chip of its own, so the
         # two don't race or double-render.
         emit_finish_chip(start, tail, st["override"])
-
-    cleanup(path)
+    # Teardown (tee file, fg-live record, slot release, bg-recheck) is
+    # stream_lifecycle's on_exit — cleanup() — so it also runs when this
+    # function raises or exits on the parked path above.
 
 
 def entry():
     _init(sys.argv)
     with T.stream_lifecycle(LOG, KIND, task_id=TASKID, src_path=SRC,
                             ctx={"kind": KIND, "taskid": TASKID, "md": MD},
-                            on_exit=release_slot) as run:
+                            on_exit=cleanup) as run:
         main(run)

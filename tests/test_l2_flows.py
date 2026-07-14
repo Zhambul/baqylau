@@ -976,23 +976,132 @@ def test_f11_session_end_parks_db_and_substream_exits(run_hook, test_env,
     wait_until(lambda: streams_all_ended(test_env, s.sid),
                desc="substream exits once the DB is parked")
     assert any("parked" in (r or "") for r in end_reasons(test_env, s.sid))
-    # The exiting substream fires a detached bg-recheck that lands a beat
-    # after its stream row closes. Let it fully settle (its transition row is
-    # written before its tab write, so also wait for the tab to reflect an
-    # applied flip), THEN run SessionEnd's other wiring row — the tab clear —
-    # so the recheck can't repaint over the cleared tab.
-    def recheck_settled():
-        rows = [r for r in oracle.transitions(test_env, s.sid)
-                if r[0] == "bg-recheck"]
-        if not rows:
-            return False
-        if rows[-1][3] == 1:       # applied flip -> wait for the tab to show it
-            return oracle.tab_state(test_env, fake_kitten.window_id) == rows[-1][2]
-        return True                 # bailed -> nothing more will be painted
-    wait_until(recheck_settled, timeout=15,
-               desc="the exiting substream's bg-recheck settled")
+    # The exiting substream's cleanup is parked-gated: once the session is over
+    # it makes no state-DB writes and spawns no bg-recheck (see f11b) — so no
+    # recheck can race the SessionEnd tab clear below, and no recheck
+    # transition row exists at all (the stream row above closes AFTER on_exit,
+    # so by now cleanup has already run — this is not a timing window).
+    assert not [r for r in oracle.transitions(test_env, s.sid)
+                if r[0] == "bg-recheck"], \
+        "post-park substream cleanup fired a bg-recheck"
     run_hook(TAB, P.session_end(s), argv=("clear",))
     assert oracle.tab_state(test_env, fake_kitten.window_id) is None
     oracle.assert_clean(test_env, s.sid,
                         allow=("SubagentStart without SubagentStop",
                                "slot claims without a matching release"))
+
+
+def test_f11b_substream_parked_exit_makes_no_state_writes(run_hook, test_env,
+                                                          session):
+    """The parked exit's "no writes past this point" covers cleanup() too: its
+    release_id / agent_set / pid_del all connect to the state DB, so an
+    UNGATED on_exit either recreated a fresh empty DB at the live path (no
+    cached connection — the session-alive-signal hazard) or, through this
+    streamer's cached connection, deleted the slot rows out of the parked
+    snapshot. Gate check: after the parked exit the live path stays absent and
+    the parked snapshot still holds the agent's sub.id + sub.pid live rows
+    exactly as parked."""
+    s = session.make()
+    agent = "agent-" + uuid.uuid4().hex[:8]
+    s.write_subagent_jsonl(agent, [])
+    run_hook("claude-subagent-fmt.py", P.subagent_start(s, agent_id=agent),
+             argv=("start",))
+    s.write_subagent_jsonl(agent, SUB_EVENTS[:3])
+    wait_until(lambda: "scanning the tree now" in s.ops_text(), desc="live")
+
+    run_hook("claude-split.py", P.session_end(s), argv=("close",))  # parks it
+    assert os.path.exists(s.parked_db) and not os.path.exists(s.state_db)
+    wait_until(lambda: streams_all_ended(test_env, s.sid),
+               desc="substream exits once the DB is parked")
+    assert any("state-db-parked" in (r or "")
+               for r in end_reasons(test_env, s.sid))
+
+    # No recreation at the live path (the no-cached-conn failure class) ...
+    assert not os.path.exists(s.state_db), \
+        "post-park cleanup recreated the live state DB"
+    # ... and no pollution of the parked snapshot (the cached-conn class): the
+    # slot rows the SubagentStart hook + streamer claimed are still there,
+    # untouched by release_id/pid_del.
+    conn = sqlite3.connect("file:%s?mode=ro" % s.parked_db, uri=True, timeout=5)
+    try:
+        live = conn.execute("SELECT kind, key FROM live").fetchall()
+    finally:
+        conn.close()
+    assert ("sub.id", agent) in live, \
+        "post-park release_id deleted the slot row from the parked snapshot"
+    assert ("sub.pid", agent) in live, \
+        "post-park pid_del deleted the pid row from the parked snapshot"
+    # And no bg-recheck was spawned for a session that no longer exists.
+    assert not [r for r in oracle.transitions(test_env, s.sid)
+                if r[0] == "bg-recheck"]
+    oracle.assert_clean(test_env, s.sid,
+                        allow=("SubagentStart without SubagentStop",
+                               "slot claims without a matching release"))
+
+
+# -------------------------------------------------------------------- F12
+
+def test_f12_fg_tailer_crash_still_tears_down(test_env, session, monkeypatch):
+    """A crash in the fg tailer's main() (renderer exception, signal) must not
+    leak its teardown: cleanup() is stream_lifecycle's on_exit now, not
+    main()'s last statement — before that, a crash after open_tailer left the
+    tee .out until the 7-day sweep, the fg-live record until the next Bash
+    PreToolUse noticed the dead pid, and never ran the stale-red recheck.
+    Runs the streamer IN-PROCESS (the only way to raise from a chosen phase)
+    with the run identity seeded via the product APIs the launch hooks use."""
+    import sys as _sys
+
+    from core import slots as claude_slots
+    from core import state as S
+    from plugins.claude_code import stream as ST
+
+    # The in-process product code reads the hermetic env at call time.
+    for k in list(os.environ):
+        if k.startswith(("KITTY_", "CLAUDE_")) and k not in test_env:
+            monkeypatch.delenv(k)
+    for k, v in test_env.items():
+        monkeypatch.setenv(k, v)
+
+    s = session.make()
+    src = os.path.join(s.cwd, "tee.out")            # our own tee target (OWN=1)
+    with open(src, "w") as f:
+        f.write("some output\n")
+    done = s.log + ".t1.done"                       # session-keyed sentinel token
+
+    # Seed exactly what claude-cmd-pre.py seeds before spawning the tailer:
+    # the fg-live hand-off (pid = the tailer's — here: this process) + the slot.
+    S.hand_put(s.log, "fg-live",
+               {"tid": "tu_crash", "src": src, "done": done, "pid": os.getpid()})
+    slot, marker = claude_slots.claim("fg", s.log)
+    claude_slots.set_owner(marker, os.getpid())
+    monkeypatch.setenv("CLAUDE_STREAM_SRC", src)
+    monkeypatch.setenv("CLAUDE_STREAM_OWN", "1")
+    monkeypatch.setenv("CLAUDE_STREAM_DONE", done)
+    monkeypatch.setattr(_sys, "argv",
+                        ["claude-stream.py", "fg", "tu_crash", s.log, str(slot)])
+
+    # entry()/_init mutate module globals — register restores so this in-process
+    # run can't leak identity into other tests on the same worker.
+    for name in ("KIND", "TASKID", "LOG", "SIG", "OUTER", "SLOT", "_MARKER",
+                 "SLOT_RGB", "OUTER_RGB", "SRC", "OWN", "DONE", "SKIP_EXISTING",
+                 "POS0", "GROUP", "CMD", "RKIND", "RVALUE", "RENDER_KIND",
+                 "MD", "SNIFF"):
+        monkeypatch.setattr(ST, name, getattr(ST, name))
+    monkeypatch.setattr(ST, "_CLEANED", {"done": False, "path": None})
+    monkeypatch.setattr(ST, "_LSOF_STATE", dict(ST._LSOF_STATE))
+
+    def boom(run, tail):                            # crash right after open_tailer
+        raise RuntimeError("boom mid-stream")
+    monkeypatch.setattr(ST, "make_pump", boom)
+
+    ST.entry()                                      # must swallow the crash
+
+    assert not os.path.exists(src), "crash leaked the tee .out file"
+    assert fg_live_record(s) is None, "crash leaked the fg-live record"
+    assert s.live("fg") == [], "crash leaked the fg slot row"
+    releases = [r for r in oracle.slots(test_env, s.sid)
+                if r[0] == "fg" and r[3] == "release"]
+    assert len(releases) == 1, "slot must be released exactly once: %r" % releases
+    assert any(r[2] == "main" for r in oracle.errors(test_env, s.sid)), \
+        "the crash itself must be audited"
+    assert [r[1] for r in oracle.streams(test_env, s.sid)] == ["crash"]

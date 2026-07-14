@@ -502,6 +502,17 @@ def main(run):
 
 
 def cleanup():
+    # Parked exit: main() returned on the "no writes past this point" path, and
+    # this on_exit must honour it too — release_id / agent_set / pid_del all
+    # connect to the state DB, so past a park they would either recreate a fresh
+    # empty DB at the live path (whose absence IS the session-alive signal — the
+    # next resume then sees reuse-live-db and strands the history in the park)
+    # or, through this streamer's cached connection, mutate the parked snapshot.
+    # The bg-recheck below is equally moot post-park: the session is over,
+    # SessionEnd already cleared the tab, and the tracker's mode=ro probe of a
+    # gone DB has nothing to decide. Same gate stream.py's cleanup runs.
+    if S.parked(LOG):
+        return
     # Release this agent's markers FIRST (so the recheck below doesn't see our own
     # still-live sub.pid), then ask claude-tab-status.py to flip a stale bg-running
     # blue back to green — a background agent finishing has no other hook to do it.
