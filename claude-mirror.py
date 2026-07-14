@@ -109,7 +109,6 @@ MAX_OPS = 8000
 ROW_BUDGET = int(os.environ.get("CLAUDE_MIRROR_SCROLLBACK", "4800"))
 
 OPS = []            # parsed ops (capped), for repaint-on-resize
-_resized = True     # paint once at startup (and whenever a SIGWINCH arrives)
 
 
 def width():
@@ -295,14 +294,13 @@ def _height():
 
 
 def repaint():
-    global _PAINTED_SIZE
     w = width()
     body = frame_bytes(w)
     try:
         sys.stdout.write(body); sys.stdout.flush()
     except Exception:
         pass
-    _PAINTED_SIZE = (w, _height())
+    L.painted_size = (w, _height())
     _audit_paint("repaint", w, body)
 
 
@@ -331,8 +329,7 @@ def paint_new(ops):
 
 
 def _on_winch(signum, frame):
-    global _resized
-    _resized = True
+    L.resized = True
 
 
 def trim_to_budget(w):
@@ -369,16 +366,12 @@ def measure(gid):
 
 
 _TTY_OK = False      # stdin switched to no-echo/non-canonical (DSR handshake usable)
-_LAST_CAP0 = None    # first line of locate_viewport's last capture (audit evidence)
-_LOC_ROWS = None     # rendered row count from locate_viewport's last successful run
-_PAINTED_SIZE = None  # (w, h) of the last full frame — the spurious-WINCH gate
-_FORCE_PAINT = True  # next plain repaint must run even at an unchanged size
-_WATCH_UNTIL = 0.0   # post-toggle drift watch deadline (monotonic)
-_WATCH_POS = None    # last verified viewport offset during the watch
-_WATCH_HOME = None   # the toggle's verified landing — the settle-guard target
-_GUARD_UNTIL = 0.0   # settle-guard deadline (monotonic) — the pane's position
-#                      belongs to the TOGGLE until then, not to input
-_GUARD_LEFT = 0      # settle-guard corrections remaining for this toggle
+
+# A first miss this gross (rows) is not scroll-unit bias — it means residual
+# trackpad momentum raced the restore itself, so the fix is redoing the
+# absolute restore, not a delta correction (toggle_repaint), and a landing
+# this far off must not be "converged" onto by restore_to.
+GROSS_MISS_ROWS = 400
 
 
 def tty_setup():
@@ -441,7 +434,6 @@ def locate_viewport(w, tag=None, near=None):
     so this stays ~O(matches) instead of O(rows·h); full scan is the
     fallback. None (audited when `tag` names the caller) when anchorless or
     nothing matches confidently."""
-    global _LAST_CAP0, _LOC_ROWS
 
     def _bail(reason, extra=None):
         # EVERY null path leaves evidence when `tag` names a caller that will
@@ -475,11 +467,11 @@ def locate_viewport(w, tag=None, near=None):
         cap.pop()
     if not cap:
         return _bail("empty capture")
-    _LAST_CAP0 = cap[0][:60]
+    L.last_cap0 = cap[0][:60]
     rows = [R.strip_ansi(BANNER).rstrip()]
     for _, _, _, rtxt in iter_painted(w):
         rows.extend(r.rstrip() for r in R.strip_ansi(rtxt).split("\n"))
-    _LOC_ROWS = len(rows)
+    L.loc_rows = len(rows)
     # Candidate offsets from a distinctive probe row; full scan as fallback.
     cands = None
     for k, line in enumerate(cap[:12]):
@@ -531,7 +523,8 @@ def restore_to(j0):
         fe = _fe()
         ok = _restore(fe, win, total + 1 - h - j0)
         landed = locate_viewport(w, near=j0)
-        if landed is not None and landed != j0 and abs(landed - j0) <= 400:
+        if landed is not None and landed != j0 \
+                and abs(landed - j0) <= GROSS_MISS_ROWS:
             fe.scroll_window_fast(win, landed - j0)   # converge exactly
         return ok
     except Exception:
@@ -589,7 +582,6 @@ def toggle_repaint(gid, j0, follow=False):
 
     Returns the result dict merged into the caller's view-reflow audit row
     (up / applied / dsr / landed / retried / follow)."""
-    global _PAINTED_SIZE
     win = os.environ.get("KITTY_WINDOW_ID")
     w = width()
     body = frame_bytes(w)
@@ -610,7 +602,7 @@ def toggle_repaint(gid, j0, follow=False):
         sys.stdout.write(body + "\033[6n"); sys.stdout.flush()
     except Exception:
         return {"up": up, "applied": False}
-    _PAINTED_SIZE = (w, h)
+    L.painted_size = (w, h)
     _audit_paint("toggle", w, body)
     dsr = await_dsr(1.0)
     applied, landed, retried = False, None, False
@@ -629,7 +621,7 @@ def toggle_repaint(gid, j0, follow=False):
             # scrolls by the measured error (never by re-running the same
             # absolute amount — a systematic bias like kitty's visual-line
             # scroll units vs these logical rows reproduces identically and
-            # never converges). A GROSS first miss (>400) means residual
+            # never converges). A GROSS first miss (>GROSS_MISS_ROWS) means residual
             # trackpad momentum raced the restore itself — redo the absolute
             # restore once, then delta-correct.
             for i in range(3):
@@ -637,7 +629,7 @@ def toggle_repaint(gid, j0, follow=False):
                     break
                 retried = True
                 try:
-                    if abs(landed - j0) > 400 and i == 0:
+                    if abs(landed - j0) > GROSS_MISS_ROWS and i == 0:
                         _restore(fe, win, up)
                     else:
                         fe.scroll_window_fast(win, landed - j0)
@@ -655,22 +647,52 @@ def toggle_repaint(gid, j0, follow=False):
 
 # --- main-loop phases -------------------------------------------------------
 # main() is a fixed sequence of phase functions sharing one small mutable
-# context (`_Loop`) plus the module globals above. The ORDER of phases is
-# load-bearing (toggle planning must precede the reflow dispatch; the settle
-# guard runs after it; the wait picks its tick from the guard) — each phase
-# below is the corresponding block of the old monolithic loop, moved verbatim.
+# context: the single module-level `_Loop` instance `L` below. The ORDER of
+# phases is load-bearing (toggle planning must precede the reflow dispatch; the
+# settle guard runs after it; the wait picks its tick from the guard) — each
+# phase below is the corresponding block of the old monolithic loop, moved
+# verbatim.
 
 
 class _Loop:
-    """The per-iteration loop state the phases hand each other."""
+    """ALL the loop-owned mutable state: the per-iteration fields the phases
+    hand each other, plus the toggle/watch/guard/paint state that used to be
+    module globals. One module-level instance (`L`) so everything — the phase
+    functions, the paint/locate helpers they call, and the SIGWINCH handler —
+    mutates the same object without `global` declarations."""
     __slots__ = ("db", "wake_r", "last", "ino", "cur_ino",
-                 "toggled", "t_idx", "anchor", "follow")
+                 "toggled", "t_idx", "anchor", "follow",
+                 "resized", "force_paint", "painted_size",
+                 "last_cap0", "loc_rows",
+                 "watch_until", "watch_pos", "watch_home",
+                 "guard_until", "guard_left")
 
-    def __init__(self, db, wake_r):
-        self.db, self.wake_r = db, wake_r
+    def __init__(self):
+        self.db, self.wake_r = None, None       # filled in by main()
         self.last, self.ino, self.cur_ino = 0, None, None
         self.toggled, self.t_idx, self.anchor, self.follow = \
             None, None, None, False
+        self.resized = True       # paint once at startup (and on any SIGWINCH)
+        self.force_paint = True   # next plain repaint must run even at an
+        #                           unchanged size
+        self.painted_size = None  # (w, h) of the last full frame — the
+        #                           spurious-WINCH gate
+        self.last_cap0 = None     # first line of locate_viewport's last
+        #                           capture (audit evidence)
+        self.loc_rows = None      # rendered row count from locate_viewport's
+        #                           last successful run
+        self.watch_until = 0.0    # post-toggle drift watch deadline (monotonic)
+        self.watch_pos = None     # last verified viewport offset during the watch
+        self.watch_home = None    # the toggle's verified landing — the
+        #                           settle-guard target
+        self.guard_until = 0.0    # settle-guard deadline (monotonic) — the
+        #                           pane's position belongs to the TOGGLE
+        #                           until then, not to input
+        self.guard_left = 0       # settle-guard corrections remaining for
+        #                           this toggle
+
+
+L = _Loop()
 
 
 def sync_inode(L):
@@ -679,7 +701,6 @@ def sync_inode(L):
     cycle) leaves the cached connection pointing at the OLD inode — drop it
     and re-read from the top. A missing DB just means no producer has
     written yet (or a resume is mid-restore): keep waiting, don't reset."""
-    global _resized, _FORCE_PAINT
     try:
         L.cur_ino = os.stat(L.db).st_ino
     except OSError:
@@ -700,7 +721,7 @@ def sync_inode(L):
                     pass
             L.last, OPS[:] = 0, []
             VIEW_OPEN.clear(); _VIEW_OPS.clear()
-            _resized = _FORCE_PAINT = True
+            L.resized = L.force_paint = True
         L.ino = L.cur_ino
         # ADOPT the persisted open-set silently: at startup (and after a
         # park/restore reset) the kv `view-open` rows are inherited state,
@@ -724,11 +745,10 @@ def drain_ops(L):
     """Drain any new ops appended to the table. Returns (new_ops, restart) —
     restart True means the table shrank under us and the loop must start the
     iteration over (the old `continue`)."""
-    global _resized, _FORCE_PAINT
     L.last, new = St.ops_after(LOG, L.last)
     if L.last < 0:                       # table shrank under us — restart
         L.last, OPS[:] = 0, []
-        _resized = _FORCE_PAINT = True
+        L.resized = L.force_paint = True
         return new, True
     OPS.extend(new)
     # Bound memory on a long session by dropping oldest ops from the in-memory
@@ -751,7 +771,6 @@ def poll_toggles(L):
     find the toggled line's offset and recover the current viewport
     top (the anchor must match against the PRE-toggle rendered rows —
     exactly what's on screen right now)."""
-    global _resized
     try:
         cur_open = set(St.kv_get(LOG, "view-open") or [])
     except Exception:
@@ -765,7 +784,7 @@ def poll_toggles(L):
         L.t_idx = L.anchor = None
         L.follow = False
         # Plan UNCONDITIONALLY — in particular do NOT skip when
-        # _resized is set: the click handler's own SIGWINCH nudge sets
+        # L.resized is set: the click handler's own SIGWINCH nudge sets
         # it before this branch ever runs, so gating on it silently
         # disabled the anchor for every nudged toggle (the pane then
         # parked at the bottom — the "scrolls to the very end" bug).
@@ -790,20 +809,18 @@ def poll_toggles(L):
                 # small tolerance absorbs the logical-vs-visual line
                 # bias in the bottom math (wrapped rows).
                 h = _height()
-                if (L.anchor is not None and h and _LOC_ROWS
-                        and L.anchor >= _LOC_ROWS + 1 - h - 1):
+                if (L.anchor is not None and h and L.loc_rows
+                        and L.anchor >= L.loc_rows + 1 - h - 1):
                     L.follow = True
         VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
-        _resized = True
+        L.resized = True
 
 
 def dispatch_reflow(L, new):
     """Reflow dispatch: startup / resize / toggle -> full reflow (toggle plan
     wins over a plain repaint); otherwise just append-paint the new ops."""
-    global _resized, _FORCE_PAINT, _WATCH_UNTIL, _WATCH_POS, \
-        _WATCH_HOME, _GUARD_UNTIL, _GUARD_LEFT
-    if _resized:                         # startup / resize / toggle -> reflow
-        _resized = False
+    if L.resized:                        # startup / resize / toggle -> reflow
+        L.resized = False
         if L.toggled:
             res = {}
             if L.t_idx is not None:
@@ -823,7 +840,7 @@ def dispatch_reflow(L, new):
                 A.state_file(LOG, St.db_path(LOG), "view-reflow",
                              dict({"gid": L.toggled, "idx": L.t_idx,
                                    "anchor": L.anchor,
-                                   "cap0": _LAST_CAP0}, **res))
+                                   "cap0": L.last_cap0}, **res))
             except Exception:
                 pass
             L.toggled, L.t_idx, L.anchor, L.follow = None, None, None, False
@@ -835,18 +852,18 @@ def dispatch_reflow(L, new):
             # a user wheel-scroll shows as gradual steps, a bug as one
             # instant leap.
             if res.get("landed") is not None:
-                _WATCH_UNTIL = time.monotonic() + 8.0
-                _WATCH_POS = res["landed"]
+                L.watch_until = time.monotonic() + 8.0
+                L.watch_pos = res["landed"]
                 # The guard defends the INTENDED anchor, not the measured
                 # landing — momentum in flight DURING the restore corrupts
                 # the landing itself, and adopting it as home left the
                 # guard defending the wrong place (observed: landed 1176
                 # off, guard content).
-                _WATCH_HOME = res.get("home", res["landed"])
-                _GUARD_UNTIL = time.monotonic() + 0.7
-                _GUARD_LEFT = 2
-        elif _FORCE_PAINT or (width(), _height()) != _PAINTED_SIZE:
-            _FORCE_PAINT = False
+                L.watch_home = res.get("home", res["landed"])
+                L.guard_until = time.monotonic() + 0.7
+                L.guard_left = 2
+        elif L.force_paint or (width(), _height()) != L.painted_size:
+            L.force_paint = False
             repaint()
         else:
             # A WINCH with an UNCHANGED size and no toggle plan (a stray
@@ -868,12 +885,11 @@ def drift_watch():
     live at +224ms with no rc actor and no repaint) — scroll it back,
     once per toggle. Deliberate post-click navigation starts later
     (observed at +1100ms) and is never fought."""
-    global _WATCH_UNTIL, _WATCH_POS, _GUARD_LEFT
-    if not _WATCH_UNTIL:
+    if not L.watch_until:
         return
     now = time.monotonic()
-    if now < _WATCH_UNTIL:
-        j = locate_viewport(width(), near=_WATCH_POS)
+    if now < L.watch_until:
+        j = locate_viewport(width(), near=L.watch_pos)
         if j is not None:
             # SETTLE GUARD: for the first ~700ms after a verified
             # landing the pane's position belongs to the TOGGLE, not
@@ -887,25 +903,25 @@ def drift_watch():
             # are ABSOLUTE (recomputed against current content) —
             # a relative fix against a still-moving target amplifies.
             corrected = False
-            if (now < _GUARD_UNTIL and _GUARD_LEFT > 0
-                    and _WATCH_HOME is not None
-                    and abs(j - _WATCH_HOME) > 5):
-                corrected = restore_to(_WATCH_HOME)
+            if (now < L.guard_until and L.guard_left > 0
+                    and L.watch_home is not None
+                    and abs(j - L.watch_home) > 5):
+                corrected = restore_to(L.watch_home)
                 if corrected:
-                    _GUARD_LEFT -= 1
-            if corrected or (_WATCH_POS is not None
-                             and j != _WATCH_POS):
+                    L.guard_left -= 1
+            if corrected or (L.watch_pos is not None
+                             and j != L.watch_pos):
                 try:
                     A.state_file(LOG, St.db_path(LOG), "view-drift",
-                                 {"from": _WATCH_POS, "to": j,
-                                  "left_ms": int((_WATCH_UNTIL - now)
+                                 {"from": L.watch_pos, "to": j,
+                                  "left_ms": int((L.watch_until - now)
                                                  * 1000),
                                   "corrected": corrected})
                 except Exception:
                     pass
-            _WATCH_POS = _WATCH_HOME if corrected else j
+            L.watch_pos = L.watch_home if corrected else j
     else:
-        _WATCH_UNTIL, _WATCH_POS = 0.0, None
+        L.watch_until, L.watch_pos = 0.0, None
 
 
 def wait_tick(L):
@@ -915,7 +931,7 @@ def wait_tick(L):
     the landing, and the sooner a displacement is caught the smaller
     the visible wobble."""
     try:
-        guarding = _GUARD_UNTIL and time.monotonic() < _GUARD_UNTIL
+        guarding = L.guard_until and time.monotonic() < L.guard_until
         if select.select([L.wake_r], [], [], 0.08 if guarding else 0.2)[0]:
             os.read(L.wake_r, 4096)
     except Exception:
@@ -942,7 +958,7 @@ def main():
     signal.signal(signal.SIGWINCH, _on_winch)
     tty_setup()
 
-    L = _Loop(St.db_path(LOG), wake_r)
+    L.db, L.wake_r = St.db_path(LOG), wake_r
     while True:
         sync_inode(L)
         new = []

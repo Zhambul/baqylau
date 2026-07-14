@@ -195,7 +195,8 @@ parts:
   `view-reflow` audit row (gid/idx/anchor/cap0/up/applied/dsr/landed/
   retried/follow) and every full reflow a `paint` row (width/rows/ops/open)
   — the pair that cracked three live regressions: the nudge SIGWINCH setting
-  `_resized`, whose planning guard then skipped the anchor entirely (guard
+  the resized flag (now `L.resized`), whose planning guard then skipped the
+  anchor entirely (guard
   removed); an off-by-one in the restore amount (the repaint's trailing
   newline leaves the cursor on an extra row, so the parked frame top is
   `total+1-h`, verified against `get-text`); and the poisoned-output replay
