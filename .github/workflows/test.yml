@@ -22,7 +22,7 @@ jobs:
       # (retarget-python.py's speed hack); --revert restores the portable
       # `#!/usr/bin/env python3` so the few shebang-exec'd paths
       # (claude_hook.notify_tab) resolve on the runner.
-      - run: python3 retarget-python.py --revert
+      - run: python3 bin/retarget-python.py --revert
       - run: python3 -m pip install -r requirements-dev.txt
       # pytest-timeout must scale in LOCKSTEP with conftest's WAIT_SCALE (6x on
       # CI): pytest.ini's 30s is sized for local runs, and an unscaled per-test
