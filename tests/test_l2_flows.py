@@ -842,10 +842,12 @@ def test_f9c_interrupted_reply_flips_green(run_hook, test_env, session,
 
     run_hook(TAB, P.user_prompt(s), argv=("thinking",))
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "thinking"
-    # At test poll speed the first watcher can beat the paint and exit
-    # turn-over on the still-empty tab row; re-running the dispatch re-ensures
-    # one (production's 0.5s first tick never loses this race).
-    run_hook(TAB, P.user_prompt(s), argv=("thinking",))
+    # The watcher spawns BEFORE the paint, but no longer exits turn-over on a
+    # green/idle/empty row it sees before ANY mid-turn paint landed this run
+    # (the premature-turn-over race: a failed/lagging THINKING paint left the
+    # previous turn's green in the row and the watcher's first tick killed it,
+    # leaving a later cancel with no recovery) — so one dispatch suffices even
+    # at test poll speed.
     wait_until(watcher_alive, desc="a live interrupt-watch on the magenta tab")
     # The interrupt must land AFTER the watcher's transcript-size snapshot, and
     # that snapshot immediately follows its A.stream_start registration — so

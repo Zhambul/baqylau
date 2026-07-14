@@ -176,7 +176,24 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     copy already showed isn't repeated; and not from the size at the tailer's own
     OPEN time, which skipped (lost forever) any output that landed while the
     tailer was still starting up.
-  - **A manually cancelled command** fires no hook at all (the
+    - **Hand-off ordering is deliberate: sentinel first, then pos0, then
+      spawn.** `claude-cmd-fmt.py` writes the `converted` sentinel *before*
+      measuring pos0. The theoretical duplicate window is a line that lands in
+      the tee file after the fg tailer's last pre-sentinel pump AND in the task
+      output file after pos0 — the fg tailer does one final tee pump in its
+      drain after taking the sentinel, and the bg tailer replays everything
+      past pos0. That window requires the tee to keep receiving output *after*
+      the Ctrl+B conversion, which contradicts the observed behavior above
+      (post-keypress output stops landing in the tee entirely, and cmd-fmt
+      only runs after the keypress) — so it is theoretical, never observed.
+      Swapping the order (pos0 before the sentinel) would *widen* it: an
+      earlier, smaller pos0 makes the bg tailer replay more of the task file,
+      including content the tee copy showed between the two moments. And
+      clamping the fg tailer's drain ("emit nothing pumped after the
+      sentinel") trades the never-observed dupe for a possible *drop* — a
+      line that only ever reached the tee (e.g. on a build where the tee stays
+      attached) would then render nowhere, and losing output is worse than
+      showing it twice. Current behavior is pinned; don't reorder.
     no-hook-on-interrupt gap noted throughout this doc), so `claude-cmd-fmt.py`'s normal consume of
     the `fg-live` record (a state-DB hand-off, key `fg-live` — was a `.fg-live`
     JSON file) never runs. Left alone, that stale record would make

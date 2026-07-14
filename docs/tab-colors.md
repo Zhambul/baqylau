@@ -149,7 +149,18 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   originally exited the moment the state left magenta — but the first Bash/Task
   pretool sets `executing`, so the watcher died at the turn's first tool call and
   a cancel *later* in the same turn, e.g. Esc during the long reply after a
-  command finished, had no recovery at all: stuck magenta.) On seeing the
+  command finished, had no recovery at all: stuck magenta.) Green/idle/cleared
+  only count once the watcher has seen a **mid-turn state this run**: it is
+  spawned *before* `d_thinking`'s paint, and the tab row is written only on an
+  *applied* paint — so a THINKING paint that failed (transient socket error) or
+  lagged past the first 0.5s tick left the previous turn's green in the row, the
+  ungated watcher exited `turn-over` immediately, and a cancel later that turn
+  (after a later paint succeeded) had no recovery at all. Writing the row before
+  the paint is not an option — persisting failed paints stranded colours (the
+  dedup bug above). The gate's cost: a turn whose paints *all* fail keeps the
+  watcher alive until its 30m ceiling, which is harmless (the next prompt reuses
+  it via the pid lock). The stale sample is audited once
+  ("stale pre-turn row — paint failed/lagged"). On seeing the
   interrupt line it re-checks the state: green/idle means the turn already
   resolved (do nothing); blue means a live command/agent whose own
   writer-liveness recovery is faster and authoritative (defer, or it would race

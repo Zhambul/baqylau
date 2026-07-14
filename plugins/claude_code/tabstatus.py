@@ -381,6 +381,20 @@ def run_interruptwatch(transcript):
         except OSError:
             pos = 0
         poll = WATCH_POLL_S or 0.5
+        # Green/idle/cleared end the watch ONLY once a mid-turn state has been
+        # seen THIS run. The watcher is spawned by d_thinking BEFORE main()
+        # paints THINKING, and the tab row is written only on an APPLIED paint
+        # (rc==0) — so if that paint fails (transient socket error) or lags
+        # past the first 0.5s tick, the row still holds the PREVIOUS turn's
+        # green and an ungated check exited "turn-over" at once. A later paint
+        # this turn then succeeded (magenta/blue), and a cancel after it had no
+        # recovery at all: stuck magenta until the next interaction. (Writing
+        # the row before/regardless of the paint isn't an option — persisting
+        # failed paints stranded colours, the dedup bug main() documents.)
+        # Cost of the gate: a turn whose paints ALL fail keeps the watcher
+        # alive until the interrupt-max ceiling — harmless, and the next
+        # prompt's ensure_interruptwatch reuses it via the live pid lock.
+        seen_midturn = stale_audited = False
         for _ in range(max(1, int(INTERRUPT_MAX_S / poll))):
             time.sleep(poll)
             # Keep watching through the WHOLE turn (magenta/blue/red are all
@@ -391,9 +405,21 @@ def run_interruptwatch(transcript):
             # (the fg tailer only covers a cancel while its command runs):
             # stuck magenta until the next interaction. Only green/idle/cleared
             # mean the turn is over and there is nothing left to recover.
-            if tab_get(_win()) in (AWAITING_RESPONSE, IDLE, ""):
-                reason = "turn-over"        # green/idle/cleared -> nothing to do
-                return None
+            cur = tab_get(_win())
+            if cur in (AWAITING_RESPONSE, IDLE, ""):
+                if seen_midturn:
+                    reason = "turn-over"    # green/idle/cleared -> nothing to do
+                    return None
+                # Pre-turn stale row (the THINKING paint failed or hasn't
+                # landed yet) — keep watching; audited once so a lagging paint
+                # leaves evidence.
+                if cur and not stale_audited:
+                    stale_audited = True
+                    audit_tx(cur, "", 0,
+                             "interrupt-watch: stale pre-turn row — paint "
+                             "failed/lagged, keep watching")
+            else:
+                seen_midturn = True
             try:
                 size = os.path.getsize(transcript)
             except OSError:

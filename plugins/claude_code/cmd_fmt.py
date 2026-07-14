@@ -108,6 +108,10 @@ def _render_background(d, cmd, taskid, converted, done):
         slot, slot_marker, head_rgb = None, None, LBL_BG
 
     if converted and done:
+        # ORDERING (deliberate — docs/streaming.md "Hand-off ordering"): the
+        # converted sentinel goes out FIRST, pos0 is measured after it, below.
+        # pos0-first would widen the theoretical dupe window (a smaller pos0
+        # replays task-file content the departing tee copy already showed).
         # Our own fg tailer was tee-ing this command's own side file — but once
         # Ctrl+B hands it off, Claude Code captures further output into its OWN
         # backgroundTaskId file instead (empirically: our tee file gets nothing

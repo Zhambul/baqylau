@@ -147,7 +147,14 @@ New always-audited swallow sites (previously silent — their absence used to ma
   handed recovery to writer-liveness; the watcher now spans the WHOLE turn, so a
   `turn-over` exit *before* the stuck stretch means it was killed or never
   respawned, not that it legitimately stopped at the first tool call), and
-  whether the final apply carried a "kitten @ failed" reason.
+  whether the final apply carried a "kitten @ failed" reason. `turn-over` is
+  also GATED on having seen a mid-turn state that run: an immediate turn-over on
+  the previous turn's stale green (the watcher spawns before d_thinking's paint,
+  and a failed/lagging paint leaves the old row) was the premature-exit race —
+  its tell is a `tab_transitions` row with reason "interrupt-watch: stale
+  pre-turn row — paint failed/lagged, keep watching" (the gate working); a
+  `turn-over` within ~1s of the UserPromptSubmit with NO applied mid-turn paint
+  before it means the gate regressed.
 - **Tab flips green too early** — a `bg-recheck`/`bg-watch`/`notify` transition with
   `applied=1` while a `streams` row was still open; the reason column shows what it
   (wrongly) concluded.

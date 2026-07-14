@@ -280,6 +280,90 @@ def test_probe_never_creates_state_db(run_hook, test_env, session, fake_kitten):
     assert not os.path.exists(s.state_db)
 
 
+# ------------------------------------------- interrupt-watch turn-over gate
+
+def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None):
+    """Run run_interruptwatch in-process, fully sequenced (no timing races):
+    tab_get returns states[i] on its i-th call (last value repeats), and the
+    synthetic interrupt line is appended to the transcript during tab_get call
+    number `interrupt_at` (None = never). Returns (resolved_state, end_reason,
+    [audited transition reasons])."""
+    import sys as _sys
+    from conftest import REPO
+    if REPO not in _sys.path:
+        _sys.path.insert(0, REPO)
+    import plugins.claude_code.tabstatus as T
+
+    transcript = tmp_path / "sess-x.jsonl"
+    transcript.write_text('{"type":"user"}\n')
+    ended, reasons = {}, []
+
+    class _A:
+        def stream_start(self, *a, **k):
+            return 7
+
+        def stream_end(self, sid, reason):
+            ended["reason"] = reason
+
+        def transition(self, sid, win, dispatch, prev, new, applied, reason):
+            reasons.append(reason)
+
+    tick = {"n": -1}
+
+    def fake_tab_get(win):
+        tick["n"] += 1
+        if interrupt_at is not None and tick["n"] == interrupt_at:
+            with open(transcript, "a") as f:
+                f.write('{"text":"[Request interrupted by user]"}\n')
+        return states[min(tick["n"], len(states) - 1)]
+
+    monkeypatch.setattr(T, "WIN", "9")
+    monkeypatch.setattr(T, "A", _A())
+    monkeypatch.setattr(T, "watcher_del", lambda *a, **k: None)
+    monkeypatch.setattr(T, "tab_get", fake_tab_get)
+    monkeypatch.setattr(T, "WATCH_POLL_S", 0.001)
+    return T.run_interruptwatch(str(transcript)), ended.get("reason"), reasons
+
+
+def test_interruptwatch_survives_stale_preturn_green(monkeypatch, tmp_path):
+    """The premature-turn-over race: the watcher is spawned BEFORE d_thinking's
+    paint, and a failed/lagging paint leaves the PREVIOUS turn's green in the
+    tab row — the watcher must keep watching (not exit turn-over) until it has
+    seen a mid-turn state this run, so a cancel later in the turn still flips
+    green. Ticks 0-1 show the stale green; the paint lands at tick 2; the
+    cancel arrives at tick 3 on magenta."""
+    state, reason, reasons = _drive_interruptwatch(
+        monkeypatch, tmp_path,
+        states=["awaiting-response", "awaiting-response", "thinking", "working"],
+        interrupt_at=3)
+    assert state == "awaiting-response", \
+        "watcher exited on the stale pre-turn green (premature turn-over)"
+    assert reason == "interrupt-detected-flipped-green"
+    assert sum("stale pre-turn row" in r for r in reasons) == 1  # audited once
+
+
+def test_interruptwatch_still_exits_on_genuine_turn_over(monkeypatch, tmp_path):
+    """Once a mid-turn state HAS been seen, green means the turn resolved on
+    its own — the watcher must still exit turn-over (the gate must not turn it
+    into a whole-session watcher)."""
+    state, reason, _ = _drive_interruptwatch(
+        monkeypatch, tmp_path,
+        states=["thinking", "working", "awaiting-response"])
+    assert state is None
+    assert reason == "turn-over"
+
+
+def test_interruptwatch_recheck_defers_when_turn_resolved(monkeypatch, tmp_path):
+    """The post-interrupt re-check is unchanged: interrupt seen but the tab is
+    already green (the turn resolved concurrently) -> do nothing."""
+    state, reason, _ = _drive_interruptwatch(
+        monkeypatch, tmp_path,
+        states=["thinking", "working", "awaiting-response"],
+        interrupt_at=1)
+    assert state is None
+    assert reason == "interrupt-seen-but-turn-already-over"
+
+
 # ------------------------------------------------- frontend substitutability
 
 def _spawn_watcher_with(monkeypatch, fe):
