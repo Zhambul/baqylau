@@ -18,8 +18,8 @@ from frontends.base import Frontend, INACTIVE_FG, TAB_COLOR_NONE
 
 # Timeout for mutating `kitten @` calls (kitten_run): kitten has its own
 # client-side response timeout, but a hang on socket CONNECT is unbounded, and
-# every tab paint and split op runs through here from hook processes — which
-# must never block.
+# every split op (and every tab paint whose raw-socket attempt missed) runs
+# through here from hook processes — which must never block.
 KITTEN_TIMEOUT_S = 10
 # Tighter timeout for read-only queries (get-text / ls): they run on hot paths
 # (renderer reflow, geometry probes) where a stale answer is useless anyway.
@@ -122,6 +122,15 @@ def set_tab_color(kitten, listen, win, active_bg, active_fg, inactive_bg,
                       f"inactive_bg={inactive_bg}", f"inactive_fg={inactive_fg}")
 
 
+def _tab_color_int(v):
+    """One set-tab-color VALUE, kitten-CLI grammar → RC-payload wire form:
+    "NONE" → None (JSON null), "#rrggbb" → the 24-bit RGB integer — exactly
+    what the kitten client itself puts in the @kitty-cmd payload (captured
+    live: `active_bg=#ff00aa` travels as `"active_bg": 16711850`,
+    `inactive_fg=NONE` as `"inactive_fg": null`)."""
+    return None if v == TAB_COLOR_NONE else int(v.lstrip("#"), 16)
+
+
 def _is_socket(p):
     try:
         return stat.S_ISSOCK(os.stat(p).st_mode)
@@ -182,13 +191,34 @@ class KittyFrontend(Frontend):
     # --- tab colour -----------------------------------------------------------
     def set_tab_color(self, win, active_bg, active_fg, inactive_bg,
                       inactive_fg=INACTIVE_FG):
+        # Raw socket first (~0.1ms vs the ~20-100ms kitten subprocess — this
+        # runs on the BLOCKING hook path several times per turn), kitten
+        # subprocess as the no-socket fallback. The raw exchange REQUESTS the
+        # response and maps it to the same exit-code contract the subprocess
+        # gives (`ok` → 0, else 1): the tab DB row is persisted only on rc==0,
+        # and a fire-and-forget "success" here would report paints that never
+        # landed — the stranded-colour bug class set_tab_color's docstring
+        # exists to prevent. Only a socket miss (None) falls back; a definitive
+        # ok:false from kitty is the answer, not a reason to retry slower.
+        try:
+            colors = {"active_bg": _tab_color_int(active_bg),
+                      "active_fg": _tab_color_int(active_fg),
+                      "inactive_bg": _tab_color_int(inactive_bg),
+                      "inactive_fg": _tab_color_int(inactive_fg)}
+        except (ValueError, AttributeError):   # unparseable value: let kitten
+            colors = None                      # produce its own rc
+        if colors is not None:
+            r = self._rc_raw("set-tab-color",
+                             {"match": "window_id:%s" % win, "colors": colors},
+                             want_response=True)
+            if isinstance(r, dict):
+                return 0 if r.get("ok") else 1
         return set_tab_color(self.kitten, self.listen, win, active_bg,
                              active_fg, inactive_bg, inactive_fg)
 
     def clear_tab_color(self, win):
-        return set_tab_color(self.kitten, self.listen, win,
-                             TAB_COLOR_NONE, TAB_COLOR_NONE, TAB_COLOR_NONE,
-                             inactive_fg=TAB_COLOR_NONE)
+        return self.set_tab_color(win, TAB_COLOR_NONE, TAB_COLOR_NONE,
+                                  TAB_COLOR_NONE, inactive_fg=TAB_COLOR_NONE)
 
     # --- window enumeration -----------------------------------------------------
     def ls(self):
@@ -253,7 +283,9 @@ class KittyFrontend(Frontend):
         spawn. The wire bytes are exactly what the kitten client sends
         (captured live): ESC P @kitty-cmd {json} ESC \\, with the reply (when
         requested) framed the same way. Speed is load-bearing for the mirror
-        renderer: get-text runs on every click-to-view toggle, and the scroll
+        renderer AND the hook path: get-text runs on every click-to-view
+        toggle, the tab paint (set_tab_color) runs on the BLOCKING hook path
+        several times per turn, and the scroll
         runs INSIDE its DEC 2026 freeze bracket, where a subprocess outlives
         kitty's render-freeze window and exposes the intermediate frame (the
         toggle flicker). Returns the parsed response dict, True (fire-and-

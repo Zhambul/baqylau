@@ -28,3 +28,13 @@ Any session started with the timing knobs set is self-evident in the audit:
 `CLAUDE_CODEX_*`/`CLAUDE_OTEL_*` (and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
 side is injected via the pre-existing `KITTY_KITTEN_BIN` override (a recorder
 script standing in for `kitten`), so no product code special-cases tests.
+Calls that take the RAW `@kitty-cmd` socket path (`frontends/kitty.py
+_rc_raw` — get-text, the freeze-bracket scrolls, the tab paint) never spawn
+`kitten`, so the recorder can't see them; the `fake_rc_socket` fixture
+(`conftest.FakeRCServer`) stands up a live AF_UNIX socket speaking the DCS
+framing, records every decoded command envelope, and replies with a
+programmable `{"ok": …}` — wire it into `KITTY_LISTEN_ON` alongside the
+recorder to assert exact raw frames (`test_l0_frontends_contract.py`,
+`test_l3_tab.py`). Without it, the default dead socket path makes the raw
+attempt miss and every call falls back to the recorder — which is why the
+pre-raw-path tests keep passing unchanged.

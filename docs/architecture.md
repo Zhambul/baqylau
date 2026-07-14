@@ -158,7 +158,12 @@ grep-style test keeps every module outside `frontends/` off kitty-only
 internals (the tabstatus `FE.listen` leak class).
 `frontends/kitty.py` is the kitty implementation (absorbing the old
 `claude_kitty.py` helpers, `claude-split.py`'s socket resolution, and the
-kitty-specific `neighbors`/`groups` geometry walk). `frontends.get()` selects
+kitty-specific `neighbors`/`groups` geometry walk). Latency-critical calls —
+`get_text`, the freeze-bracket scrolls, and the hook-path tab paint
+(`set_tab_color`/`clear_tab_color`) — go over a raw `@kitty-cmd` unix-socket
+exchange (`_rc_raw`, ~0.1 ms) with the `kitten` subprocess (~20-100 ms) as the
+no-socket fallback; the tab paint *requests* kitty's `{"ok": …}` response so
+callers still get the real exit code (docs/tab-colors.md, *How it works*). `frontends.get()` selects
 the active frontend — `$CLAUDE_FRONTEND` pins one, default kitty — so
 supporting iTerm2/ghostty later means one new sibling module plus a detection
 line, with `claude-tab-status.py` / `claude-split.py` / `claude-scorebar.py`

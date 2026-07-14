@@ -10,8 +10,10 @@ import json
 import os
 import signal
 import sqlite3
+import socket
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -274,6 +276,92 @@ def fake_kitten(test_env, tmp_path):
     test_env["KITTY_LISTEN_ON"] = fk.listen
     test_env["KITTY_WINDOW_ID"] = fk.window_id
     return fk
+
+
+# ------------------------------------------------------------- fake rc socket
+
+class FakeRCServer:
+    """A live AF_UNIX socket speaking kitty's @kitty-cmd framing — the seam for
+    the RAW remote-control path (frontends/kitty.py _rc_raw), which bypasses
+    the kitten subprocess entirely so the fake-kitten recorder never sees it.
+    Records every decoded command envelope and replies with a programmable
+    response ({"ok": True} by default) whenever the client requests one."""
+
+    ST = b"\x1b\\"
+    KEY = b"@kitty-cmd"
+
+    def __init__(self, path):
+        # Caller supplies a SHORT path (unix socket paths cap at ~104 bytes;
+        # pytest tmp dirs blow past that — same constraint as test_l8_kitty).
+        self.path = path
+        self.frames = []
+        self.response = {"ok": True}
+        self._srv = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self._srv.bind(path)
+        self._srv.listen(8)
+        self._srv.settimeout(0.2)
+        self._stop = False
+        self._thread = threading.Thread(target=self._serve, daemon=True)
+        self._thread.start()
+
+    def _serve(self):
+        while not self._stop:
+            try:
+                conn, _ = self._srv.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                return
+            try:
+                conn.settimeout(2)
+                buf = b""
+                while self.ST not in buf:
+                    b = conn.recv(65536)
+                    if not b:
+                        break
+                    buf += b
+                if self.KEY in buf and self.ST in buf:
+                    obj = json.loads(buf[buf.index(self.KEY) + len(self.KEY):
+                                         buf.index(self.ST)])
+                    self.frames.append(obj)
+                    if not obj.get("no_response"):
+                        conn.sendall(b"\x1bP" + self.KEY +
+                                     json.dumps(self.response).encode("utf-8") +
+                                     self.ST)
+            except Exception:
+                pass
+            finally:
+                conn.close()
+
+    def commands(self, cmd=None):
+        """Decoded @kitty-cmd envelopes, optionally filtered by cmd name."""
+        return [f for f in self.frames if cmd is None or f.get("cmd") == cmd]
+
+    def close(self):
+        self._stop = True
+        try:
+            self._srv.close()
+        except OSError:
+            pass
+        self._thread.join(2)
+        try:
+            os.remove(self.path)
+        except OSError:
+            pass
+
+
+@pytest.fixture
+def fake_rc_socket(test_env):
+    """A FakeRCServer wired into the test env as $KITTY_LISTEN_ON, so both
+    in-process KittyFrontend calls and hook subprocesses hit the raw path.
+    Compose AFTER fake_kitten when both are wanted: this overwrites the
+    recorder's dead listen path with the live socket (the kitten binary
+    override stays, so subprocess fallbacks still hit the recorder)."""
+    srv = FakeRCServer("/tmp/claude-rc-%d-%d.sock" % (os.getpid(), _WIN_COUNTER[0]))
+    _WIN_COUNTER[0] += 1
+    test_env["KITTY_LISTEN_ON"] = "unix:" + srv.path
+    yield srv
+    srv.close()
 
 
 # ------------------------------------------------------------------- session

@@ -27,6 +27,7 @@ from conftest import REPO
 sys.path.insert(0, REPO)
 
 import frontends                                             # noqa: E402
+from frontends import kitty as fk                            # noqa: E402
 from frontends.base import Frontend                          # noqa: E402
 from frontends.kitty import KittyFrontend                    # noqa: E402
 
@@ -232,6 +233,67 @@ def test_kitty_wire_constants_unchanged():
     assert fk.RC_CMD_DCS == b"\x1bP@kitty-cmd"
     assert fk.RC_ST == b"\x1b\\"
     assert len(fk.RC_CMD_KEY) == 10          # the old bare "+ 10" reply offset
+
+
+def _rc_fe(path):
+    """A KittyFrontend aimed at the fake RC socket with NO usable kitten
+    binary — any subprocess fallback would rc-1, so a 0 return proves the
+    raw path answered."""
+    return KittyFrontend(listen="unix:" + path, kitten="/nonexistent-kitten")
+
+
+def test_set_tab_color_raw_frame(fake_rc_socket):
+    """The exact @kitty-cmd envelope the raw tab paint writes — captured live
+    from the real kitten client (colors as 24-bit ints, response REQUESTED so
+    the caller's persist-only-on-rc-0 audit contract holds)."""
+    rc = _rc_fe(fake_rc_socket.path).set_tab_color(
+        "7", "#ff0000", "#000000", "#7f0000")
+    assert rc == 0
+    frames = fake_rc_socket.commands("set-tab-color")
+    assert len(frames) == 1
+    f = frames[0]
+    assert f["version"] == fk.KITTY_RC_VERSION
+    assert f["no_response"] is False          # fire-and-forget is banned here
+    assert f["payload"] == {
+        "match": "window_id:7",
+        "colors": {"active_bg": 0xff0000, "active_fg": 0x000000,
+                   "inactive_bg": 0x7f0000, "inactive_fg": 0xc0c4cc}}
+
+
+def test_clear_tab_color_raw_frame(fake_rc_socket):
+    """clear paints all four channels as JSON null (the NONE wire form)."""
+    assert _rc_fe(fake_rc_socket.path).clear_tab_color("7") == 0
+    f = fake_rc_socket.commands("set-tab-color")[-1]
+    assert f["payload"]["colors"] == {
+        "active_bg": None, "active_fg": None,
+        "inactive_bg": None, "inactive_fg": None}
+
+
+def test_set_tab_color_raw_ok_false_is_rc1_no_fallback(fake_rc_socket,
+                                                       monkeypatch):
+    """A definitive ok:false from kitty is the answer (rc 1) — retrying via
+    the slow subprocess would just re-ask the same question."""
+    fake_rc_socket.response = {"ok": False, "error": "no matching tabs"}
+    calls = []
+    monkeypatch.setattr(fk, "kitten_run",
+                        lambda *a: calls.append(a) or 0)
+    assert _rc_fe(fake_rc_socket.path).set_tab_color(
+        "7", "#ff0000", "#000000", "#7f0000") == 1
+    assert calls == []                        # no subprocess fallback fired
+
+
+def test_set_tab_color_socket_miss_falls_back_to_kitten(monkeypatch, tmp_path):
+    """No live socket → the kitten subprocess path, with the exact historical
+    argv (the module-level set_tab_color)."""
+    calls = []
+    monkeypatch.setattr(fk, "kitten_run",
+                        lambda *a: calls.append(list(a)) or 0)
+    fe = KittyFrontend(listen="unix:%s/nope.sock" % tmp_path, kitten="/k")
+    assert fe.set_tab_color("7", "#ff0000", "#000000", "#7f0000") == 0
+    assert calls == [["/k", "unix:%s/nope.sock" % tmp_path, "set-tab-color",
+                      "--match", "window_id:7",
+                      "active_bg=#ff0000", "active_fg=#000000",
+                      "inactive_bg=#7f0000", "inactive_fg=#c0c4cc"]]
 
 
 def test_model_tail_scan_bytes():

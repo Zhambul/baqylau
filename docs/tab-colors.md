@@ -43,6 +43,26 @@ both active and inactive tabs so background sessions stay visible. The script
 no-ops silently when not inside kitty / when remote control is unavailable, and
 always exits 0 so it can never block a hook.
 
+**The paint itself no longer spawns that `kitten` subprocess on the happy
+path.** The block above is the *semantic* contract; the wire is
+`frontends/kitty.py set_tab_color`, which writes the equivalent `@kitty-cmd`
+DCS straight to the `$KITTY_LISTEN_ON` unix socket (`_rc_raw` — the same raw
+path get-text and the mirror's freeze-bracket scroll already use). Measured:
+~0.1 ms per paint vs ~20-100 ms for the subprocess spawn — and the paint runs
+on the **blocking** hook path several times per turn. Two things are
+deliberate, not incidental:
+
+- **The raw exchange requests and reads kitty's response** (`no_response:
+  false`, `{"ok": …}` reply) and maps it to the historical exit-code contract
+  (`ok` → 0). Fire-and-forget would have reported success optimistically, and
+  the tab DB row is persisted **only on rc == 0** — an optimistic 0 would
+  reintroduce the stranded-colour dedup bug below. In the payload, colours
+  travel as 24-bit RGB integers and `NONE` as JSON `null` (captured live from
+  the real kitten client; `frontends/kitty.py _tab_color_int`).
+- **The `kitten` subprocess survives as the fallback**, taken only when the
+  raw exchange yields *no answer* (no socket, connect timeout, garbled reply).
+  A definitive `ok: false` from kitty is the answer — rc 1, no slow retry.
+
 Besides literal states, hooks pass these **dispatch modes**:
 
 The tab tracks the **main session only**: any `PreToolUse`/`PostToolUse` carrying an

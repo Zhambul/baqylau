@@ -81,6 +81,38 @@ def test_failed_paint_not_persisted_and_retried(run_hook, test_env, session,
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "idle"
 
 
+def test_raw_socket_paint_persists_and_skips_subprocess(run_hook, test_env,
+                                                        session, fake_kitten,
+                                                        fake_rc_socket):
+    """With a LIVE rc socket the paint travels as a raw @kitty-cmd frame —
+    the kitten recorder must see nothing — and ok:true persists the row
+    exactly like rc==0 did."""
+    s = session.make()
+    run_hook(TAB, P.base(s, ""), argv=("idle",))
+    frames = fake_rc_socket.commands("set-tab-color")
+    assert frames and frames[-1]["payload"]["match"] == \
+        "window_id:%s" % fake_kitten.window_id
+    assert frames[-1]["no_response"] is False
+    assert fake_kitten.calls("set-tab-color") == []
+    assert oracle.tab_state(test_env, fake_kitten.window_id) == "idle"
+
+
+def test_raw_socket_ok_false_not_persisted_and_retried(run_hook, test_env,
+                                                       session, fake_kitten,
+                                                       fake_rc_socket):
+    """ok:false over the raw socket is rc!=0: the row must stay unchanged so
+    the next same-state event retries (the stranded-colour contract, now on
+    the raw path)."""
+    s = session.make()
+    fake_rc_socket.response = {"ok": False, "error": "no matching tabs"}
+    run_hook(TAB, P.base(s, ""), argv=("idle",))
+    assert oracle.tab_state(test_env, fake_kitten.window_id) is None
+    assert fake_kitten.calls("set-tab-color") == []   # no subprocess retry
+    fake_rc_socket.response = {"ok": True}
+    run_hook(TAB, P.base(s, ""), argv=("idle",))      # NOT deduped away
+    assert oracle.tab_state(test_env, fake_kitten.window_id) == "idle"
+
+
 # ------------------------------------------------------------------ pretool
 
 @pytest.mark.parametrize("tool,state", [
