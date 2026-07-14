@@ -42,6 +42,7 @@ from datetime import datetime, timedelta
 from core.slots import CODEX_PALETTE
 from core import locks as LK
 from core import state as S
+from core.spawn import spawn_detached
 
 from core.noaudit import load_audit
 
@@ -248,14 +249,11 @@ def spawn(srcfile, jsonfile, label):
     global _n
     rgb = ",".join(str(x) for x in CODEX_PALETTE[_n % len(CODEX_PALETTE)])
     _n += 1
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, STREAM, LOG, rgb, srcfile, jsonfile, label],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True)
-        A.spawn(LOG, proc.pid, [STREAM, srcfile, label], purpose=f"stream:codex {label}")
-    except Exception:
-        A.error(LOG, "spawn codex stream", {"src": srcfile, "label": label})
+    # The detach mechanics + spawn/error audit live in core.spawn (the one
+    # owner); audit_argv drops the rgb/jsonfile noise the spawns row never
+    # recorded here.
+    spawn_detached(STREAM, [LOG, rgb, srcfile, jsonfile, label], LOG,
+                   purpose=f"stream:codex {label}", audit_argv=[srcfile, label])
 
 
 def label_for(data):

@@ -11,13 +11,14 @@
 # waits for a hook's process group to drain, so the never-exiting watcher blocked
 # SessionStart — new sessions "got no answer", and the watcher orphaned. The fix is
 # the same pattern the mirror's other streamers use: subprocess.Popen(..., start_new_
-# session=True), which puts the child in its OWN session/group at fork time. This
-# launcher returns in a few ms, so the hook completes instantly.
+# session=True), which puts the child in its OWN session/group at fork time — the
+# mechanics now live in core.spawn.spawn_detached, the one owner of that pattern.
+# This launcher returns in a few ms, so the hook completes instantly.
 import os
-import subprocess
 import sys
 
 from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
+from core.spawn import spawn_detached
 WATCH = os.path.join(BIN, "claude-codex-watch.py")
 
 from core.noaudit import load_audit
@@ -26,13 +27,9 @@ A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub
 
 
 def main():
-    if not os.path.exists(WATCH) or len(sys.argv) < 2:
+    if len(sys.argv) < 2:
         return
-    proc = subprocess.Popen(
-        [sys.executable, WATCH] + sys.argv[1:],
-        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL, start_new_session=True)
-    A.spawn(sys.argv[1], proc.pid, [WATCH] + sys.argv[1:], purpose="codex watcher")
+    spawn_detached(WATCH, sys.argv[1:], sys.argv[1], purpose="codex watcher")
 
 
 def entry():

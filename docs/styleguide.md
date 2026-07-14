@@ -56,6 +56,7 @@ backed by grep-style regression tests that will fail the build):
 | Slot claim-token format (both directions: `_token`/`_untoken`) | `core/slots.py` |
 | Stream-block shapes: `cap`, `chip`, `gutter`, `tok_rollup`, `file_line` | `core/streamfmt.py` |
 | Session-alive probe | `core/state.parked()` — a bare exists check, never a connect |
+| Detached-spawn mechanics (DEVNULL stdio + `start_new_session=True` + the `spawn`/`error` audit rows) | `core/spawn.spawn_detached` — `hookkit.spawn_streamer` is its bin/-name-resolving wrapper |
 | Mirror-pane width default (`DEFAULT_BIAS`, the `CLAUDE_MIRROR_BIAS` fallback both hosts share) | `core/hostpane.py` |
 | Claude config dir default (`$CLAUDE_CONFIG_DIR` else `~/.claude`) | `plugins/claude_code/model.config_dir()` |
 | Audit-import degradation | `core/noaudit.load_audit()` — the ONLY way to get `A`; direct `from core import audit` is reserved for `bin/claude-audit.py` |
@@ -107,8 +108,9 @@ charter fits, document the owner here, and (if cheap) add a grep test.
   the guard *around an audit call itself* (auditing an audit failure is
   circular).
 - Get `A` via `load_audit()`. New detached processes go through
-  `core.tail.stream_lifecycle` + `hookkit.spawn_streamer` (stream rows and
-  crash audit come free). New handlers go through `hookkit.run()`.
+  `core.tail.stream_lifecycle` + `core.spawn.spawn_detached` (or its bin/-name
+  wrapper `hookkit.spawn_streamer`) — stream rows, spawn rows, and crash audit
+  come free. New handlers go through `hookkit.run()`.
 - The full audit-coverage checklist (decisions, stream rows, state files,
   transitions, anomaly queries, SKILL.md's schema table AND playbook) is in
   CLAUDE.md § "Every new feature must be audit-covered" — it applies to every

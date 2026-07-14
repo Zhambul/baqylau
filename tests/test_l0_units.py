@@ -883,3 +883,28 @@ def test_tabstatus_watcher_ceilings_and_reason_strings():
         == "no-interrupt-within-30m"
     assert f"~{lbl(TS.BG_MISS_GRACE_N * 2)} of checks" == "~8s of checks"
     assert lbl(45) == "45s" and lbl(90) == "90s" and lbl(120) == "2m"
+
+
+# --- core.spawn.spawn_detached ---------------------------------------------------
+
+def test_spawn_detached_missing_script_returns_none(tmp_path):
+    """A renamed/deleted script must return None (audited), never raise."""
+    from core.spawn import spawn_detached
+    assert spawn_detached(str(tmp_path / "nope.py"), [], "") is None
+
+
+def test_spawn_detached_detaches_into_own_session(tmp_path, reaper):
+    """The child must run in its OWN session (start_new_session=True is the
+    load-bearing half of the pattern — a same-group child hung SessionStart)."""
+    import os
+    from conftest import wait_until
+    from core.spawn import spawn_detached
+    script = tmp_path / "sid.py"
+    out = tmp_path / "sid.txt"
+    script.write_text("import os,sys\n"
+                      "open(sys.argv[1],'w').write(str(os.getsid(0)))\n")
+    proc = spawn_detached(str(script), [str(out)], "")
+    assert proc is not None
+    reaper.append(proc)
+    wait_until(lambda: out.exists() and out.read_text(), desc="child sid file")
+    assert int(out.read_text()) != os.getsid(0)

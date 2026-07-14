@@ -24,6 +24,7 @@ from core.noaudit import load_audit
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 from core import paths as P
+from core.spawn import spawn_detached
 
 from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 
@@ -125,29 +126,15 @@ def is_failure(d):
 
 
 def spawn_streamer(name, argv, log, env=None, purpose="", audit_argv=None):
-    """Spawn a sibling script detached, audited. start_new_session=True is
-    load-bearing: a plain child would sit in the hook's process group, which
-    Claude Code waits to drain (this hung SessionStart once — see
-    claude-codex-launch.py). Returns the Popen, or None (missing script or spawn
-    failure, audited) — the CALLER rolls back its own slot/marker state."""
-    path = script(name)
-    if not os.path.exists(path):
-        # Audited (the docstring promised it, the code didn't): a renamed/deleted
-        # sibling script otherwise means every block silently never streams, with
-        # no spawn row and no errors row to triage from.
-        A.error(log, "spawn " + name + " (script missing)", {"path": path})
-        return None
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, path] + [str(a) for a in argv],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-    except Exception:
-        A.error(log, "spawn " + name, {"argv": [str(a) for a in argv]})
-        return None
-    A.spawn(log, proc.pid, [path] + list(audit_argv if audit_argv is not None else argv),
-            purpose=purpose)
-    return proc
+    """Spawn a sibling bin/ script detached, audited — resolves the NAME to
+    its path and delegates the detach mechanics (DEVNULL stdio, the
+    load-bearing start_new_session=True, the spawn/error audit rows) to
+    core.spawn.spawn_detached, the one owner of that pattern (the codex
+    launcher/watcher spawn through it too). Returns the Popen, or None
+    (missing script or spawn failure, audited) — the CALLER rolls back its
+    own slot/marker state."""
+    return spawn_detached(script(name), argv, log, env=env, purpose=purpose,
+                          audit_argv=audit_argv)
 
 
 def stream_env(src=None, done=None, cmd=None, group=None, own=False,

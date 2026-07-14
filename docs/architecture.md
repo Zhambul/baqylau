@@ -45,6 +45,13 @@ ARBITRARY caller-supplied DB path: the codex per-repo claims DB and watch
 lock, the OTLP receiver's per-machine singleton; borrows state.py's
 `_connect`/`immediate`/`pid_alive`, moved out of state.py because
 arbitrary-path locks were never per-session state), `tail.py` (the tailer skeleton — was `claude_tail.py`),
+`spawn.py` (THE detached audited process spawn — `spawn_detached`: Popen with
+all stdio to DEVNULL plus the load-bearing `start_new_session=True` (a plain
+child sits in the hook's process group, which Claude Code waits to drain —
+this hung SessionStart once), and the `A.spawn`/`A.error` rows around it;
+extracted from three byte-similar copies — `hookkit.spawn_streamer` (which
+stays as the plugin-facing wrapper resolving a bin/ sibling NAME), the codex
+launcher, and the codex watcher's per-run stream spawn),
 `streamfmt.py` (the shared block-shaping vocabulary of the stream renderers —
 `cap`, the `chip`/`gutter`/`dim_gut` op shapes, the ended-footer `tok_rollup`
 token fragment, and `file_line` — the file-op one-liner
