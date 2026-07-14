@@ -12,6 +12,14 @@
 import os
 import re
 
+# The repo root, where the ENTRY shims (claude-hook.py, claude-stream.py, ...)
+# live. Not the mirror-log format proper, but repo-root derivation is a path
+# fact with exactly one correct answer, and this stdlib-only leaf is the
+# project's designated path owner — before this, ten modules each re-derived it
+# with a depth-sensitive triple-dirname (a moved file silently breaks its own
+# copy). This file is one level below the root, so: two dirnames.
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 # CLAUDE_MIRROR_TMPDIR relocates EVERYTHING derived from these two roots (state
 # DBs, .out/.done sidecars, .keep parks, the tab DB) — it exists solely so the
 # test suite can run hermetically; nothing sets it in real sessions. Read at

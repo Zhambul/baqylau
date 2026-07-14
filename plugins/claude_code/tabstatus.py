@@ -56,11 +56,10 @@ import subprocess
 import sys
 import time
 
-# The repo root, where the sibling ENTRY scripts live (this module is two
-# package levels below it). SELF must be the ENTRY script: the detached
-# watchers re-invoke it by filename, and argv[0] is what the audit records.
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SELF = os.path.join(REPO, "claude-tab-status.py")
+from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+# SELF must be the ENTRY script: the detached watchers re-invoke it by
+# filename, and argv[0] is what the audit records.
+SELF = os.path.join(ROOT, "claude-tab-status.py")
 import frontends  # noqa: E402  (the terminal adapter — kitty today)
 from core.noaudit import load_audit  # noqa: E402  (in-process; every write swallows + spools)
 

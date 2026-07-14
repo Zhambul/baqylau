@@ -18,8 +18,8 @@ import socket
 import subprocess
 import sys
 
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-RECEIVER = os.path.join(REPO, "claude-otlp-receiver.py")
+from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+RECEIVER = os.path.join(ROOT, "claude-otlp-receiver.py")
 
 from core.noaudit import load_audit
 

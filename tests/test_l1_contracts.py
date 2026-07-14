@@ -427,3 +427,22 @@ def test_paths_accessors():
     # And the two agree on any already-sanitized key.
     key = CP.sanitize_sid("weird sid!*")
     assert CP.log_for_key(key) == CP.mirror_log("weird sid!*")
+
+
+def test_paths_root_is_repo_root():
+    """core/paths.ROOT is the ONE owner of repo-root derivation (every module
+    that spawns a sibling ENTRY shim by filename joins against it). Pin that it
+    resolves to the actual repo root: the known entry shims live there."""
+    import os
+    import sys
+    from conftest import REPO
+    if REPO not in sys.path:
+        sys.path.insert(0, REPO)
+    from core import paths as CP
+
+    assert os.path.isabs(CP.ROOT)
+    assert os.path.samefile(CP.ROOT, REPO)
+    for shim in ("claude-hook.py", "claude-stream.py", "claude-tab-status.py",
+                 "claude-mirror.py", "claude-codex-launch.py",
+                 "claude-otlp-launch.py"):
+        assert os.path.isfile(os.path.join(CP.ROOT, shim)), shim

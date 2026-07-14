@@ -46,10 +46,8 @@ from core.noaudit import load_audit
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
-# The repo root, where the sibling ENTRY scripts live (this module is two
-# package levels below it) — the per-run streamer is spawned by entry filename.
-REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-STREAM = os.path.join(REPO, "claude-codex-stream.py")
+from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+STREAM = os.path.join(ROOT, "claude-codex-stream.py")
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 CWD = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
 SID = sys.argv[3] if len(sys.argv) > 3 else ""

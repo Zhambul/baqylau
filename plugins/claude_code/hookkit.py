@@ -25,9 +25,7 @@ from core.noaudit import load_audit
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 from core import paths as P
 
-# The repo root, where the entry scripts live (this file is two package levels
-# below it) — script() must resolve SIBLING ENTRY SCRIPTS, not package modules.
-HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
 
 _LOG = ""  # last mirror log seen by read_payload(); run()'s crash audit uses it
 
@@ -60,7 +58,7 @@ def log_path(d):
 
 def script(name):
     """Absolute path of a sibling script (a streamer / the tab dispatcher)."""
-    return os.path.join(HERE, name)
+    return os.path.join(ROOT, name)
 
 
 def read_payload():
