@@ -37,6 +37,20 @@ def test_fmt_dur_integer_shape():        # the old private _dur, byte-identical
     assert fmt_dur(-5, decimals=False) == "0s"
 
 
+def test_fmt_dur_hour_day_tiers():       # two largest units only above an hour
+    assert fmt_dur(3599) == "59m59s"      # last second of the minute tier
+    assert fmt_dur(3600) == "1h00m"       # hour tier drops seconds
+    assert fmt_dur(3753) == "1h02m"       # 1h02m33s truncates to minutes
+    assert fmt_dur(27458) == "7h37m"      # the 457m38s complaint case
+    assert fmt_dur(86399) == "23h59m"     # last minute of the hour tier
+    assert fmt_dur(86400) == "1d00h"      # day tier drops minutes
+    assert fmt_dur(198000) == "2d07h"
+    # decimals only affects the sub-minute branch — higher tiers identical
+    assert fmt_dur(3600, decimals=False) == "1h00m"
+    assert fmt_dur(27458, decimals=False) == "7h37m"
+    assert fmt_dur(86400, decimals=False) == "1d00h"
+
+
 def test_frontend_color_constants():
     assert INACTIVE_FG == "#c0c4cc"
     assert TAB_COLOR_NONE == "NONE"

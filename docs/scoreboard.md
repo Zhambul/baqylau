@@ -21,7 +21,7 @@ see [otel.md](otel.md).
     ```
     ⬡ 95466f49-240b-4b69-92b4-96bd1541a9a9
     ✉ 5 msgs · 1● unread · 2◐ stale · 1◉ read
-    ▪ 45 cmds (5✗) · ⏱ 68m24s
+    ▪ 45 cmds (5✗) · ⏱ 1h08m
     Σ 56M total · 428k in · 197k out · 55M cache · 410k write · ≈ $1.20
       56 files · +791 -29 · Read 34 · Edit 18 · Write 4
     ```

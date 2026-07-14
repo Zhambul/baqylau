@@ -191,12 +191,19 @@ AMBER  = (214, 153, 92)    # a task entering the list
 
 
 def fmt_dur(sec, decimals=True):
-    """Wall-clock duration chip text: '3.2s' / '4m07s' (negatives clamp to 0).
-    decimals=False drops the sub-minute fraction ('3s') — the scoreboard's ⏱ chip."""
+    """Wall-clock duration chip text: '3.2s' / '4m07s' / '7h37m' / '2d07h'
+    (negatives clamp to 0). Above an hour only the two largest units show —
+    second precision stops mattering at that altitude and the string must
+    still fit a ~8-char chip. decimals=False drops the sub-minute fraction
+    ('3s') — the scoreboard's ⏱ chip."""
     sec = max(0.0, sec)
     if sec < 60:
         return f"{sec:.1f}s" if decimals else f"{int(sec)}s"
-    return f"{int(sec // 60)}m{int(sec % 60):02d}s"
+    if sec < 3600:
+        return f"{int(sec // 60)}m{int(sec % 60):02d}s"
+    if sec < 86400:
+        return f"{int(sec // 3600)}h{int(sec % 3600 // 60):02d}m"
+    return f"{int(sec // 86400)}d{int(sec % 86400 // 3600):02d}h"
 
 
 def fmt_usd(c):
