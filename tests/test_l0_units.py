@@ -845,3 +845,41 @@ def test_codex_malformed_payload_audits(monkeypatch):
     monkeypatch.setattr(sys, "stdin", io.StringIO("{not json"))
     assert CS.read_payload() == {}               # still degrades, never raises
     assert errors == ["codex payload parse (stdin not valid JSON)"]
+
+
+def test_session_model_honors_tail_scan_bytes(tmp_path, monkeypatch):
+    # The seek window must come from TAIL_SCAN_BYTES, not a re-encoded literal:
+    # shrink the constant and verify an assistant turn OUTSIDE the window is
+    # invisible while one inside it is found.
+    from plugins.claude_code import model as cm
+    old = '{"type":"assistant","message":{"model":"claude-old-9"}}\n'
+    pad = '{"type":"pad","x":"' + "p" * 400 + '"}\n'
+    new = '{"type":"assistant","message":{"model":"claude-new-9"}}\n'
+    t = tmp_path / "s.jsonl"
+    t.write_text(old + pad + new)
+    monkeypatch.setattr(cm, "TAIL_SCAN_BYTES", len(new) + 10)
+    assert cm.session_model(str(t)) == "claude-new-9"   # old line outside window
+    monkeypatch.setattr(cm, "TAIL_SCAN_BYTES", 1 << 20)
+    assert cm.session_model(str(t)) == "claude-new-9"   # full window: LAST wins
+    t.write_text(old + pad)                              # only the old turn left
+    monkeypatch.setattr(cm, "TAIL_SCAN_BYTES", 50)
+    assert cm.session_model(str(t)) is None              # window misses it
+
+
+def test_tabstatus_watcher_ceilings_and_reason_strings():
+    # The named ceilings must reproduce the historical loop counts for the
+    # shipped poll cadences, and the derived audit reason strings must stay
+    # byte-identical to the old hardcoded vocabulary (SKILL.md cites
+    # "no-interrupt-within-30m" literally).
+    from plugins.claude_code import tabstatus as TS
+    assert TS.BGWATCH_MAX_S == 3600 and TS.INTERRUPT_MAX_S == 1800
+    assert TS.BG_MISS_GRACE_N == 4
+    assert int(TS.BGWATCH_MAX_S / 2) == 1800          # bg-watch @ 2s poll
+    assert int(TS.INTERRUPT_MAX_S / 0.5) == 3600      # interrupt-watch @ 0.5s
+    lbl = TS._dur_label
+    assert f"gave-up-after-{lbl(TS.BGWATCH_MAX_S)} (markers still live)" \
+        == "gave-up-after-1h (markers still live)"
+    assert f"no-interrupt-within-{lbl(TS.INTERRUPT_MAX_S)}" \
+        == "no-interrupt-within-30m"
+    assert f"~{lbl(TS.BG_MISS_GRACE_N * 2)} of checks" == "~8s of checks"
+    assert lbl(45) == "45s" and lbl(90) == "90s" and lbl(120) == "2m"

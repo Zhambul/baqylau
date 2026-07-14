@@ -226,7 +226,7 @@ def session_model(tpath):
         with open(tpath, "rb") as fh:
             fh.seek(0, 2)
             size = fh.tell()
-            fh.seek(max(0, size - 262144))
+            fh.seek(max(0, size - TAIL_SCAN_BYTES))
             chunk = fh.read().decode("utf-8", "replace")
         last = None
         for line in chunk.splitlines():

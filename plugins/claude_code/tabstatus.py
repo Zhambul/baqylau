@@ -107,6 +107,28 @@ def _win():
 # greppable at their use sites.
 WATCH_POLL_S = float(os.environ.get("CLAUDE_WATCH_POLL_S") or 0)
 
+# Watcher WALL-CLOCK ceilings, in seconds. The loop counts are derived at run
+# time from ceiling / actual poll interval, so tuning either the ceiling or the
+# cadence keeps the give-up wall time (and the audited reason strings, rendered
+# via _dur_label) honest instead of silently scaling.
+BGWATCH_MAX_S = 3600        # bg-watch gives up after ~1h of live markers
+INTERRUPT_MAX_S = 1800      # interrupt-watch gives up after ~30m without a cancel
+# bg-watch green-flip grace: the team must stay quiet across this many
+# consecutive checks (~BG_MISS_GRACE_N * poll seconds) before declaring green,
+# so a teammate's inter-task marker gap doesn't flip the tab early.
+BG_MISS_GRACE_N = 4
+
+
+def _dur_label(sec):
+    """Whole-unit duration for audit reason strings ("1h", "30m", "45s") —
+    deliberately NOT ops.fmt_dur, whose "1h00m" would change the historical
+    reason vocabulary byte-for-byte."""
+    if sec % 3600 == 0:
+        return f"{int(sec // 3600)}h"
+    if sec % 60 == 0:
+        return f"{int(sec // 60)}m"
+    return f"{sec:g}s"
+
 # The state decisions below record to the audit DB (see claude_audit.py) as
 # tab_transitions rows — applied, skipped, and early bails alike. claude_audit's
 # writers never raise and spool on a locked/unreachable DB, so calling them
@@ -302,8 +324,9 @@ def run_bgwatch(mlog):
     reason = "killed-or-crashed"
     try:
         misses = 0
-        for _ in range(1800):
-            time.sleep(WATCH_POLL_S or 2)
+        poll = WATCH_POLL_S or 2
+        for _ in range(max(1, int(BGWATCH_MAX_S / poll))):
+            time.sleep(poll)
             if tab_get(_win()) != AWAITING_BG:
                 reason = "state-moved-on"
                 audit_tx("", "", 0, "bg-watch: state moved on, watcher exiting")
@@ -312,17 +335,17 @@ def run_bgwatch(mlog):
                 misses = 0                  # something running -> reset
             else:
                 # GRACE: a teammate working in bursts drops its marker between
-                # tasks. Require the team to stay quiet across several checks
-                # (~8s) before declaring green, so an inter-task gap doesn't flip
+                # tasks. Require the team to stay quiet across BG_MISS_GRACE_N
+                # checks before declaring green, so an inter-task gap doesn't flip
                 # the tab green while the team is still going.
                 misses += 1
-                if misses >= 4:
+                if misses >= BG_MISS_GRACE_N:
                     break
         else:
-            reason = "gave-up-after-1h (markers still live)"
+            reason = f"gave-up-after-{_dur_label(BGWATCH_MAX_S)} (markers still live)"
             return None
         reason = "cleared-to-green"
-        REASON = "bg-watch: no live markers across ~8s of checks"
+        REASON = f"bg-watch: no live markers across ~{_dur_label(BG_MISS_GRACE_N * poll)} of checks"
         return AWAITING_RESPONSE
     finally:
         watcher_del("bgwatch", _win())
@@ -357,8 +380,9 @@ def run_interruptwatch(transcript):
             pos = os.path.getsize(transcript)
         except OSError:
             pos = 0
-        for _ in range(3600):
-            time.sleep(WATCH_POLL_S or 0.5)
+        poll = WATCH_POLL_S or 0.5
+        for _ in range(max(1, int(INTERRUPT_MAX_S / poll))):
+            time.sleep(poll)
             # Keep watching through the WHOLE turn (magenta/blue/red are all
             # mid-turn). Exiting the moment the state left thinking/working
             # meant the first Bash/Task pretool (-> executing) killed the
@@ -385,7 +409,7 @@ def run_interruptwatch(transcript):
                     break
                 pos = size
         else:
-            reason = "no-interrupt-within-30m"
+            reason = f"no-interrupt-within-{_dur_label(INTERRUPT_MAX_S)}"
             return None
         cur = tab_get(_win())
         if cur in (AWAITING_RESPONSE, IDLE, ""):
