@@ -265,7 +265,10 @@ def stats_now(log):
 
 def kfmt(n):
     """Compact token count: 124000 -> "124k", 1200000 -> "1.2M"."""
-    if n >= 1_000_000:
+    # Branch on the ROUNDED value: 999_500..999_999 rounds to 1.0M, so it must
+    # take the M branch ("1M"), not render as the k branch's "1000k". The k
+    # boundary has no integer equivalent (999 -> "999", 1000 -> "1k").
+    if n >= 999_500:
         return f"{n / 1_000_000:.1f}M".replace(".0M", "M")
     if n >= 1000:
         return f"{round(n / 1000)}k"

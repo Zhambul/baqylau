@@ -1073,3 +1073,50 @@ def test_state_evict_closes_and_drops_cached_conn(tmp_path):
     # a later connect still works (evict is a cache op, not a session op)
     assert S.connect(log) is not None
     S.evict(log)          # don't leak the tmp conn into other in-process tests
+
+
+# --- kfmt boundary rounding ------------------------------------------------------
+# 999_500..999_999 rounds to 1.0M, so it must take the M branch — the old raw-value
+# check rendered "1000k". Boundary pins table-driven around both unit edges.
+
+def test_kfmt_boundaries():
+    from core.ops import kfmt
+    for n, want in [
+        (0, "0"), (999, "999"), (1000, "1k"),           # k edge: no int gap
+        (124_000, "124k"), (999_499, "999k"),           # rounds down: stays k
+        (999_500, "1M"), (999_999, "1M"),               # rounds to 1.0M -> M branch
+        (1_000_000, "1M"), (1_200_000, "1.2M"),
+    ]:
+        assert kfmt(n) == want, f"kfmt({n}) = {kfmt(n)!r}, want {want!r}"
+
+
+# --- diff_rows: "\ No newline at end of file" ------------------------------------
+# The diff library emits that literal entry inside a hunk's `lines` when a file
+# lacks a trailing newline. It's metadata, not a file line: it must be skipped,
+# never numbered as context (which also shifted every later lineno by one).
+
+def test_diff_rows_skips_no_newline_marker():
+    from plugins.claude_code import tools as T
+    resp = {"structuredPatch": [{
+        "oldStart": 10, "newStart": 10,
+        "lines": [" ctx", "-old", "\\ No newline at end of file", "+new", " tail"],
+    }]}
+    assert T.diff_rows("Edit", {}, resp) == [
+        (" ", 10, "ctx"),                 # old 10 / new 10
+        ("-", 11, "old"),                 # removals number in the OLD file
+        ("+", 11, "new"),                 # additions in the NEW file
+        (" ", 12, "tail"),                # not 13: the marker consumed nothing
+    ]
+
+
+# --- read_extent: offset-read that reaches EOF -----------------------------------
+# Read(offset=100) on a 149-line file IS partial (lines 1-99 unread), so the
+# honest render is the range — pinned as correct-as-is: the whole-file '' short
+# circuit stays start<=1 only.
+
+def test_read_extent_offset_to_eof_stays_ranged():
+    from plugins.claude_code import tools as T
+    fi = {"startLine": 100, "numLines": 50, "totalLines": 149}
+    assert T.read_extent(fi) == "100-149/149"
+    # and a genuinely whole read stays bare
+    assert T.read_extent({"startLine": 1, "numLines": 149, "totalLines": 149}) == ""

@@ -88,7 +88,10 @@ parts:
   (`tool_response` content, `old_string`/`new_string`) exists ONLY while the
   hook runs and the file on disk drifts afterwards — a click must work forever
   (the kv table parks/restores across resume with the rest of the DB). Diffs
-  prefer the result's `structuredPatch` (real file line numbers) and fall back
+  prefer the result's `structuredPatch` (real file line numbers; its literal
+  `\ No newline at end of file` marker entry is metadata, not a file line —
+  `diff_rows` skips it outright, since numbering it as context shifted every
+  later lineno in the hunk by one) and fall back
   to a difflib unified diff over the input strings — which is also what a
   subagent's op uses, since its transcript result carries no patch (its Read
   body falls back to a disk re-read at stream time). Code **highlighting is

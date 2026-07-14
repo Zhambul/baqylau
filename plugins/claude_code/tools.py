@@ -320,6 +320,13 @@ def diff_rows(tool_name, inp, resp):
                 rows.append(("@", None, "⋮"))
             for l in lines:
                 sign, body = (l[:1] or " "), l[1:]
+                if sign == "\\":
+                    # The diff library's literal "\ No newline at end of file"
+                    # marker — metadata, not a file line. Numbering it as
+                    # context shifted every later lineno in the hunk by one.
+                    # Skipped outright (like `git diff --stat`-style summaries;
+                    # the mirror's diff shows content, not byte-level trivia).
+                    continue
                 if sign == "+":
                     rows.append(("+", new, body)); new += 1
                 elif sign == "-":
