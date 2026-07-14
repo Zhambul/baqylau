@@ -20,6 +20,7 @@
 # claude-scorebar.py — live), likewise passed by the caller.
 import os
 import shutil
+import sqlite3
 import time
 
 from core.noaudit import load_audit
@@ -38,6 +39,12 @@ BAR_SETTLE_S = 0.08   # pause between resize_pane and re-measure — kitty appli
 # settings.json) says otherwise. Owned HERE because both hosts (claude_code's
 # split.py and codex's session.py) fall back to it — each used to hardcode 25.
 DEFAULT_BIAS = 25
+
+# How long the pre-park WAL checkpoint waits on SQLite's busy handler before
+# giving up. Short by design: park_db runs inside SessionEnd (a hook), and a
+# busy-failed checkpoint degrades gracefully — the -wal file is then moved
+# alongside the main DB, frames intact.
+CHECKPOINT_TIMEOUT_S = 2.0
 
 
 # --- window lookups ----------------------------------------------------------
@@ -201,20 +208,36 @@ def decide_log_fate(sid, log):
                         mid-session; a crash skips SessionEnd). Leave it alone.
       fresh-db        — brand-new session. With no sid (the shared cwd-slug
                         fallback) any leftover DB may be another session's —
-                        remove it."""
+                        remove it.
+      restore-failed (park kept) — the MAIN park file could not be moved back
+                        (audited); the park stays intact for a later resume and
+                        the caller's ensure_db starts this session fresh."""
     db = P.state_db(log)
     pk = P.parked_db(log)
     if sid and (os.path.isfile(pk) or os.path.isfile(db + ".keep")):
         for suf in ("", "-wal", "-shm"):
             dst = db + suf
             # durable park first, then a legacy in-place *.keep (transition).
-            for src in (pk + suf, dst + ".keep"):
-                if os.path.isfile(src):
+            src = next((s for s in (pk + suf, dst + ".keep")
+                        if os.path.isfile(s)), None)
+            if src is None:
+                # No parked sidecar (the park checkpoints the WAL away). A
+                # STALE live sidecar left next to the restored main file would
+                # corrupt it — SQLite would replay a foreign WAL — so drop it.
+                if suf:
                     try:
-                        shutil.move(src, dst)
+                        os.remove(dst)
                     except OSError:
                         pass
-                    break
+                continue
+            try:
+                shutil.move(src, dst)
+            except OSError:
+                A.error(log, "decide_log_fate (restore move %s)" % (suf or "main"))
+                if not suf:
+                    # Without the main file there is nothing to restore onto;
+                    # leave the park (and its sidecars) intact for a later try.
+                    return "restore-failed (park kept)"
         return "restore-history"
     if os.path.isfile(db):
         if sid:
@@ -227,6 +250,25 @@ def decide_log_fate(sid, log):
     return "fresh-db"
 
 
+def _checkpoint_wal(db, log):
+    """Best-effort `wal_checkpoint(TRUNCATE)` through a short-lived connection,
+    run just before the park moves files: with the WAL flushed into the main
+    file (and truncated to nothing), the main-file move is the only one that
+    matters — a sidecar move can no longer tear uncheckpointed frames away from
+    a parked DB. Connecting here is fine (the DB still exists; this IS the park
+    path), but other writers may still be live at SessionEnd, so a busy-failed
+    TRUNCATE is a graceful no-op — the -wal file is then moved alongside the
+    main DB, frames intact. Only an exception is audited."""
+    try:
+        conn = sqlite3.connect(db, timeout=CHECKPOINT_TIMEOUT_S)
+        try:
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        finally:
+            conn.close()
+    except Exception:
+        A.error(log, "park_db (wal checkpoint)")
+
+
 def park_db(sid, log):
     """Tear down the state DB at session end. MOVING the DB (+ -wal/-shm) out to
     the durable park (HISTORY_DIR) makes the live DB PATH vanish — the exit
@@ -235,27 +277,53 @@ def park_db(sid, log):
     machine reboot (decide_log_fate → restore-history). The park lives under
     ~/.claude, not /tmp, precisely because macOS wipes /tmp on reboot. Only the
     anonymous cwd-slug fallback (no sid) is deleted outright. Returns the action
-    string the caller audits."""
+    string the caller audits:
+      keep-history — parked (a sidecar-only move failure is audited but still
+                     parks: the WAL was checkpointed first, so the main file
+                     already holds every frame).
+      park-failed (kept live) — the MAIN DB could not be moved (ENOSPC, EPERM,
+                     blocked destination — audited). The live path persists, so
+                     parked() never fires: the scorebar and codex watcher keep
+                     polling as orphans and a same-sid resume sees reuse-live-db.
+                     Returning a distinct, audited fate makes that VISIBLE (the
+                     errors row also lights the errwatch ⚠ chip); a poller
+                     backstop for this state is deliberately out of scope.
+      discard      — the sid-less cwd-slug fallback, deleted outright."""
     db = P.state_db(log)
     if sid:
         pk = P.parked_db(log)
         try:
             os.makedirs(os.path.dirname(pk), exist_ok=True)
         except OSError:
-            pass
-        for suf in ("", "-wal", "-shm"):
+            A.error(log, "park_db (mkdir park dir)")
+        if os.path.isfile(db):
+            _checkpoint_wal(db, log)
+        # MAIN file first: if IT can't move, stop before touching the sidecars
+        # — the DB stays live and intact (not torn), and the caller audits the
+        # distinct failure fate instead of a false keep-history.
+        if os.path.isfile(db):
+            _remove_blocking_park(pk, log)
+            try:
+                shutil.move(db, pk)
+            except OSError:
+                A.error(log, "park_db (main move — DB kept live)")
+                return "park-failed (kept live)"
+        for suf in ("-wal", "-shm"):
             src = db + suf
             if os.path.isfile(src):
                 dst = pk + suf
-                try:            # a stale prior park would block a cross-device move
-                    if os.path.exists(dst):
-                        os.remove(dst)
-                except OSError:
-                    pass
+                _remove_blocking_park(dst, log)
                 try:
                     shutil.move(src, dst)
                 except OSError:
-                    pass
+                    A.error(log, "park_db (sidecar move %s)" % suf)
+                    try:
+                        # The main file is already parked; a stale sidecar left
+                        # at the live path would corrupt the NEXT restore, and
+                        # the checkpoint above already folded its frames in.
+                        os.remove(src)
+                    except OSError:
+                        pass
         return "keep-history"
     for f in (db, db + "-wal", db + "-shm"):
         try:
@@ -263,3 +331,11 @@ def park_db(sid, log):
         except OSError:
             pass
     return "discard"
+
+
+def _remove_blocking_park(dst, log):
+    try:            # a stale prior park would block a cross-device move
+        if os.path.exists(dst):
+            os.remove(dst)
+    except OSError:
+        A.error(log, "park_db (remove blocking park file)")

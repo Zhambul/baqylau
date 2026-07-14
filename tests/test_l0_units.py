@@ -8,6 +8,7 @@
 #   3. core.noaudit — the centralized audit-import-degradation helper: the
 #      stub swallows every call, and load_audit() returns the real module
 #      when it imports.
+import os
 import sys
 
 from conftest import REPO
@@ -908,3 +909,143 @@ def test_spawn_detached_detaches_into_own_session(tmp_path, reaper):
     reaper.append(proc)
     wait_until(lambda: out.exists() and out.read_text(), desc="child sid file")
     assert int(out.read_text()) != os.getsid(0)
+
+
+# --- core.hostpane.park_db / decide_log_fate — failure-path fates ---------------
+# A silent park failure used to report "keep-history" while the live DB stayed
+# put (orphaned pollers, reuse-live-db on resume), and the three independent
+# moves could tear the WAL away from the parked main file. Pins: the WAL is
+# checkpointed before parking, the MAIN move failing returns a distinct audited
+# fate with the live DB untouched, a sidecar-only failure still parks (audited),
+# and the restore direction audits its failures + drops stale live sidecars.
+
+def _park_env(tmp_path, monkeypatch):
+    """Route audit rows + the durable park into the hermetic tmpdir and hand
+    back (hostpane, paths, log, state_db, parked_db, audit_errors)."""
+    import core.audit
+    from core import hostpane as HP
+    from core import paths as P
+    monkeypatch.setenv("CLAUDE_AUDIT", "1")
+    monkeypatch.setenv("CLAUDE_AUDIT_DIR", str(tmp_path / "audit"))
+    # audit caches its connection per process — drop it so rows land in THIS
+    # test's hermetic audit dir, not a previous test's.
+    monkeypatch.setattr(core.audit, "_CONN", None)
+    monkeypatch.setattr(core.audit, "_FAILED", False)
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    log = str(tmp_path / "claude-mirror-parkunit.log")
+
+    def errors():
+        import sqlite3
+        db = str(tmp_path / "audit" / "audit.db")
+        if not os.path.exists(db):
+            return []
+        conn = sqlite3.connect(db)
+        try:
+            return [r[0] for r in conn.execute("SELECT func FROM errors")]
+        finally:
+            conn.close()
+    return HP, P, log, P.state_db(log), P.parked_db(log), errors
+
+
+def _seed_state_db(db, wal=False):
+    """A real SQLite DB with one recognizable row (WAL mode keeps the -wal
+    sidecar alive while `hold` stays open)."""
+    import sqlite3
+    conn = sqlite3.connect(db)
+    if wal:
+        conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE t(x)")
+    conn.execute("INSERT INTO t VALUES ('parked-row')")
+    conn.commit()
+    return conn
+
+
+def test_park_db_checkpoints_wal_before_moving(tmp_path, monkeypatch):
+    """Rows committed only to the WAL must survive the park in the MAIN file:
+    park_db checkpoints (TRUNCATE) first, so the parked DB is self-contained
+    even if the sidecar moves were to fail."""
+    import sqlite3
+    HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
+    hold = _seed_state_db(db, wal=True)          # open conn keeps the -wal alive
+    assert os.path.getsize(db + "-wal") > 0      # frames really live in the WAL
+    assert HP.park_db("parkunit", log) == "keep-history"
+    hold.close()
+    assert not os.path.exists(db)
+    conn = sqlite3.connect("file:%s?mode=ro" % pk, uri=True)
+    try:
+        assert conn.execute("SELECT x FROM t").fetchone()[0] == "parked-row"
+    finally:
+        conn.close()
+    # the checkpoint emptied the WAL — no frame-bearing sidecar in the park
+    assert not os.path.exists(pk + "-wal") or os.path.getsize(pk + "-wal") == 0
+    assert errors() == []
+
+
+def test_park_db_main_move_failure_keeps_db_live_and_audits(tmp_path, monkeypatch):
+    """ENOSPC/EPERM on the MAIN move: distinct fate, errors row, live DB (and
+    its sidecars) untouched — never a false keep-history."""
+    HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
+    _seed_state_db(db).close()
+    open(db + "-wal", "w").write("fake frames")
+
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(HP.shutil, "move", boom)
+    assert HP.park_db("parkunit", log) == "park-failed (kept live)"
+    assert os.path.exists(db), "live DB must be untouched"
+    assert os.path.exists(db + "-wal"), "sidecars must not be torn off a live DB"
+    assert not os.path.exists(pk)
+    assert "park_db (main move — DB kept live)" in errors()
+
+
+def test_park_db_sidecar_move_failure_still_parks_and_audits(tmp_path, monkeypatch):
+    """Main parked, only the -wal move fails: still keep-history (the WAL was
+    checkpointed into the main file), the failure is audited, and the stale
+    live sidecar is removed so it can't corrupt the next restore."""
+    HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
+    _seed_state_db(db).close()
+    open(db + "-wal", "w").write("leftover")
+    real_move = HP.shutil.move
+
+    def flaky(src, dst):
+        if src.endswith("-wal"):
+            raise OSError(1, "Operation not permitted")
+        return real_move(src, dst)
+    monkeypatch.setattr(HP.shutil, "move", flaky)
+    assert HP.park_db("parkunit", log) == "keep-history"
+    assert os.path.exists(pk) and not os.path.exists(db)
+    assert not os.path.exists(db + "-wal"), "stale live sidecar must be removed"
+    assert "park_db (sidecar move -wal)" in errors()
+
+
+def test_decide_log_fate_restore_main_failure_keeps_park(tmp_path, monkeypatch):
+    """The restore direction of the same bug: a failed MAIN move back returns a
+    distinct audited fate and leaves the park intact for a later resume."""
+    HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
+    os.makedirs(os.path.dirname(pk), exist_ok=True)
+    _seed_state_db(pk).close()
+
+    def boom(src, dst):
+        raise OSError(28, "No space left on device")
+    monkeypatch.setattr(HP.shutil, "move", boom)
+    assert HP.decide_log_fate("parkunit", log) == "restore-failed (park kept)"
+    assert os.path.exists(pk) and not os.path.exists(db)
+    assert "decide_log_fate (restore move main)" in errors()
+
+
+def test_decide_log_fate_restore_drops_stale_live_sidecar(tmp_path, monkeypatch):
+    """A stale live -wal with no parked counterpart would be replayed into the
+    freshly restored main file — the restore must remove it."""
+    import sqlite3
+    HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
+    os.makedirs(os.path.dirname(pk), exist_ok=True)
+    _seed_state_db(pk).close()                    # parked main only, no sidecars
+    open(db + "-wal", "w").write("foreign frames")
+    assert HP.decide_log_fate("parkunit", log) == "restore-history"
+    assert not os.path.exists(db + "-wal"), "stale live sidecar survived restore"
+    conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+    try:
+        assert conn.execute("SELECT x FROM t").fetchone()[0] == "parked-row"
+    finally:
+        conn.close()
+    assert errors() == []

@@ -770,6 +770,17 @@ ANOMALY_SECTIONS = [
     # log a `restore-history` (or, after a crash with no SessionEnd, find the DB
     # still live: `reuse-live-db`). A `fresh-db` row on a source=resume start
     # means the history was lost — the mirror came back empty.
+    # park_db/decide_log_fate audit their move failures as DISTINCT fates now
+    # (2026-07-15): 'park-failed (kept live)' = SessionEnd could not move the
+    # state DB out (ENOSPC/EPERM/blocked destination — the paired errors row has
+    # the traceback), so the live path persists, parked() never fires, and the
+    # scorebar/codex-watcher pollers keep running as orphans; 'restore-failed
+    # (park kept)' = the resume's move-back failed, the park stays for a later
+    # try and the session started fresh. Either row is a real filesystem problem.
+    ("state-DB park/restore move failed (orphaned pollers / history not restored)",
+     "SELECT ts, action, content FROM state_files WHERE session_id=? AND "
+     "action IN ('park-failed (kept live)', 'restore-failed (park kept)') "
+     "ORDER BY ts", 1),
     ("resume that lost its mirror history (fresh-db on source=resume)",
      "SELECT h.ts FROM hook_events h WHERE h.session_id=? AND "
      "h.hook='SessionStart' AND json_extract(h.payload,'$.source')='resume' "

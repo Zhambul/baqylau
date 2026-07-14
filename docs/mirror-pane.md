@@ -354,6 +354,12 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   - neither → a genuinely new session: nothing to do, the first writer creates the
     DB (**fresh-db**). The sid-less cwd-slug fallback removes any leftover DB
     instead — it may belong to another session.
+  - the park exists but the MAIN file can't be moved back (ENOSPC, EPERM) →
+    **restore-failed (park kept)**: the failure is audited (`errors` row, func
+    `decide_log_fate (restore move main)`), the park stays intact for a later
+    resume, and `ensure_db` starts the session fresh. A restore also removes any
+    stale LIVE `-wal`/`-shm` that has no parked counterpart — SQLite would
+    replay a foreign WAL into the freshly restored main file.
 
   Why *park-and-move* rather than simply not deleting: the DB **path** vanishing
   is the exit signal the codex watcher and the bar's renderer poll for — leaving
@@ -367,6 +373,32 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   `state_files` row (action = the fate, content = the payload's `source`), so a
   resume that came back empty is a `fresh-db` row on a `source=resume` start — a
   canned `anomalies` query.
+
+  **The park itself can fail — it must never LIE about it.** `park_db` used to
+  do three independent `shutil.move`s (db, `-wal`, `-shm`) with every `OSError`
+  swallowed bare, then return `keep-history` unconditionally. Two failure
+  shapes fell out: (a) the MAIN move failing (ENOSPC, EPERM, a blocked
+  destination) left the live path in place while everything reported success —
+  `parked()` never fired, so the scorebar (a `while True` with no backstop) and
+  the codex watcher polled forever as orphans, and a same-sid resume took
+  `reuse-live-db` instead of restoring; (b) a partial failure TORE the WAL —
+  a parked main file without its uncheckpointed frames, or a stale sidecar left
+  at the live path for the next session to replay. Current `park_db`
+  (core/hostpane.py): first a best-effort `wal_checkpoint(TRUNCATE)` through a
+  short-lived connection (`CHECKPOINT_TIMEOUT_S`) — connecting is fine here,
+  the DB still exists and this IS the park path; a busy-failed checkpoint
+  (writers can still be live at SessionEnd) degrades gracefully because the
+  `-wal` is then moved alongside, frames intact — so the main-file move is the
+  only one that matters. Then the MAIN file moves FIRST: if it fails, the park
+  stops before touching the sidecars (live DB stays whole, not torn), audits
+  (`errors` func `park_db (main move — DB kept live)`), and returns the
+  distinct fate **`park-failed (kept live)`**, which SessionEnd audits as a
+  `state_files` row — the orphaned pollers are now at least VISIBLE (the
+  `errors` row also lights the errwatch `⚠` chip); a poller backstop for that
+  state is deliberately not added. A sidecar-only move failure still returns
+  `keep-history` (the checkpoint already folded the frames into the parked main
+  file) but is audited and the stale live sidecar removed so the next restore
+  can't replay it.
 
   **Resume (and backgrounding) can FORK the sid (adoption).** "keeps the same
   `session_id`" above has observed exceptions (both 2026-07-11). On a

@@ -439,6 +439,9 @@ def cmd_close():                             # SessionEnd (payload on stdin)
     action = HP.park_db(sid, log)            # move->durable park (resume) or delete
     if action == "keep-history":
         audit_state(log, P.parked_db(log), "keep-history", "parked for resume")
+    elif action != "discard":                # park-failed (kept live) — the live
+        audit_state(log, P.parked_db(log), action,  # DB persists, pollers stay up
+                    "park FAILED — live DB kept, pollers keep running")
     for f in (log, log + ".keep"):           # legacy JSONL log, if any
         try:
             os.remove(f)
