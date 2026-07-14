@@ -29,24 +29,35 @@ import time
 TAIL_SCAN_BYTES = 256 * 1024
 
 
-def claude_dirs(start=None):
+def config_dir():
+    """The USER-level Claude config dir: $CLAUDE_CONFIG_DIR when set (Claude's own
+    override — settings/agents live THERE, not in ~/.claude, when it's in effect),
+    else ~/.claude. The one place this default is encoded."""
+    return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+
+
+def claude_dirs(start=None, nearest_only=False):
     """Every `.claude` directory to consult for project-level config (agents, settings),
-    NEAREST-FIRST, always ending with ~/.claude. Used instead of a bare os.getcwd()
-    lookup, because a subagent/teammate frequently runs in a SUBDIRECTORY (a task's
-    `.zhambyl/tasks/<t>/db`, or a git worktree under `.zhambyl/parallel/<wt>`) where
-    `<cwd>/.claude` lacks the def/field we need.
+    NEAREST-FIRST, always ending with the user config dir (config_dir()). Used instead
+    of a bare os.getcwd() lookup, because a subagent/teammate frequently runs in a
+    SUBDIRECTORY (a task's `.zhambyl/tasks/<t>/db`, or a git worktree under
+    `.zhambyl/parallel/<wt>`) where `<cwd>/.claude` lacks the def/field we need.
 
     Resolution:
       - $CLAUDE_PROJECT_DIR (the harness's own project override; same as claude-split.py)
         pins the single project `.claude` when set;
       - otherwise walk UP from `start`, collecting EVERY ancestor `.claude` (stopping at
-        `/` or $HOME).
-    Collecting *all* of them — not just the nearest — is deliberate: an intermediate dir
-    may hold its own `.claude/` that is missing `agents/` or the field we want (e.g. a
-    task's `db/.claude`), and we must still fall through to the repo-root `.claude` above
-    it. Nearest-first means a more-specific dir still overrides a parent. Since the
-    agent-defs here are UNTRACKED (present only in the main working tree, absent from
-    worktree checkouts), a nested worktree resolves up to the main repo's defs correctly."""
+        `/` or $HOME) — or, with nearest_only=True, only the NEAREST one (split.py's
+        historical semantics for the mirror-width env settings: the project is "the
+        nearest .claude above cwd", full stop — it never fell through an intermediate
+        `.claude` to an outer repo's, and a width preference must not start doing so).
+    Collecting *all* of them — not just the nearest — is deliberate for agents/settings
+    resolution: an intermediate dir may hold its own `.claude/` that is missing `agents/`
+    or the field we want (e.g. a task's `db/.claude`), and we must still fall through to
+    the repo-root `.claude` above it. Nearest-first means a more-specific dir still
+    overrides a parent. Since the agent-defs here are UNTRACKED (present only in the main
+    working tree, absent from worktree checkouts), a nested worktree resolves up to the
+    main repo's defs correctly."""
     dirs = []
     env = (os.environ.get("CLAUDE_PROJECT_DIR") or "").strip()
     if env:
@@ -60,11 +71,13 @@ def claude_dirs(start=None):
             c = os.path.join(d, ".claude")
             if os.path.isdir(c):
                 dirs.append(c)
+                if nearest_only:
+                    break
             parent = os.path.dirname(d)
             if parent == d:
                 break
             d = parent
-    home_claude = os.path.expanduser("~/.claude")
+    home_claude = config_dir()
     if home_claude not in dirs:
         dirs.append(home_claude)
     return dirs
@@ -179,6 +192,30 @@ def settings_field(field):
         except Exception:
             pass
     return None
+
+
+def settings_env(key, nearest_only=False):
+    """The merged value of `key` from the `env` block of the settings files, or "".
+    Per .claude dir (claude_dirs, nearest-first — nearest_only limits the walk to the
+    nearest project .claude, see claude_dirs), settings.local.json shadows
+    settings.json; the FIRST dir that defines the key wins (== project overrides
+    global). The user config dir contributes only settings.json (there is no
+    user-level settings.local.json layering — and split.py never read one).
+    A present-but-falsy JSON value (0, "") still WINS: presence is `is not None`,
+    so e.g. CLAUDE_MIRROR_BIAS: 0 yields "0", not the default."""
+    cfg = config_dir()
+    for c in claude_dirs(nearest_only=nearest_only):
+        names = ("settings.json",) if c == cfg else ("settings.local.json",
+                                                     "settings.json")
+        for name in names:
+            try:
+                with open(os.path.join(c, name), encoding="utf-8") as fh:
+                    v = json.load(fh).get("env", {}).get(key)
+                if v is not None:
+                    return str(v)
+            except Exception:
+                pass
+    return ""
 
 
 def session_model(tpath):

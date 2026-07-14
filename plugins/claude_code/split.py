@@ -48,6 +48,7 @@ from core import hostpane as HP           # noqa: E402  (shared host pane lifecy
 from core import paths as P               # noqa: E402
 from core import tabs as T                # noqa: E402  (adopt_note — sid-fork registry)
 from plugins.claude_code import hookkit as HK  # noqa: E402  (log_path)
+from plugins.claude_code import model as M     # noqa: E402  (settings_env)
 
 # Keymap-launched background processes can inherit a minimal PATH; guarantee the
 # tools we shell out to (kitten, ps) resolve.
@@ -66,39 +67,10 @@ CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claud
 # the var isn't already in our env, we read+merge the files ourselves. The
 # keybindings pass `--cwd current`, so $PWD is the project here too.
 # Precedence: inherited env (if any) → project settings → global settings → default.
-def _settings_files():
-    files = [os.path.join(CONFIG_DIR, "settings.json")]
-    proj = os.environ.get("CLAUDE_PROJECT_DIR", "")
-    if not proj:                             # walk up from cwd to the nearest .claude
-        d = os.getcwd()
-        home = os.path.expanduser("~")
-        while d and d not in ("/", home):
-            if os.path.isdir(os.path.join(d, ".claude")):
-                proj = d
-                break
-            d = os.path.dirname(d)
-    if proj:
-        files += [os.path.join(proj, ".claude", "settings.json"),
-                  os.path.join(proj, ".claude", "settings.local.json")]
-    return files
-
-
-def read_setting(key):
-    """The env-var's merged value across the settings files (last wins), or ""."""
-    val = ""
-    for f in _settings_files():
-        try:
-            with open(f, encoding="utf-8") as fh:
-                v = json.load(fh).get("env", {}).get(key)
-            if v is not None:
-                val = str(v)
-        except Exception:
-            pass
-    return val
-
-
+# The walk + layering live in model.settings_env (the shared settings-resolution
+# home); nearest_only=True keeps this path's historical nearest-.claude-wins walk.
 def _int_setting(env_key, default):
-    v = os.environ.get(env_key) or read_setting(env_key)
+    v = os.environ.get(env_key) or M.settings_env(env_key, nearest_only=True)
     try:
         return int(v)
     except (TypeError, ValueError):

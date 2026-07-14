@@ -472,3 +472,82 @@ def test_wait_until_ceiling_scales(monkeypatch):
     assert "0.4" in str(e.value)                      # message reports scaled value
     # and a truthy predicate returns immediately regardless of scale
     assert C.wait_until(lambda: 7, timeout=0.1) == 7
+
+
+# --- model.claude_dirs / model.settings_env (the ONE settings walk) ----------
+# split.py's private nearest-.claude walk + env-block layering was consolidated
+# onto model.py. Pin both walk modes and the layering order so the consolidation
+# can't silently change either caller's precedence.
+
+def _settings_tree(tmp_path, monkeypatch):
+    """cfg/.claude (user config dir) + outer/.claude + outer/inner/.claude,
+    cwd = outer/inner/sub — a REAL nested-.claude layout."""
+    import json as _json
+    cfg = tmp_path / "cfg" / ".claude"
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    sub = inner / "sub"
+    for d in (cfg, outer / ".claude", inner / ".claude", sub):
+        d.mkdir(parents=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    monkeypatch.chdir(sub)
+
+    def write(claude_dir, name, env):
+        (claude_dir / name).write_text(_json.dumps({"env": env}))
+    return cfg, outer / ".claude", inner / ".claude", write
+
+
+def test_claude_dirs_all_ancestors_vs_nearest_only(tmp_path, monkeypatch):
+    from plugins.claude_code import model as M
+    cfg, outer_c, inner_c, _ = _settings_tree(tmp_path, monkeypatch)
+    # default: EVERY ancestor .claude, nearest-first, config dir last
+    assert M.claude_dirs() == [str(inner_c), str(outer_c), str(cfg)]
+    # nearest_only (split.py's walk): stop at the nearest, still config-dir last
+    assert M.claude_dirs(nearest_only=True) == [str(inner_c), str(cfg)]
+
+
+def test_claude_dirs_project_dir_pins(tmp_path, monkeypatch):
+    from plugins.claude_code import model as M
+    cfg, outer_c, _inner_c, _ = _settings_tree(tmp_path, monkeypatch)
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(outer_c.parent))
+    assert M.claude_dirs() == [str(outer_c), str(cfg)]
+    assert M.claude_dirs(nearest_only=True) == [str(outer_c), str(cfg)]
+
+
+def test_settings_env_layering_project_over_global(tmp_path, monkeypatch):
+    from plugins.claude_code import model as M
+    cfg, _outer_c, inner_c, write = _settings_tree(tmp_path, monkeypatch)
+    write(cfg, "settings.json", {"CLAUDE_MIRROR_BIAS": 25})
+    write(inner_c, "settings.json", {"CLAUDE_MIRROR_BIAS": 40})
+    write(inner_c, "settings.local.json", {"CLAUDE_MIRROR_BIAS": 55})
+    # local shadows settings within the dir; project beats global — both modes
+    assert M.settings_env("CLAUDE_MIRROR_BIAS") == "55"
+    assert M.settings_env("CLAUDE_MIRROR_BIAS", nearest_only=True) == "55"
+    # absent from the project -> falls through to the global file
+    assert M.settings_env("CLAUDE_MIRROR_STEP", nearest_only=True) == ""
+    write(cfg, "settings.json", {"CLAUDE_MIRROR_STEP": 6})
+    assert M.settings_env("CLAUDE_MIRROR_STEP", nearest_only=True) == "6"
+
+
+def test_settings_env_walk_depth_is_the_behavioral_difference(tmp_path, monkeypatch):
+    """A key defined only in the OUTER .claude of a nested layout: the default
+    walk falls through the inner .claude to it; nearest_only (split's mode)
+    stops at the inner .claude and goes straight to global — the exact
+    difference that made nearest_only a parameter."""
+    from plugins.claude_code import model as M
+    _cfg, outer_c, _inner_c, write = _settings_tree(tmp_path, monkeypatch)
+    write(outer_c, "settings.json", {"CLAUDE_MIRROR_BIAS": 33})
+    assert M.settings_env("CLAUDE_MIRROR_BIAS") == "33"
+    assert M.settings_env("CLAUDE_MIRROR_BIAS", nearest_only=True) == ""
+
+
+def test_settings_env_falsy_value_and_global_local_ignored(tmp_path, monkeypatch):
+    from plugins.claude_code import model as M
+    cfg, _outer_c, inner_c, write = _settings_tree(tmp_path, monkeypatch)
+    # a present-but-falsy JSON value still wins (presence is `is not None`)
+    write(inner_c, "settings.json", {"CLAUDE_MIRROR_BIAS": 0})
+    assert M.settings_env("CLAUDE_MIRROR_BIAS", nearest_only=True) == "0"
+    # the user config dir contributes only settings.json, never a local file
+    write(cfg, "settings.local.json", {"CLAUDE_MIRROR_STEP": 9})
+    assert M.settings_env("CLAUDE_MIRROR_STEP", nearest_only=True) == ""
