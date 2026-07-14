@@ -278,7 +278,9 @@ def agent_meta(tpath, agent_id):
         try:
             with open(p, encoding="utf-8") as fh:
                 return json.load(fh)
-        except FileNotFoundError:
+        except (FileNotFoundError, json.JSONDecodeError):
+            # Missing OR mid-write (a partial file json-fails) — both are the same
+            # "not there yet" race, so both retry.
             time.sleep(0.05)
         except Exception:
             break

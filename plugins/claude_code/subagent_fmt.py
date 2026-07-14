@@ -12,7 +12,7 @@
 #   stop  — SubagentStop: signal completion to the streamer (which writes the footer
 #           and releases the slot). Safety net: if the streamer isn't running, write
 #           the footer + release the slot here.
-import json, os, sys, time
+import os, sys, time
 
 from core import ops as O
 from core import slots as claude_slots
@@ -36,18 +36,10 @@ def is_teammate(tpath, agent_id):
     # but its meta.json carries taskKind == "in_process_teammate". (Unlike an ordinary
     # subagent's meta, a teammate's is present at SubagentStart, so reading it here is
     # reliable.) Teammates render in the lighter "team" palette + a "teammate" header.
-    base = tpath[:-6] if tpath.endswith(".jsonl") else tpath
-    meta = os.path.join(base, "subagents", f"agent-{agent_id}.meta.json")
-    # The meta.json can lag SubagentStart by a moment, so retry briefly when it's
-    # missing (no delay when it's already there). Without this, the race made real
-    # teammates render in the ordinary subagent palette.
-    for _ in range(6):
-        try:
-            with open(meta, encoding="utf-8") as f:
-                return json.load(f).get("taskKind") == "in_process_teammate"
-        except Exception:
-            time.sleep(0.08)
-    return False
+    # The meta.json read (incl. the brief retry while it lags SubagentStart — without
+    # which the race made real teammates render in the ordinary subagent palette) is
+    # M.agent_meta's; missing/never-appearing meta → {} → False.
+    return M.agent_meta(tpath, agent_id).get("taskKind") == "in_process_teammate"
 
 
 # The canonical probe treats EPERM (exists, foreign-owned) as ALIVE — the local
@@ -160,7 +152,8 @@ def finalize(log, d, agent_id, atype, tpath, tag="stop"):
         # Idempotent (diffs against the billed baseline), so a duplicate stop or a
         # clean finish recovers nothing. The payload's agent_transcript_path (when
         # present) beats the derived path.
-        rec_st = reconcile_spend(log, tpath, agent_id, is_teammate(tpath, agent_id),
+        team = is_teammate(tpath, agent_id)   # once — each probe is a retry-read
+        rec_st = reconcile_spend(log, tpath, agent_id, team,
                                  d.get("agent_transcript_path") or "")
         got = claude_slots.lookup_id("sub", log, agent_id)
         # Release FIRST, emit only if THIS call deleted the row: two overlapping
@@ -169,7 +162,7 @@ def finalize(log, d, agent_id, atype, tpath, tag="stop"):
         if got and claude_slots.release_id("sub", log, agent_id):
             dur = fmt_dur(time.time() - got[1]) if got[1] else ""
             chip = f"■ {atype} ended · {dur}" if dur else f"■ {atype} ended"
-            pal = "team" if is_teammate(tpath, agent_id) else "sub"
+            pal = "team" if team else "sub"
             O.emit(log, O.rule(), O.label(chip, claude_slots.color(pal, got[0])), O.rule())
             A.hook_event(d, decision="%s: SAFETY NET footer (streamer died mid-run, "
                          "spend %s)" % (tag, rec_st))

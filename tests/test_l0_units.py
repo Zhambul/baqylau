@@ -236,3 +236,33 @@ print("OK")
     r = subprocess.run([sys.executable, "-c", prog], cwd=REPO, env=env,
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 0 and "OK" in r.stdout, r.stderr
+
+
+# --- is_teammate — the meta.json teammate probe, now a thin wrapper over -----
+# --- model.agent_meta (the ONE retry-read of the sidecar) --------------------
+
+def test_is_teammate_marker_present(tmp_path):
+    import json
+    from plugins.claude_code import subagent_fmt
+    tpath = str(tmp_path / "sess.jsonl")
+    sub = tmp_path / "sess" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a1.meta.json").write_text(
+        json.dumps({"taskKind": "in_process_teammate"}))
+    assert subagent_fmt.is_teammate(tpath, "a1") is True
+
+
+def test_is_teammate_ordinary_subagent(tmp_path):
+    import json
+    from plugins.claude_code import subagent_fmt
+    tpath = str(tmp_path / "sess.jsonl")
+    sub = tmp_path / "sess" / "subagents"
+    sub.mkdir(parents=True)
+    (sub / "agent-a1.meta.json").write_text(json.dumps({"agentType": "task"}))
+    assert subagent_fmt.is_teammate(tpath, "a1") is False
+
+
+def test_is_teammate_missing_meta_false(tmp_path):
+    # No meta.json ever appears: agent_meta's brief retry exhausts -> {} -> False.
+    from plugins.claude_code import subagent_fmt
+    assert subagent_fmt.is_teammate(str(tmp_path / "sess.jsonl"), "gone") is False
