@@ -27,10 +27,10 @@ RST = R.RST
 kfmt = O.kfmt        # compact token count: 124000 -> "124k"
 AMBER = R.fg(*O.YELLOW)   # the compact-boundary notice colour
 
-# Verbs + colours for file ops — the shared claude_ops table (claude-file-fmt.py
-# renders the main session's file ops with the same).
+# Verbs for file ops — the shared claude_code.tools table (claude-file-fmt.py
+# renders the main session's file ops with the same; the colours ride into
+# streamfmt.file_line straight from CT.FILE_RGB).
 FILE_LABEL = CT.FILE_LABEL
-FILE_COL   = {verb: R.fg(*rgb) for verb, rgb in CT.FILE_RGB.items()}
 
 # A message DELIVERED to this teammate appears in its transcript as a plain user
 # record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
@@ -218,38 +218,31 @@ class Renderer:
         label = FILE_LABEL.get(name_tool, "Read")
         path = inp.get("file_path") or inp.get("notebook_path") or ""
         name = os.path.basename(path.rstrip("/")) or path or "?"
-        col = R.fg(*O.RED) if failed else FILE_COL.get(label, R.COL["def"])   # red verb on failure
-        # Lead with WHO did it — the agent's name/type in its own colour — so a Read/Update/
-        # Write is attributable to the subagent (or teammate) that ran it, the same identity
-        # cue chip() puts on this agent's Bash ops. The gutter bar already carries the colour,
-        # but the explicit name is what the eye reads.
-        who = R.fg(*self.rgb) + self.label + " " + RST
-        line = who + col + label + R.DIM + "(" + R.COL["def"] + name + R.DIM + ")" + RST
         # A read shows how much of the file it took ('' == the whole file); a mutation shows
         # its added/removed line counts plus the line range(s) it touched. All go before the
         # model tag so they survive truncation on a narrow pane. Extent/range come from the
-        # tool_result (`result`); counts from the input.
+        # tool_result (`result`); counts from the input. A failed op gets none of these
+        # (diff_counts would count lines never written) — just the red verb + ✗ mark.
         added = removed = 0
+        ext = rng = ""
+        if not failed:
+            if name_tool == "Read":
+                ext = CT.read_extent(result.get("file") if isinstance(result, dict) else None, inp)
+            else:
+                added, removed = CT.diff_counts(name_tool, inp)
+                rng = CT.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
+        # Lead with WHO did it — the agent's name/type in its own colour — so a Read/Update/
+        # Write is attributable to the subagent (or teammate) that ran it, the same identity
+        # cue chip() puts on this agent's Bash ops. The gutter bar already carries the colour,
+        # but the explicit name is what the eye reads. The one-liner itself is the shared
+        # core builder (streamfmt.file_line — same anatomy as the main session's file ops
+        # and codex patches).
+        who = R.fg(*self.rgb) + self.label + " " + RST
+        line = who + SF.file_line(label, name, CT.FILE_RGB.get(label, O.SLATE),
+                                  failed=failed, extent=ext,
+                                  added=added, removed=removed, rng=rng)
         if failed:
-            # A failed op: no extent, no counts (diff_counts would count lines never
-            # written) — just the ✗ mark, same as claude-file-fmt.py's `if not failed`.
             line += "  " + R.DIM + "✗" + RST
-        elif name_tool == "Read":
-            ext = CT.read_extent(result.get("file") if isinstance(result, dict) else None, inp)
-            if ext:
-                line += "  " + R.DIM + ext + RST
-        else:
-            added, removed = CT.diff_counts(name_tool, inp)
-            d = []
-            if added:
-                d.append(R.fg(*O.GREEN) + f"+{added}" + RST)   # green additions
-            if removed:
-                d.append(R.fg(*O.RED) + f"-{removed}" + RST)  # red removals
-            if d:
-                line += "  " + " ".join(d)
-            rng = CT.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
-            if rng:
-                line += "  " + R.DIM + rng + RST
         tag = self._op_tag()
         if tag:
             line += "  " + R.DIM + tag + RST
@@ -260,7 +253,7 @@ class Renderer:
         # tool_use_id, bake the /view hyperlink into the line (the OSC 8 sequence is
         # zero-width to wrap_gutter), and tag the gut op with "v" so the renderer
         # expands the block in place. A subagent transcript's tool_result rarely
-        # carries the Read content/structuredPatch — _view_ops falls back to the
+        # carries the Read content/structuredPatch — view_ops falls back to the
         # disk re-read / input-strings difflib for those.
         vid = None
         if not failed and tid:
@@ -268,8 +261,8 @@ class Renderer:
             from core import paths as PATHS
             from plugins.claude_code import file_fmt as FF
             try:
-                vops = FF._view_ops(name_tool, label, name, path, inp,
-                                    result if isinstance(result, dict) else {})
+                vops = FF.view_ops(name_tool, label, name, path, inp,
+                                   result if isinstance(result, dict) else {})
             except Exception:
                 vops = None
                 A.error(self.log, "view-stash (substream render)",

@@ -35,6 +35,7 @@ from core import ops as O
 from core import paths as PATHS
 from core import render as R
 from core import state as S
+from core import streamfmt as SF
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -49,7 +50,6 @@ def fg(r, g, b):
     return f"\033[38;2;{r};{g};{b}m"
 
 
-COLOR = {verb: fg(*rgb) for verb, rgb in CT.FILE_RGB.items()}
 DIM = fg(92, 99, 112)
 DEF = fg(171, 178, 191)
 RST = "\033[0m"
@@ -165,10 +165,18 @@ def _diff_ops(rows, rgb, lexer):
     return ops
 
 
-def _view_ops(tool, label, name, path, ti, tr):
+def view_ops(tool, label, name, path, ti, tr):
     """The click-to-view block for one file op, as a list of paint-op dicts
     (JSON-clean — exactly what claude-copy.py O.emit()s on a /view click), or
-    None when there is nothing to show (empty content, unreadable file)."""
+    None when there is nothing to show (empty content, unreadable file).
+
+    Public API: the subagent substream renderer
+    (plugins/claude_code/substream_render.py) builds its file-op view stashes
+    through this too — file_fmt owns the block builder for both, so a Read/
+    Write body and an Update diff render identically whether the main session
+    or a subagent did the op. When the caller's tool_result lacks the Read
+    content/structuredPatch (a subagent transcript's usually does), the
+    builders below fall back to the disk re-read / input-strings difflib."""
     rgb = CT.FILE_RGB.get(label, O.SLATE)
     if tool == "Read":
         text, start = _read_text(path, ti, tr)
@@ -211,37 +219,27 @@ def main():
         return H.ignore(d, "no file path")
     name = os.path.basename(path.rstrip("/")) or path
     failed = H.is_failure(d)
-    if failed:
-        col, mark = fg(*O.RED), DIM + " ✗" + RST          # red verb + ✗ on failure
-    else:
-        col, mark = COLOR.get(label, DEF), ""
+    mark = (DIM + " ✗" + RST) if failed else ""           # ✗ on failure (verb goes red)
     tool = d.get("tool_name") or ""
     tr = d.get("tool_response")
     added = removed = 0
-    line = col + label + DIM + "(" + DEF + name + DIM + ")" + RST
+    ext = rng = ""
     if not failed:
         if tool == "Read":
             # How much of the file it actually read ('' when the whole file). The result
             # carries startLine/numLines/totalLines; tool_input offset/limit is a fallback.
-            finfo = tr.get("file") if isinstance(tr, dict) else None
-            ext = CT.read_extent(finfo, ti)
-            if ext:
-                line += "  " + DIM + ext + RST
+            ext = CT.read_extent(tr.get("file") if isinstance(tr, dict) else None, ti)
         else:
             # Added/removed line counts for a mutation (Read returns (0, 0) → no suffix),
             # then the line range(s) it touched (from the result's structuredPatch).
             added, removed = CT.diff_counts(tool, ti)
-            parts = []
-            if added:
-                parts.append(fg(*O.GREEN) + f"+{added}" + RST)   # green additions
-            if removed:
-                parts.append(fg(*O.RED) + f"-{removed}" + RST)   # red removals
-            if parts:
-                line += "  " + " ".join(parts)
             rng = CT.edit_range(tr.get("structuredPatch") if isinstance(tr, dict) else None)
-            if rng:
-                line += "  " + DIM + rng + RST
-    line += mark
+    # The one-liner shape itself is the shared core builder (streamfmt.file_line
+    # — the substream and codex renderers paint the same anatomy); the failure
+    # mark stays this formatter's own.
+    line = SF.file_line(label, name, CT.FILE_RGB.get(label, O.SLATE),
+                        failed=failed, extent=ext,
+                        added=added, removed=removed, rng=rng) + mark
     # Click-to-view: stash the pre-rendered content block under the op's
     # tool_use_id, wrap the WHOLE one-liner in the claude-copy:///…/view
     # hyperlink (a `line` op paints verbatim, so the producer bakes the link;
@@ -253,7 +251,7 @@ def main():
     gid = d.get("tool_use_id") or None
     if not failed and gid:
         try:
-            vops = _view_ops(tool, label, name, path, ti, tr)
+            vops = view_ops(tool, label, name, path, ti, tr)
         except Exception:
             vops = None
             A.error(LOG, "view-stash (render)", {"tool": tool, "gid": gid})

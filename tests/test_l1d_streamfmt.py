@@ -61,6 +61,57 @@ def test_dim_gut_wraps_in_dim():
     assert got == O.gut(R.DIM + "thinking" + R.RST, RGB)
 
 
+# --- file_line -----------------------------------------------------------------
+# The file-op one-liner extracted from THREE hand-built copies (file_fmt main,
+# the substream's render_file, the codex render_patch). Pins are the exact bytes
+# each site painted before the extraction, per that caller's shape.
+
+YELLOW = R.fg(*O.YELLOW)
+BLUE = R.fg(*O.BLUE)
+GREEN = R.fg(*O.GREEN)
+RED = R.fg(*O.RED)
+DEF = R.COL["def"]
+
+
+def _head(col, verb, name):
+    return col + verb + R.DIM + "(" + DEF + name + R.DIM + ")" + R.RST
+
+
+def test_file_line_read_extent():
+    # file_fmt's Read shape: verb(name) + dim extent, no counts/range.
+    got = SF.file_line("Read", "a.py", O.BLUE, extent="120-160/400")
+    assert got == _head(BLUE, "Read", "a.py") + "  " + R.DIM + "120-160/400" + R.RST
+
+
+def test_file_line_whole_file_read_is_bare():
+    assert SF.file_line("Read", "a.py", O.BLUE) == _head(BLUE, "Read", "a.py")
+
+
+def test_file_line_update_counts_and_range():
+    # The mutation shape shared by file_fmt and the substream: green +A, red -R,
+    # then the dim structuredPatch range.
+    got = SF.file_line("Update", "b.py", O.YELLOW, added=3, removed=1, rng="41-52")
+    assert got == (_head(YELLOW, "Update", "b.py")
+                   + "  " + GREEN + "+3" + R.RST + " " + RED + "-1" + R.RST
+                   + "  " + R.DIM + "41-52" + R.RST)
+
+
+def test_file_line_single_sided_counts():
+    # Only one side present: no stray joiner space (codex render_patch shape).
+    got = SF.file_line("Write", "c.py", O.GREEN, added=12)
+    assert got == _head(GREEN, "Write", "c.py") + "  " + GREEN + "+12" + R.RST
+    got = SF.file_line("Delete", "d.py", O.RED, removed=7)
+    assert got == _head(RED, "Delete", "d.py") + "  " + RED + "-7" + R.RST
+
+
+def test_file_line_failed_is_red_head_only():
+    # A failed op: red verb(name), and every suffix suppressed even if passed —
+    # the counts would claim lines never written. The ✗ mark stays caller-side.
+    got = SF.file_line("Update", "e.py", O.YELLOW, failed=True,
+                       extent="1-9/9", added=3, removed=1, rng="1-3")
+    assert got == _head(RED, "Update", "e.py")
+
+
 # --- tok_rollup ------------------------------------------------------------------
 
 def test_tok_rollup_empty_when_no_tokens():

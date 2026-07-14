@@ -200,8 +200,12 @@ the file it probes), `slots.py` (palette/liveness slots — was
 `claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
 `streamfmt.py` (the shared block-shaping vocabulary of the stream renderers —
 `cap`, the `chip`/`gutter`/`dim_gut` op shapes, the ended-footer `tok_rollup`
-token fragment; extracted from the byte-identical copies the substream renderer
-and the codex stream each grew — shared surface lives in core because the
+token fragment, and `file_line` — the file-op one-liner
+`verb(name)[ extent][ +A -R][ range]` painted identically by `file_fmt.py`,
+`substream_render.py`, and the codex patch renderer, each of which used to
+hand-build it; the per-caller extras — who-prefix, model/ctx tags, ✗ mark, the
+click-to-view hyperlink — stay caller-side; extracted from the byte-identical
+copies the renderers each grew — shared surface lives in core because the
 dependency rule forbids codex importing claude_code),
 `render.py` (ANSI rendering — was `claude_render.py`), `mdrender.py` (AST-driven
 markdown → styled ANSI for the mirror: an `OpsRenderer(BaseRenderer)` over the
@@ -793,6 +797,8 @@ a soft red panel and additions on a soft green panel (the tint alone carries
 the meaning), non-adjacent hunks separated by a dim `⋮`. Mechanism, in three
 parts:
 - **The stash** (hook time): the producer pre-renders the block into paint ops
+  (`file_fmt.view_ops` — the ONE block builder, public API shared by the
+  substream renderer, so a subagent's op expands identically)
   and writes them to the state DB kv table under `view:<tool_use_id>`
   (audited as a `view-stash` state_files row), because the payload
   (`tool_response` content, `old_string`/`new_string`) exists ONLY while the

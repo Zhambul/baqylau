@@ -113,15 +113,10 @@ def render_patch(p):
         verb, rgb, tool = FILE_VERB.get(ch.get("type"), FILE_VERB["update"])
         name = os.path.basename((path or "").rstrip("/")) or path or "?"
         add, rem = _patch_delta(ch)
-        line = (R.fg(*rgb) + verb + R.DIM + "(" + R.COL["def"] + name
-                + R.DIM + ")" + RST)
-        parts = []
-        if add:
-            parts.append(R.fg(*O.GREEN) + "+%d" % add + RST)
-        if rem:
-            parts.append(R.fg(*O.RED) + "-%d" % rem + RST)
-        if parts:
-            line += "  " + " ".join(parts)
+        # The one-liner shape is the shared core builder (streamfmt.file_line —
+        # the same anatomy the claude_code file formatters paint); a codex patch
+        # has no extent/range/failure variants, just the ± counts.
+        line = SF.file_line(verb, name, rgb, added=add, removed=rem)
         O.emit(LOG, O.gut(line, SLOT_RGB))
         O.bump(LOG, tool=tool, file=path, added=add, removed=rem)
 
