@@ -49,18 +49,43 @@ A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub
 
 from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 STREAM = os.path.join(BIN, "claude-codex-stream.py")
-LOG = sys.argv[1] if len(sys.argv) > 1 else ""
-CWD = sys.argv[2] if len(sys.argv) > 2 else os.getcwd()
-SID = sys.argv[3] if len(sys.argv) > 3 else ""
-# argv[4] = the codex HOST pid, present ONLY when this watcher is the session
-# manager for a STANDALONE codex (plugins/codex/session.py). Its presence flips
-# the watcher into standalone mode: stream exactly THIS session's own rollout
-# (uuid == SID, adopting the codex-tui originator we otherwise skip) and, since
-# codex has no SessionEnd hook, own teardown — park the DB + close the panes when
-# the codex host pid dies. Empty/"0" = the classic secondary-source mode inside a
-# Claude Code host (backward-compatible 3-arg launch).
-HOST_PID = sys.argv[4] if len(sys.argv) > 4 else ""
-STANDALONE = bool(HOST_PID) and HOST_PID != "0"
+
+# --- run identity (argv contract) ---------------------------------------------------
+# All of this used to be bound at module top level — importing the module read
+# argv and even FORKED a `git rev-parse` (workspace_slug -> git_root). It now
+# lives in _init(), called from entry(), so IMPORTING this module (tests,
+# tooling) reads no argv and runs no subprocess — only running it does. The
+# placeholders below just name the module globals every function reads at call
+# time.
+LOG = CWD = SID = ""
+HOST_PID = ""
+STANDALONE = False
+SLUGDIR = ""
+REPO_ROOT = ""
+
+
+def _init(argv):
+    """Bind this run's identity from the shim's argv:
+      claude-codex-watch.py MIRROR_LOG CWD [SESSION_ID] [HOST_PID]
+    plus the derived workspace slug + repo root (a `git rev-parse` fork)."""
+    global LOG, CWD, SID, HOST_PID, STANDALONE, SLUGDIR, REPO_ROOT
+    LOG = argv[1] if len(argv) > 1 else ""
+    CWD = argv[2] if len(argv) > 2 else os.getcwd()
+    SID = argv[3] if len(argv) > 3 else ""
+    # argv[4] = the codex HOST pid, present ONLY when this watcher is the session
+    # manager for a STANDALONE codex (plugins/codex/session.py). Its presence flips
+    # the watcher into standalone mode: stream exactly THIS session's own rollout
+    # (uuid == SID, adopting the codex-tui originator we otherwise skip) and, since
+    # codex has no SessionEnd hook, own teardown — park the DB + close the panes when
+    # the codex host pid dies. Empty/"0" = the classic secondary-source mode inside a
+    # Claude Code host (backward-compatible 3-arg launch).
+    HOST_PID = argv[4] if len(argv) > 4 else ""
+    STANDALONE = bool(HOST_PID) and HOST_PID != "0"
+    SLUGDIR = workspace_slug()
+    try:
+        REPO_ROOT = os.path.realpath(git_root(CWD))
+    except Exception:
+        REPO_ROOT = git_root(CWD)
 
 POLL = float(os.environ.get("CLAUDE_CODEX_WATCH_POLL_S") or 0.4)
 SKEW = 5.0          # accept a run created up to this many seconds before we started
@@ -89,13 +114,6 @@ def workspace_slug():
     base = os.path.basename(root.rstrip("/")) or "workspace"
     slug = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-") or "workspace"
     return f"{slug}-{hashlib.sha256(rp.encode()).hexdigest()[:16]}"
-
-
-SLUGDIR = workspace_slug()
-try:
-    REPO_ROOT = os.path.realpath(git_root(CWD))
-except Exception:
-    REPO_ROOT = git_root(CWD)
 
 
 def claims_db():
@@ -399,6 +417,7 @@ def main():
 _WATCH_ID = None
 
 def entry():
+    _init(sys.argv)
     try:
         os.setsid()          # redundant when launched via start_new_session, harmless
     except Exception:

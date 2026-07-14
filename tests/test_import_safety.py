@@ -124,6 +124,57 @@ def test_split_imports_clean():
         f"import of plugins.claude_code.split had side effects:\n{r.stderr}")
 
 
+_CODEX_WATCH_PROG = """
+import sys, os, subprocess
+sys.argv = ["import-safety-test"]          # no argv contract available
+# Importing watch must fork no subprocess — the old top-level
+# `SLUGDIR = workspace_slug()` ran `git rev-parse` at import time.
+def _boom(*a, **k):
+    raise AssertionError("subprocess forked at import time (git rev-parse)")
+subprocess.run = _boom
+subprocess.Popen = _boom
+import plugins.codex.watch as W
+assert W.LOG == "" and W.SLUGDIR == "" and W.REPO_ROOT == "", "argv/slug bound at import"
+print("OK")
+"""
+
+
+def test_codex_watch_imports_clean():
+    """codex watch must not read argv or fork `git rev-parse` (workspace_slug
+    -> git_root) at import — the run identity, slug and repo root are bound by
+    _init(), called only from entry()."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("KITTY_", "CLAUDE_"))}
+    r = subprocess.run([sys.executable, "-c", _CODEX_WATCH_PROG], cwd=REPO, env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "OK" in r.stdout, (
+        f"import of plugins.codex.watch had side effects:\n{r.stderr}")
+
+
+_CODEX_STREAM_PROG = """
+import sys, os, subprocess
+sys.argv = ["import-safety-test"]          # no argv contract available
+def _boom(*a, **k):
+    raise AssertionError("subprocess forked at import time")
+subprocess.run = _boom
+subprocess.Popen = _boom
+import plugins.codex.stream as CS
+assert CS.LOG == "" and CS.LOGFILE == "" and not CS.ROLLOUT, "argv bound at import"
+print("OK")
+"""
+
+
+def test_codex_stream_imports_clean():
+    """codex stream must not read argv at import — LOG/SLOT_RGB/LOGFILE/JSONF/
+    LABEL/ROLLOUT are bound by _init(), called only from entry()."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("KITTY_", "CLAUDE_"))}
+    r = subprocess.run([sys.executable, "-c", _CODEX_STREAM_PROG], cwd=REPO, env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "OK" in r.stdout, (
+        f"import of plugins.codex.stream had side effects:\n{r.stderr}")
+
+
 def test_split_lazy_fe_memoizes(monkeypatch):
     """split._fe() resolves + export_env()s once on first use and honours a
     pre-seeded FE (the test seam, matching tabstatus)."""

@@ -32,13 +32,31 @@ from core import tail as T
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-LOG      = sys.argv[1] if len(sys.argv) > 1 else ""
-SLOT_RGB = tuple(int(x) for x in sys.argv[2].split(",")) if len(sys.argv) > 2 else (0, 200, 150)
-LOGFILE  = sys.argv[3] if len(sys.argv) > 3 else ""
-JSONF    = sys.argv[4] if len(sys.argv) > 4 else "-"
-LABEL    = sys.argv[5] if len(sys.argv) > 5 else "task"
-ROLLOUT  = LOGFILE.endswith(".jsonl")     # else companion .log
 RST, FAIL = R.RST, R.fg(*O.RED)
+
+# --- run identity (argv contract) ---------------------------------------------------
+# All of this used to be parsed at module top level — importing the module read
+# argv. It now lives in _init(), called from entry(), so IMPORTING this module
+# (tests, tooling) reads no argv — only running it does. The placeholders below
+# just name the module globals every function reads at call time.
+LOG      = ""
+SLOT_RGB = (0, 200, 150)
+LOGFILE  = ""
+JSONF    = "-"
+LABEL    = "task"
+ROLLOUT  = False                          # LOGFILE ends .jsonl; else companion .log
+
+
+def _init(argv):
+    """Bind this run's identity from the shim's argv:
+      claude-codex-stream.py MIRROR_LOG "r,g,b" SRCFILE JSONFILE LABEL"""
+    global LOG, SLOT_RGB, LOGFILE, JSONF, LABEL, ROLLOUT
+    LOG      = argv[1] if len(argv) > 1 else ""
+    SLOT_RGB = tuple(int(x) for x in argv[2].split(",")) if len(argv) > 2 else (0, 200, 150)
+    LOGFILE  = argv[3] if len(argv) > 3 else ""
+    JSONF    = argv[4] if len(argv) > 4 else "-"
+    LABEL    = argv[5] if len(argv) > 5 else "task"
+    ROLLOUT  = LOGFILE.endswith(".jsonl")
 
 # Line caps per excerpt kind (how many lines of each block the mirror shows before
 # "… (+N lines)"). These deliberately DIVERGE from plugins/claude_code/
@@ -156,167 +174,171 @@ def dim_gut(text, g=None):
     return SF.dim_gut(text, SLOT_RGB, g=g)
 
 
-_last_msg = ""            # last assistant-message body, to de-dup a repeated "Final output"
+class Renderer:
+    """Per-run mutable render state for BOTH sources (companion + rollout) —
+    was ~10 module globals mutated via `global` in render_record/feed_rollout;
+    gathering them here matches the substream_render.py house shape (a
+    state-holding class the lifecycle instantiates per run)."""
 
+    def __init__(self):
+        self.last_msg = ""    # last assistant-message body, to de-dup a repeated "Final output"
+        # companion: the `[ts]` block currently being accumulated (a head only
+        # renders when the NEXT timestamped line flushes it)
+        self.cur_head, self.cur_body = None, []
+        # rollout lifecycle + accounting
+        self.ro_started = self.ro_completed = self.ro_done_wall = None
+        self.ro_active = False
+        self.ro_aborted = False
+        self.ro_model = ""    # bare model id from turn_context — prices the footer
+        self.ro_tag = ""      # "model · effort" chip last shown (re-shown on change)
+        self.ro_usage = None  # CUMULATIVE total_token_usage from the last token_count
 
-# --- companion (.log) parse: the pre-digested `[ts] …` activity stream --------------
-def render_record(head, body):
-    global _last_msg
-    head = (head or "").rstrip()
-    if not head or head.startswith("Assistant message captured:"):
-        return
-    if head.startswith(("Thread ready", "Turn started", "Turn completed",
-                        "Starting Codex", "Queued", "Reviewer finished")):
-        return
-    if head.startswith("Running command:"):
-        g = O.new_group(LOG)
-        # cmd-only link: codex's exit-code output lands in a separate record, not this
-        # group, so there's no ⧉out body to offer.
-        O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]),
-               O.code(head[len("Running command:"):].strip(), g=g))
-        return
-    if head.startswith(("Command completed:", "Command failed:")):
-        m = re.search(r"\(exit (\d+)\)", head)
-        if m and m.group(1) != "0":
-            O.emit(LOG, O.gut(FAIL + "■ exit " + m.group(1) + RST, SLOT_RGB))
-        return
-    if head.startswith("Reviewer started"):
-        what = head.split(":", 1)[-1].strip() if ":" in head else head
-        g = O.new_group(LOG)
-        O.emit(LOG, chip("◆", "review", g=g, lk=O.COPY_ALL), gutter(cap(what, CAP_HEAD), g=g))
-        return
-    body_text = "\n".join(body).strip()
-    if head == "Assistant message":
-        if body_text:
-            _last_msg = body_text
+    # --- companion (.log) parse: the pre-digested `[ts] …` activity stream ----------
+    # Kept as a prefix-match LADDER, deliberately not a dispatch table: the
+    # branches match by startswith with overlapping prefixes ("Assistant message
+    # captured:" must be tested before "Assistant message"), so ordering is
+    # load-bearing — a name-keyed table would have to re-encode it.
+    def render_record(self, head, body):
+        head = (head or "").rstrip()
+        if not head or head.startswith("Assistant message captured:"):
+            return
+        if head.startswith(("Thread ready", "Turn started", "Turn completed",
+                            "Starting Codex", "Queued", "Reviewer finished")):
+            return
+        if head.startswith("Running command:"):
             g = O.new_group(LOG)
-            O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
-                   gutter(cap(body_text, CAP_MSG), g=g))
-        return
-    if head == "Reasoning summary":
-        if body_text:
+            # cmd-only link: codex's exit-code output lands in a separate record, not this
+            # group, so there's no ⧉out body to offer.
+            O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]),
+                   O.code(head[len("Running command:"):].strip(), g=g))
+            return
+        if head.startswith(("Command completed:", "Command failed:")):
+            m = re.search(r"\(exit (\d+)\)", head)
+            if m and m.group(1) != "0":
+                O.emit(LOG, O.gut(FAIL + "■ exit " + m.group(1) + RST, SLOT_RGB))
+            return
+        if head.startswith("Reviewer started"):
+            what = head.split(":", 1)[-1].strip() if ":" in head else head
             g = O.new_group(LOG)
-            O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
-                   dim_gut(cap(body_text, CAP_REASONING), g=g))
-        return
-    if head == "Review output":
-        if body_text:
+            O.emit(LOG, chip("◆", "review", g=g, lk=O.COPY_ALL), gutter(cap(what, CAP_HEAD), g=g))
+            return
+        body_text = "\n".join(body).strip()
+        if head == "Assistant message":
+            if body_text:
+                self.last_msg = body_text
+                g = O.new_group(LOG)
+                O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
+                       gutter(cap(body_text, CAP_MSG), g=g))
+            return
+        if head == "Reasoning summary":
+            if body_text:
+                g = O.new_group(LOG)
+                O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
+                       dim_gut(cap(body_text, CAP_REASONING), g=g))
+            return
+        if head == "Review output":
+            if body_text:
+                g = O.new_group(LOG)
+                O.emit(LOG, chip("⇠", "review", g=g, lk=O.COPY_ALL),
+                       gutter(cap(body_text, CAP_OUTPUT), g=g))
+            return
+        if head == "Final output":
+            if body_text and body_text != self.last_msg:
+                g = O.new_group(LOG)
+                O.emit(LOG, chip("⇠", "result", g=g, lk=O.COPY_ALL),
+                       gutter(cap(body_text, CAP_OUTPUT), g=g))
+            return
+        if head.startswith("Subagent "):
             g = O.new_group(LOG)
-            O.emit(LOG, chip("⇠", "review", g=g, lk=O.COPY_ALL),
-                   gutter(cap(body_text, CAP_OUTPUT), g=g))
-        return
-    if head == "Final output":
-        if body_text and body_text != _last_msg:
-            g = O.new_group(LOG)
-            O.emit(LOG, chip("⇠", "result", g=g, lk=O.COPY_ALL),
-                   gutter(cap(body_text, CAP_OUTPUT), g=g))
-        return
-    if head.startswith("Subagent "):
-        g = O.new_group(LOG)
-        O.emit(LOG, chip("✎", "sub", g=g, lk=O.COPY_ALL),
-               gutter(cap(body_text or head, CAP_SUB), g=g))
-        return
-    O.emit(LOG, dim_gut(cap(head, CAP_HEAD)))
+            O.emit(LOG, chip("✎", "sub", g=g, lk=O.COPY_ALL),
+                   gutter(cap(body_text or head, CAP_SUB), g=g))
+            return
+        O.emit(LOG, dim_gut(cap(head, CAP_HEAD)))
 
+    def feed_line(self, line):
+        m = TS.match(line)
+        if m:
+            if self.cur_head is not None:
+                self.render_record(self.cur_head, self.cur_body)
+            self.cur_head, self.cur_body = m.group(1), []
+        elif line.strip():
+            self.cur_body.append(line)
 
-_cur_head, _cur_body = None, []
+    # --- rollout (.jsonl) parse: codex's own native session log ---------------------
+    # One handler per record shape, selected via the _EVENT/_RESP tables below —
+    # every event_msg/response_item `type` names exactly one handler (unknown
+    # types fall through silently, as the old ladder did).
 
-
-def feed_line(line):
-    global _cur_head, _cur_body
-    m = TS.match(line)
-    if m:
-        if _cur_head is not None:
-            render_record(_cur_head, _cur_body)
-        _cur_head, _cur_body = m.group(1), []
-    elif line.strip():
-        _cur_body.append(line)
-
-
-def read_status():
-    try:
-        with open(JSONF, encoding="utf-8") as fh:
-            return (json.load(fh).get("status") or "").strip()
-    except Exception:
-        return ""
-
-
-# --- rollout (.jsonl) parse: codex's own native session log -------------------------
-_ro_started = _ro_completed = _ro_done_wall = None
-_ro_active = False
-_ro_aborted = False
-_ro_model = ""            # bare model id from turn_context — prices the footer
-_ro_tag = ""              # "model · effort" chip last shown (re-shown on change)
-_ro_usage = None          # CUMULATIVE total_token_usage from the last token_count
-
-
-def feed_rollout(o):
-    global _last_msg, _ro_started, _ro_completed, _ro_done_wall, _ro_active, \
-        _ro_aborted, _ro_model, _ro_tag, _ro_usage
-    t = o.get("type")
-    p = o.get("payload") or {}
-    if t == "turn_context":
+    def _ro_turn_context(self, p):
         # Model + effort for this turn — shown once (dim ⚙ line) and re-shown
         # only when it changes; the bare model id prices the footer rollup.
         model = (p.get("model") or "").strip()
         eff = (((p.get("collaboration_mode") or {}).get("settings") or {})
                .get("reasoning_effort") or "").strip()
         tag = model + (" · " + eff if eff else "")
-        if model and tag != _ro_tag:
-            _ro_model, _ro_tag = model, tag
+        if model and tag != self.ro_tag:
+            self.ro_model, self.ro_tag = model, tag
             O.emit(LOG, dim_gut("⚙ " + tag))
-        return
-    if t == "event_msg":
-        st = p.get("type")
-        if st == "token_count":
-            # Cumulative usage snapshot (info is null on rate-limit-only
-            # events). Folded into the scoreboard ONCE, at the footer — the
-            # totals are cumulative, so summing per-event would double-count.
-            u = (p.get("info") or {}).get("total_token_usage") if isinstance(
-                p.get("info"), dict) else None
-            if isinstance(u, dict):
-                _ro_usage = u
-        elif st == "patch_apply_end":
-            render_patch(p)
-        elif st == "context_compacted":
-            # Same ⟳ treatment the substream gives a compact_boundary, so a
-            # gap in a codex run's history reads the same way.
-            O.emit(LOG, O.gut(R.fg(*O.YELLOW) + "⟳ compacted" + RST, SLOT_RGB))
-        if st == "task_started":
-            _ro_active = True
-            if _ro_started is None:
-                _ro_started = p.get("started_at")
-        elif st == "task_complete":
-            _ro_active = False
-            _ro_completed = p.get("completed_at") or _ro_completed
-            _ro_done_wall = time.time()
-        elif st == "turn_aborted":
-            _ro_active, _ro_aborted, _ro_done_wall = False, True, time.time()
-        elif st == "user_message":
-            msg = (p.get("message") or "").strip()
-            if msg:
-                g = O.new_group(LOG)
-                O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-                       gutter(cap(msg, CAP_PROMPT), g=g))
-        elif st == "agent_reasoning":
-            txt = (p.get("text") or "").strip()
-            if txt:
-                g = O.new_group(LOG)
-                O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
-                       dim_gut(cap(txt, CAP_THINK), g=g))
-        elif st == "agent_message":
-            msg = (p.get("message") or "").strip()
-            if msg:
-                _last_msg = msg
-                g = O.new_group(LOG)
-                O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
-                       gutter(cap(msg, CAP_MSG), g=g))
-    elif t == "response_item" and p.get("type") == "web_search_call":
+
+    def _ev_token_count(self, p):
+        # Cumulative usage snapshot (info is null on rate-limit-only
+        # events). Folded into the scoreboard ONCE, at the footer — the
+        # totals are cumulative, so summing per-event would double-count.
+        u = (p.get("info") or {}).get("total_token_usage") if isinstance(
+            p.get("info"), dict) else None
+        if isinstance(u, dict):
+            self.ro_usage = u
+
+    def _ev_patch_apply_end(self, p):
+        render_patch(p)
+
+    def _ev_context_compacted(self, p):
+        # Same ⟳ treatment the substream gives a compact_boundary, so a
+        # gap in a codex run's history reads the same way.
+        O.emit(LOG, O.gut(R.fg(*O.YELLOW) + "⟳ compacted" + RST, SLOT_RGB))
+
+    def _ev_task_started(self, p):
+        self.ro_active = True
+        if self.ro_started is None:
+            self.ro_started = p.get("started_at")
+
+    def _ev_task_complete(self, p):
+        self.ro_active = False
+        self.ro_completed = p.get("completed_at") or self.ro_completed
+        self.ro_done_wall = time.time()
+
+    def _ev_turn_aborted(self, p):
+        self.ro_active, self.ro_aborted, self.ro_done_wall = False, True, time.time()
+
+    def _ev_user_message(self, p):
+        msg = (p.get("message") or "").strip()
+        if msg:
+            g = O.new_group(LOG)
+            O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
+                   gutter(cap(msg, CAP_PROMPT), g=g))
+
+    def _ev_agent_reasoning(self, p):
+        txt = (p.get("text") or "").strip()
+        if txt:
+            g = O.new_group(LOG)
+            O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
+                   dim_gut(cap(txt, CAP_THINK), g=g))
+
+    def _ev_agent_message(self, p):
+        msg = (p.get("message") or "").strip()
+        if msg:
+            self.last_msg = msg
+            g = O.new_group(LOG)
+            O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
+                   gutter(cap(msg, CAP_MSG), g=g))
+
+    def _rsp_web_search_call(self, p):
         q = (p.get("action") or {}).get("query") or ""
         if q:
             g = O.new_group(LOG)
             O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL), gutter(cap(q, CAP_HEAD), g=g))
-    elif t == "response_item" and p.get("type") == "function_call_output":
+
+    def _rsp_function_call_output(self, p):
         # The exec output record: surface a FAILED exit prominently (the
         # companion path already does this from its "Command failed" lines).
         out = p.get("output") or ""
@@ -324,7 +346,10 @@ def feed_rollout(o):
                       out[:300])
         if m and m.group(1) != "0":
             O.emit(LOG, O.gut(FAIL + "■ exit " + m.group(1) + RST, SLOT_RGB))
-    elif t == "response_item" and p.get("type") == "function_call" and p.get("name") == "exec_command":
+
+    def _rsp_function_call(self, p):
+        if p.get("name") != "exec_command":
+            return
         try:
             args = json.loads(p.get("arguments") or "{}")
         except Exception:
@@ -335,6 +360,38 @@ def feed_rollout(o):
         if cmd:
             g = O.new_group(LOG)
             O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]), O.code(cmd, g=g))
+
+    _EVENT = {"token_count": _ev_token_count, "patch_apply_end": _ev_patch_apply_end,
+              "context_compacted": _ev_context_compacted,
+              "task_started": _ev_task_started, "task_complete": _ev_task_complete,
+              "turn_aborted": _ev_turn_aborted, "user_message": _ev_user_message,
+              "agent_reasoning": _ev_agent_reasoning,
+              "agent_message": _ev_agent_message}
+    _RESP = {"web_search_call": _rsp_web_search_call,
+             "function_call_output": _rsp_function_call_output,
+             "function_call": _rsp_function_call}
+
+    def feed_rollout(self, o):
+        t = o.get("type")
+        p = o.get("payload") or {}
+        if t == "turn_context":
+            self._ro_turn_context(p)
+        elif t == "event_msg":
+            h = self._EVENT.get(p.get("type"))
+            if h:
+                h(self, p)
+        elif t == "response_item":
+            h = self._RESP.get(p.get("type"))
+            if h:
+                h(self, p)
+
+
+def read_status():
+    try:
+        with open(JSONF, encoding="utf-8") as fh:
+            return (json.load(fh).get("status") or "").strip()
+    except Exception:
+        return ""
 
 
 def main(run):
@@ -357,6 +414,7 @@ def main(run):
     O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
 
     tail = T.FileTailer(LOGFILE)
+    rd = Renderer()          # this run's mutable render state (both sources)
 
     def pump():
         for ln in (tail.pump() or ()):
@@ -365,11 +423,11 @@ def main(run):
                 s = s.strip()
                 if s:
                     try:
-                        feed_rollout(json.loads(s))
+                        rd.feed_rollout(json.loads(s))
                     except Exception:
                         pass
             else:
-                feed_line(s)
+                rd.feed_line(s)
 
     # rollout: close the block if no new turn starts within grace. Env override
     # exists solely for the test suite (docs/testing.md).
@@ -382,7 +440,7 @@ def main(run):
             # the cached connection — or recreate the DB file outright.
             return
         if ROLLOUT:
-            if _ro_done_wall and not _ro_active and (time.time() - _ro_done_wall) >= GRACE:
+            if rd.ro_done_wall and not rd.ro_active and (time.time() - rd.ro_done_wall) >= GRACE:
                 pump(); run.end("task-complete"); break
         elif read_status() in ("completed", "failed", "cancelled"):
             time.sleep(0.2); pump(); pump()  # drain the tail
@@ -393,19 +451,19 @@ def main(run):
             break
         time.sleep(T.POLL_S)
 
-    if not ROLLOUT and _cur_head is not None:
-        render_record(_cur_head, _cur_body)
+    if not ROLLOUT and rd.cur_head is not None:
+        rd.render_record(rd.cur_head, rd.cur_body)
 
     if ROLLOUT:
-        state = "failed" if _ro_aborted else "ended"
-        sec = (_ro_completed - _ro_started) if (_ro_started and _ro_completed) \
+        state = "failed" if rd.ro_aborted else "ended"
+        sec = (rd.ro_completed - rd.ro_started) if (rd.ro_started and rd.ro_completed) \
             else max(0.0, time.time() - start)
     else:
         state = "failed" if read_status() == "failed" else "ended"
         sec = max(0.0, time.time() - start)
     dur = O.fmt_dur(sec)
     foot = f"■ codex {LABEL} {state} · {dur}"
-    if ROLLOUT and isinstance(_ro_usage, dict):
+    if ROLLOUT and isinstance(rd.ro_usage, dict):
         # Cumulative rollup from the run's last token_count: fresh billed
         # input (input minus cached) / generated output / cache-hit share —
         # the same figures a subagent footer shows, so runs compare at a
@@ -414,14 +472,14 @@ def main(run):
         # are re-derivable from the audit DB alone). No fold on the parked-DB
         # exit above, and none for companion (.log) runs — their usage isn't
         # in the activity log (their rollout is deliberately not adopted).
-        tin = int(_ro_usage.get("input_tokens") or 0)
-        tcache = int(_ro_usage.get("cached_input_tokens") or 0)
-        tout = int(_ro_usage.get("output_tokens") or 0)
+        tin = int(rd.ro_usage.get("input_tokens") or 0)
+        tcache = int(rd.ro_usage.get("cached_input_tokens") or 0)
+        tout = int(rd.ro_usage.get("output_tokens") or 0)
         fresh = max(tin - tcache, 0)
         # Shared footer fragment (core/streamfmt.py) — reads=tin: codex's
         # cumulative input_tokens already includes the cached share.
         foot += SF.tok_rollup(fresh, tout, tcache, reads=tin)
-        usd = codex_cost_usd(_ro_model, fresh, tout, tcache)
+        usd = codex_cost_usd(rd.ro_model, fresh, tout, tcache)
         if usd:
             foot += " · ≈ " + O.fmt_usd(usd)
         deltas = {}
@@ -436,13 +494,14 @@ def main(run):
             deltas.update(O.split_tokens(fresh, tout, tcache, 0))
         if deltas:
             O.bump(LOG, meta={"agent_id": "", "kind": "codex",
-                              "model": _ro_model, "in": fresh, "out": tout,
+                              "model": rd.ro_model, "in": fresh, "out": tout,
                               "cache": tcache, "create": 0, "src": LOGFILE,
                               "label": LABEL}, **deltas)
     O.emit(LOG, O.rule(), O.label(foot, SLOT_RGB), O.rule())
 
 
 def entry():
+    _init(sys.argv)
     with T.stream_lifecycle(LOG, "codex", task_id=LABEL, src_path=LOGFILE,
                             ctx={"src": LOGFILE, "label": LABEL}) as run:
         main(run)
