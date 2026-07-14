@@ -30,7 +30,12 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
 SessionEnd parked the state DB file away, polled by every detached
 tailer/watcher completion loop, a bare `os.path.exists` that can never create
 the file it probes), `slots.py` (palette/liveness slots — was
-`claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
+`claude_slots.py`), `locks.py` (pid-liveness locks —
+`lock_acquire`/`lock_holder`/`lock_release` on the `claims` table of an
+ARBITRARY caller-supplied DB path: the codex per-repo claims DB and watch
+lock, the OTLP receiver's per-machine singleton; borrows state.py's
+`_connect`/`immediate`/`pid_alive`, moved out of state.py because
+arbitrary-path locks were never per-session state), `tail.py` (the tailer skeleton — was `claude_tail.py`),
 `streamfmt.py` (the shared block-shaping vocabulary of the stream renderers —
 `cap`, the `chip`/`gutter`/`dim_gut` op shapes, the ended-footer `tok_rollup`
 token fragment, and `file_line` — the file-op one-liner

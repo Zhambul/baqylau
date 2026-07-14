@@ -33,6 +33,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from core import paths as P
+from core import locks as LK
 from core import state as S
 from core import tail as T
 from core.noaudit import load_audit
@@ -245,13 +246,13 @@ class _Server(HTTPServer):
 
 def _own_lock():
     """True while the global singleton lock is still held by THIS pid."""
-    return S.lock_holder(P.OTLP_DB, "otlp-receiver") == os.getpid()
+    return LK.lock_holder(P.OTLP_DB, "otlp-receiver") == os.getpid()
 
 
 def serve():
     port = _port()
     # Guard 1: the global pid-lock.
-    got = S.lock_acquire(P.OTLP_DB, "otlp-receiver")
+    got = LK.lock_acquire(P.OTLP_DB, "otlp-receiver")
     if got.startswith("claim-denied"):
         A.event("streams", session_id="otlp-receiver", kind="otlp",
                 pid=os.getpid(), started_at=time.time(), ended_at=time.time(),
@@ -261,7 +262,7 @@ def serve():
     try:
         srv = _Server(("127.0.0.1", port), None)
     except OSError:
-        S.lock_release(P.OTLP_DB, "otlp-receiver")
+        LK.lock_release(P.OTLP_DB, "otlp-receiver")
         A.event("streams", session_id="otlp-receiver", kind="otlp",
                 pid=os.getpid(), started_at=time.time(), ended_at=time.time(),
                 end_reason="duplicate (port %d in use)" % port)
@@ -272,7 +273,7 @@ def serve():
             srv.server_close()
         except Exception:
             pass
-        S.lock_release(P.OTLP_DB, "otlp-receiver")
+        LK.lock_release(P.OTLP_DB, "otlp-receiver")
 
     idle = _idle_s()
     with T.stream_lifecycle(SELF_LOG, "otlp", src_path="127.0.0.1:%d" % port,

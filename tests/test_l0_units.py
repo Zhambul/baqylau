@@ -639,3 +639,28 @@ def test_has_payload_without_consuming_stdin(monkeypatch):
     HK2.set_payload({})                                 # injected {} still counts
     assert HK2.has_payload()
     HK2.clear_payload()
+
+
+# --- core.locks — the pid-liveness lock trio (moved out of core/state.py) ----------
+
+def test_locks_acquire_holder_release(tmp_path):
+    from core import locks as LK
+    import os
+    db = str(tmp_path / "claims.db")
+    me = os.getpid()
+    assert LK.lock_acquire(db, "k") == "claim"
+    assert LK.lock_holder(db, "k") == me
+    assert LK.lock_acquire(db, "k") == "claim"          # re-acquire by holder is fine
+    # a live foreign holder is denied; a dead one is stolen
+    assert LK.lock_acquire(db, "k", pid=1).startswith("claim-denied:")
+    LK.lock_release(db, "k")
+    assert LK.lock_holder(db, "k") == 0
+    dead = 99999999
+    assert LK.lock_acquire(db, "k2", pid=dead) == "claim"
+    assert LK.lock_acquire(db, "k2") == "steal-stale"   # dead holder is taken over
+    LK.lock_release(db, "k2", pid=me)
+    assert LK.lock_holder(db, "k2") == 0
+    # release by a non-holder is a no-op
+    assert LK.lock_acquire(db, "k3", pid=dead) == "claim"
+    LK.lock_release(db, "k3", pid=me)
+    assert LK.lock_holder(db, "k3") == dead
