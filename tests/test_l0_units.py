@@ -453,3 +453,22 @@ def test_set_owner_audits_via_slot_with_slot_n(tmp_path, monkeypatch):
     assert kw["slot_n"] == idx                        # groups with its claim/release
     assert kw["owner_pid"] == 12345
     assert kw["marker_path"] == token
+
+
+def test_wait_until_ceiling_scales(monkeypatch):
+    """wait_until's timeout ceiling multiplies by conftest.WAIT_SCALE (set from
+    CLAUDE_TEST_WAIT_SCALE / CI): slow shared runners get more headroom without
+    slowing green runs, which return as soon as the predicate holds."""
+    import time as _t
+
+    import pytest
+
+    import conftest as C
+    monkeypatch.setattr(C, "WAIT_SCALE", 4.0)
+    t0 = _t.time()
+    with pytest.raises(AssertionError) as e:
+        C.wait_until(lambda: False, timeout=0.1, interval=0.01, desc="never")
+    assert _t.time() - t0 >= 0.4                      # ceiling actually scaled
+    assert "0.4" in str(e.value)                      # message reports scaled value
+    # and a truthy predicate returns immediately regardless of scale
+    assert C.wait_until(lambda: 7, timeout=0.1) == 7

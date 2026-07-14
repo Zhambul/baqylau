@@ -21,8 +21,19 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------------------------------------------------------------- wait_until
 
+# Slow shared CI runners (macOS especially, under -n auto) blow the local
+# 10s ceiling on legitimately-passing waits: two adjacent pushes each failed
+# a DIFFERENT test on the same generic "wait_until timed out (10.0s)" while
+# the code was fine. Scale every wait there — a passing wait returns as soon
+# as the predicate holds, so the larger ceiling costs nothing when green.
+# CLAUDE_TEST_WAIT_SCALE overrides; CI=true (GitHub Actions) defaults to 6x.
+WAIT_SCALE = float(os.environ.get(
+    "CLAUDE_TEST_WAIT_SCALE", "6" if os.environ.get("CI") else "1"))
+
+
 def wait_until(pred, timeout=10.0, interval=0.05, desc=""):
     """The ONE wait primitive — poll an observable fact, never sleep blind."""
+    timeout *= WAIT_SCALE
     deadline = time.time() + timeout
     while time.time() < deadline:
         v = pred()
