@@ -35,8 +35,8 @@ done
 ./claude-split.py toggle|grow|shrink|reset|setpct <N>
 
 # E2E test suite (hermetic — fake kitten, per-test tmp dirs; see docs/testing.md)
-make test        # the whole hermetic suite
-make test-par    # same, parallel (pytest-xdist)
+make test        # the whole hermetic suite (parallel by default, pytest-xdist)
+make test-seq    # same, sequential (debugging / no xdist)
 make test-all    # + the opt-in real-kitty smoke tests
 ```
 

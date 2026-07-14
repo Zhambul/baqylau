@@ -153,7 +153,8 @@ def test_rollout_adopted_and_tui_dropped(test_env, codex):
             "type": "function_call", "name": "exec_command",
             "arguments": json.dumps({"cmd": ["pytest", "-q"]})}},
     ])
-    # RO_GRACE (8s) must elapse before a rollout with no companion is adopted
+    # RO_GRACE (test-shortened via CLAUDE_CODEX_RO_GRACE_S) must elapse before
+    # a rollout with no companion is adopted
     wait_until(lambda: "fix the flaky test" in codex.s.ops_text(),
                timeout=20, desc="rollout adopted after the companion grace")
     wait_until(lambda: "pytest -q" in codex.s.ops_text(),

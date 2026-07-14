@@ -718,8 +718,9 @@ def test_f9f_async_launch_ack_does_not_end_streamer(run_hook, test_env, session)
         {"type": "tool_result", "tool_use_id": tid, "content": [
             {"type": "text", "text": "Async agent launched successfully. "
              "agentId: " + agent}]}]}})
-    # Give the parent scan (2s throttle) time to (wrongly, if regressed) fire.
-    time.sleep(3.0)
+    # Give the parent scan (test-shortened CLAUDE_STREAM_PARENT_SCAN_S=0.3s
+    # throttle) several chances to (wrongly, if regressed) fire.
+    time.sleep(1.0)
     assert not any("parent-task-resolved" in (r or "")
                    for r in end_reasons(test_env, s.sid)), \
         "launch ack must not end the streamer"

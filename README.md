@@ -109,8 +109,8 @@ Details, module map, and the dependency rules:
 ## Testing
 
 ```sh
-make test        # hermetic e2e suite (fake kitten, per-test tmp dirs)
-make test-par    # same, parallel
+make test        # hermetic e2e suite (fake kitten, per-test tmp dirs; parallel via pytest-xdist)
+make test-seq    # same, sequential (debugging / no xdist)
 make test-all    # + opt-in real-kitty smoke tests
 ```
 

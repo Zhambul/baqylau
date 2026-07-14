@@ -369,14 +369,16 @@ def make_parent_resolved(start):
             parent_tail = T.FileTailer(TPATH, pos=os.path.getsize(TPATH))
         except Exception:
             parent_tail = None
-    state = {"next": start + 2.0}            # next time the parent scan is allowed
+    # Scan throttle (env knob is test-only — see docs/testing.md; unset, 2 s as always).
+    scan_s = float(os.environ.get("CLAUDE_STREAM_PARENT_SCAN_S") or 2.0)
+    state = {"next": start + scan_s}         # next time the parent scan is allowed
 
     def parent_resolved():
         # None = not resolved (or throttled); bool = resolved, value is is_error
         # (True == user rejected/cancelled the Task).
         if parent_tail is None or time.time() < state["next"]:
             return None
-        state["next"] = time.time() + 2.0
+        state["next"] = time.time() + scan_s
         res = None
         try:
             for ln in (parent_tail.pump() or ()):

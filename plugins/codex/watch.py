@@ -67,9 +67,11 @@ SID = sys.argv[3] if len(sys.argv) > 3 else ""
 HOST_PID = sys.argv[4] if len(sys.argv) > 4 else ""
 STANDALONE = bool(HOST_PID) and HOST_PID != "0"
 
-POLL = 0.4
+POLL = float(os.environ.get("CLAUDE_CODEX_WATCH_POLL_S") or 0.4)
 SKEW = 5.0          # accept a run created up to this many seconds before we started
-RO_GRACE = 8.0      # rollout: wait before deciding a thread has no companion job
+# rollout: wait before deciding a thread has no companion job (env knob is
+# test-only — see docs/testing.md; unset, behavior is unchanged)
+RO_GRACE = float(os.environ.get("CLAUDE_CODEX_RO_GRACE_S") or 8.0)
 RO_UUID = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 HOME = os.path.expanduser("~")
 

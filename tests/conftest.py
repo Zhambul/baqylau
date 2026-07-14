@@ -59,6 +59,9 @@ def test_env(tmp_path):
         "CLAUDE_STREAM_GRACE_S": "0.3",
         "CLAUDE_WATCH_POLL_S": "0.1",
         "CLAUDE_CODEX_GRACE_S": "0.3",
+        "CLAUDE_CODEX_WATCH_POLL_S": "0.05",
+        "CLAUDE_CODEX_RO_GRACE_S": "0.5",
+        "CLAUDE_STREAM_PARENT_SCAN_S": "0.3",
         # OTLP receiver: a short idle-exit so a spawned receiver never lingers.
         # The port is picked per-test in test_l5_otel (this default is only a
         # backstop). The receiver only spawns when CLAUDE_CODE_ENABLE_TELEMETRY=1,
