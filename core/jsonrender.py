@@ -18,14 +18,16 @@ import json
 from core import render as R
 
 
+# JSON tweaks over render.pick's core ladder: object keys (Name.Tag) get the
+# function colour, and everything the core ladder would colour but JSON doesn't
+# (other Name.*, comments — json.loads rejects them anyway) stays default.
+_PRE = (("Token.Name.Tag", "func"),     # object keys
+        ("Token.Name", "def"),
+        ("Token.Comment", "def"))
+
+
 def _pick(ttype):
-    s = str(ttype)
-    if s.startswith("Token.Name.Tag"):                          return R.COL["func"]   # object keys
-    if s.startswith(("Token.Literal.String", "Token.String")):  return R.COL["str"]
-    if s.startswith(("Token.Literal.Number", "Token.Number")):  return R.COL["num"]
-    if s.startswith("Token.Keyword"):                           return R.COL["kw"]     # true/false/null
-    if s.startswith(("Token.Punctuation", "Token.Operator")):   return R.COL["op"]
-    return R.COL["def"]
+    return R.pick(ttype, pre=_PRE)
 
 
 def _pretty(obj):
@@ -73,23 +75,10 @@ def render_json(text):
     return _render_jsonl(stripped)
 
 
-class JsonStreamer:
+class JsonStreamer(R.BufferedStreamer):
     """Buffer a command's whole output, then at close() emit it as pretty,
-    coloured JSON — or the raw text if it isn't valid JSON. Mirrors
-    mdrender.MarkdownStreamer's feed()/close() -> list[(text, bg)] contract so the
-    tailer drives both the same way. bg is always None (no panel)."""
+    coloured JSON — or the raw text if it isn't valid JSON (the base's verbatim
+    fallback)."""
 
-    def __init__(self):
-        self.buf = ""
-
-    def feed(self, text):
-        self.buf += text
-        return []                                   # JSON only renders once whole
-
-    def close(self):
-        raw, self.buf = self.buf, ""
-        body = render_json(raw)
-        if body is None:
-            body = R.emphasize(R.unescape(raw))      # not JSON -> verbatim
-        body = body.rstrip("\n")
-        return [(body, None)] if body.strip() else []
+    def render(self, raw):
+        return render_json(raw)

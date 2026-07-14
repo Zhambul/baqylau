@@ -36,23 +36,14 @@ def render_code(text, lexer_name):
         return None
 
 
-class CodeStreamer:
+class CodeStreamer(R.BufferedStreamer):
     """Buffer a source file's whole output, then at close() emit it colour-
-    highlighted (or verbatim if pygments is unavailable). Mirrors the feed()/
-    close() -> list[(text, bg)] contract; bg is always None (no panel)."""
+    highlighted with the given lexer (or verbatim — the base's fallback — if
+    pygments is unavailable)."""
 
     def __init__(self, lexer_name):
-        self.buf = ""
+        super().__init__()
         self.lexer = lexer_name
 
-    def feed(self, text):
-        self.buf += text
-        return []                                   # render once whole
-
-    def close(self):
-        raw, self.buf = self.buf, ""
-        body = render_code(raw, self.lexer)
-        if body is None:
-            body = R.emphasize(R.unescape(raw))
-        body = body.rstrip("\n")
-        return [(body, None)] if body.strip() else []
+    def render(self, raw):
+        return render_code(raw, self.lexer)

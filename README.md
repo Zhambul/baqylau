@@ -667,8 +667,18 @@ the normal gutter. Both render **once at completion** (a partial JSON document i
 invalid; YAML block scalars make partial colouring unreliable), so
 `core/jsonrender.JsonStreamer` / `core/yamlrender.YamlStreamer` buffer the whole
 stream and fall back to the raw text verbatim if it isn't valid (truncated JSON,
-JSON Lines, a plain log; or pygments absent). No new dependency: stdlib `json` +
-the same optional pygments for colour.
+JSON Lines, a plain log; or pygments absent). The buffer-then-render-at-close
+skeleton (feed buffers, close renders, and the single-sourced verbatim fallback
+`emphasize(unescape(raw))`) is `render.BufferedStreamer`, shared with
+`CodeStreamer` — subclasses supply only `render()`; only markdown renders
+incrementally. Their token→colour ladders aren't forked either: both `_pick`s
+delegate to `render.pick` via small `pre`/`post` override ladders (json: keys
+blue, other names/comments default; yaml: same plus a *post*-ladder
+`Token.Literal`→string for plain scalars — after the core rows so real
+strings/numbers keep their own colours; order is load-bearing, the checks are
+`startswith`), so a palette change propagates from one place — pinned
+byte-identical by the `tests/golden/render-*.ansi` goldens. No new dependency:
+stdlib `json` + the same optional pygments for colour.
 
 **Source files are syntax-highlighted too.** `cat`/`head`/`tail` of a `.py`,
 `.java`, `.kt`/`.kts`, or `.sh`/`.bash`/`.zsh` (`tools.code_source`, gated by

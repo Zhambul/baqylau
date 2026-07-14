@@ -303,8 +303,16 @@ def markdown(text):
     return "\n".join(out)
 
 
-def pick(ttype):
+def pick(ttype, pre=(), post=()):
+    """Token type -> colour. `pre` / `post` are (prefix, COL-key) override
+    ladders checked before / after the core ladder — how jsonrender/yamlrender
+    express their per-language tweaks without forking this table (ORDER matters:
+    the checks are startswith, and prefixes overlap — e.g. yaml's Token.Literal
+    -> str fallback must lose to the core Literal.String/Literal.Number rows,
+    so it goes in `post`)."""
     s = str(ttype)
+    for prefix, key in pre:
+        if s.startswith(prefix):                               return COL[key]
     if s == "Cmd":                                             return COL["func"]
     if s.startswith("Token.Comment"):                          return COL["cmt"]
     if s.startswith(("Token.Literal.String", "Token.String")): return COL["str"]
@@ -314,7 +322,36 @@ def pick(ttype):
     if s.startswith("Token.Name.Variable"):                    return COL["var"]
     if s.startswith(("Token.Literal.Number", "Token.Number")): return COL["num"]
     if s.startswith(("Token.Operator", "Token.Punctuation")):  return COL["op"]
+    for prefix, key in post:
+        if s.startswith(prefix):                               return COL[key]
     return COL["def"]
+
+
+class BufferedStreamer:
+    """Shared skeleton for the render-once-whole content streamers (json/yaml/
+    code — everything except the incremental MarkdownStreamer): feed() only
+    buffers, close() renders the whole buffer via the subclass's render() and
+    falls back to the verbatim `emphasize(unescape(raw))` when render() returns
+    None. Same feed()/close() -> list[(text, bg)] contract as MarkdownStreamer;
+    bg is always None (no panel)."""
+
+    def __init__(self):
+        self.buf = ""
+
+    def feed(self, text):
+        self.buf += text
+        return []                                   # render once whole
+
+    def render(self, raw):                          # subclass hook: str | None
+        return None
+
+    def close(self):
+        raw, self.buf = self.buf, ""
+        body = self.render(raw)
+        if body is None:
+            body = emphasize(unescape(raw))          # not renderable -> verbatim
+        body = body.rstrip("\n")
+        return [(body, None)] if body.strip() else []
 
 
 # Split a bash command into (lang, text) segments so embedded Python gets the

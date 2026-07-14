@@ -15,16 +15,17 @@
 from core import render as R
 
 
+# YAML tweaks over render.pick's core ladder: keys (Name.Tag) get the function
+# colour, other Name.* (anchors/aliases) stay default, and any remaining
+# Token.Literal (plain scalars) falls back to the string colour — AFTER the core
+# ladder so Literal.String/Literal.Number keep their own colours.
+_PRE  = (("Token.Name.Tag", "func"),    # keys
+         ("Token.Name", "def"))
+_POST = (("Token.Literal", "str"),)     # plain scalars
+
+
 def _pick(ttype):
-    s = str(ttype)
-    if s.startswith("Token.Comment"):                           return R.COL["cmt"]
-    if s.startswith("Token.Name.Tag"):                          return R.COL["func"]   # keys
-    if s.startswith(("Token.Literal.String", "Token.String")):  return R.COL["str"]
-    if s.startswith(("Token.Literal.Number", "Token.Number")):  return R.COL["num"]
-    if s.startswith("Token.Keyword"):                           return R.COL["kw"]     # true/false/null
-    if s.startswith(("Token.Punctuation", "Token.Operator")):   return R.COL["op"]
-    if s.startswith("Token.Literal"):                           return R.COL["str"]    # scalars
-    return R.COL["def"]
+    return R.pick(ttype, pre=_PRE, post=_POST)
 
 
 def render_yaml(text):
@@ -40,22 +41,9 @@ def render_yaml(text):
         return None
 
 
-class YamlStreamer:
+class YamlStreamer(R.BufferedStreamer):
     """Buffer a command's whole output, then at close() emit it colour-highlighted
-    (or verbatim if pygments is unavailable). Mirrors the feed()/close() ->
-    list[(text, bg)] contract; bg is always None (no panel)."""
+    (or verbatim — the base's fallback — if pygments is unavailable)."""
 
-    def __init__(self):
-        self.buf = ""
-
-    def feed(self, text):
-        self.buf += text
-        return []                                   # render once whole
-
-    def close(self):
-        raw, self.buf = self.buf, ""
-        body = render_yaml(raw)
-        if body is None:
-            body = R.emphasize(R.unescape(raw))
-        body = body.rstrip("\n")
-        return [(body, None)] if body.strip() else []
+    def render(self, raw):
+        return render_yaml(raw)

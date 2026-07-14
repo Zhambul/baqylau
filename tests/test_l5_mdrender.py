@@ -363,6 +363,105 @@ def test_code_source_detection():
         assert code_source(c) is None, c
 
 
+# ---- golden byte-identity ------------------------------------------------------
+# Pinned before the BufferedStreamer/pick-override refactor: the rendered ANSI for
+# representative json/jsonl/yaml/code snippets must stay byte-identical (files in
+# tests/golden/render-*.ansi), and the token->colour ladders must keep their exact
+# per-token mapping (the ladders' ORDER matters — startswith checks overlap).
+
+import os as _os  # noqa: E402
+
+GOLDEN = _os.path.join(_os.path.dirname(__file__), "golden")
+
+GOLDEN_JSON = ('{"name":"adapter","count":3,"pi":1.5e-3,"on":true,"off":false,'
+               '"n":null,"tags":["a",""],"nest":{"k":[1,{"d":2}]},"u":"café \\"q\\""}')
+GOLDEN_JSONL = '{"a":1}\n[2,3]\n{"b":"x"}'
+GOLDEN_YAML = """# top comment
+name: adapters-api   # trailing comment
+replicas: 3
+ratio: 0.25
+enabled: true
+empty: null
+anchor: &base
+  key: 'single'
+alias: *base
+items:
+  - plain scalar
+  - "double quoted"
+  - 42
+block: |
+  line one
+  line two
+"""
+GOLDEN_CODE = ("import os\n\ndef greet(name):\n    x = 42  # answer\n"
+               "    return f'hi {name}' + os.sep\n")
+
+
+def _golden(name):
+    with open(_os.path.join(GOLDEN, "render-%s.ansi" % name)) as f:
+        return f.read()
+
+
+def test_golden_rendered_output_byte_identical():
+    for name, got in [("json", JSON.render_json(GOLDEN_JSON)),
+                      ("jsonl", JSON.render_json(GOLDEN_JSONL)),
+                      ("yaml", YAML.render_yaml(GOLDEN_YAML)),
+                      ("code", CODE.render_code(GOLDEN_CODE, "python"))]:
+        assert got == _golden(name), "%s render drifted from golden" % name
+
+
+# Every token prefix the ladders discriminate, incl. the overlap/order-sensitive
+# ones (Token.Literal.* vs the yaml Literal->str fallback; Token.Name.* vs
+# Name.Tag). Values pinned from the pre-refactor forked ladders. "Cmd" (a
+# synthetic type only render.pick's command path uses) is deliberately excluded:
+# no lexer emits it into these renderers.
+LADDER_TOKENS = [
+    "Token.Name.Tag", "Token.Name.Variable", "Token.Name.Builtin",
+    "Token.Name.Function", "Token.Name.Label", "Token.Literal.String.Double",
+    "Token.String", "Token.Literal.Number.Integer", "Token.Number.Float",
+    "Token.Keyword.Constant", "Token.Punctuation.Indicator", "Token.Operator",
+    "Token.Comment.Single", "Token.Literal.Scalar.Plain", "Token.Literal",
+    "Token.Text.Whitespace", "Token.Error"]
+
+JSON_LADDER = {"Token.Name.Tag": "func", "Token.Name.Variable": "def",
+               "Token.Name.Builtin": "def", "Token.Name.Function": "def",
+               "Token.Name.Label": "def", "Token.Literal.String.Double": "str",
+               "Token.String": "str", "Token.Literal.Number.Integer": "num",
+               "Token.Number.Float": "num", "Token.Keyword.Constant": "kw",
+               "Token.Punctuation.Indicator": "op", "Token.Operator": "op",
+               "Token.Comment.Single": "def", "Token.Literal.Scalar.Plain": "def",
+               "Token.Literal": "def", "Token.Text.Whitespace": "def",
+               "Token.Error": "def"}
+YAML_LADDER = dict(JSON_LADDER, **{
+    "Token.Comment.Single": "cmt", "Token.Literal.Scalar.Plain": "str",
+    "Token.Literal": "str"})
+
+
+def test_pick_ladders_pinned_per_token():
+    inv = {v: k for k, v in R.COL.items()}
+    for tok in LADDER_TOKENS:
+        assert inv[JSON._pick(tok)] == JSON_LADDER[tok], "json _pick(%s)" % tok
+        assert inv[YAML._pick(tok)] == YAML_LADDER[tok], "yaml _pick(%s)" % tok
+
+
+def test_buffered_streamers_share_contract(monkeypatch):
+    # feed buffers (returns []), close renders once; a None render falls back to
+    # R.emphasize(R.unescape(raw)); whitespace-only input emits nothing.
+    monkeypatch.setattr(YAML, "render_yaml", lambda _t: None)
+    monkeypatch.setattr(CODE, "render_code", lambda _t, _l: None)
+    for mk in (JSON.JsonStreamer, YAML.YamlStreamer,
+               lambda: CODE.CodeStreamer("python")):
+        s = mk()
+        assert s.feed("   \n") == []
+        assert s.close() == [], "whitespace-only buffer must emit nothing"
+        s = mk()
+        raw = "plain \\x1b[31mnot-real\\x1b[0m text"   # renders via the fallback
+        s.feed(raw[:7]); s.feed(raw[7:])
+        out = s.close()
+        assert out == [(R.emphasize(R.unescape(raw)), None)]
+        assert s.buf == "", "close() must drain the buffer"
+
+
 # ---- detection ---------------------------------------------------------------
 
 def test_md_source_positive():
