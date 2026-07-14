@@ -9,6 +9,7 @@ to already-rejected designs.
 |---|---|
 | [tab-colors.md](tab-colors.md) | The tab-colour state machine — colour table, dispatch modes, background/agent detection at `stop`, cancelled-turn recovery (`interrupt-watch`), notes/tweaking |
 | [architecture.md](architecture.md) | The core / plugins / frontends layering, every module's responsibility, the dependency rule, entry-shim filenames, compat shims |
+| [styleguide.md](styleguide.md) | The normative rules: layout/naming, the dependency rule, single-owner vocabularies, import-time purity, audit-before-swallow, SQL/db discipline, refactoring and test conventions |
 | [wiring.md](wiring.md) | Everything outside the repo: kitty.conf, open-actions.conf, the full `~/.claude/settings.json` hook table (`claude-hook.py` dispatcher routing), telemetry env, codex host wiring, the pyenv retarget, activation/smoke test |
 | [mirror-pane.md](mirror-pane.md) | The command mirror pane — block anatomy, chips/palettes/gutters, command pretty-printing, markdown/JSON/YAML/source rendering, the renderer + reflow, file-op one-liners, pane lifecycle (`claude-split.py`), resume/adoption, anchoring, sizing/keys |
 | [click-to-view.md](click-to-view.md) | ⧉ copy links, click-to-view expansion of Read/Update/Write lines, viewport anchoring/restore, drift watch, paint-time neutralization |

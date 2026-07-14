@@ -1,5 +1,10 @@
 # Architecture (core / plugins / frontends)
 
+This file describes *what the pieces are and why*. The normative rules for
+writing code that fits them — layering, naming, single-owner vocabularies,
+import-time purity, audit coverage, test discipline — live in
+[styleguide.md](styleguide.md); new code is expected to follow it.
+
 The codebase is layered so that agent tools (Claude Code, codex, future
 similar tools) and terminals (kitty, future iTerm2/ghostty) are both
 pluggable. The layers and their one dependency rule:
