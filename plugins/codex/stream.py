@@ -430,9 +430,10 @@ def main(run):
         if fresh or tout:
             deltas["tokens"] = fresh + tout
         if fresh or tout or tcache:
-            deltas["tk_in"] = fresh
-            deltas["tk_out"] = tout
-            deltas["tk_read"] = tcache
+            # O.split_tokens owns the Σ-row tk_* arithmetic. create=0: codex
+            # reports no cache-creation category, and `fresh` is already net of
+            # its cache reads, so tk_in == fresh (nothing to subtract).
+            deltas.update(O.split_tokens(fresh, tout, tcache, 0))
         if deltas:
             O.bump(LOG, meta={"agent_id": "", "kind": "codex",
                               "model": _ro_model, "in": fresh, "out": tout,

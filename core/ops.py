@@ -325,3 +325,19 @@ def token_parts(st):
     return [("ttot", kfmt(total) + " total"), ("tin", kfmt(ti) + " in"),
             ("tout", kfmt(to) + " out"), ("tread", kfmt(tr) + " cache"),
             ("twrite", kfmt(tc) + " write")]
+
+
+def split_tokens(inp, out, read, create):
+    """The ONE usage-fields → Σ-row token split (the counters token_parts sums).
+
+    `inp` is the usage input_tokens figure in the Anthropic shape: it INCLUDES
+    cache creation and EXCLUDES cache reads — so tk_in (fresh input) subtracts
+    `create`. Invariants every producer relies on: tk_in + tk_create == inp
+    (the billed fresh-input figure), so tk_in + tk_out + tk_create == the
+    ▪-row 'tokens'. A producer whose input figure carries no creation share
+    (codex: its `fresh` is already net of cache reads, and codex reports no
+    cache-creation category) passes create=0, which leaves inp untouched.
+    Every Σ-row producer goes through this rather than re-encoding the
+    subtraction per-site."""
+    return {"tk_in": inp - create, "tk_out": out,
+            "tk_read": read, "tk_create": create}

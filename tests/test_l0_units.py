@@ -15,7 +15,7 @@ from conftest import REPO
 sys.path.insert(0, REPO)
 
 from core.noaudit import NoAudit, load_audit                 # noqa: E402
-from core.ops import fmt_dur                                 # noqa: E402
+from core.ops import fmt_dur, split_tokens                   # noqa: E402
 from frontends.base import INACTIVE_FG, TAB_COLOR_NONE       # noqa: E402
 
 
@@ -108,3 +108,35 @@ def test_anchored_traversal_nothing_focused():
     for osw in ls:
         osw["is_focused"] = False
     assert list(_anchored_tab_windows(_FakeFE(ls), None)) == []
+
+
+# ---- core.ops.split_tokens — the ONE usage-fields → Σ-row tk_* mapping ------
+# All five former per-site encodings (three bump_transcript branches, the
+# subagent_fmt reconcile, the codex footer) now call this; these pins hold the
+# arithmetic each site relied on.
+
+def test_split_tokens_subtracts_cache_creation():
+    # Anthropic shape: input_tokens INCLUDES cache creation — tk_in is the
+    # fresh remainder, and tk_in + tk_create round-trips back to the input.
+    s = split_tokens(300, 50, 1000, 200)
+    assert s == {"tk_in": 100, "tk_out": 50, "tk_read": 1000, "tk_create": 200}
+    assert s["tk_in"] + s["tk_create"] == 300          # == billed fresh input
+    assert s["tk_in"] + s["tk_out"] + s["tk_create"] == 350   # == ▪-row tokens
+
+
+def test_split_tokens_no_cache_activity():
+    assert split_tokens(100, 50, 0, 0) == {
+        "tk_in": 100, "tk_out": 50, "tk_read": 0, "tk_create": 0}
+
+
+def test_split_tokens_cache_read_only():
+    # Cache READ never touches tk_in (input_tokens excludes it upstream).
+    assert split_tokens(7, 3, 5000, 0) == {
+        "tk_in": 7, "tk_out": 3, "tk_read": 5000, "tk_create": 0}
+
+
+def test_split_tokens_codex_shape():
+    # codex passes create=0 with an input already net of cache reads — the
+    # split must leave its `fresh` untouched as tk_in.
+    assert split_tokens(42, 9, 12345, 0) == {
+        "tk_in": 42, "tk_out": 9, "tk_read": 12345, "tk_create": 0}

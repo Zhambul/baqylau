@@ -116,7 +116,12 @@ see [otel.md](otel.md).
     cacheCreation→tk_create), so `tk_in + tk_create + tk_out` equals the billed `tokens`
     counter and `+ tk_read` is the Σ total's extra — and the display code is unchanged
     from when the fold fed the same counters. Total-first so a narrow pane keeps the
-    headline.
+    headline. The transcript-side producers (the three `bump_transcript` branches, the
+    `subagent_fmt` reconcile, the codex footer) all derive their `tk_*` deltas through
+    the one arithmetic owner `core.ops.split_tokens()` — usage `input_tokens` includes
+    cache creation, so `tk_in` (fresh input) subtracts it; codex passes `create=0`
+    because its input figure is already net of cache reads and it reports no creation
+    category. Re-encoding that subtraction per-site is how the split used to drift.
     One assistant **message** is written as one JSONL line **per content block**, each
     repeating the message's usage (input/cache identical, `output_tokens` a growing
     snapshot), so usage is deduped by `message.id` — counted once, from the last line.

@@ -14,6 +14,7 @@ except Exception:                       # audit must never break a producer
         def __getattr__(self, _):
             return lambda *a, **k: None
     A = _NoAudit()
+from core import ops as O
 from core import state as S
 
 
@@ -205,12 +206,18 @@ def bump_transcript(log, transcript):
             return None
         tok, usd = 0, 0.0
         # Per-category token split for the scoreboard's Σ breakdown row, from the
-        # SAME usage_fields cost_usd prices: input (fresh, EXCL. cache creation —
-        # fields[0] is input+create, so subtract fields[3]), output, cache read
-        # (replay), cache write (creation). tk_in+tk_create == the billed 'fin', so
-        # tk_in+tk_out+tk_create == the ▪-row 'tokens'; +tk_read is the extra the Σ
-        # total carries (why it dwarfs the ▪ headline).
-        cin = cout = cread = ccreate = c1h = 0
+        # SAME usage_fields cost_usd prices — the arithmetic is O.split_tokens
+        # (core/ops.py), the one owner of the fields→tk_* mapping. +tk_read is
+        # the extra the Σ total carries over the ▪ headline (why it dwarfs it).
+        comps = {"tk_in": 0, "tk_out": 0, "tk_read": 0, "tk_create": 0}
+        c1h = 0
+
+        def count(f):                       # fold a usage_fields tuple into comps
+            nonlocal c1h
+            for k, v in O.split_tokens(f[0], f[1], f[2], f[3]).items():
+                comps[k] += v
+            c1h += f[4]
+
         rows = {}                           # message id -> last usage line seen for it
         for ln in chunk[:end].split(b"\n"):
             try:
@@ -228,8 +235,7 @@ def bump_transcript(log, transcript):
             if not mid:                     # no id to dedup on — count the line as-is
                 tok += fields[0] + fields[1]
                 usd += cost_usd(m.get("model"), *fields) or 0.0
-                cin += fields[0] - fields[3]; cout += fields[1]
-                cread += fields[2]; ccreate += fields[3]; c1h += fields[4]
+                count(fields)
                 continue
             rows[mid] = (m.get("model"), fields)
         for mid, (model, fields) in rows.items():
@@ -243,19 +249,17 @@ def bump_transcript(log, transcript):
                 # legacy carry has no per-field split — count this one straddling
                 # message's categories in full (a one-time small Σ-row over-count,
                 # never of billed tok/usd), then re-persist in the {"id","f"} shape.
-                cin += fields[0] - fields[3]; cout += fields[1]
-                cread += fields[2]; ccreate += fields[3]; c1h += fields[4]
+                count(fields)
                 prev = {"id": mid, "f": list(fields)}
                 continue
             d, prev = usage_fold(mid, fields, prev)
             tok += d[0] + d[1]
             usd += cost_usd(model, *d) or 0.0
-            cin += d[0] - d[3]; cout += d[1]
-            cread += d[2]; ccreate += d[3]; c1h += d[4]
-        # c1h (the 1h-TTL share of ccreate) prices at 2× instead of 1.25× — it rides
-        # the audit row (re-pricing evidence), not comps: it is a pricing input, not
-        # a fifth Σ-row display category, so no tk_create_1h counter exists.
-        comps = {"tk_in": cin, "tk_out": cout, "tk_read": cread, "tk_create": ccreate}
+            count(d)
+        # c1h (the 1h-TTL share of tk_create) prices at 2× instead of 1.25× — it
+        # rides the audit row (re-pricing evidence), not comps: it is a pricing
+        # input, not a fifth Σ-row display category, so no tk_create_1h counter
+        # exists.
         moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev,
                      comps=comps, c1h=c1h)
         return pos + end + 1, prev, tok, usd, comps

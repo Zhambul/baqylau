@@ -94,12 +94,9 @@ def reconcile_spend(log, tpath, agent_id, team, ajsonl=""):
         if r_in or r_out:
             deltas["tokens"] = r_in + r_out     # fresh billed input(+create) + output
         if r_in or r_out or r_cache or r_create:
-            # Same Σ-row split the streamer footer uses: tk_in is fresh input EXCL.
-            # cache creation (r_in is input+create), so tk_in+tk_create == r_in.
-            deltas["tk_in"] = r_in - r_create
-            deltas["tk_out"] = r_out
-            deltas["tk_read"] = r_cache
-            deltas["tk_create"] = r_create
+            # Same Σ-row split the streamer footer uses — O.split_tokens owns the
+            # fields→tk_* arithmetic (r_in is input+create, so tk_in subtracts).
+            deltas.update(O.split_tokens(r_in, r_out, r_cache, r_create))
         if not deltas:
             return "already billed"
         # Cost is OTEL-authoritative now (the OTLP receiver folds agent spend live),
