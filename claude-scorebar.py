@@ -46,7 +46,10 @@ from core import ops as O
 from core import paths as P
 from core import render as R
 from core import state as St
+from core.noaudit import load_audit
 import plugins as PLUGINS
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
@@ -63,6 +66,20 @@ KIND  = {"fail": R.fg(*O.RED), "rem": R.fg(*O.RED),
          "read": R.fg(*O.GREEN)}
 SEP   = R.DIM + " · " + R.RST
 _NUM  = re.compile(r"\d[\d.,]*")
+
+SEP_W    = 3     # plain-text width of the " · " joiner between segments
+PREFIX_W = 3     # every row's 3-column glyph prefix (" ⬡ " / " ✉ " / " ▪ " / " Σ ")
+
+
+def fit_parts(parts, avail, min_keep=1, text=lambda p: p[1]):
+    """Tail-drop shrink-to-fit: pop segments off the END of `parts` (in place)
+    until the plain text — `text(part)` per segment, SEP_W between segments —
+    fits in `avail` columns, but never below `min_keep` segments. Returns
+    `parts` for convenience."""
+    while len(parts) > min_keep and \
+            sum(len(text(p)) for p in parts) + SEP_W * (len(parts) - 1) > avail:
+        parts.pop()
+    return parts
 
 
 fit = R.fit
@@ -142,15 +159,16 @@ def session_id():
 
 
 
-def compose(w, mparts):
+def compose(w, mparts, st):
     """The scoreboard rows for width w, as styled strings: [session-id, messages,
     session-stats, tokens, tools]. Row 0 is the always-on ⬡ session id; row 1 is the
     ✉ message census `mparts` (always shown — defaults to '0 msgs'); row 2 is the ▪
     activity summary (commands + active time); row 3 is the Σ token breakdown
     (input/output/cache/write + an all-in total) with the `≈ $` cost last; row 4 is
     the unique-file count + the ± line-diff + the tool tallies.
-    Segments drop from the tail until the plain text fits."""
-    st = St.stats(LOG)      # atomic snapshot from the state DB — no torn reads
+    Segments drop from the tail until the plain text fits.
+    `st` is the caller's ONE St.stats(LOG) snapshot for this tick — atomic from
+    the state DB, read once and shared, so all five rows agree (no torn reads)."""
     now = time.time()
 
     # Row 0: session id — always visible, truncated to width (dim glyph, brighter id).
@@ -159,18 +177,14 @@ def compose(w, mparts):
     # Row 1: message census — never blank; default to a 0 count when there's nothing.
     if not mparts:
         mparts = [("msgs", "0 msgs")]
-    avail = w - 3                                    # " ✉ " prefix
-    while len(mparts) > 1 and sum(len(t) for _, t in mparts) + 3 * (len(mparts) - 1) > avail:
-        mparts.pop()
+    fit_parts(mparts, w - PREFIX_W)                  # " ✉ " prefix; keep >= 1
     line_msg = R.DIM + " ✉ " + R.RST + SEP.join(style(k, t) for k, t in mparts)
 
     if not isinstance(st, dict):
         return [line_sid, line_msg, R.DIM + " ▪ session" + R.RST, "", ""]
     parts, tools = O.scoreboard_parts(st, now)
 
-    avail = w - 3                                    # " ▪ " prefix
-    while parts and sum(len(t) for _, t in parts) + 3 * (len(parts) - 1) > avail:
-        parts.pop()
+    fit_parts(parts, w - PREFIX_W, min_keep=0)       # " ▪ " prefix; may empty out
     row = ""
     for i, (kind, text) in enumerate(parts):
         row += ("" if i == 0 else joiner(parts[i - 1][0], kind)) + style(kind, text)
@@ -183,9 +197,7 @@ def compose(w, mparts):
     cost = float(st.get("cost") or 0)
     if cost > 0:
         tparts.append(("cost", "≈ " + O.fmt_usd(cost)))
-    avail = w - 3                                    # " Σ " prefix
-    while len(tparts) > 1 and sum(len(t) for _, t in tparts) + 3 * (len(tparts) - 1) > avail:
-        tparts.pop()
+    fit_parts(tparts, w - PREFIX_W)                  # " Σ " prefix; keep the total
     line_tok = R.DIM + " Σ " + R.RST + SEP.join(style(k, t) for k, t in tparts) \
             if tparts else ""
 
@@ -207,11 +219,11 @@ def compose(w, mparts):
         lead.append((f"+{add}", style("add", f"+{add}")))
     elif rem:
         lead.append((f"-{rem}", style("rem", f"-{rem}")))
-    avail = w - 3                                    # aligned under the parts
+    avail = w - PREFIX_W                             # aligned under the parts
     for t, _ in lead:
-        avail -= len(t) + 3                          # + its separator
-    while tools and sum(len(f"{k} {v}") for k, v in tools) + 3 * (len(tools) - 1) > avail:
-        tools.pop()
+        avail -= len(t) + SEP_W                      # + its separator
+    fit_parts(tools, avail, min_keep=0,              # leads kept; tools pop first
+              text=lambda kv: f"{kv[0]} {kv[1]}")
     segs = [s for _, s in lead] \
             + [SLATE + k + " " + VAL + str(v) + R.RST for k, v in tools]
     line_tools = "   " + SEP.join(segs) if segs else ""
@@ -241,12 +253,15 @@ def main():
         if St.parked(LOG):                        # SessionEnd parked the state DB -> window closes
             return
         now = time.time()
+        st = None                           # this tick's ONE St.stats snapshot, read lazily
         # ⏱ pause accounting: while the tab is green, fold the elapsed tick into
         # the sidecar's 'paused' total (flushed ~1s so the display freezes cleanly).
         # Only once the sidecar exists — pausing shouldn't create an empty session.
         if win is None and now >= win_retry:
             win, win_retry = _claude_window(), now + 5.0   # tag lands async at start
-        if win and _tab_green(win) and prev_ts is not None and St.stats(LOG).get("start"):
+        if win and _tab_green(win) and prev_ts is not None:
+            st = St.stats(LOG)
+        if st is not None and st.get("start"):
             pend += now - prev_ts
             if pend >= 1.0:
                 O.bump(LOG, paused=round(pend, 2))
@@ -263,11 +278,13 @@ def main():
             except Exception:
                 # Audited: a crashing tracker otherwise freezes the ✉ row at
                 # stale/0 counts with zero trace in the audit DB.
-                O.A.error(LOG, "update_messages (✉ row frozen this tick)")
+                A.error(LOG, "update_messages (✉ row frozen this tick)")
                 mparts, events = [], []
             if events:
                 emit_events(events)         # surface arrivals/reads in the mirror pane
-            lines = compose(width(), mparts)
+            if st is None:                  # not already read by the pause block
+                st = St.stats(LOG)          # atomic snapshot — shared with compose
+            lines = compose(width(), mparts, st)
             try:                            # hide cursor; repaint both rows in place
                 sys.stdout.write("\033[?25l\033[H\033[2J" + "\n".join(lines))
                 sys.stdout.flush()
@@ -283,8 +300,7 @@ if __name__ == "__main__":
         pass
     except Exception:
         try:
-            from core import audit
-            audit.error(LOG, "main (renderer crashed)")
+            A.error(LOG, "main (renderer crashed)")
         except Exception:
             pass
         raise

@@ -74,6 +74,19 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import paths as P
 from core import render as R
 from core import state as St
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
+
+_FE = None         # memoized Frontend — env is fixed at process start, so one resolve suffices
+
+
+def _fe():
+    global _FE
+    if _FE is None:
+        import frontends
+        _FE = frontends.get()
+    return _FE
 
 LOG = sys.argv[1] if len(sys.argv) > 1 else ""
 FIXED_WIDTH = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else None
@@ -299,7 +312,6 @@ def _audit_paint(kind, w, body):
     view-reflow whose `up` disagrees with the painted row count is exactly
     the model-vs-buffer divergence class of bug."""
     try:
-        from core import audit as A
         A.state_file(LOG, St.db_path(LOG), "paint",
                      {"kind": kind, "w": w, "rows": body.count("\n"),
                       "ops": len(OPS), "open": len(VIEW_OPEN)})
@@ -438,7 +450,6 @@ def locate_viewport(w, tag=None, near=None):
         # didn't, and stayed invisible.
         if tag:
             try:
-                from core import audit as A
                 A.error(LOG, "viewport_anchor (%s)" % reason,
                         dict({"tag": tag}, **(extra or {})))
             except Exception:
@@ -451,8 +462,7 @@ def locate_viewport(w, tag=None, near=None):
     txt, exc = None, None
     for attempt in range(3):        # the capture flakes under load — transient
         try:
-            import frontends
-            txt = frontends.get().get_text(win)
+            txt = _fe().get_text(win)
         except Exception as e:
             exc = e
         if txt:
@@ -518,8 +528,7 @@ def restore_to(j0):
     w = width()
     total = painted_rows(w)
     try:
-        import frontends
-        fe = frontends.get()
+        fe = _fe()
         ok = _restore(fe, win, total + 1 - h - j0)
         landed = locate_viewport(w, near=j0)
         if landed is not None and landed != j0 and abs(landed - j0) <= 400:
@@ -606,8 +615,7 @@ def toggle_repaint(gid, j0, follow=False):
     dsr = await_dsr(1.0)
     applied, landed, retried = False, None, False
     try:
-        import frontends
-        fe = frontends.get()
+        fe = _fe()
         applied = _restore(fe, win, up)
         # Verify-and-retry: where did the viewport actually land? A DSR
         # timeout means the scrolls raced kitty's parse of the frame and
@@ -638,7 +646,6 @@ def toggle_repaint(gid, j0, follow=False):
                 landed = locate_viewport(w, near=j0)
     except Exception:
         try:
-            from core import audit as A
             A.error(LOG, "toggle_scroll (view toggle)", {"gid": gid, "up": up})
         except Exception:
             pass
@@ -813,7 +820,6 @@ def dispatch_reflow(L, new):
             # whether the restore had to be retried, and what the top of
             # the pre-toggle capture actually said).
             try:
-                from core import audit as A
                 A.state_file(LOG, St.db_path(LOG), "view-reflow",
                              dict({"gid": L.toggled, "idx": L.t_idx,
                                    "anchor": L.anchor,
@@ -890,7 +896,6 @@ def drift_watch():
             if corrected or (_WATCH_POS is not None
                              and j != _WATCH_POS):
                 try:
-                    from core import audit as A
                     A.state_file(LOG, St.db_path(LOG), "view-drift",
                                  {"from": _WATCH_POS, "to": j,
                                   "left_ms": int((_WATCH_UNTIL - now)
@@ -958,8 +963,7 @@ if __name__ == "__main__":
         pass
     except Exception:
         try:
-            from core import audit
-            audit.error(LOG, "main (renderer crashed)")
+            A.error(LOG, "main (renderer crashed)")
         except Exception:
             pass
         raise

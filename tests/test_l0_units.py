@@ -308,3 +308,47 @@ def test_stats_hides_internal_counters(tmp_path):
     # ...but they stay readable through counter_get for the accountant.
     assert int(S.counter_get(conn, "txpos")) == 4096
     assert int(S.counter_get(conn, "v")) >= 1
+
+
+# ---- claude-scorebar.py fit_parts — the ONE tail-drop shrink-to-fit ---------
+# compose() used to repeat this loop four times with subtly different guards
+# (`len(parts) > 1` vs `parts and ...`) and a repeated `w - 3` magic number;
+# fit_parts(min_keep=, text=) is the single extraction. Pin the exact
+# semantics each row relied on.
+
+
+def _load_scorebar():
+    import importlib.util
+    import os
+    spec = importlib.util.spec_from_file_location(
+        "claude_scorebar_script", os.path.join(REPO, "claude-scorebar.py"))
+    m = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(m)
+    return m
+
+
+def test_fit_parts_tail_drop_and_min_keep():
+    m = _load_scorebar()
+    assert m.SEP_W == 3 and m.PREFIX_W == 3           # " · " joiner, " ▪ " prefix
+    parts = [("a", "aaaa"), ("b", "bbbb"), ("c", "cccc")]
+    # 3 segs = 12 chars + 2 seps*3 = 18; avail 17 drops one (11 + 3 = 14 fits).
+    got = m.fit_parts(list(parts), 17)
+    assert got == parts[:2]
+    # fits exactly -> untouched (and returns the same list, mutated in place).
+    keep = list(parts)
+    assert m.fit_parts(keep, 18) is keep and keep == parts
+    # min_keep=1 (the ✉/Σ rows): never empties, even when the survivor overflows.
+    assert m.fit_parts(list(parts), 1) == parts[:1]
+    # min_keep=0 (the ▪/tools rows): may empty out entirely.
+    assert m.fit_parts(list(parts), 1, min_keep=0) == []
+    assert m.fit_parts([], 10, min_keep=0) == []      # empty input is a no-op
+
+
+def test_fit_parts_custom_text():
+    m = _load_scorebar()
+    # The tools row measures "name count" pairs, not (kind, text) tuples.
+    tools = [("Read", 34), ("Edit", 18), ("Write", 4)]
+    text = lambda kv: f"{kv[0]} {kv[1]}"              # noqa: E731
+    # "Read 34" + "Edit 18" + "Write 4" = 21 chars + 2*3 = 27.
+    assert m.fit_parts(list(tools), 27, min_keep=0, text=text) == tools
+    assert m.fit_parts(list(tools), 26, min_keep=0, text=text) == tools[:2]
