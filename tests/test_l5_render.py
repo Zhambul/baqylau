@@ -136,3 +136,65 @@ def test_semantic_color_table_not_reencoded_by_producers():
     assert not offenders, \
         "raw semantic-table RGB triplets re-encoded (use core.ops constants):\n" \
         + "\n".join(offenders)
+
+
+# ---------------------------------------------------------------------------
+# _ANSI / _CTRL shared-fragment pins. Both regexes are composed from the named
+# fragments _CSI_RE/_OSC_RE/_C1_RE (plus _CTRL's own _DCS_RE) so the wrap/strip
+# path and the security-critical neutralize() replay-safety path cannot drift.
+
+
+def test_ansi_ctrl_patterns_equal_historic_literals():
+    """The composed patterns must be character-identical to the pre-refactor
+    literals (behaviour-preserving refactor pin)."""
+    from core import render as R
+    old_ansi = (r"\x1b\[[0-9;:?]*[ -/]*[@-~]"
+                r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"
+                r"|\x1b[@-Z\\-_]")
+    old_ctrl = (r"\x1b\[[0-9;:?]*[ -/]*[@-~]"
+                r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"
+                r"|\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)?"
+                r"|\x1b[@-Z\\-_]")
+    assert R._ANSI.pattern == old_ansi
+    assert R._CTRL.pattern == old_ctrl
+    assert R._ANSI.flags == R._CTRL.flags
+
+
+def test_strip_ansi_behaviour():
+    from core.render import strip_ansi
+    # CSI (SGR and non-SGR)
+    assert strip_ansi("\x1b[31mred\x1b[0m") == "red"
+    assert strip_ansi("a\x1b[2Jb") == "ab"
+    # OSC with BEL and with ST terminators (incl. OSC 8 hyperlinks — zero-width
+    # for wrapping, so strip removes them entirely)
+    assert strip_ansi("\x1b]0;title\x07text") == "text"
+    assert strip_ansi("\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\") == "link"
+    # 2-char C1
+    assert strip_ansi("a\x1bMb") == "ab"
+    assert strip_ansi("plain") == "plain"
+
+
+def test_neutralize_behaviour():
+    from core.render import neutralize
+    # SGR styling survives
+    assert neutralize("\x1b[31mred\x1b[0m") == "\x1b[31mred\x1b[0m"
+    # OSC 8 hyperlinks survive (the mirror's copy/view links)
+    link = "\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\"
+    assert neutralize(link) == link
+    # Non-SGR CSI is executable — stripped
+    assert neutralize("a\x1b[2Jb") == "ab"
+    assert neutralize("a\x1b[5;5Hb") == "ab"
+    # Non-8 OSC stripped (BEL and ST forms)
+    assert neutralize("\x1b]0;title\x07t") == "t"
+    assert neutralize("\x1b]52;c;YWJj\x1b\\t") == "t"
+    # The documented live bug: a tee'd @kitty-cmd DCS must not reach the pane
+    dcs = "\x1bP@kitty-cmd{\"cmd\":\"scroll-window\"}\x1b\\"
+    assert neutralize("before" + dcs + "after") == "beforeafter"
+    # SOS/PM/APC and bare 2-char C1
+    assert neutralize("a\x1b_apc payload\x1b\\b") == "ab"
+    assert neutralize("a\x1bMb") == "ab"
+    # Malformed/truncated sequences: no raw ESC may survive except one opening
+    # a sanctioned form
+    out = neutralize("trunc\x1b[12;")
+    assert all(c != "\x1b" or out[i:i + 2] in ("\x1b[", "\x1b]", "\x1b\\")
+               for i, c in enumerate(out))

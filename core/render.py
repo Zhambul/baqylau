@@ -110,9 +110,14 @@ def unescape(s):
 # visible text — producers now bake hyperlinks into gut/line text (the file-op
 # click-to-view links), so wrap/strip must treat the whole sequence as
 # zero-width.
-_ANSI = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]"
-                   r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"
-                   r"|\x1b[@-Z\\-_]")
+# Named fragments shared by _ANSI (wrap/strip) and _CTRL (neutralize) — a single
+# source so the two compiled patterns cannot drift apart (neutralize() is the
+# replay-safety path; see its comment below).
+_CSI_RE = r"\x1b\[[0-9;:?]*[ -/]*[@-~]"                # CSI
+_OSC_RE = r"\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"         # OSC (BEL/ST)
+_C1_RE = r"\x1b[@-Z\\-_]"                              # other 2-char C1
+
+_ANSI = re.compile(_CSI_RE + "|" + _OSC_RE + "|" + _C1_RE)
 
 
 def strip_ansi(s):
@@ -129,10 +134,8 @@ def strip_ansi(s):
 # repaint. neutralize() strips everything except SGR (colours/styles — both
 # the mirror's own and legitimate colours in tailed output) and OSC 8
 # hyperlinks (the mirror's copy/view links).
-_CTRL = re.compile(r"\x1b\[[0-9;:?]*[ -/]*[@-~]"              # CSI
-                   r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"      # OSC (BEL/ST)
-                   r"|\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)?"     # DCS/SOS/PM/APC
-                   r"|\x1b[@-Z\\-_]")                          # other 2-char C1
+_DCS_RE = r"\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)?"        # DCS/SOS/PM/APC
+_CTRL = re.compile(_CSI_RE + "|" + _OSC_RE + "|" + _DCS_RE + "|" + _C1_RE)
 
 # Any ESC left over after _CTRL — a MALFORMED sequence (e.g. a truncated CSI
 # whose parameter run hits a non-CSI byte) matches none of _CTRL's branches,
