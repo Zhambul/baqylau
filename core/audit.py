@@ -479,6 +479,25 @@ def session_end(d, reason=""):
           end_reason=reason or (d.get("reason") or ""))
 
 
+def schema_tables():
+    """Every table _SCHEMA creates, in declaration order."""
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (\w+)\(", _SCHEMA)
+
+
+# Tables prune() must NOT sweep by session_id + ts like the rest. `sessions` is the
+# driver of pruning (its COALESCE(ended_at, started_at) picks the sids; its own row is
+# deleted per-sid, last). `streams` has no `ts` column — its orphan age-out keys on
+# `started_at` instead, handled explicitly below. A NEW audit table is prunable by
+# default: give it session_id + ts columns, or classify it here (and in the unit test).
+_PRUNE_SPECIAL = ("sessions", "streams")
+
+
+def prunable_tables():
+    """Tables swept by prune()'s generic session_id/ts loops, derived from _SCHEMA so
+    a new audit table can't silently escape pruning."""
+    return [t for t in schema_tables() if t not in _PRUNE_SPECIAL]
+
+
 def prune(days=PRUNE_DAYS):
     """Delete every table's rows for sessions that ENDED more than `days` ago (or
     started that long ago and never ended — a crashed session)."""
@@ -492,15 +511,14 @@ def prune(days=PRUNE_DAYS):
             (cutoff,)).fetchall()
         sids = [r[0] for r in rows]
         for sid in sids:
-            for t in ("hook_events", "tab_transitions", "slots", "streams", "ops",
-                      "errors", "spawns", "state_files", "pane_events", "otel"):
+            for t in prunable_tables() + ["streams"]:
                 conn.execute(f"DELETE FROM {t} WHERE session_id=?", (sid,))
             conn.execute("DELETE FROM sessions WHERE session_id=?", (sid,))
         # Orphan rows whose session row never existed (pre-session writes) age out too.
-        for t in ("hook_events", "tab_transitions", "slots", "ops", "errors",
-                  "spawns", "state_files", "pane_events", "otel"):
+        for t in prunable_tables():
             conn.execute(f"DELETE FROM {t} WHERE ts < ? AND session_id NOT IN "
                          "(SELECT session_id FROM sessions)", (cutoff,))
+        # streams has no ts column — its orphans age out by started_at.
         conn.execute("DELETE FROM streams WHERE started_at < ? AND session_id NOT IN "
                      "(SELECT session_id FROM sessions)", (cutoff,))
         conn.commit()

@@ -316,3 +316,55 @@ def test_spool_replay_produces_identical_rows(test_env):
     assert r["sessions"] == [("/x", "clear", 1, 1)]
     assert r["ops"] == [("eqv-test", '{"t": "line", "text": "hello"}', 1)]
     assert r["otel"] == [("claude_code.token.usage", "main", "m", "input", 3.0, 1)]
+
+
+# ------------------------------------------------------------- prune coverage
+
+def test_prunable_tables_cover_schema():
+    """prune()'s table list is derived from _SCHEMA; the only tables allowed to
+    escape the generic session_id/ts sweep are the documented specials. Adding
+    an audit table without classifying it must fail here."""
+    import re
+    import claude_audit as A
+    tables = A.schema_tables()
+    assert set(A._PRUNE_SPECIAL) == {"sessions", "streams"}
+    assert set(A.prunable_tables()) == set(tables) - set(A._PRUNE_SPECIAL)
+    # Every prunable table must actually have the columns the sweep keys on.
+    for t in A.prunable_tables():
+        body = re.search(r"CREATE TABLE IF NOT EXISTS %s\((.*?)\);" % t,
+                         A._SCHEMA, re.S).group(1)
+        assert "session_id" in body and "ts REAL" in body, \
+            "%s lacks the session_id/ts pruning keys" % t
+    # And the specials are special for the reason documented.
+    streams = re.search(r"CREATE TABLE IF NOT EXISTS streams\((.*?)\);",
+                        A._SCHEMA, re.S).group(1)
+    assert "ts" not in streams.replace("started_at", "").replace("ended_at", "")
+
+
+def test_prune_round_trip(test_env):
+    """Seed every audit table for an old ended session, an old orphan sid (no
+    sessions row), and a fresh session; prune() must delete exactly the old
+    rows from every table and leave the fresh ones."""
+    import claude_audit as A
+    old, orphan, fresh = "prune-old", "prune-orphan", "prune-fresh"
+    poison(test_env, "INSERT INTO sessions(session_id, started_at, ended_at)"
+           " VALUES(?, 1, 2)", (old,))
+    poison(test_env, "INSERT INTO sessions(session_id, started_at)"
+           " VALUES(?, 9e12)", (fresh,))
+    for sid, ts in ((old, 1), (orphan, 1), (fresh, 9e12)):
+        for t in A.prunable_tables():
+            if t == "spawns":
+                # child_pid must be a real-typed (nonexistent) pid: the reaper
+                # fixture kills every pid it finds in this table.
+                poison(test_env, "INSERT INTO spawns(ts, session_id, child_pid)"
+                       " VALUES(?, ?, 999999999)", (ts, sid))
+            else:
+                poison(test_env, "INSERT INTO %s(ts, session_id) VALUES(?, ?)"
+                       % t, (ts, sid))
+        poison(test_env, "INSERT INTO streams(session_id, started_at)"
+               " VALUES(?, ?)", (sid, ts))
+    _audit_calls(test_env, "assert A.prune(30) == 1")
+    for t in A.prunable_tables() + ["streams", "sessions"]:
+        left = [r[0] for r in oracle.q(
+            test_env, "SELECT session_id FROM %s" % t)]
+        assert left == [fresh], "%s after prune: %s" % (t, left)
