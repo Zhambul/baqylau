@@ -13,8 +13,6 @@
 # Empirically the payload carries task_id + task_subject + task_description (NOT the
 # "task_title"/"task_status" the docs mention). There is no readable per-task file
 # on disk, so the hook payload is the source of truth.
-import os, sys
-
 from core import ops as O
 from plugins.claude_code import hookkit as H
 

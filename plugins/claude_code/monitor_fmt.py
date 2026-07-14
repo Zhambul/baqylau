@@ -7,7 +7,7 @@
 # monitor's event stream into the same log. Monitor's PostToolUse fires at start
 # (the tool returns immediately while streaming continues), with the stream's
 # taskId in tool_response — same shape as a background Bash launch.
-import os, re, sys
+import os, re
 
 from core import ops as O
 from core import slots as claude_slots

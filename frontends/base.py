@@ -23,6 +23,15 @@
 # `kitten` constructor attrs, which nothing outside frontends/ may touch).
 
 
+# Default inactive-tab foreground for set_tab_color — a soft grey every frontend
+# shares (kitty imports this rather than re-encoding the hex).
+INACTIVE_FG = "#c0c4cc"
+
+# The kitty set-tab-color sentinel that clears a colour back to the theme
+# default — clear_tab_color paints all four channels with it.
+TAB_COLOR_NONE = "NONE"
+
+
 class Frontend:
     name = "none"
 
@@ -54,7 +63,7 @@ class Frontend:
     # Slice consumers: plugins/claude_code/tabstatus.py only (the tab
     # dispatcher paints and clears; nothing else touches tab colour).
     def set_tab_color(self, win, active_bg, active_fg, inactive_bg,
-                      inactive_fg="#c0c4cc"):
+                      inactive_fg=INACTIVE_FG):
         """Colour the tab containing window `win`. Returns an exit code
         (0 = the terminal acknowledged the paint; callers audit non-zero)."""
         return 1

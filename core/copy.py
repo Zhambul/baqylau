@@ -46,13 +46,9 @@ from urllib.parse import unquote
 
 from core import paths as P
 
-try:
-    from core import audit as A
-except Exception:                       # audit must never break the handler
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 
 def parse_url(url):

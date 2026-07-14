@@ -43,6 +43,17 @@ _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 # Line-capped excerpt — shared with the codex stream (core/streamfmt.py).
 cap = SF.cap
 
+# Line caps per excerpt kind (how many lines of each block the mirror shows before
+# "… (+N lines)"). These deliberately DIVERGE from plugins/codex/stream.py's caps —
+# the two renderers weight their content differently; don't unify the values.
+CAP_MSG      = 40   # an assistant message / final result
+CAP_PROMPT   = 24   # the spawn prompt
+CAP_TEAMMSG  = 24   # an incoming teammate message
+CAP_SENDMSG  = 12   # an outgoing SendMessage body
+CAP_TOOL_REQ = 10   # a generic tool's request summary (query/url/...)
+CAP_BODY     = 60   # a command's output body
+CAP_JOB_NOTE = 8    # a bg/monitor launch note without a job id
+
 
 def result_text(content):
     if isinstance(content, str):
@@ -174,7 +185,7 @@ class Renderer:
         glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
         g = O.new_group(self.log)
         O.emit(self.log, self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL),
-               self.msg_gutter(cap(self.pending_msg, 40), g=g))
+               self.msg_gutter(cap(self.pending_msg, CAP_MSG), g=g))
         self.pending_msg = None
         self.pending_tag = ""
 
@@ -194,14 +205,14 @@ class Renderer:
         self.flush_msg()
         g = O.new_group(self.log)
         O.emit(self.log, self.chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-               self.gutter(cap(text.strip(), 24), g=g))
+               self.gutter(cap(text.strip(), CAP_PROMPT), g=g))
 
     def render_teammsg(self, sender, body):
         # An incoming agent-team message (mail from another teammate or the lead).
         self.flush_msg()
         g = O.new_group(self.log)
         O.emit(self.log, self.chip("✉", "from " + (sender or "?"), g=g, lk=O.COPY_ALL),
-               self.gutter(cap(body.strip(), 24), g=g))
+               self.gutter(cap(body.strip(), CAP_TEAMMSG), g=g))
 
     def render_message(self, text):
         text = text.strip()
@@ -334,7 +345,7 @@ class Renderer:
         text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
         g = O.new_group(self.log)
         O.emit(self.log, self.chip("✉", "to " + to, ctx, g=g, lk=O.COPY_ALL),
-               self.gutter(cap(text.strip(), 12), g=g))
+               self.gutter(cap(text.strip(), CAP_SENDMSG), g=g))
         self.pend[tid] = ("sendmsg", "")
 
     def _use_agent(self, name, inp, tid, ctx):
@@ -350,7 +361,7 @@ class Renderer:
         g = O.new_group(self.log) if req else None
         O.emit(self.log, self.chip("·", name or "tool", ctx, g=g, lk=O.COPY_ALL if g else None))
         if req:
-            O.emit(self.log, self.gutter(cap(req, 10), g=g))
+            O.emit(self.log, self.gutter(cap(req, CAP_TOOL_REQ), g=g))
         self.pend[tid] = ("other", "")
 
     # tool name -> use handler; unknown names fall to _use_other. File tools share
@@ -399,7 +410,7 @@ class Renderer:
         err = bool(b.get("is_error"))
         if rec:
             body = result_text(b.get("content")).rstrip("\n")
-            fb = R.emphasize(R.unescape(cap(body, 60))) if body else R.DIM + "(no output)" + RST
+            fb = R.emphasize(R.unescape(cap(body, CAP_BODY))) if body else R.DIM + "(no output)" + RST
             if S.hand_put(self.log, "done:" + rec["done"], {"failed": err, "fallback_body": fb}):
                 A.state_file(self.log, "state:done:" + rec["done"], "write", {"failed": err})
         O.bump(self.log, tool="Bash", commands=1, **({"failed": 1} if err else {}))
@@ -416,7 +427,7 @@ class Renderer:
             # streamed output/finish ops join the header+code we already emitted.
             self._spawn_tailer(kind, m.group(1), cmd, group=tid)
         elif txt.strip():
-            O.emit(self.log, self.gutter(cap(txt.strip(), 8)))
+            O.emit(self.log, self.gutter(cap(txt.strip(), CAP_JOB_NOTE)))
 
     def _res_body(self, kind, cmd, b, tur, tid):
         # fg / other: show the command's output (banners emphasised — this is real
@@ -426,7 +437,7 @@ class Renderer:
         g = tid if kind == "fg" else None
         body = txt.rstrip("\n")
         if body:
-            O.emit(self.log, O.gut(R.emphasize(R.unescape(cap(body, 60))), self.rgb, g=g))
+            O.emit(self.log, O.gut(R.emphasize(R.unescape(cap(body, CAP_BODY))), self.rgb, g=g))
         else:
             O.emit(self.log, O.gut(R.DIM + "(no output)" + RST, self.rgb, g=g))
         err = bool(b.get("is_error"))

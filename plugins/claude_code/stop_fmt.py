@@ -23,8 +23,6 @@
 #
 # It paints nothing and touches no tab colour (that stays claude-tab-status.py,
 # read-only on the state DB); this handler is the one sanctioned Stop-time WRITER.
-import os, sys
-
 from core import ops as O
 from core import state as St
 from plugins.claude_code import accounting as ACC

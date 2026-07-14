@@ -14,7 +14,7 @@ import stat
 import subprocess
 import shutil
 
-from frontends.base import Frontend
+from frontends.base import Frontend, INACTIVE_FG, TAB_COLOR_NONE
 
 
 def find_kitten():
@@ -86,7 +86,7 @@ def window_for_session(kitten, listen, sid):
 
 
 def set_tab_color(kitten, listen, win, active_bg, active_fg, inactive_bg,
-                  inactive_fg="#c0c4cc"):
+                  inactive_fg=INACTIVE_FG):
     """Set (or with all-"NONE", clear) the colour of the tab containing `win`.
     Colour goes on BOTH active and inactive tabs so background sessions stay
     visible; callers pass a darkened inactive_bg of the same hue so the focused
@@ -159,13 +159,14 @@ class KittyFrontend(Frontend):
 
     # --- tab colour -----------------------------------------------------------
     def set_tab_color(self, win, active_bg, active_fg, inactive_bg,
-                      inactive_fg="#c0c4cc"):
+                      inactive_fg=INACTIVE_FG):
         return set_tab_color(self.kitten, self.listen, win, active_bg,
                              active_fg, inactive_bg, inactive_fg)
 
     def clear_tab_color(self, win):
         return set_tab_color(self.kitten, self.listen, win,
-                             "NONE", "NONE", "NONE", inactive_fg="NONE")
+                             TAB_COLOR_NONE, TAB_COLOR_NONE, TAB_COLOR_NONE,
+                             inactive_fg=TAB_COLOR_NONE)
 
     # --- window enumeration -----------------------------------------------------
     def ls(self):

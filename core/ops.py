@@ -44,13 +44,9 @@
 # equivalent, runnable bash either way); ⧉out/⧉copy the ANSI-stripped gut text.
 import json, os, time
 
-try:
-    from core import audit as A         # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:                       # audit must never break a producer
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 from core import state as S             # per-session runtime state (SQLite, /tmp)
 
 
@@ -194,10 +190,13 @@ BLUE   = (97, 175, 239)    # a read
 AMBER  = (214, 153, 92)    # a task entering the list
 
 
-def fmt_dur(sec):
-    """Wall-clock duration chip text: '3.2s' / '4m07s' (negatives clamp to 0)."""
+def fmt_dur(sec, decimals=True):
+    """Wall-clock duration chip text: '3.2s' / '4m07s' (negatives clamp to 0).
+    decimals=False drops the sub-minute fraction ('3s') — the scoreboard's ⏱ chip."""
     sec = max(0.0, sec)
-    return f"{sec:.1f}s" if sec < 60 else f"{int(sec // 60)}m{int(sec % 60):02d}s"
+    if sec < 60:
+        return f"{sec:.1f}s" if decimals else f"{int(sec)}s"
+    return f"{int(sec // 60)}m{int(sec % 60):02d}s"
 
 
 def fmt_usd(c):
@@ -257,11 +256,6 @@ def stats_now(log):
     return S.stats(log)
 
 
-def _dur(sec):
-    sec = max(0, int(sec))
-    return f"{sec}s" if sec < 60 else f"{sec // 60}m{sec % 60:02d}s"
-
-
 def kfmt(n):
     """Compact token count: 124000 -> "124k", 1200000 -> "1.2M"."""
     if n >= 1_000_000:
@@ -298,7 +292,7 @@ def scoreboard_parts(st, now):
         # ⏱ shows ACTIVE time: wall clock minus the green "your turn" stretches
         # (tab awaiting-response) the scorebar accumulates into 'paused' — the
         # timer freezes while Claude waits on you and resumes when work restarts.
-        parts.append(("time", "⏱ " + _dur(now - start - float(st.get("paused") or 0))))
+        parts.append(("time", "⏱ " + fmt_dur(now - start - float(st.get("paused") or 0), decimals=False)))
     tools = st.get("tools")
     top = []
     if isinstance(tools, dict) and tools:

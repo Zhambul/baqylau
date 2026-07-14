@@ -40,6 +40,18 @@ LABEL    = sys.argv[5] if len(sys.argv) > 5 else "task"
 ROLLOUT  = LOGFILE.endswith(".jsonl")     # else companion .log
 RST, FAIL = R.RST, R.fg(*O.RED)
 
+# Line caps per excerpt kind (how many lines of each block the mirror shows before
+# "… (+N lines)"). These deliberately DIVERGE from plugins/claude_code/
+# substream_render.py's caps — the two renderers weight their content differently;
+# don't unify the values.
+CAP_MSG       = 40  # an assistant message
+CAP_OUTPUT    = 80  # review / final output
+CAP_SUB       = 20  # a codex subagent line
+CAP_REASONING = 16  # a companion "Reasoning summary" block
+CAP_THINK     = 12  # a rollout agent_reasoning event
+CAP_PROMPT    = 6   # the user prompt (rollout user_message)
+CAP_HEAD      = 4   # a bare head line (review-started, search query, unknown)
+
 # Approximate per-MTok (input, output) USD for codex models — the plugin's own
 # price table (core deliberately has none; each tool plugin knows its vendor's
 # rates). Cached input bills 0.1× input. Matching is by version-exact prefix —
@@ -171,7 +183,7 @@ def render_record(head, body):
     if head.startswith("Reviewer started"):
         what = head.split(":", 1)[-1].strip() if ":" in head else head
         g = O.new_group(LOG)
-        O.emit(LOG, chip("◆", "review", g=g, lk=O.COPY_ALL), gutter(cap(what, 4), g=g))
+        O.emit(LOG, chip("◆", "review", g=g, lk=O.COPY_ALL), gutter(cap(what, CAP_HEAD), g=g))
         return
     body_text = "\n".join(body).strip()
     if head == "Assistant message":
@@ -179,32 +191,32 @@ def render_record(head, body):
             _last_msg = body_text
             g = O.new_group(LOG)
             O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
-                   gutter(cap(body_text, 40), g=g))
+                   gutter(cap(body_text, CAP_MSG), g=g))
         return
     if head == "Reasoning summary":
         if body_text:
             g = O.new_group(LOG)
             O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
-                   dim_gut(cap(body_text, 16), g=g))
+                   dim_gut(cap(body_text, CAP_REASONING), g=g))
         return
     if head == "Review output":
         if body_text:
             g = O.new_group(LOG)
             O.emit(LOG, chip("⇠", "review", g=g, lk=O.COPY_ALL),
-                   gutter(cap(body_text, 80), g=g))
+                   gutter(cap(body_text, CAP_OUTPUT), g=g))
         return
     if head == "Final output":
         if body_text and body_text != _last_msg:
             g = O.new_group(LOG)
             O.emit(LOG, chip("⇠", "result", g=g, lk=O.COPY_ALL),
-                   gutter(cap(body_text, 80), g=g))
+                   gutter(cap(body_text, CAP_OUTPUT), g=g))
         return
     if head.startswith("Subagent "):
         g = O.new_group(LOG)
         O.emit(LOG, chip("✎", "sub", g=g, lk=O.COPY_ALL),
-               gutter(cap(body_text or head, 20), g=g))
+               gutter(cap(body_text or head, CAP_SUB), g=g))
         return
-    O.emit(LOG, dim_gut(cap(head, 4)))
+    O.emit(LOG, dim_gut(cap(head, CAP_HEAD)))
 
 
 _cur_head, _cur_body = None, []
@@ -285,25 +297,25 @@ def feed_rollout(o):
             if msg:
                 g = O.new_group(LOG)
                 O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-                       gutter(cap(msg, 6), g=g))
+                       gutter(cap(msg, CAP_PROMPT), g=g))
         elif st == "agent_reasoning":
             txt = (p.get("text") or "").strip()
             if txt:
                 g = O.new_group(LOG)
                 O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
-                       dim_gut(cap(txt, 12), g=g))
+                       dim_gut(cap(txt, CAP_THINK), g=g))
         elif st == "agent_message":
             msg = (p.get("message") or "").strip()
             if msg:
                 _last_msg = msg
                 g = O.new_group(LOG)
                 O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
-                       gutter(cap(msg, 40), g=g))
+                       gutter(cap(msg, CAP_MSG), g=g))
     elif t == "response_item" and p.get("type") == "web_search_call":
         q = (p.get("action") or {}).get("query") or ""
         if q:
             g = O.new_group(LOG)
-            O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL), gutter(cap(q, 4), g=g))
+            O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL), gutter(cap(q, CAP_HEAD), g=g))
     elif t == "response_item" and p.get("type") == "function_call_output":
         # The exec output record: surface a FAILED exit prominently (the
         # companion path already does this from its "Command failed" lines).

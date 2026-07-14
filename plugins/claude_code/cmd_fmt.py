@@ -11,7 +11,7 @@
 # Subagent (Task/Agent) tool calls fire this same hook (with an agent_id), but the
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
-import os, sys, re
+import os, re
 
 from core import ops as O
 from core import render as R

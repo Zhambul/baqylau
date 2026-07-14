@@ -11,13 +11,9 @@
 import os
 import time
 
-try:
-    from core import audit as A          # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:                       # audit must never break a tailer
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 # Env overrides exist solely for the test suite (README § Testing) — real
 # sessions never set them, so the shipped cadence stays the literal defaults.

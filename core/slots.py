@@ -19,13 +19,9 @@ import os, time
 
 from core import state as St
 
-try:
-    from core import audit as A            # always-on audit trail (CLAUDE_AUDIT=0 disables)
-except Exception:
-    class _NoAudit:
-        def __getattr__(self, _):
-            return lambda *a, **k: None
-    A = _NoAudit()
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 # Full-spectrum, well-separated hues (large min pairwise distance), avoiding the
 # foreground status hues (red/orange). Slot order keeps slots 0/1/2 very distinct.

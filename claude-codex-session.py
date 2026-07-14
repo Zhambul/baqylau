@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/Users/z.yermagambet/.pyenv/versions/3.12.1/bin/python3
 # claude-codex-session.py — entry point; the implementation lives in
 # plugins/codex/session.py (README § Architecture). Wired to codex's native
 # SessionStart hook (~/.codex/hooks.json). This filename is load-bearing: it is

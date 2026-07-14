@@ -28,7 +28,7 @@
 # (tool_response content, old/new strings) exists only while this hook runs,
 # and the file on disk drifts — the kv stash is parked/restored with the
 # session like the ops history itself.
-import os, sys
+import os
 from urllib.parse import quote
 
 from core import ops as O
