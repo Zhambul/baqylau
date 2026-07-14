@@ -51,3 +51,60 @@ def test_noaudit_stub_swallows_everything():
 def test_load_audit_returns_real_module():
     import core.audit
     assert load_audit() is core.audit
+
+
+# ---- core.hostpane._anchored_tab_windows — the shared anchor traversal ------
+# One helper now backs both close_stale_mirrors and tab_host_sid; these pins
+# hold the anchoring invariant (docs/mirror-pane.md § Anchoring): an anchor
+# selects the tab CONTAINING that window id; no anchor falls back to the
+# focused tab of the focused os-window; neither → nothing.
+
+from core.hostpane import _anchored_tab_windows              # noqa: E402
+
+
+class _FakeFE:
+    def __init__(self, ls):
+        self._ls = ls
+
+    def ls(self):
+        return self._ls
+
+
+def _win(wid, **user_vars):
+    return {"id": wid, "user_vars": user_vars}
+
+
+def _ls():
+    return [
+        {"is_focused": False, "tabs": [
+            {"is_focused": True, "windows": [_win(1), _win(2, claude_mirror="s1")]},
+        ]},
+        {"is_focused": True, "tabs": [
+            {"is_focused": False, "windows": [_win(3)]},
+            {"is_focused": True, "windows": [_win(4, claude_session="s2"),
+                                             _win(5, claude_scorebar="s2")]},
+        ]},
+    ]
+
+
+def test_anchored_traversal_anchor_match():
+    tabs = list(_anchored_tab_windows(_FakeFE(_ls()), "2"))
+    assert len(tabs) == 1
+    assert [w["id"] for w in tabs[0]] == [1, 2]   # the whole tab, not just the anchor
+
+
+def test_anchored_traversal_anchor_absent():
+    assert list(_anchored_tab_windows(_FakeFE(_ls()), "99")) == []
+
+
+def test_anchored_traversal_focused_fallback():
+    tabs = list(_anchored_tab_windows(_FakeFE(_ls()), None))
+    assert len(tabs) == 1                          # focused tab of focused osw only
+    assert [w["id"] for w in tabs[0]] == [4, 5]
+
+
+def test_anchored_traversal_nothing_focused():
+    ls = _ls()
+    for osw in ls:
+        osw["is_focused"] = False
+    assert list(_anchored_tab_windows(_FakeFE(ls), None)) == []

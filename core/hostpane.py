@@ -93,6 +93,25 @@ def close_mirror(fe, sid):
     fe.close_pane(var=("claude_mirror", sid))
 
 
+def _anchored_tab_windows(fe, anchor):
+    """Yield the window lists of anchor-selected tabs — the ONE traversal behind
+    the daemon-origin/pane-hijack anchoring invariant (docs/mirror-pane.md
+    § Anchoring): with an `anchor` window id, a tab qualifies only if it
+    CONTAINS that window; without one, only the focused tab of the focused
+    os-window qualifies (keybinding case). At most the first qualifying tab per
+    os-window is yielded, as a list of its windows. Callers own what they read
+    from the windows' user_vars and whether they stop after the first tab."""
+    for osw in fe.ls():
+        for t in osw.get("tabs", []):
+            if anchor:
+                if not any(str(w.get("id")) == anchor for w in t.get("windows", [])):
+                    continue
+            elif not (osw.get("is_focused") and t.get("is_focused")):
+                continue
+            yield t.get("windows", [])
+            break
+
+
 def close_stale_mirrors(fe, keep, anchor=None):
     """Close any STALE mirror/scoreboard in the tab whose sid differs from `keep`.
     A session's id changes on --resume/--continue (and often /clear): SessionStart
@@ -107,19 +126,12 @@ def close_stale_mirrors(fe, keep, anchor=None):
     No-op when there's nothing stale to close."""
     anchor = anchor or fe.current_window()
     stale = []
-    for osw in fe.ls():
-        for t in osw.get("tabs", []):
-            if anchor:
-                if not any(str(w.get("id")) == anchor for w in t.get("windows", [])):
-                    continue
-            elif not (osw.get("is_focused") and t.get("is_focused")):
-                continue
-            for w in t.get("windows", []):
-                uv = w.get("user_vars", {})
-                sid = uv.get("claude_mirror") or uv.get("claude_scorebar")
-                if sid and sid != keep:
-                    stale.append((w.get("id"), sid))
-            break
+    for windows in _anchored_tab_windows(fe, anchor):
+        for w in windows:
+            uv = w.get("user_vars", {})
+            sid = uv.get("claude_mirror") or uv.get("claude_scorebar")
+            if sid and sid != keep:
+                stale.append((w.get("id"), sid))
     for wid, sid in stale:
         fe.close_pane(win_id=wid)
         try:
@@ -136,20 +148,13 @@ def tab_host_sid(fe, exclude_sid=""):
     session's watcher already streams the codex run, so the nested host must not
     open a second mirror. A mirror keyed by `exclude_sid` (our own, e.g. on a
     resume) does not count. 'Live' = its state DB still exists."""
-    anchor = fe.current_window()
-    for osw in fe.ls():
-        for t in osw.get("tabs", []):
-            if anchor:
-                if not any(str(w.get("id")) == anchor for w in t.get("windows", [])):
-                    continue
-            elif not (osw.get("is_focused") and t.get("is_focused")):
-                continue
-            for w in t.get("windows", []):
-                uv = w.get("user_vars", {})
-                sid = uv.get("claude_mirror") or uv.get("claude_session")
-                if sid and sid != exclude_sid and not S.parked(_log_for_sid(sid)):
-                    return sid
-            return ""
+    for windows in _anchored_tab_windows(fe, fe.current_window()):
+        for w in windows:
+            uv = w.get("user_vars", {})
+            sid = uv.get("claude_mirror") or uv.get("claude_session")
+            if sid and sid != exclude_sid and not S.parked(_log_for_sid(sid)):
+                return sid
+        return ""       # one tab is THE tab — a later os-window's is a different host
     return ""
 
 
