@@ -26,7 +26,9 @@ SQLite.
   → [docs/mirror-pane.md](docs/mirror-pane.md)
 - **🔍 Audit trail** — every hook event, tab transition, stream lifecycle, and
   swallowed exception recorded to SQLite, so any bug is debuggable after the
-  fact. → [docs/audit.md](docs/audit.md)
+  fact — with a live **⚠ warning light** on the scoreboard (and `⚠ audit:`
+  one-liners in the mirror) whenever the session swallows an exception.
+  → [docs/audit.md](docs/audit.md)
 
 ## Requirements
 

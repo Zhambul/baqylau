@@ -68,7 +68,18 @@ see [otel.md](otel.md).
     time. It truncates from the tail on narrow panes, and **exits when the mirror log
     disappears** at SessionEnd, auto-closing its window (`claude-split.py close` is the
     safety net). Each row is grouped by concern: the **`▪` row is just activity**
-    (commands + failures + active time); the **`Σ` row is all token counts plus the
+    (commands + failures + active time) — plus, ONLY when the session has
+    swallowed exceptions, a leading **`⚠ N` audit warning-light chip** (AMBER —
+    a degradation warning, deliberately distinct from the row's red `✗` command
+    failures): N is the session's audit `errors` count from **`core/errwatch.py`**,
+    polled from the GLOBAL audit DB at its own slow cadence (`EW.POLL_S`, 5s,
+    `mode=ro` — never every `TICK_S`, and never creating the DB) and memoized
+    between ticks; it leads the row so tail-drop never sheds the warning, and it
+    sits on `▪` (not the `⬡` id row) because a degradation count is session
+    *activity*, not identity. The same poll emits the mirror's `⚠ audit: …`
+    one-liners (see [mirror-pane.md](mirror-pane.md)) — the scorebar is the
+    emitter because it is the one long-lived per-session process that already
+    owns a slow ambient poll (the ✉ census) and already emits mirror events; the **`Σ` row is all token counts plus the
     `≈ $` cost** — spend derives from tokens, so it sits here rather than on `▪`, and
     goes **last** so the tail-drop sheds it before the token breakdown; the **last row
     carries every file/line/tool figure** — the unique-`files` count, then the `±`

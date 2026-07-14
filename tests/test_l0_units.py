@@ -721,3 +721,60 @@ def test_find_proc_matches_ps_line_with_sig(monkeypatch):
     finally:
         proc.kill()
         proc.wait()
+
+
+# ---- core.errwatch — the audit warning light (pure shapes) ------------------
+# The ⚠ chip / mirror-block vocabulary is single-owned by core/errwatch.py
+# (styleguide ownership table); pin the shapes the scorebar and the e2e flow
+# (test_l4_scoreboard.py) rely on.
+
+
+def test_errwatch_summary_last_traceback_line():
+    from core import errwatch as EW
+    tb = ("Traceback (most recent call last):\n"
+          '  File "x.py", line 1, in f\n'
+          "ValueError: boom\n")
+    assert EW._summary(tb) == "ValueError: boom"
+    assert EW._summary("just a message") == "just a message"
+    assert EW._summary("") == "?"
+    assert EW._summary(None) == "?"
+
+
+def test_errwatch_err_ops_per_row_and_flood_collapse():
+    from core import errwatch as EW
+    rows = [(1, "claude-cmd-fmt.py", "ValueError: boom"),
+            (2, "claude-split.py", "OSError: nope")]
+    ops = EW.err_ops(rows, "sid-1")
+    assert [o["t"] for o in ops] == ["label", "label"]
+    assert ops[0]["s"] == "⚠ audit: claude-cmd-fmt.py: ValueError: boom"
+    assert ops[1]["s"] == "⚠ audit: claude-split.py: OSError: nope"
+    from core import ops as O
+    assert ops[0]["c"] == list(O.AMBER)          # amber warning, not red failure
+    # Past FLOOD_N new rows in one poll: ONE collapsed line pointing at the CLI.
+    flood = [(i, "s.py", "E: x") for i in range(EW.FLOOD_N + 1)]
+    ops = EW.err_ops(flood, "sid-1")
+    assert len(ops) == 1
+    assert ops[0]["s"] == ("⚠ audit: %d new errors (bin/claude-audit.py errors "
+                           "sid-1)" % (EW.FLOOD_N + 1))
+    # Per-line char cap: a huge exception message truncates to TEXT_MAX.
+    ops = EW.err_ops([(9, "s.py", "E: " + "x" * 500)], "sid-1")
+    assert len(ops[0]["s"]) == EW.TEXT_MAX
+
+
+def test_errwatch_chip_part_shape():
+    from core import errwatch as EW
+    assert EW.chip_part(3) == ("warn", "⚠ 3")
+
+
+def test_scorebar_compose_warn_chip():
+    """The ▪ row leads with the ⚠ chip when nerr > 0 (so tail-drop never sheds
+    the warning) and shows no trace of it when nerr == 0."""
+    import re
+    m = _load_scorebar()
+    strip = lambda s: re.sub(r"\x1b\[[0-9;]*m", "", s)        # noqa: E731
+    st = {"commands": 2, "start": 1000.0}
+    with_chip = strip(m.compose(80, [], dict(st), 2)[2])
+    without = strip(m.compose(80, [], dict(st), 0)[2])
+    assert "⚠ 2" in with_chip and "2 cmds" in with_chip
+    assert with_chip.index("⚠ 2") < with_chip.index("2 cmds")   # chip leads
+    assert "⚠" not in without

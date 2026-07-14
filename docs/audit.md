@@ -62,6 +62,21 @@ python3 bin/claude-audit.py sql-write "<query>" # read-write SQL for deliberate 
 python3 bin/claude-audit.py prune [days]        # manual retention pass
 ```
 
+**The warning light (live, push):** the audit used to be pull-only — every
+swallowed exception was recorded, but nothing told the user the session was
+degraded. **`core/errwatch.py`** now surfaces the `errors` table live: the
+scorebar polls it every 5 s (`EW.POLL_S`, `mode=ro` — a probe that never creates
+the DB) and shows an AMBER **`⚠ N` chip** on its `▪` row when N > 0, and emits an
+AMBER **`⚠ audit: <script>: <exception>` one-liner into the mirror** for each new
+row, exactly once (rowid checkpoint in the state-DB kv `errseen`, its advance
+audited as a `state_files` row), flood-collapsed past 3 rows into one line
+pointing at `bin/claude-audit.py errors <sid>`. The watcher's own failure is
+audited at most once per process and then silenced (the recursion guard — a
+persistently failing watcher must not append an `errors` row per poll that the
+next poll would report), so "the warning light is broken" still shows up as one
+`errwatch.poll` row in `errors`. See [scoreboard.md](scoreboard.md) /
+[mirror-pane.md](mirror-pane.md).
+
 Or just hand Claude Code a session id: the **`audit-debug` skill**
 (`.claude/skills/audit-debug/SKILL.md`) walks the triage — anomalies → errors →
 timeline → targeted SQL — and names the bug from the evidence: which rows, which

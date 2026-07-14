@@ -12,7 +12,11 @@
 #   Σ 56M total · 428k in · 197k out · 55M cache · 410k write · ≈ $1.20
 #     56 files · +791 -29 · Read 34 · Edit 18 · Write 4
 #
-# The ▪ row is just activity (commands + active time). The Σ row is all token
+# The ▪ row is just activity (commands + active time) — plus, only when the
+# session has swallowed exceptions, a leading AMBER `⚠ N` audit warning-light
+# chip (core/errwatch.py, polled from the global audit DB at EW.POLL_S and
+# memoized between ticks; the same poll emits `⚠ audit: …` one-liners into the
+# mirror for each NEW error row). The Σ row is all token
 # counts plus the `≈ $` cost (spend derives from tokens, so it goes last). The last
 # row carries every file/line/tool figure: unique files · ± line-diff · tool tallies.
 # The Σ total is the all-in count INCLUDING cache-read replay, so it reconciles with
@@ -42,6 +46,7 @@ import os, re, sys, time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 import frontends
+from core import errwatch as EW
 from core import ops as O
 from core import panescript as PS
 from core import paths as P
@@ -63,7 +68,10 @@ KIND  = {"fail": R.fg(*O.RED), "rem": R.fg(*O.RED),
          "add": R.fg(*O.GREEN), "cost": R.fg(*O.ORANGE),
          # message-census kinds (✉ row): unread yellow, stale orange, read green
          "unread": R.fg(*O.YELLOW), "stale": R.fg(*O.ORANGE),
-         "read": R.fg(*O.GREEN)}
+         "read": R.fg(*O.GREEN),
+         # audit warning light (▪ row ⚠ chip): amber — a degradation warning,
+         # deliberately distinct from the row's red ✗ command failures
+         "warn": R.fg(*O.AMBER)}
 SEP   = R.DIM + " · " + R.RST
 _NUM  = re.compile(r"\d[\d.,]*")
 
@@ -161,7 +169,7 @@ def session_id():
 
 
 
-def compose(w, mparts, st):
+def compose(w, mparts, st, nerr=0):
     """The scoreboard rows for width w, as styled strings: [session-id, messages,
     session-stats, tokens, tools]. Row 0 is the always-on ⬡ session id; row 1 is the
     ✉ message census `mparts` (always shown — defaults to '0 msgs'); row 2 is the ▪
@@ -183,8 +191,14 @@ def compose(w, mparts, st):
     line_msg = R.DIM + " ✉ " + R.RST + SEP.join(style(k, t) for k, t in mparts)
 
     if not isinstance(st, dict):
-        return [line_sid, line_msg, R.DIM + " ▪ session" + R.RST, "", ""]
+        st = {}
     parts, tools = O.scoreboard_parts(st, now)
+
+    # ⚠ audit warning light — the session's swallowed-error count (core.errwatch,
+    # polled at its own slow cadence and memoized by main()). Only when > 0, and
+    # FIRST on the ▪ row so a narrow pane's tail-drop never sheds the warning.
+    if nerr:
+        parts.insert(0, EW.chip_part(nerr))
 
     fit_parts(parts, w - PREFIX_W, min_keep=0)       # " ▪ " prefix; may empty out
     row = ""
@@ -249,6 +263,10 @@ def main():
     PS.install_winch(_on_winch)
     last, mt_seen = 0.0, None
     win, win_retry, prev_ts, pend = None, 0.0, None, 0.0
+    # ⚠ audit warning light: errwatch.poll runs at its own SLOW cadence
+    # (EW.POLL_S — the audit DB is global, don't open it every TICK_S) and the
+    # count is memoized between polls; a None poll keeps the last good value.
+    nerr, err_next = 0, 0.0
     while True:
         if St.parked(LOG):                        # SessionEnd parked the state DB -> window closes
             return
@@ -270,6 +288,12 @@ def main():
             O.bump(LOG, paused=round(pend, 2))
             pend = 0.0
         prev_ts = now
+        if now >= err_next:                 # slow poll — chip memoized in between
+            err_next = now + EW.POLL_S
+            v = EW.poll(LOG, session_id())  # also emits ⚠ mirror blocks for new rows
+            if v is not None and v != nerr:
+                nerr, last = v, 0.0         # force a repaint (chip changed; the
+                                            # state-DB change counter didn't move)
         mt = St.version(LOG)                # state-DB change counter (was file mtime)
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
@@ -284,7 +308,7 @@ def main():
                 emit_events(events)         # surface arrivals/reads in the mirror pane
             if st is None:                  # not already read by the pause block
                 st = St.stats(LOG)          # atomic snapshot — shared with compose
-            lines = compose(width(), mparts, st)
+            lines = compose(width(), mparts, st, nerr)
             try:                            # hide cursor; repaint both rows in place
                 sys.stdout.write("\033[?25l\033[H\033[2J" + "\n".join(lines))
                 sys.stdout.flush()

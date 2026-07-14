@@ -294,3 +294,88 @@ def _alive(pid):
         return False
     except PermissionError:
         return True
+
+
+# ------------------------------------------------------ ⚠ audit warning light
+# core/errwatch.py — the live surface over the audit `errors` table: the
+# scorebar's ⚠ chip count plus a mirror one-liner per NEW error row (emitted
+# exactly once — the rowid checkpoint lives in the state DB kv), flood-collapsed
+# past FLOOD_N. Errors are planted through the audit's own write CLI
+# (`bin/claude-audit.py error <sid> <script> <msg>` — the real product write
+# path) and poll() runs in a subprocess under the test env, like every seed.
+
+
+def _plant_error(run_hook, sid, script, msg):
+    run_hook("claude-audit.py", argv=["error", sid, script, msg])
+
+
+def _poll(seed, log):
+    return seed.py("from core import errwatch\n"
+                   "print(errwatch.poll(%r))" % log).strip()
+
+
+def test_warning_light_emits_each_error_exactly_once(run_hook, seed, session):
+    s = session.make()
+    _plant_error(run_hook, s.sid, "claude-cmd-fmt.py", "ValueError: boom")
+    assert _poll(seed, s.log) == "1"
+    line = "⚠ audit: claude-cmd-fmt.py: ValueError: boom"
+    assert s.ops_text().count(line) == 1
+    # Second poll: count memoizable (still 1), NOTHING re-emitted — the
+    # errseen kv checkpoint already covers the row.
+    assert _poll(seed, s.log) == "1"
+    assert s.ops_text().count("⚠ audit:") == 1
+    # The checkpoint advance itself is audited (state_files action=errseen).
+    import sqlite3
+    db = os.path.join(s.env["CLAUDE_AUDIT_DIR"], "audit.db")
+    conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+    try:
+        n = conn.execute("SELECT COUNT(*) FROM state_files WHERE session_id=? "
+                         "AND action='errseen'", (s.sid,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert n == 1
+
+
+def test_warning_light_flood_collapses_then_resumes(run_hook, seed, session):
+    s = session.make()
+    for i in range(5):                       # > FLOOD_N (3) in one poll
+        _plant_error(run_hook, s.sid, "claude-split.py", "OSError: nope %d" % i)
+    assert _poll(seed, s.log) == "5"
+    txt = s.ops_text()
+    assert txt.count("⚠ audit: 5 new errors "
+                     "(bin/claude-audit.py errors %s)" % s.sid) == 1
+    assert txt.count("OSError") == 0         # collapsed: no per-row lines
+    # A later trickle (<= FLOOD_N) gets its own per-row line again.
+    _plant_error(run_hook, s.sid, "claude-file-fmt.py", "RuntimeError: late")
+    assert _poll(seed, s.log) == "6"
+    assert s.ops_text().count(
+        "⚠ audit: claude-file-fmt.py: RuntimeError: late") == 1
+
+
+def test_warning_light_chip_reaches_scorebar_text(run_hook, seed, session):
+    """End to end: plant an error, poll, and render the scorebar's rows — the ▪
+    row carries the AMBER ⚠ chip; with zero errors it shows no ⚠ at all."""
+    s = session.make()
+    code = ("import sys, os, importlib.util\n"
+            "sys.argv = ['claude-scorebar.py', %r, '80']\n"
+            "spec = importlib.util.spec_from_file_location(\n"
+            "    'sb', os.path.join('bin', 'claude-scorebar.py'))\n"
+            "m = importlib.util.module_from_spec(spec)\n"
+            "spec.loader.exec_module(m)\n"
+            "from core import errwatch\n"
+            "n = errwatch.poll(%r)\n"
+            "print(chr(10).join(m.compose(80, [], {}, n or 0)))\n"
+            % (s.log, s.log))
+    assert "⚠" not in seed.py(code)          # clean session: no warning light
+    _plant_error(run_hook, s.sid, "claude-cmd-pre.py", "KeyError: 'command'")
+    assert "⚠ 1" in seed.py(code)
+
+
+def test_warning_light_never_creates_the_audit_db(seed, session, test_env):
+    """The poll is a mode=ro probe: with no audit DB it returns None (caller
+    keeps its memoized count) and must NOT create the file."""
+    s = session.make()
+    db = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "audit.db")
+    assert not os.path.exists(db)
+    assert _poll(seed, s.log) == "None"
+    assert not os.path.exists(db)
