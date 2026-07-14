@@ -230,3 +230,89 @@ def test_audit_disabled_still_works(run_hook, test_env, session):
     assert not os.path.exists(oracle.audit_db(test_env)), \
         "CLAUDE_AUDIT=0 must not create the audit DB"
     assert s.ops(), "handler must still work with auditing off"
+
+
+# ------------------------------------- spool-row equivalence for the refactor
+
+def _audit_calls(env, code):
+    """Run audit-writer calls in a subprocess (matches production: one short-lived
+    process per writer) against this test's audit dir."""
+    p = subprocess.run([sys.executable, "-c",
+                        "import claude_audit as A\n" + code],
+                       env=dict(env), cwd=REPO, capture_output=True, text=True,
+                       timeout=15)
+    assert p.returncode == 0, p.stderr
+
+
+WRITER_SCRIPT = """
+sid = A.stream_start('/tmp/claude-mirror-eqv-sid.log', 'bg', task_id='t1')
+# stream_start returns None on a degraded DB; the spooled streams row is
+# ingested as id 1 into the fresh DB, so target that.
+A.stream_end(sid or 1, 'writer-exit', lines_emitted=7)
+A.session_start({'session_id': 'eqv-sid', 'cwd': '/x',
+                 'hook_event_name': 'SessionStart'})
+A.session_end({'session_id': 'eqv-sid'}, 'clear')
+A.ops('/tmp/claude-mirror-eqv-sid.log', [{'t': 'line', 'text': 'hello'}],
+      producer='eqv-test')
+A.otel('eqv-sid', [{'metric': 'claude_code.token.usage', 'query_source': 'main',
+                    'model': 'm', 'type': 'input', 'value': 3.0}])
+"""
+
+
+def _rows(env):
+    return {
+        "streams": oracle.q(env, "SELECT kind, task_id, end_reason, lines_emitted,"
+                            " started_at IS NOT NULL, ended_at IS NOT NULL"
+                            " FROM streams WHERE session_id='eqv-sid'"),
+        "sessions": oracle.q(env, "SELECT cwd, end_reason, started_at IS NOT NULL,"
+                             " ended_at IS NOT NULL FROM sessions"
+                             " WHERE session_id='eqv-sid'"),
+        "ops": oracle.q(env, "SELECT producer, op, ts IS NOT NULL FROM ops"
+                        " WHERE session_id='eqv-sid'"),
+        "otel": oracle.q(env, "SELECT metric, query_source, model, type, value,"
+                         " ts IS NOT NULL FROM otel WHERE session_id='eqv-sid'"),
+    }
+
+
+def test_writers_direct_row_shapes(test_env):
+    """The rerouted writers (stream_end/session_end via event(), ops/otel via
+    _event_many) still land the exact row shapes on a healthy DB."""
+    _audit_calls(test_env, WRITER_SCRIPT)
+    r = _rows(test_env)
+    assert r["streams"] == [("bg", "t1", "writer-exit", 7, 1, 1)]
+    assert r["sessions"] == [("/x", "clear", 1, 1)]
+    assert r["ops"] == [("eqv-test", '{"t": "line", "text": "hello"}', 1)]
+    assert r["otel"] == [("claude_code.token.usage", "main", "m", "input", 3.0, 1)]
+
+
+def test_spool_replay_produces_identical_rows(test_env):
+    """DB unusable -> every writer spools; ingest must yield the same rows as the
+    direct path — in particular sessions/streams rows must NOT grow a stray `ts`
+    (they carry their own time columns; OWN_TS_TABLES)."""
+    db = oracle.audit_db(test_env)
+    # Create then corrupt the DB so writers spool.
+    _audit_calls(test_env, "A._connect()")
+    with open(db, "wb") as f:
+        f.write(b"this is not a sqlite database at all........")
+    _audit_calls(test_env, WRITER_SCRIPT)
+    spool = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl")
+    assert os.path.exists(spool)
+    with open(spool) as f:
+        recs = [json.loads(l) for l in f]
+    by_table = {}
+    for r in recs:
+        by_table.setdefault(r["table"], []).append(r["cols"])
+    for t in ("streams", "stream_end", "sessions", "session_end", "ops", "otel"):
+        assert t in by_table, "writer did not spool a %s record: %s" % (t, by_table)
+    for t in ("streams", "stream_end", "sessions", "session_end"):
+        for cols in by_table[t]:
+            assert "ts" not in cols, "%s spool row grew a ts column: %s" % (t, cols)
+    # DB becomes creatable again -> next open ingests the spool.
+    os.remove(db)
+    _audit_calls(test_env, "assert A._connect() is not None")
+    assert not os.path.exists(spool) or os.path.getsize(spool) == 0
+    r = _rows(test_env)
+    assert r["streams"] == [("bg", "t1", "writer-exit", 7, 1, 1)]
+    assert r["sessions"] == [("/x", "clear", 1, 1)]
+    assert r["ops"] == [("eqv-test", '{"t": "line", "text": "hello"}', 1)]
+    assert r["otel"] == [("claude_code.token.usage", "main", "m", "input", 3.0, 1)]

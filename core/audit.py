@@ -45,6 +45,11 @@ _FAILED = False         # sqlite gave up this process -> spool only, don't retry
 
 PRUNE_DAYS = 30
 
+# Tables (plus their spool pseudo-tables) that carry their OWN time column
+# (started_at/ended_at) instead of the generic `ts` — event() must not stamp
+# `ts` onto their rows (sessions/streams have no ts column to insert into).
+OWN_TS_TABLES = ("sessions", "streams", "stream_end", "session_end")
+
 
 def enabled():
     return (os.environ.get("CLAUDE_AUDIT", "1") or "1") != "0"
@@ -207,19 +212,18 @@ def _insert(conn, table, cols):
 
 
 def event(table, **cols):
-    """Insert one row; never raises. Returns the new rowid (or None). Falls back to
-    the spool when sqlite can't be written."""
+    """Write one row (INSERT, or the UPDATE a spool pseudo-table stands for);
+    never raises. Returns the new rowid (or None). Falls back to the spool when
+    sqlite can't be written."""
     if not enabled():
         return None
-    cols.setdefault("ts", time.time())
+    if table not in OWN_TS_TABLES:
+        cols.setdefault("ts", time.time())
     conn = _connect()
     if conn is None:
-        cols.pop("ts", None) if table in ("sessions", "streams") else None
         _spool(table, cols)
         return None
     try:
-        if table in ("sessions", "streams"):
-            cols.pop("ts", None)            # these tables carry their own time columns
         cur = _insert(conn, table, cols)
         conn.commit()
         return cur.lastrowid
@@ -304,20 +308,30 @@ def stream_start(log, kind, agent_id="", task_id="", src_path=""):
 
 
 def stream_end(stream_id, end_reason, lines_emitted=None):
-    if stream_id is None or not enabled():
+    # Routed through event() via the "stream_end" pseudo-table: _insert applies it
+    # as the UPDATE it stands for (live write and spool replay share one shape).
+    if stream_id is None:
         return
-    row = {"id": stream_id, "ended_at": time.time(), "end_reason": end_reason,
-           "lines_emitted": lines_emitted}
+    event("stream_end", id=stream_id, ended_at=time.time(),
+          end_reason=end_reason, lines_emitted=lines_emitted)
+
+
+def _event_many(table, sql, packed, spool_rows):
+    """Shared degradation shape for the BATCHED writers (ops, otel). They can't
+    route through event() — that is one INSERT + commit per row, and these are
+    hot paths writing whole batches in a single transaction — so the
+    connect→try→spool fallback lives once here instead. Never raises: an
+    unreachable or failing DB degrades to spooling each row individually."""
     conn = _connect()
-    if conn is None:
-        _spool("stream_end", row)
-        return
-    try:
-        conn.execute("UPDATE streams SET ended_at=?, end_reason=?, lines_emitted=? "
-                     "WHERE id=?", (row["ended_at"], end_reason, lines_emitted, stream_id))
-        conn.commit()
-    except Exception:
-        _spool("stream_end", row)
+    if conn is not None:
+        try:
+            conn.executemany(sql, packed)
+            conn.commit()
+            return
+        except Exception:
+            pass
+    for r in spool_rows:
+        _spool(table, r)
 
 
 def ops(log, op_list, producer=None):
@@ -325,7 +339,6 @@ def ops(log, op_list, producer=None):
     chokepoint covers every producer). One transaction per batch."""
     if not enabled() or not op_list:
         return
-    conn = _connect()
     sid, now, prod, pid = sid_from_log(log), time.time(), producer or _script(), os.getpid()
     rows = []
     for o in op_list:
@@ -333,20 +346,12 @@ def ops(log, op_list, producer=None):
             rows.append(json.dumps(o, ensure_ascii=False, default=str))
         except Exception:
             rows.append(str(o))
-    if conn is None:
-        for r in rows:
-            _spool("ops", {"ts": now, "session_id": sid, "producer": prod,
-                           "pid": pid, "op": r})
-        return
-    try:
-        conn.executemany(
-            "INSERT INTO ops(ts, session_id, producer, pid, op) VALUES(?,?,?,?,?)",
-            [(now, sid, prod, pid, r) for r in rows])
-        conn.commit()
-    except Exception:
-        for r in rows:
-            _spool("ops", {"ts": now, "session_id": sid, "producer": prod,
-                           "pid": pid, "op": r})
+    _event_many(
+        "ops",
+        "INSERT INTO ops(ts, session_id, producer, pid, op) VALUES(?,?,?,?,?)",
+        [(now, sid, prod, pid, r) for r in rows],
+        [{"ts": now, "session_id": sid, "producer": prod, "pid": pid, "op": r}
+         for r in rows])
 
 
 def error(session_or_log="", func="", context=None):
@@ -412,19 +417,13 @@ def otel(session_id, rows):
     packed = [(ts, session_id or "", r.get("metric") or "", r.get("query_source") or "",
                r.get("model") or "", r.get("type") or "", float(r.get("value") or 0), pid)
               for r in rows]
-    conn = _connect()
-    if conn is not None:
-        try:
-            conn.executemany(
-                "INSERT INTO otel(ts,session_id,metric,query_source,model,type,value,pid)"
-                " VALUES(?,?,?,?,?,?,?,?)", packed)
-            conn.commit()
-            return
-        except Exception:
-            pass
-    for t, sid, metric, qs, model, typ, val, p in packed:
-        _spool("otel", dict(ts=t, session_id=sid, metric=metric, query_source=qs,
-                            model=model, type=typ, value=val, pid=p))
+    _event_many(
+        "otel",
+        "INSERT INTO otel(ts,session_id,metric,query_source,model,type,value,pid)"
+        " VALUES(?,?,?,?,?,?,?,?)", packed,
+        [dict(ts=t, session_id=sid, metric=metric, query_source=qs, model=model,
+              type=typ, value=val, pid=p)
+         for t, sid, metric, qs, model, typ, val, p in packed])
 
 
 def session_start(d):
@@ -472,21 +471,12 @@ def session_end(d, reason=""):
     sid = sid_of(d)
     if not sid:
         return
-    # Same spool degradation as stream_end (the "session_end" pseudo-table in
-    # _insert): a locked/unreachable DB at SessionEnd used to drop the row
-    # silently, leaving the session "(open)" in cli_sessions forever.
-    row = {"session_id": sid, "ended_at": time.time(),
-           "end_reason": reason or (d.get("reason") or "")}
-    conn = _connect()
-    if conn is None:
-        _spool("session_end", row)
-        return
-    try:
-        conn.execute("UPDATE sessions SET ended_at=?, end_reason=? WHERE session_id=?",
-                     (row["ended_at"], row["end_reason"], sid))
-        conn.commit()
-    except Exception:
-        _spool("session_end", row)
+    # Routed through event() via the "session_end" pseudo-table (like stream_end):
+    # _insert applies it as the UPDATE it stands for. A locked/unreachable DB at
+    # SessionEnd used to drop the row silently, leaving the session "(open)" in
+    # cli_sessions forever — the shared spool degradation covers that.
+    event("session_end", session_id=sid, ended_at=time.time(),
+          end_reason=reason or (d.get("reason") or ""))
 
 
 def prune(days=PRUNE_DAYS):
@@ -948,6 +938,10 @@ def _cmd_transition(argv):
 def _cmd_error(argv):
     # error <sid> <script> <message>
     a = argv[2:] + [""] * 3
+    # getppid, unlike every other writer's getpid: this runs in a short-lived
+    # `claude_audit.py error …` CLI subprocess invoked FROM a shell script — the
+    # diagnostic identity is the invoking shell process, not this throwaway
+    # python pid (which is gone before anyone could correlate it).
     event("errors", session_id=a[0], script=a[1] or "shell", func="",
           traceback=a[2], context="", pid=os.getppid())
 
