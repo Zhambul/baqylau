@@ -152,7 +152,7 @@ def spawn_streamer(name, argv, log, env=None, purpose="", audit_argv=None):
 
 
 def stream_env(src=None, done=None, cmd=None, group=None, own=False,
-               skip_existing=False):
+               skip_existing=False, pos0=None):
     """The ONE builder of claude-stream.py's env contract (CLAUDE_STREAM_*).
     Every tailer launch site — main-session fg (cmd_pre), bg (cmd_fmt), a
     subagent's fg (substream.spawn_fg_tailer) — goes through here, so a new key
@@ -162,7 +162,12 @@ def stream_env(src=None, done=None, cmd=None, group=None, own=False,
     (pre-tee-wrap) command: the tailer derives its own content-render mode
     (md/json/yaml/code) from it — launchers pass the command, never the
     decision. `skip_existing` tails the file from its size at spawn (a `>>`
-    append target / a Ctrl+B hand-off — the prior bytes are not this job's)."""
+    append target / a Ctrl+B hand-off — the prior bytes are not this job's):
+    the size is measured HERE, at the launch site, and passed as
+    CLAUDE_STREAM_POS0 (`pos0` overrides for a source the launcher located
+    itself, e.g. the Ctrl+B task-output glob) — measuring at tailer OPEN time
+    instead silently skipped any output that landed during the tailer's own
+    startup (seconds under load), a permanently-lost line."""
     env = dict(os.environ)
     for k, v in (("CLAUDE_STREAM_SRC", src), ("CLAUDE_STREAM_DONE", done),
                  ("CLAUDE_STREAM_CMD", cmd), ("CLAUDE_STREAM_GROUP", group)):
@@ -172,6 +177,13 @@ def stream_env(src=None, done=None, cmd=None, group=None, own=False,
         env["CLAUDE_STREAM_OWN"] = "1"
     if skip_existing:
         env["CLAUDE_STREAM_SKIP_EXISTING"] = "1"
+        if pos0 is None and src:
+            try:
+                pos0 = os.path.getsize(src)
+            except OSError:
+                pos0 = 0
+        if pos0 is not None:
+            env["CLAUDE_STREAM_POS0"] = str(int(pos0))
     return env
 
 

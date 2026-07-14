@@ -30,7 +30,7 @@ LBL_FAIL = O.RED      # a failed tool (PostToolUseFailure)
 
 
 def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None,
-                  cmd=None):
+                  cmd=None, pos0=None):
     # Launch claude-stream.py detached so it keeps tailing the job's output file
     # after this hook exits. Passes the claimed slot so its gutter + finish chip
     # match the header colour. If the command redirected stdout to a file (`src`),
@@ -41,7 +41,8 @@ def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None,
     # file rather than re-showing it from the start. Returns the Popen (or None).
     if not taskid:
         return None
-    env = H.stream_env(src=src, cmd=cmd, group=group, skip_existing=skip_existing)
+    env = H.stream_env(src=src, cmd=cmd, group=group, skip_existing=skip_existing,
+                       pos0=pos0)
     return H.spawn_streamer("claude-stream.py", [kind, taskid, LOG, slot], LOG,
                             env=env, purpose=f"stream:{kind} task={taskid}",
                             audit_argv=[kind, taskid, str(slot)])
@@ -132,9 +133,25 @@ def _render_background(d, cmd, taskid, converted, done):
         src, src_append = redirect if redirect else (None, False)
         # skip_existing for a `>>` redirect: tail only what this job appends, or
         # the target file's entire prior contents would replay into the mirror.
+        # For a conversion the skip offset is measured NOW, against the task
+        # output file located by the same glob the tailer uses (0 if it doesn't
+        # exist yet): the departing fg tee showed everything up to THIS moment,
+        # so everything after it belongs to the bg block — leaving the tailer to
+        # measure at its own open time skipped output that landed during its
+        # startup (hookkit.stream_env, CLAUDE_STREAM_POS0).
+        pos0 = None
+        if converted:
+            from plugins.claude_code import stream as ST
+            found = ST.glob_task_output(taskid)
+            pos0 = 0
+            if found:
+                try:
+                    pos0 = os.path.getsize(found)
+                except OSError:
+                    pos0 = 0
         proc = _spawn_stream("bg", taskid, slot, src,
                              skip_existing=converted or src_append, group=taskid,
-                             cmd=cmd)
+                             cmd=cmd, pos0=pos0)
         if proc is not None:
             claude_slots.set_owner(slot_marker, proc.pid)
         else:

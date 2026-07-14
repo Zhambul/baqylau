@@ -61,6 +61,7 @@ SLOT_RGB = (0, 0, 0)
 OUTER_RGB = None
 SRC = DONE = CMD = ""
 OWN = SKIP_EXISTING = False
+POS0 = None
 GROUP = None
 RKIND = RVALUE = RENDER_KIND = None
 MD = SNIFF = False
@@ -107,6 +108,11 @@ def _init(argv):
     OWN = os.environ.get("CLAUDE_STREAM_OWN") == "1"
     DONE = os.environ.get("CLAUDE_STREAM_DONE") or ""
     SKIP_EXISTING = os.environ.get("CLAUDE_STREAM_SKIP_EXISTING") == "1"
+    global POS0
+    try:
+        POS0 = int(os.environ["CLAUDE_STREAM_POS0"])
+    except (KeyError, ValueError):
+        POS0 = None
     GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
     CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
 
@@ -227,10 +233,11 @@ PROCFIND_S = float(os.environ.get("CLAUDE_STREAM_PROCFIND_S") or 20)
 FG_BACKSTOP_S = 7200
 
 
-def glob_task_output():
-    pats = [f"/private/tmp/claude-*/*/*/tasks/{TASKID}.output",
-            f"/private/tmp/claude-*/*/tasks/{TASKID}.output",
-            f"/private/tmp/claude-*/*/*/*/tasks/{TASKID}.output"]
+def glob_task_output(taskid=None):
+    tid = taskid or TASKID
+    pats = [f"/private/tmp/claude-*/*/*/tasks/{tid}.output",
+            f"/private/tmp/claude-*/*/tasks/{tid}.output",
+            f"/private/tmp/claude-*/*/*/*/tasks/{tid}.output"]
     for p in pats:
         m = glob.glob(p)
         if m:
@@ -255,37 +262,87 @@ def find_file(deadline):
     return glob_task_output()
 
 
-_LSOF_STATE = {"missing": False, "audited": False}
+# `lsof -- path` scans the WHOLE process fd table on macOS (seconds on a loaded
+# box), and every tailer used to run it SYNCHRONOUSLY on every poll tick (POLL_S
+# can be 0.05 under test). Several concurrent tailers then spawn dozens of lsofs
+# per second, each lsof slows the others down, and once one exceeded the old 5s
+# subprocess timeout the "assume still writing" fallback starved writer-gone
+# INDEFINITELY — the CI macOS-runner flake class no wait-ceiling could fix; a
+# blocking slow lsof also froze the whole tailer loop (fg sentinel hand-offs
+# went unconsumed for its full duration). So the probe is ASYNC and throttled:
+# has_writer() starts an lsof at most every LSOF_MIN_S, returns the last known
+# answer immediately, and harvests the result on a later tick — the loop never
+# blocks, and lsof pressure is capped at ~1/s per tailer. The answer therefore
+# lags by up to one lsof duration + LSOF_MIN_S, which only delays writer-gone
+# (grace is 2s in production) and can never fire it early: the initial and
+# every failure answer is True ("assume still writing").
+LSOF_MIN_S = float(os.environ.get("CLAUDE_STREAM_LSOF_S") or 1.0)
+# Cap on one probe's runtime. Generous: a slow-but-successful lsof still yields
+# a REAL answer; a tight cap turns mere slowness into a poisoned permanent True.
+LSOF_TIMEOUT_S = 30
+_LSOF_STATE = {"missing": False, "audited": False,
+               "proc": None, "started": 0.0, "at": 0.0, "val": True}
+
+
+def _lsof_parse(out):
+    # True if some process holds the file open for writing (FD ends w/u/W).
+    return any(len(p) >= 4 and p[3][-1:] in "wuW"
+               for p in (line.split() for line in out.splitlines()[1:]))
 
 
 def has_writer(path):
-    # True if some process holds the file open for writing (lsof FD ends w/u/W).
-    # A FAILED lsof (5s timeout on a busy box) must read as "can't tell — assume
-    # still writing", NOT "no writer": returning False here once let writer_gone
-    # fire mid-command during a silent phase (premature finish chip, tab flipped
-    # green, remaining output lost). Only a MISSING lsof binary keeps returning
-    # False — writer-liveness is impossible without it, and "always alive" would
-    # mean bg streams never end (they deliberately have no backstop).
-    if _LSOF_STATE["missing"]:
+    # Non-blocking: last known answer now, fresh probe harvested next tick.
+    # A FAILED/hung lsof must read as "can't tell — assume still writing", NOT
+    # "no writer": returning False here once let writer_gone fire mid-command
+    # during a silent phase (premature finish chip, tab flipped green, remaining
+    # output lost). Only a MISSING lsof binary keeps returning False —
+    # writer-liveness is impossible without it, and "always alive" would mean
+    # bg streams never end (they deliberately have no backstop).
+    st = _LSOF_STATE
+    if st["missing"]:
         return False
-    try:
-        out = subprocess.run(["lsof", "--", path], capture_output=True,
-                             text=True, timeout=5).stdout
-    except FileNotFoundError:
-        _LSOF_STATE["missing"] = True
-        A.error(LOG, "lsof missing — writer-liveness disabled", {"path": path})
-        return False
-    except Exception:
-        if not _LSOF_STATE["audited"]:          # first occurrence only, or it spams
-            _LSOF_STATE["audited"] = True
-            A.error(LOG, "lsof failed — assuming writer still present",
-                    {"path": path})
-        return True
-    for line in out.splitlines()[1:]:
-        parts = line.split()
-        if len(parts) >= 4 and parts[3][-1:] in "wuW":
-            return True
-    return False
+    now = time.time()
+    p = st["proc"]
+    if p is not None:
+        if p.poll() is None:
+            if now - st["started"] > LSOF_TIMEOUT_S:    # hung probe: kill, retry later
+                try:
+                    p.kill()
+                    p.wait()
+                except Exception:
+                    pass
+                st["proc"] = None
+                st["at"], st["val"] = now, True
+                if not st["audited"]:       # first occurrence only, or it spams
+                    st["audited"] = True
+                    A.error(LOG, "lsof timed out — assuming writer still present",
+                            {"path": path})
+        else:
+            try:
+                out = p.stdout.read() or ""
+            except Exception:
+                out = ""
+            finally:
+                p.stdout.close()
+            st["proc"] = None
+            st["at"], st["val"] = now, _lsof_parse(out)
+    if st["proc"] is None and now - st["at"] >= LSOF_MIN_S:
+        try:
+            st["proc"] = subprocess.Popen(
+                ["lsof", "--", path], stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL, text=True)
+            st["started"] = now
+        except FileNotFoundError:
+            st["missing"] = True
+            A.error(LOG, "lsof missing — writer-liveness disabled", {"path": path})
+            return False
+        except Exception:
+            if not st["audited"]:
+                st["audited"] = True
+                A.error(LOG, "lsof spawn failed — assuming writer still present",
+                        {"path": path})
+            st["at"], st["val"] = now, True
+    return st["val"]
 
 
 alive = S.pid_alive                             # EPERM (foreign-owned) counts as alive
@@ -332,6 +389,15 @@ def find_proc(sig):
     return hits[0] if len(hits) == 1 else None
 
 
+def mon_proc_found(pid):
+    """Audit the monitor pid latch — the moment completion detection is keyed
+    to a real process. Makes "why did this monitor end idle-fallback?" (was the
+    process ever identified?) answerable from the DB, and gives the e2e suite
+    an observable to synchronise on before it kills its monitor stand-in (a
+    short-lived stand-in raced the tailer's startup on loaded runners)."""
+    A.state_file(LOG, "monitor:" + TASKID, "proc-found", {"pid": pid})
+
+
 def monitor_wait_file(run, start):
     # Claude Code creates tasks/<id>.output LAZILY, on the monitor's first output
     # byte — a quiet persistent monitor (poll every N seconds, print only on
@@ -358,7 +424,9 @@ def monitor_wait_file(run, start):
         now = time.time()
         if pid is None:
             pid = find_proc(SIG)
-            if pid is None and now > find_deadline:
+            if pid is not None:
+                mon_proc_found(pid)
+            elif now > find_deadline:
                 O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
                 run.end("output-file-not-found (monitor process never found)")
                 return None, None
@@ -388,14 +456,23 @@ def wait_source(run, start):
 
 def open_tailer(path):
     """A FileTailer positioned at the start of THIS job's output: offset 0
-    normally, or the file's spawn-time size when the existing bytes predate the
-    job (Ctrl+B hand-off / `>>` append — see SKIP_EXISTING above)."""
+    normally, or the file's SPAWN-time size when the existing bytes predate the
+    job (Ctrl+B hand-off / `>>` append — see SKIP_EXISTING above). The launcher
+    measures that size and passes it as CLAUDE_STREAM_POS0 (hookkit.stream_env)
+    — measuring here, at open time, silently skipped any output that landed
+    during this tailer's own startup (seconds under load): a permanently lost
+    line. The open-time getsize survives only as the fallback for a launcher
+    that predates POS0."""
     pos0 = 0
     if SKIP_EXISTING:
-        try:
-            pos0 = os.path.getsize(path)
-        except OSError:
-            pos0 = 0
+        if POS0 is not None:
+            pos0 = POS0
+        else:
+            try:
+                pos0 = os.path.getsize(path)
+            except OSError:
+                pos0 = 0
+        A.state_file(LOG, "tail:" + TASKID, "open", {"path": path, "pos0": pos0})
     return T.FileTailer(path, pos=pos0)
 
 
@@ -493,8 +570,12 @@ def make_is_done(tail, path, mon_pid, st):
     mon = {"pid": mon_pid, "deadline": time.time() + PROCFIND_S}
 
     def writer_gone(now):
-        return (not has_writer(path) and tail.idle_for(now) >= GRACE
-                and tail.size >= 0)
+        # Cheap pure checks FIRST: while output is flowing (idle < grace) no
+        # lsof runs at all — has_writer is a whole-fd-table scan (see throttle
+        # note above) and calling it on every poll tick was the lsof storm
+        # that starved CI completion detection.
+        return (tail.idle_for(now) >= GRACE and tail.size >= 0
+                and not has_writer(path))
 
     def fg_done(now):
         taken = S.hand_take(LOG, sentinel) if sentinel else None
@@ -508,6 +589,8 @@ def make_is_done(tail, path, mon_pid, st):
     def monitor_done(now):
         if mon["pid"] is None and now < mon["deadline"]:
             mon["pid"] = find_proc(SIG)
+            if mon["pid"] is not None:
+                mon_proc_found(mon["pid"])
         if mon["pid"] is not None:
             if not alive(mon["pid"]):           # process gone -> definitively done
                 return "monitor-process-exited"

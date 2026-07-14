@@ -27,8 +27,13 @@ TAB = "claude-tab-status.py"
 @pytest.fixture
 def writer(reaper):
     """A real write-holder on a file (what has_writer/lsof detects): the
-    product treats 'no process holds the file open for write' as job-done."""
-    def _start(path, seconds=30):
+    product treats 'no process holds the file open for write' as job-done.
+    Long-lived by default — every test ENDS it explicitly (terminate()), and
+    the reaper sweeps leftovers. A 30s lifetime silently expired mid-test on
+    slow runners (the scaled wait ceilings alone can exceed it), ending the
+    stream writer-gone before the test wrote its next line — a flake that got
+    WORSE, not better, as wait ceilings grew."""
+    def _start(path, seconds=600):
         # >> (append) not > : truncating would race lines the test already
         # wrote into the file; append still registers as a write-holder.
         p = subprocess.Popen(["/bin/sh", "-c",
@@ -512,6 +517,16 @@ def test_f6_teammate_rendering(run_hook, test_env, session):
 
 # --------------------------------------------------------------------- F7
 
+def mon_proc_latched(env, sid):
+    """The tailer's audited monitor-pid latch (stream.mon_proc_found): only
+    after it may the test end its monitor stand-in and still expect the
+    process-exit end reason. Ending the stand-in on its own timer raced the
+    tailer's startup — find_proc cannot identify a process that exited before
+    the tailer ever ran `ps` (spawn takes seconds on a loaded runner), and the
+    stream then ends idle-fallback instead."""
+    return any(a == "proc-found" for _, a, _ in oracle.state_files(env, sid))
+
+
 @needs_private_tmp
 def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     """Monitor: header + tailer on tasks/<id>.output, completion detected by
@@ -519,8 +534,9 @@ def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     s = session.make()
     token = "monsig%s" % uuid.uuid4().hex[:8]
     # two statements so sh can't exec-optimize itself away — find_proc needs
-    # the full command string (incl. the token) visible in a live process argv
-    cmd = "sleep 1.5; true #%s" % token
+    # the full command string (incl. the token) visible in a live process argv;
+    # long-lived: the TEST ends it, after the tailer verifiably latched it
+    cmd = "sleep 300; true #%s" % token
     proc = subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True)
     reaper.append(proc)
     taskid = "mon-" + uuid.uuid4().hex[:8]
@@ -533,7 +549,10 @@ def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     assert "◉ monitor" in s.ops_text()
     wait_until(lambda: "monitor event 1" in s.ops_text(),
                desc="monitor output streams")
-    proc.wait()
+    wait_until(lambda: mon_proc_latched(test_env, s.sid),
+               desc="tailer latches the monitor process")
+    proc.terminate()
+    proc.wait()          # reap — a zombie still reads as alive to pid_alive
     wait_until(lambda: any("monitor-process-exited" in (r or "")
                            for r in end_reasons(test_env, s.sid)),
                timeout=15, desc="monitor ends when its process exits")
@@ -552,7 +571,8 @@ def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
     env = dict(test_env)
     env["CLAUDE_STREAM_FIND_S"] = "0.3"   # any bounded-wait regression trips fast
     token = "monsig%s" % uuid.uuid4().hex[:8]
-    cmd = "sleep 8; true #%s" % token
+    # long-lived: the TEST ends it, after the tailer verifiably latched it
+    cmd = "sleep 300; true #%s" % token
     proc = subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True)
     reaper.append(proc)
     taskid = "mon-" + uuid.uuid4().hex[:8]
@@ -571,6 +591,8 @@ def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
         f.write("late event\n")
     wait_until(lambda: "late event" in s.ops_text(),
                desc="late-created output streams")
+    wait_until(lambda: mon_proc_latched(test_env, s.sid),
+               desc="tailer latches the monitor process")
     proc.terminate()
     proc.wait()          # reap — a zombie still reads as alive to pid_alive
     wait_until(lambda: any("monitor-process-exited" in (r or "")
@@ -588,12 +610,16 @@ def test_f7c_monitor_dies_before_any_output(run_hook, test_env, session,
     the process's death, not a timeout, is the "nothing to show" signal."""
     s = session.make()
     token = "monsig%s" % uuid.uuid4().hex[:8]
-    cmd = "sleep 1.2; true #%s" % token
+    # long-lived: the TEST ends it, after the tailer verifiably latched it
+    cmd = "sleep 300; true #%s" % token
     proc = subprocess.Popen(["/bin/sh", "-c", cmd], start_new_session=True)
     reaper.append(proc)
     run_hook("claude-monitor-fmt.py",
              P.post_monitor(s, description="silent monitor", command=cmd,
                             task_id="mon-" + uuid.uuid4().hex[:8]))
+    wait_until(lambda: mon_proc_latched(test_env, s.sid),
+               desc="tailer latches the monitor process")
+    proc.terminate()
     proc.wait()          # reap — a zombie still reads as alive to pid_alive
     wait_until(lambda: any("monitor-exited-silent" in (r or "")
                            for r in end_reasons(test_env, s.sid)),

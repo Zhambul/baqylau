@@ -445,18 +445,21 @@ def sweep_tmp_debris():
     (marker dirs, tab-state/watcher-pid files — nothing reads or writes them
     anymore) and anything session-scoped older than 7 days (parked *.keep never
     resumed, state DBs of crashed sessions, orphaned fg .out/.done side files —
-    a LIVE session's files are always younger)."""
-    for p in glob.glob("/tmp/claude-mirror-*.log.slots"):
+    a LIVE session's files are always younger). Sweeps the SAME root everything
+    else derives paths from (core.paths honours CLAUDE_MIRROR_TMPDIR) — a
+    hardcoded /tmp here made every test's SessionEnd rummage in the REAL /tmp."""
+    tmp = os.path.dirname(P.TAB_DB)
+    for p in glob.glob(tmp + "/claude-mirror-*.log.slots"):
         shutil.rmtree(p, ignore_errors=True)
-    for pat in ("/tmp/claude-tab-state-*", "/tmp/claude-tab-bgwatch-*",
-                "/tmp/claude-tab-interruptwatch-*"):
+    for pat in (tmp + "/claude-tab-state-*", tmp + "/claude-tab-bgwatch-*",
+                tmp + "/claude-tab-interruptwatch-*"):
         for p in glob.glob(pat):
             try:
                 os.remove(p)
             except OSError:
                 pass
     cutoff = time.time() - 7 * 86400
-    for p in glob.glob("/tmp/claude-mirror-*"):
+    for p in glob.glob(tmp + "/claude-mirror-*"):
         try:
             if os.lstat(p).st_mtime < cutoff:
                 shutil.rmtree(p, ignore_errors=True) if os.path.isdir(p) \

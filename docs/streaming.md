@@ -47,7 +47,12 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   - **A `>>` append target is tailed from its size at spawn**
     (`CLAUDE_STREAM_SKIP_EXISTING`, the same mechanism the Ctrl+B hand-off uses),
     not from 0 — otherwise the target file's entire *prior* contents would replay
-    into the mirror as if the command had printed them.
+    into the mirror as if the command had printed them. The skip offset is
+    measured at the LAUNCH site and passed via `CLAUDE_STREAM_POS0`
+    (`hookkit.stream_env`); letting the tailer measure at its own open time
+    silently skipped output that landed during the tailer's startup — seconds
+    under load — a permanently lost line. The adopted offset is audited
+    (`state_files` action `open`, path `tail:<taskid>`).
 
   `│ ` gutter coloured from its kind's palette slot, then writes a
   `■ background finished · Ns` / `■ monitor ended · Ns` line when done. **Completion
@@ -56,7 +61,17 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   - **background** — the command holds its output file open the whole time, so
     the write-holder vanishing (`lsof`) is a definitive signal (works even for a
     long silent `sleep 3600; echo done`). The tailer only *reads*, so it never
-    counts itself. A **failed** `lsof` (its 5s timeout on a busy box) reads as
+    counts itself. The probe is **async and throttled** (`CLAUDE_STREAM_LSOF_S`,
+    default 1s): `lsof -- path` scans the whole process fd table (seconds on a
+    loaded macOS box), and a synchronous per-poll-tick call both froze the tailer
+    loop for the lsof's full duration (fg sentinel hand-offs went unconsumed) and
+    let concurrent tailers storm each other slow — once one exceeded the old 5s
+    subprocess cap, the failure fallback starved writer-gone indefinitely (the CI
+    macOS flake class no wait-ceiling could fix). So `has_writer` starts at most
+    one lsof per interval, returns the last known answer immediately, and
+    harvests the result on a later tick; the answer lags by at most one lsof
+    duration + the interval, which only ever *delays* writer-gone (grace is 2s).
+    A **failed/hung** `lsof` (its 30s cap on a badly wedged box) reads as
     "can't tell — assume still writing", never "no writer": returning False there
     once ended a stream mid-command during a silent phase (premature finish chip,
     tab green, output lost). Only a *missing* lsof binary disables
@@ -67,8 +82,11 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     whose argv contains the command. The launcher passes a distinctive token from
     the command; the tailer finds that process (`ps`) and watches it — it exits
     exactly when the monitor ends, so completion is exact at **any cadence** (1s
-    or 1h between ticks) with no grace/idle guess. A short idle fallback only
-    applies if the process can't be found. **Disambiguation:** the launcher also
+    or 1h between ticks) with no grace/idle guess. The moment the pid latches is
+    audited (`state_files` action `proc-found`, path `monitor:<taskid>`) — the
+    evidence for "was the process ever identified?", and the observable the e2e
+    suite synchronises on before killing its monitor stand-in. A short idle
+    fallback only applies if the process can't be found. **Disambiguation:** the launcher also
     passes the *full* command (`CLAUDE_MONITOR_CMD`) and a whole-command argv
     match always wins — the longest-token signature alone can equally match an
     unrelated long-lived process (another tail/editor holding the same file path
@@ -121,9 +139,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     replacement), prints a `▷ backgrounded (ctrl+b) — continuing below` note, and
     spawns a genuine `bg` tailer against the real `backgroundTaskId`, reusing the
     same `_spawn_stream` used for an explicit background command. That tailer
-    starts from the *current size* of the task's output file
-    (`CLAUDE_STREAM_SKIP_EXISTING`), not from 0, so whatever the `fg` tailer's tee
-    copy already showed isn't repeated.
+    starts from the task output file's size *at the hand-off moment* — measured
+    by `claude-cmd-fmt.py` itself (the same task-output glob the tailer uses; 0
+    if the file doesn't exist yet) and passed via `CLAUDE_STREAM_POS0` with
+    `CLAUDE_STREAM_SKIP_EXISTING` — not from 0, so whatever the `fg` tailer's tee
+    copy already showed isn't repeated; and not from the size at the tailer's own
+    OPEN time, which skipped (lost forever) any output that landed while the
+    tailer was still starting up.
   - **A manually cancelled command** fires no hook at all (the
     no-hook-on-interrupt gap noted throughout this doc), so `claude-cmd-fmt.py`'s normal consume of
     the `fg-live` record (a state-DB hand-off, key `fg-live` — was a `.fg-live`

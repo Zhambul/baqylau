@@ -73,6 +73,7 @@ def test_env(tmp_path):
         "CLAUDE_TAIL_POLL_S": "0.05",
         "CLAUDE_TAIL_BACKSTOP_S": "60",
         "CLAUDE_STREAM_GRACE_S": "0.3",
+        "CLAUDE_STREAM_LSOF_S": "0.25",
         "CLAUDE_WATCH_POLL_S": "0.1",
         "CLAUDE_CODEX_GRACE_S": "0.3",
         "CLAUDE_CODEX_WATCH_POLL_S": "0.05",
