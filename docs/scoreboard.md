@@ -6,7 +6,7 @@ see [otel.md](otel.md).
 
   - **Session scoreboard (its own window).** A running "so far" summary of the whole
     session, aggregated across the separate hook processes in the **per-session
-    state DB** `…/<mirror-log>.state.db` (`claude_state.py`; was an flock'd
+    state DB** `…/<mirror-log>.state.db` (`state.py`; was an flock'd
     `.stats.json` sidecar — atomic SQL increments replaced the read-modify-write
     JSON dance, so bumps can neither tear nor clobber and reads never see a torn
     write; parked as `*.keep` with the log at SessionEnd and restored on resume, so
@@ -28,7 +28,7 @@ see [otel.md](otel.md).
     The **`⬡` session-id row** is always shown (parsed from the mirror-log filename),
     so a pane is identifiable at a glance. The **`✉` message census** gives live
     visibility into the agent-team message flow and is **always shown** (defaults to
-    `0 msgs`, even for a non-team session). It comes from `claude_msgs.update_messages()`,
+    `0 msgs`, even for a non-team session). It comes from `msgs.update_messages()`,
     which — since there is **no hook** for a message being read/consumed — tracks state
     by **stateful polling**: each tick it diffs the team inboxes against the persisted
     state (the state DB's `messages` table, keyed by `(msg_id, recipient)` — was a
@@ -72,7 +72,7 @@ see [otel.md](otel.md).
     goes **last** so the tail-drop sheds it before the token breakdown; the **last row
     carries every file/line/tool figure** — the unique-`files` count, then the `±`
     line-diff (`+added -removed`, relocated off `▪`), then the tool tallies. The
-    structured data comes from `claude_ops.scoreboard_parts()` (which now returns only
+    structured data comes from `ops.scoreboard_parts()` (which now returns only
     the `▪`-row activity + the tool tallies; the renderer reads `files`/`added`/
     `removed`/`cost` straight off the stats dict for the rows they moved to). The tools
     row **excludes Bash** — its count is already the `cmds` figure (same bump; listing
@@ -106,7 +106,7 @@ see [otel.md](otel.md).
     can't recount, and the bump lands as a plain `bump` row (deltas are files/lines,
     not the tokens/cost the unattributed-bump anomaly guards).
   - **The `Σ` row is the token display: a per-category breakdown with an all-in total.**
-    The `Σ` row (`claude_ops.token_parts()`) shows the four raw
+    The `Σ` row (`ops.token_parts()`) shows the four raw
     categories — **input · output · cache read · cache write** — plus a **total** that
     ADDS cache-read replay, so it reconciles with what `claude --resume`'s "Usage by
     model" reports (that total is dominated by cache read on a long session, so it far
@@ -134,7 +134,7 @@ see [otel.md](otel.md).
     as a second instance of the same bug: a session whose four review agents really
     billed ~784k tokens bumped 1.75M (×2.24), turning a $18.76 session into a $23
     scoreboard.
-  - **Pricing** (`claude_ops.PRICES`, verified against the published 2026-07 list):
+  - **Pricing** (`accounting.PRICES`, verified against the published 2026-07 list):
     Fable/Mythos 10/50 · Opus 4.6-4.8 5/25 · Sonnet 3/15 · Haiku 4.5 1/5 · legacy
     Opus 4.1/4.0/3 15/75 per MTok in/out. The table keys are **substrings of the
     real model ids** — the legacy rows are `opus-4-1` / `opus-4-2025`

@@ -17,8 +17,8 @@ import os
 import subprocess
 import sys
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
-WATCH = os.path.join(ROOT, "claude-codex-watch.py")
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
+WATCH = os.path.join(BIN, "claude-codex-watch.py")
 
 from core.noaudit import load_audit
 

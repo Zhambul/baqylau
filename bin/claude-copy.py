@@ -4,7 +4,7 @@
 # ~/.config/kitty/open-actions.conf `protocol claude-copy` rule invokes it with
 # the clicked URL, and argv[0] is the audit DB's handler/script vocabulary.
 import os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 from core import copy as C
 if __name__ == "__main__":
     C.entry(sys.argv)

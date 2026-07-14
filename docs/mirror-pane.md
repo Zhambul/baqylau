@@ -89,7 +89,7 @@ is reflowed into readable multi-line form — **bash** breaks after top-level `&
 `||` / `|` and turns `;` into a line break; **embedded Python** (`-c` args + heredoc
 bodies) is reformatted via `ast`, so `python3 -c "import os;x=1;print(x)"` becomes
 three real lines. It's width-INDEPENDENT (real newlines the renderer still wraps), so
-it runs **once at op creation** (`claude_ops.code` → `claude_render.format_code`), not
+it runs **once at op creation** (`ops.code` → `render.format_code`), not
 in the paint loop. Best-effort and conservative — operators inside quotes (`git commit
 -m "a && b"`), background `&`, redirections, bash heredocs, `case` bodies, and Python
 that carries comments are all left exactly as written; anything it can't confidently
@@ -99,7 +99,7 @@ verbatim.
 **Section banners in output are emphasised.** Lines that scripts (and Claude Code
 itself) print to delimit sections — `=== title ===`, `--- title ---`,
 `### title ###` — are rendered **bold amber** so section boundaries pop out of a
-wall of output. Detection (`claude_render.emphasize`) runs on each line's *visible*
+wall of output. Detection (`render.emphasize`) runs on each line's *visible*
 text and is deliberately conservative: the `=` family needs a run of `==`+ followed
 by a space or end-of-line (so `x == y` and valgrind's `==123==` are left alone),
 and the `-`/`#`/`*`/`~` forms must be **bracketed** on both ends (so a diff header
@@ -293,17 +293,17 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   +18 -1` — from a real line-level diff of the tool input (`old_string` vs
   `new_string`, summed over a MultiEdit; the whole body for a Write), the same
   additions/removals Claude Code reports. Reads and failures show none. The shared
-  counter is `claude_ops.diff_counts()`, used by both this path and the subagent
+  counter is `tools.diff_counts()`, used by both this path and the subagent
   streamer. A mutation also shows the **line range(s) it touched** — a dim
   `start-end` after the counts, e.g. `Update(README.md) +18 -1 445-462`, comma-joined
   for a multi-hunk MultiEdit (capped at 3, `+k` for the rest) — read from the result's
-  `structuredPatch` hunks via `claude_ops.edit_range()`; a brand-new Write shows no
+  `structuredPatch` hunks via `tools.edit_range()`; a brand-new Write shows no
   range (its `+N` already says the size). A **Read** instead shows how much of the file it took: a bare
   `Read(name)` means the **whole file**, while a dim `start-end/total` (e.g.
   `Read(big.py) 1-2000/5000`) flags a **partial** read — either an explicit
   `offset`/`limit` slice or a bare read that hit Claude Code's **2000-line cap** on a
   larger file. The extent comes from the result's `startLine`/`numLines`/`totalLines`
-  via `claude_ops.read_extent()`.
+  via `tools.read_extent()`.
 - **`claude-split.py open|close|toggle|grow|shrink|reset|setpct`** manages the pane,
   **per Claude session**. Everything is keyed by `session_id` so PARALLEL sessions
   never collide: each mirror pane carries `var:claude_mirror=<sid>`, each Claude pane
@@ -311,7 +311,7 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   DB at `/tmp/claude-mirror-<sid>.log.state.db` (the `.log` path is the KEY the
   scripts pass around; no log file exists anymore). The key format itself —
   sanitizing a session id, the cwd-slug fallback, deriving/parsing the path — is
-  owned by ONE stdlib-only module, **`claude_paths.py`**; it used to be encoded in
+  owned by ONE stdlib-only module, **`core/paths.py`**; it used to be encoded in
   four independently-maintained regexes (ops/audit/split/tab-status) that had
   already drifted (audit captured the full sid where `team_dir` captured 8 hex
   chars), and any two of them disagreeing silently breaks the audit join or the
@@ -536,7 +536,7 @@ Behaviour & limits:
   **all** sequences, not just colour: a command that emits an escaped cursor-move
   or clear-screen (e.g. `^[[2J`) will have it execute in the pane.
 - **Reflow on resize.** Producers write width-INDEPENDENT **paint ops** (rows in
-  the state DB's `ops` table via `claude_ops.py`; one transaction per block, so
+  the state DB's `ops` table via `core/ops.py`; one transaction per block, so
   concurrent producers' blocks never interleave — the atomicity the old JSONL
   log's single O_APPEND write gave) — `rule` / `label` / `code` / `gut` / `line`, each carrying its
   colours + pre-highlighted text but no baked width. The renderer
@@ -547,7 +547,7 @@ Behaviour & limits:
   baked at write time, so resizing left old blocks frozen.) Cost: a resize
   re-renders the whole history (re-highlighting code) — fine for interactive use.
   All column accounting counts **terminal cells, not code points**
-  (`claude_render.dwidth`/`dsplit`, wcwidth-style: CJK/emoji are 2 cells, combining
+  (`render.dwidth`/`dsplit`, wcwidth-style: CJK/emoji are 2 cells, combining
   marks/ZWJ/VS16 are 0) — with `len()`, any op containing wide text overran the
   pane and knocked the `│ ` gutter out of alignment on wrapped rows.
 - **Tailers read exactly the bytes they measured.** Every poll-loop FILE reader
@@ -619,7 +619,7 @@ Behaviour & limits:
   is just the fallback when a project has no saved size). So sizing is sticky across
   restarts, independently per project.
 - Opened on `SessionStart`; toggle it off/on any time with the key above (or
-  `./claude-split.py toggle`) — reopening re-shows the session's full history, and
+  `./bin/claude-split.py toggle`) — reopening re-shows the session's full history, and
   while off nothing runs. **Per session:** each Claude session has its own mirror
   (own content, own size, independent toggle), so running several sessions in
   parallel no longer makes one session's toggle close another's pane.

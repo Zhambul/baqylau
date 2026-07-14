@@ -70,7 +70,7 @@ def _ensure_pygments():
 
 _ensure_pygments()
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 from core import panescript as PS
 from core import paths as P
 from core import codefmt as CF

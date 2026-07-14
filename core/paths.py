@@ -1,5 +1,5 @@
 # core/paths.py — the ONE owner of the mirror-log path format.
-# (Importable as `claude_paths` via the top-level compat shim.)
+# (Historical top-level name: claude_paths.py — that compat shim is deleted.)
 #
 # Everything in this project is keyed by the mirror-log path
 # /tmp/claude-mirror-<key>.log (the "<key>.log" is a KEY, not a file — see
@@ -12,13 +12,18 @@
 import os
 import re
 
-# The repo root, where the ENTRY shims (claude-hook.py, claude-stream.py, ...)
-# live. Not the mirror-log format proper, but repo-root derivation is a path
-# fact with exactly one correct answer, and this stdlib-only leaf is the
+# The repo root. Not the mirror-log format proper, but repo-root derivation is
+# a path fact with exactly one correct answer, and this stdlib-only leaf is the
 # project's designated path owner — before this, ten modules each re-derived it
 # with a depth-sensitive triple-dirname (a moved file silently breaks its own
 # copy). This file is one level below the root, so: two dirnames.
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# bin/ — where every hyphenated ENTRY script (claude-hook.py, claude-stream.py,
+# claude-mirror.py, …) lives. Their FILENAMES are load-bearing (the audit DB's
+# handler/script vocabulary), so spawn sites must join THIS directory with the
+# historical filename, never re-derive the location.
+BIN = os.path.join(ROOT, "bin")
 
 # CLAUDE_MIRROR_TMPDIR relocates EVERYTHING derived from these two roots (state
 # DBs, .out/.done sidecars, .keep parks, the tab DB) — it exists solely so the

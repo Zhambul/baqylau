@@ -5,7 +5,7 @@
 # event to it (one entry per event), and the dispatcher reads hook_event_name to
 # fan out in-process to the tab dispatch, formatters, and audit subscriber.
 import os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 from plugins.claude_code import dispatch
 if __name__ == "__main__":
     dispatch.entry()

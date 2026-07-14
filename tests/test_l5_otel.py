@@ -15,7 +15,7 @@ import payloads as P
 from conftest import wait_until
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-RECEIVER = os.path.join(REPO, "claude-otlp-receiver.py")
+RECEIVER = os.path.join(REPO, "bin", "claude-otlp-receiver.py")
 
 
 def _free_port():

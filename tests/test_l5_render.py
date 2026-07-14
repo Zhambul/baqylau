@@ -17,8 +17,8 @@ from conftest import REPO, wait_until
 GOLDEN_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "golden")
 
 SEED_OPS = r'''
-import claude_ops as O
-import claude_render as R
+from core import ops as O
+from core import render as R
 log = %(log)r
 O.emit(log,
        O.blank(), O.rule(), O.label("▶ foreground", O.SLATE),
@@ -51,7 +51,7 @@ def render_at(env, reaper, log, width, sentinel):
     out_path = log + ".render-%d.out" % width
     with open(out_path, "wb") as out:
         proc = subprocess.Popen(
-            [sys.executable, os.path.join(REPO, "claude-mirror.py"), log,
+            [sys.executable, os.path.join(REPO, "bin", "claude-mirror.py"), log,
              str(width)],
             stdout=out, stderr=subprocess.DEVNULL, env=dict(env), cwd=REPO)
     reaper.append(proc)

@@ -41,13 +41,13 @@ def codex(test_env, session, seed, reaper):
         def __init__(self):
             self.s = session.make()
             # the DB file's existence is the watcher's session-alive signal
-            seed.py("import claude_state as S; S.connect(%r)" % self.s.log)
+            seed.py("from core import state as S; S.connect(%r)" % self.s.log)
             self.jobs = os.path.join(test_env["TMPDIR"], "codex-companion",
                                      slug_for(self.s.cwd), "jobs")
             os.makedirs(self.jobs, exist_ok=True)
 
         def start_watcher(self, host_pid=None):
-            argv = [sys.executable, os.path.join(REPO, "claude-codex-watch.py"),
+            argv = [sys.executable, os.path.join(REPO, "bin", "claude-codex-watch.py"),
                     self.s.log, self.s.cwd, self.s.sid]
             if host_pid is not None:          # 4th arg -> STANDALONE host manager
                 argv.append(str(host_pid))

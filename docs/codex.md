@@ -88,7 +88,7 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     emits per-agent records.
     It never writes after the state DB is parked: the
     header emit re-checks the DB file right before painting (SessionEnd can park it
-    during the tailer's wait-for-source window, and `claude_state`'s connect would
+    during the tailer's wait-for-source window, and `core.state`'s connect would
     *create* a missing DB — resurrecting the session-alive signal the watcher polls,
     which then never exits), and a park detected mid-stream skips the footer rather
     than writing it into the `*.keep` snapshot via the cached connection.

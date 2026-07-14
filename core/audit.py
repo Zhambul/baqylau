@@ -1,6 +1,6 @@
 """core/audit.py — always-on SQLite audit trail for the mirror tooling.
-(Importable as `claude_audit` via the top-level compat shim, which is also
-the CLI entry point: `python3 claude_audit.py sessions|anomalies|…`.)
+(Historical name: claude_audit.py; bin/claude-audit.py is also
+the CLI entry point: `python3 bin/claude-audit.py sessions|anomalies|…`.)
 
 The mirror is ~20 short-lived hook processes plus detached tailers/watchers
 coordinating through /tmp marker files, sidecars, and sentinels — and almost every
@@ -27,13 +27,13 @@ spool (spool.jsonl) that is re-ingested on the next successful open, so auditing
 can neither lose evidence nor break a hook.
 
 CLI (what the audit-debug skill drives):
-  claude_audit.py sessions [N]          recent sessions
-  claude_audit.py timeline <sid>        merged chronological event timeline
-  claude_audit.py errors <sid>          swallowed exceptions for a session
-  claude_audit.py anomalies <sid>       canned queries for known bug signatures
-  claude_audit.py sql "<query>"         free-form read-only SQL
-  claude_audit.py prune [days]          drop sessions older than N days (default 30)
-  claude_audit.py session-start|session-end|hook <handler>|transition …
+  bin/claude-audit.py sessions [N]          recent sessions
+  bin/claude-audit.py timeline <sid>        merged chronological event timeline
+  bin/claude-audit.py errors <sid>          swallowed exceptions for a session
+  bin/claude-audit.py anomalies <sid>       canned queries for known bug signatures
+  bin/claude-audit.py sql "<query>"         free-form read-only SQL
+  bin/claude-audit.py prune [days]          drop sessions older than N days (default 30)
+  bin/claude-audit.py session-start|session-end|hook <handler>|transition …
                                         write entry points for the shell scripts
 """
 import json, os, re, sys, time, traceback
@@ -929,7 +929,7 @@ def cli_sql(argv):
 # --------------------------------------------------------------- CLI dispatch
 # Each handler owns its own argv parsing (argv is the FULL argv; argv[1] is the
 # command name). write=True marks the fire-and-forget entry points hooks/shell
-# invoke — the claude_audit.py shim derives its never-fail-loudly swallow set
+# invoke — the bin/claude-audit.py CLI derives its never-fail-loudly swallow set
 # from WRITE_COMMANDS, so the two can't drift apart again.
 
 def _cmd_session_start(argv):
@@ -957,7 +957,7 @@ def _cmd_error(argv):
     # error <sid> <script> <message>
     a = argv[2:] + [""] * 3
     # getppid, unlike every other writer's getpid: this runs in a short-lived
-    # `claude_audit.py error …` CLI subprocess invoked FROM a shell script — the
+    # `bin/claude-audit.py error …` CLI subprocess invoked FROM a shell script — the
     # diagnostic identity is the invoking shell process, not this throwaway
     # python pid (which is gone before anyone could correlate it).
     event("errors", session_id=a[0], script=a[1] or "shell", func="",
@@ -1047,5 +1047,5 @@ def main(argv):
     entry[0](argv)
 
 
-# The CLI entry point lives in the top-level claude_audit.py shim (main() above
+# The CLI entry point lives in bin/claude-audit.py (main() above
 # is what it calls) — a package module can't be executed directly.

@@ -13,7 +13,7 @@
 #
 # The two top-level entry shapes both hit the shim:
 #   1. `/abs/path/claude-*.py …`  via the `#!/usr/bin/env python3` shebang, and
-#   2. `python3 claude_audit.py hook subscriber`  in ~/.claude/settings.json.
+#   2. any literal `python3 …` hook command in ~/.claude/settings.json.
 # (Child processes are already fast: they spawn via sys.executable, which — once
 # we're inside a shim-launched interpreter — is the concrete binary, not the shim.)
 #

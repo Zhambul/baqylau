@@ -53,7 +53,7 @@ STATE_KEY = USAGE_KEY = BILLED_KEY = ""
 REN = None
 
 RST  = R.RST
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 
 
 def _init(argv):
@@ -227,7 +227,7 @@ def spawn_tailer(kind, taskid, cmd="", group=None):
     #   KIND TASKID LOG SLOT SIG OUTER
     # group (a tool_use_id) rides in via CLAUDE_STREAM_GROUP so the tailer's ops join
     # the block's ⧉ copy group (see core/copy.py / claude-stream.py's GROUP).
-    streamer = os.path.join(ROOT, "claude-stream.py")
+    streamer = os.path.join(BIN, "claude-stream.py")
     if not (taskid and os.path.exists(streamer)):
         return
     slot, marker = claude_slots.claim(kind, LOG)
@@ -276,7 +276,7 @@ def spawn_fg_tailer(tid, rec, cmd=""):
     # tool_use command (the model-authored original — updatedInput rewrites the
     # EXECUTED input, not the assistant message), so the tailer's content-render
     # detection sees the same clean command the main-session path passes.
-    streamer = os.path.join(ROOT, "claude-stream.py")
+    streamer = os.path.join(BIN, "claude-stream.py")
     if not os.path.exists(streamer):
         return None
     slot, marker = claude_slots.claim("fg", LOG)
@@ -512,7 +512,7 @@ def cleanup():
     S.agent_set(LOG, AGENT, done=0)
     claude_slots.pid_del(LOG, AGENT)
     try:
-        subprocess.run([os.path.join(ROOT, "claude-tab-status.py"), "bg-recheck", LOG, "sub"],
+        subprocess.run([os.path.join(BIN, "claude-tab-status.py"), "bg-recheck", LOG, "sub"],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:

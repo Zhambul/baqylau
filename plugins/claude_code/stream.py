@@ -43,7 +43,7 @@ from core import slots as claude_slots
 from core import state as S
 from core import tail as T
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -706,7 +706,7 @@ def cleanup(path):
     # the tab is currently red and nothing else is still running). The detached
     # process inherited KITTY_LISTEN_ON / KITTY_WINDOW_ID from the launch hook.
     try:
-        subprocess.run([os.path.join(ROOT, "claude-tab-status.py"), "bg-recheck", LOG, KIND],
+        subprocess.run([os.path.join(BIN, "claude-tab-status.py"), "bg-recheck", LOG, KIND],
                        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, timeout=10)
     except Exception:

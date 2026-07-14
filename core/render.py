@@ -1,5 +1,5 @@
 # core/render.py — shared rendering primitives for the command mirror.
-# (Importable as `claude_render` via the top-level compat shim.)
+# (Historical top-level name: claude_render.py — that compat shim is deleted.)
 #
 # Extracted from claude-cmd-fmt.py so the same ANSI-aware gutter wrapping,
 # escape-unescaping, and chip labels can be reused by claude-substream.py (which
@@ -364,7 +364,7 @@ class BufferedStreamer:
 # The bash/python tokenizer + pretty-printer (heredoc/`python -c` splitting,
 # command-word marking, `format_code` one-liner reflow, the highlight-and-wrap
 # `render`) lives in core/codefmt.py. Thin delegating aliases kept here because
-# external call sites and the `claude_render` compat shim historically reach
+# external call sites historically reach
 # them as render.format_code / render.render; new code imports core.codefmt.
 def format_code(code):
     from core import codefmt

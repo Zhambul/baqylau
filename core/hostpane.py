@@ -16,7 +16,7 @@
 # opening a pane needs a frontend. So every function that touches the terminal
 # takes the caller's `fe` (a frontends.Frontend) as its FIRST argument — core
 # never imports frontends; the plugin that already holds an `fe` passes it in.
-# `here` is the repo root (where the entry scripts — claude-mirror.py,
+# `here` is the repo's bin/ (where the entry scripts — claude-mirror.py,
 # claude-scorebar.py — live), likewise passed by the caller.
 import os
 import time

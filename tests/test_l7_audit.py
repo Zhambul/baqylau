@@ -21,7 +21,7 @@ def poison(env, sql, args=()):
     """Insert a row through the product's own audit connection (so the schema
     exists and the write path matches production)."""
     code = ("import json, sys\n"
-            "import claude_audit as A\n"
+            "from core import audit as A\n"
             "c = A._connect()\n"
             "assert c is not None, 'audit db unavailable'\n"
             "c.execute(sys.argv[1], json.loads(sys.argv[2]))\n"
@@ -137,7 +137,7 @@ def test_assert_clean_allowlist(test_env):
 # ------------------------------------------------------------- CLI dispatch
 
 def cli(env, *args):
-    return subprocess.run([sys.executable, os.path.join(REPO, "claude_audit.py"),
+    return subprocess.run([sys.executable, os.path.join(REPO, "bin", "claude-audit.py"),
                            *args], env=dict(env), cwd=REPO, capture_output=True,
                           text=True, timeout=15)
 
@@ -147,7 +147,7 @@ def test_unknown_command_prints_usage(test_env):
     docstring + the COMMANDS-derived command list, so it can't go stale) and
     exit 0. The old `__doc__ or …` fallback was dead: the header was a comment
     block, so users only ever saw 'see module docstring for usage'."""
-    import claude_audit as A
+    from core import audit as A
     for args in (("definitely-not-a-command",), ()):
         p = cli(test_env, *args)
         assert p.returncode == 0, p.stderr
@@ -160,7 +160,7 @@ def test_unknown_command_prints_usage(test_env):
 def test_swallow_set_derived_from_command_table():
     """The shim's never-fail-loudly set is WRITE_COMMANDS, derived from the one
     command table — the hand-maintained copy it replaced had already drifted."""
-    import claude_audit as A
+    from core import audit as A
     assert A.WRITE_COMMANDS == {n for n, (_, w) in A.COMMANDS.items() if w}
     for name, (fn, write) in A.COMMANDS.items():
         assert callable(fn), name
@@ -185,7 +185,7 @@ def test_anomalies_registry_smoke(test_env):
     """Every registry entry is well-formed and its SQL executes against the
     real schema (a bad query would blind the whole triage path)."""
     import sqlite3
-    import claude_audit as A
+    from core import audit as A
     poison(test_env,                # force schema creation via the product path
            "INSERT INTO errors(ts,session_id,script,func,traceback,context,pid)"
            " VALUES(1,?,'x.py','f','tb','{}',1)", (SID,))
@@ -238,7 +238,7 @@ def _audit_calls(env, code):
     """Run audit-writer calls in a subprocess (matches production: one short-lived
     process per writer) against this test's audit dir."""
     p = subprocess.run([sys.executable, "-c",
-                        "import claude_audit as A\n" + code],
+                        "from core import audit as A\n" + code],
                        env=dict(env), cwd=REPO, capture_output=True, text=True,
                        timeout=15)
     assert p.returncode == 0, p.stderr
@@ -325,7 +325,7 @@ def test_prunable_tables_cover_schema():
     escape the generic session_id/ts sweep are the documented specials. Adding
     an audit table without classifying it must fail here."""
     import re
-    import claude_audit as A
+    from core import audit as A
     tables = A.schema_tables()
     assert set(A._PRUNE_SPECIAL) == {"sessions", "streams"}
     assert set(A.prunable_tables()) == set(tables) - set(A._PRUNE_SPECIAL)
@@ -345,7 +345,7 @@ def test_prune_round_trip(test_env):
     """Seed every audit table for an old ended session, an old orphan sid (no
     sessions row), and a fresh session; prune() must delete exactly the old
     rows from every table and leave the fresh ones."""
-    import claude_audit as A
+    from core import audit as A
     old, orphan, fresh = "prune-old", "prune-orphan", "prune-fresh"
     poison(test_env, "INSERT INTO sessions(session_id, started_at, ended_at)"
            " VALUES(?, 1, 2)", (old,))

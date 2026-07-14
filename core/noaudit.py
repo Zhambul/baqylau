@@ -9,7 +9,7 @@
 # hookkit.run()'s audit-then-swallow harness is ever entered — so an unguarded
 # import failure there would kill the whole hook process (the hooks-must-never-
 # fail invariant). The sole sanctioned direct import of core.audit is
-# claude_audit.py, the CLI compat shim over the audit module itself; a grep
+# bin/claude-audit.py, the audit CLI entry over the audit module itself; a grep
 # test (test_l0_units.test_no_module_bypasses_load_audit) pins this. Stdlib-only leaf (like core.paths): its
 # own import can only fail if the package itself is broken — the same failure
 # mode as the callers' other unguarded core imports — so the degradation

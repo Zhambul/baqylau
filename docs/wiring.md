@@ -11,7 +11,7 @@
   `ctrl+shift+f5` — no kitty restart needed):
   ```
   protocol claude-copy
-  action launch --type=background /path/to/repo/claude-copy.py ${URL}
+  action launch --type=background /path/to/repo/bin/claude-copy.py ${URL}
   ```
 - **`~/.claude/settings.json`** — a `hooks` block. **Every** hook event points at
   a single entry, **`claude-hook.py`** (→ `plugins/claude_code/dispatch.py`), which
@@ -19,8 +19,8 @@
 
   ```json
   "hooks": { "PostToolUse": [ { "hooks": [
-      { "type": "command", "command": "/ABS/PATH/kitty/claude-hook.py" } ] } ],
-      "Stop": [ { "hooks": [ { "type": "command", "command": ".../claude-hook.py" } ] } ],
+      { "type": "command", "command": "/ABS/PATH/kitty/bin/claude-hook.py" } ] } ],
+      "Stop": [ { "hooks": [ { "type": "command", "command": ".../bin/claude-hook.py" } ] } ],
       "…every other event…": [ … same single entry … ] }
   ```
 
@@ -70,7 +70,7 @@
     e2e tests drive them directly, and nothing changed for them.
 
   All seven `*-fmt.py`/`-pre.py` handlers (incl. `claude-stop-fmt.py`) share
-  **`hookkit.py`** (historical name `claude_hook.py`) — the harness owning the
+  **`hookkit.py`** (historical name `hookkit.py`) — the harness owning the
   identical per-hook skeleton (stdin payload parse + mirror-log derivation, audited
   ignore-decisions, detached streamer spawn with the load-bearing
   `start_new_session=True`, and the top-level audit-then-swallow). The `agent_id`
@@ -118,7 +118,7 @@
   { "hooks": { "SessionStart": [ {
       "matcher": "startup|resume|clear",
       "hooks": [ { "type": "command",
-        "command": "/ABS/PATH/kitty/claude-codex-session.py",
+        "command": "/ABS/PATH/kitty/bin/claude-codex-session.py",
         "statusMessage": "kitty mirror" } ] } ] } }
   ```
   Codex hooks are Claude-compatible (stdin JSON: `session_id`/`cwd`/`source`/…),
@@ -142,14 +142,14 @@ shim-launched interpreter is already the concrete binary.)
 
 Two top-level entry shapes hit the shim: the `#!/usr/bin/env python3` **shebang**
 on the `/abs/path/claude-*.py …` hook commands, and the literal `python3 …`
-prefix on the `claude_audit.py hook subscriber` commands in `settings.json`.
+prefix on the `bin/claude-audit.py hook subscriber` commands in `settings.json`.
 **`retarget-python.py`** rewrites both to an absolute concrete-interpreter path
 (it takes `sys.executable`, which under the shim already resolves to pyenv's
 *active* version, so it honours `pyenv version`):
 
 ```sh
-./retarget-python.py            # bake in the concrete interpreter (run once at setup)
-./retarget-python.py --revert   # restore portable `#!/usr/bin/env python3`
+./bin/retarget-python.py            # bake in the concrete interpreter (run once at setup)
+./bin/retarget-python.py --revert   # restore portable `#!/usr/bin/env python3`
 ```
 
 It is idempotent — **re-run it after any `pyenv` version change** to re-point the
@@ -173,7 +173,7 @@ echo "$KITTY_LISTEN_ON"          # non-empty, e.g. unix:/tmp/kitty-23011
 kitten @ ls >/dev/null && echo OK
 
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
-  ./claude-tab-status.py "$s"; ping -c 4 127.0.0.1 >/dev/null   # ~3s each
+  ./bin/claude-tab-status.py "$s"; ping -c 4 127.0.0.1 >/dev/null   # ~3s each
 done
-./claude-tab-status.py clear
+./bin/claude-tab-status.py clear
 ```

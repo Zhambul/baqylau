@@ -18,8 +18,8 @@ import socket
 import subprocess
 import sys
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
-RECEIVER = os.path.join(ROOT, "claude-otlp-receiver.py")
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
+RECEIVER = os.path.join(BIN, "claude-otlp-receiver.py")
 
 from core.noaudit import load_audit
 from plugins.otel.config import port as _port   # the ONE port resolver (must match the receiver's bind)

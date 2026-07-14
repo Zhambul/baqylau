@@ -31,8 +31,8 @@ import os
 import subprocess
 import sys
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
-LAUNCH = os.path.join(ROOT, "claude-codex-launch.py")
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
+LAUNCH = os.path.join(BIN, "claude-codex-launch.py")
 
 import frontends                                   # noqa: E402
 from core.noaudit import load_audit                # noqa: E402
@@ -149,7 +149,7 @@ def main():
     anchor = win or fe.window_for_session(sid)
     HP.close_stale_mirrors(fe, sid, anchor)   # a prior-sid pane (resume/clear)
     b = bias()
-    HP.open_mirror(fe, ROOT, sid, log, b, 25, anchor)
+    HP.open_mirror(fe, BIN, sid, log, b, 25, anchor)
 
     ok = HP.mirror_exists(fe, sid)
     try:

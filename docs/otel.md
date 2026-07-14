@@ -42,10 +42,10 @@ telemetry env it requires).
     DB has no `tokens`/`tk_read` counter is the stranded-receiver signature. **Codex is exempt**:
     it runs in a separate process OTEL can't see, so it keeps its own rollout fold
     (`bump-agent`, `meta.kind=codex`). Every raw datapoint is captured in the audit
-    `otel` table (`python3 claude_audit.py otel <sid>`), so the counters are fully
+    `otel` table (`python3 bin/claude-audit.py otel <sid>`), so the counters are fully
     reconstructible.
   - **The transcript fold survives ONLY as a resilience fallback.**
-    `claude_ops.bump_transcript()` (transcript JSONL → `txpos` cursor → the same
+    `accounting.bump_transcript()` (transcript JSONL → `txpos` cursor → the same
     `tk_*`/`cost` counters) now runs from `claude-stop-fmt.py` on **`SessionEnd` only**,
     and only when the receiver wrote nothing for the session (`otel_seen == 0`:
     telemetry off, receiver down, or a machine without the env). So a session that

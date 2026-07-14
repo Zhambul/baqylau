@@ -5,7 +5,7 @@
 # invoked by name from the codex hook and argv[0] is the audit DB's handler
 # vocabulary.
 import os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 from plugins.codex import session
 if __name__ == "__main__":
     session.entry()

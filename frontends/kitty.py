@@ -3,7 +3,7 @@
 # Talking to kitty happens over the socket in $KITTY_LISTEN_ON via the `kitten`
 # client (hooks run with no controlling terminal, so never the TTY). The
 # module-level helpers are the historical claude_kitty.py API (kept: the
-# claude_kitty compat shim re-exports this module); KittyFrontend wraps them in
+# deleted claude_kitty compat shim re-exported this module); KittyFrontend wraps them in
 # the Frontend interface (frontends/base.py) that tab-status / split / scorebar
 # now speak. Everything is best-effort and silent: a failed call returns
 # rc 1 / [] / None, never raises (callers audit what matters).
@@ -102,7 +102,7 @@ def iter_windows(ls):
 def window_for_session(kitten, listen, sid):
     """Kitty window id (str) of the Claude pane carrying claude_session=<sid>
     (tagged by claude-split.py at SessionStart), or None. Kept only for the
-    claude_kitty compat shim — in-repo callers use Frontend.window_for_session;
+    (deleted) claude_kitty compat shim — in-repo callers use Frontend.window_for_session;
     this delegates to that one scan implementation."""
     return KittyFrontend(listen=listen, kitten=kitten).window_for_session(sid)
 

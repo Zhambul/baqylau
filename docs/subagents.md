@@ -86,7 +86,7 @@ for the counters these streams feed).
     cumulative baseline (`billed:<agent>` kv — `{in,out,cache,create,create_1h}` summed
     across the whole streamer chain), and **`claude-subagent-fmt.py`'s `SubagentStop`**, once it
     sees the streamer is gone, folds the agent's *full* transcript to its true total
-    (`claude_ops.fold_usage`, the batch analogue of the inline fold — same `usage_fold`
+    (`accounting.fold_usage`, the batch analogue of the inline fold — same `usage_fold`
     dedup) and bumps only `true − baseline` (a `bump-agent` with `meta.reconcile`, plus
     a `reconcile` audit row). Idempotent: a clean finish or a duplicate stop leaves
     `true == baseline` and bumps nothing. This recovers the *transcript-resident*
@@ -103,7 +103,7 @@ for the counters these streams feed).
     payload path when a transcript *does* exist, and the audit gained a
     `SubagentStop without SubagentStart` anomaly so the gap is diagnosable, not silent.
   - **Cost estimate in the footer.** After the rollup the footer appends `· ≈ $X`,
-    the summed tokens priced on the resolved model (`claude_ops.PRICES`, per-MTok
+    the summed tokens priced on the resolved model (`accounting.PRICES`, per-MTok
     input/output for the current lineup; `cache_read` billed at ~0.1×, cache writes
     at their per-TTL premium — see *Pricing* in [scoreboard.md](scoreboard.md)). An unknown
     model shows nothing rather than guess. Being last, it truncates before the rest.
@@ -250,7 +250,7 @@ for the counters these streams feed).
     `desc.queue` file) and the next `SubagentStart` pops it — exact for sequential
     subagents (for several same-type subagents launched at once, the worst case is
     two descriptions swapped, purely cosmetic).
-  - Highlighting/wrapping/gutter/unescape primitives live in **`claude_render.py`**
+  - Highlighting/wrapping/gutter/unescape primitives live in **`render.py`**
     (shared by `claude-cmd-fmt.py` and `claude-substream.py`).
   - **Duplicate `SubagentStart`.** A background agent (and an agent-team teammate
     in particular) can fire `SubagentStart` **more than once**. The start hook only

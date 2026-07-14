@@ -1,5 +1,5 @@
 # core/tail.py — the shared skeleton of every detached tailer
-# (Importable as `claude_tail` via the top-level compat shim.)
+# (Historical top-level name: claude_tail.py — that compat shim is deleted.)
 # (claude-stream.py, claude-substream.py, claude-codex-stream.py).
 #
 # Each tailer is the same machine: follow a growing file by byte position,

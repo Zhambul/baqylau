@@ -79,7 +79,7 @@ def slots(env, sid):
 def anomalies(env, sid):
     """Run the product's own canned invariant queries; returns the raw text."""
     p = subprocess.run(
-        [sys.executable, os.path.join(REPO, "claude_audit.py"), "anomalies", sid],
+        [sys.executable, os.path.join(REPO, "bin", "claude-audit.py"), "anomalies", sid],
         capture_output=True, text=True, env=dict(env), timeout=30, cwd=REPO)
     assert p.returncode == 0, p.stderr
     return p.stdout

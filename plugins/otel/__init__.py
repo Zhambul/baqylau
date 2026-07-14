@@ -18,7 +18,7 @@ import os
 import subprocess
 import sys
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 
 
 def on_session_start(log, cwd, sid):
@@ -32,7 +32,7 @@ def on_session_start(log, cwd, sid):
     # inert). The env is set in ~/.claude/settings.json (docs/wiring.md).
     if os.environ.get("CLAUDE_CODE_ENABLE_TELEMETRY") != "1":
         return
-    launcher = os.path.join(ROOT, "claude-otlp-launch.py")
+    launcher = os.path.join(BIN, "claude-otlp-launch.py")
     if not os.path.isfile(launcher):
         return
     try:

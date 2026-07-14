@@ -1,6 +1,5 @@
 # plugins/claude_code/model.py — model / effort / context-window resolution
-# for agents (historical name: claude_model.py — the compat shim re-exports
-# this).
+# for agents (historical name: claude_model.py — that compat shim is deleted).
 #
 # Extracted from claude-substream.py, where ~250 lines of config-dir walking,
 # frontmatter parsing, and window tables had accreted (CLAUDE.md had always

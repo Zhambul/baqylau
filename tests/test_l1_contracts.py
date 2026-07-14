@@ -430,9 +430,10 @@ def test_paths_accessors():
 
 
 def test_paths_root_is_repo_root():
-    """core/paths.ROOT is the ONE owner of repo-root derivation (every module
-    that spawns a sibling ENTRY shim by filename joins against it). Pin that it
-    resolves to the actual repo root: the known entry shims live there."""
+    """core/paths.ROOT / core/paths.BIN are the ONE owners of repo-root and
+    entry-directory derivation (every module that spawns an ENTRY script by
+    filename joins against BIN). Pin that ROOT resolves to the actual repo root
+    and that the known entry scripts live in BIN."""
     import os
     import sys
     from conftest import REPO
@@ -442,7 +443,8 @@ def test_paths_root_is_repo_root():
 
     assert os.path.isabs(CP.ROOT)
     assert os.path.samefile(CP.ROOT, REPO)
+    assert os.path.samefile(CP.BIN, os.path.join(REPO, "bin"))
     for shim in ("claude-hook.py", "claude-stream.py", "claude-tab-status.py",
                  "claude-mirror.py", "claude-codex-launch.py",
                  "claude-otlp-launch.py"):
-        assert os.path.isfile(os.path.join(CP.ROOT, shim)), shim
+        assert os.path.isfile(os.path.join(CP.BIN, shim)), shim

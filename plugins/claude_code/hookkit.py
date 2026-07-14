@@ -1,5 +1,5 @@
 # plugins/claude_code/hookkit.py — the shared harness for the short-lived hook
-# handlers (historical name: claude_hook.py — the compat shim re-exports this)
+# handlers (historical name: claude_hook.py — that compat shim is deleted)
 # (claude-cmd-pre / claude-cmd-fmt / claude-file-fmt / claude-subagent-fmt /
 # claude-monitor-fmt / claude-task-fmt).
 #
@@ -25,7 +25,7 @@ from core.noaudit import load_audit
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 from core import paths as P
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 
 _LOG = ""  # last mirror log seen by read_payload(); run()'s crash audit uses it
 
@@ -92,7 +92,7 @@ def log_path(d):
 
 def script(name):
     """Absolute path of a sibling script (a streamer / the tab dispatcher)."""
-    return os.path.join(ROOT, name)
+    return os.path.join(BIN, name)
 
 
 def read_payload():

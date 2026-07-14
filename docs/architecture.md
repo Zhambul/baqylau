@@ -9,12 +9,16 @@ core/        tool- and terminal-agnostic runtime — imports nothing outside cor
 frontends/   terminal adapters — import core/ at most
 plugins/     one directory per agent tool — import core/ + frontends/,
              never each other
-claude-*.py  repo-root entry scripts: the assembly layer. They may import
-             anything. Their FILENAMES are load-bearing: they name the audit
-             DB's handler/script vocabulary (`hook_events.handler`,
-             `errors.script`, spawn parents) — so entries stay at the root
-             under their historical names even as implementations move into
-             the packages. Since the single-dispatcher refactor ([wiring.md](wiring.md)) the
+bin/         every executable ENTRY script (`bin/claude-*.py`): the assembly
+             layer. They may import anything. Their FILENAMES are load-bearing:
+             they name the audit DB's handler/script vocabulary
+             (`hook_events.handler`, `errors.script`, spawn parents) — so
+             entries keep their historical basenames even as implementations
+             move into the packages, and spawn sites join `core/paths.py`'s
+             `BIN` with the basename. Naming convention (deliberate): a
+             hyphenated `claude-*.py` is an executable entry, un-importable by
+             design; an underscored `*.py` inside a package is an importable
+             module. The repo root holds no Python files. Since the single-dispatcher refactor ([wiring.md](wiring.md)) the
              HOOK wiring in ~/.claude/settings.json points every event at ONE
              entry, `claude-hook.py`, which runs each subsystem in-process — so
              argv[0] is `claude-hook.py` for all of them. The vocabulary is
@@ -101,13 +105,11 @@ dispatch tables, into which the lifecycle module injects its identity and
 tailer hooks), the tab dispatch (`tabstatus.py` —
 maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
 and the pane/session lifecycle (`split.py` — now a thin caller into
-`core/hostpane.py`, which it shares with the codex host). Each repo-root `claude-*.py`
-entry is now a ~8-line shim importing its plugin module and calling
-`entry()`; `claude-mirror.py` and `claude-scorebar.py` keep their bodies at
-the root (they are assembly-layer renderers, allowed to import both core and
-plugins). `claude_ops.py` remains as a compat AGGREGATOR (a namespace copy
-re-exporting all three homes — unlike the other shims there is no single
-module to alias to).
+`core/hostpane.py`, which it shares with the codex host). Each `bin/claude-*.py`
+entry is a ~8-line shim importing its plugin module and calling
+`entry()`; `bin/claude-mirror.py` and `bin/claude-scorebar.py` keep their
+bodies in the entry script (they are assembly-layer renderers, allowed to
+import both core and plugins).
 
 `plugins/codex/` is a DUAL-role adapter — a secondary source inside a Claude
 session AND a first-class HOST on its own: `launch.py` (the detach-fast
@@ -116,7 +118,7 @@ every repo codex run; given a `HOST_PID` it becomes a standalone session
 manager, streaming just this codex session's own rollout and owning teardown),
 `stream.py` (one tailer per codex run), and `session.py` (the standalone-host
 SessionStart handler — see [codex.md](codex.md) › *standalone*). The three
-`claude-codex-*.py` entries plus `claude-codex-session.py` remain as shims.
+`claude-codex-*.py` entries plus `claude-codex-session.py` are thin shims in `bin/`.
 `plugins/__init__.py` is the registry: `all_plugins()` (host first),
 `on_session_start(log, cwd, sid)` (SessionStart fan-out — how codex attaches
 its watcher to a Claude host; a plugin failure is audited and never blocks the
@@ -154,15 +156,14 @@ remote-control API comparable to kitty's — a ghostty frontend would keep
 colour (if/where possible) still works; the base class's no-op defaults are
 designed for exactly that partial-capability case.
 
-**Compat shims.** Every historical top-level module name still works:
-`claude_state.py` and friends remain at the repo root as five-line shims that
-replace themselves in `sys.modules` with the package module, so
-`import claude_state` yields the *same module object* as
-`from core import state` (shared `_CONNS`, shared globals — not a copy).
-`claude_audit.py` additionally stays the documented CLI entry point
-(`python3 claude_audit.py sessions|anomalies|…` and the
-`claude_audit.py hook subscriber` write entry hooks invoke). Why shims rather
-than a clean break: the hook table in `~/.claude/settings.json` lives outside
-this repo, and the audit DB's historical vocabulary + the test suite's
-subprocess imports all reference the old names — a rename would silently
-orphan all three.
+**Compat shims: gone.** The historical top-level module names
+(`claude_state.py`, `claude_ops.py`, `claude_kitty.py`, …) existed as
+sys.modules-redirect shims for out-of-repo muscle memory; nothing in the repo
+or the test suite imports them anymore, so they were deleted — import the
+package modules directly (`core.state`, `core.ops`, `frontends.kitty`, …).
+The audit CLI moved with the entries: `python3 bin/claude-audit.py
+sessions|anomalies|…` (formerly root `claude_audit.py`). The ENTRY filenames,
+by contrast, are permanent: the audit DB's handler/script vocabulary and the
+external wiring (`~/.claude/settings.json`, kitty's `open-actions.conf`,
+`~/.codex/hooks.json`) reference them by name, so they moved to `bin/`
+unrenamed.

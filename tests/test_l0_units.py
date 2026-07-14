@@ -57,7 +57,7 @@ def test_no_module_bypasses_load_audit():
     """core/noaudit.py is the ONE audit-import-degradation helper: no other
     module may define its own _NoAudit-style stub, and every module gets its
     audit handle via load_audit() rather than importing core.audit directly
-    (claude_audit.py, the CLI compat shim over the audit module itself, is
+    (bin/claude-audit.py, the audit CLI entry over the audit module itself, is
     the sole sanctioned direct import). Grep-style pin, like the semantic
     colour-table test in test_l5_render.py."""
     import os
@@ -65,7 +65,7 @@ def test_no_module_bypasses_load_audit():
     stub_pat = re.compile(r"class\s+_?NoAudit\b")
     imp_pat = re.compile(r"^\s*from core import audit\b|^\s*import core\.audit\b",
                          re.MULTILINE)
-    allowed_import = {"core/noaudit.py", "claude_audit.py"}
+    allowed_import = {"core/noaudit.py", "bin/claude-audit.py"}
     offenders = []
     for root, dirs, files in os.walk(REPO):
         dirs[:] = [d for d in dirs if d not in
@@ -186,7 +186,7 @@ def _load_mirror():
     import importlib.util
     import os
     spec = importlib.util.spec_from_file_location(
-        "claude_mirror_script", os.path.join(REPO, "claude-mirror.py"))
+        "claude_mirror_script", os.path.join(REPO, "bin", "claude-mirror.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     m.FIXED_WIDTH = 80          # deterministic width() under a non-tty pytest
@@ -354,7 +354,7 @@ def _load_scorebar():
     import importlib.util
     import os
     spec = importlib.util.spec_from_file_location(
-        "claude_scorebar_script", os.path.join(REPO, "claude-scorebar.py"))
+        "claude_scorebar_script", os.path.join(REPO, "bin", "claude-scorebar.py"))
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m

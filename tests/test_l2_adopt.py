@@ -22,7 +22,7 @@ ADOPT_SECTION = "hook traffic under a sid with no sessions row"
 
 def seed_counter(seed, log, key, val):
     seed.py(
-        "import claude_state as S\n"
+        "from core import state as S\n"
         "c = S.connect(%r)\n"
         "c.execute(\"INSERT OR REPLACE INTO counters(key,val) VALUES(?,?)\","
         " (%r, %r))\n"

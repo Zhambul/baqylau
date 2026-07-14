@@ -1,5 +1,5 @@
 # core/state.py — per-session runtime coordination state in SQLite.
-# (Importable as `claude_state` via the top-level compat shim.)
+# (Historical top-level name: claude_state.py — that compat shim is deleted.)
 #
 # The mirror's Python-side coordination state used to be a zoo of small files next
 # to the mirror log: a flock'd read-modify-write JSON for the scoreboard

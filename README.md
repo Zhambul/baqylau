@@ -49,15 +49,15 @@ SQLite.
    the single dispatcher entry:
    ```json
    "hooks": { "PostToolUse": [ { "hooks": [
-       { "type": "command", "command": "/ABS/PATH/kitty/claude-hook.py" } ] } ],
+       { "type": "command", "command": "/ABS/PATH/kitty/bin/claude-hook.py" } ] } ],
        "…every other event…": [ "… same single entry …" ] }
    ```
 4. Wire the ⧉ copy links (`~/.config/kitty/open-actions.conf`):
    ```
    protocol claude-copy
-   action launch --type=background /ABS/PATH/kitty/claude-copy.py ${URL}
+   action launch --type=background /ABS/PATH/kitty/bin/claude-copy.py ${URL}
    ```
-5. Using pyenv? Run `./retarget-python.py` once to skip the ~140ms/process
+5. Using pyenv? Run `./bin/retarget-python.py` once to skip the ~140ms/process
    shim tax.
 
 The full hook/routing table, the telemetry env for OTEL-accurate cost
@@ -71,20 +71,20 @@ Everything activates automatically per session — the mirror opens on
 
 ```sh
 # Mirror pane
-./claude-split.py toggle|grow|shrink|reset|setpct <N>
+./bin/claude-split.py toggle|grow|shrink|reset|setpct <N>
 
 # Smoke-test the tab colors (~3s each)
 for s in idle thinking working executing awaiting-bg awaiting-command awaiting-response; do
-  ./claude-tab-status.py "$s"; ping -c 4 127.0.0.1 >/dev/null
+  ./bin/claude-tab-status.py "$s"; ping -c 4 127.0.0.1 >/dev/null
 done
-./claude-tab-status.py clear
+./bin/claude-tab-status.py clear
 
 # Audit CLI — the primary debugging tool
-python3 claude_audit.py sessions            # recent sessions
-python3 claude_audit.py anomalies <sid>     # canned queries for known bug signatures
-python3 claude_audit.py errors    <sid>     # swallowed exceptions, full tracebacks
-python3 claude_audit.py timeline  <sid>     # merged chronological story of a session
-python3 claude_audit.py sql "<query>"       # free-form SQL
+python3 bin/claude-audit.py sessions            # recent sessions
+python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug signatures
+python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
+python3 bin/claude-audit.py timeline  <sid>     # merged chronological story of a session
+python3 bin/claude-audit.py sql "<query>"       # free-form SQL
 ```
 
 ## Architecture
@@ -100,7 +100,7 @@ core/        tool- and terminal-agnostic runtime   (imports only core)
 frontends/   terminal adapters — kitty today       (import core at most)
 plugins/     one adapter per agent tool:
              claude_code · codex · otel            (import core + frontends)
-claude-*.py  repo-root entry shims — filenames are load-bearing
+bin/         executable entry scripts (claude-*.py) — filenames are load-bearing
 ```
 
 Details, module map, and the dependency rules:

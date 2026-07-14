@@ -77,13 +77,13 @@ def test_renderer_paints_copy_hyperlinks(session, seed, reaper, test_env):
     label renders none."""
     s = session.make()
     seed.py(
-        "import claude_ops as O\n"
+        "from core import ops as O\n"
         "O.emit(%r, O.label('tagged', O.SLATE, g='gid-1'),\n"
         "       O.label('plain', O.SLATE), O.line('SENTINEL-L9'))" % s.log)
     out_path = s.log + ".render.out"
     with open(out_path, "wb") as out:
         proc = subprocess.Popen(
-            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            [sys.executable, os.path.join(REPO, "bin", "claude-mirror.py"), s.log, "100"],
             stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
     reaper.append(proc)
     try:
@@ -176,13 +176,13 @@ def test_renderer_paints_single_copy_link_from_lk(session, seed, reaper, test_en
     link — not the default cmd/out pair."""
     s = session.make()
     seed.py(
-        "import claude_ops as O\n"
+        "from core import ops as O\n"
         "O.emit(%r, O.label('note', O.SLATE, g='gid-x', lk=O.COPY_ALL),\n"
         "       O.line('SENTINEL-LK'))" % s.log)
     out_path = s.log + ".render.out"
     with open(out_path, "wb") as out:
         proc = subprocess.Popen(
-            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            [sys.executable, os.path.join(REPO, "bin", "claude-mirror.py"), s.log, "100"],
             stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
     reaper.append(proc)
     try:
@@ -359,7 +359,7 @@ def test_renderer_expands_view_block_in_place(session, run_hook, seed, reaper,
     out_path = s.log + ".render.out"
     with open(out_path, "wb") as out:
         proc = subprocess.Popen(
-            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            [sys.executable, os.path.join(REPO, "bin", "claude-mirror.py"), s.log, "100"],
             stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
     reaper.append(proc)
     try:
@@ -422,7 +422,7 @@ def _load_mirror(log, width=80):
     sys.argv = ["claude-mirror.py", log, str(width)]
     try:
         spec = importlib.util.spec_from_file_location(
-            "cmirror_under_test", os.path.join(REPO, "claude-mirror.py"))
+            "cmirror_under_test", os.path.join(REPO, "bin", "claude-mirror.py"))
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
     finally:
@@ -632,7 +632,7 @@ def test_renderer_neutralizes_executable_output(session, seed, reaper, test_env)
     SGR styling and OSC 8 hyperlinks is stripped at paint time."""
     s = session.make()
     seed.py(
-        "import claude_ops as O\n"
+        "from core import ops as O\n"
         "O.emit(%r,\n"
         "  O.gut('\\x1bP@kitty-cmd{\"cmd\":\"scroll-window\"}\\x1b\\\\\\\\poisoned', (1,2,3)),\n"
         "  O.line('\\x1b[2J\\x1b[38;2;9;9;9mstyled\\x1b[0m'),\n"
@@ -640,7 +640,7 @@ def test_renderer_neutralizes_executable_output(session, seed, reaper, test_env)
     out_path = s.log + ".render.out"
     with open(out_path, "wb") as out:
         proc = subprocess.Popen(
-            [sys.executable, os.path.join(REPO, "claude-mirror.py"), s.log, "100"],
+            [sys.executable, os.path.join(REPO, "bin", "claude-mirror.py"), s.log, "100"],
             stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
     reaper.append(proc)
     try:

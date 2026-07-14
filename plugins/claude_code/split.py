@@ -38,7 +38,7 @@ import subprocess
 import sys
 import time
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 import frontends                          # noqa: E402
 from core.noaudit import load_audit       # noqa: E402
 
@@ -265,8 +265,8 @@ def save_size(sid):
 # --- pane ops, all scoped to ONE session's mirror (var:claude_mirror=<sid>) ----
 # The mirror pane + scoreboard bar lifecycle is tool-AGNOSTIC — a second host
 # (standalone codex) drives the identical machinery — so it lives in core:
-# core.hostpane, frontend-INJECTED (core imports no frontend, so we pass FE/ROOT
-# in). These thin wrappers bind THIS host's FE/ROOT/BIAS so the call sites below
+# core.hostpane, frontend-INJECTED (core imports no frontend, so we pass FE/BIN
+# in). These thin wrappers bind THIS host's FE/BIN/BIAS so the call sites below
 # read unchanged. The scoreboard bar (claude-scorebar.py) is a small hsplit under
 # the mirror (var:claude_scorebar=<sid>) — its own window so scrolling the
 # mirror's history can't scroll it away; excluded from the width math above (it
@@ -288,7 +288,7 @@ def close_stale_mirrors(keep, anchor=None):
 
 def open_mirror(sid, log, bias, anchor=None):
     """Does NOT truncate — the caller decides the state DB's fate."""
-    HP.open_mirror(_fe(), ROOT, sid, log, bias, BIAS, anchor)
+    HP.open_mirror(_fe(), BIN, sid, log, bias, BIAS, anchor)
 
 
 def close_mirror(sid):

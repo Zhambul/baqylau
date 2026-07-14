@@ -18,6 +18,8 @@ import uuid
 import pytest
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if REPO not in sys.path:          # make core/, plugins/, frontends/ importable in-process
+    sys.path.insert(0, REPO)
 
 # ---------------------------------------------------------------- wait_until
 
@@ -399,7 +401,7 @@ def run_hook(test_env):
         e = dict(env if env is not None else test_env)
         stdin = raw_stdin if raw_stdin is not None else json.dumps(payload or {})
         p = subprocess.run(
-            [sys.executable, os.path.join(REPO, script), *map(str, argv)],
+            [sys.executable, os.path.join(REPO, "bin", script), *map(str, argv)],
             input=stdin, text=True, capture_output=True, env=e, timeout=timeout,
             cwd=REPO)
         if check:

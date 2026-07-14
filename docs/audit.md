@@ -21,7 +21,7 @@ stuck blue or a block never closed, the evidence evaporated with the processes.
   per-session table including `pane_events` (once omitted from the prune loops,
   which grew it unboundedly with permanently orphaned rows).
 
-What's recorded (all tables keyed by `session_id`, written by `claude_audit.py`):
+What's recorded (all tables keyed by `session_id`, written by `core/audit.py`):
 
 | table | one row per |
 |---|---|
@@ -31,7 +31,7 @@ What's recorded (all tables keyed by `session_id`, written by `claude_audit.py`)
 `hook_events` is fed two ways. The mirror's own handlers record the events they
 process, *with* the decision they took. On top of that, a **universal subscriber**
 records **every** event with its full payload, `handler = 'subscriber'`. It used to
-be its own `async` settings entry (`claude_audit.py hook subscriber`); since the
+be its own `async` settings entry (`bin/claude-audit.py hook subscriber`); since the
 single-dispatcher refactor ([wiring.md](wiring.md)) the dispatcher writes it in-process at the end
 of `route()` — `A.hook_event(d, handler="subscriber")` — for **all 30 hook events**,
 so it still covers the ones nothing else listens to:
@@ -53,12 +53,12 @@ subscriber's independent record of the same event.
 Explore it with the CLI (from the repo root):
 
 ```sh
-python3 claude_audit.py sessions            # recent sessions
-python3 claude_audit.py timeline  <sid>     # merged chronological story
-python3 claude_audit.py errors    <sid>     # swallowed exceptions, full tracebacks
-python3 claude_audit.py anomalies <sid>     # canned queries for known bug signatures
-python3 claude_audit.py sql "<query>"       # free-form SQL
-python3 claude_audit.py prune [days]        # manual retention pass
+python3 bin/claude-audit.py sessions            # recent sessions
+python3 bin/claude-audit.py timeline  <sid>     # merged chronological story
+python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
+python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug signatures
+python3 bin/claude-audit.py sql "<query>"       # free-form SQL
+python3 bin/claude-audit.py prune [days]        # manual retention pass
 ```
 
 Or just hand Claude Code a session id: the **`audit-debug` skill**

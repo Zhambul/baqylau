@@ -18,7 +18,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   renderer wraps them at paint time). It reads the payload
   (`tool_input.command`, `tool_response.stdout`/`stderr`, `duration_ms`),
   syntax-highlights the command (pygments `BashLexer` + `PythonLexer` for embedded
-  python), and appends a block of **paint ops** (via `claude_ops`) to the
+  python), and appends a block of **paint ops** (via `core.ops`) to the
   session's `ops` table — the command as a `code` op, the output as a
   `gut` op, framed by `rule`/`label` ops; the renderer wraps them to the live
   width. It lives in its own file (not an inline `python3 -c '…'`) so its regexes
@@ -113,7 +113,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   spawns `claude-stream.py fg` to tail `$F` the same way a background job is
   tailed. `claude-cmd-fmt.py`'s `PostToolUse` handler is the only place the real
   outcome (duration/exit code/interrupted) is known, so it hands that off to the
-  tailer via a **state-DB hand-off record** (`claude_state` handoffs — was a
+  tailer via a **state-DB hand-off record** (`core.state` handoffs — was a
   `.done` sentinel file polled with exists/read/remove; `hand_take` is the same
   take-once, atomically). The hand-off key is a **session-keyed token** chosen by
   `claude-cmd-pre.py` (stored in the `fg-live` record as `done` and passed to the
@@ -154,7 +154,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     silently skip wrapping every later command (the mirror would just stop
     showing anything new). The record stores the tailer's pid, and
     `claude-cmd-pre.py` liveness-checks it (`os.kill(pid, 0)`, the same pattern
-    `claude_slots` uses for stale slots) before treating an existing claim as
+    `core.slots` uses for stale slots) before treating an existing claim as
     genuinely in-flight — a dead pid means abandoned, so it's cleared and the next
     command streams normally.
   - **The `fg-live` record is keyed to its tool call** (`tid` = the payload's
@@ -166,7 +166,7 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     rendering — two commands cross-wired. A mismatched take leaves the record in
     place and returns None; the exiting `fg` tailer also reclaims **its own**
     record (matched on pid) so a cancelled command's record doesn't linger.
-  - **Redirect detection is quote-aware** (`claude_ops.parse_redirect`,
+  - **Redirect detection is quote-aware** (`tools.parse_redirect`,
     `posix=False` tokens): posix tokenising stripped quotes, so `grep '>' file`
     parsed as a *redirect to `file`* — cmd-pre then skipped the tee rewrite and
     the tailer streamed the whole existing file into the mirror as "command

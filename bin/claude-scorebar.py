@@ -40,7 +40,7 @@
 # claude-split.py close is the safety net.
 import os, re, sys, time
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 import frontends
 from core import ops as O
 from core import panescript as PS

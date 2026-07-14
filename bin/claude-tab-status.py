@@ -4,7 +4,7 @@
 # load-bearing: the hook wiring in ~/.claude/settings.json invokes it, and
 # argv[0] is the audit DB's handler/script vocabulary.
 import os, sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
 from plugins.claude_code import tabstatus
 if __name__ == "__main__":
     tabstatus.entry()

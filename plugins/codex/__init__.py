@@ -9,7 +9,7 @@ import os
 import subprocess
 import sys
 
-from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts live
+from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 
 
 def on_session_start(log, cwd, sid):
@@ -18,7 +18,7 @@ def on_session_start(log, cwd, sid):
     few ms — so SessionStart can never hang on it (the hard-won lesson in
     plugins/codex/launch.py). Invoked via the plugins registry from the host's
     SessionStart (plugins/claude_code/split.py cmd_open)."""
-    launcher = os.path.join(ROOT, "claude-codex-launch.py")
+    launcher = os.path.join(BIN, "claude-codex-launch.py")
     if not os.path.isfile(launcher):
         return
     try:

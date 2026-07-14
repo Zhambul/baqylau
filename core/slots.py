@@ -1,5 +1,5 @@
 # core/slots.py — shared palette + slot allocation for the command mirror.
-# (Importable as `claude_slots` via the top-level compat shim.)
+# (Historical top-level name: claude_slots.py — that compat shim is deleted.)
 #
 # Background and monitor streams each draw their "│ " gutter colour from their own
 # palette so concurrent jobs are visually distinct. The LAUNCHER (claude-cmd-fmt
