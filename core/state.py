@@ -642,17 +642,12 @@ def tab_state(win):
     and its schema belong to claude-tab-status.py; this accessor is the ONE
     sanctioned cross-module reader (the scorebar's pause-accounting) — before it,
     the scorebar hardcoded the path and schema and a change there broke it
-    silently."""
-    try:
-        conn = sqlite3.connect(f"file:{P.TAB_DB}?mode=ro", uri=True, timeout=0.2)
-        try:
-            row = conn.execute("SELECT state FROM tab WHERE win=?",
-                               (str(win),)).fetchone()
-            return row[0] or "" if row else ""
-        finally:
-            conn.close()
-    except Exception:
-        return ""
+    silently. Delegates to tabs.tab_get — tabs.py owns the tab-DB schema, and
+    its sq() gives the same guarantees this used to hand-roll (mode=ro URI +
+    isfile guard so a probe can never create the DB, timeout=0.2, silent on
+    missing/locked DB)."""
+    from core import tabs
+    return tabs.tab_get(str(win)) or ""
 
 
 # --- pid-liveness claims (was O_EXCL pid files: codex mirror-claims + watch lock) ----

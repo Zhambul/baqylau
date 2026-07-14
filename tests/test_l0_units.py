@@ -352,3 +352,26 @@ def test_fit_parts_custom_text():
     # "Read 34" + "Edit 18" + "Write 4" = 21 chars + 2*3 = 27.
     assert m.fit_parts(list(tools), 27, min_keep=0, text=text) == tools
     assert m.fit_parts(list(tools), 26, min_keep=0, text=text) == tools[:2]
+
+
+# ---- core.state.tab_state -> tabs.tab_get delegation ------------------------
+# tab_state used to hand-roll its own mode=ro connect + SQL against the tab DB;
+# it now delegates to tabs.tab_get (tabs.py owns the schema). Pin the contract:
+# reads the set state, '' when the DB is missing, and — crucially — a probe on
+# a missing DB must NOT create the file (its existence is a liveness signal).
+
+
+def test_tab_state_reads_set_state(tmp_path, monkeypatch):
+    from core import state, tabs
+    monkeypatch.setattr(tabs, "TABDB", str(tmp_path / "tab.db"))
+    tabs.tab_set("7", "thinking")
+    assert state.tab_state(7) == "thinking"           # int win coerced to str
+    assert state.tab_state("7") == "thinking"
+
+
+def test_tab_state_missing_db_default_and_no_create(tmp_path, monkeypatch):
+    from core import state, tabs
+    db = tmp_path / "absent" / "tab.db"               # parent dir doesn't exist either
+    monkeypatch.setattr(tabs, "TABDB", str(db))
+    assert state.tab_state("7") == ""
+    assert not db.exists() and not db.parent.exists()
