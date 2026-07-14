@@ -277,11 +277,20 @@ Code and now codex are both hosts, both driving the shared `core/hostpane.py`
 lifecycle) + one line in `all_plugins()` — core and the frontends don't change.
 
 `frontends/` is the terminal layer. `frontends/base.py` defines the
-`Frontend` interface — tab colour (`set_tab_color`/`clear_tab_color`), window
-enumeration (`ls`/`iter_windows`/`find_window`/`window_for_session`), and pane
+`Frontend` interface, organised into role slices with each slice's consumers
+documented inline — presence (`available`/`usable`/`current_window`/
+`export_env`), tab colour (`set_tab_color`/`clear_tab_color`), window
+enumeration (`ls`/`iter_windows`/`find_window`/`window_for_session`), pane
 management (`launch_pane`/`close_pane`/`resize_pane`/`set_user_vars`/
-`goto_splits_layout`/`split_geometry`) — and doubles as the inert "none"
-frontend (every op a silent no-op with the callers' expected failure value).
+`goto_splits_layout`), viewport scroll/read (`scroll_window`[`_fast`/`_end`]/
+`get_text` — the mirror renderer's slice), and geometry (`split_geometry`) —
+and doubles as the inert "none" frontend (every op a silent no-op with the
+callers' expected failure value). That contract is pinned by
+`tests/test_l0_frontends_contract.py`: the stub's every public method is
+exercised for its inert default, kitty is checked to add no public API beyond
+the interface (only the documented `listen`/`kitten` constructor attrs), and a
+grep-style test keeps every module outside `frontends/` off kitty-only
+internals (the tabstatus `FE.listen` leak class).
 `frontends/kitty.py` is the kitty implementation (absorbing the old
 `claude_kitty.py` helpers, `claude-split.py`'s socket resolution, and the
 kitty-specific `neighbors`/`groups` geometry walk). `frontends.get()` selects

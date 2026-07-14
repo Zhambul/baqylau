@@ -251,8 +251,8 @@ def mirror_geometry(sid):
     shares the mirror's column, so counting it would double-count that column.
     The one geometry walk behind current_pct AND target_delta (they had drifted
     into two near-identical copies). The walk itself (kitty's `neighbors`/
-    `groups` semantics) lives in the frontend — see
-    frontends.kitty.KittyFrontend.split_geometry."""
+    `groups` semantics) lives in the frontend — see split_geometry in
+    frontends/kitty.py."""
     return FE.split_geometry(("claude_mirror", sid), exclude_var="claude_scorebar")
 
 

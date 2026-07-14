@@ -12,12 +12,24 @@
 # must provide at least  id, user_vars (dict), columns, lines  per window —
 # richer terminal-specific keys (kitty's `neighbors`/`groups`) stay private to
 # that frontend's own methods (e.g. split_geometry).
+#
+# The interface is deliberately ONE class, but consumers each use a narrow
+# role slice (documented per section below) — a new frontend can be brought up
+# slice by slice, testing one consumer at a time, and a slice it cannot
+# support may simply keep the inert defaults (that consumer degrades to
+# no-op, the others keep working). tests/test_l0_frontends_contract.py pins
+# this substitutability: every public method has an inert default, and kitty
+# adds no public API beyond the interface (except the documented `listen`/
+# `kitten` constructor attrs, which nothing outside frontends/ may touch).
 
 
 class Frontend:
     name = "none"
 
-    # --- presence -------------------------------------------------------------
+    # --- presence ---------------------------------------------------------------
+    # Slice consumers: everyone gates on this first — tabstatus (available/
+    # usable/export_env), split + codex/session + adopt + scorebar (usable),
+    # hostpane + split + codex/session (current_window as the pane anchor).
     def available(self):
         """True when the terminal's control channel is reachable in principle
         (env says we're inside this terminal). Cheap — no I/O."""
@@ -38,7 +50,9 @@ class Frontend:
         hook's env and later shell out to the tab dispatcher)."""
         return None
 
-    # --- tab colour -----------------------------------------------------------
+    # --- tab colour ---------------------------------------------------------
+    # Slice consumers: plugins/claude_code/tabstatus.py only (the tab
+    # dispatcher paints and clears; nothing else touches tab colour).
     def set_tab_color(self, win, active_bg, active_fg, inactive_bg,
                       inactive_fg="#c0c4cc"):
         """Colour the tab containing window `win`. Returns an exit code
@@ -49,7 +63,10 @@ class Frontend:
         """Revert the tab containing `win` to the theme default. Exit code."""
         return 1
 
-    # --- window enumeration -----------------------------------------------------
+    # --- window enumeration -------------------------------------------------
+    # Slice consumers: hostpane (ls/find_window liveness probes), split
+    # (iter_windows, window_for_session), tabstatus + codex/session +
+    # scorebar (window_for_session), adopt (find_window to retag panes).
     def ls(self):
         """The raw OS-window/tab/window tree, [] on failure."""
         return []
@@ -70,7 +87,11 @@ class Frontend:
         w = self.find_window("claude_session", sid, tree)
         return str(w.get("id")) if w else None
 
-    # --- pane management --------------------------------------------------------
+    # --- pane management ------------------------------------------------------
+    # Slice consumers: core/hostpane.py (goto_splits_layout/launch_pane/
+    # close_pane/resize_pane — the mirror+scorebar lifecycle), split +
+    # codex/session + adopt (set_user_vars pane tagging), split (resize_pane
+    # grow/shrink).
     def goto_splits_layout(self, win=None):
         """Switch a tab to a layout where directional splits with a size bias
         work (kitty: `goto-layout splits`) — the tab holding window `win` when
@@ -97,6 +118,16 @@ class Frontend:
         """Set user-vars {name: value} on window `win_id`. Exit code."""
         return 1
 
+    def resize_pane(self, var, axis, increment):
+        """Resize the window matched by user-var (name, value) along
+        "horizontal"/"vertical" by `increment` cells (negative shrinks)."""
+        return 1
+
+    # --- viewport scroll / read ---------------------------------------------
+    # Slice consumers: claude-mirror.py only (the renderer's click-to-view
+    # scroll restore + get_text scroll-position anchor). A frontend without
+    # scroll control may leave these inert — the mirror still renders, only
+    # the exact-scroll restore degrades.
     def scroll_window(self, win_id, lines_up):
         """Scroll window `win_id`'s viewport UP by `lines_up` lines (the
         renderer restoring a click-to-view line into view after a reflow)."""
@@ -118,11 +149,9 @@ class Frontend:
         screen), or None. The renderer's scroll-position anchor."""
         return None
 
-    def resize_pane(self, var, axis, increment):
-        """Resize the window matched by user-var (name, value) along
-        "horizontal"/"vertical" by `increment` cells (negative shrinks)."""
-        return 1
-
+    # --- geometry -------------------------------------------------------------
+    # Slice consumers: plugins/claude_code/split.py only (setpct/reset and the
+    # remembered pane size need the pane's share of its row).
     def split_geometry(self, var, exclude_var=None):
         """(pane_columns, row_total_columns) for the pane tagged by the
         user-var (name, value) pair, excluding panes carrying `exclude_var`
