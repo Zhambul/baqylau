@@ -66,6 +66,7 @@ from core.noaudit import load_audit  # noqa: E402  (in-process; every write swal
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import paths as P  # noqa: E402  (the one owner of the mirror-log path format)
 from core import state as St  # noqa: E402  (pid_alive only — DB reads stay mode=ro via sq())
+from plugins.claude_code import hookkit as HK  # noqa: E402  (the injected-payload accessor)
 from core.tabs import (  # noqa: E402  (the core tab vocabulary + tab DB — see core/tabs.py)
     IDLE, THINKING, WORKING, EXECUTING, AWAITING_BG, AWAITING_COMMAND,
     AWAITING_RESPONSE, COLORS, sq, tab_get, tab_set, tab_clear,
@@ -247,26 +248,14 @@ def ensure_interruptwatch(transcript):
         _spawn_watcher("interruptwatch", ["interrupt-watch", transcript])
 
 
-_INJECTED = None   # dispatcher-injected payload (see dispatch()); None = read stdin
-_PAYLOAD = None    # cached stdin parse — stdin can only be read once, and both
-                   # _ensure_win() and the dispatch handler need the payload
-
-
 def read_payload():
     """The hook's stdin JSON; {} on anything unparsable (a hook must never fail).
-    When the single per-event dispatcher (dispatch.py) drives this in-process it
-    has already consumed stdin, so it injects the parsed payload via dispatch().
-    The standalone-shim parse is cached — a second caller must not re-read a
-    drained stdin and get {}."""
-    global _PAYLOAD
-    if _INJECTED is not None:
-        return _INJECTED
-    if _PAYLOAD is None:
-        try:
-            _PAYLOAD = json.loads(sys.stdin.read() or "{}") or {}
-        except Exception:
-            _PAYLOAD = {}
-    return _PAYLOAD
+    The inject/parse/cache mechanics live in hookkit.payload_or_stdin(): when
+    the single per-event dispatcher (dispatch.py) drives this in-process it has
+    already consumed stdin and injected the parsed payload (dispatch() below
+    re-injects for direct callers), and the standalone-shim stdin parse is
+    cached — a second caller must not re-read a drained stdin and get {}."""
+    return HK.payload_or_stdin()
 
 
 def _ensure_win():
@@ -287,7 +276,7 @@ def _ensure_win():
         sid = os.path.basename(t)[:-len(".jsonl")] if t.endswith(".jsonl") else ""
     else:
         try:
-            if _INJECTED is not None or not sys.stdin.isatty():
+            if HK.has_payload():
                 sid = (read_payload().get("session_id") or "").strip()
         except Exception:
             sid = ""
@@ -778,12 +767,14 @@ def dispatch(state, payload):
     detached watcher sub-dispatches (bg-watch / interrupt-watch / bg-recheck /
     agent-start) still re-invoke the shim by filename with argv, so they keep the
     entry() argv path."""
-    global _INJECTED, DISPATCH
-    _INJECTED, DISPATCH = payload, state   # DISPATCH labels the tab_transitions row
+    global DISPATCH
+    DISPATCH = state                       # DISPATCH labels the tab_transitions row
+    prev = HK.injected()                   # under dispatch.py route() this is `payload`
+    HK.set_payload(payload)                # already, but a direct caller needs the inject
     try:
         main(state)
     finally:
-        _INJECTED = None
+        HK.set_payload(prev)
 
 
 def entry():

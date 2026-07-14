@@ -47,6 +47,40 @@ def clear_payload():
     _INJECTED = None
 
 
+def injected():
+    """Peek at the dispatcher-injected payload (None when standalone) WITHOUT
+    touching stdin — for in-process entrypoints (tabstatus.dispatch /
+    split.handle) that save-and-restore it around their own run."""
+    return _INJECTED
+
+
+_STDIN = None  # cached lenient stdin parse — stdin can only be read once, and a
+               # handler may consult the payload from several sites
+
+
+def payload_or_stdin():
+    """The LENIENT payload accessor: the dispatcher-injected payload if set,
+    else stdin parsed ONCE and cached — {} on anything unparsable/drained (these
+    callers, the tab dispatcher and the pane lifecycle, must never fail on a
+    bad payload; the audited-strict formatter variant is read_payload above)."""
+    global _STDIN
+    if _INJECTED is not None:
+        return _INJECTED
+    if _STDIN is None:
+        try:
+            _STDIN = json.loads(sys.stdin.read() or "{}") or {}
+        except Exception:
+            _STDIN = {}
+    return _STDIN
+
+
+def has_payload():
+    """True when a payload is plausibly available WITHOUT consuming stdin:
+    either the dispatcher injected one, or stdin is a pipe (non-tty — a manual
+    terminal invocation has no payload to block on)."""
+    return _INJECTED is not None or not sys.stdin.isatty()
+
+
 def log_path(d):
     """The mirror log for a hook payload, keyed by session_id so PARALLEL Claude
     sessions get separate logs (separate content). Falls back to a cwd slug if a

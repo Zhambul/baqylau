@@ -551,3 +551,90 @@ def test_settings_env_falsy_value_and_global_local_ignored(tmp_path, monkeypatch
     # the user config dir contributes only settings.json, never a local file
     write(cfg, "settings.local.json", {"CLAUDE_MIRROR_STEP": 9})
     assert M.settings_env("CLAUDE_MIRROR_STEP", nearest_only=True) == ""
+
+
+# --- plugins/otel/config.port — the ONE port resolver ----------------------------
+
+def test_otel_port_is_single_sited(monkeypatch):
+    """launch.py's already-listening pre-check and receiver.py's bind must
+    resolve the port through the SAME function (plugins/otel/config.py) — a
+    re-encoded copy in either is exactly the drift the single-siting removes."""
+    from plugins.otel import config, launch, receiver
+    assert launch._port is config.port
+    assert receiver._port is config.port
+
+
+def test_otel_port_env_resolution(monkeypatch):
+    from plugins.otel import config
+    monkeypatch.delenv("CLAUDE_OTEL_PORT", raising=False)
+    assert config.port() == 4319                      # the default
+    monkeypatch.setenv("CLAUDE_OTEL_PORT", "5005")
+    assert config.port() == 5005
+    monkeypatch.setenv("CLAUDE_OTEL_PORT", "")        # empty -> default
+    assert config.port() == 4319
+    monkeypatch.setenv("CLAUDE_OTEL_PORT", "junk")    # unparsable -> default
+    assert config.port() == 4319
+
+
+# --- hookkit.payload_or_stdin / injected / has_payload ---------------------------
+# The shared "dispatcher-injected payload, else stdin once" accessor that
+# tabstatus.read_payload and split.sid_from_stdin now delegate to.
+
+def _fresh_hookkit(monkeypatch):
+    from plugins.claude_code import hookkit as HK
+    monkeypatch.setattr(HK, "_INJECTED", None)
+    monkeypatch.setattr(HK, "_STDIN", None)
+    return HK
+
+
+def test_payload_or_stdin_prefers_injected(monkeypatch):
+    import io
+    HK = _fresh_hookkit(monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id": "stdin-sid"}'))
+    HK.set_payload({"session_id": "injected-sid"})
+    assert HK.injected() == {"session_id": "injected-sid"}
+    assert HK.has_payload()
+    assert HK.payload_or_stdin()["session_id"] == "injected-sid"
+    HK.clear_payload()
+    assert HK.injected() is None
+
+
+def test_payload_or_stdin_caches_the_one_stdin_read(monkeypatch):
+    """stdin can only be read once: the first call parses, the second must
+    return the cache instead of re-reading a drained stream and getting {}."""
+    import io
+    HK = _fresh_hookkit(monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO('{"session_id": "s2"}'))
+    assert HK.payload_or_stdin() == {"session_id": "s2"}
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))   # drained/replaced
+    assert HK.payload_or_stdin() == {"session_id": "s2"}
+
+
+def test_payload_or_stdin_lenient_on_garbage(monkeypatch):
+    import io
+    HK = _fresh_hookkit(monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO("not json"))
+    assert HK.payload_or_stdin() == {}                  # never raises
+    HK2 = _fresh_hookkit(monkeypatch)
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert HK2.payload_or_stdin() == {}                 # empty pipe -> {}
+
+
+def test_has_payload_without_consuming_stdin(monkeypatch):
+    import io
+    HK = _fresh_hookkit(monkeypatch)
+    fake = io.StringIO('{"session_id": "x"}')           # non-tty pipe
+    monkeypatch.setattr("sys.stdin", fake)
+    assert HK.has_payload()                             # plausible payload…
+    assert fake.tell() == 0                             # …but nothing consumed
+
+    class Tty(io.StringIO):
+        def isatty(self):
+            return True
+
+    HK2 = _fresh_hookkit(monkeypatch)
+    monkeypatch.setattr("sys.stdin", Tty(""))
+    assert not HK2.has_payload()                        # manual terminal run
+    HK2.set_payload({})                                 # injected {} still counts
+    assert HK2.has_payload()
+    HK2.clear_payload()

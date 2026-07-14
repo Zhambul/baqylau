@@ -46,13 +46,9 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 LABEL = CT.FILE_LABEL
 
 
-def fg(r, g, b):
-    return f"\033[38;2;{r};{g};{b}m"
-
-
-DIM = fg(92, 99, 112)
-DEF = fg(171, 178, 191)
-RST = "\033[0m"
+# SGR primitives are core.render's (R.fg/R.DIM/R.RST — the shared One Dark
+# palette); DEF is its default-foreground entry, aliased for the diff fallback.
+DEF = R.COL["def"]
 
 # Click-to-view diff panel tints — the git/delta-style SOFT row backgrounds;
 # the fg stays the shared semantic GREEN/RED; the tint is what reads "diff".
@@ -142,11 +138,11 @@ def _diff_ops(rows, rgb, lexer):
             ops.append(O.gut("\n".join(buf), rgb, bg=bg, lex=lexer,
                              num=cur_start))
         else:
-            col = (fg(*O.GREEN) if cur_sign == "+" else
-                   fg(*O.RED) if cur_sign == "-" else DEF)
+            col = (R.fg(*O.GREEN) if cur_sign == "+" else
+                   R.fg(*O.RED) if cur_sign == "-" else DEF)
             body = "\n".join(
-                DIM + ("%5d " % (cur_start + i) if cur_start is not None
-                       else " " * 6) + RST + col + t + RST
+                R.DIM + ("%5d " % (cur_start + i) if cur_start is not None
+                         else " " * 6) + R.RST + col + t + R.RST
                 for i, t in enumerate(buf))
             ops.append(O.gut(body, rgb, bg=bg) if bg else O.gut(body, rgb))
         buf = []
@@ -155,7 +151,7 @@ def _diff_ops(rows, rgb, lexer):
         if sign == "@":
             flush()
             cur_sign = None
-            ops.append(O.gut(DIM + "    ⋮" + RST, rgb))
+            ops.append(O.gut(R.DIM + "    ⋮" + R.RST, rgb))
             continue
         if sign != cur_sign:
             flush()
@@ -248,7 +244,7 @@ def main():
         return H.ignore(d, "no file path")
     name = os.path.basename(path.rstrip("/")) or path
     failed = H.is_failure(d)
-    mark = (DIM + " ✗" + RST) if failed else ""           # ✗ on failure (verb goes red)
+    mark = (R.DIM + " ✗" + R.RST) if failed else ""           # ✗ on failure (verb goes red)
     tool = d.get("tool_name") or ""
     tr = d.get("tool_response")
     added = removed = 0

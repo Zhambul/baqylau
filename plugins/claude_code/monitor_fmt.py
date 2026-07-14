@@ -15,6 +15,11 @@ from plugins.claude_code import hookkit as H
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
+# Failed-monitor header colour: the One Dark cyan (render.COL's builtin/op hue),
+# NOT a semantic ops.py constant or a monitor-palette slot — a failed call never
+# claims a slot (nothing will stream), so it gets this fixed, palette-free tint.
+CYAN_FAIL_HDR = (86, 182, 194)
+
 
 def main():
     d, LOG = H.read_payload()
@@ -46,7 +51,7 @@ def main():
         # block inline instead, with the error on the chip.
         err = " ".join((d.get("error") or "").split())
         chip = "■ monitor failed" + ((" · " + err[:80]) if err else "")
-        O.emit(LOG, O.blank(), O.rule(), O.label(text, (86, 182, 194)),
+        O.emit(LOG, O.blank(), O.rule(), O.label(text, CYAN_FAIL_HDR),
                O.label(chip, O.RED), O.rule())
         A.hook_event(d, decision="monitor failed / no taskId: block closed inline")
         return

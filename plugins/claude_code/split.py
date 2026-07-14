@@ -30,7 +30,6 @@
 # KITTY_LISTEN_ON — it is inherited / self-resolved (see below).
 
 import glob
-import json
 import os
 import re
 import shutil
@@ -47,7 +46,7 @@ A = load_audit()   # audit trail (real module, or an inert stub if it can't impo
 from core import hostpane as HP           # noqa: E402  (shared host pane lifecycle)
 from core import paths as P               # noqa: E402
 from core import tabs as T                # noqa: E402  (adopt_note — sid-fork registry)
-from plugins.claude_code import hookkit as HK  # noqa: E402  (log_path)
+from plugins.claude_code import hookkit as HK  # noqa: E402  (log_path + the injected-payload accessor)
 from plugins.claude_code import model as M     # noqa: E402  (settings_env)
 
 # Keymap-launched background processes can inherit a minimal PATH; guarantee the
@@ -129,18 +128,12 @@ def _fe():
 
 # --- session identity --------------------------------------------------------
 
-_INJECTED = None   # dispatcher-injected payload (see handle()); None = read stdin
-
-
 def sid_from_stdin():
     """SessionStart/SessionEnd: (payload, session_id) from the hook's stdin — or
-    from the dispatcher-injected payload when driven in-process (dispatch.py)."""
-    if _INJECTED is not None:
-        return _INJECTED, str(_INJECTED.get("session_id") or "")
-    try:
-        payload = json.loads(sys.stdin.read() or "{}") or {}
-    except Exception:
-        payload = {}
+    from the dispatcher-injected payload when driven in-process (dispatch.py;
+    handle() below re-injects for direct callers). The lenient parse/cache is
+    hookkit.payload_or_stdin() — {} on anything unparsable."""
+    payload = HK.payload_or_stdin()
     return payload, str(payload.get("session_id") or "")
 
 
@@ -553,12 +546,14 @@ def handle(cmd, payload):
     SessionStart(open) / SessionEnd(close) pane lifecycle against the injected
     payload. Keybinding subcommands (toggle/grow/shrink/reset/setpct) keep the
     argv path via the module-global CMD."""
-    global CMD, _INJECTED
-    CMD, _INJECTED = cmd, payload
+    global CMD
+    CMD = cmd
+    prev = HK.injected()                   # under dispatch.py route() this is `payload`
+    HK.set_payload(payload)                # already, but a direct caller needs the inject
     try:
         main()
     finally:
-        _INJECTED = None
+        HK.set_payload(prev)
 
 
 def entry():

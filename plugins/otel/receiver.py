@@ -36,6 +36,10 @@ from core import paths as P
 from core import state as S
 from core import tail as T
 from core.noaudit import load_audit
+# The listen port is single-sited in plugins/otel/config.py — launch.py's
+# already-listening pre-check resolves the SAME function, so probe and bind
+# can never drift.
+from plugins.otel.config import port as _port
 
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 
@@ -53,14 +57,6 @@ _BILLED_TYPES = ("input", "output", "cacheCreation")
 # A synthetic log key so the receiver's own audit rows (streams/spawns/errors) are
 # attributable without colliding with any real session id.
 SELF_LOG = P.mirror_log("otlp-receiver")
-
-
-def _port():
-    v = os.environ.get("CLAUDE_OTEL_PORT") or "4319"
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return 4319
 
 
 def _idle_s():

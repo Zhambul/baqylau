@@ -22,15 +22,9 @@ from core.paths import ROOT  # the repo root, where the sibling ENTRY scripts li
 RECEIVER = os.path.join(ROOT, "claude-otlp-receiver.py")
 
 from core.noaudit import load_audit
+from plugins.otel.config import port as _port   # the ONE port resolver (must match the receiver's bind)
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
-
-
-def _port():
-    try:
-        return int(os.environ.get("CLAUDE_OTEL_PORT") or "4319")
-    except (TypeError, ValueError):
-        return 4319
 
 
 def _already_listening(port):
