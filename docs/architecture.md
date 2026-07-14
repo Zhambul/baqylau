@@ -45,7 +45,13 @@ hand-build it; the per-caller extras — who-prefix, model/ctx tags, ✗ mark, t
 click-to-view hyperlink — stay caller-side; extracted from the byte-identical
 copies the renderers each grew — shared surface lives in core because the
 dependency rule forbids codex importing claude_code),
-`render.py` (ANSI rendering — was `claude_render.py`), `panescript.py` (the
+`render.py` (the ANSI rendering PRIMITIVES — was `claude_render.py`: width
+math, palette/`pick`, strip/wrap/gutters, the security-critical `neutralize()`,
+inline markdown; keeps thin `format_code`/`render` delegating aliases),
+`codefmt.py` (the bash/python source tokenizer + pretty-printer split out of
+render.py: heredoc/`python -c` segment splitting, command-word marking,
+`format_code`, and the highlight-and-wrap `render()` for `code` ops; imports
+render's primitives one-directionally), `panescript.py` (the
 shared skeleton of the two pane-renderer ENTRY scripts, `claude-mirror.py` and
 `claude-scorebar.py`: the `MIRROR_LOG [WIDTH]` argv contract (`parse_argv`),
 the `width()` closure (`make_width`), the SIGWINCH flag-setter shape

@@ -73,6 +73,7 @@ _ensure_pygments()
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from core import panescript as PS
 from core import paths as P
+from core import codefmt as CF
 from core import render as R
 from core import state as St
 from core.noaudit import load_audit
@@ -178,7 +179,7 @@ def _render(op, w):
             return R.fg(*outer) + "│ " + R.RST + chip
         return chip
     if t == "code":
-        return R.render(R.neutralize(op.get("s", "")), w, op.get("ind", "  "))
+        return CF.render(R.neutralize(op.get("s", "")), w, op.get("ind", "  "))
     if t == "gut":
         outer = op.get("outer")
         if outer:

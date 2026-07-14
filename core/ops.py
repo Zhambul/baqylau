@@ -85,8 +85,8 @@ def code(s, ind="  ", g=None):
     # code(); the renderer never does, so this never runs in the paint loop.
     if os.environ.get("CLAUDE_MIRROR_FORMAT", "1") != "0":
         try:
-            from core import render as R
-            s = R.format_code(s)
+            from core import codefmt
+            s = codefmt.format_code(s)
         except Exception:
             # Audited: a broken formatter (pygments regression) otherwise paints
             # every command unformatted with nothing in the DB saying why.
