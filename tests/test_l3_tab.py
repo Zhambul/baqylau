@@ -279,3 +279,58 @@ def test_probe_never_creates_state_db(run_hook, test_env, session, fake_kitten):
     assert not os.path.exists(s.state_db)
     run_hook(TAB, P.stop(s), argv=("stop",))
     assert not os.path.exists(s.state_db)
+
+
+# ------------------------------------------------- frontend substitutability
+
+def _spawn_watcher_with(monkeypatch, fe):
+    """Drive tabstatus._spawn_watcher in-process with frontend `fe`, capturing
+    the Popen call (argv + env) instead of spawning a real watcher."""
+    import sys as _sys
+    from conftest import REPO
+    if REPO not in _sys.path:
+        _sys.path.insert(0, REPO)
+    import plugins.claude_code.tabstatus as T
+
+    spawned = {}
+
+    class _Proc:
+        pid = 4242
+
+    def fake_popen(argv, **kw):
+        spawned["argv"] = list(argv)
+        spawned["env"] = kw.get("env")
+        return _Proc()
+
+    monkeypatch.setattr(T.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(T, "watcher_set", lambda *a, **k: None)
+    monkeypatch.setattr(T, "WIN", "9")
+    monkeypatch.setattr(T, "FE", fe)
+    T._spawn_watcher("bgwatch", ["bg-watch", "/tmp/x.log"])
+    return spawned
+
+
+def test_spawn_watcher_survives_stub_frontend(monkeypatch):
+    """Building the watcher env must go through the Frontend contract
+    (export_env), not kitty-only attrs like .listen — a frontend whose
+    available() is True but has no .listen would AttributeError, and the
+    swallow in _spawn_watcher would hide it: the watcher silently never
+    spawns. Pin that the stub path spawns cleanly with no kitty vars."""
+    from frontends.base import Frontend
+    monkeypatch.delenv("KITTY_LISTEN_ON", raising=False)
+    spawned = _spawn_watcher_with(monkeypatch, Frontend())
+    assert spawned.get("argv"), "watcher was not spawned under the stub frontend"
+    assert spawned["argv"][-2:] == ["bg-watch", "/tmp/x.log"]
+    # The stub exports nothing — the child env must not grow a kitty var.
+    assert "KITTY_LISTEN_ON" not in spawned["env"]
+
+
+def test_spawn_watcher_kitty_exports_socket(monkeypatch):
+    """Under kitty, export_env() must land the resolved socket in the child
+    env (the detached watcher is re-parented, so it can't re-resolve)."""
+    from frontends.kitty import KittyFrontend
+    monkeypatch.setenv("KITTY_LISTEN_ON", "stale-value")
+    fe = KittyFrontend(listen="unix:/tmp/fe-test.sock", kitten="/bin/true")
+    spawned = _spawn_watcher_with(monkeypatch, fe)
+    assert spawned["env"]["KITTY_LISTEN_ON"] == "unix:/tmp/fe-test.sock"
+    assert spawned["env"]["KITTY_WINDOW_ID"] == "9"

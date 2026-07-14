@@ -170,11 +170,10 @@ def _spawn_watcher(kind, args):
     re-parented, so the ppid walk can't find the socket, and WIN may have been
     fallback-resolved (_ensure_win) rather than inherited from the env."""
     try:
-        env = dict(os.environ)
+        FE.export_env()   # stamp terminal-reach env (kitty: KITTY_LISTEN_ON);
+        env = dict(os.environ)  # no-op on the inert stub — no frontend attrs read
         if WIN:
             env["KITTY_WINDOW_ID"] = str(WIN)
-        if FE.available():
-            env["KITTY_LISTEN_ON"] = FE.listen
         p = subprocess.Popen([sys.executable or "python3", SELF] + args,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True,
