@@ -17,9 +17,8 @@ if __name__ == "__main__":
         pass
     except Exception:
         # The CLI write paths are fired from hooks — they must never fail loudly.
-        if len(sys.argv) > 1 and sys.argv[1] in ("session-start", "session-end",
-                                                 "hook", "transition", "error",
-                                                 "pane", "state-file"):
+        # Derived from core/audit.py's command table so the two can't drift.
+        if len(sys.argv) > 1 and sys.argv[1] in _impl.WRITE_COMMANDS:
             pass
         else:
             raise

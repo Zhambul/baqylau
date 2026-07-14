@@ -612,55 +612,54 @@ def cli_errors(sid):
         print(tb)
 
 
-def cli_anomalies(sid):
-    """Canned queries for known bug signatures. Each prints a section; empty = clean."""
-    conn = _connect()
-    if conn is None:
-        print("audit db unavailable"); return
-
-    def section(title, q, params=()):
-        rows = conn.execute(q, params).fetchall()
-        print(f"== {title}: {len(rows)}")
-        for r in rows:
-            print("   " + " | ".join("" if v is None else str(v) for v in r))
-
-    section("swallowed errors",
-            "SELECT ts, script, func FROM errors WHERE session_id=? ORDER BY ts", (sid,))
-    section("streams that never ended (crashed/stuck tailer)",
-            "SELECT id, kind, pid, task_id, agent_id, started_at FROM streams "
-            "WHERE session_id=? AND ended_at IS NULL", (sid,))
+# The anomalies registry — the canned queries `cli_anomalies` runs, IN ORDER.
+# Each entry is either
+#   (title, sql, nparams)   — sql takes the sid repeated nparams times, printed
+#                             as a counted section (empty = clean), or
+#   a callable(conn, section, sid) — a special-case section that needs more than
+#                             one query (e.g. a cross-DB check); it must print its
+#                             own `== title: N` section via the passed `section`
+#                             helper or an equivalent print.
+# CLAUDE.md tells contributors to extend this list when a feature has a known
+# failure signature — add the entry here (with the why-comment above it) and
+# poison-test it in tests/test_l7_audit.py.
+ANOMALY_SECTIONS = [
+    ("swallowed errors",
+     "SELECT ts, script, func FROM errors WHERE session_id=? ORDER BY ts", 1),
+    ("streams that never ended (crashed/stuck tailer)",
+     "SELECT id, kind, pid, task_id, agent_id, started_at FROM streams "
+     "WHERE session_id=? AND ended_at IS NULL", 1),
     # kind='codex-claim' is EXCLUDED: those rows are permanent cross-session
     # OWNERSHIP records (which session shows a codex run), not slot lifecycles
     # — no release ever follows, so counting them false-fired on every adopted
     # rollout. 'claim-denied' is likewise not an acquisition (nothing was
     # taken, so nothing will be released).
-    section("slot claims without a matching release",
-            "SELECT kind, slot_n, agent_id, COUNT(*) FROM slots WHERE session_id=? "
-            "AND kind != 'codex-claim' "
-            "GROUP BY kind, COALESCE(slot_n, -1), agent_id "
-            "HAVING SUM(CASE WHEN action LIKE 'claim%' AND action != 'claim-denied' "
-            "               THEN 1 ELSE 0 END) > "
-            "       SUM(CASE WHEN action LIKE 'release%' OR action LIKE 'steal%' THEN 1 ELSE 0 END)",
-            (sid,))
-    section("tab left on a busy colour (last transition not green/idle/clear)",
-            "SELECT ts, dispatch, prev_state, new_state, reason FROM tab_transitions "
-            "WHERE session_id=? AND applied=1 AND ts = (SELECT MAX(ts) FROM "
-            "tab_transitions WHERE session_id=? AND applied=1) AND new_state NOT IN "
-            "('awaiting-response', 'idle', 'clear', '')", (sid, sid))
+    ("slot claims without a matching release",
+     "SELECT kind, slot_n, agent_id, COUNT(*) FROM slots WHERE session_id=? "
+     "AND kind != 'codex-claim' "
+     "GROUP BY kind, COALESCE(slot_n, -1), agent_id "
+     "HAVING SUM(CASE WHEN action LIKE 'claim%' AND action != 'claim-denied' "
+     "               THEN 1 ELSE 0 END) > "
+     "       SUM(CASE WHEN action LIKE 'release%' OR action LIKE 'steal%' THEN 1 ELSE 0 END)",
+     1),
+    ("tab left on a busy colour (last transition not green/idle/clear)",
+     "SELECT ts, dispatch, prev_state, new_state, reason FROM tab_transitions "
+     "WHERE session_id=? AND applied=1 AND ts = (SELECT MAX(ts) FROM "
+     "tab_transitions WHERE session_id=? AND applied=1) AND new_state NOT IN "
+     "('awaiting-response', 'idle', 'clear', '')", 2),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions
     # since the subscriber landed).
-    section("duplicate SubagentStart (same agent started twice)",
-            "SELECT agent_id, COUNT(*) FROM hook_events WHERE session_id=? AND "
-            "hook='SubagentStart' AND agent_id != '' AND handler != 'subscriber' "
-            "GROUP BY agent_id HAVING COUNT(*) > 1",
-            (sid,))
-    section("SubagentStart without SubagentStop",
-            "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
-            "h.hook='SubagentStart' AND h.agent_id != '' AND h.agent_id NOT IN "
-            "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStop')",
-            (sid, sid))
+    ("duplicate SubagentStart (same agent started twice)",
+     "SELECT agent_id, COUNT(*) FROM hook_events WHERE session_id=? AND "
+     "hook='SubagentStart' AND agent_id != '' AND handler != 'subscriber' "
+     "GROUP BY agent_id HAVING COUNT(*) > 1", 1),
+    ("SubagentStart without SubagentStop",
+     "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
+     "h.hook='SubagentStart' AND h.agent_id != '' AND h.agent_id NOT IN "
+     "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStop')",
+     2),
     # The inverse is the scoreboard-under-/cost signature: Claude Code runs hidden
     # summarizer-style agents that fire ONLY SubagentStop — no SubagentStart, no
     # substream, and (usually) no transcript file, so their billed spend never
@@ -668,11 +667,11 @@ def cli_anomalies(sid):
     # IS captured (the OTLP receiver folds query_source=auxiliary/subagent live), so
     # this is now informational, not a spend gap. The stop handler's decision row
     # still says whether a transcript existed to cross-check ("never started …").
-    section("SubagentStop without SubagentStart (hidden agent — spend now captured via OTEL)",
-            "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
-            "h.hook='SubagentStop' AND h.agent_id != '' AND h.agent_id NOT IN "
-            "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStart')",
-            (sid, sid))
+    ("SubagentStop without SubagentStart (hidden agent — spend now captured via OTEL)",
+     "SELECT DISTINCT h.agent_id FROM hook_events h WHERE h.session_id=? AND "
+     "h.hook='SubagentStop' AND h.agent_id != '' AND h.agent_id NOT IN "
+     "(SELECT agent_id FROM hook_events WHERE session_id=? AND hook='SubagentStart')",
+     2),
     # A subagent turn that dies on an API error (e.g. 529 Overloaded) fires
     # StopFailure carrying its agent_id and NO SubagentStop — the agent's only stop
     # signal. claude-stop-fmt.py must hand it to the subagent finaliser (a
@@ -680,10 +679,10 @@ def cli_anomalies(sid):
     # streamer's slot claimed forever and wedged the tab blue. This flags only the
     # UNrecovered case — a StopFailure+agent_id whose decision is NOT 'stopfail:' — so
     # a healthy recovered session stays clean and a non-empty row IS the regression.
-    section("StopFailure carrying an agent_id NOT handed to the finaliser (stuck-blue regression)",
-            "SELECT ts, agent_id, decision FROM hook_events WHERE session_id=? AND "
-            "hook='StopFailure' AND agent_id != '' AND handler != 'subscriber' "
-            "AND decision NOT LIKE 'stopfail:%' ORDER BY ts", (sid,))
+    ("StopFailure carrying an agent_id NOT handed to the finaliser (stuck-blue regression)",
+     "SELECT ts, agent_id, decision FROM hook_events WHERE session_id=? AND "
+     "hook='StopFailure' AND agent_id != '' AND handler != 'subscriber' "
+     "AND decision NOT LIKE 'stopfail:%' ORDER BY ts", 1),
     # An ASYNC (background) agent's Task resolves IMMEDIATELY in the parent
     # transcript with a synthetic "Async agent launched successfully" tool_result
     # (is_error absent) meaning launched-not-finished. parent_tool_result() must
@@ -691,12 +690,12 @@ def cli_anomalies(sid):
     # 0 lines rendered, so the agent's whole transcript never reached the mirror.
     # Tell: a subagent/teammate stream ending 'parent-task-resolved' (NOT rejected)
     # with lines_emitted=0 while a real SubagentStop later fired for that agent.
-    section("async launch-ack ended the substream early (0 lines rendered)",
-            "SELECT s.agent_id, s.ended_at, s.end_reason FROM streams s WHERE "
-            "s.session_id=? AND s.kind IN ('subagent','teammate') AND "
-            "s.end_reason='parent-task-resolved' AND COALESCE(s.lines_emitted,0)=0 "
-            "AND s.agent_id IN (SELECT agent_id FROM hook_events WHERE session_id=? "
-            "AND hook='SubagentStop')", (sid, sid))
+    ("async launch-ack ended the substream early (0 lines rendered)",
+     "SELECT s.agent_id, s.ended_at, s.end_reason FROM streams s WHERE "
+     "s.session_id=? AND s.kind IN ('subagent','teammate') AND "
+     "s.end_reason='parent-task-resolved' AND COALESCE(s.lines_emitted,0)=0 "
+     "AND s.agent_id IN (SELECT agent_id FROM hook_events WHERE session_id=? "
+     "AND hook='SubagentStop')", 2),
     # Claude Code creates tasks/<id>.output LAZILY, on the monitor's first output
     # byte — a quiet persistent monitor has no file for minutes or hours. The
     # monitor tailer waits for it keyed on the monitor PROCESS's liveness
@@ -706,66 +705,61 @@ def cli_anomalies(sid):
     # Post-fix the only legitimate not-found end carries the
     # '(monitor process never found)' suffix (nothing to key liveness on), so a
     # bare match here IS the regression.
-    section("monitor gave up on a lazily-created output file (tab wrongly cleared)",
-            "SELECT id, task_id, started_at, ended_at FROM streams WHERE session_id=? "
-            "AND kind='monitor' AND end_reason='output-file-not-found'", (sid,))
+    ("monitor gave up on a lazily-created output file (tab wrongly cleared)",
+     "SELECT id, task_id, started_at, ended_at FROM streams WHERE session_id=? "
+     "AND kind='monitor' AND end_reason='output-file-not-found'", 1),
     # Since the single-dispatcher refactor every event runs through claude-hook.py
     # -> dispatch.py. A crash in the DISPATCHER itself (not a subsystem) records
     # script='dispatch' — that means route() threw before/around fanning out, so a
     # whole event may have produced no tab change / no block. A subsystem crash keeps
     # its own entry-filename script (surfaced by "swallowed errors" above); this
     # isolates the dispatcher-level failure, which should essentially never fire.
-    section("dispatcher-level crash (route() threw — whole event may be lost)",
-            "SELECT ts, func, substr(traceback,1,120) FROM errors WHERE session_id=? "
-            "AND script='dispatch' ORDER BY ts", (sid,))
-    section("failed tools (PostToolUseFailure)",
-            "SELECT ts, tool_name, decision FROM hook_events WHERE session_id=? AND "
-            "hook LIKE '%Failure%' ORDER BY ts", (sid,))
+    ("dispatcher-level crash (route() threw — whole event may be lost)",
+     "SELECT ts, func, substr(traceback,1,120) FROM errors WHERE session_id=? "
+     "AND script='dispatch' ORDER BY ts", 1),
+    ("failed tools (PostToolUseFailure)",
+     "SELECT ts, tool_name, decision FROM hook_events WHERE session_id=? AND "
+     "hook LIKE '%Failure%' ORDER BY ts", 1),
     # A content-render stream (claude-stream.py MD/JSON mode: cat/head/tail of a .md,
     # cat of a .json; decision '[md-render]'/'[json-render]' in hook_events) records a
     # 'done' state_file row (path render:<taskid>) with the block count it emitted.
     # Zero blocks from a stream that ran means the renderer produced nothing — a
     # wenmode/json parse failure or an empty fallback. The paired 'start' row records
     # the kind (md/json). See core/mdrender.py / core/jsonrender.py.
-    section("content-render streams that emitted zero blocks (render failure)",
-            "SELECT ts, path, content FROM state_files WHERE session_id=? AND "
-            "path LIKE 'render:%' AND action='done' AND content LIKE '%\"blocks\": 0%' "
-            "ORDER BY ts", (sid,))
-    section("spawned processes that never registered a stream",
-            "SELECT s.ts, s.child_pid, s.purpose FROM spawns s WHERE s.session_id=? "
-            "AND s.purpose LIKE 'stream%' AND s.child_pid NOT IN "
-            "(SELECT pid FROM streams WHERE session_id=?)", (sid, sid))
-    section("pane operations that failed",
-            "SELECT ts, action, detail FROM pane_events WHERE session_id=? AND ok=0 "
-            "ORDER BY ts", (sid,))
+    ("content-render streams that emitted zero blocks (render failure)",
+     "SELECT ts, path, content FROM state_files WHERE session_id=? AND "
+     "path LIKE 'render:%' AND action='done' AND content LIKE '%\"blocks\": 0%' "
+     "ORDER BY ts", 1),
+    ("spawned processes that never registered a stream",
+     "SELECT s.ts, s.child_pid, s.purpose FROM spawns s WHERE s.session_id=? "
+     "AND s.purpose LIKE 'stream%' AND s.child_pid NOT IN "
+     "(SELECT pid FROM streams WHERE session_id=?)", 2),
+    ("pane operations that failed",
+     "SELECT ts, action, detail FROM pane_events WHERE session_id=? AND ok=0 "
+     "ORDER BY ts", 1),
     # close_stale_mirrors audits every window it sweeps (action=close-stale,
     # detail "closed sid=<sid> win=<id>"). Sweeping a mirror whose session is
     # still OPEN is the cross-session pane-hijack shape (a daemon-origin
     # SessionStart anchored to the wrong tab — the agents-view bug); the benign
     # exception is a predecessor that crashed without SessionEnd in the same tab.
-    section("stale-mirror sweep closed a LIVE session's mirror (pane hijack)",
-            "SELECT p.ts, p.session_id, p.detail FROM pane_events p JOIN sessions s "
-            "ON p.detail LIKE ('closed sid=' || s.session_id || ' %') "
-            "WHERE p.action='close-stale' AND s.ended_at IS NULL "
-            "AND s.session_id != p.session_id "
-            "AND (p.session_id=? OR s.session_id=?) ORDER BY p.ts", (sid, sid))
-    section("tab colour applies where kitten @ failed",
-            "SELECT ts, dispatch, new_state, reason FROM tab_transitions "
-            "WHERE session_id=? AND reason LIKE '%kitten @ failed%' ORDER BY ts", (sid,))
-    # Token/cost spend must arrive as an ATTRIBUTED action: 'bump-otel' (the OTLP
-    # receiver, keyed by session.id + query_source) or 'bump-agent' (codex's own
-    # rollout fold — codex runs in a separate process OTEL can't see). A plain 'bump'
-    # carrying a tokens/cost delta means some producer bypassed attribution — the
-    # scoreboard number it fed can only be traced by timestamp correlation.
+    ("stale-mirror sweep closed a LIVE session's mirror (pane hijack)",
+     "SELECT p.ts, p.session_id, p.detail FROM pane_events p JOIN sessions s "
+     "ON p.detail LIKE ('closed sid=' || s.session_id || ' %') "
+     "WHERE p.action='close-stale' AND s.ended_at IS NULL "
+     "AND s.session_id != p.session_id "
+     "AND (p.session_id=? OR s.session_id=?) ORDER BY p.ts", 2),
+    ("tab colour applies where kitten @ failed",
+     "SELECT ts, dispatch, new_state, reason FROM tab_transitions "
+     "WHERE session_id=? AND reason LIKE '%kitten @ failed%' ORDER BY ts", 1),
     # A --resume/--continue SessionStart should find the parked *.keep state DB and
     # log a `restore-history` (or, after a crash with no SessionEnd, find the DB
     # still live: `reuse-live-db`). A `fresh-db` row on a source=resume start
     # means the history was lost — the mirror came back empty.
-    section("resume that lost its mirror history (fresh-db on source=resume)",
-            "SELECT h.ts FROM hook_events h WHERE h.session_id=? AND "
-            "h.hook='SessionStart' AND json_extract(h.payload,'$.source')='resume' "
-            "AND EXISTS (SELECT 1 FROM state_files f WHERE f.session_id=h.session_id "
-            "AND f.action='fresh-db' AND abs(f.ts - h.ts) < 30)", (sid,))
+    ("resume that lost its mirror history (fresh-db on source=resume)",
+     "SELECT h.ts FROM hook_events h WHERE h.session_id=? AND "
+     "h.hook='SessionStart' AND json_extract(h.payload,'$.source')='resume' "
+     "AND EXISTS (SELECT 1 FROM state_files f WHERE f.session_id=h.session_id "
+     "AND f.action='fresh-db' AND abs(f.ts - h.ts) < 30)", 1),
     # Claude Code can FORK the sid on --resume: SessionStart fires under the OLD
     # sid while every later event carries a NEW sid that never gets its own
     # SessionStart (see plugins/claude_code/adopt.py). On a current build the
@@ -777,11 +771,10 @@ def cli_anomalies(sid):
     # legitimate session — interactive, headless, agents-view — gets a sessions
     # row from its own SessionStart (A.session_start runs before the pane-skip
     # check), so this only fires on an unadopted fork.
-    section("hook traffic under a sid with no sessions row (resume fork never adopted)",
-            "SELECT MIN(ts), MAX(ts), COUNT(*) FROM hook_events WHERE session_id=? "
-            "AND handler='subscriber' AND NOT EXISTS "
-            "(SELECT 1 FROM sessions WHERE session_id=?) HAVING COUNT(*) > 0",
-            (sid, sid))
+    ("hook traffic under a sid with no sessions row (resume fork never adopted)",
+     "SELECT MIN(ts), MAX(ts), COUNT(*) FROM hook_events WHERE session_id=? "
+     "AND handler='subscriber' AND NOT EXISTS "
+     "(SELECT 1 FROM sessions WHERE session_id=?) HAVING COUNT(*) > 0", 2),
     # A genuine sid-fork NEVER gets its own SessionStart — that is the whole basis
     # for adoption. So a sid that ADOPTED a predecessor yet ALSO has its own
     # SessionStart is a MIS-adoption: an independent new session wrongly consumed a
@@ -789,25 +782,29 @@ def cli_anomalies(sid):
     # bug: 507fc4c8's pre-SessionStart InstructionsLoaded adopted the unrelated live
     # db081e65 — toggling 507's mirror then toggled db081e65's). Fixed by marking the
     # sid on InstructionsLoaded (adopt.py); a non-empty row here is the regression.
-    section("adopted a predecessor despite having its OWN SessionStart (mis-adoption — pane theft)",
-            "SELECT a.ts, a.decision FROM hook_events a WHERE a.session_id=? "
-            "AND a.decision LIKE 'adopt:%' AND EXISTS (SELECT 1 FROM hook_events s "
-            "WHERE s.session_id=a.session_id AND s.hook='SessionStart') ORDER BY a.ts",
-            (sid,))
-    section("unattributed token/cost bumps (should be bump-agent with meta)",
-            "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
-            "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
-            "OR json_extract(content, '$.deltas.cost') IS NOT NULL) ORDER BY ts", (sid,))
+    ("adopted a predecessor despite having its OWN SessionStart (mis-adoption — pane theft)",
+     "SELECT a.ts, a.decision FROM hook_events a WHERE a.session_id=? "
+     "AND a.decision LIKE 'adopt:%' AND EXISTS (SELECT 1 FROM hook_events s "
+     "WHERE s.session_id=a.session_id AND s.hook='SessionStart') ORDER BY a.ts", 1),
+    # Token/cost spend must arrive as an ATTRIBUTED action: 'bump-otel' (the OTLP
+    # receiver, keyed by session.id + query_source) or 'bump-agent' (codex's own
+    # rollout fold — codex runs in a separate process OTEL can't see). A plain 'bump'
+    # carrying a tokens/cost delta means some producer bypassed attribution — the
+    # scoreboard number it fed can only be traced by timestamp correlation.
+    ("unattributed token/cost bumps (should be bump-agent with meta)",
+     "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
+     "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
+     "OR json_extract(content, '$.deltas.cost') IS NOT NULL) ORDER BY ts", 1),
     # Cost is OTEL-authoritative; the transcript fold survives ONLY as a SessionEnd
     # fallback that must fire ONLY when the receiver wrote nothing (otel_seen==0). If a
     # session has BOTH a 'folded transcript fallback' SessionEnd decision AND bump-otel
     # rows, the fallback fired despite OTEL data — a double-count regression (the
     # otel_seen gate in stop_fmt broke). A healthy session has exactly one source.
-    section("SessionEnd transcript fallback fired despite OTEL data (double-count regression)",
-            "SELECT ts, decision FROM hook_events WHERE session_id=? AND "
-            "handler='claude-stop-fmt.py' AND decision LIKE 'otel absent%' AND EXISTS "
-            "(SELECT 1 FROM state_files f WHERE f.session_id=? AND f.action='bump-otel') "
-            "ORDER BY ts", (sid, sid))
+    ("SessionEnd transcript fallback fired despite OTEL data (double-count regression)",
+     "SELECT ts, decision FROM hook_events WHERE session_id=? AND "
+     "handler='claude-stop-fmt.py' AND decision LIKE 'otel absent%' AND EXISTS "
+     "(SELECT 1 FROM state_files f WHERE f.session_id=? AND f.action='bump-otel') "
+     "ORDER BY ts", 2),
     # The OTLP receiver is a long-lived singleton that caches its state-DB
     # connection. A park (os.replace db -> db.keep) + resume swaps the inode under
     # the path, so a receiver that didn't revalidate kept writing token counters to
@@ -816,7 +813,29 @@ def cli_anomalies(sid):
     # the session (OTEL landed) yet the LIVE state DB has no tk_read/tokens counter.
     # core/state._connect now revalidates by st_ino, so a non-empty row here is that
     # regression (or the receiver holding an fd on a *.keep path — check `lsof`).
-    _section_otel_stranded(conn, section, sid)
+    lambda conn, section, sid: _section_otel_stranded(conn, section, sid),
+]
+
+
+def cli_anomalies(sid):
+    """Canned queries for known bug signatures (the ANOMALY_SECTIONS registry
+    above). Each prints a section; empty = clean."""
+    conn = _connect()
+    if conn is None:
+        print("audit db unavailable"); return
+
+    def section(title, q, params=()):
+        rows = conn.execute(q, params).fetchall()
+        print(f"== {title}: {len(rows)}")
+        for r in rows:
+            print("   " + " | ".join("" if v is None else str(v) for v in r))
+
+    for entry in ANOMALY_SECTIONS:
+        if callable(entry):
+            entry(conn, section, sid)
+        else:
+            title, q, nparams = entry
+            section(title, q, (sid,) * nparams)
 
 
 def _section_otel_stranded(audit_conn, section, sid):
@@ -884,71 +903,125 @@ def cli_sessions(limit=20):
     _print_rows(rows, ["session_id", "project", "started", "ended", "reason"])
 
 
+def cli_sql(argv):
+    conn = _connect()
+    if conn is None:
+        print("audit db unavailable"); return
+    q = argv[2] if len(argv) > 2 else ""
+    try:
+        cur = conn.execute(q)
+        headers = [c[0] for c in cur.description] if cur.description else []
+        _print_rows(cur.fetchall(), headers)
+        conn.commit()
+    except Exception as e:
+        print(f"sql error: {e}")
+
+
+# --------------------------------------------------------------- CLI dispatch
+# Each handler owns its own argv parsing (argv is the FULL argv; argv[1] is the
+# command name). write=True marks the fire-and-forget entry points hooks/shell
+# invoke — the claude_audit.py shim derives its never-fail-loudly swallow set
+# from WRITE_COMMANDS, so the two can't drift apart again.
+
+def _cmd_session_start(argv):
+    session_start(_read_stdin_json())
+
+
+def _cmd_session_end(argv):
+    session_end(_read_stdin_json())
+    prune()
+
+
+def _cmd_hook(argv):
+    # hook <handler> [<decision>], payload on stdin
+    hook_event(_read_stdin_json(), handler=(argv[2] if len(argv) > 2 else None),
+               decision=(argv[3] if len(argv) > 3 else ""))
+
+
+def _cmd_transition(argv):
+    # transition <sid> <win> <dispatch> <prev> <new> <applied> [reason]
+    a = argv[2:] + [""] * 7
+    transition(a[0], a[1], a[2], a[3], a[4], a[5] == "1", a[6])
+
+
+def _cmd_error(argv):
+    # error <sid> <script> <message>
+    a = argv[2:] + [""] * 3
+    event("errors", session_id=a[0], script=a[1] or "shell", func="",
+          traceback=a[2], context="", pid=os.getppid())
+
+
+def _cmd_pane(argv):
+    # pane <sid> <action> <ok 0|1> [detail]
+    a = argv[2:] + [""] * 4
+    pane(a[0], a[1], a[2] == "1", a[3])
+
+
+def _cmd_state_file(argv):
+    # state-file <log> <path> <action> [content]
+    a = argv[2:] + [""] * 4
+    state_file(a[0], a[1], a[2], a[3])
+
+
+def _cmd_sessions(argv):
+    cli_sessions(int(argv[2]) if len(argv) > 2 else 20)
+
+
+def _cmd_timeline(argv):
+    cli_timeline(argv[2] if len(argv) > 2 else "",
+                 int(argv[3]) if len(argv) > 3 else 2000)
+
+
+def _cmd_errors(argv):
+    cli_errors(argv[2] if len(argv) > 2 else "")
+
+
+def _cmd_anomalies(argv):
+    cli_anomalies(argv[2] if len(argv) > 2 else "")
+
+
+def _cmd_otel(argv):
+    cli_otel(argv[2] if len(argv) > 2 else "")
+
+
+def _cmd_prune(argv):
+    n = prune(int(argv[2]) if len(argv) > 2 else PRUNE_DAYS)
+    print(f"pruned {n} session(s)")
+
+
+# NB: the old `stream-start`/`stream-end` CLI branches were removed — every
+# tailer records its lifecycle in-process via stream_start()/stream_end()
+# (core/tail.py stream_lifecycle); no repo script, ~/.claude/settings.json
+# entry, or open-actions.conf action invoked them.
+COMMANDS = {
+    # write entry points (fired from hooks/shell — must never fail loudly)
+    "session-start": (_cmd_session_start, True),
+    "session-end":   (_cmd_session_end,   True),
+    "hook":          (_cmd_hook,          True),
+    "transition":    (_cmd_transition,    True),
+    "error":         (_cmd_error,         True),
+    "pane":          (_cmd_pane,          True),
+    "state-file":    (_cmd_state_file,    True),
+    # read/query commands (interactive — errors should surface)
+    "sessions":      (_cmd_sessions,      False),
+    "timeline":      (_cmd_timeline,      False),
+    "errors":        (_cmd_errors,        False),
+    "anomalies":     (_cmd_anomalies,     False),
+    "otel":          (_cmd_otel,          False),
+    "sql":           (cli_sql,            False),
+    "prune":         (_cmd_prune,         False),
+}
+
+WRITE_COMMANDS = frozenset(name for name, (_, write) in COMMANDS.items() if write)
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
-    if cmd == "session-start":
-        session_start(_read_stdin_json())
-    elif cmd == "session-end":
-        d = _read_stdin_json()
-        session_end(d)
-        prune()
-    elif cmd == "hook":                     # hook <handler> [<decision>], payload on stdin
-        hook_event(_read_stdin_json(), handler=(argv[2] if len(argv) > 2 else None),
-                   decision=(argv[3] if len(argv) > 3 else ""))
-    elif cmd == "transition":               # transition <sid> <win> <dispatch> <prev> <new> <applied> [reason]
-        a = argv[2:] + [""] * 7
-        transition(a[0], a[1], a[2], a[3], a[4], a[5] == "1", a[6])
-    elif cmd == "error":                    # error <sid> <script> <message>
-        a = argv[2:] + [""] * 3
-        event("errors", session_id=a[0], script=a[1] or "shell", func="",
-              traceback=a[2], context="", pid=os.getppid())
-    elif cmd == "pane":                     # pane <sid> <action> <ok 0|1> [detail]
-        a = argv[2:] + [""] * 4
-        pane(a[0], a[1], a[2] == "1", a[3])
-    elif cmd == "state-file":               # state-file <log> <path> <action> [content]
-        a = argv[2:] + [""] * 4
-        state_file(a[0], a[1], a[2], a[3])
-    elif cmd == "stream-start":             # stream-start <sid> <kind> [src] -> prints row id
-        a = argv[2:] + [""] * 3
-        rid = event("streams", session_id=a[0], kind=a[1] or "watcher",
-                    agent_id="", task_id="", src_path=a[2], pid=os.getppid(),
-                    started_at=time.time())
-        print(rid if rid is not None else "")
-    elif cmd == "stream-end":               # stream-end <id> <reason> [lines]
-        a = argv[2:] + [""] * 3
-        try:
-            rid = int(a[0])
-        except Exception:
-            rid = None
-        stream_end(rid, a[1] or "?", int(a[2]) if a[2].isdigit() else None)
-    elif cmd == "sessions":
-        cli_sessions(int(argv[2]) if len(argv) > 2 else 20)
-    elif cmd == "timeline":
-        cli_timeline(argv[2] if len(argv) > 2 else "",
-                     int(argv[3]) if len(argv) > 3 else 2000)
-    elif cmd == "errors":
-        cli_errors(argv[2] if len(argv) > 2 else "")
-    elif cmd == "anomalies":
-        cli_anomalies(argv[2] if len(argv) > 2 else "")
-    elif cmd == "otel":
-        cli_otel(argv[2] if len(argv) > 2 else "")
-    elif cmd == "sql":
-        conn = _connect()
-        if conn is None:
-            print("audit db unavailable"); return
-        q = argv[2] if len(argv) > 2 else ""
-        try:
-            cur = conn.execute(q)
-            headers = [c[0] for c in cur.description] if cur.description else []
-            _print_rows(cur.fetchall(), headers)
-            conn.commit()
-        except Exception as e:
-            print(f"sql error: {e}")
-    elif cmd == "prune":
-        n = prune(int(argv[2]) if len(argv) > 2 else PRUNE_DAYS)
-        print(f"pruned {n} session(s)")
-    else:
+    entry = COMMANDS.get(cmd)
+    if entry is None:
         print(__doc__ or "see module docstring for usage")
+        return
+    entry[0](argv)
 
 
 # The CLI entry point lives in the top-level claude_audit.py shim (main() above

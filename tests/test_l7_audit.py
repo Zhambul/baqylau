@@ -134,6 +134,67 @@ def test_assert_clean_allowlist(test_env):
     oracle.assert_clean(test_env, SID, allow=("swallowed errors",))
 
 
+# ------------------------------------------------------------- CLI dispatch
+
+def cli(env, *args):
+    return subprocess.run([sys.executable, os.path.join(REPO, "claude_audit.py"),
+                           *args], env=dict(env), cwd=REPO, capture_output=True,
+                          text=True, timeout=15)
+
+
+def test_unknown_command_prints_usage(test_env):
+    """An unrecognized (or missing) command must no-op with usage, exit 0."""
+    for args in (("definitely-not-a-command",), ()):
+        p = cli(test_env, *args)
+        assert p.returncode == 0, p.stderr
+        assert "usage" in p.stdout or "docstring" in p.stdout
+
+
+def test_swallow_set_derived_from_command_table():
+    """The shim's never-fail-loudly set is WRITE_COMMANDS, derived from the one
+    command table — the hand-maintained copy it replaced had already drifted."""
+    import claude_audit as A
+    assert A.WRITE_COMMANDS == {n for n, (_, w) in A.COMMANDS.items() if w}
+    for name, (fn, write) in A.COMMANDS.items():
+        assert callable(fn), name
+        assert isinstance(write, bool), name
+    # the known hook-fired write entry points are all swallowed …
+    assert {"session-start", "session-end", "hook", "transition",
+            "error", "pane", "state-file"} <= A.WRITE_COMMANDS
+    # … and the interactive read/query commands are NOT
+    assert not ({"sessions", "timeline", "errors", "anomalies", "otel",
+                 "sql", "prune"} & A.WRITE_COMMANDS)
+    # stream-start/stream-end were removed: streamers audit in-process only
+    assert "stream-start" not in A.COMMANDS and "stream-end" not in A.COMMANDS
+
+
+def test_write_command_swallows_argv_garbage(test_env):
+    """A write entry point with broken argv must exit 0 (hooks fire these)."""
+    p = cli(test_env, "transition")          # every positional arg missing
+    assert p.returncode == 0, p.stderr
+
+
+def test_anomalies_registry_smoke(test_env):
+    """Every registry entry is well-formed and its SQL executes against the
+    real schema (a bad query would blind the whole triage path)."""
+    import sqlite3
+    import claude_audit as A
+    poison(test_env,                # force schema creation via the product path
+           "INSERT INTO errors(ts,session_id,script,func,traceback,context,pid)"
+           " VALUES(1,?,'x.py','f','tb','{}',1)", (SID,))
+    conn = sqlite3.connect(oracle.audit_db(test_env))
+    try:
+        for entry in A.ANOMALY_SECTIONS:
+            if callable(entry):
+                continue
+            title, sql, nparams = entry
+            assert isinstance(title, str) and title, entry
+            assert nparams == sql.count("?"), title
+            conn.execute(sql, (SID,) * nparams).fetchall()   # must not raise
+    finally:
+        conn.close()
+
+
 # ------------------------------------------------------- degradation paths
 
 def test_spool_fallback_and_ingest(run_hook, test_env, session):
