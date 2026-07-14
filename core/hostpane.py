@@ -22,6 +22,7 @@ import os
 import time
 
 from core import audit as A
+from core import paths as P
 from core import state as S
 
 # kitty bias is approximate ("you cannot use this method to create windows of
@@ -154,7 +155,6 @@ def tab_host_sid(fe, exclude_sid=""):
 
 
 def _log_for_sid(sid):
-    from core import paths as P
     return P.mirror_log(sid)
 
 
@@ -186,7 +186,7 @@ def decide_log_fate(sid, log):
       fresh-db        — brand-new session. With no sid (the shared cwd-slug
                         fallback) any leftover DB may be another session's —
                         remove it."""
-    db = log + ".state.db"
+    db = P.state_db(log)
     if sid and os.path.isfile(db + ".keep"):
         for f in (db, db + "-wal", db + "-shm"):
             if os.path.isfile(f + ".keep"):
@@ -213,7 +213,7 @@ def park_db(sid, log):
     same-sid resume replays it (decide_log_fate → restore-history). Only the
     anonymous cwd-slug fallback (no sid) is deleted outright. Returns the action
     string the caller audits."""
-    db = log + ".state.db"
+    db = P.state_db(log)
     if sid:
         for f in (db, db + "-wal", db + "-shm"):
             if os.path.isfile(f):

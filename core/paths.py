@@ -64,6 +64,16 @@ def sid_from_log(log):
     return m.group(1) if m else (log or "")
 
 
+def log_for_key(key):
+    """The mirror-log path for an ALREADY-FORMED key, verbatim — no sanitizing.
+    Differs from mirror_log(sid), which sanitizes its input: callers that hold a
+    key recovered from an existing path/URL (e.g. core/copy.py's hyperlink
+    round-trip) must reproduce the exact original path, not a re-derived one —
+    re-sanitizing a key that is already a key must never change it, and going
+    through mirror_log would hide that assumption."""
+    return PREFIX + key + ".log"
+
+
 def state_db(log):
     """The per-session runtime state DB for a mirror log (see claude_state.py)."""
     return log + ".state.db"

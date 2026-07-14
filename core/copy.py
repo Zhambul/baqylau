@@ -164,7 +164,7 @@ def main(argv):
         A.error("", "copy (bad url)", {"argv": argv[1:2]})
         return
     key, gid, what = parsed
-    log = P.PREFIX + key + ".log"
+    log = P.log_for_key(key)
     db = P.state_db(log)
     if not os.path.exists(db):
         # Session over (DB parked away at SessionEnd) — nothing to read, and

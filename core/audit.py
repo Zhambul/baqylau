@@ -830,7 +830,7 @@ def _section_otel_stranded(audit_conn, section, sid):
         (sid,)).fetchone()[0]
     hits = []
     if n_otel:
-        db = P.mirror_log(sid) + ".state.db"
+        db = P.state_db(P.mirror_log(sid))
         if os.path.exists(db):
             try:
                 c = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.5)

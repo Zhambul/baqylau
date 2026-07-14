@@ -346,3 +346,31 @@ def test_tab_status_paints_and_records(run_hook, test_env, session, fake_kitten)
     calls = fake_kitten.calls("set-tab-color")
     assert calls, "no set-tab-color call recorded by the fake kitten"
     assert oracle.tab_state(test_env, fake_kitten.window_id) is not None
+
+
+# ------------------------------------------------------------ core/paths (unit)
+
+def test_paths_accessors():
+    """core/paths is the ONE owner of the mirror-log path format — pin the
+    accessors every other module must go through instead of re-encoding the
+    format by hand (state_db suffix, verbatim-key log path)."""
+    import sys
+    from conftest import REPO
+    if REPO not in sys.path:
+        sys.path.insert(0, REPO)
+    from core import paths as CP
+
+    log = CP.mirror_log("abc-123")
+    assert log == CP.PREFIX + "abc-123.log"
+    # state_db: the .state.db suffix lives here and only here.
+    assert CP.state_db(log) == log + ".state.db"
+    assert CP.sid_from_log(CP.state_db(log)) == "abc-123"
+    # mirror_log sanitizes its input...
+    assert CP.mirror_log("a/b c") == CP.PREFIX + "a-b-c.log"
+    # ...log_for_key deliberately does NOT: an already-formed key (recovered
+    # from a path/URL) must round-trip verbatim.
+    assert CP.log_for_key("a-b-c") == CP.PREFIX + "a-b-c.log"
+    assert CP.log_for_key("a/b c") == CP.PREFIX + "a/b c.log"
+    # And the two agree on any already-sanitized key.
+    key = CP.sanitize_sid("weird sid!*")
+    assert CP.log_for_key(key) == CP.mirror_log("weird sid!*")
