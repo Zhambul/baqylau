@@ -203,6 +203,24 @@ def test_cmd_pre_stale_fg_live_record_is_cleared(run_hook, test_env, session):
     assert any(r[1] == "remove-stale" for r in oracle.state_files(test_env, s.sid))
 
 
+def test_cmd_pre_fg_live_hand_put_failure_retried_and_audited(run_hook, test_env,
+                                                              session):
+    """A failed fg-live hand_put loses the OUTCOME hand-off (the tailer is
+    already spawned; cmd-fmt can't hand it the finish chip) — it must be
+    retried once and both attempts audited WITH the tool_use_id context.
+    A directory squatting on the state-DB path makes every connect fail."""
+    import os
+    s = session.make()
+    os.makedirs(s.state_db)
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo hi", tid="t-retry"))
+    rows = [r for r in oracle.errors(test_env, s.sid)
+            if "fg-live record" in (r[2] or "")]
+    # one 'retrying' row + one final row = the retry actually ran, audited
+    assert [r[2] for r in rows] == ["write fg-live record (retrying)",
+                                    "write fg-live record"], rows
+    assert all("t-retry" in (r[3] or "") for r in rows), rows
+
+
 def _alive(pid):
     import os
     try:

@@ -6,6 +6,7 @@
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import sys
 import urllib.request
@@ -153,6 +154,56 @@ def test_receiver_registers_stream_and_singleton(run_hook, test_env, session):
     assert rows and all(r[0] == "otlp" for r in rows), "no otlp streams row"
     assert any("duplicate" in (r[1] or "") for r in rows), \
         "the second receiver did not record a duplicate streams row"
+
+
+# ------------------------------------------------- parked-session stragglers
+
+def test_parked_straggler_dropped_and_conn_evicted(run_hook, test_env, session):
+    """A datapoint arriving AFTER a session parked (SessionEnd) must not
+    recreate the state DB (its absence is the session-alive signal watchers
+    poll) and must release the receiver's cached connection (otherwise every
+    ended session pins a conn + WAL/SHM fds until the receiver's idle exit).
+    The dropped deltas stay auditable; a LIVE session keeps folding."""
+    s, s2 = session.make(), session.make()
+    _materialize_db(run_hook, s)
+    _materialize_db(run_hook, s2)
+    port = _free_port()
+    recv = _spawn_receiver(test_env, port)
+    try:
+        _wait_listening(port, recv)
+        _post(port, P.otlp_metrics(s.sid, costs=[("main", 0.05)]))  # caches s's conn
+        wait_until(lambda: s.counters().get("cost"), desc="pre-park fold")
+        run_hook("claude-split.py", P.session_end(s), argv=("close",))  # parks it
+        assert os.path.exists(s.parked_db) and not os.path.exists(s.state_db)
+        # a straggler for the parked session + a normal export for the live one
+        _post(port, P.otlp_metrics(s.sid, costs=[("main", 0.99)]))
+        _post(port, P.otlp_metrics(s2.sid, costs=[("main", 0.07)]))
+        wait_until(lambda: s2.counters().get("cost"),
+                   desc="live session still folds after the straggler")
+        wait_until(lambda: [r for r in oracle.state_files(test_env, s.sid)
+                            if r[1] == "drop-otel-parked"],
+                   desc="drop-otel-parked audit row")
+    finally:
+        recv.terminate()
+        recv.wait(timeout=5)
+    # the straggler did NOT recreate the live DB (whose existence = session alive)
+    assert not os.path.exists(s.state_db), "straggler datapoint recreated the state DB"
+    # the cached conn was evicted (the sweep's audit row is the observable)
+    assert [r for r in oracle.state_files(test_env, s.sid)
+            if r[1] == "evict-parked"], "no evict-parked row — cached conn pinned"
+    # the dropped deltas rode the drop row (audited, not silent)
+    drop = [r for r in oracle.state_files(test_env, s.sid)
+            if r[1] == "drop-otel-parked"]
+    assert "0.99" in (drop[0][2] or ""), drop
+    # …and never reached the parked snapshot (only the pre-park value is there)
+    conn = sqlite3.connect("file:%s?mode=ro" % s.parked_db, uri=True, timeout=5)
+    try:
+        cost = conn.execute("SELECT val FROM counters WHERE key='cost'").fetchone()[0]
+    finally:
+        conn.close()
+    assert round(cost, 4) == 0.05, cost
+    # the live session's fold was unaffected
+    assert round(s2.counters()["cost"], 4) == 0.07
 
 
 # --------------------------------------------------- SessionEnd fallback gating

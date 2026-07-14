@@ -32,6 +32,9 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 LBL_FG = O.SLATE   # same colour claude-cmd-fmt.py uses for an OK foreground block
 
+HAND_RETRY_S = 0.1   # pause before the one fg-live hand_put retry (a transient
+                     # writer holding the state DB past busy_timeout)
+
 
 def _tee_wrap(cmd, src):
     # Wrap `cmd` so its stdout/stderr ALSO tee into `src` (the live-tail file).
@@ -203,11 +206,19 @@ def main():
     # eaten by the next command's Post (which cross-wired the two blocks).
     rec = {"src": src, "own": own, "pid": proc.pid, "done": done,
            "tid": d.get("tool_use_id") or ""}
-    if S.hand_put(log, "fg-live", rec):
-        A.state_file(log, "state:fg-live", "write", rec)
-    else:
-        A.error(log, "write fg-live record", {"src": src})
-        return                                     # tailer will notice via its own backstop eventually
+    if not S.hand_put(log, "fg-live", rec):
+        # One retry: a failed hand_put here loses the OUTCOME hand-off — the
+        # tailer is already spawned, but PostToolUse (cmd-fmt) can't hand it the
+        # finish chip without this record. hand_put's realistic failure mode is a
+        # transiently locked state DB, so a single short-delay retry is cheap
+        # insurance; both attempts are audited with the tool_use_id context.
+        A.error(log, "write fg-live record (retrying)",
+                {"src": src, "tid": rec["tid"]})
+        time.sleep(HAND_RETRY_S)
+        if not S.hand_put(log, "fg-live", rec):
+            A.error(log, "write fg-live record", {"src": src, "tid": rec["tid"]})
+            return                             # tailer will notice via its own backstop eventually
+    A.state_file(log, "state:fg-live", "write", rec)
 
     O.emit(log, O.blank(), O.rule(), O.label("▶ foreground", LBL_FG, g=gid),
            O.code(cmd, g=gid), O.rule())

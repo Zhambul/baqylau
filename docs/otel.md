@@ -39,7 +39,24 @@ telemetry env it requires).
     GONE (parked, not yet recreated) → keep the stale conn and **never recreate** (the
     live path's absence is the session-alive exit signal streamers poll). The
     `anomalies` CLI cross-checks this: `bump-otel` rows for a session whose live state
-    DB has no `tokens`/`tk_read` counter is the stranded-receiver signature. **Codex is exempt**:
+    DB has no `tokens`/`tk_read` counter is the stranded-receiver signature.
+    **…and must EVICT it once the session parks.** That path-gone stale-conn behavior
+    is deliberate for *per-session* processes, but the receiver is the one *multi*-
+    session state-DB writer: without eviction every ENDED session pinned its cached
+    connection + WAL/SHM fds for the receiver's lifetime (bounded only by the 900s
+    idle exit). `receiver.sweep_parked()` runs on every batch and every serve-loop
+    tick: for each session it has connected to, a `state.parked()` exists-probe, and
+    on park a `state.evict(log)` (close + drop from the cache — an API reserved for
+    exactly this multi-session case; per-session processes must never call it) plus
+    an audited `state_files` row, action `evict-parked`. **Straggler datapoints for a
+    parked session are DROPPED, audibly, never written.** `write_session` guards with
+    `parked()` *before* connecting — a connect would CREATE a fresh DB at the live
+    path, whose file-existence is the session-alive signal (the phantom-session
+    hazard). The counters are final by then (the SessionEnd fold fallback, gated on
+    `otel_seen`, ran before the park), so the deltas are dropped with a `state_files`
+    row, action `drop-otel-parked`, carrying the deltas + raw datapoints — NOT rows
+    in the audit `otel` table, whose `SUM(value)` must keep equalling the live
+    counters. **Codex is exempt**:
     it runs in a separate process OTEL can't see, so it keeps its own rollout fold
     (`bump-agent`, `meta.kind=codex`). Every raw datapoint is captured in the audit
     `otel` table (`python3 bin/claude-audit.py otel <sid>`), so the counters are fully

@@ -130,18 +130,52 @@ def aggregate(body):
 
 # --- state-DB write ----------------------------------------------------------
 
+# Logs this process has cached a state-DB connection for (via write_session) —
+# the sweep_parked() worklist. Bounded by the number of sessions seen this
+# receiver lifetime; entries leave when their session parks.
+_SEEN_LOGS = set()
+
+
+def sweep_parked():
+    """Evict (close + drop) the cached state-DB connection of every seen session
+    that has since PARKED (SessionEnd moved its DB away). Without this the
+    singleton receiver pins one connection + WAL/SHM fds per ENDED session until
+    its own idle exit — state._CONNS only swaps a cached conn on an inode CHANGE
+    at the path, never on the path going away (that stale-conn behavior is
+    load-bearing for per-session processes; the multi-session fix belongs HERE).
+    Cheap (one parked() exists-probe per seen log), so it runs on every batch
+    and every serve-loop tick. Never raises."""
+    for log in list(_SEEN_LOGS):
+        if S.parked(log):
+            _SEEN_LOGS.discard(log)
+            if S.evict(log):
+                A.state_file(log, S.db_path(log), "evict-parked",
+                             "receiver closed cached state-DB conn (session parked)")
+
+
 def write_session(sid, entry):
     """Apply one session's summed deltas to its state DB and capture the raw OTLP
-    datapoints in the audit. Skips a session whose DB doesn't exist (unknown/parked)
-    — audit-drop, never create. Returns True on a real write (idle/lines tracking)."""
+    datapoints in the audit. A session whose DB doesn't exist (unknown/parked) is
+    an audited DROP — never a connect: connecting would CREATE a fresh DB at the
+    live path, whose file-existence is the session-alive signal every watcher
+    polls. Returns True on a real write (idle/lines tracking)."""
     deltas, rows = entry["deltas"], entry["rows"]
     log = P.mirror_log(sid)
     db = S.db_path(log)
-    if not os.path.exists(db):
+    if S.parked(log):
+        # A straggler export for an ended session. Its counters are FINAL — the
+        # SessionEnd fold fallback (stop_fmt, gated on otel_seen) already ran
+        # before the park — so the deltas are dropped, but AUDITABLY: the raw
+        # datapoints ride this state_files row, NOT the audit `otel` table
+        # (whose SUM(value) must keep equalling the live counters).
+        A.state_file(log, db, "drop-otel-parked",
+                     json.dumps({"deltas": deltas, "rows": rows},
+                                ensure_ascii=False))
         return False
     conn = S.connect(log)
     if conn is None:
         return False
+    _SEEN_LOGS.add(log)
     try:
         with S.immediate(conn):
             for k, v in deltas.items():
@@ -211,6 +245,7 @@ class _Handler(BaseHTTPRequestHandler):
             for sid, entry in aggregate(body).items():
                 if write_session(sid, entry):
                     wrote += 1
+            sweep_parked()      # release conns of sessions that ended since
         except Exception:
             A.error(SELF_LOG, "otel do_POST")
         if wrote:
@@ -291,7 +326,8 @@ def serve():
         srv.timeout = min(30.0, idle)
         while True:
             srv.handle_request()            # blocks up to srv.timeout
-            if not _own_lock():
+            sweep_parked()                  # also on idle ticks: a session can end
+            if not _own_lock():             # while no exports are arriving
                 run.end("lock-stolen")
                 break
             if time.time() - srv.last > idle:

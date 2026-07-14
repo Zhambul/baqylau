@@ -165,6 +165,26 @@ def connect(log):
     return _connect(db_path(log))
 
 
+def evict(log):
+    """Close and drop this session's cached state-DB connection, if any. Returns
+    True when a connection was actually closed. For LONG-LIVED MULTI-SESSION
+    processes ONLY (the OTLP receiver): each session that ends (DB parked away)
+    otherwise pins its cached connection + WAL/SHM fds for the process lifetime,
+    because _connect only swaps a cached conn on an inode CHANGE at the path.
+    PER-SESSION processes (streamers, renderers, hooks) must NOT call this —
+    their stale conn after a park is DELIBERATE (_connect's path-gone branch:
+    reconnecting would recreate the DB whose absence is the session-alive exit
+    signal). Never raises."""
+    cached = _CONNS.pop(db_path(log), None)
+    if cached is None:
+        return False
+    try:
+        cached[0].close()
+    except Exception:
+        pass
+    return True
+
+
 @contextmanager
 def immediate(conn):
     """BEGIN IMMEDIATE / commit; on any exception roll back (best-effort) and

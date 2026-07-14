@@ -1049,3 +1049,27 @@ def test_decide_log_fate_restore_drops_stale_live_sidecar(tmp_path, monkeypatch)
     finally:
         conn.close()
     assert errors() == []
+
+
+# --- core.state.evict — the multi-session cached-conn release --------------------
+# The OTLP receiver (the one long-lived MULTI-session state-DB writer) needs to
+# drop a parked session's cached connection: _connect only swaps on an inode
+# CHANGE at the path, so without evict every ended session pinned a conn +
+# WAL/SHM fds for the receiver's lifetime. Per-session processes must NOT call
+# it (their stale conn after a park is deliberate) — see the docstring.
+
+def test_state_evict_closes_and_drops_cached_conn(tmp_path):
+    import sqlite3
+    import pytest
+    from core import state as S
+    log = str(tmp_path / "claude-mirror-evictunit.log")
+    conn = S.connect(log)
+    assert conn is not None and S.db_path(log) in S._CONNS
+    assert S.evict(log) is True
+    assert S.db_path(log) not in S._CONNS, "evict left the cache entry"
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn.execute("SELECT 1")                  # the fd is really closed
+    assert S.evict(log) is False                  # nothing cached -> no-op
+    # a later connect still works (evict is a cache op, not a session op)
+    assert S.connect(log) is not None
+    S.evict(log)          # don't leak the tmp conn into other in-process tests
