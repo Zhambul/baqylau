@@ -1,40 +1,41 @@
-# core/audit.py — always-on SQLite audit trail for the mirror tooling.
-# (Importable as `claude_audit` via the top-level compat shim, which is also
-# the CLI entry point: `python3 claude_audit.py sessions|anomalies|…`.)
-#
-# The mirror is ~20 short-lived hook processes plus detached tailers/watchers
-# coordinating through /tmp marker files, sidecars, and sentinels — and almost every
-# failure is swallowed (`except Exception: pass`, `2>/dev/null`), so when a tab
-# sticks blue or a block never closes, the evidence evaporates with the processes.
-# This module records everything durable enough to chase a bug after the fact:
-#
-#   sessions        one row per Claude session (the anchor everything joins to)
-#   hook_events     every hook invocation: full stdin payload + the handler's decision
-#   tab_transitions the tab-colour state machine (replaces the old CLAUDE_TAB_DEBUG logs)
-#   slots           every marker-file claim/release (the mechanism behind stuck colours)
-#   streams         lifecycle of every detached tailer/streamer/watcher
-#   ops             every paint op appended to the mirror log (full pane reconstruction)
-#   errors          every swallowed exception, with traceback + context
-#   spawns          every detached process launch
-#   state_files     writes/removals of coordination files (.done sentinels, .fg-live, …)
-#
-# ON by default; set CLAUDE_AUDIT=0 to turn it off (every call becomes a no-op).
-# The DB lives OUTSIDE /tmp (session artifacts there are deleted at SessionEnd) in
-# $CLAUDE_AUDIT_DIR or ~/.claude/kitty-audit/audit.db — one global DB, all sessions,
-# WAL mode so the many concurrent short-lived writers never block each other. Audit
-# failures NEVER propagate to callers: a failed write degrades to an append-only
-# spool (spool.jsonl) that is re-ingested on the next successful open, so auditing
-# can neither lose evidence nor break a hook.
-#
-# CLI (what the audit-debug skill drives):
-#   claude_audit.py sessions [N]          recent sessions
-#   claude_audit.py timeline <sid>        merged chronological event timeline
-#   claude_audit.py errors <sid>          swallowed exceptions for a session
-#   claude_audit.py anomalies <sid>       canned queries for known bug signatures
-#   claude_audit.py sql "<query>"         free-form read-only SQL
-#   claude_audit.py prune [days]          drop sessions older than N days (default 30)
-#   claude_audit.py session-start|session-end|hook <handler>|transition …
-#                                         write entry points for the shell scripts
+"""core/audit.py — always-on SQLite audit trail for the mirror tooling.
+(Importable as `claude_audit` via the top-level compat shim, which is also
+the CLI entry point: `python3 claude_audit.py sessions|anomalies|…`.)
+
+The mirror is ~20 short-lived hook processes plus detached tailers/watchers
+coordinating through /tmp marker files, sidecars, and sentinels — and almost every
+failure is swallowed (`except Exception: pass`, `2>/dev/null`), so when a tab
+sticks blue or a block never closes, the evidence evaporates with the processes.
+This module records everything durable enough to chase a bug after the fact:
+
+  sessions        one row per Claude session (the anchor everything joins to)
+  hook_events     every hook invocation: full stdin payload + the handler's decision
+  tab_transitions the tab-colour state machine (replaces the old CLAUDE_TAB_DEBUG logs)
+  slots           every marker-file claim/release (the mechanism behind stuck colours)
+  streams         lifecycle of every detached tailer/streamer/watcher
+  ops             every paint op appended to the mirror log (full pane reconstruction)
+  errors          every swallowed exception, with traceback + context
+  spawns          every detached process launch
+  state_files     writes/removals of coordination files (.done sentinels, .fg-live, …)
+
+ON by default; set CLAUDE_AUDIT=0 to turn it off (every call becomes a no-op).
+The DB lives OUTSIDE /tmp (session artifacts there are deleted at SessionEnd) in
+$CLAUDE_AUDIT_DIR or ~/.claude/kitty-audit/audit.db — one global DB, all sessions,
+WAL mode so the many concurrent short-lived writers never block each other. Audit
+failures NEVER propagate to callers: a failed write degrades to an append-only
+spool (spool.jsonl) that is re-ingested on the next successful open, so auditing
+can neither lose evidence nor break a hook.
+
+CLI (what the audit-debug skill drives):
+  claude_audit.py sessions [N]          recent sessions
+  claude_audit.py timeline <sid>        merged chronological event timeline
+  claude_audit.py errors <sid>          swallowed exceptions for a session
+  claude_audit.py anomalies <sid>       canned queries for known bug signatures
+  claude_audit.py sql "<query>"         free-form read-only SQL
+  claude_audit.py prune [days]          drop sessions older than N days (default 30)
+  claude_audit.py session-start|session-end|hook <handler>|transition …
+                                        write entry points for the shell scripts
+"""
 import json, os, re, sys, time, traceback
 
 from core import paths as P    # the one owner of the mirror-log path format
@@ -1015,11 +1016,21 @@ COMMANDS = {
 WRITE_COMMANDS = frozenset(name for name, (_, write) in COMMANDS.items() if write)
 
 
+def _usage():
+    # Derived from COMMANDS so the list can never go stale; the docstring above
+    # carries the prose + per-command arg synopsis.
+    reads = sorted(n for n, (_, w) in COMMANDS.items() if not w)
+    writes = sorted(n for n, (_, w) in COMMANDS.items() if w)
+    return ((__doc__ or "").rstrip()
+            + "\n\nquery commands:  " + " ".join(reads)
+            + "\nwrite commands:  " + " ".join(writes))
+
+
 def main(argv):
     cmd = argv[1] if len(argv) > 1 else ""
     entry = COMMANDS.get(cmd)
     if entry is None:
-        print(__doc__ or "see module docstring for usage")
+        print(_usage())
         return
     entry[0](argv)
 

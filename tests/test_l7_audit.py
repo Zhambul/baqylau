@@ -143,11 +143,18 @@ def cli(env, *args):
 
 
 def test_unknown_command_prints_usage(test_env):
-    """An unrecognized (or missing) command must no-op with usage, exit 0."""
+    """An unrecognized (or missing) command must print REAL usage (the module
+    docstring + the COMMANDS-derived command list, so it can't go stale) and
+    exit 0. The old `__doc__ or …` fallback was dead: the header was a comment
+    block, so users only ever saw 'see module docstring for usage'."""
+    import claude_audit as A
     for args in (("definitely-not-a-command",), ()):
         p = cli(test_env, *args)
         assert p.returncode == 0, p.stderr
-        assert "usage" in p.stdout or "docstring" in p.stdout
+        assert "audit trail" in p.stdout          # docstring prose made it out
+        for name in A.COMMANDS:                   # every command is listed
+            assert name in p.stdout, name
+        assert "see module docstring" not in p.stdout
 
 
 def test_swallow_set_derived_from_command_table():
