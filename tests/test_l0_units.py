@@ -683,3 +683,41 @@ def test_locks_acquire_holder_release(tmp_path):
     assert LK.lock_acquire(db, "k3", pid=dead) == "claim"
     LK.lock_release(db, "k3", pid=me)
     assert LK.lock_holder(db, "k3") == dead
+
+
+def test_monitor_sig_extraction():
+    """monitor_sig (plugins/claude_code/stream.py) is the ONE owner of the
+    signature-token extraction shared by both monitor launch sites
+    (monitor_fmt.py and substream.spawn_tailer) — pin the longest-5+-char-token
+    behavior on representative monitor commands so the wire contract with
+    find_proc can't drift."""
+    from plugins.claude_code.stream import monitor_sig
+    assert monitor_sig("tail -f /var/log/build-output.log") == "/var/log/build-output.log"
+    assert monitor_sig("kubectl logs -f pod/web-7d9f --namespace=prod") == "--namespace=prod"
+    assert monitor_sig("python3 watch.py --url=http://host:8080/api") == "--url=http://host:8080/api"
+    assert monitor_sig("ls -l") == ""            # no token reaches 5 chars
+    assert monitor_sig("") == ""
+    assert monitor_sig(None) == ""
+
+
+def test_find_proc_matches_ps_line_with_sig(monkeypatch):
+    """find_proc greps `ps` argv output for the sig monitor_sig extracted — a
+    live end-to-end check that the extraction really matches a process whose
+    argv contains the command (unique token, so no full-cmd disambiguation
+    needed; CLAUDE_MONITOR_CMD unset exercises the token-only path)."""
+    import os
+    import subprocess
+    from plugins.claude_code import stream as ST
+    monkeypatch.delenv("CLAUDE_MONITOR_CMD", raising=False)
+    # two statements so sh can't exec-optimize itself away (an exec'd sleep's
+    # argv would no longer carry the sig; same trick as the l2 monitor flow)
+    cmd = f": monitor-sig-unit-{os.getpid()}; sleep 30"
+    sig = ST.monitor_sig(cmd)
+    assert sig == f"monitor-sig-unit-{os.getpid()}"
+    proc = subprocess.Popen(["/bin/sh", "-c", cmd],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        assert ST.find_proc(sig) == proc.pid
+    finally:
+        proc.kill()
+        proc.wait()

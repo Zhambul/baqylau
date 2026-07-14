@@ -41,6 +41,25 @@ def test_tabstatus_imports_clean():
     _import_fresh("plugins.claude_code.tabstatus")
 
 
+def test_subagent_fmt_imports_clean():
+    """subagent_fmt must not read argv at import — dispatch.py imports it for
+    every hook event; PHASE defaults to "start" and is set by entry() (argv)
+    or run_phase() (the in-process dispatcher path)."""
+    _import_fresh("plugins.claude_code.subagent_fmt")
+
+
+def test_subagent_fmt_run_phase_sets_phase(monkeypatch):
+    """The in-process dispatcher path (run_phase) must override the module
+    default — no argv involved."""
+    if REPO not in sys.path:
+        sys.path.insert(0, REPO)
+    from plugins.claude_code import subagent_fmt as SF
+    monkeypatch.setattr(SF, "main", lambda: None)   # phase set is the unit under test
+    monkeypatch.setattr(SF, "PHASE", SF.PHASE)      # restore the default at teardown
+    SF.run_phase("push")
+    assert SF.PHASE == "push"
+
+
 def test_substream_imports_clean():
     """substream must not parse argv or read meta.json at import — the run
     identity is bound by _init(), called only from entry()."""

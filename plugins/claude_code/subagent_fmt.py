@@ -23,7 +23,11 @@ from plugins.claude_code import model as M
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-PHASE = sys.argv[1] if len(sys.argv) > 1 else "start"
+# PHASE is the raw phase this invocation runs — set by entry() (argv[1], the
+# standalone-shim contract) or run_phase() (the in-process dispatcher path).
+# argv is deliberately NOT read at import: dispatch.py imports this module for
+# every hook event, whose argv belongs to claude-hook.py, not this shim.
+PHASE = "start"
 LOG   = ""   # set in main() from the payload's session_id (per-session log)
 
 
@@ -290,4 +294,8 @@ def run_phase(phase):
 
 
 def entry():
+    # The standalone-shim argv contract: claude-subagent-fmt.py <phase>.
+    # Parsed HERE (not at import) so importing this module reads no argv.
+    global PHASE
+    PHASE = sys.argv[1] if len(sys.argv) > 1 else "start"
     H.run(main, phase=PHASE)

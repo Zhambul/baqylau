@@ -32,6 +32,7 @@ from core import tail as T
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import hookkit as HK
 from plugins.claude_code import model as M
+from plugins.claude_code import stream as ST
 from plugins.claude_code import substream_render as SR
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -231,10 +232,9 @@ def spawn_tailer(kind, taskid, cmd="", group=None):
     if not (taskid and os.path.exists(streamer)):
         return
     slot, marker = claude_slots.claim(kind, LOG)
-    sig = ""
-    if kind == "monitor":
-        toks = re.findall(r"[\w./:@=+-]{5,}", cmd or "")
-        sig = max(toks, key=len) if toks else ""
+    # monitor_sig is the ONE owner of the signature extraction (the wire
+    # contract with claude-stream.py's find_proc).
+    sig = ST.monitor_sig(cmd) if kind == "monitor" else ""
     outer = ",".join(str(x) for x in SUB_RGB)
     env = HK.stream_env(cmd=cmd, group=group)
     try:

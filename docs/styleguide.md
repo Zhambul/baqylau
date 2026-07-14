@@ -63,6 +63,7 @@ backed by grep-style regression tests that will fail the build):
 | Usage dedup + Σ-row arithmetic | `accounting.usage_fold` + `ops.split_tokens` |
 | settings.json env-block layering | `model.settings_env` (`nearest_only=` preserves split.py's walk) |
 | File-op payload shapes, `FILE_LABEL`/`FILE_RGB` | `plugins/claude_code/tools.py` |
+| Monitor signature-token extraction (the `find_proc` wire contract) | `plugins/claude_code/stream.monitor_sig` |
 | Click-to-view stash-and-link | `file_fmt.stash_view` (over the shared `view_ops`) |
 
 Adding a new shared fact? Give it one owner in the most-core module whose

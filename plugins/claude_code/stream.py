@@ -348,6 +348,19 @@ def has_writer(path):
 alive = S.pid_alive                             # EPERM (foreign-owned) counts as alive
 
 
+def monitor_sig(cmd):
+    """Extract the monitor signature token from a command — the WIRE CONTRACT
+    between the monitor launch sites (monitor_fmt.py's PostToolUse handler and
+    substream.py's nested spawn_tailer) and find_proc below, which greps this
+    token in `ps` argv output to identify the monitor's persistent command
+    process. The extraction (longest run of 5+ command-ish chars) must be
+    identical at launch and match time, so both launchers call this ONE helper
+    — the two hand-copied versions could drift and silently break monitor
+    completion detection."""
+    toks = re.findall(r"[\w./:@=+-]{5,}", cmd or "")
+    return max(toks, key=len) if toks else ""
+
+
 def find_proc(sig):
     # Find the command process whose args contain `sig` (the monitor's command
     # runs as `zsh -c … eval '<command>'`, so the signature is in its argv). This

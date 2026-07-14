@@ -7,11 +7,12 @@
 # monitor's event stream into the same log. Monitor's PostToolUse fires at start
 # (the tool returns immediately while streaming continues), with the stream's
 # taskId in tool_response — same shape as a background Bash launch.
-import os, re
+import os
 
 from core import ops as O
 from core import slots as claude_slots
 from plugins.claude_code import hookkit as H
+from plugins.claude_code import stream as ST
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -34,8 +35,8 @@ def main():
     taskid = tr.get("taskId") if isinstance(tr, dict) else None
     # A distinctive token from the monitor command, used by claude-stream.py to
     # find the monitor's (persistent) command process and watch it for completion.
-    toks = re.findall(r"[\w./:@=+-]{5,}", ti.get("command") or "")
-    sig = max(toks, key=len) if toks else ""
+    # monitor_sig is the ONE owner of this extraction (wire contract w/ find_proc).
+    sig = ST.monitor_sig(ti.get("command"))
     desc = " ".join((ti.get("description") or "").split())
     # If a subagent launched this monitor, note which one in the header (the stream
     # still uses the monitor palette + tailer — monitors-within-subagents are rare).
