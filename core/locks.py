@@ -3,7 +3,7 @@
 # Deliberately separate from core/state.py, whose charter is the per-SESSION
 # state DB — these locks just reuse its connection/transaction machinery (the
 # `claims` table is part of the shared schema) and its pid_alive probe.
-# (Named lock_*, not claim — that name collided with claude_slots.claim, a
+# (Named lock_*, not claim — that name collided with core.slots.claim, a
 # different mechanism. Was O_EXCL pid files: codex mirror-claims + watch lock.)
 
 import os

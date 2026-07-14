@@ -11,6 +11,7 @@ real session, and unset they leave shipped behavior bit-identical:
 | Env var | Default | Effect |
 |---|---|---|
 | `CLAUDE_MIRROR_TMPDIR` | `/tmp` | Relocates everything `core/paths.py` derives: `claude-mirror-<key>.log*` state DBs/sidecars/parks **and** the global `claude-kitty-tab.db` — per-test isolation |
+| `CLAUDE_TASKS_GLOB_ROOT` | `/private/tmp/claude-*` | Root of the glob `claude-stream.py`/`claude-cmd-fmt.py` use to find Claude Code's `tasks/<id>.output` files (`plugins/claude_code/stream.py glob_task_output`). The default mirrors Claude Code's OWN on-disk layout (external, empirically macOS) — not a path this repo mints, so it lives in `stream.py`, not `core/paths.py`. The suite points it into the per-test sandbox so the `task_dir` fixture never creates dirs on shared host `/tmp` |
 | `CLAUDE_TAIL_POLL_S` / `CLAUDE_TAIL_BACKSTOP_S` | `0.4` / 6 h | `tail.py` poll cadence / absolute tailer cap |
 | `CLAUDE_TAIL_WAIT_POLL_S` | `0.2` | `tail.py wait_for` source-appearance poll (deliberately faster than `POLL_S` — runs only until the file lands) |
 | `CLAUDE_STREAM_GRACE_S` | 2 s (fg/bg) · 8 s (monitor) | `claude-stream.py` idle-grace before writer-gone is definitive |

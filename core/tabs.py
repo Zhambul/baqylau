@@ -5,7 +5,7 @@
 # pid locks) are core: any host-tool plugin drives them and any terminal
 # frontend renders them. The DISPATCH logic that maps one tool's signals onto
 # these states lives with that tool's plugin (plugins/claude_code/tabstatus.py
-# for Claude Code hooks); claude_state.tab_state() is the one sanctioned
+# for Claude Code hooks); core.state.tab_state() is the one sanctioned
 # cross-module READER of the DB this module owns.
 import os
 import sqlite3

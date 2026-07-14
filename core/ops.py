@@ -152,7 +152,7 @@ def new_group(log):
 
 
 def emit(log, *ops):
-    """Append paint ops to the session's `ops` table (claude_state, keyed by the
+    """Append paint ops to the session's `ops` table (core.state, keyed by the
     mirror-log path). One transaction so a block of ops lands contiguously relative
     to other producers inserting concurrently — the atomicity the old single
     O_APPEND write() to the JSONL log provided."""
@@ -170,7 +170,7 @@ def emit(log, *ops):
 # The scoreboard is a running "so far" summary, aggregated across the SEPARATE, short-
 # lived hook processes that produce the mirror (one per Bash call, one per file op, one
 # per subagent). They share no memory, so the counters live in the per-session state
-# DB keyed to the mirror-log path (claude_state — parked at SessionEnd, restored on
+# DB keyed to the mirror-log path (core.state — parked at SessionEnd, restored on
 # resume). Each producer bumps its deltas atomically; claude-scorebar.py (a small
 # dedicated window under the mirror, opened by claude-split.py) renders the
 # scoreboard live off the DB's change counter.
@@ -180,7 +180,7 @@ SCORE_RGB = (120, 132, 158)   # muted slate-blue — reads as a divider, not an 
 # --- shared status colours (RGB) -------------------------------------------------
 # One table for the hues that must agree across producers (several used to be
 # duplicated per-file with "must match" comments). Palette families for streams
-# stay in claude_slots; these are the fixed semantic colours.
+# stay in core.slots; these are the fixed semantic colours.
 SLATE  = (170, 185, 210)   # foreground OK (neutral, distinct from the vivid palettes)
 ORANGE = (209, 154, 102)   # background header / interrupted
 RED    = (224, 108, 117)   # failure / removals
@@ -213,7 +213,7 @@ def fmt_usd(c):
 
 
 def bump(log, tool=None, file=None, meta=None, **deltas):
-    """Fold scoreboard deltas into the per-session state DB (claude_state) — was a
+    """Fold scoreboard deltas into the per-session state DB (core.state) — was a
     flock'd read-modify-write of a JSON sidecar, now atomic SQL increments, so
     concurrent hook processes can't tear or clobber each other. Adds each numeric
     delta to its counter, increments tools[tool], and stamps 'start' (epoch secs) on

@@ -58,7 +58,7 @@ def post_file(s, tool="Edit", path=None, patch=None, failure=False, agent_id=Non
     tr = {"file": {"filePath": path}}
     ti = {"file_path": path}
     if tool in ("Edit", "MultiEdit"):
-        # diff counts come from the INPUT's old/new strings (claude_ops.diff_counts)
+        # diff counts come from the INPUT's old/new strings (plugins/claude_code/tools.diff_counts)
         ti.update(old_string=old_string, new_string=new_string)
     elif tool == "Write":
         ti["content"] = new_string

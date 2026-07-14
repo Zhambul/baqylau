@@ -41,7 +41,7 @@ from plugins.claude_code import tools as CT
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-# Verbs + colours are the shared claude_ops table (claude-substream.py renders a
+# Verbs + colours are the shared core.ops table (claude-substream.py renders a
 # subagent's file ops with the SAME verbs/colours).
 LABEL = CT.FILE_LABEL
 

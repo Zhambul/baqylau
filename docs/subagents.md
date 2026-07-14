@@ -118,7 +118,7 @@ for the counters these streams feed).
     Sonnet 5 · Sonnet 4.6 · Fable 5, `xhigh` on Opus 4.7). A **teammate's** def is found
     via its `meta.json` `customAgentType` (its short type — `container` — doesn't match
     the def's `name:`/filename `task-container`). The def + settings are looked up across
-    **every ancestor `.claude/` dir** (`claude_ops.claude_dirs`, `$CLAUDE_PROJECT_DIR`
+    **every ancestor `.claude/` dir** (`plugins/claude_code/model.py claude_dirs`, `$CLAUDE_PROJECT_DIR`
     honoured, else walk up from cwd, nearest-first, ending at `~/.claude`) — **not** just
     `cwd/.claude`: a teammate/subagent often runs in a subdirectory (a task's
     `.zhambyl/tasks/<t>/db`) or a git worktree, where `cwd/.claude` is absent or a stub

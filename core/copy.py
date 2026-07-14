@@ -9,7 +9,7 @@
 # kitty resolves a plain left-click on such a link through
 # ~/.config/kitty/open-actions.conf, whose `protocol claude-copy` rule launches
 # this handler (detached, --type=background) with the URL. <key> is the mirror-log
-# key (claude_paths.sid_from_log); <gid> is the block's copy-group id — the Bash
+# key (core.paths.sid_from_log); <gid> is the block's copy-group id — the Bash
 # tool_use_id, or the backgroundTaskId for a background job — stamped as "g" on
 # the block's ops by the producers (claude-cmd-pre.py / claude-cmd-fmt.py /
 # claude-stream.py).

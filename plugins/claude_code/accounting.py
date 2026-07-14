@@ -174,7 +174,7 @@ def bump_transcript(log, transcript):
     growing snapshot — the last line has the final count). So usage is counted once
     per message.id, from its last line (usage_fold, carried across calls in the
     state's 'txlast' record). The read-modify-write of the cursor runs inside ONE
-    BEGIN IMMEDIATE transaction, owned by claude_state.transcript_fold — this
+    BEGIN IMMEDIATE transaction, owned by core.state.transcript_fold — this
     function only parses and prices. Best-effort: any failure rolls the
     transaction back and leaves the state unchanged."""
     if not log or not transcript:

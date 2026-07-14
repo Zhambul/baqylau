@@ -7,7 +7,7 @@
 # the block's header chip with it, then passes the slot index to claude-stream.py,
 # which uses it for the gutter + finish chip — so a job's header, gutter, and
 # finish all share ONE colour, and parallel jobs differ. Slots are rows in the
-# per-session state DB's `live` table (claude_state — were O_EXCL marker files
+# per-session state DB's `live` table (core.state — were O_EXCL marker files
 # under "<mirror-log>.slots/"), liveness-checked by pid and released when the
 # streamer exits; >5 concurrent of a kind reuse colours.
 #
@@ -321,7 +321,7 @@ def pid_del(log, ident):
 # subagents; for several SAME-TYPE subagents launched in one message the only risk
 # is two descriptions being swapped (cosmetic) if SubagentStart order reverses the
 # launch order — agent_type + colour still identify each correctly.
-# The queue lives in the per-session state DB (claude_state.queue — was an flock'd
+# The queue lives in the per-session state DB (core.state.queue — was an flock'd
 # desc.queue file); the signatures are kept here so callers don't change.
 def desc_push(log, text):
     St.desc_push(log, text)

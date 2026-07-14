@@ -152,7 +152,7 @@ def sid_from_focus():
 
 
 def log_for(sid):
-    """Canonical per-session log path — claude_ops.log_path, so it is byte-for-byte
+    """Canonical per-session log path — hookkit.log_path, so it is byte-for-byte
     the same path the producers write to (sid primary, cwd slug fallback)."""
     try:
         return HK.log_path({"session_id": sid, "cwd": os.getcwd()})
@@ -418,7 +418,7 @@ def cmd_close():                             # SessionEnd (payload on stdin)
         close_mirror(sid)
     audit_pane(sid, "close", 1, "session end")
     log = log_for(sid)
-    # Park (don't delete) the per-session state DB (claude_state: the ops table —
+    # Park (don't delete) the per-session state DB (core.state: the ops table —
     # the mirror's entire visible history — plus scoreboard counters, message
     # tracker, agent records, hand-offs) as *.keep: --resume/--continue keeps the
     # session_id, so the next SessionStart moves it back and the mirror replays

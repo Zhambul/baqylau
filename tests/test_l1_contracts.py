@@ -33,7 +33,7 @@ ALL_HANDLERS = [
     ("claude-tab-status.py", ("clear",)),
 ]
 
-# The handlers built on claude_hook.read_payload — these must leave an audit
+# The handlers built on hookkit.read_payload — these must leave an audit
 # errors row ("payload parse") when stdin is not JSON.
 HOOKLIB_HANDLERS = [h for h in ALL_HANDLERS
                     if h[0] not in ("claude-tab-status.py", "claude-split.py")]
@@ -278,7 +278,7 @@ def test_monitor_fmt_renders_and_spawns(run_hook, test_env, session):
 
 
 def test_monitor_fmt_renders_subagent_monitors_too(run_hook, test_env, session):
-    """Deliberate exception to the agent_id guard (see claude_hook.py note)."""
+    """Deliberate exception to the agent_id guard (see plugins/claude_code/hookkit.py note)."""
     s = session.make()
     run_hook("claude-monitor-fmt.py", P.post_monitor(s, agent_id="agent-x"))
     assert "monitor" in s.ops_text()

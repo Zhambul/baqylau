@@ -22,7 +22,7 @@ A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub
 # PostToolUse, but nothing fires when a teammate drains its inbox), so we can't bump a
 # sidecar event-style. Instead the tracker is STATEFUL POLLING: the one scorebar per
 # session already scans inboxes each tick, so it diffs the current inbox snapshot
-# against the persisted state (claude_state's messages table) keyed by msg_id and folds transitions into
+# against the persisted state (core.state's messages table) keyed by msg_id and folds transitions into
 # CUMULATIVE counters — which therefore survive a teammate draining its inbox (the
 # whole point; a plain snapshot goes blank the instant a message is consumed).
 #
@@ -101,7 +101,7 @@ def _scan_inbox(d):
 
 def update_messages(log):
     """Stateful team-message tracker. Scans inboxes, diffs against the persisted
-    state (claude_state's messages table + cumulative counters — was a .msgs.json
+    state (core.state's messages table + cumulative counters — was a .msgs.json
     sidecar) keyed by msg_id, updates the counters, and returns (parts, events):
       parts  — [(kind, text)] census for the ✉ row: msgs / unread / read; always leads
                with a msgs count (0 included) so the row is never blank, even for a

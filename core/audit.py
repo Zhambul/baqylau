@@ -338,7 +338,7 @@ def _event_many(table, sql, packed, spool_rows):
 
 
 def ops(log, op_list, producer=None):
-    """Mirror a batch of paint ops into the DB (called from claude_ops.emit — one
+    """Mirror a batch of paint ops into the DB (called from core.ops.emit — one
     chokepoint covers every producer). One transaction per batch."""
     if not enabled() or not op_list:
         return

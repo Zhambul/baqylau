@@ -12,9 +12,9 @@
 #      exactly the untestable hole this module exists to close.
 #   2. KittyFrontend adds NO public API beyond the interface. Its only public
 #      extras are the documented constructor attrs `listen`/`kitten` (the
-#      socket + client binary), and nothing outside frontends/ (plus the
-#      claude_kitty compat shim) may reference them — a caller reaching for a
-#      kitty-only attr would break every other frontend silently.
+#      socket + client binary), and nothing outside frontends/ may reference
+#      them — a caller reaching for a kitty-only attr would break every
+#      other frontend silently.
 #   3. frontends.get() honours $CLAUDE_FRONTEND ("none" → the stub, "kitty" →
 #      KittyFrontend, unknown → the stub, unset → kitty).
 import inspect
@@ -97,8 +97,8 @@ def test_kitty_adds_no_public_methods():
 
 
 def test_no_caller_outside_frontends_uses_kitty_internals():
-    """Grep-style: no repo module outside frontends/ (and the documented
-    claude_kitty compat shim, and tests) imports KittyFrontend/frontends.kitty
+    """Grep-style: no repo module outside frontends/ (and tests)
+    imports KittyFrontend/frontends.kitty
     or touches a frontend's `.listen`/`.kitten` attrs — the tabstatus
     FE.listen leak was fixed once; keep it fixed."""
     pat = re.compile(r"KittyFrontend|frontends\.kitty"
@@ -109,7 +109,7 @@ def test_no_caller_outside_frontends_uses_kitty_internals():
                    if d not in (".git", "__pycache__", "frontends", "tests",
                                 ".claude")]
         for f in files:
-            if not f.endswith(".py") or f == "claude_kitty.py":
+            if not f.endswith(".py"):
                 continue
             path = os.path.join(root, f)
             with open(path, encoding="utf-8", errors="replace") as fh:
@@ -139,9 +139,10 @@ def test_get_honours_claude_frontend(monkeypatch):
 
 
 def test_module_window_for_session_delegates_to_class(monkeypatch):
-    """The module-level window_for_session (kept only for the claude_kitty
-    compat shim) must be the SAME scan as Frontend.window_for_session — one
-    implementation, identical answers on the same tree."""
+    """The module-level window_for_session (kept only for the now-deleted
+    claude_kitty compat shim — see frontends/kitty.py) must be the SAME
+    scan as Frontend.window_for_session — one implementation, identical
+    answers on the same tree."""
     from frontends import kitty as fk
     tree = [{"tabs": [{"windows": [
         {"id": 3, "user_vars": {"claude_mirror": "sid-1"}},

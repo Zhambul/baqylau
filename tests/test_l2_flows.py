@@ -7,7 +7,6 @@
 # regression net for the cancel-recovery / hand-off / park-restore machinery.
 import json
 import os
-import shutil
 import signal
 import subprocess
 import time
@@ -45,23 +44,16 @@ def writer(reaper):
     return _start
 
 
-needs_private_tmp = pytest.mark.skipif(
-    not os.path.isdir("/private/tmp"),
-    reason="claude-stream.py find_file globs /private/tmp/claude-*/ — the "
-           "empirical macOS location of Claude Code's tasks/<id>.output; on "
-           "Linux there is no /private (a known product gap: bg-task/monitor "
-           "output discovery is macOS-only today)")
-
-
 @pytest.fixture
-def task_dir():
-    """A tasks/ dir matching claude-stream.py's /private/tmp/claude-* glob —
-    where Claude Code drops tasks/<id>.output for bg jobs and monitors."""
-    root = "/private/tmp/claude-e2e-%s" % uuid.uuid4().hex[:8]
-    d = os.path.join(root, "t", "tasks")
+def task_dir(test_env):
+    """A tasks/ dir matching claude-stream.py's task-output glob — where Claude
+    Code drops tasks/<id>.output for bg jobs and monitors. Built inside the
+    per-test sandbox via CLAUDE_TASKS_GLOB_ROOT (docs/testing.md); the shipped
+    default is the real macOS /private/tmp/claude-* location."""
+    d = os.path.join(test_env["CLAUDE_TASKS_GLOB_ROOT"],
+                     "e2e-%s" % uuid.uuid4().hex[:8], "tasks")
     os.makedirs(d)
-    yield d
-    shutil.rmtree(root, ignore_errors=True)
+    return d
 
 
 def fg_live_record(s):
@@ -381,7 +373,6 @@ def test_f4a_background_command_lifecycle(run_hook, test_env, session,
     oracle.assert_clean(test_env, s.sid)
 
 
-@needs_private_tmp
 def test_f4b_ctrl_b_conversion(run_hook, test_env, session, task_dir, writer):
     """Ctrl+B mid-command: fg tailer bows out silently (converted-ctrl-b),
     a bg tailer takes over from Claude Code's own tasks/<id>.output file."""
@@ -527,7 +518,6 @@ def mon_proc_latched(env, sid):
     return any(a == "proc-found" for _, a, _ in oracle.state_files(env, sid))
 
 
-@needs_private_tmp
 def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     """Monitor: header + tailer on tasks/<id>.output, completion detected by
     the monitored PROCESS exiting (find_proc on CLAUDE_MONITOR_CMD)."""
@@ -560,7 +550,6 @@ def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     oracle.assert_clean(test_env, s.sid)
 
 
-@needs_private_tmp
 def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
                                                 task_dir, reaper):
     """Claude Code creates tasks/<id>.output LAZILY on the monitor's first
@@ -602,7 +591,6 @@ def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
     oracle.assert_clean(test_env, s.sid)
 
 
-@needs_private_tmp
 def test_f7c_monitor_dies_before_any_output(run_hook, test_env, session,
                                             task_dir, reaper):
     """Monitor process exits without ever writing output: the block closes
@@ -629,7 +617,6 @@ def test_f7c_monitor_dies_before_any_output(run_hook, test_env, session,
     oracle.assert_clean(test_env, s.sid)
 
 
-@needs_private_tmp
 def test_f7d_monitor_process_never_found(run_hook, test_env, session, task_dir):
     """No output file AND no identifiable monitor process (nothing to key
     liveness on): fall back to the bounded give-up rather than wedge the slot

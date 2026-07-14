@@ -70,7 +70,7 @@
     e2e tests drive them directly, and nothing changed for them.
 
   All seven `*-fmt.py`/`-pre.py` handlers (incl. `claude-stop-fmt.py`) share
-  **`hookkit.py`** (historical name `hookkit.py`) — the harness owning the
+  **`hookkit.py`** (historical name `claude_hook.py`) — the harness owning the
   identical per-hook skeleton (stdin payload parse + mirror-log derivation, audited
   ignore-decisions, detached streamer spawn with the load-bearing
   `start_new_session=True`, and the top-level audit-then-swallow). The `agent_id`

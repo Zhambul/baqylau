@@ -18,7 +18,7 @@
 #                       that never touched the companion. JSONFILE is "-"; completion
 #                       is a `task_complete` event with no follow-up turn.
 #
-# The colour is passed in as "r,g,b" (the watcher round-robins claude_slots.CODEX_
+# The colour is passed in as "r,g,b" (the watcher round-robins core.slots.CODEX_
 # PALETTE) — this stream keeps no slot marker, so it never affects the tab colour.
 # A codex run is attributed to the SESSION / cwd, not the launching agent_id, so it
 # reads as its own top-level stream (rule-bracketed) in the codex palette.

@@ -30,8 +30,8 @@
 # discarding scrolled lines instead of pushing them to scrollback. This window never
 # scrolls (it repaints two rows in place), so the scoreboard is simply always there.
 #
-# Data comes from the per-session state DB (<log>.state.db — claude_state) that
-# every producer bumps atomically (claude_ops.bump); we re-read it when its change
+# Data comes from the per-session state DB (<log>.state.db — core.state) that
+# every producer bumps atomically (core.ops.bump); we re-read it when its change
 # counter moves and repaint once a second regardless so the ⏱ duration ticks. The ⏱
 # counts ACTIVE time: it pauses while the tab is green (awaiting-response — your
 # turn) and resumes otherwise — see the pause-accounting block below. Reads are
@@ -148,7 +148,7 @@ def _claude_window():
 
 def _tab_green(win):
     """True when the session's tab currently shows awaiting-response (green).
-    Read through claude_state.tab_state — the tab DB's schema is owned by
+    Read through core.state.tab_state — the tab DB's schema is owned by
     claude-tab-status.py, not hardcoded here."""
     return St.tab_state(win) == "awaiting-response"
 

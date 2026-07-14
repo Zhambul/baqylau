@@ -141,7 +141,7 @@ def main():
         # record (its tailer pid still alive) apart from an abandoned one the same way
         # claude_slots does for slots: a dead pid means it's stale, so clear it and
         # proceed as if there were none. (The record lives in the per-session state
-        # DB — claude_state handoffs, key "fg-live" — was a .fg-live JSON file.)
+        # DB — core.state handoffs, key "fg-live" — was a .fg-live JSON file.)
         pid = held.get("pid") if isinstance(held, dict) else None
         stale = not (pid and S.pid_alive(pid))      # no pid recorded -> can't confirm, assume stale
         if not stale:
@@ -152,7 +152,7 @@ def main():
                      "dead tailer pid — record abandoned")
 
     # If the command already sends its own stdout to a file, tail THAT instead of
-    # tee-ing into a second file (shared tokenizer — see claude_ops.parse_redirect).
+    # tee-ing into a second file (shared tokenizer — see plugins/claude_code/tools.parse_redirect).
     # The ".done" sentinel gets its own session-keyed /tmp path, NEVER derived from
     # the command's redirect target — deriving it from `src` used to drop stray
     # `<target>.done` files (even literal `$VAR.done`) into the project directory

@@ -6,7 +6,7 @@
 # Monitor streams both write their output to a …/tasks/<id>.output file, but no
 # hook fires while they run — so this process (spawned detached by the launch
 # hook) tails that file and appends each new line to the mirror log (as structured
-# paint ops via claude_ops), then a closing rule + finish chip when the job ends.
+# paint ops via core.ops), then a closing rule + finish chip when the job ends.
 # NB Claude Code creates that file LAZILY, on the first output byte — a quiet
 # persistent monitor has none for minutes/hours, so a monitor waits for it keyed
 # on its command process's liveness (monitor_wait_file), not a bounded deadline.
@@ -232,12 +232,19 @@ PROCFIND_S = float(os.environ.get("CLAUDE_STREAM_PROCFIND_S") or 20)
 # legitimately long background job must keep streaming past any cap.
 FG_BACKSTOP_S = 7200
 
+# Where Claude Code drops its tasks/<id>.output files for bg jobs and monitors.
+# This is Claude Code's OWN on-disk layout (empirical, macOS), not ours — so it
+# does NOT belong in core/paths.py, which owns only the paths this repo mints.
+# Env-overridable so the test suite can point the glob at a per-test sandbox
+# instead of shared host /tmp (docs/testing.md); unset, behavior is identical.
+TASKS_GLOB_ROOT = os.environ.get("CLAUDE_TASKS_GLOB_ROOT") or "/private/tmp/claude-*"
+
 
 def glob_task_output(taskid=None):
     tid = taskid or TASKID
-    pats = [f"/private/tmp/claude-*/*/*/tasks/{tid}.output",
-            f"/private/tmp/claude-*/*/tasks/{tid}.output",
-            f"/private/tmp/claude-*/*/*/*/tasks/{tid}.output"]
+    pats = [f"{TASKS_GLOB_ROOT}/*/*/tasks/{tid}.output",
+            f"{TASKS_GLOB_ROOT}/*/tasks/{tid}.output",
+            f"{TASKS_GLOB_ROOT}/*/*/*/tasks/{tid}.output"]
     for p in pats:
         m = glob.glob(p)
         if m:

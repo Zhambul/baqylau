@@ -15,7 +15,7 @@
 # semantics those dances approximated. The "<sid>.log" path is a historical KEY —
 # no log file exists: the mirror's paint-op stream itself lives in this DB's `ops`
 # table (claude-mirror.py polls it by rowid), and the palette/liveness slot
-# markers live in its `live` table (claude_slots.py; claude-tab-status.py queries
+# markers live in its `live` table (core/slots.py; claude-tab-status.py queries
 # it via the sqlite3 CLI). The DB FILE's existence is the session-alive signal —
 # parked as *.keep at SessionEnd (claude-split.py), restored on resume, so the
 # scorebar/codex-watcher exit when the path vanishes and a resumed session
@@ -170,7 +170,7 @@ def immediate(conn):
     """BEGIN IMMEDIATE / commit; on any exception roll back (best-effort) and
     re-raise — each call site keeps its own swallow-with-default. Replaces the
     try/commit/except/rollback/except/pass block that was copy-pasted at every
-    read-modify-write site in this module, claude_slots, and claude_ops.
+    read-modify-write site in this module, core.slots, and core.ops.
 
     The commit is INSIDE the protected region: with it outside, a commit-time
     failure (I/O error, SQLITE_FULL) left the cached connection stuck in an open
@@ -321,7 +321,7 @@ def incr(log, tool=None, file=None, **deltas):
 
 def stats(log):
     """The scoreboard state as a dict in the OLD .stats.json shape — counters,
-    tools{}, files (unique count), txlast{} — so claude_ops.scoreboard_parts and the
+    tools{}, files (unique count), txlast{} — so core.ops.scoreboard_parts and the
     audit's "resulting totals" snapshots work unchanged. {} on failure.
 
     Counter values come back typed generically (integral REAL -> int, else float;
@@ -358,7 +358,7 @@ def stats(log):
 
 def transcript_fold(log, fold):
     """One atomic read-modify-write of the main session's transcript cursor — the
-    transaction claude_ops.bump_transcript used to hand-roll against this module's
+    transaction plugins/claude_code/accounting.bump_transcript used to hand-roll against this module's
     private tables. `fold(pos, prev)` is called INSIDE the transaction with the
     current byte cursor ('txpos') and dedup carry record ('txlast', a dict or
     None); it returns None to leave everything unchanged, or

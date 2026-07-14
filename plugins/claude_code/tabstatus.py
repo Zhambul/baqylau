@@ -162,7 +162,7 @@ def bg_command_running():
     session_id is ever unavailable."""
     log = MLOG
     if not log and P.cwd_slug():
-        log = P.mirror_log()                # cwd-slug fallback, same as claude_ops
+        log = P.mirror_log()                # cwd-slug fallback, same as hookkit.log_path
     if not log:
         return False
     for pid in sq(P.state_db(log), "SELECT pid FROM live WHERE pid IS NOT NULL "
@@ -174,7 +174,7 @@ def bg_command_running():
 
 def log_for_sid(sid):
     """Mirror-log KEY for a given session key (an ALREADY-sanitised session_id or
-    cwd slug — appended verbatim), matching claude_ops.log_path so it points at
+    cwd slug — appended verbatim), matching hookkit.log_path so it points at
     exactly the state DB the tailers write."""
     return P.PREFIX + sid + ".log"
 

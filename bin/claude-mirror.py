@@ -3,8 +3,8 @@
 #
 # The command-mirror RENDERER. Runs inside the kitty split pane (launched by
 # claude-split.py) and replaces the old `tail -F`. It polls the session's `ops`
-# table (the per-session state DB, claude_state — argv[1] is the mirror-log KEY the
-# DB path derives from; written by claude_ops producers), renders each op at the
+# table (the per-session state DB, core.state — argv[1] is the mirror-log KEY the
+# DB path derives from; written by core.ops producers), renders each op at the
 # pane's CURRENT width, and — the whole point of this design — RE-RENDERS EVERYTHING
 # on resize so the content reflows. Resizing the pane changes its pty size, which
 # delivers SIGWINCH here; we recompute the width, clear the screen, and repaint

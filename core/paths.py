@@ -3,12 +3,12 @@
 #
 # Everything in this project is keyed by the mirror-log path
 # /tmp/claude-mirror-<key>.log (the "<key>.log" is a KEY, not a file — see
-# claude_state.py). The key is the sanitized session_id, or a cwd slug when a
+# core/state.py). The key is the sanitized session_id, or a cwd slug when a
 # payload lacks one. Before this module, the format was encoded independently in
 # claude_ops.log_path, claude_audit.sid_from_log, claude-split.proj_slug and
 # claude-tab-status's fallback — four regexes that MUST agree (the audit's
 # mirror_log column joins on it; the fallback state-DB paths must line up).
-# Stdlib-only leaf module: importable by claude_audit/claude_state without cycles.
+# Stdlib-only leaf module: importable by core.audit/core.state without cycles.
 import os
 import re
 
@@ -34,7 +34,7 @@ _TMP = os.environ.get("CLAUDE_MIRROR_TMPDIR") or "/tmp"
 PREFIX = _TMP + "/claude-mirror-"
 
 # The GLOBAL window-keyed tab DB (colour state + watcher pid locks). Owned by
-# claude-tab-status.py (schema + writes); claude_state.tab_state is the one
+# claude-tab-status.py (schema + writes); core.state.tab_state is the one
 # sanctioned reader. Window-keyed, not session-keyed — a kitty window outlives
 # any one session. In /tmp so it self-clears on reboot.
 TAB_DB = _TMP + "/claude-kitty-tab.db"
@@ -88,5 +88,5 @@ def log_for_key(key):
 
 
 def state_db(log):
-    """The per-session runtime state DB for a mirror log (see claude_state.py)."""
+    """The per-session runtime state DB for a mirror log (see core/state.py)."""
     return log + ".state.db"

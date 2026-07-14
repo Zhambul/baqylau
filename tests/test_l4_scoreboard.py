@@ -1,7 +1,7 @@
 # L4 — scoreboard / accounting goldens.
 #
 # Drives claude-stop-fmt.py (the sanctioned Stop-time fold — a real subprocess,
-# real transcript bytes) and pins the numbers claude_ops computes: the
+# real transcript bytes) and pins the numbers plugins/claude_code/accounting computes: the
 # per-message.id dedup (the famous ~2.2x inflation bug), the PRICES table,
 # the cache read/write premiums, the byte cursor, and reconcile_spend's
 # crashed-streamer recovery.

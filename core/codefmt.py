@@ -111,7 +111,7 @@ def _mixed_tokens(code):
 # command into multi-line form: reformat embedded Python with `ast`, and break dense
 # bash at its top-level control operators. This is width-independent (real newlines,
 # which the renderer then wraps further if needed), so it belongs at op creation — see
-# claude_ops.code(). Best-effort throughout: any doubt → return the text unchanged.
+# core.ops.code(). Best-effort throughout: any doubt → return the text unchanged.
 
 
 def _fmt_python(text):

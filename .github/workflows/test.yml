@@ -21,7 +21,7 @@ jobs:
       # The repo's shebangs are baked to the owner's pyenv interpreter
       # (retarget-python.py's speed hack); --revert restores the portable
       # `#!/usr/bin/env python3` so the few shebang-exec'd paths
-      # (claude_hook.notify_tab) resolve on the runner.
+      # (hookkit.notify_tab) resolve on the runner.
       - run: python3 bin/retarget-python.py --revert
       - run: python3 -m pip install -r requirements-dev.txt
       # pytest-timeout must scale in LOCKSTEP with conftest's WAIT_SCALE (6x on

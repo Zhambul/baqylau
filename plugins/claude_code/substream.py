@@ -92,7 +92,7 @@ def _init(argv):
     SUB_FG = (os.environ.get("CLAUDE_MIRROR_LIVE_FG_SUB", "1") != "0"
               and os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") != "0")
 
-    # Model / effort / context-window resolution lives in claude_model.py; this block
+    # Model / effort / context-window resolution lives in model.py (this package); this block
     # just binds it to THIS agent's identity (its meta.json, definition file, and the
     # parent session's transcript).
     META = M.agent_meta(TPATH, AGENT)
@@ -107,7 +107,7 @@ def _init(argv):
 
     # Where the subagent's transcript lives. The completion signal and the resume
     # checkpoint live on this agent's record in the per-session state DB
-    # (claude_state.agents — was sub.done.* / sub.pos.* files in the .slots dir):
+    # (core.state agents table — was sub.done.* / sub.pos.* files in the .slots dir):
     #   done      — set to 1 by the SubagentStop hook; this streamer polls it.
     #   pos       — byte offset of the last fully consumed transcript line. An idle
     #               TEAMMATE fires SubagentStop (this streamer finalises and dies) and a

@@ -57,7 +57,7 @@ def reconcile_spend(log, tpath, agent_id, ajsonl=""):
     scoreboard at SubagentStop. Cost is now folded live by the OTLP receiver
     (plugins/otel/, query_source=subagent) — including the tail a crashed streamer
     would have dropped — so this NO LONGER bumps counters. It still folds the agent's
-    FULL transcript to its TRUE total (claude_ops.fold_usage, deduped by message.id),
+    FULL transcript to its TRUE total (plugins/claude_code/accounting.fold_usage, deduped by message.id),
     records the residual over the BILLED_KEY baseline as a `reconcile` audit row (an
     OTEL-vs-transcript reconciliation trail), and advances the baseline/render cursor
     so a later resume renders past what we folded. `ajsonl` is the payload's

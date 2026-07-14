@@ -81,6 +81,11 @@ def test_env(tmp_path):
         "CLAUDE_CODEX_WATCH_POLL_S": "0.05",
         "CLAUDE_CODEX_RO_GRACE_S": "0.5",
         "CLAUDE_STREAM_PARENT_SCAN_S": "0.3",
+        # Hermeticity: claude-stream.py/claude-cmd-fmt.py glob this root for
+        # Claude Code's tasks/<id>.output files (default: the real product
+        # location on shared host /private/tmp) — point it into the sandbox
+        # so the task_dir fixture never touches host /tmp.
+        "CLAUDE_TASKS_GLOB_ROOT": str(dirs["tmp"] / "tasks"),
         # OTLP receiver: a short idle-exit so a spawned receiver never lingers.
         # The port is picked per-test in test_l5_otel (this default is only a
         # backstop). The receiver only spawns when CLAUDE_CODE_ENABLE_TELEMETRY=1,
@@ -103,7 +108,7 @@ _KITTEN_SRC = r'''#!/usr/bin/env python3
 # for programmed rc / canned `@ ls` output, and keeps a minimal WINDOW MODEL so
 # launch/close-window/set-user-vars round-trip through `ls` (what the product
 # uses to find its panes). Stands in for the real binary via the product's own
-# $KITTY_KITTEN_BIN override (claude_kitty.find_kitten).
+# $KITTY_KITTEN_BIN override (frontends/kitty.py find_kitten).
 import json, os, sys
 root = os.path.dirname(os.path.abspath(__file__))
 argv = sys.argv[1:]
@@ -127,7 +132,7 @@ if wins is None:
     wins = [{"id": int(cfg.get("base_win", 1)), "user_vars": {},
              "is_focused": True}]
 
-# argv shape (claude_kitty.kitten_run/kitten_ls): @ --to <listen> <subcmd> ...
+# argv shape (frontends/kitty.py kitten_run/kitten_ls): @ --to <listen> <subcmd> ...
 sub, toks = "", list(argv)
 if toks and toks[0] == "@":
     toks = toks[1:]
@@ -276,7 +281,7 @@ def fake_kitten(test_env, tmp_path):
 class Session:
     """A synthetic Claude Code session: unique sid, its own cwd + transcript,
     and helpers for the paths/DBs every assertion needs. The path arithmetic
-    here deliberately re-states the claude_paths format — pinning it."""
+    here deliberately re-states the core/paths.py format — pinning it."""
 
     def __init__(self, env, root, sid=None):
         self.env = env
@@ -290,7 +295,7 @@ class Session:
         self.log = env["CLAUDE_MIRROR_TMPDIR"] + "/claude-mirror-" + self.sid + ".log"
         self.state_db = self.log + ".state.db"
 
-    # ---- transcript writers (shapes per claude_ops.bump_transcript) ----
+    # ---- transcript writers (shapes per plugins/claude_code/accounting.py bump_transcript) ----
     def add_line(self, obj):
         with open(self.transcript, "a") as f:
             f.write(json.dumps(obj) + "\n")
@@ -351,7 +356,7 @@ class Session:
             conn.close()
 
     def ops(self):
-        """All mirror paint ops, as parsed JSON rows (claude_state ops table)."""
+        """All mirror paint ops, as parsed JSON rows (core/state.py ops table)."""
         return [json.loads(r[0]) for r in
                 self.query_state("SELECT op FROM ops ORDER BY id")]
 
@@ -416,7 +421,7 @@ def run_hook(test_env):
 
 @pytest.fixture
 def seed(test_env, reaper):
-    """Seed runtime state exactly like the product would — via claude_state in
+    """Seed runtime state exactly like the product would — via core.state in
     a subprocess running under the test env (so CLAUDE_MIRROR_TMPDIR applies)."""
     class _Seed:
         def py(self, code, timeout=15):
@@ -432,7 +437,7 @@ def seed(test_env, reaper):
             launcher→streamer hand-off) so a `live` schema change breaks here
             loudly at the API, not silently in an interpolated SQL string. Stays
             a subprocess so CLAUDE_MIRROR_TMPDIR (and the rest of the test env)
-            governs where claude_paths puts the state DB; the row's OWNER pid is
+            governs where core.paths puts the state DB; the row's OWNER pid is
             the caller-supplied one (live_pid()/dead_pid()), not the seeder's."""
             self.py(
                 "from core import slots\n"

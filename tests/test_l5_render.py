@@ -1,7 +1,7 @@
 # L5 — renderer goldens.
 #
 # The whole producer/renderer contract in one pin: a canonical op sequence
-# (built through claude_ops, highlighting included) rendered by the real
+# (built through core.ops, highlighting included) rendered by the real
 # claude-mirror.py at two FIXED_WIDTHs. Width 100 vs 60 is the reflow pin —
 # the same width-INDEPENDENT ops must wrap/gutter differently at paint time.
 # Regenerate with UPDATE_GOLDEN=1 after an intentional renderer change.

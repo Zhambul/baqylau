@@ -33,7 +33,7 @@
 # such run in exactly ONE same-repo session's mirror instead of replaying in all.
 #
 # The <slug> is basename(git-root) + sha256(realpath(git-root))[:16] — byte-for-byte
-# what codex's state.mjs computes. Colours round-robin claude_slots.CODEX_PALETTE and
+# what codex's state.mjs computes. Colours round-robin core.slots.CODEX_PALETTE and
 # are passed to the streamer as "r,g,b". The watcher exits on its own when the
 # session's mirror log is removed at SessionEnd; a pid lock guards against a duplicate.
 import glob, hashlib, json, os, re, subprocess, sys, tempfile, time
@@ -121,7 +121,7 @@ def claims_db():
     # concurrent sessions coordinate: a codex run that can't be attributed to one
     # session by id is claimed by the FIRST watcher to see it, and the others skip it —
     # otherwise every same-repo session's mirror would replay the same run. The claims
-    # live in a shared SQLite table (claude_state.claim — was a dir of O_EXCL pid
+    # live in a shared SQLite table (core.state.claim — was a dir of O_EXCL pid
     # files); stale holders (dead pid) are taken over the same way.
     d = os.path.join(tempfile.gettempdir(), "codex-companion", SLUGDIR)
     try:

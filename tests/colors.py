@@ -16,7 +16,7 @@ INACTIVE_FG = "#c0c4cc"
 
 
 def tab_color_argv(listen, win, state):
-    """The exact `kitten` argv claude_kitty.set_tab_color must produce."""
+    """The exact `kitten` argv frontends/kitty.py set_tab_color must produce."""
     bg, fg, ibg = COLOR_TABLE[state]
     return ["@", "--to", listen, "set-tab-color",
             "--match", "window_id:%s" % win,
