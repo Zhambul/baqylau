@@ -75,8 +75,29 @@ from core.tabs import (  # noqa: E402  (the core tab vocabulary + tab DB — see
 # (no KITTY_LISTEN_ON), same as split.py's keybinding launches — the kitty
 # frontend walks the ppid chain / lone-socket fallback only when the env var is
 # absent, so the normal interactive path pays nothing.
-FE = frontends.get(resolve=True)
-WIN = FE.current_window()
+#
+# FE/WIN are resolved LAZILY (memoized on first use) rather than at import:
+# dispatch.py imports this module for every hook event, including ones that
+# never touch the tab, and eagerly resolving the frontend + current window
+# there was per-invocation work paid by everything sharing the process.
+# None = not-yet-resolved; a resolved-but-absent window is "" (tests may also
+# pre-seed FE/WIN directly, which the accessors honour).
+FE = None
+WIN = None
+
+
+def _fe():
+    global FE
+    if FE is None:
+        FE = frontends.get(resolve=True)
+    return FE
+
+
+def _win():
+    global WIN
+    if WIN is None:
+        WIN = _fe().current_window() or ""
+    return WIN
 
 # Test-suite-only cadence override (README § Testing): one value that replaces
 # every watcher/grace sleep below (bg-watch 2s, interrupt-watch 0.5s, bg-recheck
@@ -91,8 +112,11 @@ WATCH_POLL_S = float(os.environ.get("CLAUDE_WATCH_POLL_S") or 0)
 # in-process can't block or break a hook (the bash predecessor had to spawn a
 # detached python for this; in-process is both faster and still safe).
 
-STATE = sys.argv[1] if len(sys.argv) > 1 else ""
-DISPATCH = STATE          # the raw arg, before the dispatch blocks rewrite STATE
+# DISPATCH is the raw dispatch mode/state this invocation runs — set by entry()
+# (argv[1], the standalone-shim contract) or dispatch() (the in-process path).
+# argv is deliberately NOT read at import: dispatch.py imports this module for
+# every hook event, whose argv belongs to claude-hook.py, not this shim.
+DISPATCH = ""             # the raw arg, before the dispatch blocks rewrite it
 AUDIT_SID = ""            # set by dispatches that learn the session_id
 REASON = ""               # why the final state was chosen (set by dispatch blocks)
 MLOG = ""                 # this session's mirror-log KEY (state DB derives from it)
@@ -100,7 +124,7 @@ MLOG = ""                 # this session's mirror-log KEY (state DB derives from
 
 def audit_tx(prev, new, applied, reason):
     try:
-        A.transition(AUDIT_SID, WIN, DISPATCH, prev, new, applied, reason)
+        A.transition(AUDIT_SID, _win(), DISPATCH, prev, new, applied, reason)
     except Exception:
         pass
 
@@ -170,15 +194,16 @@ def _spawn_watcher(kind, args):
     re-parented, so the ppid walk can't find the socket, and WIN may have been
     fallback-resolved (_ensure_win) rather than inherited from the env."""
     try:
-        FE.export_env()   # stamp terminal-reach env (kitty: KITTY_LISTEN_ON);
+        fe, win = _fe(), _win()
+        fe.export_env()   # stamp terminal-reach env (kitty: KITTY_LISTEN_ON);
         env = dict(os.environ)  # no-op on the inert stub — no frontend attrs read
-        if WIN:
-            env["KITTY_WINDOW_ID"] = str(WIN)
+        if win:
+            env["KITTY_WINDOW_ID"] = str(win)
         p = subprocess.Popen([sys.executable or "python3", SELF] + args,
                              stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                              stderr=subprocess.DEVNULL, start_new_session=True,
                              env=env)
-        watcher_set(kind, WIN, p.pid)
+        watcher_set(kind, win, p.pid)
     except Exception:
         pass
 
@@ -187,9 +212,9 @@ def ensure_bgwatch():
     """Spawn ONE detached bg-watch for this window (if not already running) that
     polls MLOG's state DB until no background job/agent remains, then flips the
     stale awaiting-bg blue back to green. Shared by stop and agent-start."""
-    if not WIN:
+    if not _win():
         return
-    wpid = watcher_pid("bgwatch", WIN)
+    wpid = watcher_pid("bgwatch", _win())
     if not (wpid and _alive(wpid)):
         _spawn_watcher("bgwatch", ["bg-watch", MLOG])   # pass this session's log key
 
@@ -215,9 +240,9 @@ def ensure_interruptwatch(transcript):
     useful false-positived on every long thinking stretch (tab lied "done" mid-turn).
     The stale magenta after a mid-thinking cancel is rarer and self-corrects at the
     next prompt, which the cancelling user is typically about to type anyway."""
-    if not (WIN and transcript):
+    if not (_win() and transcript):
         return
-    wpid = watcher_pid("interruptwatch", WIN)
+    wpid = watcher_pid("interruptwatch", _win())
     if not (wpid and _alive(wpid)):
         _spawn_watcher("interruptwatch", ["interrupt-watch", transcript])
 
@@ -252,7 +277,7 @@ def _ensure_win():
     resolve() — the dispatch handlers themselves consult WIN (d_notify's
     mid-turn check, d_stop's bg path, the watchers' tab_get loops)."""
     global WIN
-    if WIN or not FE.usable():
+    if _win() or not _fe().usable():
         return
     sid = ""
     if DISPATCH in ("bg-recheck", "bg-watch", "agent-start"):
@@ -267,7 +292,7 @@ def _ensure_win():
         except Exception:
             sid = ""
     if sid:
-        WIN = FE.window_for_session(sid) or ""
+        WIN = _fe().window_for_session(sid) or ""
 
 
 # --- long-lived watcher dispatches (each runs detached, spawned above) -----------
@@ -282,7 +307,7 @@ def run_bgwatch(mlog):
     global MLOG, AUDIT_SID, REASON
     MLOG = mlog
     AUDIT_SID = sid_from_key(MLOG)
-    if not WIN:
+    if not _win():
         return None
     watch_id = A.stream_start(AUDIT_SID, "bg-watch", src_path=MLOG)
     reason = "killed-or-crashed"
@@ -290,7 +315,7 @@ def run_bgwatch(mlog):
         misses = 0
         for _ in range(1800):
             time.sleep(WATCH_POLL_S or 2)
-            if tab_get(WIN) != AWAITING_BG:
+            if tab_get(_win()) != AWAITING_BG:
                 reason = "state-moved-on"
                 audit_tx("", "", 0, "bg-watch: state moved on, watcher exiting")
                 return None
@@ -311,7 +336,7 @@ def run_bgwatch(mlog):
         REASON = "bg-watch: no live markers across ~8s of checks"
         return AWAITING_RESPONSE
     finally:
-        watcher_del("bgwatch", WIN)
+        watcher_del("bgwatch", _win())
         try:
             A.stream_end(watch_id, reason)
         except Exception:
@@ -329,7 +354,7 @@ def run_interruptwatch(transcript):
     user]" line Claude Code appends the instant a cancel happens, for the whole
     turn (exits on green/idle/cleared), and flips green within one ~0.5s tick."""
     global AUDIT_SID, REASON
-    if not (WIN and transcript):
+    if not (_win() and transcript):
         return None
     # The transcript filename IS the session id (~/.claude/projects/<slug>/<sid>.jsonl).
     AUDIT_SID = os.path.basename(transcript)[:-len(".jsonl")] \
@@ -353,7 +378,7 @@ def run_interruptwatch(transcript):
             # (the fg tailer only covers a cancel while its command runs):
             # stuck magenta until the next interaction. Only green/idle/cleared
             # mean the turn is over and there is nothing left to recover.
-            if tab_get(WIN) in (AWAITING_RESPONSE, IDLE, ""):
+            if tab_get(_win()) in (AWAITING_RESPONSE, IDLE, ""):
                 reason = "turn-over"        # green/idle/cleared -> nothing to do
                 return None
             try:
@@ -373,7 +398,7 @@ def run_interruptwatch(transcript):
         else:
             reason = "no-interrupt-within-30m"
             return None
-        cur = tab_get(WIN)
+        cur = tab_get(_win())
         if cur in (AWAITING_RESPONSE, IDLE, ""):
             # re-check: the turn already resolved on its own right now
             reason = "interrupt-seen-but-turn-already-over"
@@ -393,7 +418,7 @@ def run_interruptwatch(transcript):
         REASON = "interrupt-watch: [Request interrupted by user] in transcript"
         return AWAITING_RESPONSE
     finally:
-        watcher_del("interruptwatch", WIN)
+        watcher_del("interruptwatch", _win())
         try:
             A.stream_end(watch_id, reason)
         except Exception:
@@ -466,7 +491,7 @@ def d_agent_start():
     global MLOG, AUDIT_SID, REASON
     MLOG = sys.argv[2] if len(sys.argv) > 2 else ""
     AUDIT_SID = sid_from_key(MLOG)
-    cur = tab_get(WIN) if WIN else ""
+    cur = tab_get(_win()) if _win() else ""
     if cur == AWAITING_COMMAND:
         audit_tx(cur, "", 0,
                  "agent-start: red (awaiting-command) wins — user's answer still needed")
@@ -502,7 +527,7 @@ def d_bg_recheck():
     MLOG = sys.argv[2] if len(sys.argv) > 2 else ""   # this session's log key
     kind = sys.argv[3] if len(sys.argv) > 3 else ""   # fg / bg / monitor / sub
     AUDIT_SID = sid_from_key(MLOG)
-    cur = tab_get(WIN) if WIN else ""
+    cur = tab_get(_win()) if _win() else ""
     # Clearing EXECUTING exists SOLELY for the cancelled-foreground-command
     # case, where the caller is that command's own fg tailer noticing its writer
     # died. Any OTHER tailer (a finishing teammate/subagent/bg job) calling in
@@ -526,7 +551,7 @@ def d_bg_recheck():
     if bg_command_running():
         audit_tx(cur, "", 0, f"bg-recheck({kind}): a new job started in the grace gap")
         return None
-    cur2 = tab_get(WIN) if WIN else ""
+    cur2 = tab_get(_win()) if _win() else ""
     if cur2 not in (AWAITING_BG, EXECUTING) or \
        (cur2 == EXECUTING and kind != "fg"):
         audit_tx(cur2, "", 0, f"bg-recheck({kind}): state moved on in the gap")
@@ -579,7 +604,7 @@ def d_notify():
     # teammate finishing used to slip through the bg check below and paint
     # green over a still-working lead; when the lead is truly waiting, Stop has
     # already set the state, so skipping here loses nothing.
-    cur = tab_get(WIN) if WIN else ""
+    cur = tab_get(_win()) if _win() else ""
     if cur in (THINKING, WORKING, EXECUTING):
         audit_tx(cur, "", 0, f"notify: main mid-turn, teammate ping ignored: {msg}")
         return None
@@ -687,16 +712,16 @@ def resolve(state):
 # core/tabs.py — the paint contract shared by every frontend.
 
 
-def main(state=None):
+def main(state):
     _ensure_win()                            # daemon-origin env has no KITTY_WINDOW_ID
-    state = resolve(STATE if state is None else state)
+    state = resolve(state)
     if state is None:
         return
 
     # Must be inside a controllable terminal (kitty: window id + remote-control
     # socket), else no-op silently. (Audited so the audit trail shows hooks
     # fired even where the tab can't be set.)
-    if not WIN or not FE.available():
+    if not _win() or not _fe().available():
         audit_tx("", state, 0, "skipped: not inside kitty / no remote-control socket")
         return
 
@@ -708,7 +733,7 @@ def main(state=None):
     # currently shown: if it matches, there's nothing to do — bail before locating
     # the kitten binary or touching the socket. (clear/reset deletes the row, so
     # an empty prev_state means "already cleared".)
-    prev_state = tab_get(WIN)
+    prev_state = tab_get(_win())
     if state in ("clear", "reset", ""):
         if not prev_state:
             return
@@ -716,13 +741,13 @@ def main(state=None):
         audit_tx(prev_state, state, 0, "skipped: colour already shown")
         return
 
-    if not FE.usable():
+    if not _fe().usable():
         return
 
     if state in COLORS:
-        rc = FE.set_tab_color(WIN, *COLORS[state])
+        rc = _fe().set_tab_color(_win(), *COLORS[state])
     elif state in ("clear", "reset", ""):
-        rc = FE.clear_tab_color(WIN)
+        rc = _fe().clear_tab_color(_win())
     else:
         return
 
@@ -737,9 +762,9 @@ def main(state=None):
     if rc == 0:
         audit_tx(prev_state, state, 1, REASON)
         if state in COLORS:
-            tab_set(WIN, state)
+            tab_set(_win(), state)
         else:
-            tab_clear(WIN)
+            tab_clear(_win())
     else:
         audit_tx(prev_state, state, 0,
                  (f"{REASON} — " if REASON else "")
@@ -752,7 +777,7 @@ def dispatch(state, payload):
     the dispatcher-injected payload, instead of reading argv[1] + stdin. The
     detached watcher sub-dispatches (bg-watch / interrupt-watch / bg-recheck /
     agent-start) still re-invoke the shim by filename with argv, so they keep the
-    module-global STATE path."""
+    entry() argv path."""
     global _INJECTED, DISPATCH
     _INJECTED, DISPATCH = payload, state   # DISPATCH labels the tab_transitions row
     try:
@@ -762,8 +787,12 @@ def dispatch(state, payload):
 
 
 def entry():
+    # The standalone-shim argv contract: claude-tab-status.py <state> [...].
+    # Parsed HERE (not at import) so importing this module reads no argv.
+    global DISPATCH
+    DISPATCH = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
-        main()
+        main(DISPATCH)
     except Exception:
         try:
             A.error(AUDIT_SID or MLOG, "main")   # audit the swallow, then stay silent

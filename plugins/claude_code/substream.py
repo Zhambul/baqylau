@@ -36,35 +36,106 @@ from plugins.claude_code import substream_render as SR
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
-AGENT   = sys.argv[1]
-TPATH   = sys.argv[2]
-LOG     = sys.argv[3]
-SLOT    = int(sys.argv[4])
-ATYPE   = sys.argv[5] if len(sys.argv) > 5 else "agent"
-# Which palette to colour this block with. An in-process agent-team TEAMMATE rides
-# the very same machinery as an ordinary subagent (same "sub" slot + sub.* markers,
-# same transcript layout) — only the colour family differs, so it's "team" instead
-# of "sub". Everything else (slot index, completion sentinel, footer) is identical.
-PALETTE = sys.argv[6] if len(sys.argv) > 6 else "sub"
-# The task description (from the PreToolUse payload), passed through by the start hook.
-DESC    = sys.argv[7] if len(sys.argv) > 7 else ""
-# What each per-operation line labels this agent with. "general-purpose" is a
-# meaningless catch-all in the mirror, so for it we substitute the task description
-# (e.g. "Get Bali weather") when one is known; every other type keeps its own name,
-# and the header ("▶ general-purpose · <desc>") is untouched — this is the body only.
-LABEL = DESC if (ATYPE == "general-purpose" and DESC) else ATYPE
+# --- run identity (argv/env contract) --------------------------------------------
+# All of this used to be parsed at module top level. It now lives in _init(),
+# called from entry(), so IMPORTING this module (tests, tooling) reads no argv,
+# opens no files, and resolves nothing — only running it does. The placeholders
+# below just name the module globals every function reads at call time.
+AGENT = TPATH = LOG = ATYPE = PALETTE = DESC = LABEL = ""
+SLOT = 0
+SUB_RGB = (0, 0, 0)
+SUB_FG = True
+META = {}
+DEF_TYPE = AGENT_DEF_FILE = AGENT_DEF_MODEL = SETTINGS_MODEL = SESSION_MODEL = None
+EFFORT_CFG = None
+BASE = SUBDIR = JSONL = META_PATH = ""
+STATE_KEY = USAGE_KEY = BILLED_KEY = ""
+REN = None
 
-SUB_RGB = claude_slots.color(PALETTE, SLOT)
 RST  = R.RST
-# Live-stream this subagent's FOREGROUND commands (tee'd by claude-cmd-pre.py's
-# PreToolUse), the same way its background/monitor jobs already stream. On by
-# default; CLAUDE_MIRROR_LIVE_FG_SUB=0 (or the parent CLAUDE_MIRROR_LIVE_FG=0)
-# opts out, matching claude-cmd-pre.py's gate so the two agree on when a marker exists.
-SUB_FG = (os.environ.get("CLAUDE_MIRROR_LIVE_FG_SUB", "1") != "0"
-          and os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") != "0")
 # The repo root, where the sibling ENTRY scripts live (this module is two
 # package levels below it) — nested tailers/the tab dispatcher are entry files.
 HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+def _init(argv):
+    """Bind this run's identity from the shim's argv:
+      claude-substream.py AGENT_ID TRANSCRIPT_PATH MIRROR_LOG SLOT AGENT_TYPE [PALETTE] [DESC]
+    plus everything derived from it (meta.json read, model/effort resolution,
+    slot colour, the Renderer)."""
+    global AGENT, TPATH, LOG, SLOT, ATYPE, PALETTE, DESC, LABEL, SUB_RGB, SUB_FG
+    global META, DEF_TYPE, AGENT_DEF_FILE, AGENT_DEF_MODEL, SETTINGS_MODEL
+    global SESSION_MODEL, EFFORT_CFG, BASE, SUBDIR, JSONL, META_PATH
+    global STATE_KEY, USAGE_KEY, BILLED_KEY, REN
+    AGENT   = argv[1]
+    TPATH   = argv[2]
+    LOG     = argv[3]
+    SLOT    = int(argv[4])
+    ATYPE   = argv[5] if len(argv) > 5 else "agent"
+    # Which palette to colour this block with. An in-process agent-team TEAMMATE rides
+    # the very same machinery as an ordinary subagent (same "sub" slot + sub.* markers,
+    # same transcript layout) — only the colour family differs, so it's "team" instead
+    # of "sub". Everything else (slot index, completion sentinel, footer) is identical.
+    PALETTE = argv[6] if len(argv) > 6 else "sub"
+    # The task description (from the PreToolUse payload), passed through by the start hook.
+    DESC    = argv[7] if len(argv) > 7 else ""
+    # What each per-operation line labels this agent with. "general-purpose" is a
+    # meaningless catch-all in the mirror, so for it we substitute the task description
+    # (e.g. "Get Bali weather") when one is known; every other type keeps its own name,
+    # and the header ("▶ general-purpose · <desc>") is untouched — this is the body only.
+    LABEL = DESC if (ATYPE == "general-purpose" and DESC) else ATYPE
+
+    SUB_RGB = claude_slots.color(PALETTE, SLOT)
+    # Live-stream this subagent's FOREGROUND commands (tee'd by claude-cmd-pre.py's
+    # PreToolUse), the same way its background/monitor jobs already stream. On by
+    # default; CLAUDE_MIRROR_LIVE_FG_SUB=0 (or the parent CLAUDE_MIRROR_LIVE_FG=0)
+    # opts out, matching claude-cmd-pre.py's gate so the two agree on when a marker exists.
+    SUB_FG = (os.environ.get("CLAUDE_MIRROR_LIVE_FG_SUB", "1") != "0"
+              and os.environ.get("CLAUDE_MIRROR_LIVE_FG", "1") != "0")
+
+    # Model / effort / context-window resolution lives in claude_model.py; this block
+    # just binds it to THIS agent's identity (its meta.json, definition file, and the
+    # parent session's transcript).
+    META = M.agent_meta(TPATH, AGENT)
+    # Look up the definition by its real name (customAgentType) — the short agentType a
+    # teammate reports ("container") won't match the def's `name:`/filename ("task-container").
+    DEF_TYPE = META.get("customAgentType") or ATYPE
+    AGENT_DEF_FILE  = M.agent_def_file(DEF_TYPE)
+    AGENT_DEF_MODEL = M.def_field(AGENT_DEF_FILE, "model")
+    SETTINGS_MODEL  = M.settings_field("model")
+    SESSION_MODEL   = M.session_model(TPATH)
+    EFFORT_CFG      = M.effort_config(AGENT_DEF_FILE)
+
+    # Where the subagent's transcript lives. The completion signal and the resume
+    # checkpoint live on this agent's record in the per-session state DB
+    # (claude_state.agents — was sub.done.* / sub.pos.* files in the .slots dir):
+    #   done      — set to 1 by the SubagentStop hook; this streamer polls it.
+    #   pos       — byte offset of the last fully consumed transcript line. An idle
+    #               TEAMMATE fires SubagentStop (this streamer finalises and dies) and a
+    #               later message fires a fresh SubagentStart, which spawns a NEW streamer
+    #               for the SAME transcript — without the checkpoint that streamer would
+    #               re-render the whole history. Deliberately NOT cleared in cleanup():
+    #               it must outlive the streamer to make the resume seamless.
+    BASE = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
+    SUBDIR = os.path.join(BASE, "subagents")
+    JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
+    META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
+    STATE_KEY = "state:agent." + AGENT          # audit label for checkpoint rows
+    USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
+    BILLED_KEY = "billed:" + AGENT              # kv slot: {in,out,cache,create,create_1h} this
+                                                # streamer chain has folded into the
+                                                # scoreboard — the baseline reconcile_spend
+                                                # (claude-subagent-fmt.py) diffs the
+                                                # transcript's true total against, so a
+                                                # crashed streamer's un-bumped tail is
+                                                # recovered exactly once at SubagentStop.
+
+    # The block renderer: transcript records -> mirror paint ops (substream_render.py).
+    # Everything identity-shaped is injected here; the Renderer holds the per-run render
+    # state (pending message, pend ledger, ctx-tag turn tracking, the footer's rollup).
+    REN = SR.Renderer(log=LOG, agent=AGENT, label=LABEL, rgb=SUB_RGB, sub_fg=SUB_FG,
+                      op_tag=op_tag, ctx_tag=ctx_tag, take_subfg=take_subfg,
+                      spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer)
 
 
 # Context-fill thresholds (percent) for the live per-turn % shown on each turn:
@@ -73,19 +144,7 @@ HERE = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 CTX_WARN = M.int_env("CLAUDE_MIRROR_CTX_WARN", 30)
 CTX_CRIT = M.int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
 
-# Model / effort / context-window resolution lives in claude_model.py; this block
-# just binds it to THIS agent's identity (its meta.json, definition file, and the
-# parent session's transcript).
 RESOLVED_MODEL = None      # authoritative model id (with [1m]) read from the parent
-META = M.agent_meta(TPATH, AGENT)
-# Look up the definition by its real name (customAgentType) — the short agentType a
-# teammate reports ("container") won't match the def's `name:`/filename ("task-container").
-DEF_TYPE = META.get("customAgentType") or ATYPE
-AGENT_DEF_FILE  = M.agent_def_file(DEF_TYPE)
-AGENT_DEF_MODEL = M.def_field(AGENT_DEF_FILE, "model")
-SETTINGS_MODEL  = M.settings_field("model")
-SESSION_MODEL   = M.session_model(TPATH)
-EFFORT_CFG      = M.effort_config(AGENT_DEF_FILE)
 
 short_model = M.short_model
 
@@ -108,31 +167,6 @@ def op_tag():
     # "opus-4.8·high" — the model this agent is running plus the resolved effort.
     # Constant per agent; appended to every operation header.
     return "·".join(x for x in (short_model(disp_model()), effort()) if x)
-
-# Where the subagent's transcript lives. The completion signal and the resume
-# checkpoint live on this agent's record in the per-session state DB
-# (claude_state.agents — was sub.done.* / sub.pos.* files in the .slots dir):
-#   done      — set to 1 by the SubagentStop hook; this streamer polls it.
-#   pos       — byte offset of the last fully consumed transcript line. An idle
-#               TEAMMATE fires SubagentStop (this streamer finalises and dies) and a
-#               later message fires a fresh SubagentStart, which spawns a NEW streamer
-#               for the SAME transcript — without the checkpoint that streamer would
-#               re-render the whole history. Deliberately NOT cleared in cleanup():
-#               it must outlive the streamer to make the resume seamless.
-BASE = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
-SUBDIR = os.path.join(BASE, "subagents")
-JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
-META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
-STATE_KEY = "state:agent." + AGENT          # audit label for checkpoint rows
-USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
-BILLED_KEY = "billed:" + AGENT              # kv slot: {in,out,cache,create,create_1h} this
-                                            # streamer chain has folded into the
-                                            # scoreboard — the baseline reconcile_spend
-                                            # (claude-subagent-fmt.py) diffs the
-                                            # transcript's true total against, so a
-                                            # crashed streamer's un-bumped tail is
-                                            # recovered exactly once at SubagentStop.
-
 
 def cancelled_by_user():
     # A manually killed/cancelled subagent fires NO SubagentStop hook — the same
@@ -265,14 +299,6 @@ def spawn_fg_tailer(tid, rec, cmd=""):
         A.error(LOG, "spawn_fg_tailer", {"tid": tid, "agent": AGENT})
         claude_slots.release("fg", LOG, slot, os.getpid())
         return None
-
-
-# The block renderer: transcript records -> mirror paint ops (substream_render.py).
-# Everything identity-shaped is injected here; the Renderer holds the per-run render
-# state (pending message, pend ledger, ctx-tag turn tracking, the footer's rollup).
-REN = SR.Renderer(log=LOG, agent=AGENT, label=LABEL, rgb=SUB_RGB, sub_fg=SUB_FG,
-                  op_tag=op_tag, ctx_tag=ctx_tag, take_subfg=take_subfg,
-                  spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer)
 
 
 def restore_checkpoint():
@@ -494,6 +520,7 @@ def cleanup():
 
 
 def entry():
+    _init(sys.argv)          # argv/env/meta binding happens only at run time
     with T.stream_lifecycle(LOG, "teammate" if PALETTE == "team" else "subagent",
                             agent_id=AGENT, src_path=JSONL,
                             ctx={"agent": AGENT, "type": ATYPE}) as run:
