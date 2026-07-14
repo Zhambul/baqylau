@@ -9,7 +9,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 
 import pytest
 
@@ -57,9 +56,20 @@ def render_at(env, reaper, log, width, sentinel):
             stdout=out, stderr=subprocess.DEVNULL, env=dict(env), cwd=REPO)
     reaper.append(proc)
     try:
-        wait_until(lambda: sentinel.encode() in open(out_path, "rb").read(),
-                   desc="renderer painted the sentinel op")
-        time.sleep(0.3)                       # let the paint flush fully
+        # "Paint complete" is observable: the sentinel (the LAST op seeded) has
+        # been painted AND the captured bytes are stable across two consecutive
+        # polls — no blind sleep, and the golden bytes stay byte-identical.
+        last = [None]
+
+        def settled():
+            with open(out_path, "rb") as f:
+                cur = f.read()
+            done = sentinel.encode() in cur and cur == last[0]
+            last[0] = cur
+            return done
+
+        wait_until(settled, interval=0.2,
+                   desc="renderer output stable after painting the sentinel op")
     finally:
         proc.send_signal(signal.SIGTERM)
         proc.wait(timeout=5)

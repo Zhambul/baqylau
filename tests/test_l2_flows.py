@@ -559,7 +559,9 @@ def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
     run_hook("claude-monitor-fmt.py",
              P.post_monitor(s, description="quiet monitor", command=cmd,
                             task_id=taskid), env=env)
-    time.sleep(1.5)                       # well past FIND_S: must still be waiting
+    # Deliberate blind sleep: this asserts event ABSENCE ("output not found"
+    # never painted), which cannot be polled — well past FIND_S by design.
+    time.sleep(1.5)
     assert "output not found" not in s.ops_text(), \
         "tailer gave up on the lazily-created output file"
     assert s.live("monitor"), "monitor slot released while the monitor runs"
@@ -719,7 +721,8 @@ def test_f9f_async_launch_ack_does_not_end_streamer(run_hook, test_env, session)
             {"type": "text", "text": "Async agent launched successfully. "
              "agentId: " + agent}]}]}})
     # Give the parent scan (test-shortened CLAUDE_STREAM_PARENT_SCAN_S=0.3s
-    # throttle) several chances to (wrongly, if regressed) fire.
+    # throttle) several chances to (wrongly, if regressed) fire. Deliberate
+    # blind sleep: this asserts event ABSENCE, which cannot be polled.
     time.sleep(1.0)
     assert not any("parent-task-resolved" in (r or "")
                    for r in end_reasons(test_env, s.sid)), \
@@ -791,7 +794,14 @@ def test_f9c_interrupted_reply_flips_green(run_hook, test_env, session,
     # one (production's 0.5s first tick never loses this race).
     run_hook(TAB, P.user_prompt(s), argv=("thinking",))
     wait_until(watcher_alive, desc="a live interrupt-watch on the magenta tab")
-    time.sleep(0.3)                    # let it take its size snapshot
+    # The interrupt must land AFTER the watcher's transcript-size snapshot, and
+    # that snapshot immediately follows its A.stream_start registration — so
+    # the observable "snapshot taken" fact is an un-ended interrupt-watch
+    # stream row (not a blind sleep). An earlier watcher that already exited
+    # turn-over leaves an ENDED row, hence the ended_at IS NULL filter.
+    wait_until(lambda: any(k == "interrupt-watch" and ended is None
+                           for k, _, ended, _ in oracle.streams(test_env, s.sid)),
+               desc="interrupt-watch registered its stream (snapshot taken)")
     s.add_interrupted()
     wait_until(lambda: oracle.tab_state(test_env, fake_kitten.window_id)
                == "awaiting-response", desc="interrupt-watch flips green")

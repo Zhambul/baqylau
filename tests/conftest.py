@@ -418,14 +418,19 @@ def seed(test_env, reaper):
             assert p.returncode == 0, "seed code failed:\n%s\n%s" % (code, p.stderr)
             return p.stdout
 
-        def live_row(self, log, kind, pid, key=None, idx=0):
-            """A live slot row — the tab tracker's liveness signal."""
+        def live_row(self, log, kind, pid):
+            """A live slot row — the tab tracker's liveness signal. Seeded via
+            the product's own writer (core.slots.claim + set_owner, exactly the
+            launcher→streamer hand-off) so a `live` schema change breaks here
+            loudly at the API, not silently in an interpolated SQL string. Stays
+            a subprocess so CLAUDE_MIRROR_TMPDIR (and the rest of the test env)
+            governs where claude_paths puts the state DB; the row's OWNER pid is
+            the caller-supplied one (live_pid()/dead_pid()), not the seeder's."""
             self.py(
-                "import claude_state as S\n"
-                "c = S.connect(%r)\n"
-                "c.execute(\"INSERT OR REPLACE INTO live(kind,key,pid,idx,start_ts)\"\n"
-                "          \" VALUES(?,?,?,?,0)\", (%r, %r, %d, %d))\n"
-                "c.commit()" % (log, kind, key or (kind + ".seed"), int(pid), idx))
+                "from core import slots\n"
+                "idx, token = slots.claim(%r, %r)\n"
+                "assert token is not None, 'seed: slot claim failed'\n"
+                "slots.set_owner(token, %d)\n" % (kind, log, int(pid)))
 
         def live_pid(self):
             """A genuinely-alive pid to own a live row (reaped at teardown)."""
