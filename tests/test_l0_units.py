@@ -266,3 +266,45 @@ def test_is_teammate_missing_meta_false(tmp_path):
     # No meta.json ever appears: agent_meta's brief retry exhausts -> {} -> False.
     from plugins.claude_code import subagent_fmt
     assert subagent_fmt.is_teammate(str(tmp_path / "sess.jsonl"), "gone") is False
+
+
+# --- core.state.stats() counter typing + internal-key visibility --------------------
+# The reader used to hardcode WHICH counters coerce to int ("start", "txpos",
+# "commands", ...) — every new counter silently came back float (SQLite REAL).
+# Now typing is generic (integral -> int, else float), FLOAT_COUNTERS pin the
+# always-float ones (cost/paused), and INTERNAL_COUNTERS (v/txpos/block_seq —
+# accounting cursors, not scoreboard state) never leak into the public dict.
+
+def test_stats_generic_counter_typing(tmp_path):
+    from core import state as S
+    log = str(tmp_path / "claude-mirror-t.log")
+    st = S.incr(log, tool="Bash", commands=1, failed=1, added=3, removed=2,
+                tokens=165, tk_in=100, cost=2.0, paused=1.0, otel_seen=1)
+    # integral counters come back int — including ones the old reader never
+    # listed (tokens, tk_in, otel_seen used to arrive as float).
+    for k in ("commands", "failed", "added", "removed", "tokens", "tk_in",
+              "otel_seen", "start"):
+        assert isinstance(st[k], int), k
+    # declared floats stay float even when integral.
+    assert isinstance(st["cost"], float) and st["cost"] == 2.0
+    assert isinstance(st["paused"], float) and st["paused"] == 1.0
+    # a non-integral value on an undeclared counter keeps its float.
+    st = S.incr(log, weird=0.5)
+    assert isinstance(st["weird"], float) and st["weird"] == 0.5
+    assert st["tools"] == {"Bash": 1} and isinstance(st["tools"]["Bash"], int)
+
+
+def test_stats_hides_internal_counters(tmp_path):
+    from core import state as S
+    log = str(tmp_path / "claude-mirror-t2.log")
+    S.incr(log, commands=1)                       # bumps 'v' too
+    assert S.next_group(log) == 1                 # creates 'block_seq'
+    conn = S.connect(log)
+    with S.immediate(conn):
+        S.counter_set(conn, "txpos", 4096)        # transcript byte cursor
+    st = S.stats(log)
+    for k in ("v", "txpos", "block_seq"):
+        assert k not in st, k
+    # ...but they stay readable through counter_get for the accountant.
+    assert int(S.counter_get(conn, "txpos")) == 4096
+    assert int(S.counter_get(conn, "v")) >= 1

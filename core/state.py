@@ -192,6 +192,23 @@ def immediate(conn):
 
 # --- counter primitives (used inside an open transaction) ---------------------------
 
+# Counter typing/visibility, declared HERE where the counters physically live
+# (ops.py imports this module, so the vocabulary can't sit next to bump() without
+# an import cycle). The `counters` table stores every value as REAL
+# (counter_add/counter_set coerce to float), so stats() re-types generically on
+# the way out — int when the stored value is integral, float otherwise — EXCEPT
+# the declared floats below, which stay float even at whole numbers (cost must
+# not flip type at an integral dollar figure). New counters therefore get the
+# right public type automatically; only add here when a counter must STAY float
+# or stay private.
+FLOAT_COUNTERS = frozenset({"cost", "paused"})
+# Internal accounting cursors — real counters (readable via counter_get, and raw
+# in the tests' counters() dump) but NOT part of the public stats() dict: 'v' is
+# the change counter behind version(), 'txpos' the transcript byte cursor owned
+# by transcript_fold, 'block_seq' the ⧉ copy-group sequence behind next_group().
+INTERNAL_COUNTERS = frozenset({"v", "txpos", "block_seq"})
+
+
 def counter_add(conn, key, v=1):
     conn.execute("INSERT INTO counters(key, val) VALUES(?, ?) "
                  "ON CONFLICT(key) DO UPDATE SET val = val + excluded.val",
@@ -305,7 +322,12 @@ def incr(log, tool=None, file=None, **deltas):
 def stats(log):
     """The scoreboard state as a dict in the OLD .stats.json shape — counters,
     tools{}, files (unique count), txlast{} — so claude_ops.scoreboard_parts and the
-    audit's "resulting totals" snapshots work unchanged. {} on failure."""
+    audit's "resulting totals" snapshots work unchanged. {} on failure.
+
+    Counter values come back typed generically (integral REAL -> int, else float;
+    FLOAT_COUNTERS always float) and INTERNAL_COUNTERS ('v', 'txpos', 'block_seq')
+    are excluded — they're accounting cursors, not scoreboard state; internal
+    readers get them via counter_get inside their own transaction."""
     conn = connect(log)
     if conn is None:
         return {}
@@ -314,12 +336,13 @@ def stats(log):
         for k, v in conn.execute("SELECT key, val FROM counters"):
             if k.startswith("tool:"):
                 tools[k[5:]] = int(v)
-            elif k == "v":
+            elif k in INTERNAL_COUNTERS:
                 continue
-            elif k in ("start", "txpos", "commands", "failed", "added", "removed"):
-                st[k] = int(v)
+            elif k in FLOAT_COUNTERS:
+                st[k] = float(v)
             else:
-                st[k] = v
+                fv = float(v)
+                st[k] = int(fv) if fv.is_integer() else fv
         if tools:
             st["tools"] = tools
         n = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
