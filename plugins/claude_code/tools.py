@@ -100,12 +100,135 @@ def parse_redirect(cmd, cwd):
     return target, append
 
 
-# Plain-text readers whose stdout is a markdown file verbatim — the mirror can
-# pretty-render it. Deliberately EXCLUDES bat/glow/mdcat/less/more (they already
-# style their output — re-rendering would double-format) and grep/rg/head-of-a-
-# match (they emit fragments, not a document).
-_MD_READERS = {"cat", "head", "tail"}
+# ---- content-render detection (the RENDER_KINDS registry) --------------------
+#
+# "Does this fg command stream a file's raw contents the mirror can pretty-render?"
+# Every render kind shares one skeleton — reduce to the `_effective` read, tokenise,
+# reject shell plumbing / command substitution, accept a bare `< file.ext` stdin
+# redirect, then an allowlisted reader with a matching file argument — and differs
+# only in its reader set, extension set, and small per-kind quirks. Those live as
+# fields of a RenderKind entry below; `_detect_source` is the one skeleton. Adding
+# a render mode is one new entry in RENDER_KINDS (stream.py iterates it).
+#
+# Readers are the plain-text ones whose stdout is the file verbatim. Deliberately
+# EXCLUDED everywhere: bat/glow/mdcat/less/more (they already style their output —
+# re-rendering would double-format) and jq/yq (pretty-print + colour themselves).
+
 _MD_EXT = (".md", ".markdown", ".mdown", ".mkd")
+_PLUMBING = ("|", ";", "&&", "||", "&", ">", ">>", "&>")
+
+
+def _ext_match(exts):
+    """word-matcher: True when the (quote-stripped, lowered) word ends in `exts`."""
+    return lambda w: w.endswith(exts) or None
+
+
+def _lexer_match(w):
+    """word-matcher for the code kind: the pygments lexer name keyed by the word's
+    extension (core.coderender.LANGS), or None. The truthy VALUE is the detection
+    result — code_source returns the lexer, not a bare True."""
+    from core.coderender import LANGS
+    for ext, lexer in LANGS.items():
+        if w.endswith(ext):
+            return lexer
+    return None
+
+
+class RenderKind:
+    """One row of the RENDER_KINDS registry.
+
+    name            render-kind tag ("md"/"json"/"yaml"/"code") — stream.py's
+                    RENDER_KIND (code suffixes its lexer: "code:python").
+    env             the CLAUDE_MIRROR_* gate stream.py checks (default-on).
+    readers         commands whose stdout is the file verbatim when the file is
+                    ANY argument (cat/head/tail — grep/rg emit fragments, not a
+                    document, so they never appear here).
+    tailarg_readers commands whose FILE is the TRAILING arg only (sed/grep put a
+                    SCRIPT/PATTERN arg first) — so `grep 'foo.py' x.txt` can't
+                    masquerade as python and a recursive `grep -r pat src/` (dir
+                    last, no extension) correctly opts out. Only the code kind
+                    uses this: a sed/grep of a .md/.yml emits fragments too, but
+                    colouring fragments in place is fine, reflowing them as a
+                    document is not.
+    match           word -> truthy detection value (True, or the lexer name) —
+                    called with each candidate word quote-stripped and lowered.
+    streamer        "module:Class" of the core content streamer stream.py
+                    instantiates for this kind, and streamer_takes_value says
+                    whether the detection value (the lexer) is its ctor arg.
+    """
+    def __init__(self, name, env, readers, match, streamer,
+                 tailarg_readers=(), streamer_takes_value=False):
+        self.name, self.env, self.match = name, env, match
+        self.readers, self.tailarg_readers = readers, tailarg_readers
+        self.streamer, self.streamer_takes_value = streamer, streamer_takes_value
+
+    def detect(self, cmd):
+        return _detect_source(cmd, self)
+
+
+# Priority-ordered: stream.py picks the FIRST gated-on kind that detects. Per-kind
+# quirks, preserved from the four original detectors:
+#   md    — cat/head/tail all qualify (a truncated document still reflows fine).
+#   json  — `cat` ONLY: JSON can only be pretty-printed whole (a partial document
+#           is invalid), so head/tail would truncate it into garbage.
+#   yaml  — coloured in place (not reparsed), so head/tail of a .yml is fine too.
+#   code  — coloured in place like YAML; extension picks the lexer (the detection
+#           value); sed/grep stream a file too, via the trailing-arg rule above.
+RENDER_KINDS = (
+    RenderKind("md", "CLAUDE_MIRROR_MD", frozenset({"cat", "head", "tail"}),
+               _ext_match(_MD_EXT), "core.mdrender:MarkdownStreamer"),
+    RenderKind("json", "CLAUDE_MIRROR_JSON", frozenset({"cat"}),
+               _ext_match((".json", ".jsonl", ".ndjson")),
+               "core.jsonrender:JsonStreamer"),
+    RenderKind("yaml", "CLAUDE_MIRROR_YAML", frozenset({"cat", "head", "tail"}),
+               _ext_match((".yml", ".yaml")), "core.yamlrender:YamlStreamer"),
+    RenderKind("code", "CLAUDE_MIRROR_CODE", frozenset({"cat", "head", "tail"}),
+               _lexer_match, "core.coderender:CodeStreamer",
+               tailarg_readers=frozenset({"sed", "grep", "egrep", "fgrep"}),
+               streamer_takes_value=True),
+)
+
+
+def _detect_source(cmd, kind):
+    """The one detection skeleton. If `cmd` is a single simple command whose body
+    streams a matching file's raw contents — an allowlisted reader with a matching
+    file argument, or a bare `< file.ext` stdin redirect — return kind.match's
+    truthy value; else None. Conservative: any pipe, output redirect, chain
+    (; && ||), or command substitution disqualifies, because then the streamed
+    bytes are filtered/derived, not the document itself. Runs on the command's
+    `_effective` read, so a trailing `| head`/`| tail` (truncation) still renders
+    and a multi-statement block keys off its LAST statement's file."""
+    cmd = _effective(cmd)
+    try:
+        toks = shlex.split(cmd, posix=False)
+    except ValueError:
+        return None
+    if not toks:
+        return None
+    # Any shell plumbing means the output is no longer the file verbatim.
+    if any(t in _PLUMBING for t in toks):
+        return None
+    if "$(" in cmd:
+        return None
+    def _match(word):
+        return kind.match(word.strip("'\"").lower())
+    # `< file.ext` (with or without a leading command)
+    if "<" in toks:
+        i = toks.index("<")
+        if i + 1 < len(toks):
+            v = _match(toks[i + 1])
+            if v:
+                return v
+    head = os.path.basename(toks[0].strip("'\""))
+    if head in kind.readers:
+        for w in toks[1:]:
+            v = _match(w)
+            if v:
+                return v
+        return None
+    if head in kind.tailarg_readers and len(toks) > 1:
+        return _match(toks[-1])             # the FILE is the trailing arg
+    return None
 
 
 def is_md(path):
@@ -115,152 +238,30 @@ def is_md(path):
     return (path or "").lower().endswith(_MD_EXT)
 
 
+# Thin per-kind wrappers over the registry (the historical public names).
+_BY_NAME = {k.name: k for k in RENDER_KINDS}
+
+
 def md_source(cmd):
-    """True when `cmd` is a single simple command whose body streams a markdown
-    file's raw contents — an allowlisted reader (cat/head/tail) with a .md/.markdown
-    argument, or a bare `< file.md` stdin redirect. Conservative: any pipe, output
-    redirect, chain (; && ||), or command substitution disqualifies it, because
-    then the streamed bytes are filtered/derived, not the document itself."""
-    cmd = _effective(cmd)
-    try:
-        toks = shlex.split(cmd, posix=False)
-    except ValueError:
-        return False
-    if not toks:
-        return False
-    # Any shell plumbing means the output is no longer the file verbatim.
-    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
-        return False
-    if any(c in cmd for c in "`$(") and "$(" in cmd:
-        return False
-    def _has_md_arg(words):
-        for w in words:
-            w = w.strip("'\"")
-            if w.lower().endswith(_MD_EXT):
-                return True
-        return False
-    # `< file.md` (with or without a leading command)
-    if "<" in toks:
-        i = toks.index("<")
-        if i + 1 < len(toks):
-            tgt = toks[i + 1].strip("'\"")
-            if tgt.lower().endswith(_MD_EXT):
-                return True
-    head = os.path.basename(toks[0].strip("'\""))
-    if head in _MD_READERS and _has_md_arg(toks[1:]):
-        return True
-    return False
-
-
-# JSON can only be pretty-printed whole (a partial document is invalid), so only
-# `cat` (or `< file.json`) qualifies — head/tail would truncate it. jq is excluded
-# (it already pretty-prints + colours). Same plumbing guard as md_source.
-_JSON_READERS = {"cat"}
-_JSON_EXT = (".json", ".jsonl", ".ndjson")
+    """True when `cmd` streams a markdown file's raw contents (see _detect_source)."""
+    return bool(_BY_NAME["md"].detect(cmd))
 
 
 def json_source(cmd):
     """True when `cmd` streams a whole .json file's raw contents — `cat file.json`
-    or a bare `< file.json`. Any pipe/redirect/chain disqualifies it."""
-    cmd = _effective(cmd)
-    try:
-        toks = shlex.split(cmd, posix=False)
-    except ValueError:
-        return False
-    if not toks:
-        return False
-    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
-        return False
-    if "$(" in cmd:
-        return False
-    def _has_json_arg(words):
-        return any(w.strip("'\"").lower().endswith(_JSON_EXT) for w in words)
-    if "<" in toks:
-        i = toks.index("<")
-        if i + 1 < len(toks) and toks[i + 1].strip("'\"").lower().endswith(_JSON_EXT):
-            return True
-    head = os.path.basename(toks[0].strip("'\""))
-    return head in _JSON_READERS and _has_json_arg(toks[1:])
-
-
-# YAML is coloured in place (not reparsed), so head/tail of a .yml is fine too.
-_YAML_READERS = {"cat", "head", "tail"}
-_YAML_EXT = (".yml", ".yaml")
+    or a bare `< file.json` (head/tail would truncate; see _detect_source)."""
+    return bool(_BY_NAME["json"].detect(cmd))
 
 
 def yaml_source(cmd):
-    """True when `cmd` streams a .yml/.yaml file's raw contents — an allowlisted
-    reader (cat/head/tail) with a .yml/.yaml argument, or a bare `< file.yml`."""
-    cmd = _effective(cmd)
-    try:
-        toks = shlex.split(cmd, posix=False)
-    except ValueError:
-        return False
-    if not toks:
-        return False
-    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
-        return False
-    if "$(" in cmd:
-        return False
-    def _has_yaml_arg(words):
-        return any(w.strip("'\"").lower().endswith(_YAML_EXT) for w in words)
-    if "<" in toks:
-        i = toks.index("<")
-        if i + 1 < len(toks) and toks[i + 1].strip("'\"").lower().endswith(_YAML_EXT):
-            return True
-    head = os.path.basename(toks[0].strip("'\""))
-    return head in _YAML_READERS and _has_yaml_arg(toks[1:])
-
-
-# Source files coloured in place (like YAML) — the extension picks the lexer.
-# cat/head/tail take the file among their args; sed/grep put a SCRIPT/PATTERN arg
-# first and the FILE last, so their lexer is read from the trailing arg only — that
-# way a pattern like `grep 'foo.py' x.txt` can't masquerade as python, and a
-# recursive `grep -r pat src/` (dir last, no extension) correctly opts out.
-_CODE_READERS = {"cat", "head", "tail"}
-_CODE_TAILARG_READERS = {"sed", "grep", "egrep", "fgrep"}
+    """True when `cmd` streams a .yml/.yaml file's raw contents (see _detect_source)."""
+    return bool(_BY_NAME["yaml"].detect(cmd))
 
 
 def code_source(cmd):
-    """If `cmd` streams a source file the mirror can syntax-highlight (cat/head/tail
-    of a file whose extension is in coderender.LANGS, sed/grep of one, or a bare
-    `< file.py`), return the pygments LEXER NAME (e.g. 'python'); else None. Runs on
-    the command's `_effective` read, so a trailing `| head`/`| tail` (truncation)
-    still colours and a multi-statement block keys off its LAST statement's file; a
-    transform pipe (`| awk`) or command substitution still disqualifies."""
-    from core.coderender import LANGS
-    cmd = _effective(cmd)
-    try:
-        toks = shlex.split(cmd, posix=False)
-    except ValueError:
-        return None
-    if not toks:
-        return None
-    if any(t in ("|", ";", "&&", "||", "&", ">", ">>", "&>") for t in toks):
-        return None
-    if "$(" in cmd:
-        return None
-
-    def _lexer_for(words):
-        for w in words:
-            w = w.strip("'\"").lower()
-            for ext, lexer in LANGS.items():
-                if w.endswith(ext):
-                    return lexer
-        return None
-
-    if "<" in toks:
-        i = toks.index("<")
-        if i + 1 < len(toks):
-            lx = _lexer_for([toks[i + 1]])
-            if lx:
-                return lx
-    head = os.path.basename(toks[0].strip("'\""))
-    if head in _CODE_READERS:
-        return _lexer_for(toks[1:])
-    if head in _CODE_TAILARG_READERS and len(toks) > 1:
-        return _lexer_for([toks[-1]])       # the FILE is the trailing arg
-    return None
+    """If `cmd` streams a source file the mirror can syntax-highlight, return the
+    pygments LEXER NAME (e.g. 'python'); else None (see _detect_source)."""
+    return _BY_NAME["code"].detect(cmd)
 
 
 def diff_counts(tool_name, inp):

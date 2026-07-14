@@ -684,6 +684,20 @@ b.py`) keys off its **last statement's** file
 disqualifies: a **transform pipe** (`| awk`, `| grep …` — the bytes are derived, not
 the file), `python foo.py`, an output redirect, and command substitution.
 
+**One registry, one skeleton.** The four filename-keyed detectors share a single
+implementation: `tools.RENDER_KINDS` is a priority-ordered table of `RenderKind`
+entries, each declaring its render-kind name, `CLAUDE_MIRROR_*` env gate, reader
+allowlist, trailing-arg readers (code's sed/grep rule), word-matcher (extension
+set, or the LANGS lexer lookup), and the `module:Class` of its core content
+streamer; `tools._detect_source` is the one skeleton (`_effective` → tokenise →
+plumbing guard → `< file` redirect → reader allowlist) they all run through.
+`md_source`/`json_source`/`yaml_source`/`code_source` survive as thin wrappers.
+`claude-stream.py::_detect_render` iterates the registry and instantiates the
+winning entry's declared streamer — so **adding a render mode is one registry
+entry** (plus its core streamer module), not a fifth copy of the skeleton and a
+lockstep edit to the tailer's mode switch (the pre-registry design drifted
+exactly that way).
+
 **Where detection runs: in the tailer, not the launch hook.** All four
 filename-keyed modes (md/JSON/YAML/code) are decided by `claude-stream.py`
 itself (`_detect_render`), from the ORIGINAL pre-tee-wrap command every launch

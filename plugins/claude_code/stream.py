@@ -36,11 +36,8 @@
 # that same sentinel, so a failed rewrite never means silently losing the output.
 import glob, os, re, subprocess, sys, time
 
-from core import coderender as CODER
-from core import jsonrender as JSONR
 from core import mdrender as MDR
 from core import ops as O
-from core import yamlrender as YAMLR
 from core import render as R
 from core import slots as claude_slots
 from core import state as S
@@ -122,8 +119,8 @@ GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
 # command stream a markdown / JSON / YAML / source file's raw contents
 # (cat/head/tail of a .md|.json|.yml|.kt, `sed -n … x.py`, a bare `< file.md`)?
 # — runs HERE, in the presenting process, not at the launch site. It's a pure
-# function of the command (CT.md_source|json_source|yaml_source|code_source,
-# gated default-on by CLAUDE_MIRROR_MD|JSON|YAML|CODE), and when it lived in
+# function of the command (the CT.RENDER_KINDS registry, one entry per render
+# mode, gated default-on by each entry's CLAUDE_MIRROR_* env), and when it lived in
 # claude-cmd-pre.py's main path the OTHER fg launch site (a subagent's command,
 # substream.spawn_fg_tailer) silently missed it — every launcher gets rendering
 # by passing the command, and a new render mode is one change in one place.
@@ -133,23 +130,40 @@ CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
 
 
 def _detect_render(cmd):
-    """(md, json, yaml, code_lexer) for this stream's command — all falsy for a
-    non-fg stream, an empty command, or a command that streams no such file."""
+    """(RenderKind, detection value) for this stream's command — the FIRST
+    registry entry (priority order) whose env gate is on and whose detector
+    fires; (None, None) for a non-fg stream, an empty command, or a command
+    that streams no such file. Iterates CT.RENDER_KINDS, so a new render mode
+    is a single registry entry."""
     if not cmd or KIND != "fg":
-        return False, False, False, ""
+        return None, None
     from plugins.claude_code import tools as CT
-    on = lambda k: os.environ.get(k, "1") != "0"
-    md = bool(on("CLAUDE_MIRROR_MD") and CT.md_source(cmd))
-    js = bool(not md and on("CLAUDE_MIRROR_JSON") and CT.json_source(cmd))
-    ya = bool(not (md or js) and on("CLAUDE_MIRROR_YAML") and CT.yaml_source(cmd))
-    code = ("" if (md or js or ya or not on("CLAUDE_MIRROR_CODE"))
-            else (CT.code_source(cmd) or ""))
-    return md, js, ya, code
+    for rk in CT.RENDER_KINDS:
+        if os.environ.get(rk.env, "1") == "0":
+            continue
+        v = rk.detect(cmd)
+        if v:
+            return rk, v
+    return None, None
 
 
-MD, JSON_MODE, YAML_MODE, CODE_LEXER = _detect_render(CMD)
-RENDER_KIND = ("md" if MD else "json" if JSON_MODE else "yaml" if YAML_MODE
-               else ("code:" + CODE_LEXER) if CODE_LEXER else None)
+RKIND, RVALUE = _detect_render(CMD)
+MD = bool(RKIND and RKIND.name == "md")
+RENDER_KIND = (None if RKIND is None
+               else RKIND.name + ":" + RVALUE if RKIND.streamer_takes_value
+               else RKIND.name)
+
+
+def _content_streamer():
+    """Instantiate RKIND's core content streamer from its registry-declared
+    "module:Class" spec (passing the detection value — the lexer — when the
+    entry says its ctor takes one). None when no render mode was picked."""
+    if RKIND is None:
+        return None
+    import importlib
+    mod, cls = RKIND.streamer.split(":")
+    factory = getattr(importlib.import_module(mod), cls)
+    return factory(RVALUE) if RKIND.streamer_takes_value else factory()
 # "Fenced output is markdown": when NO filename render mode was picked, sniff a fg
 # command's output for a fenced code block (```lang) — the one markdown signal that's
 # both unambiguous and rare in logs. If the FIRST data-bearing read contains a fence,
@@ -339,16 +353,7 @@ def main(run):
     # (text, bg) segments to emit as gut ops. Markdown holds incomplete blocks and
     # emits each completed one live (append-only); JSON buffers whole and renders at
     # close (a partial document is invalid). Non-render path is unchanged.
-    if MD:
-        content_stream = MDR.MarkdownStreamer()
-    elif JSON_MODE:
-        content_stream = JSONR.JsonStreamer()
-    elif YAML_MODE:
-        content_stream = YAMLR.YamlStreamer()
-    elif CODE_LEXER:
-        content_stream = CODER.CodeStreamer(CODE_LEXER)
-    else:
-        content_stream = None
+    content_stream = _content_streamer()
     md_count = {"n": 0}
     render_meta = {"kind": RENDER_KIND}
     sniff = {"mode": "sniff" if SNIFF else "off"}   # sniff -> md/raw on first data read

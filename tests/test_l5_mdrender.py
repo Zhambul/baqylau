@@ -397,3 +397,48 @@ def test_yaml_source():
     for c in ["cat x.json", "cat x.md", "cat x.yml | grep foo", "bat x.yml",
               "cat x.yml > o.txt", "yq . x.yml"]:
         assert not yaml_source(c), c
+
+
+def test_render_kinds_registry():
+    """The registry IS the detector: one table-driven pass across every kind,
+    covering positives, plumbing-guard negatives, redirect forms, and the code
+    kind's trailing-arg (sed/grep) rule — the same behaviors the per-kind
+    wrappers (md_source & co) expose."""
+    from plugins.claude_code import tools as CT
+    by = {k.name: k for k in CT.RENDER_KINDS}
+    # priority order + env gates are part of the registry contract
+    assert [k.name for k in CT.RENDER_KINDS] == ["md", "json", "yaml", "code"]
+    assert [k.env for k in CT.RENDER_KINDS] == [
+        "CLAUDE_MIRROR_MD", "CLAUDE_MIRROR_JSON",
+        "CLAUDE_MIRROR_YAML", "CLAUDE_MIRROR_CODE"]
+    for kind, cmd, exp in [
+        # positives, incl. quoted args and stdin redirects
+        ("md", "cat README.md", True), ("md", "cat 'my file.md'", True),
+        ("md", "< r.md", True), ("md", "head -50 notes.md", True),
+        ("json", "cat data.json", True), ("json", "< r.json", True),
+        ("yaml", "tail c.yaml", True), ("yaml", "< d.yml", True),
+        ("code", "cat foo.py", "python"), ("code", "< s.py", "python"),
+        # tail-arg readers: only the code kind has them
+        ("code", "sed -n '80,130p' dispatch.py", "python"),
+        ("code", "grep -n def app.py", "python"),
+        ("md", "grep x notes.md", None), ("yaml", "sed -n 1p c.yml", None),
+        # json is cat-only (a partial document is invalid)
+        ("json", "head data.json", None), ("json", "tail x.json", None),
+        # plumbing guard: pipes / output redirects / substitution disqualify
+        ("md", "cat x.md | grep foo", None), ("md", "cat a.md > b.txt", None),
+        ("code", "cat foo.py | awk '{print}'", None),
+        ("json", "cat $(ls).json", None),
+        # truncation pipes and multi-statement key off the effective read
+        ("md", "cat README.md | head -40", True),
+        ("code", "grep x file.py | head | tail -5", "python"),
+        ("code", "grep -n def a.py\nprintf hi\nsed -n 1,5p b.java", "java"),
+        # non-allowlisted readers
+        ("md", "bat README.md", None), ("code", "python foo.py", None),
+    ]:
+        got = by[kind].detect(cmd)
+        if exp is None:
+            assert not got, (kind, cmd)
+        elif exp is True:
+            assert got, (kind, cmd)
+        else:
+            assert got == exp, (kind, cmd)
