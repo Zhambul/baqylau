@@ -238,7 +238,7 @@ def main():
     last, mt_seen = 0.0, None
     win, win_retry, prev_ts, pend = None, 0.0, None, 0.0
     while True:
-        if not os.path.exists(St.db_path(LOG)):   # SessionEnd parked the state DB -> window closes
+        if St.parked(LOG):                        # SessionEnd parked the state DB -> window closes
             return
         now = time.time()
         # ⏱ pause accounting: while the tab is green, fold the elapsed tick into

@@ -67,6 +67,18 @@ def db_path(log):
     return P.state_db(log)
 
 
+def parked(log):
+    """True when this session's state DB FILE no longer exists — SessionEnd parked
+    it as *.keep (or it never existed), i.e. the session is over. This is THE
+    session-alive probe every detached tailer/watcher completion loop polls
+    (substream, bg/monitor stream, codex stream/watch, scorebar): once parked they
+    must quit footer-less, because any further state write would either recreate
+    the DB (whose file-existence IS the alive signal) or mutate the parked
+    snapshot through a cached connection. Deliberately a bare os.path.exists —
+    never a connect, which would CREATE the file it is probing for."""
+    return not os.path.exists(db_path(log))
+
+
 def pid_alive(pid):
     """The ONE pid-liveness probe (slot rows, claims, fg-live hand-offs, watcher
     locks all trust it). EPERM means the pid EXISTS but is owned by another user —

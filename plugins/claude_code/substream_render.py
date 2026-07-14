@@ -18,6 +18,7 @@ import re
 from core import ops as O
 from core import render as R
 from core import state as S
+from core import streamfmt as SF
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import tools as CT
 
@@ -39,12 +40,8 @@ TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-mess
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
 
 
-def cap(text, n):
-    lines = text.split("\n")
-    if len(lines) <= n:
-        return text
-    more = len(lines) - n
-    return "\n".join(lines[:n]) + f"\n… ({more} more line{'s' if more != 1 else ''})"
+# Line-capped excerpt — shared with the codex stream (core/streamfmt.py).
+cap = SF.cap
 
 
 def result_text(content):
@@ -153,13 +150,13 @@ class Renderer:
         # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
         # fresh O.new_group() id for a message/prompt/mail block (lk=O.COPY_ALL then gives
         # it a single whole-block ⧉copy link). Same mechanism as the main session's fg/bg
-        # blocks (core/copy.py), just double-guttered here.
-        tag = self._op_tag()
-        s = f"{self.label} {glyph} {kind}" + (f"  {tag}" if tag else "") + (f"  {ctx}" if ctx else "")
-        return O.label(s, self.rgb, g=g, lk=lk)
+        # blocks (core/copy.py), just double-guttered here. Shape shared with the codex
+        # stream via core/streamfmt.py; the model tag + ctx ride as trailing tags.
+        return SF.chip(self.label, glyph, kind, self.rgb,
+                       tags=(self._op_tag(), ctx), g=g, lk=lk)
 
     def gutter(self, text, g=None):
-        return O.gut(R.unescape(text), self.rgb, g=g)
+        return SF.gutter(text, self.rgb, g=g)
 
     def msg_gutter(self, text, g=None):
         # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).

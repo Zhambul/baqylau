@@ -27,6 +27,7 @@ from core import ops as O
 from core import render as R
 from core import slots as claude_slots
 from core import state as S
+from core import streamfmt as SF
 from core import tail as T
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import hookkit as HK
@@ -376,7 +377,7 @@ def completion_loop(run, pump, parent_resolved, start):
     # Returns (parked, cancelled).
     while True:
         pump()
-        if not os.path.exists(S.db_path(LOG)):
+        if S.parked(LOG):
             run.end("state-db-parked (session end)")
             return True, False
         if S.agent_get(LOG, AGENT).get("done"):
@@ -409,11 +410,7 @@ def emit_footer(cancelled, start, tail):
         mx = model_ctx()
         foot += f" · ctx {used * 100 // mx}% ({kfmt(used)}/{kfmt(mx)})"
     # Cumulative rollup: fresh in / generated out / cache-hit share / tool count.
-    if REN.tot_in or REN.tot_out:
-        foot += f" · {kfmt(REN.tot_in)} in · {kfmt(REN.tot_out)} out"
-        reads = REN.tot_in + REN.tot_cache
-        if reads > 0:
-            foot += f" · cache {REN.tot_cache * 100 // reads}%"
+    foot += SF.tok_rollup(REN.tot_in, REN.tot_out, REN.tot_cache)
     if REN.tool_n:
         foot += f" · {REN.tool_n} tool" + ("s" if REN.tool_n != 1 else "")
     # Cost estimate from the tokens already summed, priced on the resolved model

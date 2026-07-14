@@ -314,8 +314,8 @@ def main():
     pending_ro = {}          # rollout uuid -> first-seen wall time (grace before deciding)
     try:
         # Session-alive signal: the per-session state DB (parked as *.keep at
-        # SessionEnd, so the path vanishes — was the mirror log file itself).
-        while os.path.exists(S.db_path(LOG)):
+        # SessionEnd, so the path vanishes — S.parked, the shared probe).
+        while not S.parked(LOG):
             # --- standalone codex host: own run + pid-liveness teardown -------------
             if STANDALONE:
                 if not S.pid_alive(HOST_PID):

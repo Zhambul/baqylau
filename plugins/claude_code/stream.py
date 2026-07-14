@@ -291,9 +291,9 @@ def monitor_wait_file(run, start):
         m = glob_task_output()
         if m:
             return m, pid
-        if not os.path.exists(S.db_path(LOG)):
+        if S.parked(LOG):
             # SessionEnd parked the state DB — session over, quit footer-less
-            # (same shape as the substream/codex tailers).
+            # (S.parked, the shared probe the substream/codex tailers poll too).
             run.end("state-db-parked (session end)")
             return None, None
         now = time.time()

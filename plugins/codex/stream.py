@@ -27,6 +27,7 @@ import json, os, re, sys, time
 from core import ops as O
 from core import render as R
 from core import state as S
+from core import streamfmt as SF
 from core import tail as T
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -129,27 +130,23 @@ def render_patch(p):
 TS = re.compile(r"^\[\d{4}-\d\d-\d\dT[\d:.]+Z\]\s?(.*)$")
 
 
+# Block shapes shared with the substream renderer (core/streamfmt.py), bound to
+# this stream's identity. chip's g + lk tie a block's header to its code/gut body
+# for the ⧉ copy handler — a fresh O.new_group() per block (codex records carry
+# no tool_use_id). Same affordance the claude-session mirror paints (core/copy.py).
+cap = SF.cap
+
+
 def chip(glyph, kind, g=None, lk=None):
-    # g + lk tie this block's header to its code/gut body for the ⧉ copy handler —
-    # a fresh O.new_group() per block (codex records carry no tool_use_id). Same
-    # affordance the claude-session mirror paints (core/copy.py).
-    return O.label(f"codex {glyph} {kind}", SLOT_RGB, g=g, lk=lk)
+    return SF.chip("codex", glyph, kind, SLOT_RGB, g=g, lk=lk)
 
 
 def gutter(text, g=None):
-    return O.gut(R.unescape(text), SLOT_RGB, g=g)
+    return SF.gutter(text, SLOT_RGB, g=g)
 
 
 def dim_gut(text, g=None):
-    return O.gut(R.DIM + R.unescape(text) + RST, SLOT_RGB, g=g)
-
-
-def cap(text, n):
-    lines = text.split("\n")
-    if len(lines) <= n:
-        return text
-    more = len(lines) - n
-    return "\n".join(lines[:n]) + f"\n… ({more} more line{'s' if more != 1 else ''})"
+    return SF.dim_gut(text, SLOT_RGB, g=g)
 
 
 _last_msg = ""            # last assistant-message body, to de-dup a repeated "Final output"
@@ -339,15 +336,15 @@ def main(run):
     start = time.time()
     # Wait for the source to appear (a companion .log lands a beat after its sidecar).
     if not T.wait_for(LOGFILE, start + 15,
-                      alive=lambda: os.path.exists(S.db_path(LOG))):
+                      alive=lambda: not S.parked(LOG)):
         run.end("src-never-appeared")
         return
 
     # Re-check right before the first emit: SessionEnd may have parked the state
-    # DB during the wait above, and claude_state's connect would CREATE a missing
-    # DB file — resurrecting the very file whose existence is the session-alive
-    # signal (the codex watcher's own loop polls it and would then never exit).
-    if not os.path.exists(S.db_path(LOG)):
+    # DB during the wait above (S.parked — the shared session-alive probe; the
+    # codex watcher's own loop polls the same file and would never exit if an
+    # emit here resurrected it).
+    if S.parked(LOG):
         run.end("state-db-parked (before header)")
         return
     O.emit(LOG, O.rule(), O.label("codex ▶ " + LABEL, SLOT_RGB), O.rule())
@@ -372,7 +369,7 @@ def main(run):
     GRACE = float(os.environ.get("CLAUDE_CODEX_GRACE_S") or 8.0)
     while True:
         pump()
-        if not os.path.exists(S.db_path(LOG)):   # session ended (state DB parked) -> stop
+        if S.parked(LOG):                        # session ended (state DB parked) -> stop
             run.end("state-db-parked (session end)")
             # No footer: writing it would go into the parked *.keep snapshot via
             # the cached connection — or recreate the DB file outright.
@@ -414,10 +411,9 @@ def main(run):
         tcache = int(_ro_usage.get("cached_input_tokens") or 0)
         tout = int(_ro_usage.get("output_tokens") or 0)
         fresh = max(tin - tcache, 0)
-        if fresh or tout:
-            foot += f" · {O.kfmt(fresh)} in · {O.kfmt(tout)} out"
-            if tin > 0:
-                foot += f" · cache {tcache * 100 // tin}%"
+        # Shared footer fragment (core/streamfmt.py) — reads=tin: codex's
+        # cumulative input_tokens already includes the cached share.
+        foot += SF.tok_rollup(fresh, tout, tcache, reads=tin)
         usd = codex_cost_usd(_ro_model, fresh, tout, tcache)
         if usd:
             foot += " · ≈ " + O.fmt_usd(usd)

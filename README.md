@@ -193,8 +193,16 @@ claude-*.py  repo-root entry scripts: the assembly layer. They may import
 
 `core/` holds: `paths.py` (the mirror-log path format — was
 `claude_paths.py`), `state.py` (per-session runtime SQLite — was
-`claude_state.py`), `slots.py` (palette/liveness slots — was
+`claude_state.py`; also `parked()` — THE session-alive probe: True once
+SessionEnd parked the state DB file away, polled by every detached
+tailer/watcher completion loop, a bare `os.path.exists` that can never create
+the file it probes), `slots.py` (palette/liveness slots — was
 `claude_slots.py`), `tail.py` (the tailer skeleton — was `claude_tail.py`),
+`streamfmt.py` (the shared block-shaping vocabulary of the stream renderers —
+`cap`, the `chip`/`gutter`/`dim_gut` op shapes, the ended-footer `tok_rollup`
+token fragment; extracted from the byte-identical copies the substream renderer
+and the codex stream each grew — shared surface lives in core because the
+dependency rule forbids codex importing claude_code),
 `render.py` (ANSI rendering — was `claude_render.py`), `mdrender.py` (AST-driven
 markdown → styled ANSI for the mirror: an `OpsRenderer(BaseRenderer)` over the
 optional `wenmode` CommonMark parser + a block-buffering `MarkdownStreamer`;
@@ -1552,7 +1560,8 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     - **Quitting Claude Code with a background agent running** leaves a third
       end-shape: the agent is killed with no `SubagentStop` and no
       `stoppedByUser` stamp, but SessionEnd parks the state DB — so the streamer
-      also polls the DB file's existence (same check the codex tailers run) and
+      also polls `state.parked()` (the shared probe the codex tailers, the
+      bg/monitor stream, the codex watcher and the scorebar all run) and
       exits `state-db-parked (session end)` instead of spinning to its 6h
       backstop as a zombie whose checkpoint writes mutate the parked `*.keep`
       snapshot through its cached connection. No footer/bumps after that: any

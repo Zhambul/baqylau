@@ -147,8 +147,7 @@ def tab_host_sid(fe, exclude_sid=""):
             for w in t.get("windows", []):
                 uv = w.get("user_vars", {})
                 sid = uv.get("claude_mirror") or uv.get("claude_session")
-                if sid and sid != exclude_sid and os.path.exists(
-                        S.db_path(_log_for_sid(sid))):
+                if sid and sid != exclude_sid and not S.parked(_log_for_sid(sid)):
                     return sid
             return ""
     return ""
