@@ -33,6 +33,11 @@ from core import state as S
 BAR_ROWS = 5   # ⬡ session id + ✉ census + ▪ summary + Σ token breakdown + tools
 BAR_SETTLE_S = 0.08   # pause between resize_pane and re-measure — kitty applies the resize async
 
+# The mirror-pane width default: % of the tab when no CLAUDE_MIRROR_BIAS (env or
+# settings.json) says otherwise. Owned HERE because both hosts (claude_code's
+# split.py and codex's session.py) fall back to it — each used to hardcode 25.
+DEFAULT_BIAS = 25
+
 
 # --- window lookups ----------------------------------------------------------
 
@@ -63,7 +68,7 @@ def size_bar(fe, sid):
 
 # --- open / close ------------------------------------------------------------
 
-def open_mirror(fe, here, sid, log, bias, default_bias=25, anchor=None):
+def open_mirror(fe, here, sid, log, bias, default_bias=DEFAULT_BIAS, anchor=None):
     """Open this session's mirror pane (+ scoreboard bar). Does NOT truncate —
     the caller decides the state DB's fate (decide_log_fate). `bias` is the
     mirror width %, `default_bias` the fallback when it is 0/None. `anchor` is

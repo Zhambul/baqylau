@@ -792,3 +792,56 @@ def test_scorebar_compose_warn_chip():
     assert "⚠ 2" in with_chip and "2 cmds" in with_chip
     assert with_chip.index("⚠ 2") < with_chip.index("2 cmds")   # chip leads
     assert "⚠" not in without
+
+
+# --- single-owner delegation pins (styleguide ownership table) ----------------
+# 1. split.py's sizes-DB paths delegate to model.config_dir() at CALL time — the
+#    one owner of the $CLAUDE_CONFIG_DIR/~/.claude default (it used to re-encode
+#    the expanduser fallback in a module-level CONFIG_DIR).
+# 2. The mirror-width default is core/hostpane.DEFAULT_BIAS, shared by BOTH
+#    hosts (split.py's settings-layered read and codex's env-only read).
+# 3. codex's lenient payload reader must AUDIT a malformed stdin before
+#    degrading to {} (every swallow audits first).
+
+def test_split_sizedb_delegates_to_model_config_dir(tmp_path, monkeypatch):
+    from plugins.claude_code import split
+    cfg = tmp_path / "cfg-a"
+    cfg.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
+    assert split._sizedb() == str(cfg / "kitty-mirror.db")
+    assert split._size_dir() == str(cfg / "kitty-mirror-sizes")
+    # Call-time resolution: a changed env is honoured without re-import.
+    cfg2 = tmp_path / "cfg-b"
+    cfg2.mkdir()
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg2))
+    assert split._sizedb() == str(cfg2 / "kitty-mirror.db")
+    # Grep pin: split.py no longer re-encodes model.config_dir()'s default.
+    import inspect
+    assert 'expanduser("~/.claude")' not in inspect.getsource(split)
+
+
+def test_mirror_bias_default_single_owner(monkeypatch):
+    import inspect
+    from core import hostpane as HP
+    from plugins.codex import session as CS
+    monkeypatch.delenv("CLAUDE_MIRROR_BIAS", raising=False)
+    assert CS.bias() == HP.DEFAULT_BIAS          # codex shares the core default
+    monkeypatch.setenv("CLAUDE_MIRROR_BIAS", "40")
+    assert CS.bias() == 40                       # env-only read still honoured
+    sig = inspect.signature(HP.open_mirror)
+    assert sig.parameters["default_bias"].default == HP.DEFAULT_BIAS
+
+
+def test_codex_malformed_payload_audits(monkeypatch):
+    import io
+    from plugins.codex import session as CS
+    errors = []
+
+    class _Rec:
+        def error(self, log, where, *a, **k):
+            errors.append(where)
+
+    monkeypatch.setattr(CS, "A", _Rec())
+    monkeypatch.setattr(sys, "stdin", io.StringIO("{not json"))
+    assert CS.read_payload() == {}               # still degrades, never raises
+    assert errors == ["codex payload parse (stdin not valid JSON)"]

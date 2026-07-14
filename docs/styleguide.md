@@ -56,6 +56,8 @@ backed by grep-style regression tests that will fail the build):
 | Slot claim-token format (both directions: `_token`/`_untoken`) | `core/slots.py` |
 | Stream-block shapes: `cap`, `chip`, `gutter`, `tok_rollup`, `file_line` | `core/streamfmt.py` |
 | Session-alive probe | `core/state.parked()` — a bare exists check, never a connect |
+| Mirror-pane width default (`DEFAULT_BIAS`, the `CLAUDE_MIRROR_BIAS` fallback both hosts share) | `core/hostpane.py` |
+| Claude config dir default (`$CLAUDE_CONFIG_DIR` else `~/.claude`) | `plugins/claude_code/model.config_dir()` |
 | Audit-import degradation | `core/noaudit.load_audit()` — the ONLY way to get `A`; direct `from core import audit` is reserved for `bin/claude-audit.py` |
 | Audit table set | `core/audit._SCHEMA` — derive lists (`prunable_tables()`, `WRITE_COMMANDS`), never hand-copy |
 | CSI/OSC escape grammar | the named fragments in `core/render.py` composing `_ANSI`/`_CTRL` |

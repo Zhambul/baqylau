@@ -43,9 +43,18 @@ from core import paths as P                        # noqa: E402
 
 
 def read_payload():
+    """Lenient parse of the codex hook's stdin payload — {} on anything
+    unparsable, but AUDITED first (every swallow audits; a malformed payload
+    used to vanish silently). Deliberately NOT hookkit.read_payload: that is
+    claude_code's (dependency rule — plugins never import each other) and it
+    derives a mirror log this early-return path doesn't have yet."""
     try:
         return json.loads(sys.stdin.read() or "{}") or {}
     except Exception:
+        try:
+            A.error("", "codex payload parse (stdin not valid JSON)")
+        except Exception:
+            pass
         return {}
 
 
@@ -80,12 +89,18 @@ def codex_pid():
 
 def bias():
     """Mirror width % — the same CLAUDE_MIRROR_BIAS setting Claude's split reads,
-    honoured from the env when codex inherited it, else the 25% default."""
+    honoured from the env when codex inherited it, else the shared default.
+    Deliberately different from split.py — ENV-ONLY, don't unify: the
+    settings.json layering lives in claude_code's model.settings_env, which the
+    dependency rule forbids this plugin importing. A standalone codex launched
+    from a shell that exports CLAUDE_MIRROR_BIAS still honours it; a value set
+    only in Claude's settings.json does not reach a standalone codex host
+    (known limitation — docs/codex.md)."""
     v = os.environ.get("CLAUDE_MIRROR_BIAS")
     try:
         return int(v)
     except (TypeError, ValueError):
-        return 25
+        return HP.DEFAULT_BIAS
 
 
 def spawn_watcher(log, cwd, sid, host_pid):
@@ -149,7 +164,7 @@ def main():
     anchor = win or fe.window_for_session(sid)
     HP.close_stale_mirrors(fe, sid, anchor)   # a prior-sid pane (resume/clear)
     b = bias()
-    HP.open_mirror(fe, BIN, sid, log, b, 25, anchor)
+    HP.open_mirror(fe, BIN, sid, log, b, anchor=anchor)
 
     ok = HP.mirror_exists(fe, sid)
     try:

@@ -110,6 +110,13 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
       restore the state DB, open the mirror + scoreboard, then detach this session's
       watcher in **standalone mode**. `source:"resume"` restores the parked `*.keep`
       DB, so a `codex resume` replays its mirror history exactly like a Claude resume.
+      The mirror width honours `CLAUDE_MIRROR_BIAS` from the **env only** (inherited
+      when the launching shell exports it), else the shared `hostpane.DEFAULT_BIAS`.
+      Deliberately not Claude's settings.json layering: that reader is
+      `plugins/claude_code/model.settings_env`, which the dependency rule forbids the
+      codex plugin importing — a bias set only in Claude's settings.json does not
+      reach a standalone codex host (known limitation; moving the settings reader
+      into core just for this knob wasn't worth making core Claude-settings-aware).
     - **Standalone watcher** (`watch.py` with a `HOST_PID` argv). It streams
       *exactly this session's own rollout* — the rollout filename's `<uuid>` **is**
       the `session_id`, so it matches `rollout-*-<sid>.jsonl` precisely and **adopts

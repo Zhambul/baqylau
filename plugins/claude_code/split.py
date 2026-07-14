@@ -55,7 +55,6 @@ os.environ["PATH"] = ("/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:"
                       "/opt/homebrew/bin:" + os.environ.get("PATH", ""))
 
 CMD = sys.argv[1] if len(sys.argv) > 1 else ""
-CONFIG_DIR = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
 
 # Mirror width (% of tab) and resize step (cells). SINGLE SOURCE OF TRUTH is the
@@ -76,7 +75,7 @@ def _int_setting(env_key, default):
         return default
 
 
-BIAS = _int_setting("CLAUDE_MIRROR_BIAS", 25)
+BIAS = _int_setting("CLAUDE_MIRROR_BIAS", HP.DEFAULT_BIAS)
 STEP = _int_setting("CLAUDE_MIRROR_STEP", 4)
 
 
@@ -165,9 +164,17 @@ def log_for(sid):
 # restored on the next SessionStart. Keyed by the project cwd — $PWD is the project
 # both at SessionStart (runs in it) and for the keybindings (they pass --cwd
 # current). Stored in a small SQLite DB under the Claude config dir (was a
-# directory of one-number files) so it survives restarts.
-SIZEDB = os.path.join(CONFIG_DIR, "kitty-mirror.db")
-SIZE_DIR = os.path.join(CONFIG_DIR, "kitty-mirror-sizes")   # legacy, imported+removed
+# directory of one-number files) so it survives restarts. The config dir is
+# resolved at CALL time via model.config_dir() — the one owner of the
+# $CLAUDE_CONFIG_DIR/~/.claude default — not cached at import (import purity:
+# dispatch.py imports this module on every hook event).
+
+def _sizedb():
+    return os.path.join(M.config_dir(), "kitty-mirror.db")
+
+
+def _size_dir():
+    return os.path.join(M.config_dir(), "kitty-mirror-sizes")   # legacy, imported+removed
 
 
 def proj_slug():
@@ -176,7 +183,7 @@ def proj_slug():
 
 def size_put(project, pct):
     try:
-        conn = sqlite3.connect(SIZEDB, timeout=0.2)
+        conn = sqlite3.connect(_sizedb(), timeout=0.2)
         try:
             conn.execute("CREATE TABLE IF NOT EXISTS sizes"
                          "(project TEXT PRIMARY KEY, pct INTEGER)")
@@ -203,9 +210,10 @@ def import_legacy_sizes():
     if _LEGACY_DONE:
         return
     _LEGACY_DONE = True
-    if not os.path.isdir(SIZE_DIR):
+    size_dir = _size_dir()
+    if not os.path.isdir(size_dir):
         return
-    for f in glob.glob(os.path.join(SIZE_DIR, "*")):
+    for f in glob.glob(os.path.join(size_dir, "*")):
         try:
             with open(f, encoding="utf-8") as fh:
                 v = fh.read().strip()
@@ -213,15 +221,16 @@ def import_legacy_sizes():
                 size_put(os.path.basename(f), int(v))
         except OSError:
             continue
-    shutil.rmtree(SIZE_DIR, ignore_errors=True)
+    shutil.rmtree(size_dir, ignore_errors=True)
 
 
 def project_bias():
     """Remembered % for this project, or the configured default (BIAS)."""
     import_legacy_sizes()                    # fold any legacy files in first
-    if os.path.isfile(SIZEDB):
+    sizedb = _sizedb()
+    if os.path.isfile(sizedb):
         try:
-            conn = sqlite3.connect(f"file:{SIZEDB}?mode=ro", uri=True, timeout=0.2)
+            conn = sqlite3.connect(f"file:{sizedb}?mode=ro", uri=True, timeout=0.2)
             try:
                 row = conn.execute("SELECT pct FROM sizes WHERE project=?",
                                    (proj_slug(),)).fetchone()
