@@ -136,8 +136,24 @@ def audit_state(log, path, action, content):
 # to the controlling instance's socket (frontends.kitty.resolve_listen_on).
 # export_env() then stamps the resolved channel back into our env so detached
 # children (streamers, the codex watcher) inherit it.
-FE = frontends.get(resolve=True)
-FE.export_env()
+#
+# FE is resolved LAZILY (memoized on first use) rather than at import, same as
+# tabstatus.py: dispatch.py imports this module for every hook event, including
+# ones that never touch a pane, and eagerly resolving the frontend (a ppid-walk
+# socket hunt) there was per-invocation work paid by everything sharing the
+# process. export_env() runs inside _fe() on first resolution — every detached
+# spawn (open_mirror's streamers, the codex watcher via plugins.on_session_start)
+# happens strictly after a pane call, i.e. after _fe() has stamped the env.
+# None = not-yet-resolved; tests may pre-seed FE directly, which _fe() honours.
+FE = None
+
+
+def _fe():
+    global FE
+    if FE is None:
+        FE = frontends.get(resolve=True)
+        FE.export_env()
+    return FE
 
 
 # --- session identity --------------------------------------------------------
@@ -160,7 +176,7 @@ def sid_from_stdin():
 def sid_from_focus():
     """Keybinding: the session of the currently focused terminal tab."""
     sess = mir = ""
-    for osw, t, w in FE.iter_windows():
+    for osw, t, w in _fe().iter_windows():
         if not (osw.get("is_focused") and t.get("is_focused")):
             continue                          # frontmost OS window, active tab
         uv = w.get("user_vars", {})
@@ -210,8 +226,19 @@ def size_put(project, pct):
         pass
 
 
+_LEGACY_DONE = False
+
+
 def import_legacy_sizes():
-    """One-time import of the legacy per-project size files, then the dir goes."""
+    """One-time import of the legacy per-project size files, then the dir goes.
+    Called LAZILY (memoized) from the sizes-DB readers/writers, not at import —
+    dispatch.py imports this module for every hook event, and the /tmp-era glob
+    + isdir probe was per-invocation work paid by events that never touch the
+    sizes DB."""
+    global _LEGACY_DONE
+    if _LEGACY_DONE:
+        return
+    _LEGACY_DONE = True
     if not os.path.isdir(SIZE_DIR):
         return
     for f in glob.glob(os.path.join(SIZE_DIR, "*")):
@@ -225,11 +252,9 @@ def import_legacy_sizes():
     shutil.rmtree(SIZE_DIR, ignore_errors=True)
 
 
-import_legacy_sizes()
-
-
 def project_bias():
     """Remembered % for this project, or the configured default (BIAS)."""
+    import_legacy_sizes()                    # fold any legacy files in first
     if os.path.isfile(SIZEDB):
         try:
             conn = sqlite3.connect(f"file:{SIZEDB}?mode=ro", uri=True, timeout=0.2)
@@ -253,7 +278,7 @@ def mirror_geometry(sid):
     into two near-identical copies). The walk itself (kitty's `neighbors`/
     `groups` semantics) lives in the frontend — see split_geometry in
     frontends/kitty.py."""
-    return FE.split_geometry(("claude_mirror", sid), exclude_var="claude_scorebar")
+    return _fe().split_geometry(("claude_mirror", sid), exclude_var="claude_scorebar")
 
 
 def current_pct(sid):
@@ -267,6 +292,7 @@ def current_pct(sid):
 
 def save_size(sid):
     """Remember the mirror's current % for this project."""
+    import_legacy_sizes()                    # a fresh save must not be shadowed later
     pct = current_pct(sid)
     if isinstance(pct, int):
         size_put(proj_slug(), pct)
@@ -285,36 +311,36 @@ BAR_ROWS = HP.BAR_ROWS
 
 
 def window_exists(var, sid):
-    return HP.window_exists(FE, var, sid)
+    return HP.window_exists(_fe(), var, sid)
 
 
 def mirror_exists(sid):
-    return HP.mirror_exists(FE, sid)
+    return HP.mirror_exists(_fe(), sid)
 
 
 def close_stale_mirrors(keep, anchor=None):
-    HP.close_stale_mirrors(FE, keep, anchor)
+    HP.close_stale_mirrors(_fe(), keep, anchor)
 
 
 def open_mirror(sid, log, bias, anchor=None):
     """Does NOT truncate — the caller decides the state DB's fate."""
-    HP.open_mirror(FE, HERE, sid, log, bias, BIAS, anchor)
+    HP.open_mirror(_fe(), HERE, sid, log, bias, BIAS, anchor)
 
 
 def close_mirror(sid):
-    HP.close_mirror(FE, sid)
+    HP.close_mirror(_fe(), sid)
 
 
 def tag_window(sid):
     """Tag THIS hook's own Claude pane so a keybinding can find it."""
-    win = FE.current_window()
+    win = _fe().current_window()
     if win:
-        FE.set_user_vars(win, {"claude_session": sid})
+        _fe().set_user_vars(win, {"claude_session": sid})
 
 
 def resize_mirror(inc, sid):
     """Positive increment widens."""
-    FE.resize_pane(("claude_mirror", sid), "horizontal", inc)
+    _fe().resize_pane(("claude_mirror", sid), "horizontal", inc)
 
 
 # Resize a session's mirror to an ABSOLUTE width of PCT% of the tab. kitty only
@@ -375,7 +401,7 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # session hijack whatever tab the user was looking at — closing ITS mirror
     # as "stale" and splitting in an empty one — so skip the whole lifecycle
     # instead: no pane, no state DB, no watchers.
-    anchor = FE.current_window() or FE.window_for_session(sid)
+    anchor = _fe().current_window() or _fe().window_for_session(sid)
     if not anchor:
         audit_pane(sid, "open", 1, "skipped: no host pane (daemon/headless session)")
         return
@@ -485,7 +511,7 @@ def cmd_toggle():                            # keybinding
     else:
         # Keybinding launches carry no KITTY_WINDOW_ID; anchor to the session's
         # own tagged pane (it is in the focused tab — sid_from_focus found it).
-        anchor = FE.current_window() or FE.window_for_session(sid)
+        anchor = _fe().current_window() or _fe().window_for_session(sid)
         close_stale_mirrors(sid, anchor)     # clear any prior-sid pane in this tab first
         bias = project_bias()
         open_mirror(sid, log_for(sid), bias, anchor)  # remembered size, keep history
@@ -541,7 +567,7 @@ def main():
     if CMD == "close":
         cmd_close()
         return
-    if not FE.usable():
+    if not _fe().usable():
         return
     if CMD == "open":
         cmd_open()

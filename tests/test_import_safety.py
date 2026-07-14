@@ -47,6 +47,58 @@ def test_substream_imports_clean():
     _import_fresh("plugins.claude_code.substream")
 
 
+_SPLIT_PROG = """
+import sys, os
+sys.argv = ["import-safety-test"]          # no argv contract available
+import frontends, glob
+def _boom(*a, **k):
+    raise AssertionError("frontends.get() called at import time")
+frontends.get = _boom
+def _globboom(*a, **k):
+    raise AssertionError("glob.glob() called at import time (legacy-size scan)")
+glob.glob = _globboom
+import plugins.claude_code.split as S
+assert S.FE is None, "frontend resolved at import"
+print("OK")
+"""
+
+
+def test_split_imports_clean():
+    """split must not resolve the frontend (ppid-walk socket hunt +
+    export_env) or scan the legacy size dir at import — dispatch.py imports it
+    for EVERY hook event; FE is a lazy _fe() accessor and import_legacy_sizes()
+    runs memoized from the sizes-DB readers/writers."""
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("KITTY_", "CLAUDE_"))}
+    r = subprocess.run([sys.executable, "-c", _SPLIT_PROG], cwd=REPO, env=env,
+                       capture_output=True, text=True, timeout=30)
+    assert r.returncode == 0 and "OK" in r.stdout, (
+        f"import of plugins.claude_code.split had side effects:\n{r.stderr}")
+
+
+def test_split_lazy_fe_memoizes(monkeypatch):
+    """split._fe() resolves + export_env()s once on first use and honours a
+    pre-seeded FE (the test seam, matching tabstatus)."""
+    if REPO not in sys.path:
+        sys.path.insert(0, REPO)
+    import frontends
+    from plugins.claude_code import split as S
+    calls = []
+
+    class _FE:
+        def export_env(self):
+            calls.append("env")
+
+    monkeypatch.setattr(frontends, "get", lambda *a, **k: calls.append("fe") or _FE())
+    monkeypatch.setattr(S, "FE", None)
+    fe = S._fe()
+    assert S._fe() is fe
+    assert calls == ["fe", "env"]          # one resolution + one env stamp
+    seeded = object()
+    monkeypatch.setattr(S, "FE", seeded)   # pre-seeded value is honoured
+    assert S._fe() is seeded
+
+
 def test_tabstatus_lazy_accessors_memoize(monkeypatch):
     """_fe()/_win() resolve once on first use and honour pre-seeded values
     (the daemon-env fallback and the test seams both assign FE/WIN)."""
