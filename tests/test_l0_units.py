@@ -205,7 +205,10 @@ def _load_mirror():
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     m.FIXED_WIDTH = 80          # deterministic width() under a non-tty pytest
-    m.width = m.PS.make_width(80)   # width is a panescript closure — rebind it too
+    # width() is now the module's memoized wrapper over a panescript closure —
+    # rebind the underlying probe and drop the memo, keeping the wrapper.
+    m._raw_width = m.PS.make_width(80)
+    m.width_refresh()
     return m
 
 
@@ -243,6 +246,66 @@ def test_painted_rows_agrees_with_frame_bytes_and_measure():
     pos, idx, acc = m.measure("g2")
     assert acc == total
     assert pos == 1 and idx == 2                      # banner=0, "a"=1, op at 2
+
+
+def test_render_cache_row_counts_avoid_rescans():
+    """Perf pin for the trim_to_budget quadratic fix: the (op, width) cache
+    record carries the painted row count, so the row-accounting walks
+    (painted_rows / trim_to_budget / measure) render each op AT MOST ONCE per
+    width — repeat walks re-render nothing."""
+    m = _load_mirror()
+    n = 2000
+    m.OPS[:] = [{"t": "line", "s": "op-%d\nsecond" % i} for i in range(n)]
+    m.VIEW_OPEN.clear()
+    calls = []
+    real = m._render
+    m._render = lambda op, w: (calls.append(1), real(op, w))[1]
+    assert m.painted_rows(80) == 1 + 2 * n
+    assert len(calls) == n                    # first walk renders every op once
+    calls.clear()
+    m.painted_rows(80)
+    m.trim_to_budget(80)                      # budget not exceeded — no drop
+    m.measure("nope")
+    assert calls == []                        # repeat walks: zero re-renders
+    m.painted_rows(60)                        # width change invalidates
+    assert len(calls) == n
+
+
+def test_stripped_rows_cached_per_render():
+    """Perf pin for locate_viewport's rows rebuild: the ANSI-stripped line
+    list is cached on the render record (filled lazily, invalidated with it),
+    so repeat viewport searches strip each op at most once per width."""
+    m = _load_mirror()
+    op = {"t": "gut", "s": "aa\nbb", "c": [1, 2, 3]}
+    calls = []
+    real = m.R.strip_ansi
+    m.R.strip_ansi = lambda s: (calls.append(1), real(s))[1]
+    try:
+        c = m.rendered(op, 80)
+        first = m.stripped_rows(c)
+        assert first == [r.rstrip() for r in real(c[1]).split("\n")]
+        n = len(calls)
+        assert n >= 1
+        assert m.stripped_rows(c) is first    # second read: the cached list
+        assert len(calls) == n
+    finally:
+        m.R.strip_ansi = real
+    assert m.rendered(op, 60)[3] is None      # width change drops it with _c
+
+
+def test_width_memoized_until_refresh():
+    """Perf pin for the per-loop-iteration width memo: repeated width() calls
+    cost one size probe until width_refresh() (called once per loop tick and
+    from the SIGWINCH handler) drops the memo."""
+    m = _load_mirror()
+    probes = []
+    m._raw_width = lambda: (probes.append(1), 80)[1]
+    m.width_refresh()
+    assert m.width() == m.width() == m.width() == 80
+    assert len(probes) == 1
+    m.width_refresh()
+    assert m.width() == 80
+    assert len(probes) == 2
 
 
 def test_stream_build_chip_branches():

@@ -605,6 +605,22 @@ Behaviour & limits:
   (`render.dwidth`/`dsplit`, wcwidth-style: CJK/emoji are 2 cells, combining
   marks/ZWJ/VS16 are 0) — with `len()`, any op containing wide text overran the
   pane and knocked the `│ ` gutter out of alignment on wrapped rows.
+- **The `_c` render cache carries the frame math, not just the text.** Each op
+  caches its render per width as `_c = [w, text, rows, stripped]`
+  (`claude-mirror.py rendered()`): `rows` is the painted row count, so the
+  row-accounting walks (`trim_to_budget` — which runs on *every* append batch
+  and used to re-`count("\n")` the whole session's rendered text, quadratic in
+  session length — plus `painted_rows`/`measure`) read a cached int; `stripped`
+  is the lazily-built ANSI-stripped line list `locate_viewport` matches pane
+  captures against (the post-toggle drift watch runs ~40-50 such full-frame
+  searches per toggle — one strip pass per op per width instead). All four
+  fields invalidate together on width change, and nothing else can invalidate
+  them: ops are immutable once emitted and `viewbody`'s `_hl` highlight is
+  write-once, which is also why a fancier *incremental* frame-row total was
+  rejected — per-op cached counts already delete the rescan cost with no
+  invalidation surface beyond the width key. `width()` itself is memoized per
+  loop tick (refreshed each iteration and on SIGWINCH), so a walk costs zero
+  ioctls and sees one consistent width.
 - **Tailers read exactly the bytes they measured.** Every poll-loop FILE reader
   (`claude-stream.py`, `claude-substream.py`, `claude-codex-stream.py` — the
   renderer reads ops by rowid, which has no such race)

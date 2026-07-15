@@ -93,7 +93,6 @@ def _fe():
 LOG, FIXED_WIDTH = PS.parse_argv()
 
 BANNER = "\033[38;5;244m ◧ command mirror — waiting for commands… \033[0m"
-
 # Keep the last MAX_OPS parsed ops in memory so a resize can repaint without
 # re-reading the file. Bounded so a very long-lived session can't grow memory
 # without limit (the user's concern) — oldest history is dropped past the cap.
@@ -112,21 +111,65 @@ ROW_BUDGET = int(os.environ.get("CLAUDE_MIRROR_SCROLLBACK", "4800"))
 OPS = []            # parsed ops (capped), for repaint-on-resize
 
 
-width = PS.make_width(FIXED_WIDTH)
+_raw_width = PS.make_width(FIXED_WIDTH)
+_W = [None]     # per-loop-iteration width memo (an ioctl per CALL added up:
+#                 every render walk asks for the width several times per tick)
+
+
+def width():
+    """The pane width, memoized until the next `width_refresh()` (once per
+    main-loop iteration, and at SIGWINCH). panescript's make_width contract
+    is untouched — this only bounds the ioctl rate renderer-side. Within one
+    loop iteration every walk therefore sees ONE consistent width, which is
+    what the frame math wants anyway (a mid-walk resize is caught by the
+    SIGWINCH-driven reflow on the next iteration)."""
+    if _W[0] is None:
+        _W[0] = _raw_width()
+    return _W[0]
+
+
+def width_refresh():
+    _W[0] = None
+
 
 fit = PS.fit
+
+_BANNER_STRIPPED = R.strip_ansi(BANNER).rstrip()
 
 
 def render(op, w):
     """One paint op -> ANSI text for the current width (may contain newlines).
     Cached per (op, width) so repeated repaints at the same width — and the common
     case of re-rendering unchanged ops — don't re-highlight/re-wrap needlessly."""
+    return rendered(op, w)[1]
+
+
+def rendered(op, w):
+    """The per-(op, width) render cache record, stored on the op as `_c`:
+    `[w, text, rows, stripped]` — `rows` is the painted row count
+    (newline count + 1, the +1 being the op's own trailing-newline row), so
+    the row-accounting walks (trim_to_budget / painted_rows / measure) read a
+    cached int instead of re-scanning every op's text per call (that rescan
+    was quadratic in session length); `stripped` is the lazily-filled
+    rstripped/ANSI-stripped line list locate_viewport matches captures
+    against (~40-50 full-frame strip passes per toggle's drift watch without
+    it). All four fields invalidate together on width change; nothing else
+    can change a written op's render (ops are immutable once emitted, and
+    viewbody's `_hl` is itself write-once)."""
     c = op.get("_c")
-    if c is not None and c[0] == w:
-        return c[1]
-    s = _render(op, w)
-    op["_c"] = (w, s)
-    return s
+    if c is None or c[0] != w:
+        s = _render(op, w)
+        c = [w, s, s.count("\n") + 1, None]
+        op["_c"] = c
+    return c
+
+
+def stripped_rows(c):
+    """The cache record's stripped-line list (lazy — see `rendered`)."""
+    st = c[3]
+    if st is None:
+        st = c[3] = [r.rstrip() for r in R.strip_ansi(c[1]).split("\n")]
+    return st
 
 
 # ⧉ copy links: a g-tagged label op gets clickable " ⧉cmd ⧉out" affordances (OSC 8
@@ -257,14 +300,16 @@ def viewbody(op):
 
 def iter_painted(w, ops=None):
     """THE painted-row walk, shared by every site that must agree on what a
-    full frame contains: each (op_index, op, inner_op, rendered_text) in
+    full frame contains: each (op_index, op, inner_op, cache_record) in
     paint order — every op with its open view blocks expanded, rendered at
-    width `w`. Any two of these walks disagreeing is a model-vs-buffer
-    divergence (a restore lands where the frame math said, not where the
-    frame is), so there is exactly one."""
+    width `w` (the record is `rendered()`'s `[w, text, rows, stripped]`, so
+    callers read text OR the cached row count without re-scanning). Any two
+    of these walks disagreeing is a model-vs-buffer divergence (a restore
+    lands where the frame math said, not where the frame is), so there is
+    exactly one."""
     for i, op in enumerate(ops if ops is not None else OPS):
         for o in expanded(op):
-            yield i, op, o, render(o, w)
+            yield i, op, o, rendered(o, w)
 
 
 def painted_rows(w):
@@ -273,15 +318,15 @@ def painted_rows(w):
     row the op's own trailing newline occupies. Callers computing a restore
     amount add ONE more (+1) themselves for the cursor row the frame's final
     newline leaves; that cursor +1 is scroll math, not frame content."""
-    return 1 + sum(txt.count("\n") + 1 for _, _, _, txt in iter_painted(w))
+    return 1 + sum(c[2] for _, _, _, c in iter_painted(w))
 
 
 def frame_bytes(w):
     """The full-reflow byte string: clear screen + scrollback, banner, every
     op (with open view blocks expanded) at width `w`."""
     out = ["\033[H\033[2J\033[3J", BANNER, "\n"]    # home, clear screen + scrollback
-    for _, _, _, txt in iter_painted(w):
-        out.append(txt); out.append("\n")
+    for _, _, _, c in iter_painted(w):
+        out.append(c[1]); out.append("\n")
     return "".join(out)
 
 
@@ -319,8 +364,8 @@ def _audit_paint(kind, w, body):
 def paint_new(ops):
     w = width()
     out = []
-    for _, _, _, txt in iter_painted(w, ops):
-        out.append(txt); out.append("\n")
+    for _, _, _, c in iter_painted(w, ops):
+        out.append(c[1]); out.append("\n")
     try:
         sys.stdout.write("".join(out)); sys.stdout.flush()
     except Exception:
@@ -328,6 +373,7 @@ def paint_new(ops):
 
 
 def _on_winch():
+    width_refresh()
     L.resized = True
 
 
@@ -338,8 +384,8 @@ def trim_to_budget(w):
     the next reflow rewrites it (at which point the trimmed rows would have
     fallen off the scrollback ceiling anyway)."""
     heights = [0] * len(OPS)
-    for i, _, _, txt in iter_painted(w):
-        heights[i] += txt.count("\n") + 1
+    for i, _, _, c in iter_painted(w):
+        heights[i] += c[2]                 # cached row count — no text rescan
     total = 1 + sum(heights)
     if total <= ROW_BUDGET:
         return
@@ -357,10 +403,10 @@ def measure(gid):
     when the op isn't in OPS (trimmed / never painted)."""
     w = width()
     acc, pos, idx = 1, None, None
-    for i, op, o, txt in iter_painted(w):
+    for i, op, o, c in iter_painted(w):
         if idx is None and o is op and op.get("v") == gid:
             pos, idx = i, acc
-        acc += txt.count("\n") + 1
+        acc += c[2]
     return pos, idx, acc
 
 
@@ -473,9 +519,9 @@ def locate_viewport(w, tag=None, near=None):
     if not cap:
         return _bail("empty capture")
     L.last_cap0 = cap[0][:60]
-    rows = [R.strip_ansi(BANNER).rstrip()]
-    for _, _, _, rtxt in iter_painted(w):
-        rows.extend(r.rstrip() for r in R.strip_ansi(rtxt).split("\n"))
+    rows = [_BANNER_STRIPPED]
+    for _, _, _, c in iter_painted(w):
+        rows.extend(stripped_rows(c))
     L.loc_rows = len(rows)
     # Candidate offsets from a distinctive probe row; full scan as fallback.
     cands = None
@@ -966,6 +1012,7 @@ def main():
 
     L.db, L.wake_r = St.db_path(LOG), wake_r
     while True:
+        width_refresh()      # one live-size probe per iteration, not per call
         sync_inode(L)
         new = []
         if L.cur_ino is not None:
