@@ -339,6 +339,48 @@ def test_f3_failed_command_chip(run_hook, test_env, session):
     oracle.assert_clean(test_env, s.sid, allow=("failed tools",))
 
 
+def test_f3b_fg_waits_for_late_redirect_target(run_hook, test_env, session,
+                                                writer):
+    """A foreground command that creates its own redirect target LATE
+    (`sleep 45; cmd > out`, a retry loop) is still running — the fg tailer must
+    wait on command LIVENESS (the PostToolUse outcome hand-off), not the flat
+    FIND_S deadline. The old bounded wait painted "output not found" and released
+    the fg slot at ~12s, so bg-recheck cleared the tab off blue while the command
+    ran on and the late output never streamed (audit tell: an fg
+    'output-file-not-found' stream whose PostToolUse fired seconds later)."""
+    s = session.make()
+    env = dict(test_env)
+    env["CLAUDE_STREAM_FIND_S"] = "0.3"   # any bounded-wait regression trips fast
+    target = os.path.join(test_env["CLAUDE_MIRROR_TMPDIR"],
+                          "late-%s.out" % uuid.uuid4().hex[:8])
+    cmd = "sleep 45; adapters mr > %s 2>&1" % target
+    run_hook("claude-cmd-pre.py", P.pre_bash(s, cmd), env=env)
+    rec = fg_live_record(s)
+    assert rec["src"] == target and not rec["own"], "tailing the command's own redirect"
+
+    # Deliberate blind sleep: this asserts event ABSENCE ("output not found" never
+    # painted; slot never released) well past FIND_S — an absence can't be polled.
+    time.sleep(1.5)
+    assert "output not found" not in s.ops_text(), \
+        "fg tailer gave up on the late redirect target"
+    assert s.live("fg"), "fg slot released while the command still runs"
+    assert not any(end_reasons(test_env, s.sid)), "fg stream ended early"
+
+    # The command finally creates its redirect target (a real write-holder, so
+    # writer-liveness reads the command as still running).
+    w = writer(target)
+    with open(target, "a") as f:
+        f.write("late line\n")
+    wait_until(lambda: "late line" in s.ops_text(), desc="late-created output streams")
+
+    run_hook("claude-cmd-fmt.py", P.post_bash(s, cmd, duration_ms=45000), env=env)
+    w.terminate()
+    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
+               desc="fg stream ends on the done hand-off")
+    assert not s.live("fg"), "fg slot not released"
+    oracle.assert_clean(test_env, s.sid)
+
+
 # --------------------------------------------------------------------- F4
 
 def test_f4a_background_command_lifecycle(run_hook, test_env, session,

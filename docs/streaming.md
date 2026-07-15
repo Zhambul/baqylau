@@ -193,6 +193,21 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   fallback so nothing is silently lost. The `fg` tailer gives up by **writer-liveness**, like
   `bg`, not a fixed timeout — it keeps the block (and the tab) blue for as long as
   the command is *actually* still running, not for a guessed duration.
+  - **Waiting for a late-created output file** (`wait_fg_src`). The write-holder
+    check above only works once the file *exists*. `$F` — especially the
+    command's own redirect target — can appear arbitrarily late: `sleep 45; cmd >
+    out`, or a retry loop that only writes on its Nth pass. So the file-appearance
+    wait is **liveness-bounded too**, mirroring the monitor's process-liveness
+    wait for a lazily-created `tasks/<id>.output`: the `fg` tailer keeps polling
+    for `$F` until it lands **or** the `PostToolUse` outcome hand-off arrives
+    (the blocking Bash call resolved → the command genuinely finished with no
+    file), capped by `FG_BACKSTOP_S` against a wedged tailer — **not** the flat
+    `FIND_S` deadline `bg` uses. The rejected design was that flat ~12 s deadline:
+    it painted `■ output not found`, released the `fg` slot, and `bg-recheck`
+    cleared the tab off blue while the command ran on for another 40 s, its late
+    output never streamed (audit tell: an `fg` stream ending `output-file-not-found`
+    whose command's `PostToolUse` fired seconds *later* — the
+    `fg tailer gave up on a late redirect target` anomaly).
   - **Ctrl+B (backgrounding a running command).** Confirmed empirically,
     undocumented anywhere: backgrounding a foreground command with Ctrl+B fires
     that Bash call's `PostToolUse` immediately, with `duration_ms` covering only

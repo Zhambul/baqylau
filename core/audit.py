@@ -779,6 +779,19 @@ ANOMALY_SECTIONS = [
     ("monitor gave up on a lazily-created output file (tab wrongly cleared)",
      "SELECT id, task_id, started_at, ended_at FROM streams WHERE session_id=? "
      "AND kind='monitor' AND end_reason='output-file-not-found'", 1),
+    # The SAME shape for a foreground command that redirects to its own file
+    # (`cmd > out`): a command whose file is created only late (`sleep 45; cmd >
+    # out`, a retry loop) is still running, so the fg tailer must wait on command
+    # LIVENESS (the PostToolUse outcome hand-off), not the flat FIND_S deadline
+    # (stream.py wait_fg_src). A pre-fix fg stream gave up at ~12s with
+    # 'output-file-not-found', released the fg slot, and bg-recheck cleared the
+    # tab off blue while the command ran on (its Post fired seconds later). A bare
+    # fg 'output-file-not-found' whose command's PostToolUse arrived AFTER the
+    # stream ended is that regression; a genuinely fileless command ends after its
+    # Post, not before.
+    ("fg tailer gave up on a late redirect target (tab wrongly cleared)",
+     "SELECT id, task_id, started_at, ended_at FROM streams WHERE session_id=? "
+     "AND kind='fg' AND end_reason='output-file-not-found'", 1),
     # Since the single-dispatcher refactor every event runs through claude-hook.py
     # -> dispatch.py. A crash in the DISPATCHER itself (not a subsystem) records
     # script='dispatch' — that means route() threw before/around fanning out, so a

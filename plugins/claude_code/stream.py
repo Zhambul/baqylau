@@ -292,6 +292,52 @@ def find_file(deadline):
     return glob_task_output()
 
 
+def _outcome_pending():
+    """Non-destructive: has PostToolUse handed off this fg command's outcome yet?
+    Its arrival means the (blocking) Bash tool call resolved — the command is no
+    longer running, so a still-absent output file is now GENUINELY absent rather
+    than merely late. Peek, never take: make_is_done's fg_done() must still
+    consume this record to pick up the finish chip / fallback body. Keyed the
+    same way as that consumer — "done:" + DONE (see cmd_fmt.py's hand_put)."""
+    return bool(DONE) and S.hand_peek(LOG, "done:" + DONE) is not None
+
+
+def wait_fg_src(run, start):
+    """Wait for an fg command's output file (its own redirect target, or the tee
+    file) to appear — LIVENESS-bounded, not the flat FIND_S deadline find_file
+    uses. A command that creates its redirect target only late (`sleep 45; cmd >
+    out`, a retry loop that writes on the Nth pass) is STILL RUNNING, so the file
+    may yet appear; giving up at FIND_S released the fg slot and flipped the tab
+    off blue mid-command while the late output never streamed (the audit tell was
+    an `output-file-not-found` fg stream whose PostToolUse fired seconds later).
+    This mirrors the monitor's process-liveness wait (monitor_wait_file) — keep
+    waiting until the file lands, OR the outcome hand-off arrives (the command
+    truly finished with no file), bounded by FG_BACKSTOP_S against a wedged
+    tailer. Returns the path, or None (session parked -> run.end set here; else
+    the caller paints the not-found chip)."""
+    deadline = start + FG_BACKSTOP_S
+    while time.time() < deadline:
+        try:
+            if os.path.exists(SRC):
+                return SRC
+        except Exception:
+            pass
+        if S.parked(LOG):
+            run.end("state-db-parked (session end)")   # session over — quit quietly
+            return None
+        if _outcome_pending():
+            # Command finished. One last look (it may have written the file and
+            # exited between ticks), then fall back — a genuinely fileless command.
+            try:
+                if os.path.exists(SRC):
+                    return SRC
+            except Exception:
+                pass
+            return glob_task_output()
+        time.sleep(0.3)
+    return glob_task_output()
+
+
 # `lsof -- path` scans the WHOLE process fd table on macOS (seconds on a loaded
 # box), and every tailer used to run it SYNCHRONOUSLY on every poll tick (POLL_S
 # can be 0.05 under test). Several concurrent tailers then spawn dozens of lsofs
@@ -490,8 +536,15 @@ def wait_source(run, start):
     if KIND == "monitor" and not SRC:
         path, mon_pid = monitor_wait_file(run, start)
     else:
-        path = find_file(start + FIND_S)
-        if not path:
+        # fg waits on command LIVENESS (the outcome hand-off), like the monitor
+        # waits on its process — a late-created redirect target must not be given
+        # up on at FIND_S while the command still runs (wait_fg_src). bg (and a
+        # legacy fg with no DONE key) keeps the flat FIND_S deadline.
+        if KIND == "fg" and SRC and DONE:
+            path = wait_fg_src(run, start)
+        else:
+            path = find_file(start + FIND_S)
+        if not path and run.end_reason == "?":     # not already ended (e.g. parked)
             O.emit(LOG, O.rule(), O.label("■ output not found", SLOT_RGB))
             run.end("output-file-not-found")
     return path, mon_pid
