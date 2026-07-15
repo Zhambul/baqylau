@@ -28,7 +28,10 @@ can neither lose evidence nor break a hook.
 
 CLI (what the audit-debug skill drives):
   bin/claude-audit.py sessions [N]          recent sessions
-  bin/claude-audit.py timeline <sid>        merged chronological event timeline
+  bin/claude-audit.py timeline <sid> [limit] [--ops] [--otel]
+                                        merged chronological event timeline
+                                        (--ops / --otel merge those high-volume
+                                        tables in too; off by default)
   bin/claude-audit.py errors <sid>          swallowed exceptions for a session
   bin/claude-audit.py anomalies <sid>       canned queries for known bug signatures
   bin/claude-audit.py sql "<query>"         free-form read-only SQL (opens mode=ro)
@@ -580,11 +583,25 @@ def _print_rows(rows, headers):
         print(" | ".join("" if v is None else str(v) for v in r))
 
 
-def cli_timeline(sid, limit=2000):
-    """Merged chronological view across all event tables for one session."""
+def cli_timeline(sid, limit=2000, with_ops=False, with_otel=False):
+    """Merged chronological view across all event tables for one session.
+    `ops` and `otel` are opt-in (--ops / --otel): they dwarf the event tables
+    (one row per paint op / per metric datapoint) and would drown the story."""
     conn = _connect()
     if conn is None:
         print("audit db unavailable"); return
+    extra = ""
+    if with_ops:
+        extra += """
+      UNION ALL
+      SELECT ts, 'op', producer || ': ' || substr(op, 1, 160), session_id
+        FROM ops"""
+    if with_otel:
+        extra += """
+      UNION ALL
+      SELECT ts, 'otel', metric || ' ' || query_source ||
+             CASE WHEN type != '' THEN ' ' || type ELSE '' END || '=' || value, session_id
+        FROM otel"""
     q = """
     SELECT ts, src, detail FROM (
       SELECT ts, 'hook' AS src,
@@ -626,7 +643,7 @@ def cli_timeline(sid, limit=2000):
       UNION ALL
       SELECT ts, 'pane', action || CASE WHEN ok = 1 THEN '' ELSE ' FAILED' END ||
              CASE WHEN detail != '' THEN ' — ' || detail ELSE '' END, session_id
-        FROM pane_events
+        FROM pane_events""" + extra + """
     ) WHERE session_id = ? ORDER BY ts LIMIT ?"""
     for ts, src, detail in conn.execute(q, (sid, limit)):
         print(f"{_fmt_ts(ts)}  {src:<7} {detail}")
@@ -658,6 +675,13 @@ def cli_errors(sid):
 # CLAUDE.md tells contributors to extend this list when a feature has a known
 # failure signature — add the entry here (with the why-comment above it) and
 # poison-test it in tests/test_l7_audit.py.
+
+# Window for the duplicated-ops signature: the fixed-2026-07-04 tailer bug
+# (unbounded read() + pos=size) re-emitted the same chunk on the NEXT poll, so
+# genuine duplicates land seconds apart; identical long lines hours apart are
+# just a command printing the same thing twice.
+DUP_OPS_WINDOW_S = 5.0
+
 ANOMALY_SECTIONS = [
     ("swallowed errors",
      "SELECT ts, script, func FROM errors WHERE session_id=? ORDER BY ts", 1),
@@ -668,20 +692,32 @@ ANOMALY_SECTIONS = [
     # OWNERSHIP records (which session shows a codex run), not slot lifecycles
     # — no release ever follows, so counting them false-fired on every adopted
     # rollout. 'claim-denied' is likewise not an acquisition (nothing was
-    # taken, so nothing will be released).
+    # taken, so nothing will be released). 'steal-stale' IS an acquisition (the
+    # new holder takes the slot) — it was once counted on the release side,
+    # which balanced out a stealer that then leaked its slot (steal-then-leak
+    # escaped). The displaced dead holder's missing release is synthesized at
+    # steal time (core/slots.py 'release-stale'), so a healthy steal still
+    # balances; pre-2026-07-15 sessions have steal rows without release-stale
+    # and may flag here — historical data, not a live bug.
     ("slot claims without a matching release",
      "SELECT kind, slot_n, agent_id, COUNT(*) FROM slots WHERE session_id=? "
      "AND kind != 'codex-claim' "
      "GROUP BY kind, COALESCE(slot_n, -1), agent_id "
-     "HAVING SUM(CASE WHEN action LIKE 'claim%' AND action != 'claim-denied' "
-     "               THEN 1 ELSE 0 END) > "
-     "       SUM(CASE WHEN action LIKE 'release%' OR action LIKE 'steal%' THEN 1 ELSE 0 END)",
+     "HAVING SUM(CASE WHEN (action LIKE 'claim%' AND action != 'claim-denied') "
+     "               OR action LIKE 'steal%' THEN 1 ELSE 0 END) > "
+     "       SUM(CASE WHEN action LIKE 'release%' THEN 1 ELSE 0 END)",
      1),
+    # 'awaiting-command' (red — the permission prompt) is a RESTING user-blocked
+    # state, exactly like green: a session can legitimately sit on it for hours,
+    # so it's excluded alongside the green/idle/clear set. NB pre-2026-07
+    # sessions wrote their literal-state dispatches (SessionStart idle /
+    # SessionEnd clear) under session_id='' — this per-sid query misses that
+    # final clear, so old sessions can false-flag here.
     ("tab left on a busy colour (last transition not green/idle/clear)",
      "SELECT ts, dispatch, prev_state, new_state, reason FROM tab_transitions "
      "WHERE session_id=? AND applied=1 AND ts = (SELECT MAX(ts) FROM "
      "tab_transitions WHERE session_id=? AND applied=1) AND new_state NOT IN "
-     "('awaiting-response', 'idle', 'clear', '')", 2),
+     "('awaiting-response', 'awaiting-command', 'idle', 'clear', '')", 2),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions
@@ -777,6 +813,12 @@ ANOMALY_SECTIONS = [
     # still OPEN is the cross-session pane-hijack shape (a daemon-origin
     # SessionStart anchored to the wrong tab — the agents-view bug); the benign
     # exception is a predecessor that crashed without SessionEnd in the same tab.
+    # The LIKE join parses the swept sid out of `detail` and is deliberately
+    # non-sargable: pane_events is per-session-pruned and close-stale rows are
+    # rare, so the scan is tiny — a dedicated swept_sid column (the audit DB's
+    # first ALTER-style migration) was judged not worth it. If close-stale
+    # volume ever grows, add the column at the write site
+    # (core/hostpane.py close_stale_mirrors) instead of tuning this query.
     ("stale-mirror sweep closed a LIVE session's mirror (pane hijack)",
      "SELECT p.ts, p.session_id, p.detail FROM pane_events p JOIN sessions s "
      "ON p.detail LIKE ('closed sid=' || s.session_id || ' %') "
@@ -801,6 +843,20 @@ ANOMALY_SECTIONS = [
      "SELECT ts, action, content FROM state_files WHERE session_id=? AND "
      "action IN ('park-failed (kept live)', 'restore-failed (park kept)') "
      "ORDER BY ts", 1),
+    # The reuse-live-db zombie shape (docs/mirror-pane.md): a bg/fg tailer that
+    # outlived SessionEnd's park kept pumping, and its first post-park emit
+    # RECREATED an empty state DB at the live path — the next resume then saw
+    # 'reuse-live-db' and trusted the empty DB while the real history sat in the
+    # park. Current builds exit 'state-db-parked (session end)' before pumping,
+    # so a bg/fg stream that ended AFTER the session's keep-history park with any
+    # OTHER reason is the regression. (No keep-history row -> subquery NULL ->
+    # comparison false -> clean, by construction.)
+    ("bg/fg tailer outlived the park (zombie recreated the state DB)",
+     "SELECT s.id, s.kind, s.end_reason, s.ended_at FROM streams s WHERE "
+     "s.session_id=? AND s.kind IN ('bg','fg') AND s.ended_at IS NOT NULL "
+     "AND COALESCE(s.end_reason,'') != 'state-db-parked (session end)' "
+     "AND s.ended_at > (SELECT MAX(ts) FROM state_files WHERE session_id=? "
+     "AND action='keep-history')", 2),
     ("resume that lost its mirror history (fresh-db on source=resume)",
      "SELECT h.ts FROM hook_events h WHERE h.session_id=? AND "
      "h.hook='SessionStart' AND json_extract(h.payload,'$.source')='resume' "
@@ -851,6 +907,49 @@ ANOMALY_SECTIONS = [
      "handler='claude-stop-fmt.py' AND decision LIKE 'otel absent%' AND EXISTS "
      "(SELECT 1 FROM state_files f WHERE f.session_id=? AND f.action='bump-otel') "
      "ORDER BY ts", 2),
+    # The inverse wiring failure: SessionEnd fired (the subscriber row proves the
+    # dispatcher ran) but claude-stop-fmt.py never wrote its SessionEnd decision —
+    # the stop-fold step was dropped from the dispatch plan. stop-fmt ALWAYS
+    # decides on SessionEnd ('otel authoritative … fold skipped' or 'otel absent —
+    # folded transcript fallback'), so its absence is the tell. Scoped to sessions
+    # with NO bump-otel rows: with OTEL data the cost is intact anyway; without it
+    # the missing fallback fold means the session's cost was silently lost.
+    ("SessionEnd fired but the stop-fold never ran (fallback dropped — cost lost)",
+     "SELECT h.ts FROM hook_events h WHERE h.session_id=? AND "
+     "h.hook='SessionEnd' AND h.handler='subscriber' AND NOT EXISTS "
+     "(SELECT 1 FROM state_files f WHERE f.session_id=? AND f.action='bump-otel') "
+     "AND NOT EXISTS (SELECT 1 FROM hook_events e WHERE e.session_id=? AND "
+     "e.hook='SessionEnd' AND e.handler='claude-stop-fmt.py')", 3),
+    # Cross-session contamination: everything is keyed by session_id, EXCEPT
+    # background-job detection, which is per-project (cwd slug) — two sessions in
+    # one directory can cross-talk (CLAUDE.md). A task_id (streams) or slot claim
+    # token (slots.marker_path — it embeds the mirror-log path, so a foreign sid
+    # can only appear via a mis-keyed write) under >1 session_id is that shape.
+    # Scoped to groups involving THIS sid so `anomalies <sid>` stays per-session.
+    # Benign exception: a codex run taken over from a DEAD session
+    # (codex-claim steal-stale) legitimately streams under the new sid.
+    ("cross-session contamination (task_id/slot token under more than one sid)",
+     "SELECT src, key, sids FROM ("
+     "  SELECT 'stream-task' AS src, task_id AS key, "
+     "         GROUP_CONCAT(DISTINCT session_id) AS sids, "
+     "         SUM(session_id=?) AS mine FROM streams WHERE task_id != '' "
+     "  GROUP BY task_id HAVING COUNT(DISTINCT session_id) > 1 "
+     "  UNION ALL "
+     "  SELECT 'slot-token', marker_path, GROUP_CONCAT(DISTINCT session_id), "
+     "         SUM(session_id=?) FROM slots WHERE marker_path != '' "
+     "  GROUP BY marker_path HAVING COUNT(DISTINCT session_id) > 1"
+     ") WHERE mine > 0", 2),
+    # The fixed-2026-07-04 duplicated-block shape: a tailer's unbounded read()
+    # with pos=size re-read bytes appended mid-read, painting the same chunk
+    # twice on the NEXT poll — identical ops seconds apart. Scoped to gut ops
+    # (block body lines) long enough (>60 chars) that an identical repeat within
+    # DUP_OPS_WINDOW_S is a re-read, not a command printing a short line twice.
+    ("duplicated mirror ops (identical block lines painted twice within %gs)"
+     % DUP_OPS_WINDOW_S,
+     "SELECT substr(op,1,80), COUNT(*) FROM ops WHERE session_id=? "
+     "AND op LIKE '%\"gut\"%' AND length(op) > 60 "
+     "GROUP BY op HAVING COUNT(*) > 1 AND MAX(ts) - MIN(ts) < "
+     + str(DUP_OPS_WINDOW_S), 1),
     # The OTLP receiver is a long-lived singleton that caches its state-DB
     # connection. A park (os.replace db -> db.keep) + resume swaps the inode under
     # the path, so a receiver that didn't revalidate kept writing token counters to
@@ -1041,8 +1140,12 @@ def _cmd_sessions(argv):
 
 
 def _cmd_timeline(argv):
-    cli_timeline(argv[2] if len(argv) > 2 else "",
-                 int(argv[3]) if len(argv) > 3 else 2000)
+    # timeline <sid> [limit] [--ops] [--otel]
+    flags = {a for a in argv[2:] if a.startswith("--")}
+    args = [a for a in argv[2:] if not a.startswith("--")]
+    cli_timeline(args[0] if args else "",
+                 int(args[1]) if len(args) > 1 else 2000,
+                 with_ops="--ops" in flags, with_otel="--otel" in flags)
 
 
 def _cmd_errors(argv):

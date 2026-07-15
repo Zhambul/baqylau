@@ -352,6 +352,27 @@ def test_warning_light_flood_collapses_then_resumes(run_hook, seed, session):
         "⚠ audit: claude-file-fmt.py: RuntimeError: late") == 1
 
 
+def test_warning_light_surfaces_global_rows(run_hook, seed, session):
+    """Auditor-outage / pre-session errors land under session_id='' — every
+    session's scorebar must surface them (the chip counts them; the mirror line
+    is tagged `global:`), deduped per-session via the errseen-global kv."""
+    s = session.make()
+    _plant_error(run_hook, "", "claude-audit.py", "OSError: disk full")
+    assert _poll(seed, s.log) == "1"
+    line = "⚠ audit: global: claude-audit.py: OSError: disk full"
+    assert s.ops_text().count(line) == 1
+    assert _poll(seed, s.log) == "1"             # second poll: no re-emit
+    assert s.ops_text().count("⚠ audit: global:") == 1
+    # A session-scoped error rides the same chip count.
+    _plant_error(run_hook, s.sid, "claude-cmd-fmt.py", "ValueError: boom")
+    assert _poll(seed, s.log) == "2"
+    # A SECOND session sees the same global row too (an audit outage affects
+    # all sessions), exactly once, and not the first session's own error.
+    s2 = session.make()
+    assert _poll(seed, s2.log) == "1"
+    assert s2.ops_text().count(line) == 1
+
+
 def test_warning_light_chip_reaches_scorebar_text(run_hook, seed, session):
     """End to end: plant an error, poll, and render the scorebar's rows — the ▪
     row carries the AMBER ⚠ chip; with zero errors it shows no ⚠ at all."""

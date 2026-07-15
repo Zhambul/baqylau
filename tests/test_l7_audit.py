@@ -1,8 +1,8 @@
 # L7 — the audit oracle itself.
 #
 # assert_clean (tests/oracle.py) is the meta-assertion every session-flow test
-# ends with; these tests prove the oracle can't rot: each of the 13 canned
-# anomaly sections must FIRE on a synthetically poisoned audit DB, and stay
+# ends with; these tests prove the oracle can't rot: each canned
+# anomaly section must FIRE on a synthetically poisoned audit DB, and stay
 # silent on a healthy one. Plus the audit's own degradation paths (spool
 # fallback, CLAUDE_AUDIT=0).
 import json
@@ -89,6 +89,35 @@ BUG_SHAPES = [
         ("INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
          " VALUES(1,?,'/x.log','bump','{\"deltas\":{\"tokens\":5}}',NULL,1)",
          (SID,))]),
+    ("bg/fg tailer outlived the park", [
+        # keep-history park at ts=100, then a bg stream ending AFTER it with a
+        # non-parked reason = the zombie that recreated the state DB.
+        ("INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
+         " VALUES(100,?,'/x.keep','keep-history','resume',NULL,1)", (SID,)),
+        ("INSERT INTO streams(session_id,kind,src_path,pid,started_at,ended_at,"
+         "end_reason) VALUES(?,'bg','/x.out',1,50,200,'writer-gone')", (SID,))]),
+    ("SessionEnd fired but the stop-fold never ran", [
+        # SessionEnd subscriber row, NO bump-otel, NO stop-fmt decision row.
+        ("INSERT INTO hook_events(ts,session_id,hook,tool_name,agent_id,"
+         "handler,decision,pid,payload)"
+         " VALUES(1,?,'SessionEnd','','','subscriber','',1,'{}')", (SID,))]),
+    ("cross-session contamination", [
+        # The same task_id streaming under two sids (both ended cleanly, so
+        # only the contamination section fires).
+        ("INSERT INTO streams(session_id,kind,task_id,src_path,pid,started_at,"
+         "ended_at,end_reason) VALUES(?,'bg','t9','/x.out',1,1,2,'writer-gone')",
+         (SID,)),
+        ("INSERT INTO streams(session_id,kind,task_id,src_path,pid,started_at,"
+         "ended_at,end_reason) VALUES('other-sid','bg','t9','/x.out',1,1,2,"
+         "'writer-gone')", ())]),
+    ("duplicated mirror ops", [
+        # The same long gut op painted twice 1s apart (the re-read tailer bug).
+        ("INSERT INTO ops(ts,session_id,producer,pid,op) VALUES(1,?,'x.py',1,"
+         "'{\"t\": \"gut\", \"s\": \"an identical long output line the tailer"
+         " re-read and painted twice\", \"c\": [1,2,3]}')", (SID,)),
+        ("INSERT INTO ops(ts,session_id,producer,pid,op) VALUES(2,?,'x.py',1,"
+         "'{\"t\": \"gut\", \"s\": \"an identical long output line the tailer"
+         " re-read and painted twice\", \"c\": [1,2,3]}')", (SID,))]),
     ("SessionEnd transcript fallback fired despite OTEL data", [
         # A SessionEnd fallback fold decision AND a bump-otel row for the same
         # session = the otel_seen gate broke and cost was double-counted.
@@ -132,6 +161,61 @@ def test_assert_clean_allowlist(test_env):
     with pytest.raises(AssertionError):
         oracle.assert_clean(test_env, SID)
     oracle.assert_clean(test_env, SID, allow=("swallowed errors",))
+
+
+def test_parked_tailer_end_is_not_a_zombie(test_env):
+    """The zombie-tailer section must stay silent for the healthy shapes: a
+    bg stream that ended WITH the park reason, and one that ended BEFORE the
+    keep-history park."""
+    sid = "parked-clean"
+    poison(test_env,
+           "INSERT INTO state_files(ts,session_id,path,action,content,script,pid)"
+           " VALUES(100,?,'/x.keep','keep-history','other',NULL,1)", (sid,))
+    poison(test_env,
+           "INSERT INTO streams(session_id,kind,src_path,pid,started_at,ended_at,"
+           "end_reason) VALUES(?,'bg','/x.out',1,50,200,"
+           "'state-db-parked (session end)')", (sid,))
+    poison(test_env,
+           "INSERT INTO streams(session_id,kind,src_path,pid,started_at,ended_at,"
+           "end_reason) VALUES(?,'bg','/y.out',1,10,50,'writer-gone')", (sid,))
+    counts = oracle.anomaly_counts(test_env, sid)
+    n = next(v for t, v in counts.items() if "outlived the park" in t)
+    assert n == 0, oracle.anomalies(test_env, sid)
+
+
+def test_steal_stale_counts_as_claim(seed, session, test_env):
+    """steal-stale is an ACQUISITION: a healthy steal (dead holder displaced —
+    slots.py synthesizes its release-stale — then the stealer releases) must
+    balance, while a stealer that LEAKS its slot must stay flagged (the old
+    accounting counted the steal as a release, so steal-then-leak escaped).
+    Seeded via the product API: slots.claim in subprocesses whose pids are dead
+    by the next claim."""
+    s = session.make()
+    # Fill all 5 bg slots from one (immediately dead) process: 5 leaked claims.
+    seed.py("from core import slots\n"
+            "for _ in range(5): slots.claim('bg', %r)\n" % s.log)
+    # Steal one and release it properly — that group must come out balanced
+    # (claim + steal vs release-stale + release), leaving the other 4 flagged.
+    seed.py("import os\nfrom core import slots\n"
+            "idx, tok = slots.claim('bg', %r)\n"
+            "assert tok, 'expected a steal, got claim-denied'\n"
+            "slots.release('bg', %r, idx, os.getpid())\n" % (s.log, s.log))
+    def unbalanced():
+        counts = oracle.anomaly_counts(test_env, s.sid)
+        return next(v for t, v in counts.items()
+                    if "without a matching release" in t)
+    assert unbalanced() == 4, oracle.anomalies(test_env, s.sid)
+    # steal-then-leak: steal another dead-holder slot and exit WITHOUT
+    # releasing. Its group is claim + release-stale + steal = 2 claims vs 1
+    # release -> still flagged (the old steal-as-release accounting would have
+    # read it 1 vs 2 and let the leak escape).
+    seed.py("from core import slots\n"
+            "idx, tok = slots.claim('bg', %r)\n"
+            "assert tok, 'expected a steal, got claim-denied'\n" % s.log)
+    assert unbalanced() == 4, oracle.anomalies(test_env, s.sid)
+    actions = [r[3] for r in oracle.slots(test_env, s.sid)]
+    assert actions.count("steal-stale") == 2
+    assert actions.count("release-stale") == 2   # one synthesized per steal
 
 
 # ------------------------------------------------------------- CLI dispatch
@@ -204,6 +288,21 @@ def test_write_command_swallows_argv_garbage(test_env):
     """A write entry point with broken argv must exit 0 (hooks fire these)."""
     p = cli(test_env, "transition")          # every positional arg missing
     assert p.returncode == 0, p.stderr
+
+
+def test_timeline_ops_and_otel_flags(test_env):
+    """`timeline` excludes the high-volume ops/otel tables by default; --ops and
+    --otel merge them in (each independently)."""
+    poison(test_env, "INSERT INTO ops(ts,session_id,producer,pid,op)"
+           " VALUES(1,?,'prod.py',1,'{\"t\": \"line\"}')", (SID,))
+    poison(test_env, "INSERT INTO otel(ts,session_id,metric,query_source,model,"
+           "type,value,pid) VALUES(2,?,'token','main','m','input',3.0,1)", (SID,))
+    out = cli(test_env, "timeline", SID).stdout
+    assert "prod.py" not in out and "token main" not in out
+    out = cli(test_env, "timeline", SID, "--ops").stdout
+    assert "prod.py" in out and "token main" not in out
+    out = cli(test_env, "timeline", SID, "--ops", "--otel").stdout
+    assert "prod.py" in out and "token main input=3.0" in out
 
 
 def test_anomalies_registry_smoke(test_env):

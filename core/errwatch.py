@@ -61,6 +61,13 @@ POLL_S = 5.0        # audit-DB poll cadence — deliberately slower than the
 FLOOD_N = 3         # > this many NEW rows in one poll collapse into one line
 TEXT_MAX = 120      # per-line char cap for the ⚠ mirror one-liner
 KV_KEY = "errseen"  # state-DB kv: last errors rowid already emitted to the mirror
+# Second checkpoint for GLOBAL errors rows (session_id='') — auditor-outage rows
+# (audit.py _connect's own failure) and pre-session/CLI errors land there, so a
+# per-sid-only poll left the "audit outages are visible too" claim false. Every
+# session's scorebar sees the same global rows (correct: an audit outage affects
+# all sessions), deduped PER SESSION via this kv, and emitted with a `global:`
+# tag so they read as machine-wide, not this session's.
+KV_KEY_GLOBAL = "errseen-global"
 
 _self_audited = False   # poll()'s own failure audited once per process (see header)
 
@@ -109,17 +116,21 @@ def _summary(tb):
     return "?"
 
 
-def err_ops(rows, sid):
+def err_ops(rows, sid, who=""):
     """Mirror paint ops for a batch of NEW errors rows [(id, script, traceback),
     …]: one AMBER ⚠ label per row, or — past FLOOD_N — a single collapsed line
     pointing at the audit CLI. Text is line-capped via streamfmt.cap (the shared
-    truncation vocabulary) and char-capped to TEXT_MAX."""
+    truncation vocabulary) and char-capped to TEXT_MAX. `who` tags a non-session
+    batch (global rows pass "global") both per-line and in the flood line, whose
+    CLI pointer then targets the rows' real key (session_id='') instead of sid."""
+    tag = f"{who}: " if who else ""
+    target = "''" if who else sid
     if len(rows) > FLOOD_N:
-        return [O.label(f"⚠ audit: {len(rows)} new errors "
-                        f"(bin/claude-audit.py errors {sid})", O.AMBER)]
+        return [O.label(f"⚠ audit: {tag}{len(rows)} new errors "
+                        f"(bin/claude-audit.py errors {target})", O.AMBER)]
     out = []
     for _id, script, tb in rows:
-        text = SF.cap(f"⚠ audit: {script}: {_summary(tb)}", 1)
+        text = SF.cap(f"⚠ audit: {tag}{script}: {_summary(tb)}", 1)
         out.append(O.label(text[:TEXT_MAX], O.AMBER))
     return out
 
@@ -140,26 +151,39 @@ def poll(log, sid=None):
             return None
         sid = sid or P.sid_from_log(log)
         conn = _audit_conn(db)   # cached across polls — see the header above
-        n = conn.execute("SELECT COUNT(*) FROM errors WHERE session_id=?",
+        # The chip counts GLOBAL (session_id='') rows too: an audit outage /
+        # pre-session error degrades every session, so every session shows it.
+        n = conn.execute("SELECT COUNT(*) FROM errors WHERE session_id IN (?, '')",
                          (sid,)).fetchone()[0]
-        rows = []
+        rows, grows = [], []
         if n:
             last = int(St.kv_get(log, KV_KEY) or 0)
             rows = conn.execute(
                 "SELECT id, script, traceback FROM errors "
                 "WHERE session_id=? AND id>? ORDER BY id",
                 (sid, last)).fetchall()
-        if rows:
+            glast = int(St.kv_get(log, KV_KEY_GLOBAL) or 0)
+            grows = conn.execute(
+                "SELECT id, script, traceback FROM errors "
+                "WHERE session_id='' AND id>? ORDER BY id",
+                (glast,)).fetchall()
+        if rows or grows:
             # Checkpoint BEFORE emitting: a failing emit must not re-emit the
             # same rows every POLL_S forever (at-most-once beats at-least-once
             # for an ambient warning; the audit `ops` rows say if one dropped).
-            St.kv_set(log, KV_KEY, int(rows[-1][0]))
-            # Audit the checkpoint advance (state_files, like every other
+            # Audit each checkpoint advance (state_files, like every other
             # coordination write) so "why was this error never shown" / "why
             # twice" is answerable: which rowids one poll consumed is a row.
-            A.state_file(log, St.db_path(log), "errseen",
-                         {"last": int(rows[-1][0]), "new": len(rows)})
-            O.emit(log, *err_ops(rows, sid))
+            if rows:
+                St.kv_set(log, KV_KEY, int(rows[-1][0]))
+                A.state_file(log, St.db_path(log), "errseen",
+                             {"last": int(rows[-1][0]), "new": len(rows)})
+            if grows:
+                St.kv_set(log, KV_KEY_GLOBAL, int(grows[-1][0]))
+                A.state_file(log, St.db_path(log), "errseen",
+                             {"last": int(grows[-1][0]), "new": len(grows),
+                              "global": True})
+            O.emit(log, *(err_ops(rows, sid) + err_ops(grows, sid, who="global")))
         return int(n)
     except Exception:
         _drop_conn()   # a stale/broken cached conn must not poison every poll

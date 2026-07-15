@@ -1,7 +1,7 @@
 # oracle.py — assertion helpers over the audit DB (and the tab DB).
 #
 # The audit trail is the project's own always-on flight recorder; these helpers
-# make it the test suite's oracle too. `assert_clean` runs the SAME 13 canned
+# make it the test suite's oracle too. `assert_clean` runs the SAME canned
 # anomaly queries the audit-debug skill starts from — a healthy synthetic
 # session must come out clean, exactly like a healthy real one.
 import glob

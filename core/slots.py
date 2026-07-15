@@ -114,7 +114,7 @@ def claim(kind, log):
     conn = St.connect(log)
     if conn is None:
         return start, None
-    got, action = None, "claim"
+    got, action, displaced = None, "claim", 0
     try:
         with St.immediate(conn):
             for k in range(n):
@@ -131,7 +131,7 @@ def claim(kind, log):
                 if not holder or not _alive(holder):    # stale holder -> steal the slot
                     conn.execute("UPDATE live SET pid=?, start_ts=? WHERE kind=? AND key=?",
                                  (mypid, time.time(), kind, str(idx)))
-                    got, action = idx, "steal-stale"
+                    got, action, displaced = idx, "steal-stale", holder
                     break
     except Exception:
         A.error(log, "claim", {"kind": kind, "start": start})
@@ -139,6 +139,15 @@ def claim(kind, log):
     if got is None:                                 # all live -> reuse start, no token
         A.slot(log, kind, "claim-denied", slot_n=start, owner_pid=mypid)
         return start, None
+    if action == "steal-stale":
+        # Synthesize the release the dead displaced holder never wrote, BEFORE
+        # the steal row: steal-stale is an ACQUISITION (the anomaly's
+        # claim/release pairing counts it as a claim), so without this row every
+        # healthy steal would read as an unbalanced slot — and counting the
+        # steal as a release instead (the old accounting) let a stealer that
+        # then LEAKED its slot escape the anomaly entirely.
+        A.slot(log, kind, "release-stale", slot_n=got, owner_pid=displaced,
+               marker_path=_token(log, kind, got))
     A.slot(log, kind, action, slot_n=got, owner_pid=mypid,
            marker_path=_token(log, kind, got))
     return got, _token(log, kind, got)

@@ -51,7 +51,7 @@ so it still covers the ones nothing else listens to:
 invisible to the audit, and a mirror-handler row can be cross-checked against the
 subscriber's independent record of the same event.
 | `tab_transitions` | tab-colour decision — dispatch, prev → new, applied *or skipped*, with the **reason** (replaces the old opt-in `CLAUDE_TAB_DEBUG` flat-file logs). "Applied" is **verified against kitty**: the `kitten @` exit code is captured, so a socket call that failed records `applied=0` + a "kitten @ failed rc=N" reason instead of claiming a colour change that never happened |
-| `slots` | palette/liveness-slot event (`live`-table rows) — claim / claim-id / claim-pid / steal-stale / claim-denied / release / release-id / release-pid / set-owner |
+| `slots` | palette/liveness-slot event (`live`-table rows) — claim / claim-id / claim-pid / steal-stale / release-stale / claim-denied / release / release-id / release-pid / set-owner. `steal-stale` is an acquisition; each steal is preceded by a synthesized `release-stale` for the displaced dead holder, so the anomalies' claim/release pairing balances a healthy steal (pre-2026-07-15 sessions lack release-stale rows) |
 | `streams` | detached tailer/streamer/watcher lifecycle — with the **end reason** (writer-gone / sentinel / stoppedByUser / parent-task-resolved / converted-ctrl-b / backstop-timeout / crash). Includes the **shell watchers** (`bg-watch`, `interrupt-watch`) — a watcher that dies mid-poll leaves an open row the `anomalies` query flags — and the codex watcher's **cross-session claims** (slots, kind `codex-claim`), so "why didn't session A show that codex run" is answerable. A streamer whose end couldn't reach the DB spools it and ingest applies it later, so it never falsely reads as "never ended" |
 | `ops` | paint op written to the mirror log — full pane reconstruction, survives SessionEnd |
 | `errors` | **swallowed exception — full traceback + context** (every `except: pass` site records before swallowing) |
@@ -63,7 +63,9 @@ Explore it with the CLI (from the repo root):
 
 ```sh
 python3 bin/claude-audit.py sessions            # recent sessions
-python3 bin/claude-audit.py timeline  <sid>     # merged chronological story
+python3 bin/claude-audit.py timeline  <sid> [limit] [--ops] [--otel]
+                                                # merged chronological story
+                                                # (--ops/--otel merge those high-volume tables in)
 python3 bin/claude-audit.py errors    <sid>     # swallowed exceptions, full tracebacks
 python3 bin/claude-audit.py anomalies <sid>     # canned queries for known bug signatures
 python3 bin/claude-audit.py sql "<query>"       # free-form read-only SQL (mode=ro)
@@ -79,7 +81,11 @@ the DB) and shows an AMBER **`⚠ N` chip** on its `▪` row when N > 0, and emi
 AMBER **`⚠ audit: <script>: <exception>` one-liner into the mirror** for each new
 row, exactly once (rowid checkpoint in the state-DB kv `errseen`, its advance
 audited as a `state_files` row), flood-collapsed past 3 rows into one line
-pointing at `bin/claude-audit.py errors <sid>`. The watcher's own failure is
+pointing at `bin/claude-audit.py errors <sid>`. GLOBAL rows (`session_id=''` —
+auditor-outage rows, pre-session/CLI errors) are surfaced too, in EVERY live
+session (an audit outage affects them all): counted on the chip, emitted as
+`⚠ audit: global: …` one-liners, deduped per session via a second kv checkpoint
+(`errseen-global`, its advances audited with `"global": true`). The watcher's own failure is
 audited at most once per process and then silenced (the recursion guard — a
 persistently failing watcher must not append an `errors` row per poll that the
 next poll would report), so "the warning light is broken" still shows up as one
