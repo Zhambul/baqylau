@@ -298,6 +298,26 @@ def test_orphaned_spool_claim_is_adopted(test_env):
         "a claim file with a LIVE pid was drained"
 
 
+def test_oracle_sees_spooled_stream_end(test_env):
+    """A streamer whose audit connect latched to spool-only writes its
+    stream_end as a spool pseudo-row; if it is the LAST audit writer of the
+    session nothing ingests it, and the row's ended_at stays NULL to any plain
+    reader. The test oracle must drain the spool before answering, or every
+    streams_all_ended wait times out on a session that in fact shut down
+    cleanly (the f10b CI flake)."""
+    _audit_calls(test_env, "sid_row = A.stream_start('/tmp/claude-mirror-spoolsid.log',"
+                           " 'codex-watcher', src_path='x')")
+    (stream_id,) = oracle.q(test_env, "SELECT id FROM streams"
+                            " WHERE session_id='spoolsid'")[0]
+    with open(os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl"), "a") as f:
+        f.write(json.dumps({"table": "stream_end", "cols": {
+            "id": stream_id, "ended_at": 2.0,
+            "end_reason": "state-db-parked (session end)"}}) + "\n")
+    rows = oracle.q(test_env, "SELECT ended_at, end_reason FROM streams"
+                    " WHERE session_id='spoolsid'")
+    assert rows == [(2.0, "state-db-parked (session end)")], rows
+
+
 def test_audit_disabled_still_works(run_hook, test_env, session):
     env = dict(test_env, CLAUDE_AUDIT="0")
     s = session.make()

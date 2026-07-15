@@ -4,6 +4,7 @@
 # make it the test suite's oracle too. `assert_clean` runs the SAME 13 canned
 # anomaly queries the audit-debug skill starts from — a healthy synthetic
 # session must come out clean, exactly like a healthy real one.
+import glob
 import os
 import re
 import sqlite3
@@ -17,9 +18,28 @@ def audit_db(env):
     return os.path.join(env["CLAUDE_AUDIT_DIR"], "audit.db")
 
 
+def _drain_spool(env):
+    """Audit writes degrade to spool.jsonl when sqlite is briefly unwritable
+    (audit-connect races at SessionStart under CI load latch that process to
+    spool-only), and the spool is only ingested by the NEXT process to connect.
+    A detached streamer that spools its stream_end and is the LAST writer of
+    the test leaves ended_at NULL forever — streams_all_ended then times out
+    (the f10b CI flake). The oracle must see what the product would eventually
+    ingest: when a spool (or a dead-pid orphan claim) exists, drain it through
+    the product's own ingest before answering."""
+    d = env.get("CLAUDE_AUDIT_DIR")
+    if not d or not glob.glob(os.path.join(d, "spool.jsonl*")):
+        return
+    subprocess.run(
+        [sys.executable, "-c",
+         "import core.audit as A; A._connect()"],   # _connect ingests the spool
+        env=dict(env), cwd=REPO, capture_output=True, timeout=30)
+
+
 def q(env, sql, args=()):
     """Read-only query against this test's audit DB ([] if it doesn't exist,
     or if a writer is mid-schema-creation — polling callers just retry)."""
+    _drain_spool(env)
     path = audit_db(env)
     if not os.path.exists(path):
         return []

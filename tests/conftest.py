@@ -52,6 +52,27 @@ def wait_until(pred, timeout=10.0, interval=0.05, desc=""):
     raise AssertionError("wait_until timed out (%ss): %s" % (timeout, desc or pred))
 
 
+@pytest.fixture(autouse=True)
+def _fresh_audit_conn():
+    """core.audit caches its connection (and its gave-up latch) per PROCESS,
+    but xdist reuses one worker process across many tests, each with its own
+    hermetic CLAUDE_AUDIT_DIR. An in-process test that audits (slots claim/
+    release, park_db, ...) after an earlier test primed the cache writes its
+    rows into THAT test's dir — the oracle then sees [] (f12's 'slot must be
+    released exactly once: []' CI flake was exactly this, worker-order
+    dependent). Reset the cache around every test; product processes are
+    unaffected (they are per-test subprocesses)."""
+    import core.audit as A
+    A._CONN, A._FAILED = None, False
+    yield
+    try:
+        if A._CONN is not None:
+            A._CONN.close()
+    except Exception:
+        pass
+    A._CONN, A._FAILED = None, False
+
+
 # ------------------------------------------------------------------ test env
 
 @pytest.fixture

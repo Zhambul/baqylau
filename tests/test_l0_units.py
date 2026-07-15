@@ -1050,6 +1050,12 @@ def test_park_db_main_move_failure_keeps_db_live_and_audits(tmp_path, monkeypatc
     HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
     _seed_state_db(db).close()
     open(db + "-wal", "w").write("fake frames")
+    # The DB is rollback-mode with a hand-planted stray -wal: whether the
+    # checkpoint's short-lived connection deletes such a stray is
+    # sqlite-VERSION-dependent (CI's bundled sqlite does; 3.51 doesn't).
+    # This test pins the MOVE failure path, not the checkpoint (which has its
+    # own test above) — bypass it so the sidecar deterministically survives.
+    monkeypatch.setattr(HP, "_checkpoint_wal", lambda db, log: None)
 
     def boom(src, dst):
         raise OSError(28, "No space left on device")
@@ -1068,6 +1074,10 @@ def test_park_db_sidecar_move_failure_still_parks_and_audits(tmp_path, monkeypat
     HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
     _seed_state_db(db).close()
     open(db + "-wal", "w").write("leftover")
+    # Bypass the checkpoint for the same sqlite-version reason as above: some
+    # sqlite builds delete a stray -wal on connect, which would leave the
+    # sidecar-move path (the thing under test) with nothing to move.
+    monkeypatch.setattr(HP, "_checkpoint_wal", lambda db, log: None)
     real_move = HP.shutil.move
 
     def flaky(src, dst):
