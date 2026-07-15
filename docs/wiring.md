@@ -24,6 +24,15 @@
       "…every other event…": [ … same single entry … ] }
   ```
 
+  **Exception — `WorktreeCreate`/`WorktreeRemove` must NOT be wired.** They are not
+  observational hooks: registering a `WorktreeCreate` hook tells Claude Code "I will
+  create the worktree" and the hook must print the worktree path to stdout (or return
+  `hookSpecificOutput.worktreePath`). The dispatcher's silent exit-0 reads as "hook
+  succeeded but returned no worktree path", failing every `EnterWorktree` / worktree-
+  isolated agent spawn on the machine (seen live 2026-07-15, session `a8fe9640`).
+  These two events therefore have no subscriber row — "did it fire?" is not
+  answerable from the audit for them, by necessity.
+
   Previously each event listed several separate command entries — the tab-colour
   dispatch, a matcher-gated formatter, and the always-on `async` audit subscriber —
   so Claude Code spawned one python process **per concern per event**. The
