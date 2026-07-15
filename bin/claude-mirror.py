@@ -424,6 +424,12 @@ GUARD_CORRECTIONS = 2    # correction budget per toggle — never fight the user
 GUARD_SLACK_ROWS = 5     # displacement (rows) the guard tolerates before it corrects (wrapped-row bias)
 TICK_S = 0.2             # idle tick cadence of the renderer loop (drift-watch sampling rate)
 TICK_GUARD_S = 0.08      # faster tick while the settle guard is armed — catch momentum small
+TOGGLE_POLL_TICKS = 10   # slow-fallback cadence of the view-open kv poll: toggles are
+#                          click-driven and claude-copy.py ALWAYS SIGWINCH-nudges after
+#                          the kv write (core/copy.py — the only view-open writer), so
+#                          the per-tick read is gated on a wake/new-ops; every Nth idle
+#                          tick (~2s) still polls, so a LOST nudge degrades to latency,
+#                          never a frozen toggle
 
 
 def tty_setup():
@@ -714,13 +720,17 @@ class _Loop:
     __slots__ = ("db", "wake_r", "last", "ino", "cur_ino",
                  "toggled", "t_idx", "anchor", "follow",
                  "resized", "force_paint", "painted_size",
-                 "last_cap0", "loc_rows",
+                 "last_cap0", "loc_rows", "woke", "idle_ticks",
                  "watch_until", "watch_pos", "watch_home",
                  "guard_until", "guard_left")
 
     def __init__(self):
         self.db, self.wake_r = None, None       # filled in by main()
         self.last, self.ino, self.cur_ino = 0, None, None
+        self.woke = True          # the wake pipe fired during the last wait_tick
+        #                           (True at startup: the first iteration polls)
+        self.idle_ticks = 0       # consecutive quiet ticks — the view-open
+        #                           slow-fallback counter (poll_toggles)
         self.toggled, self.t_idx, self.anchor, self.follow = \
             None, None, None, False
         self.resized = True       # paint once at startup (and on any SIGWINCH)
@@ -795,8 +805,11 @@ def sync_inode(L):
 def drain_ops(L):
     """Drain any new ops appended to the table. Returns (new_ops, restart) —
     restart True means the table shrank under us and the loop must start the
-    iteration over (the old `continue`)."""
-    L.last, new = St.ops_after(LOG, L.last)
+    iteration over (the old `continue`). check_reset=False: sync_inode already
+    catches every DB recreation (the file's inode always changes), so the
+    idle-tick poll is ONE query, not SELECT + MAX(id) probe; the -1 branch
+    below stays as a harmless belt-and-braces."""
+    L.last, new = St.ops_after(LOG, L.last, check_reset=False)
     if L.last < 0:                       # table shrank under us — restart
         L.last, OPS[:] = 0, []
         L.resized = L.force_paint = True
@@ -815,13 +828,28 @@ def drain_ops(L):
     return new, False
 
 
-def poll_toggles(L):
+def poll_toggles(L, new):
     """Click-to-view toggles: any change to the `view-open` kv set (a
     claude-copy.py /view click) reflows the whole pane, expanding or
     collapsing the affected blocks in place. BEFORE flipping the set,
     find the toggled line's offset and recover the current viewport
     top (the anchor must match against the PRE-toggle rendered rows —
-    exactly what's on screen right now)."""
+    exactly what's on screen right now).
+
+    The kv read is GATED, not per-tick: toggles are click-driven, and
+    claude-copy.py — the only view-open writer — always SIGWINCH-nudges
+    this renderer after the kv write (core/copy.py), which both sets
+    L.resized and wakes the pipe. So the read runs only when this
+    iteration woke from the pipe / a WINCH landed / new ops arrived,
+    plus every TOGGLE_POLL_TICKS-th quiet tick — the slow fallback that
+    turns a lost nudge (dead-pid kill, unregistered renderer-pid) into
+    ~2s of latency instead of a toggle frozen until the next event."""
+    if L.woke or L.resized or new:
+        L.idle_ticks = 0
+    else:
+        L.idle_ticks += 1
+        if L.idle_ticks % TOGGLE_POLL_TICKS:
+            return
     try:
         cur_open = set(St.kv_get(LOG, "view-open") or [])
     except Exception:
@@ -980,12 +1008,15 @@ def wait_tick(L):
     click handler's post-toggle nudge) via the wakeup pipe. While the
     settle guard is active, tick fast: momentum hits within ~200ms of
     the landing, and the sooner a displacement is caught the smaller
-    the visible wobble."""
+    the visible wobble. Records whether the pipe fired (L.woke) — the
+    view-open poll gate's wake signal."""
+    L.woke = False
     try:
         guarding = L.guard_until and time.monotonic() < L.guard_until
         if select.select([L.wake_r], [], [],
                          TICK_GUARD_S if guarding else TICK_S)[0]:
             os.read(L.wake_r, 4096)
+            L.woke = True
     except Exception:
         pass
 
@@ -1019,7 +1050,7 @@ def main():
             new, restart = drain_ops(L)
             if restart:
                 continue
-            poll_toggles(L)
+            poll_toggles(L, new)
         dispatch_reflow(L, new)
         drift_watch()
         wait_tick(L)

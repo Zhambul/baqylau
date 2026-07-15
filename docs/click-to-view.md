@@ -125,9 +125,15 @@ parts:
   `signal.set_wakeup_fd` + `select` wait precisely so a signal actually
   interrupts it; PEP 475 makes a plain `time.sleep` resume). A click on an id
   with no stash (pre-feature line) is a feedback no-op.
-- **The expansion** (paint time): the renderer keeps `view-open` mirrored (one
-  kv read per tick), and paints any `v`-tagged op followed by its stashed
-  block whenever its id is open. Every toggle is a full reflow repaint (the
+- **The expansion** (paint time): the renderer keeps `view-open` mirrored and
+  paints any `v`-tagged op followed by its stashed block whenever its id is
+  open. The kv read is **gated, not per-tick**: because the click handler is
+  the only `view-open` writer and it always nudges (above), the renderer reads
+  the set only on an iteration that woke from the pipe/SIGWINCH or that
+  drained new ops — plus every `TOGGLE_POLL_TICKS`-th (10th, ~2s) quiet tick
+  as a slow fallback, so a *lost* nudge (renderer pid unregistered, kill
+  failed) degrades to ~2s of latency, never a toggle frozen until the next
+  event. An idle mirror thus costs zero kv queries instead of 5/s. Every toggle is a full reflow repaint (the
   resize path — a terminal can't insert lines mid-scrollback), which
   necessarily parks the viewport at the bottom; the renderer then makes the
   toggle read as **unfolding in place**, like an editor fold. Before flipping

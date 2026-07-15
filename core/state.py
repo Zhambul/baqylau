@@ -308,11 +308,18 @@ def ops_append(log, ops):
         return False
 
 
-def ops_after(log, last_id):
+def ops_after(log, last_id, check_reset=True):
     """(new_last_id, [op, ...]) — every op with id > last_id, in insertion order.
     A max id BELOW last_id means the DB was recreated (fresh session reusing the
     key): the caller should reset and re-read from 0. Returns (last_id, []) on
-    failure so a transient error never looks like a reset."""
+    failure so a transient error never looks like a reset.
+
+    check_reset=False skips the MAX(id) recreated-DB probe on the empty path —
+    one query per idle poll instead of two — for a caller that detects DB
+    recreation ITSELF (the renderer's sync_inode stat catches every recreate,
+    since a park/restore or fresh session always swaps the file's inode; ops
+    rows are never deleted in place). Every other caller keeps the -1 reset
+    contract unchanged."""
     conn = connect(log)
     if conn is None:
         return last_id, []
@@ -320,6 +327,8 @@ def ops_after(log, last_id):
         rows = conn.execute("SELECT id, op FROM ops WHERE id > ? ORDER BY id",
                             (last_id,)).fetchall()
         if not rows:
+            if not check_reset:
+                return last_id, []
             top = conn.execute("SELECT COALESCE(MAX(id), 0) FROM ops").fetchone()[0]
             if top < last_id:
                 return -1, []               # recreated DB -> signal a reset

@@ -78,8 +78,9 @@ charter fits, document the owner here, and (if cheap) add a grep test.
 
 ## Module shape
 
-- **No import-time side effects.** The dispatcher imports every handler module
-  on every hook event, and tests import modules in isolation — so at import
+- **No import-time side effects.** The dispatcher imports handler modules on
+  hook events (lazily, per selected step — but the always-on `adopt`/
+  `tabstatus` set on EVERY event), and tests import modules in isolation — so at import
   time a module must not: read `sys.argv`, resolve a frontend, open/write any
   DB, claim a slot, glob `/tmp`, or do file I/O. Patterns: `_init(argv)`
   called from `entry()` (see `stream.py`/`substream.py`); memoized lazy

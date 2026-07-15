@@ -1453,3 +1453,41 @@ def test_cancelled_by_user_absent_file_and_mtime_only_change(tmp_path, monkeypat
     _os.utime(meta, ns=(_os.stat(meta).st_mtime_ns + 10**7,) * 2)
     assert SS.cancelled_by_user() is True
     assert calls["n"] == 2
+
+
+# --- core.state.ops_after: the -1 reset contract + the gated MAX(id) probe ----
+# The renderer detects a recreated DB via its per-iteration inode stat
+# (sync_inode), so its idle poll opts out of the empty-path MAX(id) probe
+# (check_reset=False -> ONE query per idle tick, and never a -1). Every other
+# caller keeps the reset contract byte-identical.
+
+class _CountingConn:
+    def __init__(self, conn):
+        self._c, self.sqls = conn, []
+
+    def execute(self, sql, *a):
+        self.sqls.append(sql)
+        return self._c.execute(sql, *a)
+
+    def __getattr__(self, k):
+        return getattr(self._c, k)
+
+
+def test_ops_after_reset_contract_and_gated_probe(tmp_path, monkeypatch):
+    from core import state as S
+    log = str(tmp_path / "claude-mirror-oa.log")
+    assert S.ops_append(log, [{"t": "line", "s": "a"}])
+    cc = _CountingConn(S.connect(log))
+    monkeypatch.setattr(S, "connect", lambda l: cc)
+    # default: the empty path runs the MAX(id) probe, and a max BELOW last_id
+    # is the recreated-DB signal (-1) — two queries.
+    assert S.ops_after(log, 99) == (-1, [])
+    assert len(cc.sqls) == 2
+    # check_reset=False: ONE query on the idle path, never a reset signal.
+    cc.sqls.clear()
+    assert S.ops_after(log, 99, check_reset=False) == (99, [])
+    assert len(cc.sqls) == 1
+    # the non-empty path is identical either way.
+    last, ops = S.ops_after(log, 0, check_reset=False)
+    assert last == 1 and ops == [{"t": "line", "s": "a"}]
+    assert S.ops_after(log, 0) == (last, ops)

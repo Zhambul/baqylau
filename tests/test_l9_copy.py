@@ -653,3 +653,59 @@ def test_renderer_neutralizes_executable_output(session, seed, reaper, test_env)
     # the op's embedded 2J (clear) was stripped; the renderer's own clears
     # remain (they start each repaint), so count: exactly the repaint ones
     assert "\x1b[38;2;9;9;9m" in text                  # SGR survived
+
+
+def test_poll_toggles_gates_kv_reads_on_wake(session, test_env, monkeypatch):
+    """The view-open kv read is gated: a quiet idle tick reads NOTHING until
+    the TOGGLE_POLL_TICKS-th (the slow fallback); a pipe wake (the click
+    handler's nudge / a WINCH) or new ops poll immediately."""
+    s = session.make()
+    mod = _load_mirror(s.log)
+    calls = []
+    monkeypatch.setattr(mod.St, "kv_get",
+                        lambda log, key: calls.append(key) or [])
+    L = mod.L
+    L.woke = L.resized = False
+    L.idle_ticks = 0
+    for _ in range(mod.TOGGLE_POLL_TICKS):
+        mod.poll_toggles(L, [])
+    assert len(calls) == 1                  # only the Nth quiet tick polled
+    L.woke = True
+    mod.poll_toggles(L, [])                 # a nudge wake polls at once...
+    assert len(calls) == 2
+    L.woke = False
+    mod.poll_toggles(L, [{"t": "line"}])    # ...and so does a new-ops tick
+    assert len(calls) == 3
+    L.resized = True
+    mod.poll_toggles(L, [])                 # ...and a WINCH-flagged tick
+    assert len(calls) == 4
+
+
+def test_view_toggle_unnudged_falls_back_to_slow_poll(session, run_hook, seed,
+                                                      reaper, test_env):
+    """A view-open write whose SIGWINCH nudge is LOST (dead pid, renderer-pid
+    never registered) still expands within the slow fallback window (~2s:
+    every TOGGLE_POLL_TICKS-th idle tick) — a lost nudge degrades to latency,
+    never a toggle frozen until the next event."""
+    s = session.make()
+    path = os.path.join(s.cwd, "fallback.py")
+    with open(path, "w") as f:
+        f.write("MAGIC_FALLBACK_BODY = True\n")
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
+
+    out_path = s.log + ".render.out"
+    with open(out_path, "wb") as out:
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(REPO, "bin", "claude-mirror.py"), s.log, "100"],
+            stdout=out, stderr=subprocess.DEVNULL, env=dict(test_env), cwd=REPO)
+    reaper.append(proc)
+    try:
+        wait_until(lambda: b"fallback.py" in open(out_path, "rb").read(),
+                   desc="renderer painted the file-op line")
+        # flip the kv set via the product API, deliberately WITHOUT the nudge
+        seed.py("from core import state as S\n"
+                "S.kv_set(%r, 'view-open', ['toolu_001'])" % s.log)
+        wait_until(lambda: b"MAGIC_FALLBACK_BODY" in open(out_path, "rb").read(),
+                   desc="slow-fallback poll expanded the unnudged toggle")
+    finally:
+        proc.terminate()

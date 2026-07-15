@@ -145,3 +145,47 @@ def test_posttool_bash_agent_id_ignored_but_audited(run_hook, test_env, session)
     # so no command block / counter — but the universal subscriber still records it.
     assert not s.counters().get("commands")
     assert "subscriber" in handlers(test_env, s.sid)
+
+
+# ------------------------------------------------------ lazy handler imports
+# The formatter stack (~50ms of imports, measured) is paid only by events that
+# actually route to a formatter — a tab-only event (UserPromptSubmit, most
+# tools' Pre/PostToolUse) must import none of it. The handler import happens
+# INSIDE the step thunk (under hookkit.run), so a broken module is a per-step
+# audited swallow, not a dead dispatcher.
+
+_LAZY_PROG = """
+import sys
+sys.argv = ["lazy-import-test"]
+import plugins.claude_code.dispatch as D
+HEAVY = {"plugins.claude_code." + m for m in
+         ("cmd_pre", "cmd_fmt", "file_fmt", "monitor_fmt", "stop_fmt",
+          "task_fmt", "split", "subagent_fmt", "accounting", "msgs", "tools",
+          "model")}
+loaded = HEAVY & set(sys.modules)
+assert not loaded, "at import time: %s" % loaded
+D.adopt.on_event = lambda d: None            # pin the probe to routing only
+D.tabstatus.dispatch = lambda *a, **k: None
+D.route({"hook_event_name": "UserPromptSubmit", "session_id": "s-lazy"})
+loaded = HEAVY & set(sys.modules)
+assert not loaded, "tab-only event imported: %s" % loaded
+# A matched event imports exactly its handler (agent_id: the main-session
+# guard makes cmd_fmt a no-op — the import is what this asserts).
+D.route({"hook_event_name": "PostToolUse", "tool_name": "Bash",
+         "session_id": "s-lazy", "agent_id": "agent-x",
+         "tool_input": {}, "tool_response": {}})
+assert "plugins.claude_code.cmd_fmt" in sys.modules
+assert "plugins.claude_code.file_fmt" not in sys.modules
+print("OK")
+"""
+
+
+def test_dispatch_lazy_handler_imports(test_env):
+    import subprocess
+    import sys as _sys
+    from conftest import REPO
+    r = subprocess.run([_sys.executable, "-c", _LAZY_PROG], cwd=REPO,
+                       env=dict(test_env), capture_output=True, text=True,
+                       timeout=30)
+    assert r.returncode == 0 and "OK" in r.stdout, (
+        "dispatch imported eagerly:\n%s%s" % (r.stdout, r.stderr))

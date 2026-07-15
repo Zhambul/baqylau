@@ -30,21 +30,28 @@
 import json
 import re
 import sys
+from importlib import import_module
 
 from core.noaudit import load_audit
 
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
+# Only the on-EVERY-event subsystems import at module level (adopt + the tab
+# dispatch, plus the hookkit harness they run through). The matcher-selected
+# handler modules (split/subagent_fmt/cmd_pre/cmd_fmt/file_fmt/monitor_fmt/
+# stop_fmt/task_fmt) are imported LAZILY inside their step thunks (_load) —
+# an event routed only to the tab dispatch (UserPromptSubmit, Notification,
+# most Pre/PostToolUse tools) no longer pays the whole formatter stack's
+# imports: ~69ms module-level block down to ~17ms for the tab-only set,
+# measured on the dev machine (python 3.12, warm pyc). The import runs INSIDE
+# hookkit.run under the step's entry identity, so a broken handler module is
+# audited and swallowed per-step instead of killing the whole dispatcher.
 from plugins.claude_code import adopt
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tabstatus
-from plugins.claude_code import split
-from plugins.claude_code import subagent_fmt
-from plugins.claude_code import cmd_pre
-from plugins.claude_code import cmd_fmt
-from plugins.claude_code import file_fmt
-from plugins.claude_code import monitor_fmt
-from plugins.claude_code import stop_fmt
-from plugins.claude_code import task_fmt
+
+
+def _load(modname):
+    return import_module("plugins.claude_code." + modname)
 
 
 def _match(tool, pattern):
@@ -67,20 +74,21 @@ def _tab(state):
             lambda d: (lambda: tabstatus.dispatch(state, d)))
 
 
-def _fmt(name, mod, matcher=None):
-    return (name, matcher, lambda d: mod.main)
+def _fmt(name, modname, matcher=None):
+    return (name, matcher, lambda d: (lambda: _load(modname).main()))
 
 
 def _phase(phase, matcher=None):
     return ("claude-subagent-fmt.py", matcher,
-            lambda d: (lambda: subagent_fmt.run_phase(phase)))
+            lambda d: (lambda: _load("subagent_fmt").run_phase(phase)))
 
 
 def _split(cmd):
-    return ("claude-split.py", None, lambda d: (lambda: split.handle(cmd, d)))
+    return ("claude-split.py", None,
+            lambda d: (lambda: _load("split").handle(cmd, d)))
 
 
-_STOP_FOLD = _fmt("claude-stop-fmt.py", stop_fmt)
+_STOP_FOLD = _fmt("claude-stop-fmt.py", "stop_fmt")
 
 _ROUTES = {
     "SessionStart": [_tab("idle"), _split("open")],
@@ -88,16 +96,16 @@ _ROUTES = {
     "PreToolUse": [
         _tab("pretool"),                     # matcher .* in the old wiring
         _phase("push", matcher="Task|Agent"),
-        _fmt("claude-cmd-pre.py", cmd_pre, matcher="Bash"),
+        _fmt("claude-cmd-pre.py", "cmd_pre", matcher="Bash"),
     ],
     # Failures arrive on PostToolUseFailure, not PostToolUse — both events get the
     # same routing or failures silently vanish (CLAUDE.md invariant).
     "PostToolUse": [
         _tab("posttool"),                    # matcher .* in the old wiring
-        _fmt("claude-cmd-fmt.py", cmd_fmt, matcher="Bash"),
-        _fmt("claude-file-fmt.py", file_fmt,
+        _fmt("claude-cmd-fmt.py", "cmd_fmt", matcher="Bash"),
+        _fmt("claude-file-fmt.py", "file_fmt",
              matcher="Read|Edit|Write|MultiEdit|NotebookEdit"),
-        _fmt("claude-monitor-fmt.py", monitor_fmt, matcher="Monitor"),
+        _fmt("claude-monitor-fmt.py", "monitor_fmt", matcher="Monitor"),
     ],
     "Notification": [_tab("notify")],
     "Stop": [_tab("stop"), _STOP_FOLD],
@@ -117,7 +125,7 @@ _ROUTES = {
     ],
     "SubagentStart": [_phase("start")],
     "SubagentStop": [_phase("stop")],
-    "TaskCreated": [_fmt("claude-task-fmt.py", task_fmt)],
+    "TaskCreated": [_fmt("claude-task-fmt.py", "task_fmt")],
     # Compaction is Claude busy with no tool/reply signal of its own — paint the
     # busy magenta so the tab doesn't sit stale (grey/green) through it. Use
     # WORKING, not THINKING: no interrupt-watch to start (this isn't a turn

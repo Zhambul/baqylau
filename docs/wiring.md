@@ -63,6 +63,15 @@
   - **Isolation.** Each subsystem runs through `hookkit.run()` (audit-then-swallow),
     exactly the crash isolation separate processes gave it — one failing step never
     blocks the others or the turn.
+  - **Lazy handler imports.** Only the on-every-event subsystems (`adopt`,
+    `tabstatus`, the `hookkit` harness) import at dispatcher module level; the
+    matcher-selected handler modules (`cmd_pre`/`cmd_fmt`/`file_fmt`/
+    `monitor_fmt`/`stop_fmt`/`task_fmt`/`subagent_fmt`/`split`) are imported
+    inside their step thunks, so an event routed only to the tab dispatch
+    (UserPromptSubmit, Notification, most tools' Pre/PostToolUse) pays ~17ms
+    of imports instead of the full stack's ~69ms (measured, warm pyc). The
+    import happens inside `hookkit.run()` under the step's entry identity, so
+    a broken handler module is audited and swallowed per-step.
   - **Injected payload.** Since the dispatcher already consumed stdin, the formatters'
     `hookkit.read_payload()` (and `tabstatus` / `split`'s own readers) return a
     dispatcher-injected payload instead of re-reading an empty stdin. The old

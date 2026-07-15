@@ -282,7 +282,12 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   mirror replays the prior session; see `claude-split.py` below), and while off
   there is no process at all. It keeps at most `MAX_OPS` (8000) ops in memory so a
   long session can't grow unbounded. One process — no file-switching,
-  byte-offsets, `lsof`, or orphaned tails.
+  byte-offsets, `lsof`, or orphaned tails. An **idle** tick (0.2s) costs one
+  `ops` SELECT and nothing else: the empty-path `MAX(id)` recreated-DB probe
+  is skipped (`ops_after(..., check_reset=False)` — the per-iteration inode
+  stat already catches every recreation, since a park/restore or fresh
+  session always swaps the file's inode), and the `view-open` kv read is
+  nudge-gated ([click-to-view.md](click-to-view.md) › *The expansion*).
 - **`claude-file-fmt.py`** (a `PostToolUse` hook for `Read`/`Edit`/`Write`/
   `MultiEdit`/`NotebookEdit`) logs file operations as compact one-liners showing
   just the verb + basename — `Read(README.md)`, `Update(README.md)`,
