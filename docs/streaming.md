@@ -130,6 +130,44 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     runs `> file` again, or the file is rotated in place), `FileTailer.pump`
     restarts from byte 0 — the old offset pointed past EOF, so nothing would ever
     be emitted again (or a regrow would resume mid-content from a stale position).
+  - **Worst-case bounds (three named caps).** Pathological output used to be
+    unbounded on the verbatim path: a 100MB no-newline line grew `pending` to
+    100MB, and a 100MB burst became ONE giant `gut` op the renderer re-wraps
+    char-by-char on EVERY reflow (resize, click-to-view toggle, pane re-open) —
+    a permanent latency tax, not a one-off. Three caps, each env-overridable
+    (docs/testing.md knob table):
+    - **Per-pump read ceiling** — `CLAUDE_TAIL_PUMP_MAX_B` (256KB,
+      `core/tail.py`). One `pump()` ingests at most this much; reading *less*
+      than `size-pos` is always safe under the read-exactly contract (the
+      remainder is next pump's), and `tail.capped` tells the caller a backlog
+      remains. Every tailer must **keep pumping while capped before trusting a
+      completion signal** — the writer can be long gone (idle grace elapsed)
+      while unread bytes remain, and a single "final catch-up" pump would
+      truncate the drain. `stream.py`'s main loop skips `is_done` + the sleep
+      while capped (still checking parked/backstop per chunk) and its drain
+      loops to exhaustion; the substream and codex pumps loop internally, so
+      their one-call sites stay "caught up". Bounds memory AND makes a burst
+      paint progressively as a sequence of ≤256KB batches.
+    - **Max surfaced line** — `CLAUDE_TAIL_LINE_MAX_B` (64KB), **opt-in per
+      tailer** (`FileTailer(line_max=…)`); only `stream.py`'s fg/bg/monitor
+      tailer sets it — the substream/codex tailers parse JSONL transcripts
+      where one line is one whole message, and truncation would break
+      `json.loads` and silently drop events. An over-cap line is surfaced as
+      its first 64KB plus an `… (N bytes elided)` marker, and the over-cap
+      middle of a *still-incomplete* line is discarded as it arrives, so
+      memory stays bounded before the newline ever shows up. 64KB ≈ 800
+      wrapped rows at 80 cols — already far past useful in a monitor pane;
+      truncating pathological output is the accepted trade-off (it also caps
+      what ⧉out copies — see [click-to-view.md](click-to-view.md)). The
+      elision is self-evidencing: the marker lives in the op text itself
+      (audited with the ops stream). Content renderers (md/json/yaml) see the
+      truncated line too and degrade to their verbatim fallbacks.
+    - **Bytes per op** — `CLAUDE_STREAM_OP_MAX_B` (128KB, `stream.py`
+      `verbatim_batches`). A capped pump can still hand over 256KB at once;
+      the verbatim emitter splits it into multiple ≤128KB `gut` ops — each
+      still a multi-line *batch* (never a per-line-op regression; per-line
+      emits are the txn overhead batching exists to avoid), so no single op
+      ever carries a whole burst through every future reflow.
 - **Live foreground streaming (Ctrl+B aware).** `claude-cmd-pre.py` (`PreToolUse`
   Bash) makes a normal foreground command stream live instead of only appearing
   once it completes. It rewrites the command via `PreToolUse`'s `updatedInput`

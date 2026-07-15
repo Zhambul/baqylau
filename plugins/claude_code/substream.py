@@ -333,11 +333,18 @@ def restore_checkpoint():
 
 def make_pump(tail, ckpt):
     def pump():
-        lines = tail.pump()
-        for ln in (lines or ()):
-            s = ln.decode("utf-8", "replace").strip()
-            if s:
-                REN.handle_line(s)
+        # Loop while the per-pump read ceiling (core/tail.py PUMP_MAX_B) left a
+        # backlog: every pump() call site here treats one call as "caught up"
+        # (the per-tick call AND the final drains), so a capped read must not
+        # strand bytes behind a completion signal.
+        while True:
+            lines = tail.pump()
+            for ln in (lines or ()):
+                s = ln.decode("utf-8", "replace").strip()
+                if s:
+                    REN.handle_line(s)
+            if lines is None or not tail.capped:
+                break
         # Checkpoint only what was fully consumed — a trailing partial line
         # stays uncounted so a successor re-reads it whole. The last-counted
         # usage record rides along for the successor's dedup.

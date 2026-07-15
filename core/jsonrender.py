@@ -34,8 +34,9 @@ def _pretty(obj):
     """Pretty-print (indent=2) + colour one parsed JSON value."""
     pretty = json.dumps(obj, indent=2, ensure_ascii=False)
     try:
-        from pygments.lexers import JsonLexer
-        out = [_pick(tt) + val for tt, val in JsonLexer().get_tokens(pretty)]
+        # render.lexer: singleton cache — _pretty runs once per JSONL LINE, so a
+        # per-call JsonLexer() construction was paid per line, not per block.
+        out = [_pick(tt) + val for tt, val in R.lexer("json").get_tokens(pretty)]
         return "".join(out).rstrip("\n") + R.RST
     except Exception:                               # pygments absent -> uncoloured, still pretty
         return R.COL["def"] + pretty + R.RST

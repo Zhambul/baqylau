@@ -11,6 +11,7 @@
 import re
 
 from core.render import dsplit, dwidth, pick, RST
+from core.render import lexer as R_lexer   # pygments lexer singletons (one owner)
 
 
 # Split a bash command into (lang, text) segments so embedded Python gets the
@@ -95,13 +96,14 @@ def _mark_bash_commands(toks):
 
 
 def _mixed_tokens(code):
-    from pygments.lexers import BashLexer, PythonLexer
-    lex, segs = {"bash": BashLexer(), "python": PythonLexer()}, []
+    segs = []
     for lang, text in _split_heredocs(code):
         segs.extend(_split_python_c(text) if lang == "bash" else [(lang, text)])
     toks = []
     for lang, text in segs:
-        raw = [(tt, val) for _, tt, val in lex[lang].get_tokens_unprocessed(text)]
+        # render.lexer: the module-level singleton cache — lexer construction
+        # compiles token tables and used to run per call, per language.
+        raw = [(tt, val) for _, tt, val in R_lexer(lang).get_tokens_unprocessed(text)]
         toks.extend(_mark_bash_commands(raw) if lang == "bash" else raw)
     return toks
 
@@ -146,8 +148,7 @@ def _fmt_bash(text):
     if "\n" in text or "<<" in text or ";;" in text:
         return text
     try:
-        from pygments.lexers import BashLexer
-        toks = [(str(tt), v) for _, tt, v in BashLexer().get_tokens_unprocessed(text)]
+        toks = [(str(tt), v) for _, tt, v in R_lexer("bash").get_tokens_unprocessed(text)]
     except Exception:
         return text
     out, broke = [], False

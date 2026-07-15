@@ -34,8 +34,7 @@ def render_yaml(text):
     if not body.strip():
         return None
     try:
-        from pygments.lexers import YamlLexer
-        out = [_pick(tt) + val for tt, val in YamlLexer().get_tokens(body)]
+        out = [_pick(tt) + val for tt, val in R.lexer("yaml").get_tokens(body)]
         return "".join(out).rstrip("\n") + R.RST
     except Exception:                               # pygments absent / lexer error
         return None

@@ -424,9 +424,15 @@ def main(run):
     rd = Renderer()          # this run's mutable render state (both sources)
 
     def pump():
-        for ln in (tail.pump() or ()):
-            s = ln.decode("utf-8", "replace")
-            if ROLLOUT:
+        # Loops while a capped read (core/tail.py PUMP_MAX_B) left a backlog —
+        # every call site treats one pump() as "caught up" (see substream).
+        while True:
+            lines = tail.pump()
+            for ln in (lines or ()):
+                s = ln.decode("utf-8", "replace")
+                if not ROLLOUT:
+                    rd.feed_line(s)
+                    continue
                 s = s.strip()
                 if s:
                     try:
@@ -444,8 +450,8 @@ def main(run):
                             A.error(LOG, "codex rollout parse",
                                     {"src": LOGFILE, "offset": tail.consumed,
                                      "line": s[:200]})
-            else:
-                rd.feed_line(s)
+            if lines is None or not tail.capped:
+                return
 
     def end(reason):
         # Stream-end wrapper: stamp the malformed-rollout-line count (if any)

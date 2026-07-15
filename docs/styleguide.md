@@ -62,6 +62,8 @@ backed by grep-style regression tests that will fail the build):
 | Audit-import degradation | `core/noaudit.load_audit()` — the ONLY way to get `A`; direct `from core import audit` is reserved for `bin/claude-audit.py` |
 | Audit table set | `core/audit._SCHEMA` — derive lists (`prunable_tables()`, `WRITE_COMMANDS`), never hand-copy |
 | CSI/OSC escape grammar | the named fragments in `core/render.py` composing `_ANSI`/`_CTRL` |
+| Pygments lexer instances (construction compiles token tables; instances are stateless per get_tokens — reusable) | `core/render.lexer(name)` — the one lazy per-process cache; per-call `SomeLexer()`/`get_lexer_by_name` construction is a bug |
+| Tailer worst-case caps: per-pump read ceiling + `capped` re-pump contract, opt-in surfaced-line cap + elision marker | `core/tail.py` (`PUMP_MAX_B`/`LINE_MAX_B`); the per-op byte ceiling (`OP_MAX_B`, `verbatim_batches`) is `plugins/claude_code/stream.py`'s |
 | Tailer env contract `CLAUDE_STREAM_*` | `hookkit.stream_env()` — launchers pass the raw command, never the render decision |
 | Usage dedup + Σ-row arithmetic | `accounting.usage_fold` + `ops.split_tokens` |
 | settings.json env-block layering | `model.settings_env` (`nearest_only=` preserves split.py's walk) |

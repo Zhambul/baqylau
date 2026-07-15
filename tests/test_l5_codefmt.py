@@ -54,3 +54,22 @@ def test_render_aliases_delegate_byte_identical():
     assert R.format_code(cmd) == CF.format_code(cmd)
     assert R.render(cmd, 30) == CF.render(cmd, 30)
     assert R.render(cmd, 30, ind="    ") == CF.render(cmd, 30, ind="    ")
+
+
+# --- pygments lexer singletons (render.lexer) -------------------------------------
+# Lexer construction compiles token-table regexes; instances are stateless per
+# get_tokens call, so render.lexer caches ONE per name per process — and the
+# rendered output must be byte-identical to a fresh-lexer render (the goldens
+# above already pin format/render output shapes; this pins the cache itself).
+
+def test_render_lexer_is_a_singleton_and_render_is_stable():
+    assert R.lexer("bash") is R.lexer("bash")
+    assert R.lexer("python") is R.lexer("python")
+    assert R.lexer("bash") is not R.lexer("python")
+    cmd = "for f in *.py; do python3 -c 'print(1); print(2)'; done"
+    first = CF.render(cmd, 60)
+    assert CF.render(cmd, 60) == first          # reuse changes nothing
+    from pygments.lexers import BashLexer
+    fresh = list(BashLexer().get_tokens_unprocessed("echo hi | wc -l"))
+    cached = list(R.lexer("bash").get_tokens_unprocessed("echo hi | wc -l"))
+    assert fresh == cached                      # cached lexer tokenises identically

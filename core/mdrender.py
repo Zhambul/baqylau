@@ -94,8 +94,7 @@ def _highlight_code(value, lang):
     body = (value or "").rstrip("\n")
     if lang:
         try:
-            from pygments.lexers import get_lexer_by_name
-            lx = get_lexer_by_name(lang.strip().lower())
+            lx = R.lexer(lang.strip().lower())
             out = []
             for ttype, val in lx.get_tokens(body):
                 out.append(R.pick(str(ttype)) + val)

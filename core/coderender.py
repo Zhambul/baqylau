@@ -28,9 +28,7 @@ def render_code(text, lexer_name):
     if not body.strip():
         return None
     try:
-        from pygments.lexers import get_lexer_by_name
-        lx = get_lexer_by_name(lexer_name)
-        out = [R.pick(str(tt)) + val for tt, val in lx.get_tokens(body)]
+        out = [R.pick(str(tt)) + val for tt, val in R.lexer(lexer_name).get_tokens(body)]
         return "".join(out).rstrip("\n") + R.RST
     except Exception:
         return None

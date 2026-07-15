@@ -246,6 +246,14 @@ PROCFIND_S = float(os.environ.get("CLAUDE_STREAM_PROCFIND_S") or 20)
 # (write-holder vanishing / monitor process exit) are definitive, and a
 # legitimately long background job must keep streaming past any cap.
 FG_BACKSTOP_S = 7200
+# Ceiling on ONE gut op's raw text (bytes of joined lines, pre-ANSI). A capped
+# pump can still hand over up to PUMP_MAX_B at once, and one giant op is the
+# renderer's worst case: EVERY reflow (resize, click-to-view toggle, pane
+# re-open) re-wraps every op's full text, so a monolithic burst op re-costs its
+# whole wrap forever. Split the batch into multiple ≤128KB gut ops instead —
+# each op still a multi-line batch, never a per-line op (per-line ops were the
+# original design and the emit/txn overhead is why batching exists).
+OP_MAX_B = int(os.environ.get("CLAUDE_STREAM_OP_MAX_B") or 128 * 1024)
 
 # Where Claude Code drops its tasks/<id>.output files for bg jobs and monitors.
 # This is Claude Code's OWN on-disk layout (empirical, macOS), not ours — so it
@@ -508,7 +516,31 @@ def open_tailer(path):
             except OSError:
                 pos0 = 0
         A.state_file(LOG, "tail:" + TASKID, "open", {"path": path, "pos0": pos0})
-    return T.FileTailer(path, pos=pos0)
+    # line_max: this tailer surfaces command OUTPUT (verbatim / content-rendered
+    # display), never parsed line-records — the one place the LINE_MAX_B
+    # truncation is safe and wanted (see core/tail.py). The ⧉out copy link reads
+    # the OP text, so an elided line copies elided too — accepted trade-off
+    # (docs/click-to-view.md): the tee file is transient (deleted at cleanup),
+    # so a full-output copy was never guaranteed anyway, and a monitor pane
+    # truncating pathological output beats freezing on it.
+    return T.FileTailer(path, pos=pos0, line_max=T.LINE_MAX_B)
+
+
+def verbatim_batches(parts, op_max=None):
+    """Split one pump's completed lines into ≤op_max-byte batches (by summed raw
+    line length), each destined for ONE gut op. A batch always holds at least one
+    line — a single over-cap line still becomes its own op (LINE_MAX_B already
+    bounds it upstream)."""
+    op_max = OP_MAX_B if op_max is None else op_max
+    batch, n = [], 0
+    for p in parts:
+        if batch and n + len(p) > op_max:
+            yield batch
+            batch, n = [], 0
+        batch.append(p)
+        n += len(p) + 1
+    if batch:
+        yield batch
 
 
 def make_pump(run, tail):
@@ -539,12 +571,14 @@ def make_pump(run, tail):
 
     def emit_verbatim(text):
         # text = complete lines joined with "\n" (a trailing "\n" per line); drop the
-        # one trailing empty so we don't paint a spurious blank gutter row.
+        # one trailing empty so we don't paint a spurious blank gutter row. A big
+        # batch is split into ≤OP_MAX_B gut ops (verbatim_batches) so no single op
+        # ever carries a whole burst — each op still a multi-line batch.
         parts = text.split("\n")
         if parts and parts[-1] == "":
             parts = parts[:-1]
-        if parts:
-            O.emit(LOG, O.gut("\n".join(unescape(p) for p in parts),
+        for batch in verbatim_batches(parts):
+            O.emit(LOG, O.gut("\n".join(unescape(p) for p in batch),
                               SLOT_RGB, outer=OUTER_RGB, g=GROUP))
 
     def pump():
@@ -646,7 +680,8 @@ def drain(run, pump, tail, ctx, override):
     block or partial line), or fall back to the PostToolUse-captured output
     when nothing ever landed in SRC. Returns `converted` (Ctrl+B hand-off —
     the replacement bg tailer owns the rest of the block)."""
-    pump()                                      # final catch-up read
+    while pump() is not None and tail.capped:   # final catch-up: drain the WHOLE
+        pass                                    # backlog, not just one capped pump
     converted = KIND == "fg" and override and override.get("converted")
     if converted:
         run.end("converted-ctrl-b")
@@ -803,12 +838,18 @@ def main(run):
             run.end("src-file-vanished")
             break
         now = time.time()
+        if backstop and now > backstop:         # stuck fg tailer can't run forever
+            run.end("backstop-timeout")
+            break
+        if tail.capped:
+            # A backlog remains past the per-pump read ceiling: keep pumping
+            # (no sleep) and DON'T consult is_done yet — the writer may already
+            # be gone (idle grace elapsed) while unemitted bytes remain, and
+            # firing writer-gone here would truncate the drain to one last pump.
+            continue
         reason = is_done(now)
         if reason:
             run.end(reason)
-            break
-        if backstop and now > backstop:         # stuck fg tailer can't run forever
-            run.end("backstop-timeout")
             break
         time.sleep(T.POLL_S)
 

@@ -37,7 +37,17 @@ landed. Why this design and not the alternatives:
 - **Copy from the ops table, not the `.out` tee files** — the tee files are
   transient (deleted when the tailer finishes), while the ops table is the
   session's history, parked/restored across resume: scrolled-back and
-  resumed-session blocks stay copyable.
+  resumed-session blocks stay copyable. Consequence, decided deliberately:
+  **⧉out yields what the mirror shows**, so a line the tailer elided past
+  `CLAUDE_TAIL_LINE_MAX_B` (64KB — [streaming.md](streaming.md), *Worst-case
+  bounds*) copies elided too, marker included. Copying the full original from
+  the tee file instead was considered and rejected: the tee exists only until
+  the tailer's cleanup (and a bg job's task-output file is Claude Code's,
+  swept on its own schedule), so a click minutes later would silently yield
+  the truncated text anyway — a copy affordance that works differently
+  depending on *when* you click is worse than a WYSIWYG one. The mirror is a
+  monitor, not an archive; a command whose full 100MB line matters should
+  write it to a file.
 - **OSC 8 + `open-actions.conf`, not mouse reporting** — a renderer that grabs
   mouse mode would steal normal text selection in the pane and need row→op
   geometry bookkeeping that reflow invalidates. Hyperlinks keep the pane a dumb

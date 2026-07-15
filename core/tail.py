@@ -25,6 +25,26 @@ WAIT_POLL_S = float(os.environ.get("CLAUDE_TAIL_WAIT_POLL_S") or 0.2)
                             # wait_for's source-appearance poll — deliberately faster
                             # than POLL_S: it runs only until the file lands, and a
                             # snappier first line is worth the brief tighter loop
+# Worst-case bounds (env overrides are a test seam, like the cadences above,
+# but these two also guard real pathological sessions):
+PUMP_MAX_B = int(os.environ.get("CLAUDE_TAIL_PUMP_MAX_B") or 256 * 1024)
+                            # per-pump read ceiling: one pump ingests at most this many
+                            # bytes; the rest stays in the file and `capped` tells the
+                            # caller to pump again before trusting completion checks.
+                            # Bounds both memory (pending never balloons to the whole
+                            # burst) and the size of any one emit — a multi-MB burst
+                            # becomes a sequence of ≤256KB batches the renderer paints
+                            # progressively instead of one monolithic op.
+LINE_MAX_B = int(os.environ.get("CLAUDE_TAIL_LINE_MAX_B") or 64 * 1024)
+                            # cap on ONE surfaced line, OPT-IN per tailer (the
+                            # `line_max` ctor arg): a newline-free multi-MB line (a
+                            # minified bundle, a base64 blob) otherwise grows `pending`
+                            # unboundedly AND wraps to thousands of pane rows on every
+                            # reflow. 64KB ≈ 800 rows at 80 cols — already far past
+                            # useful in a monitor pane. Tailers that PARSE their lines
+                            # (the substream/codex JSONL transcripts, where one line is
+                            # one whole message) must NOT set it — truncation would
+                            # break json.loads and silently drop events.
 
 
 class FileTailer:
@@ -36,12 +56,23 @@ class FileTailer:
     newline arrives, so lines are never split. `consumed` is the byte offset of
     everything actually surfaced (pos minus the held partial) — what a resume
     checkpoint must record. `idle_for(now)` is how long the file size has been
-    unchanged (growth without a newline still counts as activity)."""
+    unchanged (growth without a newline still counts as activity).
 
-    def __init__(self, path, pos=0):
+    Bounds: one pump reads at most PUMP_MAX_B bytes; when a backlog remains,
+    `capped` is True and the caller must keep pumping until it clears before
+    trusting a completion signal (the writer can be long gone while unread
+    bytes remain). With `line_max` set (see LINE_MAX_B), a line over the cap is
+    surfaced truncated with an `… (N bytes elided)` marker, and the over-cap
+    middle of a still-incomplete line is DISCARDED as it arrives (memory stays
+    bounded even before the newline shows up)."""
+
+    def __init__(self, path, pos=0, line_max=None):
         self.path = path
         self.pos = pos
         self.pending = b""
+        self.line_max = line_max
+        self.dropped = 0            # bytes discarded from the current over-cap line
+        self.capped = False         # last pump hit PUMP_MAX_B — backlog remains
         self.size = -1              # last observed size (-1: never seen)
         self.changed_at = time.time()
 
@@ -58,29 +89,54 @@ class FileTailer:
             # means the content is fresh: start over from 0.
             self.pos = 0
             self.pending = b""
+            self.dropped = 0
             self.changed_at = time.time()
         if size > self.size:
             self.changed_at = time.time()
         self.size = size
         lines = []
+        self.capped = False
         if size > self.pos:
             try:
-                # Read exactly size-pos bytes: an unbounded read() can grab bytes
-                # appended DURING the read, which `pos = size` would then not
-                # account for — the next pump would re-read and duplicate them.
+                # Read exactly min(size-pos, cap) bytes: an unbounded read() can
+                # grab bytes appended DURING the read, which `pos = size` would
+                # then not account for — the next pump would re-read and
+                # duplicate them. Reading LESS than size-pos is always safe (the
+                # remainder is picked up by the next pump — that's the cap).
                 with open(self.path, "rb") as fh:
                     fh.seek(self.pos)
-                    chunk = fh.read(size - self.pos)
+                    chunk = fh.read(min(size - self.pos, PUMP_MAX_B))
                     self.pending += chunk
                     self.pos += len(chunk)
             except OSError:
                 return lines
+            self.capped = self.pos < size
             *lines, self.pending = self.pending.split(b"\n")
+            if self.line_max is not None:
+                lines = [self._cap_line(ln) for ln in lines]
+                if len(self.pending) > self.line_max:
+                    # Still no newline: keep the head, drop the over-cap middle
+                    # NOW (not at the newline) so memory stays bounded.
+                    self.dropped += len(self.pending) - self.line_max
+                    self.pending = self.pending[:self.line_max]
         return lines
+
+    def _cap_line(self, ln):
+        # Truncate one completed line to line_max, folding in any bytes already
+        # dropped from its middle while it was still pending. `dropped` belongs
+        # to the FIRST completed line after a truncation (its continuation), so
+        # it is taken exactly once, in order.
+        d, self.dropped = self.dropped, 0
+        d += max(0, len(ln) - self.line_max)
+        if d == 0:
+            return ln
+        return ln[:self.line_max] + (" … (%d bytes elided)" % d).encode()
 
     @property
     def consumed(self):
-        return self.pos - len(self.pending)
+        # `dropped` bytes were read (pos includes them) but their line has not
+        # been surfaced yet — the checkpoint stays at that line's start.
+        return self.pos - len(self.pending) - self.dropped
 
     def idle_for(self, now=None):
         return (now or time.time()) - self.changed_at

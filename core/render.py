@@ -333,6 +333,27 @@ def pick(ttype, pre=(), post=()):
     return COL["def"]
 
 
+# Pygments lexer singletons — the ONE cache every highlight site goes through
+# (codefmt, coderender, jsonrender, yamlrender, mdrender). Constructing a lexer
+# compiles its token-table regexes (milliseconds, and codefmt used to pay it on
+# EVERY command render); instances are stateless per get_tokens call — pygments
+# documents lexers as reusable — so one per name per process is safe. Lazy: no
+# pygments import (or failure) at module import time; a missing pygments raises
+# here and every call site already wraps in its own try/except fallback.
+_LEXERS = {}
+
+
+def lexer(name):
+    """The cached pygments lexer for `name` (a get_lexer_by_name name: "bash",
+    "python", "json", "yaml", …). Raises if pygments/the lexer is absent —
+    callers keep their existing degrade-to-verbatim except clauses."""
+    lx = _LEXERS.get(name)
+    if lx is None:
+        from pygments.lexers import get_lexer_by_name
+        lx = _LEXERS[name] = get_lexer_by_name(name)
+    return lx
+
+
 class BufferedStreamer:
     """Shared skeleton for the render-once-whole content streamers (json/yaml/
     code — everything except the incremental MarkdownStreamer): feed() only

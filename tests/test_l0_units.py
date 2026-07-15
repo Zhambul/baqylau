@@ -1193,3 +1193,115 @@ def test_read_extent_offset_to_eof_stays_ranged():
     assert T.read_extent(fi) == "100-149/149"
     # and a genuinely whole read stays bare
     assert T.read_extent({"startLine": 1, "numLines": 149, "totalLines": 149}) == ""
+
+
+# --- FileTailer worst-case bounds (core/tail.py PUMP_MAX_B / line_max) -----------
+# A 100MB burst used to be ONE unbounded read into `pending` (memory) and one
+# giant emit (renderer latency); a newline-free multi-MB line grew `pending`
+# forever. The caps bound both — pinned here so the `capped` re-pump contract
+# and the `consumed` checkpoint semantics can't silently regress.
+
+def _tail_mod():
+    from core import tail as T
+    return T
+
+
+def test_pump_cap_drains_backlog_across_pumps(tmp_path, monkeypatch):
+    T = _tail_mod()
+    monkeypatch.setattr(T, "PUMP_MAX_B", 4096)
+    p = tmp_path / "burst.out"
+    n = 500
+    p.write_bytes(b"".join(b"line %03d " % i + b"x" * 90 + b"\n" for i in range(n)))
+    t = T.FileTailer(str(p))
+    total, pumps = 0, 0
+    while True:
+        lines = t.pump()
+        assert lines is not None
+        total += len(lines)
+        pumps += 1
+        if not t.capped:
+            break
+    assert total == n                      # nothing lost, nothing duplicated
+    assert pumps > 1                       # the cap actually chunked the read
+    assert t.consumed == p.stat().st_size  # checkpoint lands exactly at EOF
+    assert t.pending == b""
+
+
+def test_pump_capped_flag_clears_when_caught_up(tmp_path):
+    T = _tail_mod()
+    p = tmp_path / "f.out"
+    p.write_bytes(b"one\ntwo\n")
+    t = T.FileTailer(str(p))
+    assert t.pump() == [b"one", b"two"]
+    assert t.capped is False
+    assert t.pump() == []                  # idle pump: still not capped
+    assert t.capped is False
+
+
+def test_line_cap_bounds_memory_and_elides_with_marker(tmp_path, monkeypatch):
+    T = _tail_mod()
+    monkeypatch.setattr(T, "PUMP_MAX_B", 8192)
+    p = tmp_path / "giant.out"
+    p.write_bytes(b"a" * 100_000)          # newline-free so far
+    t = T.FileTailer(str(p), line_max=1000)
+    while t.pump() is not None and t.capped:
+        pass
+    # memory bound holds even BEFORE the newline arrives
+    assert len(t.pending) <= 1000
+    with open(p, "ab") as fh:
+        fh.write(b"zz\nnext\n")
+    lines = []
+    while True:
+        got = t.pump()
+        lines += got
+        if not t.capped:
+            break
+    assert len(lines) == 2
+    head, marker = lines[0][:1000], lines[0][1000:]
+    assert head == b"a" * 1000
+    elided = 100_000 + 2 - 1000            # full line minus the surfaced head
+    assert marker.decode() == " … (%d bytes elided)" % elided
+    assert lines[1] == b"next"             # later lines untouched
+    assert t.consumed == p.stat().st_size  # checkpoint intact past the elision
+
+
+def test_line_cap_short_lines_pass_byte_identical(tmp_path):
+    T = _tail_mod()
+    p = tmp_path / "ok.out"
+    p.write_bytes(b"short\n" + b"x" * 999 + b"\n")
+    t = T.FileTailer(str(p), line_max=1000)
+    assert t.pump() == [b"short", b"x" * 999]
+
+
+def test_truncation_resets_line_cap_dropped_state(tmp_path):
+    T = _tail_mod()
+    p = tmp_path / "t.out"
+    p.write_bytes(b"y" * 5000)             # over-cap partial: drops bytes
+    t = T.FileTailer(str(p), line_max=1000)
+    t.pump()
+    assert t.dropped > 0
+    p.write_bytes(b"fresh\n")              # file SHRANK: content is fresh
+    assert t.pump() == [b"fresh"]          # no stale elision folded in
+    assert t.dropped == 0
+
+
+# --- verbatim_batches: a burst splits into bounded ops ---------------------------
+# One pump's lines become MULTIPLE ≤OP_MAX_B gut ops, each still a multi-line
+# batch (never a per-line-op regression), with every line surfaced exactly once.
+
+def test_verbatim_batches_bounds_each_op():
+    from plugins.claude_code.stream import verbatim_batches
+    parts = ["line-%03d-%s" % (i, "x" * 60) for i in range(100)]
+    batches = list(verbatim_batches(parts, op_max=1024))
+    assert len(batches) > 1                            # the burst actually split
+    assert [p for b in batches for p in b] == parts    # order + completeness
+    assert all(sum(len(p) for p in b) <= 1024 for b in batches)
+    assert all(len(b) > 1 for b in batches[:-1])       # batched, not per-line
+
+
+def test_verbatim_batches_single_overcap_line_is_own_op():
+    from plugins.claude_code.stream import verbatim_batches
+    parts = ["small", "B" * 5000, "small2"]
+    batches = list(verbatim_batches(parts, op_max=1024))
+    assert ["B" * 5000] in batches                     # never split, never dropped
+    assert [p for b in batches for p in b] == parts
