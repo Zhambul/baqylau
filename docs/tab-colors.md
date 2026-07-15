@@ -131,7 +131,12 @@ instant a job ends — but it no longer has to wait for the next exchange either
   rechecking), the `stop` dispatch — when it goes blue — also spawns **one detached
   `bg-watch` watcher** that polls until no live row remains, then flips the
   stale blue green (and exits immediately if a new turn starts). One watcher per
-  window, guarded by a pid row in the tab DB.
+  window, guarded by a pid row in the tab DB. Both watcher spawns go through
+  `core.spawn.spawn_detached`, so the launch is audit-covered: a `spawns` row
+  (purpose `watcher:bg-watch` / `watcher:interrupt-watch`) on success, an
+  `errors` row on failure — a raw Popen inside `except: pass` used to make a
+  failed spawn indistinguishable from a watcher never requested, exactly the
+  non-firing-invisible failure class these recovery watchers exist to close.
 
 Each **applied** color-set persists the state to the **global tab DB**
 (`/tmp/claude-kitty-tab.db`, `tab` table keyed by window id — was a

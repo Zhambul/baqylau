@@ -56,7 +56,10 @@ telemetry env it requires).
     `otel_seen`, ran before the park), so the deltas are dropped with a `state_files`
     row, action `drop-otel-parked`, carrying the deltas + raw datapoints — NOT rows
     in the audit `otel` table, whose `SUM(value)` must keep equalling the live
-    counters. **Codex is exempt**:
+    counters. A connect FAILURE past the parked check (locked/perms/corrupt live DB)
+    is the same audited drop, action `drop-otel-noconn` — it used to `return False`
+    silently, and because the dropped rows never reached the `otel` table the
+    SUM(otel)==counters invariant still held, so no anomaly could ever see it. **Codex is exempt**:
     it runs in a separate process OTEL can't see, so it keeps its own rollout fold
     (`bump-agent`, `meta.kind=codex`). Every raw datapoint is captured in the audit
     `otel` table (`python3 bin/claude-audit.py otel <sid>`), so the counters are fully

@@ -157,6 +157,81 @@ def test_anchored_traversal_nothing_focused():
     assert list(_anchored_tab_windows(_FakeFE(ls), None)) == []
 
 
+# ---- core.hostpane.close_stale_mirrors — the audited ok must be the REAL rc -
+# The sweep used to hardcode ok=1 in its pane_events row; a close that FAILED
+# (pane lingered) was indistinguishable from a verified one, so the "pane
+# operations that failed" anomaly could never see it.
+
+def _audit_env(tmp_path, monkeypatch):
+    """Route audit rows into the hermetic tmpdir; returns a query closure."""
+    monkeypatch.setenv("CLAUDE_AUDIT", "1")
+    monkeypatch.setenv("CLAUDE_AUDIT_DIR", str(tmp_path / "audit"))
+
+    def rows(sql):
+        import sqlite3
+        db = str(tmp_path / "audit" / "audit.db")
+        if not os.path.exists(db):
+            return []
+        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+    return rows
+
+
+class _SweepFE(_FakeFE):
+    """One stale mirror in the focused tab; close_pane returns a fixed rc."""
+
+    def __init__(self, rc):
+        super().__init__([{"is_focused": True, "tabs": [{
+            "is_focused": True,
+            "windows": [_win(7, claude_mirror="old-sid")]}]}])
+        self.rc = rc
+        self.closed = []
+
+    def current_window(self):
+        return None
+
+    def close_pane(self, var=None, win_id=None):
+        self.closed.append(win_id)
+        return self.rc
+
+
+def test_close_stale_records_real_close_result(tmp_path, monkeypatch):
+    from core import hostpane as HP
+    rows = _audit_env(tmp_path, monkeypatch)
+    HP.close_stale_mirrors(_SweepFE(rc=0), keep="new-sid")   # verified close
+    HP.close_stale_mirrors(_SweepFE(rc=1), keep="new-sid")   # close FAILED
+    got = rows("SELECT ok, detail FROM pane_events WHERE action='close-stale' "
+               "ORDER BY id")
+    assert [ok for ok, _ in got] == [1, 0], got
+    # the detail (the hijack anomaly's join key) is identical for both
+    assert all("closed sid=old-sid win=7" in d for _, d in got), got
+
+
+# ---- core.slots.pid_set — a displaced live pid must get its release-pid -----
+# The upsert silently REPLACES a live pid (a resumed agent's new tailer taking
+# over from the old one) with only a claim-pid row; without the paired
+# release-pid for the displaced holder, the claim/release pairing anomaly
+# false-flagged every healthy resume as an unbalanced slot.
+
+def test_pid_set_displacement_emits_release_for_old_pid(tmp_path, monkeypatch):
+    from core import slots
+    rows = _audit_env(tmp_path, monkeypatch)
+    log = str(tmp_path / "claude-mirror-pidset.log")
+    slots.pid_set(log, "agentA", 111)     # first claim — no incumbent
+    slots.pid_set(log, "agentA", 222)     # displaces 111
+    slots.pid_set(log, "agentA", 222)     # same pid — idempotent, no release
+    got = rows("SELECT action, owner_pid FROM slots WHERE kind='sub' "
+               "ORDER BY id")
+    assert got == [("claim-pid", 111),
+                   ("release-pid", 111), ("claim-pid", 222),
+                   ("claim-pid", 222)], got
+    # the live row itself holds only the new pid
+    assert slots.pid_get(log, "agentA") == 222
+
+
 # ---- core.ops.split_tokens — the ONE usage-fields → Σ-row tk_* mapping ------
 # All five former per-site encodings (three bump_transcript branches, the
 # subagent_fmt reconcile, the codex footer) now call this; these pins hold the

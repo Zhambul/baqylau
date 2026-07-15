@@ -174,6 +174,14 @@ def write_session(sid, entry):
         return False
     conn = S.connect(log)
     if conn is None:
+        # The DB exists (past the parked check) but connect failed (locked /
+        # perms / corrupt). Same AUDITED-drop discipline as the parked case:
+        # the deltas + raw datapoints ride this row, NOT the `otel` table
+        # (whose SUM(value) must keep equalling the live counters — which is
+        # exactly why an unaudited drop here was invisible to anomalies).
+        A.state_file(log, db, "drop-otel-noconn",
+                     json.dumps({"deltas": deltas, "rows": rows},
+                                ensure_ascii=False))
         return False
     _SEEN_LOGS.add(log)
     try:

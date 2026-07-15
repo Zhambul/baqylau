@@ -149,9 +149,15 @@ def close_stale_mirrors(fe, keep, anchor=None):
             if sid and sid != keep:
                 stale.append((w.get("id"), sid))
     for wid, sid in stale:
-        fe.close_pane(win_id=wid)
+        rc = fe.close_pane(win_id=wid)
         try:
-            A.pane(keep, "close-stale", 1, "closed sid=%s win=%s" % (sid, wid))
+            # ok carries the REAL close result (pane_events contract: ok is
+            # verified, not asserted) — a failed sweep (ok=0, the pane
+            # lingered) surfaces in the "pane operations that failed" anomaly;
+            # the pane-hijack anomaly keys on the close-stale ATTEMPT (the
+            # detail's sid), so it reads correctly for both values.
+            A.pane(keep, "close-stale", 0 if rc else 1,
+                   "closed sid=%s win=%s" % (sid, wid))
         except Exception:
             pass
 

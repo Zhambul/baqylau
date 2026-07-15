@@ -52,7 +52,6 @@
 import json
 import os
 import re
-import subprocess
 import sys
 import time
 
@@ -65,6 +64,7 @@ from core.noaudit import load_audit  # noqa: E402  (in-process; every write swal
 
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import paths as P  # noqa: E402  (the one owner of the mirror-log path format)
+from core import spawn as SP  # noqa: E402  (the ONE audited detached-spawn owner)
 from core import state as St  # noqa: E402  (pid_alive only — DB reads stay mode=ro via sq())
 from plugins.claude_code import hookkit as HK  # noqa: E402  (the injected-payload accessor)
 from core.tabs import (  # noqa: E402  (the core tab vocabulary + tab DB — see core/tabs.py)
@@ -219,20 +219,24 @@ def _spawn_watcher(kind, args):
     never sits in the hook's process group, which Claude Code waits to drain).
     The resolved window + socket are passed explicitly: a detached watcher is
     re-parented, so the ppid walk can't find the socket, and WIN may have been
-    fallback-resolved (_ensure_win) rather than inherited from the env."""
+    fallback-resolved (_ensure_win) rather than inherited from the env.
+    Spawn + failure are AUDITED (core.spawn — A.spawn/A.error rows): the
+    watcher IS the recovery lattice, so a spawn that silently failed was
+    indistinguishable from one never requested — the exact non-firing-
+    invisible class the recovery watchers exist to close."""
     try:
         fe, win = _fe(), _win()
         fe.export_env()   # stamp terminal-reach env (kitty: KITTY_LISTEN_ON);
         env = dict(os.environ)  # no-op on the inert stub — no frontend attrs read
         if win:
             env["KITTY_WINDOW_ID"] = str(win)
-        p = subprocess.Popen([sys.executable or "python3", SELF] + args,
-                             stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                             stderr=subprocess.DEVNULL, start_new_session=True,
-                             env=env)
-        watcher_set(kind, win, p.pid)
+        p = SP.spawn_detached(SELF, args, MLOG, env=env,
+                              purpose="watcher:" + str(args[0]))
+        if p:
+            watcher_set(kind, win, p.pid)
     except Exception:
-        pass
+        # spawn_detached never raises — this covers frontend/env assembly.
+        A.error(MLOG, "_spawn_watcher " + kind, {"args": [str(a) for a in args]})
 
 
 def ensure_bgwatch():

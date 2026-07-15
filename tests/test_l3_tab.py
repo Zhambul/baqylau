@@ -4,6 +4,8 @@
 # first; these tests pin the whole contract: state -> exact set-tab-color argv,
 # the tab-DB persistence rules (only on rc==0), the dedup, and every dispatch's
 # decision logic (pretool/posttool/notify/stop/bg-recheck/agent-start).
+import os
+
 import pytest
 
 import oracle
@@ -417,7 +419,8 @@ def _spawn_watcher_with(monkeypatch, fe):
         spawned["env"] = kw.get("env")
         return _Proc()
 
-    monkeypatch.setattr(T.subprocess, "Popen", fake_popen)
+    import core.spawn as CS
+    monkeypatch.setattr(CS.subprocess, "Popen", fake_popen)
     monkeypatch.setattr(T, "watcher_set", lambda *a, **k: None)
     monkeypatch.setattr(T, "WIN", "9")
     monkeypatch.setattr(T, "FE", fe)
@@ -449,6 +452,59 @@ def test_spawn_watcher_kitty_exports_socket(monkeypatch):
     spawned = _spawn_watcher_with(monkeypatch, fe)
     assert spawned["env"]["KITTY_LISTEN_ON"] == "unix:/tmp/fe-test.sock"
     assert spawned["env"]["KITTY_WINDOW_ID"] == "9"
+
+
+# --------------------------------------------- watcher spawn is audit-covered
+# _spawn_watcher used a raw Popen inside `except: pass`: a failed spawn left
+# NO rows at all — indistinguishable from "watcher never requested", the exact
+# non-firing-invisible class the recovery watchers exist for. It now routes
+# through core.spawn.spawn_detached (A.spawn on success, A.error on failure).
+
+def _audit_rows(tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_AUDIT", "1")
+    monkeypatch.setenv("CLAUDE_AUDIT_DIR", str(tmp_path / "audit"))
+
+    def rows(sql):
+        import sqlite3
+        db = str(tmp_path / "audit" / "audit.db")
+        if not os.path.exists(db):
+            return []
+        conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
+        try:
+            return conn.execute(sql).fetchall()
+        finally:
+            conn.close()
+    return rows
+
+
+def test_spawn_watcher_success_writes_spawn_row(monkeypatch, tmp_path):
+    from frontends.base import Frontend
+    rows = _audit_rows(tmp_path, monkeypatch)
+    spawned = _spawn_watcher_with(monkeypatch, Frontend())
+    assert spawned.get("argv"), "watcher was not spawned"
+    got = rows("SELECT child_pid, purpose FROM spawns")
+    assert got == [(4242, "watcher:bg-watch")], got
+
+
+def test_spawn_watcher_failure_writes_error_row(monkeypatch, tmp_path):
+    """Popen raising (fork failure, exec problem) must land an errors row —
+    and still not raise into the hook."""
+    import core.spawn as CS
+    import plugins.claude_code.tabstatus as T
+    from frontends.base import Frontend
+    rows = _audit_rows(tmp_path, monkeypatch)
+
+    def boom(*a, **k):
+        raise OSError("fork failed")
+
+    monkeypatch.setattr(CS.subprocess, "Popen", boom)
+    monkeypatch.setattr(T, "watcher_set", lambda *a, **k: None)
+    monkeypatch.setattr(T, "WIN", "9")
+    monkeypatch.setattr(T, "FE", Frontend())
+    T._spawn_watcher("bgwatch", ["bg-watch", "/tmp/x.log"])   # must not raise
+    funcs = [r[0] for r in rows("SELECT func FROM errors")]
+    assert any(f.startswith("spawn claude-tab-status.py") for f in funcs), funcs
+    assert rows("SELECT id FROM spawns") == []
 
 
 def test_tab_db_readers_bind_values(monkeypatch, tmp_path):

@@ -266,3 +266,42 @@ def test_gzip_decompress_failure_audited_not_fatal(run_hook, test_env, session):
     assert len(rows) == 1, rows
     ctx = rows[0][3] or ""
     assert '"content_encoding": "gzip"' in ctx and '"bytes":' in ctx, ctx
+
+
+# ------------------------------------------------ connect-failure drop audited
+
+def test_noconn_drop_is_audited(tmp_path, monkeypatch):
+    """A connect failure PAST the parked check (locked/perms/corrupt DB) used
+    to `return False` with no row at all — and since the dropped deltas never
+    reached the `otel` table, the SUM(otel)==counters invariant still held, so
+    no anomaly could ever see it. It must now leave a `drop-otel-noconn`
+    state_files row carrying the deltas + raw datapoints, mirroring the
+    parked-straggler drop (in-process: write_session with S.connect forced to
+    None — a subprocess can't force that branch deterministically)."""
+    from core import state as S
+    from plugins.otel import receiver as R
+    monkeypatch.setenv("CLAUDE_AUDIT", "1")
+    monkeypatch.setenv("CLAUDE_AUDIT_DIR", str(tmp_path / "audit"))
+    sid = "otel-noconn-unit"
+    log = str(tmp_path / ("claude-mirror-" + sid + ".log"))
+    monkeypatch.setattr(R.P, "mirror_log", lambda s: log)
+    open(S.db_path(log), "w").close()               # DB exists -> not parked
+    monkeypatch.setattr(R.S, "connect", lambda _log: None)
+    entry = {"deltas": {"cost": 0.42, "tokens": 7},
+             "rows": [("cost", "main", 0.42)]}
+    assert R.write_session(sid, entry) is False
+    db = str(tmp_path / "audit" / "audit.db")
+    conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=5)
+    try:
+        got = conn.execute("SELECT action, content FROM state_files "
+                           "WHERE session_id=?", (sid,)).fetchall()
+        otel_rows = conn.execute("SELECT COUNT(*) FROM otel "
+                                 "WHERE session_id=?", (sid,)).fetchone()[0]
+    finally:
+        conn.close()
+    assert [a for a, _ in got] == ["drop-otel-noconn"], got
+    payload = json.loads(got[0][1])
+    assert payload["deltas"] == {"cost": 0.42, "tokens": 7}
+    assert payload["rows"], payload
+    # the dropped datapoints must NOT reach the otel table (SUM invariant)
+    assert otel_rows == 0

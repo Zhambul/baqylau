@@ -274,11 +274,21 @@ def pid_set(log, ident, pid):
     if conn is None:
         return
     try:
-        conn.execute("INSERT INTO live(kind, key, pid, idx, start_ts) "
-                     "VALUES('sub.pid', ?, ?, NULL, ?) "
-                     "ON CONFLICT(kind, key) DO UPDATE SET pid = excluded.pid",
-                     (ident, pid, time.time()))
-        conn.commit()
+        with St.immediate(conn):
+            # Read the incumbent INSIDE the claim txn: the upsert silently
+            # REPLACES a live pid (a resumed agent's new tailer displacing the
+            # old one) — without a paired release-pid for the displaced holder,
+            # the claim/release pairing anomaly false-flags every healthy
+            # resume as an unbalanced slot.
+            row = conn.execute("SELECT pid FROM live WHERE kind='sub.pid' "
+                               "AND key=?", (ident,)).fetchone()
+            old = int(row[0] or 0) if row else 0
+            conn.execute("INSERT INTO live(kind, key, pid, idx, start_ts) "
+                         "VALUES('sub.pid', ?, ?, NULL, ?) "
+                         "ON CONFLICT(kind, key) DO UPDATE SET pid = excluded.pid",
+                         (ident, pid, time.time()))
+        if old and old != pid:
+            A.slot(log, "sub", "release-pid", agent_id=ident, owner_pid=old)
         A.slot(log, "sub", "claim-pid", agent_id=ident, owner_pid=pid,
                marker_path=_token(log, "sub.pid", ident))
     except Exception:
