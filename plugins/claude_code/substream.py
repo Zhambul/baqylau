@@ -167,6 +167,10 @@ def op_tag():
     # Constant per agent; appended to every operation header.
     return "·".join(x for x in (short_model(disp_model()), effort()) if x)
 
+_META_SIG = None      # (st_mtime_ns, st_size) of META_PATH at the last parse
+_CANCELLED = False    # stoppedByUser is monotonic — once True it never unsets
+
+
 def cancelled_by_user():
     # A manually killed/cancelled subagent fires NO SubagentStop hook — the same
     # gap documented throughout this codebase for interrupts (claude-tab-status.py's
@@ -175,11 +179,34 @@ def cancelled_by_user():
     # below, leaving the tab stuck blue the whole time. But Claude Code stamps
     # `stoppedByUser: true` onto this agent's meta.json sidecar the moment that
     # happens (confirmed empirically), giving a fast, reliable end signal instead.
+    #
+    # Polled every T.POLL_S (0.4s) for the run's whole life, so the full
+    # open+json.loads is GATED on os.stat: Claude Code REWRITES meta.json on
+    # every update (mtime/size move — never an in-place no-metadata mutation),
+    # so an unchanged (mtime_ns, size) signature means unchanged content and
+    # the poll costs one stat. The flag is monotonic, so once True we
+    # short-circuit permanently. A file that can't be stat'd behaves exactly
+    # like the old unreadable-file path: False, retry next poll. A parse
+    # failure (torn read mid-rewrite) does NOT advance the signature, so the
+    # next poll re-parses instead of caching the miss.
+    global _META_SIG, _CANCELLED
+    if _CANCELLED:
+        return True
+    try:
+        st = os.stat(META_PATH)
+        sig = (st.st_mtime_ns, st.st_size)
+    except OSError:
+        return False
+    if sig == _META_SIG:
+        return False
     try:
         with open(META_PATH, encoding="utf-8") as fh:
-            return bool(json.load(fh).get("stoppedByUser"))
+            flag = bool(json.load(fh).get("stoppedByUser"))
     except Exception:
         return False
+    _META_SIG = sig
+    _CANCELLED = flag
+    return flag
 
 
 kfmt = O.kfmt        # compact token count: 124000 -> "124k"

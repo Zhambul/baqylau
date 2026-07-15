@@ -1305,3 +1305,151 @@ def test_verbatim_batches_single_overcap_line_is_own_op():
     batches = list(verbatim_batches(parts, op_max=1024))
     assert ["B" * 5000] in batches                     # never split, never dropped
     assert [p for b in batches for p in b] == parts
+
+
+# ---- core.tabs.sqc — the cached read-only tab-DB reader ----------------------
+# The long-lived pollers (scorebar tab_state tick, bg-watch, interrupt-watch)
+# read the fixed-path tab DB through ONE cached ro conn per process instead of
+# a fresh connect per poll. Pin the contract: a write committed through a
+# separate connection is visible to the cached reader (WAL), a missing-DB
+# probe neither creates the file nor caches the failure, and the reader
+# connects once the DB appears later.
+
+
+def test_tabs_sqc_cached_reader_sees_committed_writes(tmp_path, monkeypatch):
+    from core import tabs
+    db = str(tmp_path / "tab.db")
+    monkeypatch.setattr(tabs, "TABDB", db)
+    tabs.tab_set("7", "thinking")                     # separate write conn (tw)
+    assert tabs.tab_get("7") == "thinking"            # populates the cache
+    conn = tabs._RO_CONNS.get(db)
+    assert conn is not None
+    tabs.tab_set("7", "executing")                    # committed write, new conn
+    assert tabs.tab_get("7") == "executing"           # cached reader sees it
+    assert tabs._RO_CONNS.get(db) is conn             # ...through the SAME conn
+
+
+def test_tabs_sqc_missing_db_no_create_then_succeeds(tmp_path, monkeypatch):
+    from core import tabs
+    db = tmp_path / "sub" / "tab.db"                  # parent dir absent too
+    monkeypatch.setattr(tabs, "TABDB", str(db))
+    assert tabs.tab_get("9") == ""                    # silent miss
+    assert not db.exists() and not db.parent.exists()  # probe never creates
+    assert str(db) not in tabs._RO_CONNS              # absence NOT cached
+    db.parent.mkdir()
+    tabs.tab_set("9", "idle")                         # DB appears later
+    assert tabs.tab_get("9") == "idle"                # retry-able: now connects
+    assert str(db) in tabs._RO_CONNS
+
+
+# ---- core.errwatch — cached audit-DB connection ------------------------------
+# poll() keeps ONE cached mode=ro conn to the fixed-path audit DB instead of a
+# fresh connect every POLL_S: absent DB stays a non-creating, non-cached miss
+# (a DB that appears later connects then), and committed writes from another
+# connection are visible through the cached one.
+
+
+def test_errwatch_cached_conn_and_db_appears_later(tmp_path, monkeypatch):
+    import sqlite3
+
+    from core import errwatch as EW
+    db = tmp_path / "audit.db"
+    log = str(tmp_path / "claude-mirror-sid1.log")
+
+    class StubA:
+        def enabled(self):
+            return True
+
+        def db_path(self):
+            return str(db)
+
+        def error(self, *a, **k):
+            pass
+
+        def state_file(self, *a, **k):
+            pass
+    monkeypatch.setattr(EW, "A", StubA())
+    monkeypatch.setattr(EW, "_conn", None)
+    # Absent DB: None (caller keeps memoized count), no file created, no
+    # failure cached — the conn slot stays empty for a later retry.
+    assert EW.poll(log, "sid1") is None
+    assert not db.exists()
+    assert EW._conn is None
+    w = sqlite3.connect(str(db))                      # DB appears later
+    w.execute("CREATE TABLE errors(id INTEGER PRIMARY KEY, session_id TEXT,"
+              " script TEXT, traceback TEXT)")
+    w.execute("INSERT INTO errors(session_id, script, traceback)"
+              " VALUES('sid1', 's.py', 'E: x')")
+    w.commit()
+    assert EW.poll(log, "sid1") == 1                  # now connects + counts
+    conn1 = EW._conn
+    assert conn1 is not None
+    w.execute("INSERT INTO errors(session_id, script, traceback)"
+              " VALUES('sid1', 't.py', 'E: y')")
+    w.commit()                                        # committed elsewhere...
+    w.close()
+    assert EW.poll(log, "sid1") == 2                  # ...seen by the cache
+    assert EW._conn is conn1                          # same conn reused
+
+
+# ---- substream.cancelled_by_user — the stat-gated meta.json poll -------------
+# The 0.4s completion loop used to re-open + json.loads the whole meta.json
+# every tick to read one monotonic boolean. Now the parse is gated on the
+# (mtime_ns, size) stat signature (Claude Code REWRITES the file, so every
+# real update moves it) and True short-circuits permanently.
+
+
+def _reset_cancel_state(monkeypatch, meta_path):
+    from plugins.claude_code import substream as SS
+    monkeypatch.setattr(SS, "META_PATH", str(meta_path))
+    monkeypatch.setattr(SS, "_META_SIG", None)
+    monkeypatch.setattr(SS, "_CANCELLED", False)
+    return SS
+
+
+def _count_json_loads(monkeypatch):
+    import json
+    calls = {"n": 0}
+    real = json.load
+
+    def counting(fh, *a, **k):
+        calls["n"] += 1
+        return real(fh, *a, **k)
+    monkeypatch.setattr(json, "load", counting)
+    return calls
+
+
+def test_cancelled_by_user_stat_gate_and_short_circuit(tmp_path, monkeypatch):
+    meta = tmp_path / "agent-x.meta.json"
+    SS = _reset_cancel_state(monkeypatch, meta)
+    calls = _count_json_loads(monkeypatch)
+    meta.write_text('{"other": 1}')
+    assert SS.cancelled_by_user() is False            # parses once
+    assert calls["n"] == 1
+    for _ in range(5):                                # unchanged file: stat only
+        assert SS.cancelled_by_user() is False
+    assert calls["n"] == 1
+    meta.write_text('{"other": 1, "stoppedByUser": true}')  # rewrite bumps sig
+    assert SS.cancelled_by_user() is True             # flip detected -> reparse
+    assert calls["n"] == 2
+    meta.unlink()                                     # once True, stays True —
+    for _ in range(3):                                # no stat, no parse, ever
+        assert SS.cancelled_by_user() is True
+    assert calls["n"] == 2
+
+
+def test_cancelled_by_user_absent_file_and_mtime_only_change(tmp_path, monkeypatch):
+    import os as _os
+    meta = tmp_path / "agent-y.meta.json"
+    SS = _reset_cancel_state(monkeypatch, meta)
+    calls = _count_json_loads(monkeypatch)
+    assert SS.cancelled_by_user() is False            # absent: False, no parse,
+    assert calls["n"] == 0                            # retried next poll
+    meta.write_text('{"stoppedByUser": false}')
+    assert SS.cancelled_by_user() is False
+    assert calls["n"] == 1
+    # Same-size rewrite: only mtime moves — the gate must still reparse.
+    meta.write_text('{"stoppedByUser": true }')       # same byte length (24)
+    _os.utime(meta, ns=(_os.stat(meta).st_mtime_ns + 10**7,) * 2)
+    assert SS.cancelled_by_user() is True
+    assert calls["n"] == 2

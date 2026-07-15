@@ -71,6 +71,7 @@ backed by grep-style regression tests that will fail the build):
 | Monitor signature-token extraction (the `find_proc` wire contract) | `plugins/claude_code/stream.monitor_sig` |
 | Click-to-view stash-and-link | `file_fmt.stash_view` (over the shared `view_ops`) |
 | Audit warning-light shapes: the `⚠ N` chip, the `⚠ audit:` mirror ops, `POLL_S`/`FLOOD_N`/`TEXT_MAX`, the `errseen` kv checkpoint | `core/errwatch.py` |
+| Cached read-only conns for FIXED-path DBs polled by long-lived processes | `core/tabs.sqc()` (tab DB — all tab-DB reads route through it); `core/errwatch._audit_conn` (audit DB). The per-session STATE DB is deliberately excluded: its reads stay fresh-open (`tabs.sq()` / `state.parked()`'s bare exists check) because file-absence IS the session-alive signal — a cached conn keeps answering from a parked/deleted DB |
 
 Adding a new shared fact? Give it one owner in the most-core module whose
 charter fits, document the owner here, and (if cheap) add a grep test.

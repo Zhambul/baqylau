@@ -187,6 +187,10 @@ def bg_command_running():
         log = P.mirror_log()                # cwd-slug fallback, same as hookkit.log_path
     if not log:
         return False
+    # sq() (fresh open per poll), NOT tabs.sqc(): this is the per-session STATE
+    # DB, whose file-absence is the session-alive signal (state.parked) — a
+    # cached conn would keep answering from a parked/deleted DB. Only the
+    # fixed-path tab DB reads (tab_get/watcher_pid) use the cached reader.
     for pid in sq(P.state_db(log), "SELECT pid FROM live WHERE pid IS NOT NULL "
                                    "AND kind IN ('bg','monitor','fg','sub.pid')"):
         if _alive(pid):

@@ -30,7 +30,11 @@ AWAITING_RESPONSE = "awaiting-response"     # green — done, your turn
 def sq(db, sql, params=()):
     """Query a DB read-only; first column of every row. Silent on any failure
     (missing db, lock). mode=ro so a probe can never create the state DB — its
-    file-existence is the session-alive signal watchers poll."""
+    file-existence is the session-alive signal watchers poll. Opens FRESH per
+    call — required for the per-session STATE DB, whose file-absence is the
+    session-alive signal (state.parked's bare exists check): a cached conn
+    would keep answering from a deleted/parked file. Fixed-path DBs that are
+    never parked/moved read via sqc() instead."""
     if not db or not os.path.isfile(db):
         return []
     try:
@@ -41,6 +45,43 @@ def sq(db, sql, params=()):
             conn.close()
     except Exception:
         return []
+
+
+# Per-process cached read-only connections, keyed by DB path — sqc() below.
+_RO_CONNS = {}
+
+
+def sqc(db, sql, params=()):
+    """sq() with a per-process CACHED read-only connection. Same contract
+    (first column, silent on failure, mode=ro, never creates the DB) but no
+    per-call open/close — for long-lived pollers hitting a FIXED-path DB that
+    is never parked or moved (the tab DB: the scorebar's 0.25s tab_state tick
+    and the bg/interrupt watchers each opened 4 fresh conns/s forever). WAL
+    readers see committed writes per statement, so caching loses nothing.
+    NEVER use for the per-session state DB — see sq()'s fresh-open rule.
+    A missing DB is NOT cached as failure (it may appear later — connect only
+    once the file exists); a failing cached conn is dropped and the query
+    retried fresh, so a deleted+recreated DB file self-heals next call."""
+    if not db:
+        return []
+    conn = _RO_CONNS.get(db)
+    if conn is None:
+        if not os.path.isfile(db):
+            return []
+        try:
+            conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.2)
+        except Exception:
+            return []
+        _RO_CONNS[db] = conn
+    try:
+        return [r[0] for r in conn.execute(sql, params).fetchall()]
+    except Exception:
+        _RO_CONNS.pop(db, None)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        return sq(db, sql, params)     # one fresh retry; recached next call
 
 
 # --- global tab DB -------------------------------------------------------------
@@ -79,8 +120,13 @@ def twc(sql, params=()):
         return -1
 
 
+# All tab-DB reads go through sqc(): the tab DB path is fixed for the process
+# lifetime and the file is never parked/moved, so the cached conn is safe —
+# and the callers include the long-lived pollers (scorebar tab_state tick,
+# bg-watch, interrupt-watch) where a fresh connect per poll was pure churn.
+
 def tab_get(win):
-    rows = sq(TABDB, "SELECT state FROM tab WHERE win=?", (win,))
+    rows = sqc(TABDB, "SELECT state FROM tab WHERE win=?", (win,))
     return rows[0] if rows else ""
 
 
@@ -94,7 +140,7 @@ def tab_clear(win):
 
 
 def watcher_pid(kind, win):
-    rows = sq(TABDB, "SELECT pid FROM watchers WHERE kind=? AND win=?", (kind, win))
+    rows = sqc(TABDB, "SELECT pid FROM watchers WHERE kind=? AND win=?", (kind, win))
     return rows[0] if rows else None
 
 
@@ -128,7 +174,7 @@ def sid_mark(sid):
 
 
 def sid_seen(sid):
-    return bool(sq(TABDB, "SELECT 1 FROM sids WHERE sid=?", (sid,)))
+    return bool(sqc(TABDB, "SELECT 1 FROM sids WHERE sid=?", (sid,)))
 
 
 def adopt_note(cwd, sid):
@@ -140,7 +186,7 @@ def adopt_note(cwd, sid):
 
 
 def adopt_peek(cwd):
-    rows = sq(TABDB, "SELECT sid FROM adopt_pending WHERE cwd=?", (cwd,))
+    rows = sqc(TABDB, "SELECT sid FROM adopt_pending WHERE cwd=?", (cwd,))
     return rows[0] if rows else ""
 
 

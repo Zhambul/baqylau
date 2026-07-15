@@ -31,9 +31,10 @@
 # FLOOD_N new rows in one poll collapse into a single "⚠ audit: N new errors
 # (bin/claude-audit.py errors <sid>)" line pointing at the CLI.
 #
-# Probe rules: the audit DB is opened READ-ONLY (mode=ro uri) per poll and the
-# open is skipped when the file doesn't exist — a probe must never create the
-# DB (its schema belongs to core/audit._connect alone).
+# Probe rules: the audit DB is opened READ-ONLY (mode=ro uri, one CACHED conn
+# per process — see _audit_conn) and the open is skipped while the file doesn't
+# exist — a probe must never create the DB (its schema belongs to
+# core/audit._connect alone), and absence is never cached as failure.
 #
 # RECURSION GUARD (an error in the error-watcher must not recurse): poll()'s
 # own failure is audited AT MOST ONCE per process (_self_audited, the same
@@ -62,6 +63,34 @@ TEXT_MAX = 120      # per-line char cap for the ⚠ mirror one-liner
 KV_KEY = "errseen"  # state-DB kv: last errors rowid already emitted to the mirror
 
 _self_audited = False   # poll()'s own failure audited once per process (see header)
+
+# Cached read-only conn to the global audit DB. The audit DB path is fixed for
+# the process lifetime and the file is never parked/moved, so one long-lived ro
+# conn is safe (WAL readers see committed writes per statement) — the scorebar
+# polls every POLL_S for the session's whole life, and a fresh connect each
+# poll was pure churn. Populated only AFTER the file exists (never-create rule:
+# the open is still mode=ro and still skipped while the file is absent — a
+# missing DB is not cached as failure, so a DB that appears later connects
+# then). Dropped on any poll failure so a broken conn reconnects next poll.
+_conn = None
+
+
+def _audit_conn(db):
+    global _conn
+    if _conn is None:
+        import sqlite3
+        _conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.5)
+    return _conn
+
+
+def _drop_conn():
+    global _conn
+    c, _conn = _conn, None
+    try:
+        if c is not None:
+            c.close()
+    except Exception:
+        pass
 
 
 def chip_part(n):
@@ -110,20 +139,16 @@ def poll(log, sid=None):
         if not db or not os.path.exists(db):
             return None
         sid = sid or P.sid_from_log(log)
-        import sqlite3
-        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True, timeout=0.5)
-        try:
-            n = conn.execute("SELECT COUNT(*) FROM errors WHERE session_id=?",
-                             (sid,)).fetchone()[0]
-            rows = []
-            if n:
-                last = int(St.kv_get(log, KV_KEY) or 0)
-                rows = conn.execute(
-                    "SELECT id, script, traceback FROM errors "
-                    "WHERE session_id=? AND id>? ORDER BY id",
-                    (sid, last)).fetchall()
-        finally:
-            conn.close()
+        conn = _audit_conn(db)   # cached across polls — see the header above
+        n = conn.execute("SELECT COUNT(*) FROM errors WHERE session_id=?",
+                         (sid,)).fetchone()[0]
+        rows = []
+        if n:
+            last = int(St.kv_get(log, KV_KEY) or 0)
+            rows = conn.execute(
+                "SELECT id, script, traceback FROM errors "
+                "WHERE session_id=? AND id>? ORDER BY id",
+                (sid, last)).fetchall()
         if rows:
             # Checkpoint BEFORE emitting: a failing emit must not re-emit the
             # same rows every POLL_S forever (at-most-once beats at-least-once
@@ -137,6 +162,7 @@ def poll(log, sid=None):
             O.emit(log, *err_ops(rows, sid))
         return int(n)
     except Exception:
+        _drop_conn()   # a stale/broken cached conn must not poison every poll
         if not _self_audited:
             _self_audited = True
             A.error(log, "errwatch.poll (warning light dark this session)")
