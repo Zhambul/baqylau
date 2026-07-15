@@ -139,6 +139,28 @@ def _connect(path):
         return None
 
 
+def connect_existing(path):
+    """Open the state DB ONLY if its file already exists — sqlite's mode=rw
+    makes the exists-probe and the open one atomic operation (no TOCTOU), so
+    this can never resurrect a parked DB, whose file-ABSENCE is the
+    session-alive exit signal (see parked()). Returns None when the file is
+    missing (or unopenable). The connection is cached in _CONNS like
+    _connect's, so a later _connect on the same path in this process reuses it
+    (writing to the old inode after a park, never recreating the file)."""
+    cached = _CONNS.get(path)
+    if cached is not None:
+        return _connect(path)          # inode revalidation lives in _connect
+    try:
+        conn = sqlite3.connect("file:%s?mode=rw" % path, uri=True, timeout=5.0)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        _CONNS[path] = (conn, os.stat(path).st_ino)
+        return conn
+    except Exception:
+        return None
+
+
 def _migrate(conn):
     """In-place schema upgrades for a DB created by an older build (a resumed
     session restores its parked *.keep). messages: PK msg_id -> (msg_id,

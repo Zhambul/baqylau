@@ -181,6 +181,24 @@ def test_watcher_exits_when_state_db_parked(test_env, codex):
     assert rows and rows[0][1] and "parked" in rows[0][1]
 
 
+def test_watcher_spawned_after_park_never_resurrects_db(test_env, codex):
+    """The slow-spawn race (CI's f10b timeout): the session parks BEFORE the
+    watcher's first state-DB write. The watcher's lock claim must not recreate
+    the DB file — file-existence is the session-alive signal, so a resurrected
+    DB makes the loop's parked() probe never fire and the watcher an immortal
+    orphan whose stream row never ends. It must instead exit immediately with
+    the distinct audited fate."""
+    os.replace(codex.s.state_db, codex.s.state_db + ".keep")   # park FIRST
+    w = codex.start_watcher()
+    wait_until(lambda: w.poll() is not None, desc="watcher exits without a DB")
+    assert not os.path.exists(codex.s.state_db), \
+        "the watcher resurrected the parked state DB"
+    rows = [r for r in oracle.streams(test_env, codex.s.sid)
+            if r[0] == "codex-watcher"]
+    assert rows and rows[0][2] is not None, rows        # ended, not orphaned
+    assert rows[0][1] == "parked-before-start (no state DB)", rows
+
+
 def test_rollout_deepening_files_tokens_search_model(test_env, codex):
     """The rollout-side deepening: apply_patch file ops render + feed the
     scoreboard, token_count folds into Σ/cost at the footer (bump-agent,

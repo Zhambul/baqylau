@@ -8,17 +8,23 @@
 
 import os
 
-from core.state import _connect, immediate, pid_alive
+from core.state import _connect, connect_existing, immediate, pid_alive
 
 
-def lock_acquire(db, key, pid=None):
+def lock_acquire(db, key, pid=None, create=True):
     """Take the pid-lock `key` for `pid` (default: this process) in the claims table
     of the DB at `db` (a full path — the codex claims DB is shared per-repo, not
     per-session). Returns 'claim', 'steal-stale', or 'claim-denied:<holder-pid>' (the
     return strings are audit vocabulary and stay stable). A holder whose pid is dead
-    is taken over, same as the old O_EXCL marker files."""
+    is taken over, same as the old O_EXCL marker files.
+
+    create=False refuses to CREATE a missing DB file ('claim-denied:no-db'):
+    for locks living inside the per-session STATE DB, whose file-existence is
+    the session-alive signal — a slow-starting watcher whose session parked
+    before its first write must NOT resurrect the DB (state.connect_existing's
+    mode=rw open makes the refusal race-free against a concurrent park)."""
     pid = pid or os.getpid()
-    conn = _connect(db)
+    conn = _connect(db) if create else connect_existing(db)
     if conn is None:
         return "claim-denied:no-db"
     try:

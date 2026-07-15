@@ -265,9 +265,14 @@ def label_for(data):
 
 def acquire_lock():
     """Per-session single-watcher lock (was <log>.slots/codex.watch.pid) — a claim
-    row in the SESSION state DB, pid-liveness-checked so a stale lock is stolen."""
-    got = LK.lock_acquire(S.db_path(LOG), "codex-watch")
-    return got in ("claim", "steal-stale")
+    row in the SESSION state DB, pid-liveness-checked so a stale lock is stolen.
+    create=False: this is the watcher's FIRST state-DB touch, and on a loaded
+    machine the spawn can lose a race with a fast SessionEnd — a creating open
+    would resurrect the just-parked DB, and since file-existence IS the
+    session-alive signal the loop's parked() probe would then never fire (the
+    watcher spun as an immortal orphan; CI's f10b timeout). Returns the
+    lock_acquire vocabulary string."""
+    return LK.lock_acquire(S.db_path(LOG), "codex-watch", create=False)
 
 
 # --- standalone mode: this session's own codex run + its teardown ------------
@@ -317,10 +322,15 @@ def teardown():
 def main():
     if not LOG:
         return
-    if not acquire_lock():
+    got = acquire_lock()
+    if got not in ("claim", "steal-stale"):
+        # no-db: the session parked before this watcher's first write (slow
+        # spawn vs fast SessionEnd) — exit without ever touching the state DB.
+        reason = ("parked-before-start (no state DB)"
+                  if got == "claim-denied:no-db" else "duplicate (pid lock held)")
         A.event("streams", session_id=A.sid_from_log(LOG), kind="codex-watcher",
                 pid=os.getpid(), started_at=time.time(), ended_at=time.time(),
-                end_reason="duplicate (pid lock held)")
+                end_reason=reason)
         return
     global _WATCH_ID
     _WATCH_ID = A.stream_start(LOG, "codex-watcher",

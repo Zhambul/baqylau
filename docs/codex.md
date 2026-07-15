@@ -21,7 +21,14 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     when the session's mirror log vanishes at SessionEnd (parked as `*.keep`, so
     the path the watcher polls still disappears); a pid-liveness claim in
     the session state DB (key `codex-watch` — was a `codex.watch.pid` lock file)
-    guards against a duplicate SessionStart.
+    guards against a duplicate SessionStart. The claim is **non-creating**
+    (`lock_acquire(create=False)` → `state.connect_existing`, a sqlite
+    `mode=rw` open): the claim is the watcher's FIRST state-DB write, and on a
+    loaded machine the spawn can lose the race against a fast SessionEnd — a
+    creating open resurrected the just-parked DB, whose file-existence is the
+    session-alive signal, so the watcher's own `parked()` loop never fired and
+    it spun forever as an orphan (the CI f10b timeout). With no DB it exits
+    immediately, audited as end_reason `parked-before-start (no state DB)`.
   - **Source A — companion jobs** (`codex-companion.mjs`, the common case). Each job
     writes a human-readable activity log + a status sidecar to
     `$CLAUDE_PLUGIN_DATA/state/<slug>/jobs/<jobId>.{log,json}`. The watcher recomputes
