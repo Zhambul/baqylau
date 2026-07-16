@@ -117,20 +117,28 @@ def _summary(tb):
 
 
 def err_ops(rows, sid, who=""):
-    """Mirror paint ops for a batch of NEW errors rows [(id, script, traceback),
-    …]: one AMBER ⚠ label per row, or — past FLOOD_N — a single collapsed line
-    pointing at the audit CLI. Text is line-capped via streamfmt.cap (the shared
-    truncation vocabulary) and char-capped to TEXT_MAX. `who` tags a non-session
-    batch (global rows pass "global") both per-line and in the flood line, whose
-    CLI pointer then targets the rows' real key (session_id='') instead of sid."""
+    """Mirror paint ops for a batch of NEW errors rows [(id, script, func,
+    traceback), …]: one AMBER ⚠ label per row, or — past FLOOD_N — a single
+    collapsed line pointing at the audit CLI. Text is line-capped via
+    streamfmt.cap (the shared truncation vocabulary) and char-capped to
+    TEXT_MAX. `who` tags a non-session batch (global rows pass "global") both
+    per-line and in the flood line, whose CLI pointer then targets the rows'
+    real key (session_id='') instead of sid."""
     tag = f"{who}: " if who else ""
     target = "''" if who else sid
     if len(rows) > FLOOD_N:
         return [O.label(f"⚠ audit: {tag}{len(rows)} new errors "
                         f"(bin/claude-audit.py errors {target})", O.AMBER)]
     out = []
-    for _id, script, tb in rows:
-        text = SF.cap(f"⚠ audit: {tag}{script}: {_summary(tb)}", 1)
+    for _id, script, func, tb in rows:
+        what = _summary(tb)
+        # A deliberate degrade row (A.error OUTSIDE an except block — spawn
+        # script-missing, watcher-spawn failure) has no exception: format_exc
+        # stores the 'NoneType: None' sentinel, so the func string IS the
+        # message — show it instead of the noise.
+        if what in ("NoneType: None", "?") and func:
+            what = func
+        text = SF.cap(f"⚠ audit: {tag}{script}: {what}", 1)
         out.append(O.label(text[:TEXT_MAX], O.AMBER))
     return out
 
@@ -159,12 +167,12 @@ def poll(log, sid=None):
         if n:
             last = int(St.kv_get(log, KV_KEY) or 0)
             rows = conn.execute(
-                "SELECT id, script, traceback FROM errors "
+                "SELECT id, script, func, traceback FROM errors "
                 "WHERE session_id=? AND id>? ORDER BY id",
                 (sid, last)).fetchall()
             glast = int(St.kv_get(log, KV_KEY_GLOBAL) or 0)
             grows = conn.execute(
-                "SELECT id, script, traceback FROM errors "
+                "SELECT id, script, func, traceback FROM errors "
                 "WHERE session_id='' AND id>? ORDER BY id",
                 (glast,)).fetchall()
         if rows or grows:

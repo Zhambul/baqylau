@@ -53,7 +53,7 @@ def wait_until(pred, timeout=10.0, interval=0.05, desc=""):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_audit_conn():
+def _fresh_audit_conn(tmp_path):
     """core.audit caches its connection (and its gave-up latch) per PROCESS,
     but xdist reuses one worker process across many tests, each with its own
     hermetic CLAUDE_AUDIT_DIR. An in-process test that audits (slots claim/
@@ -61,8 +61,20 @@ def _fresh_audit_conn():
     rows into THAT test's dir — the oracle then sees [] (f12's 'slot must be
     released exactly once: []' CI flake was exactly this, worker-order
     dependent). Reset the cache around every test; product processes are
-    unaffected (they are per-test subprocesses)."""
+    unaffected (they are per-test subprocesses).
+
+    ALSO sandbox CLAUDE_AUDIT_DIR for in-process product calls: subprocess
+    seams get the hermetic dir from test_env, but a unit test calling
+    audit-writing product code directly (spawn_detached's script-missing
+    degrade row) used to write to the REAL ~/.claude/kitty-audit DB — and such
+    rows are GLOBAL (no sid), so every LIVE session's ⚠ warning light surfaced
+    the suite's own deliberate error rows (observed: '⚠ audit: global: -c:
+    NoneType: None' in an unrelated session's mirror — '-c' is the xdist
+    worker's argv[0]). Tests needing a specific dir still monkeypatch over
+    this default."""
     import core.audit as A
+    prev = os.environ.get("CLAUDE_AUDIT_DIR")
+    os.environ["CLAUDE_AUDIT_DIR"] = str(tmp_path / "audit-inproc")
     A._CONN, A._FAILED = None, False
     yield
     try:
@@ -71,6 +83,10 @@ def _fresh_audit_conn():
     except Exception:
         pass
     A._CONN, A._FAILED = None, False
+    if prev is None:
+        os.environ.pop("CLAUDE_AUDIT_DIR", None)
+    else:
+        os.environ["CLAUDE_AUDIT_DIR"] = prev
 
 
 # ------------------------------------------------------------------ test env

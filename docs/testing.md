@@ -28,7 +28,17 @@ real session, and unset they leave shipped behavior bit-identical:
 
 Any session started with the timing knobs set is self-evident in the audit:
 `session_start` captures `CLAUDE_TAIL_*`/`CLAUDE_STREAM_*`/`CLAUDE_WATCH_*`/
-`CLAUDE_CODEX_*`/`CLAUDE_OTEL_*` (and all `CLAUDE_MIRROR*`) into the `sessions.env` column. The fake terminal
+`CLAUDE_CODEX_*`/`CLAUDE_OTEL_*` (and all `CLAUDE_MIRROR*`) into the `sessions.env` column.
+
+**In-process audit writes are sandboxed too** (2026-07-16): subprocesses get
+their hermetic `CLAUDE_AUDIT_DIR` from `test_env`, but a unit test calling
+audit-writing product code *directly* (e.g. `spawn_detached`'s script-missing
+degrade row) used to hit the REAL `~/.claude/kitty-audit` DB — and such rows
+are global (no sid), so every live session's ⚠ warning light surfaced the
+suite's own deliberate error rows. The autouse `_fresh_audit_conn` fixture now
+points `CLAUDE_AUDIT_DIR` at a per-test sandbox for the in-process side as
+well (tests needing a specific dir monkeypatch over it), and
+`test_spawn_detached_missing_script_returns_none` pins the guarantee. The fake terminal
 side is injected via the pre-existing `KITTY_KITTEN_BIN` override (a recorder
 script standing in for `kitten`), so no product code special-cases tests.
 Calls that take the RAW `@kitty-cmd` socket path (`frontends/kitty.py

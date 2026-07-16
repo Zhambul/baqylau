@@ -373,6 +373,21 @@ def test_warning_light_surfaces_global_rows(run_hook, seed, session):
     assert s2.ops_text().count(line) == 1
 
 
+def test_warning_light_shows_func_for_no_exception_rows(seed, session):
+    """A deliberate degrade row (A.error OUTSIDE an except block — spawn
+    script-missing, watcher-spawn failures) stores format_exc's 'NoneType:
+    None' sentinel as its traceback; the mirror line must carry the func
+    string instead (observed live: '⚠ audit: global: -c: NoneType: None' —
+    unreadable)."""
+    s = session.make()
+    seed.py("from core import audit\n"
+            "audit.error(%r, 'spawn nope.py (script missing)')" % s.sid)
+    assert _poll(seed, s.log) == "1"
+    txt = s.ops_text()
+    assert "spawn nope.py (script missing)" in txt
+    assert "NoneType" not in txt
+
+
 def test_warning_light_chip_reaches_scorebar_text(run_hook, seed, session):
     """End to end: plant an error, poll, and render the scorebar's rows — the ▪
     row carries the AMBER ⚠ chip; with zero errors it shows no ⚠ at all."""

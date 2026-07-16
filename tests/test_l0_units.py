@@ -895,8 +895,8 @@ def test_errwatch_summary_last_traceback_line():
 
 def test_errwatch_err_ops_per_row_and_flood_collapse():
     from core import errwatch as EW
-    rows = [(1, "claude-cmd-fmt.py", "ValueError: boom"),
-            (2, "claude-split.py", "OSError: nope")]
+    rows = [(1, "claude-cmd-fmt.py", "on_post", "ValueError: boom"),
+            (2, "claude-split.py", "", "OSError: nope")]
     ops = EW.err_ops(rows, "sid-1")
     assert [o["t"] for o in ops] == ["label", "label"]
     assert ops[0]["s"] == "⚠ audit: claude-cmd-fmt.py: ValueError: boom"
@@ -904,14 +904,27 @@ def test_errwatch_err_ops_per_row_and_flood_collapse():
     from core import ops as O
     assert ops[0]["c"] == list(O.AMBER)          # amber warning, not red failure
     # Past FLOOD_N new rows in one poll: ONE collapsed line pointing at the CLI.
-    flood = [(i, "s.py", "E: x") for i in range(EW.FLOOD_N + 1)]
+    flood = [(i, "s.py", "f", "E: x") for i in range(EW.FLOOD_N + 1)]
     ops = EW.err_ops(flood, "sid-1")
     assert len(ops) == 1
     assert ops[0]["s"] == ("⚠ audit: %d new errors (bin/claude-audit.py errors "
                            "sid-1)" % (EW.FLOOD_N + 1))
     # Per-line char cap: a huge exception message truncates to TEXT_MAX.
-    ops = EW.err_ops([(9, "s.py", "E: " + "x" * 500)], "sid-1")
+    ops = EW.err_ops([(9, "s.py", "f", "E: " + "x" * 500)], "sid-1")
     assert len(ops[0]["s"]) == EW.TEXT_MAX
+
+
+def test_errwatch_no_exception_row_shows_func():
+    # A deliberate degrade row (A.error outside an except block) stores the
+    # 'NoneType: None' format_exc sentinel — the mirror line must show the func
+    # string ('spawn nope.py (script missing)'), not that noise. A row with
+    # neither a real traceback nor a func keeps the sentinel (nothing better).
+    from core import errwatch as EW
+    ops = EW.err_ops([(1, "-c", "spawn nope.py (script missing)",
+                       "NoneType: None\n")], "sid-1")
+    assert ops[0]["s"] == "⚠ audit: -c: spawn nope.py (script missing)"
+    ops = EW.err_ops([(2, "s.py", "", "NoneType: None\n")], "sid-1")
+    assert ops[0]["s"] == "⚠ audit: s.py: NoneType: None"
 
 
 def test_errwatch_chip_part_shape():
@@ -1027,9 +1040,24 @@ def test_tabstatus_watcher_ceilings_and_reason_strings():
 # --- core.spawn.spawn_detached ---------------------------------------------------
 
 def test_spawn_detached_missing_script_returns_none(tmp_path):
-    """A renamed/deleted script must return None (audited), never raise."""
+    """A renamed/deleted script must return None (audited), never raise.
+    The degrade row must land in the per-test audit sandbox (conftest's
+    _fresh_audit_conn redirects CLAUDE_AUDIT_DIR for in-process calls) — this
+    test once wrote a GLOBAL row into the REAL ~/.claude/kitty-audit DB, which
+    every live session's ⚠ warning light then surfaced."""
+    import sqlite3
+    from core import audit as A
     from core.spawn import spawn_detached
     assert spawn_detached(str(tmp_path / "nope.py"), [], "") is None
+    assert os.path.expanduser("~/.claude") not in A.db_path(), \
+        "in-process audit writes must never target the real DB"
+    conn = sqlite3.connect(A.db_path())
+    try:
+        funcs = [r[0] for r in conn.execute("SELECT func FROM errors")]
+    finally:
+        conn.close()
+    assert any("script missing" in f for f in funcs), \
+        "the degrade row must be audited (in the sandbox): %s" % funcs
 
 
 def test_spawn_detached_detaches_into_own_session(tmp_path, reaper):
@@ -1551,7 +1579,7 @@ def test_errwatch_cached_conn_and_db_appears_later(tmp_path, monkeypatch):
     assert EW._conn is None
     w = sqlite3.connect(str(db))                      # DB appears later
     w.execute("CREATE TABLE errors(id INTEGER PRIMARY KEY, session_id TEXT,"
-              " script TEXT, traceback TEXT)")
+              " script TEXT, func TEXT DEFAULT '', traceback TEXT)")
     w.execute("INSERT INTO errors(session_id, script, traceback)"
               " VALUES('sid1', 's.py', 'E: x')")
     w.commit()
