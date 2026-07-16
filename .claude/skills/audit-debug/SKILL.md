@@ -194,6 +194,29 @@ New always-audited swallow sites (previously silent — their absence used to ma
   whole command. A non-empty anomaly row on a current build is the regression
   (or a genuinely fileless command, whose stream ends AFTER its Post — check the
   timing).
+- **fg mirror block shows `■ output not found` (tab behaved fine)** *(mis-scoped
+  redirect, fixed 2026-07-16)* — cmd-pre decision `tailing command's own
+  redirect` but the `fg` stream's `src_path` is a file the command never wrote
+  at that path: pre-fix, `parse_redirect` took the LAST redirect anywhere in
+  the command as the output sink and joined a relative target against the hook
+  payload's cwd. Two ways that broke (session cf514935's repro command hit
+  both): a `cd` earlier in the command meant the file was created elsewhere
+  (the tailer waited on the wrong path via command liveness — the stream ends
+  `output-file-not-found` AT its PostToolUse, the tab stayed blue the whole
+  run — then painted "output not found"), and a mid-command bookkeeping
+  redirect (`… >> summary.txt ) & done↵wait↵sort summary.txt`) isn't the
+  visible output sink anyway — the trailing statements print to stdout, which
+  redirect-tail mode never captures. Tell: `src_path` = hook-cwd + a relative
+  name while the command text contains a `cd`, and/or statements after the
+  last redirect. Since 2026-07-16 `parse_redirect` is statement-scoped (only a
+  FINAL-statement redirect engages redirect-tail mode; anything else tees,
+  which shows everything) and a relative target follows statically resolvable
+  top-level `cd`s (`tools._follow_cd`; dynamic/subshell cds → tee). On a
+  current build this shape = the scoping/tracking regressed. NB the `fg tailer
+  gave up on a late redirect target` anomaly can also surface these rows —
+  distinguish by timing: mis-scoped ends AT its Post (the liveness wait
+  worked, the path was wrong); a late-redirect regression ends long BEFORE its
+  Post.
 - **Tab shows a colour the audit says it shouldn't** — trust `applied=1` rows only:
   any transition with "kitten @ failed rc=N … state row unchanged" in the reason
   means the script decided a colour but kitty never showed it (dead socket, closed

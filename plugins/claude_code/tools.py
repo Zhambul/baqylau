@@ -18,6 +18,17 @@ _CONT_OP = re.compile(r"(\|\||&&|\|)[ \t]*\n[ \t]*")
 _CONT_BSLASH = re.compile(r"\\[ \t]*\n[ \t]*")
 
 
+def _statements(cmd):
+    """Split a command into its ordered shell statements: join line
+    continuations first (`foo \\↵bar`, `… |↵head`), then cut at `_STMT_SEP`.
+    The regex split is quote-blind — a separator INSIDE a quoted string
+    mis-cuts, so callers must treat any statement that fails to tokenise as
+    untrustworthy (both do: they bail to their safe fallback)."""
+    cmd = _CONT_BSLASH.sub(" ", cmd)                # `foo \↵bar` -> `foo bar`
+    cmd = _CONT_OP.sub(r"\1 ", cmd)                 # `… |↵head` -> `… | head`
+    return [p for p in _STMT_SEP.split(cmd) if p.strip()]
+
+
 def _effective(cmd):
     """Reduce a command to the single read that determines the mirror's rendering.
 
@@ -29,9 +40,7 @@ def _effective(cmd):
     base read still colours. A NON-truncation pipe (`| awk`, `| grep`) is left in
     place so the per-detector `|` guard rejects it — that output is transformed,
     not the file. Returns the cleaned statement."""
-    cmd = _CONT_BSLASH.sub(" ", cmd)                # `foo \↵bar` -> `foo bar`
-    cmd = _CONT_OP.sub(r"\1 ", cmd)                 # `… |↵head` -> `… | head`
-    parts = [p for p in _STMT_SEP.split(cmd) if p.strip()]
+    parts = _statements(cmd)
     stmt = parts[-1] if parts else cmd
     prev = None
     while prev != stmt:                             # peel nested `| head | tail`
@@ -39,28 +48,92 @@ def _effective(cmd):
     return stmt.strip()
 
 
+def _follow_cd(stmts, cwd):
+    """Statically track the working directory across a command's LEADING
+    statements, so a relative redirect target in the final statement resolves
+    against the directory the command actually writes in (`cd build && make >
+    log` → build/log, not ./log — resolving against the hook cwd tailed a path
+    that never existed, and the mirror painted "output not found").
+
+    Returns (cwd, known). known=False = some `cd` couldn't be resolved
+    statically — dynamic target (`cd "$DIR"`, `cd -`, `~`), subshell-scoped or
+    backgrounded (`(cd x)`, `cd x & …`), flags, or a quote-mangled statement
+    split — and the caller must then REFUSE a relative target (tee fallback)
+    rather than guess: tailing a wrong-but-existing file replays its whole
+    contents into the mirror as command output. A later ABSOLUTE `cd` restores
+    certainty; a relative `cd` on an unknown base stays unknown."""
+    known = True
+    for st in stmts:
+        try:
+            toks = shlex.split(st, posix=False)
+        except ValueError:
+            known = False               # quotes span a separator: mis-split
+            continue
+        # `(cd` / `cd)` glue parens onto the token (posix=False), so a bare
+        # `in` check missed a subshell's cd entirely and the stale base won
+        if not any(t.strip("()") == "cd" for t in toks):
+            continue
+        # only a plain top-level `cd [target]` is trusted; any other mention
+        # (subshell, backgrounded, flags, mid-statement) poisons the tracking
+        if toks[0] != "cd" or len(toks) > 2 \
+                or any("(" in t or ")" in t for t in toks):
+            known = False
+            continue
+        if len(toks) == 1:              # bare `cd` = $HOME
+            cwd, known = os.path.expanduser("~"), True
+            continue
+        t = toks[1]
+        if len(t) >= 2 and t[0] in ("'", '"') and t[-1] == t[0]:
+            t = t[1:-1]                 # quotes are shell syntax, not the name
+        if not t or t.startswith("-") or t.startswith("~") \
+                or any(c in t for c in "$`*?["):
+            known = False               # flags / `cd -` / expansion: dynamic
+        elif os.path.isabs(t):
+            cwd, known = t, True
+        elif known:
+            cwd = os.path.normpath(os.path.join(cwd, t))
+    return cwd, known
+
+
 def parse_redirect(cmd, cwd):
-    """If `cmd` sends stdout to a file (… > file / &> file / 1>> file), return
-    (absolute_target, append) — else None. Used by BOTH Bash hooks: claude-cmd-pre
-    tails the redirect target instead of tee-ing a second copy, and claude-cmd-fmt
-    points the background tailer at it (the task's own output file stays empty
-    when the bytes go to the redirect). Conservative: only stdout (or &>)
-    redirects, skip /dev/* and fd-dup targets (&1), give up on anything we can't
-    tokenise. Last redirect wins (the effective stdout sink).
+    """If `cmd`'s FINAL statement sends stdout to a file (… > file / &> file /
+    1>> file), return (absolute_target, append) — else None. Used by BOTH Bash
+    hooks: claude-cmd-pre tails the redirect target instead of tee-ing a second
+    copy, and claude-cmd-fmt points the background tailer at it (the task's own
+    output file stays empty when the bytes go to the redirect). Conservative:
+    only stdout (or &>) redirects, skip /dev/* and fd-dup targets (&1), give up
+    on anything we can't tokenise. Last redirect in the statement wins.
+
+    STATEMENT-SCOPED (2026-07-16): a redirect is the command's effective output
+    sink only when it belongs to the LAST statement. Last-redirect-wins across
+    the whole command latched onto a mid-command bookkeeping file (`… >>
+    summary.txt ) & done↵wait↵sort summary.txt`) while the visible output went
+    to stdout — the tee is the correct mode there, and it captures everything.
+    A RELATIVE target resolves against the statically tracked cwd (`_follow_cd`
+    above): `cd build && make > log` tails build/log; an untrackable `cd`
+    refuses the relative target (None → tee) rather than guess.
 
     Tokenised with posix=False so QUOTES SURVIVE: posix mode stripped them, which
     made `grep '>' file` indistinguishable from `grep > file` — the fg tailer then
     streamed the whole existing file into the mirror as "command output". A token
     starting with a quote is a literal argument, never a redirect. Heredocs bail
-    entirely (their BODY lines tokenise like real redirects and last-wins picked
-    those), as do `>|` clobbers and `>(…)` process substitution — None just means
-    the caller falls back to its own tee side file, which is always safe."""
+    entirely (their BODY lines tokenise like real redirects and even a
+    final-statement scope can be fooled by a body line), as do `>|` clobbers and
+    `>(…)` process substitution — None just means the caller falls back to its
+    own tee side file, which is always safe."""
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
         return None
     if any(t.startswith("<<") for t in toks):
         return None
+    stmts = _statements(cmd)
+    if not stmts:
+        return None
+    try:
+        toks = shlex.split(stmts[-1], posix=False)
+    except ValueError:
+        return None                     # quotes span a separator: mis-split
     target, append, i = None, False, 0
     while i < len(toks):
         t = toks[i]
@@ -96,7 +169,10 @@ def parse_redirect(cmd, cwd):
     if any(c in target for c in "$`*?[") or target.startswith("~"):
         return None
     if not os.path.isabs(target):
-        target = os.path.join(cwd or os.getcwd(), target)
+        base, known = _follow_cd(stmts[:-1], cwd or os.getcwd())
+        if not known:
+            return None                 # effective cwd unknowable: tee fallback
+        target = os.path.join(base, target)
     return target, append
 
 

@@ -274,6 +274,25 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     `>|` clobbers, and `>(…)` process substitution all return None (the body of a
     heredoc tokenises like real redirects and last-wins picked those) — None just
     means falling back to the tee side file, which is always safe.
+  - **…and statement-scoped** (2026-07-16): only a redirect in the command's
+    *final* statement counts. "Last redirect wins" used to scan the whole
+    command, so a mid-command bookkeeping redirect (`for … do ( … >>
+    summary.txt ) & done↵wait↵sort summary.txt`) was taken as the output sink
+    while the visible output (the trailing `sort`) went to stdout — redirect-tail
+    mode then captured nothing the user cared about. When statements follow the
+    last redirect, the tee is the correct mode *and* shows everything. A
+    RELATIVE target now also resolves against a statically tracked cwd
+    (`tools._follow_cd`): `cd build && make > log` tails `build/log`, where
+    joining against the hook payload's cwd tailed a path that never existed
+    (the tailer waited it out and painted "output not found"). Only plain
+    top-level `cd <literal>` statements are followed; a dynamic (`cd "$DIR"`,
+    `cd -`, `~`), subshell-scoped (`(cd x; …)`), backgrounded, or flagged cd
+    makes the effective cwd unknowable, and a relative target then returns None
+    (tee fallback) — never a guess, because tailing a wrong-but-existing file
+    replays its entire contents into the mirror as command output. Why not
+    follow subshell cds too: shlex glues `(cd` into one token and paren scoping
+    isn't reconstructible from a quote-blind statement split; the tee is always
+    correct, so ambiguity resolves toward it.
   - **The rewrite auto-approves deliberately.** `updatedInput` only takes effect
     with `permissionDecision: "allow"` (auto-approve) or `"ask"` — and `"ask"`
     prompts on *every* rewritten command, even ones your allowlist would pass

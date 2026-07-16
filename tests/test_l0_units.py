@@ -1270,6 +1270,68 @@ def test_read_extent_offset_to_eof_stays_ranged():
     assert T.read_extent({"startLine": 1, "numLines": 149, "totalLines": 149}) == ""
 
 
+# --- parse_redirect: statement scoping + static cd tracking ----------------------
+# The repro_summary.txt shape (2026-07-16): last-redirect-wins across the WHOLE
+# command latched onto a mid-command bookkeeping redirect (`… >> summary.txt ) &
+# done↵wait↵sort summary.txt`) while the visible output went to stdout, AND a
+# relative target resolved against the hook cwd even though the command cd'd
+# elsewhere first — the fg tailer waited on a path that never existed and the
+# mirror painted "output not found". Now: only the FINAL statement's redirect
+# counts (statements after it print to stdout → the tee captures everything),
+# and a relative target follows statically resolvable top-level cds.
+
+def test_parse_redirect_final_statement_only():
+    from plugins.claude_code import tools as T
+    # redirect in the final statement: still tailed (single- and multi-statement)
+    assert T.parse_redirect("make > log", "/w") == ("/w/log", False)
+    assert T.parse_redirect("sleep 45; adapters mr > /t/out 2>&1", "/w") == \
+        ("/t/out", False)
+    # mid-command redirect, final statement prints to stdout: tee fallback
+    assert T.parse_redirect("cmd >> sum.txt; sort sum.txt", "/w") is None
+    assert T.parse_redirect("cmd > a.log && echo done", "/w") is None
+    # the shape from session cf514935: loop-body append + trailing sort
+    repro = ("cat data.json\ncd /scratch &&\nrm -f sum.txt &&\nfor i in 1 2\n"
+             "do ( cmd > out_$i 2>&1\necho $i >> sum.txt ) & done\nwait\n"
+             "sort sum.txt")
+    assert T.parse_redirect(repro, "/w") is None
+
+
+def test_parse_redirect_follows_static_cd():
+    import os
+    from plugins.claude_code import tools as T
+    assert T.parse_redirect("cd build && make > log", "/w") == \
+        ("/w/build/log", False)
+    assert T.parse_redirect("cd /abs/dir && make >> log", "/w") == \
+        ("/abs/dir/log", True)
+    assert T.parse_redirect("cd a && cd b && make > log", "/w") == \
+        ("/w/a/b/log", False)
+    assert T.parse_redirect("cd ..; make > log", "/w/sub") == ("/w/log", False)
+    assert T.parse_redirect("cd 'my dir' && make > log", "/w") == \
+        ("/w/my dir/log", False)
+    assert T.parse_redirect("cd && make > log", "/w") == \
+        (os.path.expanduser("~") + "/log", False)
+    # an absolute target never needs the tracking, even past a dynamic cd
+    assert T.parse_redirect('cd "$DIR" && make > /t/log', "/w") == \
+        ("/t/log", False)
+
+
+def test_parse_redirect_untrackable_cd_bails_to_tee():
+    from plugins.claude_code import tools as T
+    for cmd in [
+        'cd "$DIR" && make > log',      # dynamic target
+        "cd ~/x && make > log",         # ~ expansion
+        "cd - && make > log",           # previous dir
+        "cd -P x && make > log",        # flags
+        "(cd x); make > log",           # paren-scoped: conservative bail
+        "(cd x; make > rel)",           # glued `(cd` token — must still poison
+        "( cd x; make > rel )",
+    ]:
+        assert T.parse_redirect(cmd, "/w") is None, cmd
+    # a cd inside $(…) can't change the outer cwd — correctly ignored
+    assert T.parse_redirect("x=$(cd foo; pwd); make > log", "/w") == \
+        ("/w/log", False)
+
+
 # --- FileTailer worst-case bounds (core/tail.py PUMP_MAX_B / line_max) -----------
 # A 100MB burst used to be ONE unbounded read into `pending` (memory) and one
 # giant emit (renderer latency); a newline-free multi-MB line grew `pending`
