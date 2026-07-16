@@ -249,7 +249,12 @@ class Renderer:
         # core builder (streamfmt.file_line — same anatomy as the main session's file ops
         # and codex patches).
         who = R.fg(*self.rgb) + self.label + " " + RST
-        line = who + SF.file_line(label, name, CT.FILE_RGB.get(label, O.SLATE),
+        # Same location-aware display as the main session's file ops
+        # (streamfmt.file_display: ✎ scratchpad / dim out-of-project dir); the
+        # tailer inherits the hook's cwd = the session directory, so the
+        # default process-cwd baseline is the right one.
+        disp, _loc = SF.file_display(path)
+        line = who + SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
                                   failed=failed, extent=ext,
                                   added=added, removed=removed, rng=rng)
         if failed:

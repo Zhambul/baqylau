@@ -292,7 +292,18 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   `MultiEdit`/`NotebookEdit`) logs file operations as compact one-liners showing
   just the verb + basename — `Read(README.md)`, `Update(README.md)`,
   `Write(new.py)` — interleaved with the command blocks so the pane reads as a
-  running log of what Claude did. Verbs mirror Claude Code's own UI (Edit/
+  running log of what Claude did. The name is **location-aware**
+  (`streamfmt.file_display`, 2026-07-16 — a bare basename hid WHERE an op
+  landed; scratchpad, wiki, and repo files all looked alike): a file under the
+  session cwd stays a bare basename (the quiet default), a file in a **session
+  scratchpad** (`/tmp/claude-<uid>/…/scratchpad/…`, matched by path shape —
+  no env var names it) shows a `✎` icon — `Write(✎ repro.py)` — and any other
+  out-of-project file shows a dim abbreviated directory prefix,
+  `Update(~/wiki/…/zenith/concepts/x.md)` (home → `~`, long chains
+  middle-elided to first + last two components). The audit decision carries a
+  matching `[scratch]`/`[out]` tag. The subagent streamer's file ops
+  (`substream_render.render_file`) go through the same builder, baselined on
+  the tailer's inherited cwd = the session directory. Verbs mirror Claude Code's own UI (Edit/
   MultiEdit → **Update**, colour-coded: read blue, update yellow, write green);
   formatting lives in **`claude-file-fmt.py`**. A mutation also shows its
   added/removed line counts — green `+N` / red `-M`, e.g. `Update(task-manager.md)

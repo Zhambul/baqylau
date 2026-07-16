@@ -54,10 +54,13 @@ stays as the plugin-facing wrapper resolving a bin/ sibling NAME), the codex
 launcher, and the codex watcher's per-run stream spawn),
 `streamfmt.py` (the shared block-shaping vocabulary of the stream renderers —
 `cap`, the `chip`/`gutter`/`dim_gut` op shapes, the ended-footer `tok_rollup`
-token fragment, and `file_line` — the file-op one-liner
+token fragment, `file_line` — the file-op one-liner
 `verb(name)[ extent][ +A -R][ range]` painted identically by `file_fmt.py`,
 `substream_render.py`, and the codex patch renderer, each of which used to
-hand-build it; the per-caller extras — who-prefix, model/ctx tags, ✗ mark, the
+hand-build it — and `file_display`, the location-aware name that goes inside
+those parens (bare basename under the session cwd, `✎ name` for a session
+scratchpad file, dim abbreviated dir + basename for anything else outside the
+project); the per-caller extras — who-prefix, model/ctx tags, ✗ mark, the
 click-to-view hyperlink — stay caller-side; extracted from the byte-identical
 copies the renderers each grew — shared surface lives in core because the
 dependency rule forbids codex importing claude_code),

@@ -169,6 +169,25 @@ def test_cmd_pre_redirect_branch_identical_both_paths(run_hook, test_env,
         assert s.live("fg"), "redirect path still claims the fg slot"
 
 
+@pytest.mark.parametrize("agent_id", [None, "agent-x"])
+def test_cmd_pre_midcommand_redirect_tees_both_paths(run_hook, test_env,
+                                                     session, agent_id):
+    # Statement-scoped parse_redirect on EVERY launch path: a command whose last
+    # redirect is mid-command (the visible output goes to stdout after it — the
+    # repro_summary.txt shape) must be tee-rewritten, not redirect-tailed, on
+    # the main fg path AND the subagent fg path (cmd-fmt's bg path shares the
+    # same tokenizer; its None fallback is Claude Code's own task output file).
+    s = session.make()
+    kw = dict(agent_id=agent_id) if agent_id else {}
+    cmd = "cd sub && x >> sum.txt; sort sum.txt"
+    p = run_hook("claude-cmd-pre.py", P.pre_bash(s, cmd, **kw))
+    hso = json.loads(p.stdout)["hookSpecificOutput"]
+    assert "tee -a" in hso["updatedInput"]["command"], \
+        "mid-command redirect must fall back to the tee"
+    assert any("rewrote command (tee)" in d
+               for d in oracle.decisions(test_env, s.sid))
+
+
 def test_cmd_pre_subagent_fg_optout(run_hook, test_env, session):
     s = session.make()
     env = dict(test_env, CLAUDE_MIRROR_LIVE_FG_SUB="0")
@@ -283,6 +302,32 @@ def test_file_fmt_failure_does_not_inflate_diff(run_hook, test_env, session):
     c = s.counters()
     assert not c.get("added") and not c.get("removed"), \
         "a failed file op must not count +/- lines"
+
+
+def test_file_fmt_scratchpad_gets_icon(run_hook, test_env, session):
+    # A file op in the session scratchpad shows the ✎ icon (streamfmt.file_display)
+    # so scratch-file churn is distinguishable from project edits; the audit
+    # decision carries the [scratch] tag.
+    from core.render import strip_ansi
+    s = session.make()
+    path = "/tmp/claude-503/-proj-slug/%s/scratchpad/notes.md" % s.sid
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Write", path=path))
+    assert "(✎ notes.md)" in strip_ansi(s.ops_text())
+    assert any("[scratch]" in d for d in oracle.decisions(test_env, s.sid))
+
+
+def test_file_fmt_outside_project_shows_location(run_hook, test_env, session):
+    # A file op OUTSIDE the session cwd shows a dim abbreviated dir prefix —
+    # a bare basename hid where the op landed. In-project ops stay bare.
+    from core.render import strip_ansi
+    s = session.make()
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Edit", path="/etc/hosts",
+                                               tid="toolu_out"))
+    assert "(/etc/hosts)" in strip_ansi(s.ops_text())
+    assert any("[out]" in d for d in oracle.decisions(test_env, s.sid))
+    run_hook("claude-file-fmt.py", P.post_file(s, tool="Edit", tid="toolu_in"))
+    assert "(example.py)" in strip_ansi(s.ops_text()), \
+        "in-project op must stay a bare basename"
 
 
 # --------------------------------------------------------- claude-monitor-fmt

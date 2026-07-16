@@ -9,6 +9,9 @@
 # Everything here is width-INDEPENDENT (it runs once at op creation), takes the
 # caller's identity (who/rgb) as parameters, and returns paint ops / plain text —
 # it never emits.
+import os
+import re
+
 from core import ops as O
 from core import render as R
 
@@ -76,6 +79,54 @@ def file_line(verb, name, rgb, failed=False, extent="", added=0, removed=0,
     if rng:
         line += "  " + R.DIM + rng + R.RST
     return line
+
+
+SCRATCH_ICON = "✎"
+# The per-session scratchpad agent tools offer for temp files
+# (/tmp/claude-<uid>/<cwd-slug>/<sid>/scratchpad/…, surfaced as /private/tmp on
+# macOS). No env var names it for hook children, so detection is by path shape;
+# ANY session's scratchpad matches (another session's scratch file is still
+# scratch space, and per-path precision would need the sid threaded everywhere).
+_SCRATCH_RE = re.compile(r"/claude-\d+/[^/]+/[^/]+/scratchpad(?:/|$)")
+
+
+def _abbrev_dir(d):
+    """A directory as the one-liner's location hint: home → ~, and long chains
+    middle-elided to the first and last two components (the tail is what
+    orients the eye; the head says which tree it lives in)."""
+    home = os.path.expanduser("~")
+    if d == home:
+        return "~"
+    if d.startswith(home + "/"):
+        d = "~" + d[len(home):]
+    parts = d.split("/")
+    if len(parts) > 5:
+        parts = parts[:2] + ["…"] + parts[-2:]
+    return "/".join(parts)
+
+
+def file_display(path, cwd=None):
+    """What a file-op one-liner shows inside file_line's parens, as
+    (display, kind). kind '' = under the session cwd: basename alone, the
+    unchanged quiet default. 'scratch' = a session scratchpad file: '✎ name' —
+    the icon IS the location. 'out' = anywhere else: dim abbreviated directory
+    + basename, so an op outside the project is visibly elsewhere (a bare
+    basename hid WHERE — scratchpad, wiki, and repo ops all looked alike).
+
+    `cwd` defaults to the process cwd (hook children and detached tailers all
+    run in the session directory). The 'out' display embeds SGR (the dim
+    prefix, then COL['def'] restored for the basename — matching what
+    file_line paints around the name); callers needing plain text (audit
+    decision strings) use kind + the basename they already have."""
+    name = os.path.basename(path.rstrip("/")) or path or "?"
+    if _SCRATCH_RE.search(path):
+        return SCRATCH_ICON + " " + name, "scratch"
+    base = (cwd or os.getcwd()).rstrip("/")
+    apath = os.path.abspath(path)
+    if base and (apath == base or apath.startswith(base + "/")):
+        return name, ""
+    d = _abbrev_dir(os.path.dirname(apath) or "/")
+    return R.DIM + d + "/" + R.RST + R.COL["def"] + name, "out"
 
 
 def tok_rollup(fresh, out, cached, reads=None):

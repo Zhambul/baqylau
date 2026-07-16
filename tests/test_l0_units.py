@@ -1332,6 +1332,43 @@ def test_parse_redirect_untrackable_cd_bails_to_tee():
         ("/w/log", False)
 
 
+# --- streamfmt.file_display: location-aware file-op names ------------------------
+# A bare basename hid WHERE a Read/Update/Write landed — scratchpad, wiki, and
+# repo ops all looked alike in the mirror. Under the session cwd the quiet
+# basename stays; a session-scratchpad file gets the ✎ icon; anything else
+# outside the project gets a dim abbreviated directory prefix.
+
+def test_file_display_locations():
+    import os
+    from core import render as R
+    from core import streamfmt as SF
+    cwd = "/w/project"
+    # under the cwd: unchanged bare basename
+    assert SF.file_display("/w/project/src/app.py", cwd) == ("app.py", "")
+    assert SF.file_display("/w/project/top.md", cwd) == ("top.md", "")
+    # scratchpad (both /tmp and macOS /private/tmp spellings): icon + basename
+    for root in ("/tmp", "/private/tmp"):
+        p = root + "/claude-503/-w-project/some-sid-uuid/scratchpad/repro_1.out"
+        disp, kind = SF.file_display(p, cwd)
+        assert (disp, kind) == (SF.SCRATCH_ICON + " repro_1.out", "scratch"), p
+    # outside the project: dim abbreviated dir + basename
+    disp, kind = SF.file_display("/etc/hosts", cwd)
+    assert kind == "out" and disp.endswith(R.COL["def"] + "hosts")
+    assert R.strip_ansi(disp) == "/etc/hosts"
+    # home abbreviates to ~, long chains middle-elide to first + last two
+    home = os.path.expanduser("~")
+    disp, kind = SF.file_display(home + "/wiki/01/providers/zenith/concepts/x.md", cwd)
+    assert kind == "out"
+    assert R.strip_ansi(disp) == "~/wiki/…/zenith/concepts/x.md"
+
+
+def test_file_display_default_cwd_is_process_cwd():
+    import os
+    from core import streamfmt as SF
+    here = os.getcwd()
+    assert SF.file_display(os.path.join(here, "x.py")) == ("x.py", "")
+
+
 # --- FileTailer worst-case bounds (core/tail.py PUMP_MAX_B / line_max) -----------
 # A 100MB burst used to be ONE unbounded read into `pending` (memory) and one
 # giant emit (renderer latency); a newline-free multi-MB line grew `pending`

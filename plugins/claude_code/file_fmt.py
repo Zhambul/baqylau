@@ -261,8 +261,11 @@ def main():
             rng = CT.edit_range(tr.get("structuredPatch") if isinstance(tr, dict) else None)
     # The one-liner shape itself is the shared core builder (streamfmt.file_line
     # — the substream and codex renderers paint the same anatomy); the failure
-    # mark stays this formatter's own.
-    line = SF.file_line(label, name, CT.FILE_RGB.get(label, O.SLATE),
+    # mark stays this formatter's own. The displayed name carries the location
+    # (streamfmt.file_display): bare basename under the session cwd, ✎ for a
+    # scratchpad file, dim abbreviated dir for anything else outside the project.
+    disp, loc = SF.file_display(path, d.get("cwd"))
+    line = SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
                         failed=failed, extent=ext,
                         added=added, removed=removed, rng=rng) + mark
     # Click-to-view: stash the pre-rendered content block under the op's
@@ -285,6 +288,7 @@ def main():
     # owns it and updates the scoreboard live.
     O.bump(LOG, tool=tool, file=path, added=added, removed=removed)
     A.hook_event(d, decision=f"rendered: {label}({name})"
+                 + (f" [{loc}]" if loc else "")
                  + (" FAILED" if failed else
                     ("" if tool == "Read" else f" +{added} -{removed}"))
                  + (" +view" if viewed else ""))

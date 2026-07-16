@@ -55,6 +55,7 @@ backed by grep-style regression tests that will fail the build):
 | Tab states + `COLORS` hex table + tab-DB schema | `core/tabs.py` (read cross-module via `state.tab_state`) |
 | Slot claim-token format (both directions: `_token`/`_untoken`) | `core/slots.py` |
 | Stream-block shapes: `cap`, `chip`, `gutter`, `tok_rollup`, `file_line` | `core/streamfmt.py` |
+| File-op display name (bare basename / `✎` scratchpad icon / dim out-of-project dir), incl. the scratchpad path pattern | `core/streamfmt.file_display` |
 | Session-alive probe | `core/state.parked()` — a bare exists check, never a connect |
 | Detached-spawn mechanics (DEVNULL stdio + `start_new_session=True` + the `spawn`/`error` audit rows) | `core/spawn.spawn_detached` — `hookkit.spawn_streamer` is its bin/-name-resolving wrapper |
 | Mirror-pane width default (`DEFAULT_BIAS`, the `CLAUDE_MIRROR_BIAS` fallback both hosts share) | `core/hostpane.py` |
