@@ -152,6 +152,123 @@ def agent_paths(parent_tpath, agent_id):
             os.path.join(subdir, "agent-%s.meta.json" % agent_id))
 
 
+# --- session title + the main-thread conversation (dashboard read models) ----------
+
+TITLE_SCAN = 200        # head-window lines session_title inspects: summary records
+#                         are PREPENDED on resume, so they precede the first prompt;
+#                         a title must never cost a full multi-MB transcript read
+
+
+def session_title(path):
+    """Best-effort display TITLE for a session transcript — effectively what
+    the `claude --resume` picker shows: the LAST `summary` record in the head
+    window when Claude Code wrote one, else the first line of the first REAL
+    user prompt (isMeta rows and `<command-*>`/`<local-command-*>` wrappers
+    are plumbing, not prompts). '' when unreadable / nothing found."""
+    summary, prompt = "", ""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for i, raw in enumerate(fh):
+                if i >= TITLE_SCAN or prompt:
+                    break
+                raw = raw.strip()
+                if not raw:
+                    continue
+                try:
+                    o = json.loads(raw)
+                except Exception:
+                    continue
+                t = o.get("type")
+                if t == "summary":
+                    summary = o.get("summary") or summary
+                elif t == "user" and not o.get("isMeta"):
+                    c = (o.get("message") or {}).get("content")
+                    if isinstance(c, str):
+                        s = c.strip()
+                        if s and not s.startswith("<"):
+                            prompt = s.split("\n", 1)[0][:200]
+    except OSError:
+        return ""
+    return summary or prompt
+
+
+def _complete_lines(path, pos):
+    """Complete lines from byte `pos`: ([line, …], new_pos). A trailing
+    partial line is NOT consumed (new_pos stops before it), so a json parse
+    never sees a torn record — the read-exactly discipline of core/tail's
+    pump, as a one-shot."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(pos)
+            data = fh.read()
+    except OSError:
+        return [], pos
+    end = data.rfind(b"\n")
+    if end < 0:
+        return [], pos
+    return data[:end].decode("utf-8", "replace").split("\n"), pos + end + 1
+
+
+def conversation(path, pos=0):
+    """The MAIN-THREAD conversation for the dashboard's merged mirror stream
+    (docs/dashboard.md): every prompt / assistant message / teammate message
+    from byte `pos` on, in transcript order, each carrying `anchor` — the id
+    of the last tool_use seen BEFORE it. Ops carry the same ids (`g`/`v`), so
+    the dashboard can interleave conversation into the op stream without any
+    timestamp column: a message goes after its anchor's last op. anchor is
+    None before the first tool — and for every record of an incremental
+    (pos > 0) call, where the preceding anchor is unknowable; incremental
+    consumers append in arrival order instead. Returns (records, new_pos)."""
+    lines, new_pos = _complete_lines(path, pos)
+    out, anchor = [], None
+    for s in lines:
+        s = s.strip()
+        if not s:
+            continue
+        rec = parse_line(s)
+        if rec is None:
+            continue
+        kind = rec["kind"]
+        if kind == "prompt":
+            t = rec["text"].strip()
+            if t and not t.startswith("<"):        # command/caveat wrappers
+                out.append({"kind": "prompt", "text": t, "anchor": anchor})
+        elif kind == "teammsg":
+            out.append({"kind": "teammsg", "text": rec["body"],
+                        "sender": rec["sender"], "anchor": anchor})
+        elif kind == "results":
+            for text in rec["texts"]:
+                k, a, b = classify_user_text(text)
+                if k == "teammsg":
+                    out.append({"kind": "teammsg", "text": b, "sender": a,
+                                "anchor": anchor})
+                elif text.strip() and not text.strip().startswith("<"):
+                    out.append({"kind": "prompt", "text": text.strip(),
+                                "anchor": anchor})
+        elif kind == "assistant":
+            for bkind, blk in rec["blocks"]:
+                if bkind == "text":
+                    if blk.strip():
+                        out.append({"kind": "message", "text": blk.strip(),
+                                    "anchor": anchor})
+                elif blk.get("id"):
+                    anchor = blk["id"]
+    return out, new_pos
+
+
+def conversation_for(sid, pos=0):
+    """The conversation provider behind plugins.conversation(): the session's
+    MAIN transcript from byte `pos`. None when this plugin has no transcript
+    for the sid (the fan-out then asks the next plugin) — same resolution and
+    deferred-import shape as activity()."""
+    from core import sessionapi as API
+    row = API.session_row(sid)
+    path = (row or {}).get("transcript_path") or ""
+    if not path or not os.path.isfile(path):
+        return None
+    return conversation(path, pos)
+
+
 # --- the drill-down timeline (full fidelity — deliberately UNCAPPED) ---------------
 
 def timeline(path):

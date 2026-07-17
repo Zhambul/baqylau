@@ -176,6 +176,92 @@ def test_http_rejects_bad_sids(dash):
         assert e.value.code == 404
 
 
+# ------------------------------------------- titles + the merged conversation
+
+def _jl(*objs):
+    return "".join(json.dumps(o) + "\n" for o in objs)
+
+
+def _tw(tmp_path, name, *objs):
+    p = tmp_path / name
+    p.write_text(_jl(*objs))
+    return str(p)
+
+
+def test_session_title_prefers_summary_then_first_real_prompt(tmp_path):
+    from plugins.claude_code import transcript as TR
+    p = _tw(tmp_path, "t1.jsonl",
+            {"type": "summary", "summary": "old summary"},
+            {"type": "summary", "summary": "newest summary"},
+            {"type": "user", "isMeta": True,
+             "message": {"content": "<local-command-caveat>x</local-command-caveat>"}},
+            {"type": "user", "message": {"content": "real question here\nmore"}})
+    assert TR.session_title(p) == "newest summary"
+    q = _tw(tmp_path, "t2.jsonl",
+            {"type": "user", "message": {"content": "<command-name>/clear</command-name>"}},
+            {"type": "user", "message": {"content": "fix the flaky test\nplease"}})
+    assert TR.session_title(q) == "fix the flaky test"
+    assert TR.session_title(str(tmp_path / "absent.jsonl")) == ""
+
+
+def test_conversation_anchors_and_cursor(tmp_path):
+    from plugins.claude_code import transcript as TR
+    p = _tw(tmp_path, "c1.jsonl",
+            {"type": "user", "message": {"content": "do the thing"}},
+            {"type": "assistant", "message": {"id": "m1", "content": [
+                {"type": "text", "text": "starting"},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls"}}]}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}},
+            {"type": "assistant", "message": {"id": "m2", "content": [
+                {"type": "text", "text": "done"}]}})
+    recs, pos = TR.conversation(p, 0)
+    assert [(r["kind"], r["anchor"]) for r in recs] == \
+        [("prompt", None), ("message", None), ("message", "t1")]
+    assert pos > 0
+    # incremental: nothing new -> empty, cursor stable
+    assert TR.conversation(p, pos) == ([], pos)
+    with open(p, "a") as fh:
+        fh.write(json.dumps({"type": "user",
+                             "message": {"content": "next ask"}}) + "\n")
+    recs2, pos2 = TR.conversation(p, pos)
+    assert [r["kind"] for r in recs2] == ["prompt"] and pos2 > pos
+
+
+def test_http_sessions_carry_titles(dash, tmp_path):
+    tp = _tw(tmp_path, "titled.jsonl",
+             {"type": "user", "message": {"content": "build the dashboard"}})
+    A.session_start({"session_id": "dash5", "cwd": "/w", "transcript_path": tp})
+    rows = _get_json(dash + "/api/sessions")
+    row = next(r for r in rows if r["sid"] == "dash5")
+    assert row["title"] == "build the dashboard"
+
+
+def test_merged_backlog_interleaves_by_anchor(dash, tmp_path):
+    # ops for tool t1 + a conversation (prompt -> tool t1 -> message):
+    # the message must land AFTER t1's last op, the prompt before everything.
+    tp = _tw(tmp_path, "conv.jsonl",
+             {"type": "user", "message": {"content": "run it"}},
+             {"type": "assistant", "message": {"id": "m1", "content": [
+                 {"type": "tool_use", "id": "t1", "name": "Bash",
+                  "input": {"command": "echo hi"}}]}},
+             {"type": "user", "message": {"content": [
+                 {"type": "tool_result", "tool_use_id": "t1", "content": "hi"}]}},
+             {"type": "assistant", "message": {"id": "m2", "content": [
+                 {"type": "text", "text": "all done"}]}})
+    A.session_start({"session_id": "dash6", "cwd": "/w", "transcript_path": tp})
+    log = P.mirror_log("dash6")
+    O.emit(log, O.label("▶ foreground", (170, 185, 210), g="t1"),
+           O.gut("hi", (170, 185, 210), g="t1"))
+    last, mpos, html = DS.merged_backlog("dash6", "dash6")
+    kinds = ["prompt" if "msg prompt" in h else
+             "message" if "msg message" in h else "op" for h in html]
+    assert kinds == ["prompt", "op", "op", "message"]
+    assert last >= 2 and mpos > 0
+    assert "run it" in html[0] and "all done" in html[-1]
+
+
 # ------------------------------------------------------- notification watcher
 
 def test_notifier_transitions(monkeypatch):

@@ -155,9 +155,30 @@ NOTIFIER = Notifier()
 
 # --- payload builders ----------------------------------------------------------------
 
+_TITLES = {}      # transcript_path -> (size, title): a title only changes when
+#                   the file grows, so (path, size) is the natural cache key —
+#                   the list poll must not re-scan 50 transcript heads per tick
+
+
+def session_title(tpath):
+    if not tpath:
+        return ""
+    try:
+        size = os.path.getsize(tpath)
+    except OSError:
+        return ""
+    hit = _TITLES.get(tpath)
+    if hit and hit[0] == size:
+        return hit[1]
+    title = plugins.session_title(tpath) or ""
+    _TITLES[tpath] = (size, title)
+    return title
+
+
 def sessions_payload():
     """The sessions list, enriched with what the list view shows per row:
-    scoreboard stats (read-only, live or parked) and the tab state."""
+    scoreboard stats (read-only, live or parked), the tab state, and the
+    display title (plugins.session_title over the transcript)."""
     tabstates = API.tab_states()
     out = []
     for row in API.sessions(SESSIONS_LIMIT):
@@ -167,16 +188,63 @@ def sessions_payload():
         st = API.stats_at(sdb)
         row["stats"] = st
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
+        row["title"] = session_title(row.get("transcript_path") or "")
         out.append(row)
     return out
 
 
 def session_payload(sid):
     """One session's overview — session() plus the error count the ⚠ badge
-    shows (full rows stay behind /errors)."""
+    shows (full rows stay behind /errors) and the display title."""
     data = API.session(sid)
     data["error_count"] = len(API.errors(sid))
+    data["title"] = session_title(data.get("transcript_path") or "")
     return data
+
+
+def _conv_html(recs):
+    return [opshtml.msg_html(r["kind"], r.get("text", ""), r.get("sender", ""))
+            for r in recs]
+
+
+def merged_backlog(sid, key):
+    """The session view's INITIAL stream: every op interleaved with the
+    main-thread conversation. There is no timestamp column to merge on — ops
+    deliberately carry none — but ops and transcript records share the
+    tool_use ids (`g`/`v` on ops, `anchor` on conversation records), so each
+    message is placed after the LAST op of the tool block it followed in the
+    transcript. Messages whose anchor never painted any op (or from before
+    the first tool) keep their relative order at the head/tail. Returns
+    (last_op_id, transcript_pos, [html, …])."""
+    sdb = API.state_db_for(sid)
+    last, ops = API.ops_at(sdb, 0) if sdb else (0, [])
+    got = plugins.conversation(sid, 0)
+    recs, mpos = got if got else ([], 0)
+    lastpos = {}
+    for i, op in enumerate(ops):
+        for k in ("g", "v"):
+            tid = op.get(k)
+            if tid:
+                lastpos[tid] = i
+    by_anchor, head = {}, []
+    for r in recs:
+        a = r.get("anchor")
+        if a in lastpos:
+            by_anchor.setdefault(a, []).append(r)
+        else:
+            head.append(r)      # pre-first-tool, or the anchor never painted
+    out = _conv_html([r for r in head if r.get("anchor") is None])
+    tail = [r for r in head if r.get("anchor") is not None]
+    for i, op in enumerate(ops):
+        h = opshtml.op_html(op, key)
+        if h:
+            out.append(h)
+        for k in ("g", "v"):
+            tid = op.get(k)
+            if tid and lastpos.get(tid) == i and tid in by_anchor:
+                out.extend(_conv_html(by_anchor.pop(tid)))
+    out.extend(_conv_html(tail))
+    return last, mpos, out
 
 
 def ops_payload(sid, after):
@@ -278,7 +346,8 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 1:
                 return self.sse_global()
             if len(parts) == 3 and parts[1] == "session" and _sid(parts[2]):
-                return self.sse_session(parts[2], _after(url))
+                return self.sse_session(parts[2], _qint(url, "after"),
+                                        _qint(url, "mpos"))
             return self._json({"error": "not found"}, 404)
         if parts[0] != "api":
             return self._json({"error": "not found"}, 404)
@@ -290,7 +359,7 @@ class Handler(BaseHTTPRequestHandler):
             if not rest:
                 return self._json(session_payload(sid))
             if rest == ["ops"]:
-                last, html = ops_payload(sid, _after(url))
+                last, html = ops_payload(sid, _qint(url, "after"))
                 return self._json({"last": last, "html": html})
             if rest == ["activity"]:
                 return self._json(plugins.activity(sid) or {"entries": []})
@@ -357,15 +426,24 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             NOTIFIER.unregister(q)
 
-    def sse_session(self, sid, after):
-        """One session's live stream: `ops` (rendered HTML), `stats`,
-        `agents`, `tab`, `costs` — each sent only on change."""
+    def sse_session(self, sid, after, mpos=0):
+        """One session's live stream: `ops` (rendered HTML), `msgs` (the
+        main-thread conversation from byte cursor `mpos`), `stats`, `agents`,
+        `tab`, `costs` — each sent only on change. A FRESH connection
+        (after=0, mpos=0) gets the anchor-merged backlog as its first ops
+        event; a reconnect resumes both cursors and appends in arrival
+        order (interleave is a backfill affordance, not a live guarantee)."""
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
+        if not after and not mpos:
+            last, mpos, html = merged_backlog(sid, key)
+            if html and not self._sse("ops", {"last": last, "mpos": mpos,
+                                              "html": html}):
+                return
         n, beat = 0, time.monotonic()
         while True:
             sdb = API.state_db_for(sid)
@@ -376,6 +454,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not self._sse("ops", {"last": last,
                                              "html": opshtml.ops_html(ops, key)}):
                         return
+            got = plugins.conversation(sid, mpos)
+            if got:
+                recs, mpos = got
+                if recs and not self._sse("msgs", {"mpos": mpos,
+                                                   "html": _conv_html(recs)}):
+                    return
                 st = API.stats_at(sdb)
                 if st != prev["stats"]:
                     prev["stats"] = st
@@ -410,9 +494,9 @@ def _sid(s):
     return bool(_SID_OK.match(s or ""))
 
 
-def _after(url):
+def _qint(url, name):
     try:
-        return int((parse_qs(url.query).get("after") or ["0"])[0])
+        return int((parse_qs(url.query).get(name) or ["0"])[0])
     except ValueError:
         return 0
 

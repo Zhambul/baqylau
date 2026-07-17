@@ -22,3 +22,18 @@ def activity(sid, agent_id=None):
     parsed from its transcript. See transcript.py."""
     from plugins.claude_code import transcript
     return transcript.activity(sid, agent_id)
+
+
+def session_title(transcript_path):
+    """The session-title provider (plugins.session_title fan-out) — the head
+    summary record / first real prompt of a Claude transcript. See
+    transcript.session_title."""
+    from plugins.claude_code import transcript
+    return transcript.session_title(transcript_path)
+
+
+def conversation(sid, pos=0):
+    """The main-thread conversation provider (plugins.conversation fan-out)
+    for the dashboard's merged mirror stream. See transcript.conversation."""
+    from plugins.claude_code import transcript
+    return transcript.conversation_for(sid, pos)

@@ -110,12 +110,54 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
-| `/events/session/<sid>?after=N` | per-session SSE: `ops`/`stats`/`agents`/`costs`/`tab`, each on change |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`, each on change; a fresh connection's first `ops` event is the anchor-merged backlog (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
 global) pushed over a held response — no websockets dependency, and
 `EventSource` gives the client reconnect for free (the app reconnects with
 `?after=<last seen op id>` so nothing repeats).
+
+## Grouping and titles
+
+The sessions view groups by DIRECTORY (cwd — the audit `sessions` row),
+groups ordered by their newest session; the directory name lives on the group
+header, so the card itself is titled by the SESSION's name. That name comes
+from `plugins.session_title(transcript_path)` — a path-keyed fan-out (the
+list view already holds every row's path; 50 sid-keyed `session_row()`
+resolutions per poll would be waste). The claude_code provider
+(`transcript.session_title`) returns the last `summary` record in the head
+window (Claude Code prepends them on resume) or, when none exists — this
+setup stores no summaries; `conversation_summaries` in `__store.db` is empty —
+the first line of the first REAL user prompt, which is effectively what the
+`claude --resume` picker shows (`history.jsonl` `display`). `isMeta` rows and
+`<command-*>`/`<local-command-*>` wrappers are plumbing, never titles. The
+server caches titles by `(path, size)` — a title can only change when the
+transcript grows. Agent cards follow the same rule: the Task description
+(`desc` from the state DB's agents table) IS the agent's name; the raw
+`agent_id` drops to the subtitle.
+
+## The conversation in the web stream
+
+The terminal mirror deliberately omits the main agent's messages — the main
+pane already shows them. The web has no main pane, so the dashboard
+interleaves the main-thread conversation (prompts / assistant messages /
+teammate mail) into the session stream — web-side only; no producer or
+terminal-renderer change.
+
+**Interleaving without timestamps.** Ops carry no time column, and adding one
+just for this would be a write-path change serving a read-side feature. But
+ops already carry tool_use ids (`g` on command blocks, `v` on file-op lines),
+and the transcript knows which messages fall between which tool calls — so
+`transcript.conversation(path, pos)` stamps each record with `anchor` (the
+last tool_use id seen before it) and `merged_backlog()` places each message
+after its anchor's LAST op. Pre-first-tool messages lead the stream; messages
+whose anchor never painted an op keep their relative order at the tail. This
+works for ALL history, parked sessions included. Live updates don't need
+anchors at all: the per-session SSE tails the transcript by byte cursor
+(`mpos`, resumed across reconnects like the ops `after` cursor) and appends
+`msgs` events in arrival order — interleave is a backfill affordance, not a
+live-ordering guarantee. `/api/session/<sid>/ops` stays PURE ops (the
+mirror-parity endpoint); the merge exists only in the SSE backlog.
 
 ## Notifications (the toaster)
 

@@ -287,3 +287,15 @@ def view_html(ops, key=""):
     the app inserts under the clicked line."""
     return ("<div class=\"view-block\">%s</div>"
             % "".join(ops_html(ops, key)))
+
+
+def msg_html(kind, text, sender=""):
+    """A main-thread CONVERSATION block for the merged web stream — not an op
+    (the terminal mirror deliberately omits main-agent messages: the main
+    pane already shows them; the web has no main pane, so the dashboard
+    interleaves them — docs/dashboard.md). kind: prompt | message | teammsg.
+    Same escape discipline as everything else: the text rides ansi_html."""
+    who = {"prompt": "you", "message": "claude"}.get(kind) \
+        or ("✉ " + (sender or "team"))
+    return ("<div class=\"msg %s\"><span class=\"who\">%s</span><pre>%s</pre></div>"
+            % (html.escape(kind, quote=True), html.escape(who), ansi_html(text)))

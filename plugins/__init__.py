@@ -77,3 +77,35 @@ def activity(sid, agent_id=None):
         if got is not None:
             return got
     return None
+
+
+def session_title(transcript_path):
+    """Display title for a session, resolved from its transcript/rollout path
+    (path-keyed, unlike the sid-keyed fan-outs: the dashboard's list view
+    already holds each row's path — 50 session_row() round-trips per poll
+    would be waste). First non-empty wins; '' when no plugin recognizes the
+    file. Same exception contract as census()/activity()."""
+    for p in all_plugins():
+        fn = getattr(p, "session_title", None)
+        if fn is None:
+            continue
+        got = fn(transcript_path)
+        if got:
+            return got
+    return ""
+
+
+def conversation(sid, pos=0):
+    """Main-thread conversation records from byte `pos` for the dashboard's
+    merged mirror stream: (records, new_pos) from the first plugin that
+    recognizes the sid, None otherwise. Records carry the tool_use `anchor`
+    the dashboard interleaves on (docs/dashboard.md). Same exception contract
+    as census()/activity()."""
+    for p in all_plugins():
+        fn = getattr(p, "conversation", None)
+        if fn is None:
+            continue
+        got = fn(sid, pos)
+        if got is not None:
+            return got
+    return None

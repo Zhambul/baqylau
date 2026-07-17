@@ -154,18 +154,37 @@ function showList() {
 function renderList() {
   if (S.cur) return;
   $view.textContent = "";
-  $view.append(el("div", "mhead", "sessions"));
-  const grid = el("div", "sgrid");
-  if (!S.sessions.length) grid.append(el("div", "empty", "no sessions recorded yet"));
-  for (const row of S.sessions) grid.append(sessionCard(row));
-  $view.append(grid);
+  if (!S.sessions.length) {
+    $view.append(el("div", "empty", "no sessions recorded yet"));
+    return;
+  }
+  // group by directory; groups ordered by their newest session
+  const groups = new Map();
+  for (const row of S.sessions) {
+    const k = row.cwd || "";
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(row);
+  }
+  const ordered = [...groups.entries()].sort((a, b) =>
+    Math.max(...b[1].map(r => r.started_at || 0))
+    - Math.max(...a[1].map(r => r.started_at || 0)));
+  for (const [cwd, rows] of ordered) {
+    const hd = el("div", "dirhead");
+    hd.append(el("span", "dirname", cwd ? cwd.split("/").filter(Boolean).pop() : "no project"));
+    if (cwd) hd.append(el("span", "dirpath", cwd));
+    hd.append(el("span", "dircount", rows.length + (rows.length === 1 ? " session" : " sessions")));
+    $view.append(hd);
+    const grid = el("div", "sgrid");
+    for (const row of rows) grid.append(sessionCard(row));
+    $view.append(grid);
+  }
 }
 
 function sessionCard(row) {
   const a = el("a", "scard");
   a.href = "#/s/" + encodeURIComponent(row.sid);
   const st = row.stats || {};
-  a.append(el("div", "proj", proj(row)));
+  a.append(el("div", "proj", row.title || proj(row)));
   a.append(el("div", "sid", row.sid));
   const corner = el("div", "corner");
   corner.append(el("span", "chip2 " + (row.live ? "live" : "parked"),
@@ -198,7 +217,7 @@ function showSession(sid, tab) {
   if (S.cur !== sid) {
     leaveSession();
     S.cur = sid;
-    S.ses = { lastId: 0, stream: el("div", "stream"), stats: {}, agents: [],
+    S.ses = { lastId: 0, mpos: 0, stream: el("div", "stream"), stats: {}, agents: [],
               costs: null, meta: null, es: null, timer: null, poll: null };
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
@@ -220,12 +239,19 @@ function showSession(sid, tab) {
 function connectSession(sid) {
   if (!S.ses || S.cur !== sid) return;
   const es = new EventSource("/events/session/" + encodeURIComponent(sid)
-                             + "?after=" + S.ses.lastId);
+                             + "?after=" + S.ses.lastId + "&mpos=" + S.ses.mpos);
   S.ses.es = es;
   es.addEventListener("ops", (e) => {
     const d = JSON.parse(e.data);
-    if (d.last <= S.ses.lastId) return;
-    S.ses.lastId = d.last;
+    if (d.last <= S.ses.lastId && !d.html.length) return;
+    S.ses.lastId = Math.max(S.ses.lastId, d.last);
+    if (d.mpos != null) S.ses.mpos = Math.max(S.ses.mpos, d.mpos);
+    appendOps(d.html);
+  });
+  es.addEventListener("msgs", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.mpos <= S.ses.mpos) return;
+    S.ses.mpos = d.mpos;
     appendOps(d.html);
   });
   es.addEventListener("stats", (e) => { S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
@@ -268,14 +294,16 @@ function renderSessionChrome(tab) {
 
   const head = el("div", "shead");
   const l1 = el("div", "l1");
-  l1.append(el("span", "proj", meta.cwd ? proj(meta) : shortSid(S.cur)));
+  l1.append(el("span", "proj",
+               meta.title || (meta.cwd ? proj(meta) : shortSid(S.cur))));
   const badge = el("span", "badge");
   ses.badge = badge;
   setBadge(badge, meta.tab || "");
   l1.append(badge);
   l1.append(el("span", "chip2 " + (meta.live ? "live" : "parked"),
                meta.live ? "live" : "parked"));
-  l1.append(el("span", "sid", S.cur));
+  if (meta.cwd) l1.append(el("span", "sid", meta.cwd));
+  l1.append(el("span", "sid", shortSid(S.cur)));
   head.append(l1);
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
@@ -381,8 +409,9 @@ function sortedAgents(agents) {
 function agentCard(a) {
   const card = el("a", "acard" + (isHusk(a) ? " husk" : ""));
   card.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
-  card.append(el("div", "aid", (a.kind === "teammate" ? "👥 " : "◇ ") + a.agent_id));
-  if (a.desc) card.append(el("div", "desc", a.desc));
+  const name = a.desc || a.agent_id;      // the Task description IS the name
+  card.append(el("div", "aid", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
+  if (a.desc) card.append(el("div", "desc", a.agent_id));
   const m = el("div", "meta");
   const [sttxt, stcls] = agentStatus(a);
   m.append(el("span", stcls, sttxt));
@@ -420,9 +449,10 @@ function showAgent(sid, aid) {
   $view.querySelectorAll(".tabs a").forEach(a => a.classList.remove("on"));
   if (ses.body) {
     ses.body.textContent = "";
+    const rec = (ses.agents || []).find(a => a.agent_id === aid);
     renderTimelineInto(ses.body,
                        "/api/session/" + encodeURIComponent(sid) + "/agent/" + encodeURIComponent(aid),
-                       aid);
+                       (rec && rec.desc) || aid);
   }
 }
 
