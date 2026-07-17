@@ -257,6 +257,24 @@ baseline, never news. Windowless sessions (headless/daemon) produce no
 toasts, same as they have no tab colour — that's the tab system's own
 scoping, not a dashboard limitation.
 
+**The attention bar is the persistent complement to the toasts.** Toasts are
+transient (a 7s slide-in on the transition); the bar is the standing view of
+what needs you *right now*. A slim hairline bar pinned under the header on
+every view (`#attn` in index.html — a fixed container outside `#view`, so it
+survives the router's re-renders) lists every LIVE session whose tab state is
+`awaiting-command` as a red pulsing pill (`--ask`, the badge's own dot
+animation) and every `awaiting-response` session as a quieter green pill
+(`--done`) after them; it is `hidden` entirely when nothing needs attention,
+and when it shows, `body.attn-on` drops the session view's sticky `.shead`
+below it so the two never overlap. It is fed by the same global `sessions` SSE
+snapshots the app already holds (`renderAttention()` reruns on every snapshot)
+plus the open session's per-session `tab` SSE event, which patches that row in
+place so the bar reacts before the next global snapshot lands. The count of
+asking sessions also prefixes the browser tab title (`(2) claude · dashboard`)
+and swaps the favicon to a red-dotted variant, so a backgrounded tab still
+shows the ask count. The currently-open session's own pill is de-emphasized
+(it's the one you're already looking at) but still shown, for consistency.
+
 ## The husk rows (hidden agents)
 
 `agents()` returns some rows with EVERY field empty (no kind/desc/slot/

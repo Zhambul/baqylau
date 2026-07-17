@@ -99,6 +99,48 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .ghost:hover { color: var(--text); box-shadow: var(--card-hover); }
 
+/* ---- global attention bar (persistent complement to toasts) ----------- */
+/* Slim hairline bar under the header, on every view; hidden when nothing
+   needs you. Red asking pills (--ask + pulse) then quiet green your-turn
+   pills (--done). One row, horizontal-scrolls if it overflows. */
+#attn {
+  position: sticky; top: 47px; z-index: 46;
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 20px; min-height: 34px; overflow-x: auto;
+  background: linear-gradient(180deg,
+    color-mix(in srgb, var(--bg) 92%, transparent),
+    color-mix(in srgb, var(--bg) 80%, transparent));
+  backdrop-filter: blur(10px);
+  box-shadow: inset 0 -1px 0 var(--hair);
+  scrollbar-width: none;
+}
+#attn[hidden] { display: none; }
+#attn::-webkit-scrollbar { display: none; }
+.alead {
+  flex: none; font-size: 10px; text-transform: uppercase;
+  letter-spacing: .14em; color: var(--dim); font-weight: 550;
+}
+.alead.ask { color: var(--ask); }
+.attn-pill {
+  display: inline-flex; align-items: center; gap: 6px; flex: none;
+  padding: 2px 11px; border-radius: 999px; max-width: 260px;
+  font-size: 12px; color: var(--text-soft);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  background: color-mix(in srgb, var(--mid) 5%, transparent);
+  transition: box-shadow .15s, color .15s, opacity .15s;
+}
+.attn-pill .adot { width: 7px; height: 7px; border-radius: 50%;
+  background: var(--idle); flex: none; }
+.attn-pill .alabel { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attn-pill.ask { color: var(--ask);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 42%, transparent); }
+.attn-pill.ask .adot { background: var(--ask); animation: pulse .9s infinite; }
+.attn-pill.done { color: var(--done);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 32%, transparent); }
+.attn-pill.done .adot { background: var(--done); }
+.attn-pill:hover { color: var(--text); box-shadow: var(--card-hover); }
+.attn-pill.self { opacity: .5; }        /* the session you're already viewing */
+
 /* ---- layout ----------------------------------------------------------- */
 #view { max-width: 1500px; margin: 0 auto; padding: 20px; }
 .mhead {
@@ -174,6 +216,8 @@ code, pre, .mono { font-family: var(--mono); }
   box-shadow: var(--card); border-radius: var(--r);
   padding: 11px 15px; margin-bottom: 12px;
 }
+/* when the attention bar is showing it takes the 47px slot; drop shead below it */
+body.attn-on .shead { top: 81px; }
 .shead .l1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .shead .proj { color: var(--text); font-weight: 650; font-size: 15px; }
 .shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }

@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>claude · dashboard</title>
 <link rel="stylesheet" href="/static/style.css">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%E2%AC%A1%3C/text%3E%3C/svg%3E">
+<link rel="icon" id="favicon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Ctext y='13' font-size='13'%3E%E2%AC%A1%3C/text%3E%3C/svg%3E">
 </head>
 <body>
 <header id="top">
@@ -15,6 +15,7 @@
     <span id="conn" class="dot" data-on="0" title="event stream"></span>
   </div>
 </header>
+<div id="attn" hidden></div>
 <main id="view"></main>
 <div id="toasts"></div>
 <script src="/static/app.js"></script>
