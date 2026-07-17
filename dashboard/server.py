@@ -193,10 +193,24 @@ def sessions_payload():
     return out
 
 
+def visible_agents(agents):
+    """Drop HIDDEN-agent bookkeeping rows: a SubagentStop with no
+    SubagentStart (Claude Code's hidden auxiliary agents — the subagent
+    finaliser's 'never started (hidden agent)' path) leaves an agents-table
+    row with EVERY field empty. Zero user-facing signal, so the dashboard
+    filters them; any row with at least one real field (kind, desc, slot,
+    transcript, a start time) stays. The API keeps reporting them — this is
+    presentation policy, not truth policy."""
+    return [a for a in agents
+            if a.get("kind") or a.get("desc") or a.get("transcript")
+            or a.get("slot") is not None or a.get("started_at")]
+
+
 def session_payload(sid):
     """One session's overview — session() plus the error count the ⚠ badge
     shows (full rows stay behind /errors) and the display title."""
     data = API.session(sid)
+    data["agents"] = visible_agents(data.get("agents") or [])
     data["error_count"] = len(API.errors(sid))
     data["title"] = session_title(data.get("transcript_path") or "")
     return data
@@ -466,7 +480,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not self._sse("stats", st):
                         return
             if n % SLOW_EVERY == 0:
-                agents = API.agents(sid)
+                agents = visible_agents(API.agents(sid))
                 if agents != prev["agents"]:
                     prev["agents"] = agents
                     if not self._sse("agents", agents):

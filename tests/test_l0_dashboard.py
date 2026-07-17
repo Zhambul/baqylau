@@ -169,6 +169,19 @@ def test_http_agent_timeline(dash, tmp_path):
     assert ags and ags[0]["end_reason"] == "stop-sentinel"
 
 
+def test_hidden_agent_husk_rows_are_filtered(dash):
+    # A SubagentStop with no SubagentStart (hidden auxiliary agent) leaves an
+    # agents-table row with every field empty — the finaliser's 'never
+    # started (hidden agent)' path. The dashboard must not show it; a row
+    # with any real signal (desc, kind, transcript, slot, start) stays.
+    A.session_start({"session_id": "dash7", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("dash7")
+    S.agent_set(log, "husk1", done=0)                  # the hidden-agent shape
+    S.agent_set(log, "real1", desc="do a thing")
+    ags = _get_json(dash + "/api/session/dash7")["agents"]
+    assert [a["agent_id"] for a in ags] == ["real1"]
+
+
 def test_http_rejects_bad_sids(dash):
     for bad in ("a%2Fb", "a%20b"):
         with pytest.raises(urllib.error.HTTPError) as e:

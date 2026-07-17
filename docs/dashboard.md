@@ -173,14 +173,20 @@ baseline, never news. Windowless sessions (headless/daemon) produce no
 toasts, same as they have no tab colour — that's the tab system's own
 scoping, not a dashboard limitation.
 
-## The husk rows
+## The husk rows (hidden agents)
 
-`agents()` returns some rows with no kind/desc/transcript: state-DB slot
-records for agents whose streamer never ran (Claude Code's hidden auxiliary
-spawns — the same population the OTEL pipeline exists to price). The API
-reports them (they're real state); the app renders them dim, sorted after the
-attributed agents, still clickable (the layout-derivation fallback in
-`plugins.activity` sometimes finds a transcript the audit never saw).
+`agents()` returns some rows with EVERY field empty (no kind/desc/slot/
+transcript/start): bookkeeping left by the subagent finaliser's
+`never started (hidden agent)` path — a `SubagentStop` for one of Claude
+Code's hidden auxiliary agents, which fires no `SubagentStart` and streams no
+transcript (the same population the OTEL pipeline exists to price). Zero
+user-facing signal, so the server's `visible_agents()` filters them out of
+the dashboard's payloads — presentation policy; the API itself keeps
+reporting them (they're real state, and the audit `hook_events` decision
+string is the provenance). A row with at least one real field always shows;
+one that's merely thin (desc but no transcript yet) renders dim and stays
+clickable — the layout-derivation fallback in `plugins.activity` sometimes
+finds a transcript the audit never saw.
 
 ## Design language
 

@@ -158,9 +158,22 @@ function renderList() {
     $view.append(el("div", "empty", "no sessions recorded yet"));
     return;
   }
+  const live = S.sessions.filter(r => r.live);
+  const parked = S.sessions.filter(r => !r.live);
+  if (live.length) {
+    $view.append(el("div", "secthead", "active"));
+    renderDirGroups(live);
+  }
+  if (parked.length) {
+    $view.append(el("div", "secthead dimsect", "parked"));
+    renderDirGroups(parked);
+  }
+}
+
+function renderDirGroups(rows) {
   // group by directory; groups ordered by their newest session
   const groups = new Map();
-  for (const row of S.sessions) {
+  for (const row of rows) {
     const k = row.cwd || "";
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(row);
@@ -168,14 +181,14 @@ function renderList() {
   const ordered = [...groups.entries()].sort((a, b) =>
     Math.max(...b[1].map(r => r.started_at || 0))
     - Math.max(...a[1].map(r => r.started_at || 0)));
-  for (const [cwd, rows] of ordered) {
+  for (const [cwd, grows] of ordered) {
     const hd = el("div", "dirhead");
     hd.append(el("span", "dirname", cwd ? cwd.split("/").filter(Boolean).pop() : "no project"));
     if (cwd) hd.append(el("span", "dirpath", cwd));
-    hd.append(el("span", "dircount", rows.length + (rows.length === 1 ? " session" : " sessions")));
+    hd.append(el("span", "dircount", grows.length + (grows.length === 1 ? " session" : " sessions")));
     $view.append(hd);
     const grid = el("div", "sgrid");
-    for (const row of rows) grid.append(sessionCard(row));
+    for (const row of grows) grid.append(sessionCard(row));
     $view.append(grid);
   }
 }

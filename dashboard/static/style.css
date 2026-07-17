@@ -107,6 +107,16 @@ code, pre, .mono { font-family: var(--mono); }
 }
 
 /* ---- sessions list ----------------------------------------------------- */
+.secthead {
+  font-size: 12px; text-transform: uppercase; letter-spacing: .22em;
+  color: var(--text); font-weight: 650; margin: 26px 2px 2px;
+  display: flex; align-items: center; gap: 12px;
+}
+.secthead::before { content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--done); box-shadow: 0 0 8px var(--done); }
+.secthead.dimsect { color: var(--dim); }
+.secthead.dimsect::before { background: var(--dim2); box-shadow: none; }
+.secthead:first-child { margin-top: 2px; }
 .dirhead {
   display: flex; align-items: baseline; gap: 12px;
   margin: 22px 2px 10px; padding-bottom: 6px;
