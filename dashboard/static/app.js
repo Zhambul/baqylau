@@ -282,16 +282,15 @@ function connectSession(sid) {
   es.addEventListener("ops", (e) => {
     const d = JSON.parse(e.data);
     if (d.last <= S.ses.lastId && !d.items.length) return;
-    const backlog = S.ses.lastId === 0 && S.ses.mpos === 0;
     S.ses.lastId = Math.max(S.ses.lastId, d.last);
     if (d.mpos != null) S.ses.mpos = Math.max(S.ses.mpos, d.mpos);
-    appendItems(d.items, backlog);
+    appendItems(d.items);
   });
   es.addEventListener("msgs", (e) => {
     const d = JSON.parse(e.data);
     if (d.mpos <= S.ses.mpos) return;
     S.ses.mpos = d.mpos;
-    appendItems(d.items, false);
+    appendItems(d.items);
   });
   es.addEventListener("stats", (e) => { S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
@@ -310,12 +309,24 @@ function connectSession(sid) {
 
 // Stream items ({g, t, html}) fold into collapsible BLOCK cards by copy-group
 // id: label ops become the block's summary chips (start chip, then the
-// finished/duration chip), everything else goes to the fold-away body. A
-// block born in the backlog starts collapsed; one born live starts open (you
-// watch it stream) and auto-collapses when its finishing label lands — unless
-// the user has toggled it themselves. Ungrouped items (messages, file-op
-// one-liners) stay inline.
-function appendItems(items, backlog) {
+// finished/duration chip), everything else goes to the fold-away body. The
+// LAST `KEEP_OPEN` blocks stay expanded (the recent-activity tail you're
+// actually reading); anything older folds to its one-line summary as new
+// blocks push it out of the window — unless the user toggled it themselves,
+// which always wins. Ungrouped items (messages, file-op one-liners) stay
+// inline.
+const KEEP_OPEN = 5;
+
+function enforceWindow() {
+  const blocks = [...S.ses.blocks.values()];
+  const cut = blocks.length - KEEP_OPEN;
+  blocks.forEach((b, i) => {
+    if (i < cut && !b.userSet && b.root.dataset.open === "1")
+      b.root.dataset.open = "0";
+  });
+}
+
+function appendItems(items) {
   const st = S.ses.stream;
   const w = st.querySelector(".waiting");
   if (w) w.remove();
@@ -326,7 +337,7 @@ function appendItems(items, backlog) {
     let b = S.ses.blocks.get(it.g);
     if (!b) {
       const root = el("div", "blk");
-      root.dataset.open = backlog ? "0" : "1";
+      root.dataset.open = "1";                     // enforceWindow folds elders
       const head = el("div", "bhead");
       const chips = el("span", "bchips");
       const sum = el("span", "bsum");
@@ -334,7 +345,7 @@ function appendItems(items, backlog) {
       head.append(chips, sum);
       root.append(head, body);
       st.append(root);
-      b = { root, chips, sum, body, labels: 0, userSet: false };
+      b = { root, chips, sum, body, userSet: false };
       head.onclick = (e) => {
         if (e.target.closest("a")) return;         // ⧉ links keep working
         b.userSet = true;
@@ -344,8 +355,6 @@ function appendItems(items, backlog) {
     }
     if (it.t === "label") {
       b.chips.insertAdjacentHTML("beforeend", it.html);
-      b.labels++;
-      if (b.labels >= 2 && !b.userSet) b.root.dataset.open = "0";
     } else {
       b.body.insertAdjacentHTML("beforeend", it.html);
       if (!b.sum.textContent && b.body.lastElementChild) {
@@ -355,6 +364,7 @@ function appendItems(items, backlog) {
       }
     }
   }
+  enforceWindow();
   while (st.childElementCount > 3000) st.firstElementChild.remove();
   if (nearBottom && st.isConnected) window.scrollTo(0, document.body.scrollHeight);
 }
