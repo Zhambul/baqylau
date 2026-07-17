@@ -326,14 +326,16 @@ function enforceWindow() {
   });
 }
 
+// The stream is a FEED: newest on top. Items arrive oldest→newest and each
+// is inserted at the top, so the batch lands newest-first; a block keeps the
+// position of its first op (its body still reads top-down) and new blocks
+// appear above it.
 function appendItems(items) {
   const st = S.ses.stream;
   const w = st.querySelector(".waiting");
   if (w) w.remove();
-  const nearBottom =
-    window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
   for (const it of items) {
-    if (!it.g) { st.insertAdjacentHTML("beforeend", it.html); continue; }
+    if (!it.g) { st.insertAdjacentHTML("afterbegin", it.html); continue; }
     let b = S.ses.blocks.get(it.g);
     if (!b) {
       const root = el("div", "blk");
@@ -344,7 +346,7 @@ function appendItems(items) {
       const body = el("div", "bbody");
       head.append(chips, sum);
       root.append(head, body);
-      st.append(root);
+      st.prepend(root);
       b = { root, chips, sum, body, userSet: false };
       head.onclick = (e) => {
         if (e.target.closest("a")) return;         // ⧉ links keep working
@@ -365,8 +367,7 @@ function appendItems(items) {
     }
   }
   enforceWindow();
-  while (st.childElementCount > 3000) st.firstElementChild.remove();
-  if (nearBottom && st.isConnected) window.scrollTo(0, document.body.scrollHeight);
+  while (st.childElementCount > 3000) st.lastElementChild.remove();
 }
 
 function setBadge(badge, tab) {
