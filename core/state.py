@@ -44,7 +44,7 @@ from core import paths as P
 _CONNS = {}                     # path -> (connection, st_ino) (streamers are long-lived)
 
 _SCHEMA = """
-CREATE TABLE IF NOT EXISTS ops(id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS ops(id INTEGER PRIMARY KEY AUTOINCREMENT, op TEXT NOT NULL, ts REAL);
 CREATE TABLE IF NOT EXISTS counters(key TEXT PRIMARY KEY, val REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS kv(key TEXT PRIMARY KEY, val TEXT);
 CREATE TABLE IF NOT EXISTS files(path TEXT PRIMARY KEY);
@@ -181,6 +181,16 @@ def _migrate(conn):
                 "DROP TABLE messages_old;")
     except Exception:
         pass
+    # ops.ts: the op's wall-clock creation time (one stamp per ops_append
+    # batch), the dashboard's PRIMARY conversation-interleave key (the
+    # tool_use-id anchor is the fallback). Additive so an older parked *.keep
+    # keeps working; pre-migration rows read back as ts NULL -> _ts None.
+    try:
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(ops)")]
+        if "ts" not in cols:
+            conn.execute("ALTER TABLE ops ADD COLUMN ts REAL")
+    except Exception:
+        pass
 
 
 def connect(log):
@@ -296,19 +306,52 @@ def next_group(log):
 # vanishes at SessionEnd — the DB is parked as *.keep, so the path does disappear).
 
 def ops_append(log, ops):
-    """Append paint ops (dicts) as one atomic block. Returns True on success."""
+    """Append paint ops (dicts) as one atomic block. Returns True on success.
+    One wall-clock stamp per batch (cheaper than per-row and enough: a block of
+    ops lands contiguously) — the dashboard's primary interleave key, read back
+    into each op dict under `_ts` by ops_after/ops_at."""
     if not ops:
         return True
     conn = connect(log)
     if conn is None:
         return False
     try:
+        ts = time.time()
         with immediate(conn):
-            conn.executemany("INSERT INTO ops(op) VALUES(?)",
-                             [(json.dumps(o, ensure_ascii=False),) for o in ops])
+            conn.executemany("INSERT INTO ops(op, ts) VALUES(?, ?)",
+                             [(json.dumps(o, ensure_ascii=False), ts) for o in ops])
         return True
     except Exception:
         return False
+
+
+def _select_ops(conn, after_id):
+    """Rows (id, op, ts) with id > after_id, in insertion order. Falls back to
+    a ts-less SELECT for a pre-migration DB (an older-build parked *.keep opened
+    read-only, which can't be ALTERed) — those rows read back ts None."""
+    try:
+        return conn.execute("SELECT id, op, ts FROM ops WHERE id > ? ORDER BY id",
+                            (after_id,)).fetchall()
+    except sqlite3.OperationalError:
+        return [(i, s, None) for i, s in conn.execute(
+            "SELECT id, op FROM ops WHERE id > ? ORDER BY id", (after_id,)).fetchall()]
+
+
+def _decode_ops(rows):
+    """Decode (id, op, ts) rows into op dicts, injecting the row's ts under the
+    reserved `_ts` key (None for pre-migration rows). Bad JSON is skipped. The
+    (last_id, [op, ...]) tuple shapes callers see are unchanged — `_ts` is an
+    extra key the mirror renderer ignores (it reads ops via .get) and only the
+    dashboard's timestamp interleave consumes."""
+    out = []
+    for _id, s, ts in rows:
+        try:
+            o = json.loads(s)
+        except Exception:
+            continue
+        o["_ts"] = ts
+        out.append(o)
+    return out
 
 
 def ops_after(log, last_id, check_reset=True):
@@ -327,8 +370,7 @@ def ops_after(log, last_id, check_reset=True):
     if conn is None:
         return last_id, []
     try:
-        rows = conn.execute("SELECT id, op FROM ops WHERE id > ? ORDER BY id",
-                            (last_id,)).fetchall()
+        rows = _select_ops(conn, last_id)
         if not rows:
             if not check_reset:
                 return last_id, []
@@ -336,13 +378,7 @@ def ops_after(log, last_id, check_reset=True):
             if top < last_id:
                 return -1, []               # recreated DB -> signal a reset
             return last_id, []
-        out = []
-        for _id, s in rows:
-            try:
-                out.append(json.loads(s))
-            except Exception:
-                continue
-        return rows[-1][0], out
+        return rows[-1][0], _decode_ops(rows)
     except Exception:
         return last_id, []
 
@@ -501,15 +537,8 @@ def ops_at(path, after_id=0):
     if conn is None:
         return after_id, []
     try:
-        rows = conn.execute("SELECT id, op FROM ops WHERE id > ? ORDER BY id",
-                            (after_id,)).fetchall()
-        out = []
-        for _id, s in rows:
-            try:
-                out.append(json.loads(s))
-            except Exception:
-                continue
-        return (rows[-1][0] if rows else after_id), out
+        rows = _select_ops(conn, after_id)
+        return (rows[-1][0] if rows else after_id), _decode_ops(rows)
     except Exception:
         return after_id, []
     finally:

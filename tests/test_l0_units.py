@@ -1689,7 +1689,10 @@ def test_ops_after_reset_contract_and_gated_probe(tmp_path, monkeypatch):
     cc.sqls.clear()
     assert S.ops_after(log, 99, check_reset=False) == (99, [])
     assert len(cc.sqls) == 1
-    # the non-empty path is identical either way.
+    # the non-empty path is identical either way (each op carries its row's
+    # batch timestamp under the reserved _ts key).
     last, ops = S.ops_after(log, 0, check_reset=False)
-    assert last == 1 and ops == [{"t": "line", "s": "a"}]
+    assert last == 1 and len(ops) == 1
+    assert ops[0]["t"] == "line" and ops[0]["s"] == "a"
+    assert isinstance(ops[0]["_ts"], float)
     assert S.ops_after(log, 0) == (last, ops)

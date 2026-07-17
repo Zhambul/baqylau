@@ -144,20 +144,30 @@ interleaves the main-thread conversation (prompts / assistant messages /
 teammate mail) into the session stream — web-side only; no producer or
 terminal-renderer change.
 
-**Interleaving without timestamps.** Ops carry no time column, and adding one
-just for this would be a write-path change serving a read-side feature. But
-ops already carry tool_use ids (`g` on command blocks, `v` on file-op lines),
-and the transcript knows which messages fall between which tool calls — so
-`transcript.conversation(path, pos)` stamps each record with `anchor` (the
-last tool_use id seen before it) and `merged_backlog()` places each message
-after its anchor's LAST op. Pre-first-tool messages lead the stream; messages
-whose anchor never painted an op keep their relative order at the tail. This
-works for ALL history, parked sessions included. Live updates don't need
-anchors at all: the per-session SSE tails the transcript by byte cursor
-(`mpos`, resumed across reconnects like the ops `after` cursor) and appends
-`msgs` events in arrival order — interleave is a backfill affordance, not a
-live-ordering guarantee. `/api/session/<sid>/ops` stays PURE ops (the
-mirror-parity endpoint); the merge exists only in the SSE backlog.
+**Interleaving by timestamp, anchors as the fallback.** The ops table carries
+a `ts REAL` column (`core/state.py`, one wall-clock stamp per `ops_append`
+batch — additive migration, so older parked `*.keep` DBs keep working and their
+pre-migration rows read back `_ts` None), and `ops_after`/`ops_at` inject that
+value into each op dict under the reserved `_ts` key (the mirror renderer reads
+ops via `.get` and ignores it). `transcript.conversation(path, pos)` likewise
+stamps each record with `ts` — the transcript line's ISO `timestamp` as an
+epoch float, None when absent. When BOTH sides have a timestamp,
+`merged_backlog()` interleaves chronologically: each message lands after the
+last op that precedes it in time. This is why ops needed a real time column —
+the earlier anchor-only scheme could not order a message *between* two ops of
+the same tool block.
+
+`anchor` (the last tool_use id seen before a record; ops carry the matching
+`g`/`v`) survives as the FALLBACK for pre-migration history — an op or record
+without a timestamp is placed after its anchor's LAST op. Pre-first-tool
+messages (anchor None, no ts) lead the stream; messages whose anchor never
+painted an op keep their relative order at the tail. This works for ALL
+history, parked sessions included. Live updates need neither key: the
+per-session SSE tails the transcript by byte cursor (`mpos`, resumed across
+reconnects like the ops `after` cursor) and appends `msgs` events in arrival
+order — interleave is a backfill affordance, not a live-ordering guarantee.
+`/api/session/<sid>/ops` stays PURE ops (the mirror-parity endpoint); the merge
+exists only in the SSE backlog.
 
 ## Notifications (the toaster)
 

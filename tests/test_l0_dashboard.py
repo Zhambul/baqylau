@@ -286,6 +286,53 @@ def test_merged_backlog_interleaves_by_anchor(dash, tmp_path):
     assert "run it" in items[0]["html"] and "all done" in items[-1]["html"]
 
 
+def test_merged_backlog_interleaves_by_timestamp(dash, tmp_path):
+    # Timestamps are PRIMARY over anchors: the "between" message is anchored to
+    # x2 (by anchor it would follow op-two) but its transcript timestamp falls
+    # BETWEEN the two ops' emit stamps, so it must land between them.
+    import time
+    from datetime import datetime, timezone
+    tp = str(tmp_path / "ts.jsonl")
+    A.session_start({"session_id": "dash7", "cwd": "/w", "transcript_path": tp})
+    log = P.mirror_log("dash7")
+    O.emit(log, O.label("op-one", (1, 2, 3), g="x1"))
+    time.sleep(0.02)
+    O.emit(log, O.label("op-two", (1, 2, 3), g="x2"))
+    sdb = DS.API.state_db_for("dash7")
+    _, ops = DS.API.ops_at(sdb, 0)
+    t1, t2 = ops[0]["_ts"], ops[1]["_ts"]
+    assert t1 and t2 and t1 < t2
+
+    def iso(e):
+        return datetime.fromtimestamp(e, tz=timezone.utc).isoformat()
+
+    with open(tp, "w") as fh:
+        fh.write(_jl(
+            {"type": "user", "timestamp": iso(t1 - 1),
+             "message": {"content": "first ask"}},
+            {"type": "assistant", "timestamp": iso(t1),
+             "message": {"id": "m1", "content": [
+                 {"type": "tool_use", "id": "x2", "name": "Bash",
+                  "input": {"command": "echo hi"}}]}},
+            {"type": "assistant", "timestamp": iso((t1 + t2) / 2),
+             "message": {"id": "m2", "content": [
+                 {"type": "text", "text": "between msg"}]}},
+            {"type": "assistant", "timestamp": iso(t2 + 1),
+             "message": {"id": "m3", "content": [
+                 {"type": "text", "text": "final msg"}]}}))
+    last, mpos, items = DS.merged_backlog("dash7", "dash7")
+    kinds = ["prompt" if "msg prompt" in it["html"] else
+             "message" if "msg message" in it["html"] else "op"
+             for it in items]
+    assert kinds == ["prompt", "op", "message", "op", "message"]
+    # "between msg" precedes op-two -> the timestamp beat the x2 anchor
+    between = next(i for i, it in enumerate(items) if "between msg" in it["html"])
+    optwo = next(i for i, it in enumerate(items) if "op-two" in it["html"])
+    assert between < optwo
+    assert "first ask" in items[0]["html"] and "final msg" in items[-1]["html"]
+    assert last >= 2 and mpos > 0
+
+
 # ------------------------------------------------------- notification watcher
 
 def test_notifier_transitions(monkeypatch):

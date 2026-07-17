@@ -36,6 +36,7 @@
 import json
 import os
 import re
+from datetime import datetime
 
 # A message DELIVERED to a teammate appears in its transcript as a plain user
 # record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
@@ -209,16 +210,42 @@ def _complete_lines(path, pos):
     return data[:end].decode("utf-8", "replace").split("\n"), pos + end + 1
 
 
+def _iso_epoch(v):
+    """A transcript line's ISO-8601 `timestamp` (e.g. "2026-07-17T12:34:56.789Z")
+    as an epoch float, or None when absent/unparseable. The trailing Z is
+    normalised to +00:00 so datetime.fromisoformat accepts it on the system
+    python3 (pre-3.11). Best-effort — the caller falls back to the anchor."""
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def _line_ts(s):
+    """The `timestamp` epoch of a raw transcript line (parse_line is fed the
+    same string; a second parse only for the few lines that yield conversation
+    records — prompts/messages/mail — not every noise line)."""
+    try:
+        return _iso_epoch(json.loads(s).get("timestamp"))
+    except Exception:
+        return None
+
+
 def conversation(path, pos=0):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
     (docs/dashboard.md): every prompt / assistant message / teammate message
-    from byte `pos` on, in transcript order, each carrying `anchor` — the id
-    of the last tool_use seen BEFORE it. Ops carry the same ids (`g`/`v`), so
-    the dashboard can interleave conversation into the op stream without any
-    timestamp column: a message goes after its anchor's last op. anchor is
-    None before the first tool — and for every record of an incremental
-    (pos > 0) call, where the preceding anchor is unknowable; incremental
-    consumers append in arrival order instead. Returns (records, new_pos)."""
+    from byte `pos` on, in transcript order, each carrying `ts` — the line's
+    `timestamp` as an epoch float (None when absent) — and `anchor`, the id of
+    the last tool_use seen BEFORE it. Ops carry both a wall-clock `_ts` and the
+    same tool ids (`g`/`v`), so the dashboard interleaves conversation into the
+    op stream by TIMESTAMP when both sides have one, falling back to the anchor
+    (a message goes after its anchor's last op) for pre-migration history.
+    anchor is None before the first tool — and for every record of an
+    incremental (pos > 0) call, where the preceding anchor is unknowable;
+    incremental consumers append in arrival order instead. Returns
+    (records, new_pos)."""
     lines, new_pos = _complete_lines(path, pos)
     out, anchor = [], None
     for s in lines:
@@ -229,28 +256,30 @@ def conversation(path, pos=0):
         if rec is None:
             continue
         kind = rec["kind"]
+        ts = _line_ts(s)
         if kind == "prompt":
             t = rec["text"].strip()
             if t and not t.startswith("<"):        # command/caveat wrappers
-                out.append({"kind": "prompt", "text": t, "anchor": anchor})
+                out.append({"kind": "prompt", "text": t, "anchor": anchor,
+                            "ts": ts})
         elif kind == "teammsg":
             out.append({"kind": "teammsg", "text": rec["body"],
-                        "sender": rec["sender"], "anchor": anchor})
+                        "sender": rec["sender"], "anchor": anchor, "ts": ts})
         elif kind == "results":
             for text in rec["texts"]:
                 k, a, b = classify_user_text(text)
                 if k == "teammsg":
                     out.append({"kind": "teammsg", "text": b, "sender": a,
-                                "anchor": anchor})
+                                "anchor": anchor, "ts": ts})
                 elif text.strip() and not text.strip().startswith("<"):
                     out.append({"kind": "prompt", "text": text.strip(),
-                                "anchor": anchor})
+                                "anchor": anchor, "ts": ts})
         elif kind == "assistant":
             for bkind, blk in rec["blocks"]:
                 if bkind == "text":
                     if blk.strip():
                         out.append({"kind": "message", "text": blk.strip(),
-                                    "anchor": anchor})
+                                    "anchor": anchor, "ts": ts})
                 elif blk.get("id"):
                     anchor = blk["id"]
     return out, new_pos

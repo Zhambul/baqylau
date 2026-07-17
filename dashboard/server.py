@@ -226,39 +226,52 @@ def _conv_items(recs):
 def merged_backlog(sid, key):
     """The session view's INITIAL stream: every op interleaved with the
     main-thread conversation, as stream items ({g, t, html} — see
-    opshtml.op_items). There is no timestamp column to merge on — ops
-    deliberately carry none — but ops and transcript records share the
-    tool_use ids (`g`/`v` on ops, `anchor` on conversation records), so each
-    message is placed after the LAST op of the tool block it followed in the
-    transcript. Messages whose anchor never painted any op (or from before
-    the first tool) keep their relative order at the head/tail. Returns
-    (last_op_id, transcript_pos, [item, …])."""
+    opshtml.op_items). Interleave is by TIMESTAMP first: ops carry a wall-clock
+    `_ts` (core.state) and conversation records carry the transcript line's `ts`
+    (transcript.conversation) — when both are present a record is placed after
+    the last op that chronologically precedes it. Pre-migration history (ops or
+    records without a timestamp) falls back to the tool_use-id ANCHOR: ops carry
+    `g`/`v`, records carry `anchor`, and the record lands after that tool's last
+    op. Records with neither a usable timestamp nor a painted anchor keep their
+    relative order at the head (pre-first-tool / anchor None) or tail (anchor
+    never painted). Returns (last_op_id, transcript_pos, [item, …])."""
     sdb = API.state_db_for(sid)
     last, ops = API.ops_at(sdb, 0) if sdb else (0, [])
     got = plugins.conversation(sid, 0)
     recs, mpos = got if got else ([], 0)
+    # anchor -> last op index (the fallback placement); timestamped ops as
+    # (ts, index) for the primary time-merge.
     lastpos = {}
     for i, op in enumerate(ops):
         for k in ("g", "v"):
             tid = op.get(k)
             if tid:
                 lastpos[tid] = i
-    by_anchor, head = {}, []
-    for r in recs:
-        a = r.get("anchor")
+    ts_ops = [(op["_ts"], i) for i, op in enumerate(ops) if op.get("_ts") is not None]
+    HEAD, TAIL = -1, len(ops)
+
+    def place(r):
+        ts = r.get("ts")
+        if ts is not None and ts_ops:          # primary: chronological
+            p = HEAD
+            for ots, i in ts_ops:              # ts_ops is id-ordered == ts-ordered
+                if ots <= ts:
+                    p = i
+            return p
+        a = r.get("anchor")                    # fallback: the tool-use anchor
         if a in lastpos:
-            by_anchor.setdefault(a, []).append(r)
-        else:
-            head.append(r)      # pre-first-tool, or the anchor never painted
-    out = _conv_items([r for r in head if r.get("anchor") is None])
-    tail = [r for r in head if r.get("anchor") is not None]
+            return lastpos[a]
+        return HEAD if a is None else TAIL
+
+    buckets = {}
+    for r in recs:
+        buckets.setdefault(place(r), []).append(r)
+    out = _conv_items(buckets.get(HEAD, []))
     for i, op in enumerate(ops):
         out.extend(opshtml.op_items([op], key))
-        for k in ("g", "v"):
-            tid = op.get(k)
-            if tid and lastpos.get(tid) == i and tid in by_anchor:
-                out.extend(_conv_items(by_anchor.pop(tid)))
-    out.extend(_conv_items(tail))
+        if i in buckets:
+            out.extend(_conv_items(buckets[i]))
+    out.extend(_conv_items(buckets.get(TAIL, [])))
     return last, mpos, out
 
 
