@@ -376,6 +376,37 @@ code, pre, .mono { font-family: var(--mono); }
 .ent .bd .fail { color: var(--red); }
 .ent[data-open="0"] .bd { display: none; }
 
+/* ---- rich tool rendering (opshtml.tool_html) ----------------------------- */
+.thtml { min-width: 0; }
+.thtml .oc { margin: 0; padding: 0; white-space: pre-wrap; word-break: break-word;
+  font: 12px/1.45 var(--mono); max-height: 440px; overflow: auto; color: var(--text-soft); }
+.thtml .tdesc { color: var(--dim); font-size: 11.5px; margin-top: 5px;
+  font-family: var(--sans); }
+.thtml .tfile { color: var(--text-soft); font-family: var(--mono); font-size: 11.5px;
+  margin-bottom: 5px; word-break: break-all; }
+.thtml .tflag { color: var(--amber); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .1em; font-family: var(--sans); margin-bottom: 4px; }
+.thtml .telide { color: var(--dim); font-size: 11px; font-style: italic; margin-top: 4px; }
+.thtml .tline { font: 12px/1.5 var(--mono); }
+/* unified diff: removed rows red-tinted, added green-tinted, context plain */
+.tdiff { font: 12px/1.5 var(--mono); max-height: 440px; overflow: auto;
+  border-radius: calc(var(--r) / 2); box-shadow: inset 0 0 0 1px var(--hair); }
+.tdiff .dl { display: flex; gap: 10px; padding: 0 8px; white-space: pre-wrap;
+  word-break: break-word; }
+.tdiff .dl .ln { flex: none; width: 3.5em; text-align: right; color: var(--dim2);
+  user-select: none; }
+.tdiff .dl .tx { flex: 1; min-width: 0; color: var(--text-soft); }
+.tdiff .removed { background: color-mix(in srgb, var(--red) 14%, transparent); }
+.tdiff .removed .tx { color: color-mix(in srgb, var(--red) 70%, var(--text)); }
+.tdiff .added { background: color-mix(in srgb, var(--green) 14%, transparent); }
+.tdiff .added .tx { color: color-mix(in srgb, var(--green) 65%, var(--text)); }
+.tdiff .sep .tx { color: var(--dim2); }
+/* definition list: Grep/Glob/WebFetch/WebSearch/Task/SendMessage key fields */
+.tdl { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px;
+  margin: 0; font-family: var(--mono); font-size: 12px; }
+.tdl dt { color: var(--dim); text-align: right; }
+.tdl dd { color: var(--text-soft); margin: 0; min-width: 0; word-break: break-word; }
+
 /* ---- errors ---------------------------------------------------------------- */
 .errs { display: flex; flex-direction: column; gap: 7px; }
 .err { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 32%, var(--hair));

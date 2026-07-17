@@ -20,6 +20,7 @@
 # what"> — the app intercepts those (copy via the server's /copy endpoint,
 # view via /view). Any other URL becomes a plain target=_blank anchor.
 import html
+import json
 import re
 
 from core import codefmt as CF
@@ -217,6 +218,18 @@ def _gutbody(op):
     return s
 
 
+def _code_block(text, ind="  "):
+    """Source text -> a highlighted `<pre class="oc">` — the shared body of the
+    `code` op branch and the Bash tool presenter (single owner of "how a command
+    block looks in HTML"). Neutralised, then run through codefmt.render at the
+    unwrapped CODE_W (the page owns wrapping) and ansi_html (which escapes)."""
+    try:
+        painted = CF.render(R.neutralize(text or ""), CODE_W, ind)
+    except Exception:
+        painted = R.neutralize(text or "")
+    return "<pre class=\"oc\">%s</pre>" % ansi_html(painted)
+
+
 def op_html(op, key=""):
     """One paint op -> one HTML block ('' for unknown/empty). `key` is the
     mirror-log key (paths.sid_from_log) the ⧉ copy links need; ops render
@@ -240,12 +253,7 @@ def op_html(op, key=""):
                     % (_rgb(outer), body))
         return body
     if t == "code":
-        try:
-            painted = CF.render(R.neutralize(op.get("s", "")), CODE_W,
-                                op.get("ind", "  "))
-        except Exception:
-            painted = R.neutralize(op.get("s", ""))
-        return "<pre class=\"oc\">%s</pre>" % ansi_html(painted)
+        return _code_block(op.get("s", ""), op.get("ind", "  "))
     if t == "gut":
         s = _gutbody(op) if (op.get("lex") or op.get("num") is not None) \
             else op.get("s", "")
@@ -467,3 +475,160 @@ def msg_html(kind, text, sender=""):
     return ("<div class=\"msg %s\"><span class=\"who\">%s</span>"
             "<div class=\"md\">%s</div></div>"
             % (html.escape(kind, quote=True), html.escape(who), md_html(text)))
+
+
+# --- rich tool rendering (tool_html / tool_output_html) -----------------------
+# The drill-down timeline lists every tool CALL; a raw JSON dump of its input is
+# unscannable. These presenters render the INPUT of Claude Code's well-known
+# built-in tools as structured HTML, reusing the single owners of those payload
+# shapes rather than re-encoding them: plugins.claude_code.tools (the built-in
+# tool payload owner — diff_rows / read_extent / FILE_RGB), core.codefmt (the
+# command highlighter behind `code` ops), core.streamfmt (the file-op one-liner
+# vocabulary), and core.coderender (the lexer table + highlighter). Unknown
+# tools return None so the server keeps the existing escaped-JSON fallback.
+# Escape discipline is unchanged — every leaf rides ansi_html / html.escape.
+WRITE_CAP = 200                    # Write content lines shown before an elision
+_DEFLIST_TOOLS = ("Grep", "Glob", "WebFetch", "WebSearch", "Task", "SendMessage")
+_EDIT_TOOLS = ("Edit", "MultiEdit", "NotebookEdit")
+
+
+def _first_line(s, n=200):
+    """First line of `s`, capped at n chars — for a definition-list value whose
+    full text (a Task prompt, a SendMessage body) would be a wall."""
+    s = (s or "").strip()
+    nl = s.find("\n")
+    if nl >= 0:
+        s = s[:nl]
+    return s[:n] + "…" if len(s) > n else s
+
+
+def _lexer_for(path):
+    """Pygments lexer name for a file path's extension via coderender.LANGS (the
+    single owner of the ext->lexer table), or None."""
+    try:
+        from core.coderender import LANGS
+    except Exception:
+        return None
+    low = (path or "").lower()
+    for ext, lexer in LANGS.items():
+        if low.endswith(ext):
+            return lexer
+    return None
+
+
+def _bash_html(inp):
+    cmd = inp.get("command") or ""
+    out = _code_block(cmd)
+    desc = inp.get("description")
+    if desc:
+        out += "<div class=\"tdesc\">%s</div>" % html.escape(str(desc), quote=False)
+    return out
+
+
+def _edit_html(tool_name, inp):
+    """Edit/MultiEdit/NotebookEdit input as a line-numbered red/green diff via
+    tools.diff_rows (the single owner; empty result dict makes it fall back to a
+    difflib diff over the input's old/new strings — all we have at input time)."""
+    from plugins.claude_code import tools as T
+    rows = T.diff_rows(tool_name, inp, {})
+    if not rows:
+        return None
+    out = []
+    if inp.get("replace_all"):
+        out.append("<div class=\"tflag\">replace_all</div>")
+    lines = []
+    for sign, no, text in rows:
+        if sign == "@":
+            lines.append("<div class=\"dl sep\"><span class=\"tx\">⋮</span></div>")
+            continue
+        cls = {"+": "added", "-": "removed"}.get(sign, "ctx")
+        ln = "" if no is None else str(no)
+        lines.append("<div class=\"dl %s\"><span class=\"ln\">%s</span>"
+                     "<span class=\"tx\">%s</span></div>"
+                     % (cls, html.escape(ln), html.escape(text, quote=False)))
+    out.append("<div class=\"tdiff\">%s</div>" % "".join(lines))
+    return "".join(out)
+
+
+def _write_html(inp):
+    path = inp.get("file_path") or ""
+    content = inp.get("content") or ""
+    head = ("<div class=\"tfile\">%s</div>" % html.escape(path, quote=False)
+            if path else "")
+    all_lines = content.split("\n")
+    shown = "\n".join(all_lines[:WRITE_CAP])
+    lexer = _lexer_for(path)
+    body = None
+    if lexer:
+        try:
+            from core import coderender as C
+            hi = C.render_code(shown, lexer)
+            if hi is not None:
+                body = "<pre class=\"oc\">%s</pre>" % ansi_html(hi)
+        except Exception:
+            body = None
+    if body is None:
+        body = "<pre class=\"oc\">%s</pre>" % html.escape(shown, quote=False)
+    more = len(all_lines) - WRITE_CAP
+    if more > 0:
+        body += ("<div class=\"telide\">… (%d more line%s)</div>"
+                 % (more, "" if more == 1 else "s"))
+    return head + body
+
+
+def _read_html(inp):
+    """Read input as streamfmt's `verb(name)[  extent]` one-liner (the single
+    owner of that shape), coloured via SGR and run through ansi_html. file_display
+    resolves location against the dashboard process cwd (no session cwd here), so
+    a file outside it shows its dim abbreviated dir — informative, not a bug."""
+    from core import streamfmt as SF
+    from plugins.claude_code import tools as T
+    path = inp.get("file_path") or ""
+    if not path:
+        return None
+    disp, _ = SF.file_display(path)
+    extent = T.read_extent(None, inp)
+    line = SF.file_line("Read", disp, T.FILE_RGB["Read"], extent=extent)
+    return "<div class=\"tline\">%s</div>" % ansi_html(line)
+
+
+def _deflist_html(inp):
+    rows = []
+    for k, v in inp.items():
+        vs = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
+        rows.append("<dt>%s</dt><dd>%s</dd>"
+                    % (html.escape(str(k), quote=False),
+                       html.escape(_first_line(vs), quote=False)))
+    if not rows:
+        return None
+    return "<dl class=\"tdl\">%s</dl>" % "".join(rows)
+
+
+def tool_html(tool_name, inp):
+    """Rich HTML for a well-known tool's INPUT, or None (unknown tool / bad
+    shape) so the caller keeps its escaped-JSON fallback. Escape-first like
+    everything here — every leaf rides ansi_html or html.escape."""
+    if not isinstance(inp, dict) or not inp:
+        return None
+    if tool_name == "Bash":
+        return _bash_html(inp)
+    if tool_name in _EDIT_TOOLS:
+        return _edit_html(tool_name, inp)
+    if tool_name == "Write":
+        return _write_html(inp)
+    if tool_name == "Read":
+        return _read_html(inp)
+    if tool_name in _DEFLIST_TOOLS:
+        return _deflist_html(inp)
+    return None
+
+
+def tool_output_html(text, failed=False, tool_name=""):
+    """Rich HTML for a tool's OUTPUT, or None when a plain escaped <pre> (the
+    caller's default) already suffices. Only Bash differs: its output can carry
+    ANSI (transcripts usually strip it, but harmless), so it rides ansi_html so
+    preserved SGR colours render. `failed` is accepted for symmetry with the
+    caller; the failure styling stays on the caller's label."""
+    if tool_name == "Bash" and text:
+        return "<pre class=\"oc\">%s</pre>" % ansi_html(text)
+    return None

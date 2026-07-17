@@ -627,7 +627,10 @@ function timelineEntry(ent) {
     kcls = ent.failed ? "k-toolfail" : "k-tool";
     ktxt = ent.tool || "tool";
     sum = firstLine(inputSummary(ent.input)); open = false;
-    if (ent.input && Object.keys(ent.input).length) {
+    if (ent.input_html != null) {
+      bd.append(el("div", "lbl", "input"));
+      bd.append(htmlFrag(ent.input_html));
+    } else if (ent.input && Object.keys(ent.input).length) {
       bd.append(el("div", "lbl", "input"));
       bd.append(pre(JSON.stringify(ent.input, null, 2)));
     }
@@ -635,7 +638,7 @@ function timelineEntry(ent) {
       const lbl = el("div", "lbl", ent.failed ? "output · failed" : "output");
       if (ent.failed) lbl.classList.add("fail");
       bd.append(lbl);
-      bd.append(pre(ent.output));
+      bd.append(ent.output_html != null ? htmlFrag(ent.output_html) : pre(ent.output));
     } else {
       bd.append(el("div", "lbl", "no result recorded"));
     }
@@ -665,6 +668,15 @@ function pre(text) { const p = el("pre"); p.textContent = text == null ? "" : St
 function mdOrPre(html, text) {
   if (html == null) return pre(text);
   const d = el("div", "md");
+  d.innerHTML = html;
+  return d;
+}
+// Server-rendered tool input/output HTML (opshtml.tool_html / tool_output_html
+// — escaped there like op HTML). Same innerHTML-is-safe-by-construction basis
+// as mdOrPre; a bare wrapper carries the structured blocks (.oc / .tdiff /
+// .tdl) without the .md markdown styling.
+function htmlFrag(html) {
+  const d = el("div", "thtml");
   d.innerHTML = html;
   return d;
 }

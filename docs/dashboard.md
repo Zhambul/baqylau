@@ -117,6 +117,27 @@ escaped plain text. The timeline endpoints (`/activity`, `/agent`) add an
 stays), and `app.js` uses it via `innerHTML` (server-escaped by construction),
 falling back to `pre(text)` when absent.
 
+**Rich tool rendering** (`opshtml.tool_html` / `tool_output_html`). A tool entry
+in the drill-down timeline used to dump its input as raw JSON; the presenter now
+renders the well-known built-in tools structurally, reusing the single owners of
+their payload shapes rather than re-encoding them: a **Bash** command through
+`codefmt.render` → `ansi_html` (the same `_code_block` the `code` op uses) with a
+dim description; an **Edit/MultiEdit/NotebookEdit** input as a line-numbered
+red/green diff via `plugins.claude_code.tools.diff_rows` (empty result dict → its
+difflib fallback over the input strings), with the `replace_all` flag shown; a
+**Write** as a file headline plus content highlighted through `coderender` when
+the extension maps to a lexer, capped at `WRITE_CAP` lines with an elision note;
+a **Read** as `streamfmt.file_line`'s `verb(name)[ extent]` one-liner (extent from
+`tools.read_extent`); and **Grep/Glob/WebFetch/WebSearch/Task/SendMessage** as a
+definition list of their fields (long values first-lined). Unknown tools return
+`None`, so the timeline keeps its escaped-JSON fallback. The enrichment is the
+same additive post-processing markdown uses (`server._mdify`): tool entries gain
+`input_html` and — only where it differs from a plain `<pre>` (Bash output, which
+may carry ANSI) — `output_html`; raw `input`/`output` stay untouched, and `app.js`
+falls back to the JSON dump / plain `<pre>` when a field is absent. Escape-first
+throughout — every leaf rides `ansi_html` or `html.escape`, so a `<script>` in an
+`old_string` survives as escaped text.
+
 **Why not an xterm.js embed** (the Hermes harness does one): the mirror's
 content is not a pty — it's a structured op stream that reflows. An embedded
 terminal would need a server-side repaint-to-ANSI at the browser's column
@@ -254,7 +275,9 @@ mirror read as one system.
 ## Testing
 
 `tests/test_l0_dashboard.py`: opshtml contract tests (escaping, SGR/OSC8,
-copy-link specs, lex/num gut bodies), the server on an ephemeral in-process
+copy-link specs, lex/num gut bodies, and the rich tool renders — Bash
+highlight, Edit diff with escaped content, Write cap, Read one-liner, deflist,
+unknown-tool fallback), the server on an ephemeral in-process
 port (never through `serve()` — no singleton lock in tests) against data
 seeded via the real product APIs, and the notification watcher's transition
 logic. Import safety for both modules rides `test_import_safety.py`.

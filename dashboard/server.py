@@ -222,15 +222,26 @@ def _mdify(tl):
     """Additively enrich a timeline (plugins.activity result) for the page:
     message / prompt / teammsg entries gain an `html` field — md_html of their
     text/body, so the drill-down renders conversation text as readable markdown
-    instead of a plain <pre>. The raw text field is left untouched (the API
-    shape stays additive; app.js falls back to pre(text) when `html` is absent,
-    e.g. for a plugin whose provider predates this)."""
+    instead of a plain <pre>; tool entries gain `input_html` (a scannable render
+    of a well-known tool's input — Bash command, Edit diff, Write body, Read
+    one-liner, definition list) and, where it differs from a plain <pre>,
+    `output_html`. Raw fields are left untouched (the API shape stays additive;
+    app.js falls back to pre(text)/JSON when a field is absent — an older
+    provider, or a tool with no rich render)."""
     for ent in (tl or {}).get("entries", []):
         t = ent.get("t")
         if t in ("message", "prompt"):
             ent["html"] = opshtml.md_html(ent.get("text", ""))
         elif t == "teammsg":
             ent["html"] = opshtml.md_html(ent.get("body", ""))
+        elif t == "tool":
+            ih = opshtml.tool_html(ent.get("tool", ""), ent.get("input"))
+            if ih is not None:
+                ent["input_html"] = ih
+            oh = opshtml.tool_output_html(ent.get("output"), ent.get("failed"),
+                                          ent.get("tool", ""))
+            if oh is not None:
+                ent["output_html"] = oh
     return tl
 
 

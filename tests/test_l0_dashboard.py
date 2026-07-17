@@ -152,6 +152,64 @@ def test_msg_html_renders_markdown_body():
     assert "<strong>bold</strong>" in h
 
 
+# ---------------------------------------------------------- rich tool rendering
+
+def test_tool_html_bash_highlights_command():
+    h = opshtml.tool_html("Bash", {"command": "grep -rn foo src/",
+                                    "description": "search"})
+    assert "<pre class=\"oc\">" in h and "<span" in h   # codefmt highlight spans
+    assert "class=\"tdesc\">search" in h                # dim description
+
+
+def test_tool_html_edit_diff_escapes_content():
+    # old_string with markup stays ESCAPED inside removed/added rows.
+    h = opshtml.tool_html("Edit", {"old_string": "<script>alert(1)</script>",
+                                    "new_string": "safe()", "replace_all": True})
+    assert "class=\"dl removed\"" in h and "class=\"dl added\"" in h
+    assert "&lt;script&gt;" in h and "<script>" not in h
+    assert "class=\"tflag\">replace_all" in h
+
+
+def test_tool_html_write_caps_long_content():
+    body = "\n".join("line %d" % i for i in range(opshtml.WRITE_CAP + 50))
+    h = opshtml.tool_html("Write", {"file_path": "/w/big.txt", "content": body})
+    assert "class=\"tfile\">/w/big.txt" in h
+    assert "class=\"telide\">… (50 more lines)" in h
+
+
+def test_tool_html_write_highlights_known_lexer():
+    h = opshtml.tool_html("Write", {"file_path": "/w/f.py",
+                                    "content": "def f(x):\n    return x\n"})
+    assert "<pre class=\"oc\">" in h and "<span" in h    # python lexer ran
+
+
+def test_tool_html_read_one_liner():
+    h = opshtml.tool_html("Read", {"file_path": "/w/a.py", "offset": 10,
+                                   "limit": 20})
+    assert "class=\"tline\">" in h and "Read" in h and "10-29" in h
+
+
+def test_tool_html_deflist_for_search_tools():
+    h = opshtml.tool_html("Grep", {"pattern": "foo", "path": "src"})
+    assert "<dl class=\"tdl\">" in h
+    assert "<dt>pattern</dt><dd>foo</dd>" in h
+    # a long Task prompt is first-lined, not dumped whole
+    t = opshtml.tool_html("Task", {"prompt": "line one\nline two\nline three"})
+    assert "<dd>line one</dd>" in t and "line two" not in t
+
+
+def test_tool_html_unknown_tool_and_empty_fall_back():
+    assert opshtml.tool_html("MysteryTool", {"x": 1}) is None
+    assert opshtml.tool_html("Bash", {}) is None
+    assert opshtml.tool_html("Bash", "notadict") is None
+
+
+def test_tool_output_html_only_bash():
+    assert opshtml.tool_output_html("plain", False, "Read") is None
+    h = opshtml.tool_output_html("\x1b[31mred\x1b[0m ok", False, "Bash")
+    assert h is not None and "<pre class=\"oc\">" in h and "color:rgb(" in h
+
+
 # ------------------------------------------------------------------ the server
 
 @pytest.fixture
@@ -243,6 +301,10 @@ def test_http_agent_timeline(dash, tmp_path):
     assert kinds == ["message", "tool"] and d["model"] == "claude-x"
     tool = d["entries"][1]
     assert tool["tool"] == "Bash" and tool["output"] == "listing"
+    # _mdify enriches the tool entry additively: a Bash command gets a
+    # highlighted input_html; the raw input stays untouched.
+    assert "<pre class=\"oc\">" in tool["input_html"]
+    assert tool["input"] == {"command": "ls"}
     # agents list carries the streams keystone fields the cards render
     ags = _get_json(dash + "/api/session/dash3")["agents"]
     assert ags and ags[0]["end_reason"] == "stop-sentinel"
