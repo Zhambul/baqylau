@@ -788,8 +788,46 @@ def test_post_message_success(dash, monkeypatch):
     A.session_start({"session_id": "msg1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/msg1/message",
                        {"text": "hello claude"})
-    assert code == 200 and json.loads(body) == {"ok": True}
+    # no tab state recorded → not mid-turn → queued False
+    assert code == 200 and json.loads(body) == {"ok": True, "queued": False,
+                                                "tab": ""}
     assert fe.sent == [("42", "hello claude")]
+
+
+def test_post_message_reports_queued_mid_turn(dash, monkeypatch):
+    # a send while the tab is busy lands in Claude Code's own message queue —
+    # the response says so (`queued`), and the web-send audit row carries the
+    # tab state at send time ("my message vanished" → "it queued mid-turn")
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    A.session_start({"session_id": "msgq", "cwd": "/w", "transcript_path": ""})
+    states = {"77": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    code, body = _post(dash + "/api/session/msgq/message", {"text": "later"})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "queued": True, "tab": "working"}
+    states["77"] = "awaiting-response"               # turn over: immediate send
+    code, body = _post(dash + "/api/session/msgq/message", {"text": "now"})
+    assert json.loads(body) == {"ok": True, "queued": False,
+                                "tab": "awaiting-response"}
+    # awaiting-command (a dialog is up) must NEVER claim queued — typed text
+    # goes to the dialog, not the queue
+    states["77"] = "awaiting-command"
+    code, body = _post(dash + "/api/session/msgq/message", {"text": "hm"})
+    assert json.loads(body)["queued"] is False
+
+
+def test_conv_items_carry_kind_and_prompt_text():
+    items = DS._conv_items([
+        {"kind": "prompt", "text": "do the thing"},
+        {"kind": "message", "text": "on it"},
+        {"kind": "teammsg", "text": "hi", "sender": "reviewer"},
+    ])
+    assert [it["kind"] for it in items] == ["prompt", "message", "teammsg"]
+    assert items[0]["text"] == "do the thing"        # the queue-chip match key
+    assert "text" not in items[1] and "text" not in items[2]
+    assert all(it["t"] == "msg" and it["g"] is None for it in items)
 
 
 def test_post_message_no_window_is_409(dash, monkeypatch):

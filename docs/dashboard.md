@@ -186,7 +186,7 @@ reflow for free and keeps the no-build rule.
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
-| `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); 409 headless, 400 empty, 503 no terminal |
+| `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "model"?, "effort"?, "prompt"?}` → launch `claude [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd/model/effort, 503 no terminal |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
@@ -245,6 +245,27 @@ the browser must preflight, and we never let the preflight pass
 window (same scoping as tab colours and toasts), so it returns `409` — the
 composer is disabled with a hint for it. Empty text is `400`. The text rides
 kitten's `--stdin` verbatim (no shell, no escape interpretation).
+
+**Queued messages.** Claude Code natively queues a message typed while a turn
+is running and delivers it when the turn ends — a composer send rides exactly
+that (it types into the TUI either way), so the *mechanics* need nothing from
+us. The *feedback* does: a mid-turn message reaches the transcript only at
+delivery, so from the page it would just vanish for minutes. The endpoint
+therefore reports which case happened — the response carries `queued` (tab
+state at send time ∈ `QUEUE_TABS` = `thinking`/`working`/`executing`) and
+`tab`, and the same tab state rides the `web-send` audit row. The page shows a
+queued send as a ⧗ chip under the composer (and the send button reads
+"queue" while busy — a cosmetic client-side mirror of `QUEUE_TABS`; the
+server's verdict is the chip authority). A chip is removed when its prompt
+record actually arrives in the stream — `_conv_items` items additively carry
+`kind` and, for prompts, the raw `text`, and `drainQueue` matches on exact
+text — because the transcript is the ONE delivery signal: tab transitions are
+useless (green flips busy again the instant a queued prompt starts
+processing), and the chip's ✕ only hides it (the message is already in the
+TUI's queue; the web cannot unqueue it). `awaiting-command` (red) is
+deliberately NOT in `QUEUE_TABS`: a dialog is up and typed text goes to the
+DIALOG, not the input box — a send then is neither immediate nor queued, and
+claiming "queued" would be a lie.
 
 **The "/" menu** (the composer AND the new-session form's first-prompt box —
 one shared `slashMenu` helper in app.js). A leading `/` with no whitespace yet
@@ -307,7 +328,9 @@ as one) and by a 120 s timeout, so a launch that never produces a session
 (claude failed to start) can't yank the browser somewhere minutes later.
 
 **Audit.** Every attempt lands a `state_files` row: `web-send`
-(`{win, chars, ok}`, keyed to the session's state-DB path) and `web-launch`
+(`{win, chars, ok, tab}` — `tab` is the state at send time, so "my message
+vanished" is answerable as "it queued mid-turn"; keyed to the session's
+state-DB path) and `web-launch`
 (`{cwd, model, effort, ok}`, no session yet so log/path are empty). Failure paths (no window,
 no terminal, send/launch returned false) also write an `A.error` per the
 audit-before-swallow rule, so a "my message never arrived" report is answerable

@@ -98,6 +98,14 @@ STATIC = {                         # whitelist — no path resolution on user in
 # is asking you; green — done, your turn.
 NOTIFY_STATES = {tabs.AWAITING_COMMAND: "asking", tabs.AWAITING_RESPONSE: "done"}
 
+# Tab states during which a composer send lands in Claude Code's own message
+# QUEUE (a turn is in progress — the TUI queues typed input and delivers it
+# when the turn ends) rather than starting a turn immediately. The /message
+# response reports it (`queued`) so the page can show the message as pending
+# until it surfaces in the transcript. awaiting-command (red) is deliberately
+# NOT here: a dialog is up and typed text goes to the DIALOG, not the queue.
+QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
+
 _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 
 
@@ -286,10 +294,21 @@ def _mdify(tl):
 
 
 def _conv_items(recs):
-    return [{"g": None, "t": "msg",
-             "html": opshtml.msg_html(r["kind"], r.get("text", ""),
-                                      r.get("sender", ""))}
-            for r in recs]
+    """Conversation records -> stream items. Additively carry `kind`
+    (prompt|message|teammsg) and, for prompts, the raw `text`: the page's
+    queued-message chips match a DELIVERED prompt against what they sent —
+    the transcript's prompt record is the one true delivery signal (tab
+    transitions are useless: green flips busy again the instant a queued
+    prompt starts processing)."""
+    out = []
+    for r in recs:
+        it = {"g": None, "t": "msg", "kind": r["kind"],
+              "html": opshtml.msg_html(r["kind"], r.get("text", ""),
+                                       r.get("sender", ""))}
+        if r["kind"] == "prompt":
+            it["text"] = r.get("text", "")
+        out.append(it)
+    return out
 
 
 TAIL_BLOCKS = 80       # initial backlog: how many stream BLOCKS to paint at once
@@ -744,14 +763,18 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, "web-send",
                          {"win": win, "chars": len(text), "ok": False})
             return self._json({"error": "no terminal available"}, 503)
+        # the tab state AT SEND TIME decides whether this send starts a turn
+        # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
+        # row too — "my message vanished" is answerable as "it queued mid-turn"
+        tab = API.tab_states().get(win) or ""
         ok = bool(fe.send_text(win, text))
         A.state_file(log, sdb, "web-send",
-                     {"win": win, "chars": len(text), "ok": ok})
+                     {"win": win, "chars": len(text), "ok": ok, "tab": tab})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True})
+        return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
 
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the

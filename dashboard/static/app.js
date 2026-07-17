@@ -347,7 +347,7 @@ function showSession(sid, tab) {
     S.ses = { lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
               agents: [], costs: null, running: {}, meta: null, es: null, agentEs: null,
               timer: null, poll: null, blocks: new Map(), moreEl: null,
-              loadingOlder: false,
+              loadingOlder: false, queue: [],
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
@@ -397,6 +397,7 @@ function connectSession(sid) {
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
+    if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
     // patch the open session's row so the attention bar reacts before the
     // next global snapshot lands (item 4: react to the per-session tab event)
     const row = S.sessions.find(r => r.sid === S.cur);
@@ -495,6 +496,7 @@ function appendItems(items) {
     refineBlockKind(b, it);
     applyFilterTo(b.root);
   }
+  drainQueue(items);
   enforceWindow();
   while (st.childElementCount > 3000) {
     const last = st.lastElementChild;
@@ -812,12 +814,67 @@ function slashMenu(ta, host, getCmds, opts) {
   return { key };
 }
 
+/* ---------- queued messages (Claude Code's mid-turn queue) ---------- */
+// Claude Code natively QUEUES a message typed while a turn is running and
+// delivers it when the turn ends — the composer rides exactly that (send_text
+// types into the TUI either way). The /message response says which happened
+// (`queued: true` when the send landed mid-turn — the server's QUEUE_TABS
+// verdict is the authority; the client QUEUE_TABS below only styles the send
+// button). A queued message would otherwise VANISH from the page until
+// delivery (it reaches the transcript only when the turn ends), so it shows
+// as a ⧗ chip under the composer until its prompt record actually arrives in
+// the stream (drainQueue — matched by exact text; tab transitions are useless
+// as a delivery signal since green flips busy again the instant a queued
+// prompt starts processing). ✕ only hides a chip — the message is already in
+// the TUI's queue and the web can't unqueue it.
+
+const QUEUE_TABS = ["thinking", "working", "executing"];
+
+function buildQueueBar() {
+  const q = el("div", "cqueue");
+  S.ses.queueEl = q;
+  renderQueue();
+  return q;
+}
+
+function renderQueue() {
+  const ses = S.ses;
+  if (!ses || !ses.queueEl) return;
+  const q = ses.queueEl;
+  q.textContent = "";
+  q.hidden = !ses.queue.length;
+  ses.queue.forEach((m, i) => {
+    const c = el("span", "qchip");
+    c.title = "queued in the terminal — delivers when this turn ends";
+    c.append(el("span", "qg", "⧗"), document.createTextNode(
+      m.text.length > 70 ? m.text.slice(0, 70) + "…" : m.text));
+    const x = el("button", "qx", "✕");
+    x.title = "hide this chip (the message stays queued in the terminal)";
+    x.onclick = () => { ses.queue.splice(i, 1); renderQueue(); };
+    c.append(x);
+    q.append(c);
+  });
+}
+
+function drainQueue(items) {
+  const ses = S.ses;
+  if (!ses || !ses.queue || !ses.queue.length) return;
+  let hit = false;
+  for (const it of items) {
+    if (it.t !== "msg" || it.kind !== "prompt") continue;
+    const i = ses.queue.findIndex(m => m.text === (it.text || "").trim());
+    if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
+  }
+  if (hit) renderQueue();
+}
+
 /* ---------- control plane: the message composer ---------- */
 // A textarea above the mirror feed that types a message into the session's
 // kitty window (POST /message). Enter sends, Shift+Enter is a newline. Disabled
 // with a hint when the session isn't live or has no window (a headless/daemon
 // session — the /message endpoint would 409). The sent text surfaces in the
-// stream on its own via the conversation tail, so we only clear + toast.
+// stream on its own via the conversation tail, so we only clear + toast —
+// unless the response says it QUEUED (see above), which adds a ⧗ chip.
 
 function autoGrow(ta) {
   ta.style.height = "auto";
@@ -845,12 +902,28 @@ function buildComposer() {
     if (!text || ta.disabled) return;
     ta.disabled = true; btn.disabled = true;
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", { text })
-      .then(() => { ta.value = ""; autoGrow(ta); toast("done", "message sent", ""); })
+      .then(d => {
+        ta.value = ""; autoGrow(ta);
+        if (d && d.queued) {
+          ses.queue.push({ text });
+          renderQueue();
+          toast("done", "message queued", "delivers when this turn ends");
+        } else {
+          toast("done", "message sent", "");
+        }
+      })
       .catch(e => toast("ask", "send failed", (e && e.error) || ""))
       .finally(() => {
         if (ses.composer === ta) { ta.disabled = !canSend; btn.disabled = !canSend; ta.focus(); }
       });
   };
+  // cosmetic busy hint: the send button reads "queue" while a turn is running
+  // (kept fresh by the `tab` SSE event; the server's verdict stays authoritative)
+  ses.composerMode = (tab) => {
+    btn.textContent = canSend && QUEUE_TABS.includes(tab) ? "queue" : "send";
+  };
+  ses.composerMode(((S.sessions.find(r => r.sid === S.cur) || {}).tab)
+                   || (meta.tab || ""));
   // the "/" menu — commands for THIS session's cwd, fetched once per view
   const sm = slashMenu(ta, wrap,
     () => cmdsFor(meta.cwd, ses, "cmds"),
@@ -1058,6 +1131,7 @@ function renderSessionChrome(tab) {
 
   if (tab === "mirror") {
     body.append(buildComposer());
+    body.append(buildQueueBar());
     body.append(buildFilterBar());
     const split = el("div", "split");
     split.append(ses.stream);
