@@ -297,9 +297,11 @@ def test_activity_falls_back_to_layout_derivation(monkeypatch, tmp_path):
     import plugins
     tl = plugins.activity("act1", "agX")
     assert tl and tl["entries"] == [{"t": "prompt", "text": "sub prompt"}]
-    # main-thread view reads the parent transcript itself (empty -> no entries)
+    # main-thread view reads the parent transcript itself (empty -> no entries);
+    # `pos` is the additive live-resume byte cursor (0 for an empty transcript)
     tl_main = plugins.activity("act1")
     assert tl_main == {"entries": [], "model": None, "bad_lines": 0, "tools": 0,
+                       "pos": 0,
                        "usage": {"in": 0, "out": 0, "cache": 0, "create": 0,
                                  "create_1h": 0}}
     # unknown pair -> no provider claims it

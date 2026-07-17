@@ -219,30 +219,43 @@ def session_payload(sid):
     return data
 
 
-def _mdify(tl):
-    """Additively enrich a timeline (plugins.activity result) for the page:
-    message / prompt / teammsg entries gain an `html` field — md_html of their
-    text/body, so the drill-down renders conversation text as readable markdown
-    instead of a plain <pre>; tool entries gain `input_html` (a scannable render
-    of a well-known tool's input — Bash command, Edit diff, Write body, Read
+def _enrich_entry(ent):
+    """Additively enrich ONE timeline entry for the page: message / prompt /
+    teammsg entries gain an `html` field — md_html of their text/body, so the
+    drill-down renders conversation text as readable markdown instead of a
+    plain <pre>; tool entries gain `input_html` (a scannable render of a
+    well-known tool's input — Bash command, Edit diff, Write body, Read
     one-liner, definition list) and, where it differs from a plain <pre>,
     `output_html`. Raw fields are left untouched (the API shape stays additive;
     app.js falls back to pre(text)/JSON when a field is absent — an older
-    provider, or a tool with no rich render)."""
-    for ent in (tl or {}).get("entries", []):
-        t = ent.get("t")
-        if t in ("message", "prompt"):
-            ent["html"] = opshtml.md_html(ent.get("text", ""))
-        elif t == "teammsg":
-            ent["html"] = opshtml.md_html(ent.get("body", ""))
-        elif t == "tool":
-            ih = opshtml.tool_html(ent.get("tool", ""), ent.get("input"))
-            if ih is not None:
-                ent["input_html"] = ih
-            oh = opshtml.tool_output_html(ent.get("output"), ent.get("failed"),
-                                          ent.get("tool", ""))
-            if oh is not None:
-                ent["output_html"] = oh
+    provider, or a tool with no rich render). The ONE post-processor both the
+    REST timelines (_mdify) and the live SSE increments run."""
+    t = ent.get("t")
+    if t in ("message", "prompt"):
+        ent["html"] = opshtml.md_html(ent.get("text", ""))
+    elif t == "teammsg":
+        ent["html"] = opshtml.md_html(ent.get("body", ""))
+    elif t == "tool":
+        ih = opshtml.tool_html(ent.get("tool", ""), ent.get("input"))
+        if ih is not None:
+            ent["input_html"] = ih
+        oh = opshtml.tool_output_html(ent.get("output"), ent.get("failed"),
+                                      ent.get("tool", ""))
+        if oh is not None:
+            ent["output_html"] = oh
+    return ent
+
+
+def _enrich_entries(entries):
+    for ent in entries:
+        _enrich_entry(ent)
+    return entries
+
+
+def _mdify(tl):
+    """Enrich a whole timeline dict (plugins.activity result) in place — the
+    REST /activity and /agent post-processor. See _enrich_entry."""
+    _enrich_entries((tl or {}).get("entries", []))
     return tl
 
 
@@ -424,6 +437,9 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 3 and parts[1] == "session" and _sid(parts[2]):
                 return self.sse_session(parts[2], _qint(url, "after"),
                                         _qint(url, "mpos"))
+            if len(parts) == 4 and parts[1] == "agent" \
+                    and _sid(parts[2]) and _sid(parts[3]):
+                return self.sse_agent(parts[2], parts[3], _qint(url, "pos"))
             return self._json({"error": "not found"}, 404)
         if parts[0] != "api":
             return self._json({"error": "not found"}, 404)
@@ -570,6 +586,40 @@ class Handler(BaseHTTPRequestHandler):
                 if not self._sse_beat():
                     return
             n += 1
+            time.sleep(TICK_S)
+
+    def sse_agent(self, sid, aid, pos):
+        """One agent's LIVE drill-down timeline (docs/dashboard.md): appends
+        `entries` (new increment entries, server-enriched exactly like the REST
+        /agent endpoint — the shared _enrich_entries) and `resolve`
+        (cross-increment tool resolutions — [(tool_use_id, output, failed), …]
+        the client applies by data-tool-id) events as the agent's transcript
+        grows from byte cursor `pos`, plus heartbeats; stops cleanly on client
+        disconnect. `pos` is the cursor the /agent REST response handed the
+        client, so the first increment resumes exactly where the initial fetch
+        stopped — no gap, no overlap. A pair with no incremental provider
+        (codex declines) yields None forever, so the loop is a heartbeat-only
+        keep-alive until the client navigates away."""
+        self._sse_start()
+        beat = time.monotonic()
+        while True:
+            got = plugins.activity_since(sid, aid, pos)
+            if got is not None:
+                entries, resolutions, pos = got
+                if entries:
+                    _enrich_entries(entries)
+                    if not self._sse("entries", {"pos": pos,
+                                                 "entries": entries}):
+                        return
+                if resolutions:
+                    if not self._sse("resolve", {"pos": pos,
+                                                 "resolutions": resolutions}):
+                        return
+            now = time.monotonic()
+            if now - beat > HEARTBEAT_S:
+                beat = now
+                if not self._sse_beat():
+                    return
             time.sleep(TICK_S)
 
 

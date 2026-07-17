@@ -182,6 +182,91 @@ def test_timeline_counts_bad_lines(tmp_path):
     assert tl["bad_lines"] == 1 and tl["entries"][0]["t"] == "prompt"
 
 
+# ------------------------------------------------------------ timeline_since
+
+def _append(path, lines):
+    with open(path, "a", encoding="utf-8") as fh:
+        for o in lines:
+            fh.write(_l(o) + "\n")
+
+
+def test_timeline_since_pairs_within_and_resolves_across_increments(tmp_path):
+    path = _write(tmp_path, [
+        {"type": "user", "message": {"content": "go"}},
+        {"type": "assistant", "message": {
+            "id": "m1", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls"}},
+                {"type": "tool_use", "id": "t2", "name": "Read",
+                 "input": {"file_path": "/x"}}]}},
+        # t2 resolves in the SAME window -> paired in place, no resolution
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t2", "content": "file body"}]}},
+    ])
+    ents, res, pos1 = TR.timeline_since(path, 0)
+    assert [e["t"] for e in ents] == ["prompt", "tool", "tool"]
+    assert ents[1]["id"] == "t1" and "output" not in ents[1]   # unresolved
+    assert ents[2]["id"] == "t2" and ents[2]["output"] == "file body"
+    assert res == [] and pos1 > 0
+
+    # second increment: t1's result (its tool_use was in the PRIOR window ->
+    # a cross-increment resolution, not an in-place patch) + a final message.
+    _append(path, [
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "a\nb", "is_error": False}]}},
+        {"type": "assistant", "message": {
+            "id": "m2", "content": [{"type": "text", "text": "done"}]}},
+    ])
+    ents2, res2, pos2 = TR.timeline_since(path, pos1)
+    assert [e["t"] for e in ents2] == ["message"]      # no orphan-result entry
+    assert res2 == [("t1", "a\nb", False)] and pos2 > pos1
+    assert "final" not in ents2[-1]                    # increments never mark final
+
+
+def test_timeline_since_reads_no_torn_record(tmp_path):
+    # a trailing partial line (a mid-write tail) is not consumed; the cursor
+    # stops before it, and completing the line makes it readable next call.
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l({"type": "user", "message": {"content": "hi"}}) + "\n"
+                 + '{"type": "assist', encoding="utf-8")
+    ents, res, pos = TR.timeline_since(str(p), 0)
+    assert [e["t"] for e in ents] == ["prompt"] and res == []
+    with open(p, "a", encoding="utf-8") as fh:
+        fh.write('ant", "message": {"content": '
+                 '[{"type": "text", "text": "ok"}]}}\n')
+    ents2, _res, _pos = TR.timeline_since(str(p), pos)
+    assert [e["t"] for e in ents2] == ["message"]
+
+
+def test_timeline_since_concatenation_matches_whole_file(tmp_path):
+    # entries across increments + applied resolutions reproduce what a
+    # whole-file timeline() reports for the finished transcript.
+    lines = [
+        {"type": "user", "message": {"content": "go"}},
+        {"type": "assistant", "message": {
+            "id": "m1", "content": [
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "out"}]}},
+        {"type": "assistant", "message": {
+            "id": "m2", "content": [{"type": "text", "text": "done"}]}},
+    ]
+    path = _write(tmp_path, lines[:2])
+    ents, res, pos = TR.timeline_since(path, 0)
+    _append(path, lines[2:])
+    ents2, res2, _pos = TR.timeline_since(path, pos)
+    merged = ents + ents2
+    for tid, out, failed in res + res2:                # the consumer's fill-in
+        for e in merged:
+            if e.get("id") == tid:
+                e["output"], e["failed"] = out, failed
+    whole = TR.timeline(path)["entries"]
+    whole[-1].pop("final", None)                        # increments don't mark it
+    assert merged == whole
+
+
 # ---------------------------------------------------------------- single owner
 
 def test_teammsg_regex_has_one_owner():

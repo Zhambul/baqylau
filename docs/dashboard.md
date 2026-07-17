@@ -154,12 +154,13 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>` | overview: `session()` + error count |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
-| `/api/session/<sid>/agent/<aid>` | one agent's timeline |
+| `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`, each on change; a fresh connection's first `ops` event is the anchor-merged backlog (see below) |
+| `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
 global) pushed over a held response — no websockets dependency, and
@@ -217,6 +218,38 @@ reconnects like the ops `after` cursor) and appends `msgs` events in arrival
 order — interleave is a backfill affordance, not a live-ordering guarantee.
 `/api/session/<sid>/ops` stays PURE ops (the mirror-parity endpoint); the merge
 exists only in the SSE backlog.
+
+## Live agent timelines
+
+An agent's drill-down (`/api/session/<sid>/agent/<aid>`) is fetched once for its
+rich header (model / usage / tools) and its entries; a RUNNING agent's page then
+grows live over the `/events/agent/<sid>/<aid>` SSE, so you watch a subagent work
+without reloading. The client opens the SSE only when the agent looks live (its
+`agents` row has no `ended_at` — a parked transcript won't grow) and hands it the
+`pos` byte cursor the REST response carried (additive field, from
+`plugins.activity()`), so the stream resumes exactly where the fetch stopped —
+no gap, no overlap (the same race-free hand-off the per-session stream's
+`after`/`mpos` cursors use).
+
+Server-side the SSE polls `plugins.activity_since(sid, aid, pos)` at `TICK_S` —
+the incremental companion to `activity()`, sharing timeline()'s per-record entry
+builder (`transcript._fold_record`, the single owner of the record→entry
+mapping). It returns `(entries, resolutions, new_pos)` and the SSE pushes two
+event kinds: `entries` (the new increment's entries, server-enriched by the same
+`_enrich_entries` the REST endpoints run — markdown/rich-tool HTML) appended at
+the bottom (the timeline reads chronological top-down), and `resolve`
+(`[(tool_use_id, output, failed), …]`). A `resolve` exists because a tool_use in
+one increment can have its tool_result land in a LATER one — the entry was
+already serialized and sent, so it can't be patched in place; the client finds
+it by a `data-tool-id` attribute and fills in the result region (a `.tout` block
+kept separate for exactly this), or ignores it when no such entry is on the page
+(a genuine orphan whose tool_use it never saw — increments deliberately don't
+emit orphan-result entries, since a byte window can't distinguish the two). Usage
+is omitted from increments (the header's rollup is a whole-file figure; the
+message-id dedup cursor can't survive a per-call window). **codex has no
+incremental provider** (its rollout renderer lacks the parse split), so a codex
+run's drill-down stays fetch-once — the `activity_since` fan-out finds no provider
+and the SSE idles as a heartbeat keep-alive.
 
 ## Stream search + kind filters
 

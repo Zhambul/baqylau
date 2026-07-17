@@ -80,6 +80,26 @@ def activity(sid, agent_id=None):
     return None
 
 
+def activity_since(sid, agent_id, pos):
+    """LIVE drill-down fan-out (docs/dashboard.md): the incremental companion
+    to activity() — the first plugin that recognizes (sid, agent_id) returns
+    (entries, resolutions, new_pos) from byte cursor `pos`; None when none
+    does. claude_code: plugins/claude_code/transcript.timeline_since over the
+    agent's (or, with agent_id=None, the session's main) transcript. codex has
+    NO incremental provider yet (its rollout renderer lacks the parse split),
+    so a codex run's drill-down stays fetch-once — the fan-out simply finds no
+    activity_since on that plugin and moves on. Same exception contract as
+    activity(): the callers are read-side tools, not hooks."""
+    for p in all_plugins():
+        fn = getattr(p, "activity_since", None)
+        if fn is None:
+            continue
+        got = fn(sid, agent_id, pos)
+        if got is not None:
+            return got
+    return None
+
+
 def session_title(transcript_path):
     """Display title for a session, resolved from its transcript/rollout path
     (path-keyed, unlike the sid-keyed fan-outs: the dashboard's list view

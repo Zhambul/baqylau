@@ -19,6 +19,7 @@ from conftest import REPO
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
 
+import plugins
 import core.audit as A
 from core import ops as O
 from core import paths as P
@@ -341,6 +342,54 @@ def test_http_agent_timeline(dash, tmp_path):
     # agents list carries the streams keystone fields the cards render
     ags = _get_json(dash + "/api/session/dash3")["agents"]
     assert ags and ags[0]["end_reason"] == "stop-sentinel"
+    # the /agent response carries a byte cursor `pos` (additive) so a live
+    # client can hand it to the agent SSE for a race-free resume
+    assert d["pos"] > 0
+
+
+def _agent_transcript(tmp_path, sid, aid):
+    """Seed an agent transcript + its audit streams row (the keystone
+    sessionapi.agent_transcript resolves), returning its path."""
+    tp = tmp_path / ("agent-%s.jsonl" % aid)
+    tp.write_text(
+        json.dumps({"type": "assistant", "message": {
+            "id": "m1", "content": [
+                {"type": "text", "text": "starting"},
+                {"type": "tool_use", "id": "t1", "name": "Bash",
+                 "input": {"command": "ls"}}]}}) + "\n" +
+        json.dumps({"type": "user", "message": {
+            "content": [{"type": "tool_result", "tool_use_id": "t1",
+                         "content": "listing"}]}}) + "\n")
+    A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+    A.stream_start(P.mirror_log(sid), "subagent", agent_id=aid, src_path=str(tp))
+    return tp
+
+
+def test_activity_since_fanout(dash, tmp_path):
+    """plugins.activity_since resolves (sid, agent_id) to the claude provider's
+    (entries, resolutions, new_pos); an unknown pair falls through to None."""
+    _agent_transcript(tmp_path, "fanout1", "agF")
+    got = plugins.activity_since("fanout1", "agF", 0)
+    assert got is not None
+    ents, res, pos = got
+    assert [e["t"] for e in ents] == ["message", "tool"]
+    assert ents[1]["output"] == "listing"          # paired in the same window
+    assert res == [] and pos > 0
+    assert plugins.activity_since("nope", "nada", 0) is None
+
+
+def test_sse_agent_streams_entries(dash, tmp_path):
+    """The /events/agent SSE announces the increment from the given cursor as
+    an `entries` event, server-enriched exactly like the REST endpoint."""
+    _agent_transcript(tmp_path, "sseA", "agS")
+    data = _sse_event(dash + "/events/agent/sseA/agS?pos=0", "entries")
+    assert data
+    d = json.loads(data)
+    assert d["pos"] > 0
+    kinds = [e["t"] for e in d["entries"]]
+    assert kinds == ["message", "tool"]
+    tool = d["entries"][1]
+    assert "<pre class=\"oc\">" in tool["input_html"]   # _enrich_entries ran
 
 
 def test_activity_entries_carry_markdown_html(dash, tmp_path):

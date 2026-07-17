@@ -24,6 +24,14 @@ def activity(sid, agent_id=None):
     return transcript.activity(sid, agent_id)
 
 
+def activity_since(sid, agent_id, pos):
+    """The LIVE drill-down provider (plugins.activity_since fan-out) —
+    incremental timeline entries + cross-increment tool resolutions from byte
+    cursor `pos`. See transcript.activity_since."""
+    from plugins.claude_code import transcript
+    return transcript.activity_since(sid, agent_id, pos)
+
+
 def session_title(transcript_path):
     """The session-title provider (plugins.session_title fan-out) — the head
     summary record / first real prompt of a Claude transcript. See

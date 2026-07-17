@@ -199,6 +199,7 @@ function route() {
 function leaveSession() {
   if (S.ses) {
     if (S.ses.es) S.ses.es.close();
+    closeAgentStream();
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
   }
@@ -317,8 +318,8 @@ function showSession(sid, tab) {
     leaveSession();
     S.cur = sid;
     S.ses = { lastId: 0, mpos: 0, stream: el("div", "stream"), stats: {}, agents: [],
-              costs: null, running: {}, meta: null, es: null, timer: null, poll: null,
-              blocks: new Map(),
+              costs: null, running: {}, meta: null, es: null, agentEs: null,
+              timer: null, poll: null, blocks: new Map(),
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
@@ -334,6 +335,7 @@ function showSession(sid, tab) {
       });
     connectSession(sid);
   }
+  closeAgentStream();                       // leaving any agent drill-down view
   S.ses.tab = tab;
   renderSessionChrome(tab);
 }
@@ -768,19 +770,24 @@ function updateAgents() {
 
 function showAgent(sid, aid) {
   if (S.cur !== sid) showSession(sid, "agents");
+  closeAgentStream();                       // switching agents / re-entering
   S.ses.tab = "agent:" + aid;
   const ses = S.ses;
   $view.querySelectorAll(".tabs a").forEach(a => a.classList.remove("on"));
   if (ses.body) {
     ses.body.textContent = "";
     const rec = (ses.agents || []).find(a => a.agent_id === aid);
+    // a running agent's page grows live; a parked one (ended_at set) is
+    // fetch-once — its transcript won't grow, so don't open a stream.
+    const live = !!rec && rec.ended_at == null;
     renderTimelineInto(ses.body,
                        "/api/session/" + encodeURIComponent(sid) + "/agent/" + encodeURIComponent(aid),
-                       (rec && rec.desc) || aid);
+                       (rec && rec.desc) || aid,
+                       live ? { sid: sid, aid: aid } : null);
   }
 }
 
-function renderTimelineInto(container, apiUrl, title) {
+function renderTimelineInto(container, apiUrl, title, live) {
   container.append(el("div", "empty", "loading " + title + "…"));
   fetch(apiUrl).then(r => r.json()).then(d => {
     if (!container.isConnected) return;
@@ -791,11 +798,73 @@ function renderTimelineInto(container, apiUrl, title) {
     if (!entries.length) list.append(el("div", "empty", "no recorded activity"));
     for (const ent of entries) list.append(timelineEntry(ent));
     container.append(list);
+    // LIVE agents: resume the SSE at the byte cursor the REST read stopped at
+    // (d.pos — additive; absent for a provider with no incremental support,
+    // e.g. codex, so the drill-down simply stays fetch-once).
+    if (live && d.pos != null) connectAgentStream(live.sid, live.aid, d.pos, list);
   }).catch(() => {
     if (!container.isConnected) return;
     container.textContent = "";
     container.append(el("div", "empty", "no transcript available for " + title));
   });
+}
+
+/* The live agent timeline stream: appends new increment `entries` at the
+   bottom (the timeline reads chronological top-down) and applies `resolve`
+   events — a tool_result that arrived in a later increment than its tool_use —
+   by finding the tool entry via its data-tool-id and filling in the result.
+   Reconnects (like the per-session stream) resume at the latest byte cursor so
+   nothing repeats. */
+function connectAgentStream(sid, aid, pos, list) {
+  let cur = pos;
+  const es = new EventSource("/events/agent/" + encodeURIComponent(sid)
+                             + "/" + encodeURIComponent(aid) + "?pos=" + cur);
+  S.ses.agentEs = es;
+  es.addEventListener("entries", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.pos != null) cur = d.pos;
+    const empty = list.querySelector(".empty");
+    if (empty) empty.remove();
+    for (const ent of d.entries || []) list.append(timelineEntry(ent));
+  });
+  es.addEventListener("resolve", (e) => {
+    const d = JSON.parse(e.data);
+    if (d.pos != null) cur = d.pos;
+    for (const r of d.resolutions || []) applyResolution(list, r);
+  });
+  es.onerror = () => {
+    es.close();
+    if (!S.ses || S.ses.agentEs !== es) return;   // navigated away
+    S.ses.agentEs = null;
+    setTimeout(() => {
+      if (S.ses && S.ses.tab === "agent:" + aid && list.isConnected)
+        connectAgentStream(sid, aid, cur, list);
+    }, 1500);
+  };
+}
+
+// A resolution tuple [tool_use_id, output, failed] fills in a tool entry whose
+// tool_result arrived in a later increment; no matching entry (a genuine
+// orphan we never rendered) is a no-op.
+function applyResolution(list, r) {
+  const box = list.querySelector('[data-tool-id="' + cssq(r[0]) + '"]');
+  if (!box) return;
+  const region = toolResultRegion({ output: r[1], failed: !!r[2] });
+  const old = box.querySelector(".tout");
+  if (old) old.replaceWith(region);
+  else { const bd = box.querySelector(".bd"); if (bd) bd.append(region); }
+  const k = box.querySelector(".k");
+  if (k && r[2]) { k.classList.remove("k-tool"); k.classList.add("k-toolfail"); }
+  box.dataset.open = "1";                   // surface the freshly-arrived result
+}
+
+function cssq(s) {
+  s = String(s);
+  return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, "\\$&");
+}
+
+function closeAgentStream() {
+  if (S.ses && S.ses.agentEs) { S.ses.agentEs.close(); S.ses.agentEs = null; }
 }
 
 function timelineHead(d, title) {
@@ -868,14 +937,7 @@ function timelineEntry(ent) {
       bd.append(el("div", "lbl", "input"));
       bd.append(pre(JSON.stringify(ent.input, null, 2)));
     }
-    if (ent.output != null) {
-      const lbl = el("div", "lbl", ent.failed ? "output · failed" : "output");
-      if (ent.failed) lbl.classList.add("fail");
-      bd.append(lbl);
-      bd.append(ent.output_html != null ? htmlFrag(ent.output_html) : pre(ent.output));
-    } else {
-      bd.append(el("div", "lbl", "no result recorded"));
-    }
+    bd.append(toolResultRegion(ent));
   } else if (ent.t === "orphan-result") {
     kcls = "k-orphan"; ktxt = "result";
     sum = firstLine(ent.output); open = false;
@@ -890,9 +952,30 @@ function timelineEntry(ent) {
   sspan.append(document.createTextNode(sum || ""));
   hd.append(sspan);
   box.dataset.open = open ? "1" : "0";
+  // tool entries carry their tool_use id so a later `resolve` SSE event (a
+  // tool_result that landed in a subsequent increment) can find and fill them.
+  if (ent.t === "tool" && ent.id) box.dataset.toolId = ent.id;
   hd.onclick = () => { box.dataset.open = box.dataset.open === "1" ? "0" : "1"; };
   box.append(hd, bd);
   return box;
+}
+
+// The tool entry's result region (its own .tout block so a `resolve` event can
+// replace just it, leaving the input section intact). No output yet -> "no
+// result recorded"; the live resolve renders the output as a plain <pre> (the
+// lightweight resolution tuple carries no output_html — a rich re-render lands
+// on the next full fetch).
+function toolResultRegion(ent) {
+  const tout = el("div", "tout");
+  if (ent.output != null) {
+    const lbl = el("div", "lbl", ent.failed ? "output · failed" : "output");
+    if (ent.failed) lbl.classList.add("fail");
+    tout.append(lbl);
+    tout.append(ent.output_html != null ? htmlFrag(ent.output_html) : pre(ent.output));
+  } else {
+    tout.append(el("div", "lbl", "no result recorded"));
+  }
+  return tout;
 }
 
 function pre(text) { const p = el("pre"); p.textContent = text == null ? "" : String(text); return p; }
