@@ -936,6 +936,67 @@ def test_launch_argv_falls_back_to_zsh(monkeypatch):
     assert DS.launch_argv([])[0] == "/bin/zsh"
 
 
+def test_slash_commands_discovery(tmp_path, monkeypatch):
+    from plugins.claude_code import slashcmds
+    proj = tmp_path / "proj"
+    (proj / ".claude" / "commands" / "gh").mkdir(parents=True)
+    (proj / ".claude" / "commands" / "deploy.md").write_text(
+        "---\ndescription: ship it\n---\nbody\n")
+    (proj / ".claude" / "commands" / "gh" / "fix.md").write_text(
+        "Fix a GitHub issue\n")
+    skill = proj / ".claude" / "skills" / "audit-debug"
+    skill.mkdir(parents=True)
+    (skill / "SKILL.md").write_text(
+        "---\nname: audit-debug\ndescription: triage the audit\n---\n")
+    user = tmp_path / "userclaude"
+    (user / "commands").mkdir(parents=True)
+    (user / "commands" / "deploy.md").write_text(
+        "---\ndescription: user-level deploy\n---\n")
+    (user / "commands" / "standup.md").write_text("# Daily standup notes\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(user))
+    # env pinning must NOT redirect an arbitrary-cwd lookup (env_pin=False):
+    # the dashboard resolves OTHER sessions' cwds, whatever spawned it
+    other = tmp_path / "other" / ".claude" / "commands"
+    other.mkdir(parents=True)
+    (other / "pinned.md").write_text("must not appear\n")
+    monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path / "other"))
+    cmds = {c["name"]: c for c in slashcmds.slash_commands(str(proj))}
+    assert cmds["compact"]["src"] == "built-in"
+    assert cmds["deploy"] == {"name": "deploy", "desc": "ship it",
+                              "src": "project"}    # project shadows user
+    assert cmds["gh:fix"]["desc"] == "Fix a GitHub issue"   # namespaced, first line
+    assert cmds["audit-debug"] == {"name": "audit-debug",
+                                   "desc": "triage the audit",
+                                   "src": "project skill"}
+    assert cmds["standup"] == {"name": "standup",
+                               "desc": "Daily standup notes", "src": "user"}
+    assert "pinned" not in cmds
+    names = [c["name"] for c in slashcmds.slash_commands(str(proj))]
+    assert names == sorted(names)
+    # no cwd → built-ins + user-level only (no getcwd fallback walk)
+    cmds = {c["name"]: c for c in slashcmds.slash_commands("")}
+    assert "standup" in cmds and "deploy" in cmds and "gh:fix" not in cmds
+    assert cmds["deploy"]["desc"] == "user-level deploy"
+
+
+def test_http_session_commands(dash, tmp_path, monkeypatch):
+    proj = tmp_path / "cproj"
+    (proj / ".claude" / "commands").mkdir(parents=True)
+    (proj / ".claude" / "commands" / "ship.md").write_text(
+        "---\ndescription: ship\n---\n")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-such-claude"))
+    monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
+    A.session_start({"session_id": "cmdsid", "cwd": str(proj),
+                     "transcript_path": ""})
+    rows = _get_json(dash + "/api/session/cmdsid/commands")
+    byname = {c["name"]: c for c in rows}
+    assert byname["ship"]["src"] == "project"
+    assert byname["compact"]["src"] == "built-in"
+    # unknown sid: no cwd resolves — still the built-ins, never an error
+    rows = _get_json(dash + "/api/session/nosuchsid/commands")
+    assert any(c["name"] == "compact" for c in rows)
+
+
 def test_notifier_ignores_windowless_transitions(monkeypatch):
     n = DS.Notifier()
     n.winmap = {}                             # no session known for the window

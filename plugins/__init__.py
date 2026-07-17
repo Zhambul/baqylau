@@ -116,6 +116,25 @@ def session_title(transcript_path):
     return ""
 
 
+def slash_commands(cwd):
+    """Slash-command fan-out for the web composer's "/" menu (cwd-keyed like
+    session_title is path-keyed — the caller already holds the session's cwd):
+    concatenates every plugin's [{name, desc, src}, …], first occurrence of a
+    name wins (claude_code is the only provider today). Same exception
+    contract as census()/activity(): the caller is the read-side dashboard,
+    not a hook."""
+    out, seen = [], set()
+    for p in all_plugins():
+        fn = getattr(p, "slash_commands", None)
+        if fn is None:
+            continue
+        for c in fn(cwd) or []:
+            if c.get("name") not in seen:
+                seen.add(c.get("name"))
+                out.append(c)
+    return out
+
+
 def conversation(sid, pos=0):
     """Main-thread conversation records from byte `pos` for the dashboard's
     merged mirror stream: (records, new_pos) from the first plugin that

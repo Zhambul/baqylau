@@ -123,7 +123,10 @@ parsing, the `PRICES` table, `cost_usd`, the `usage_fold` message-id dedup,
 `tools.py` (Claude's built-in tool payload shapes: `parse_redirect`,
 `diff_counts`, `read_extent`, `edit_range`, `FILE_LABEL`/`FILE_RGB`),
 `model.py` (was `claude_model.py`, plus `claude_dirs`), `msgs.py` (was
-`claude_msgs.py`), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+`claude_msgs.py`), `slashcmds.py` (slash-command discovery for the web
+composer's "/" menu: the curated `BUILTINS` snapshot + the cwd's
+`.claude/commands`/`.claude/skills` walk, behind the `plugins.slash_commands`
+fan-out — see [dashboard.md](dashboard.md)), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
 `file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the
 single per-event **`dispatch.py`** (behind the `claude-hook.py` entry — reads
 the payload once and fans out in-process to the tab dispatch, the right

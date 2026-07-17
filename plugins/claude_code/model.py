@@ -35,7 +35,7 @@ def config_dir():
     return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
 
-def claude_dirs(start=None, nearest_only=False):
+def claude_dirs(start=None, nearest_only=False, env_pin=True):
     """Every `.claude` directory to consult for project-level config (agents, settings),
     NEAREST-FIRST, always ending with the user config dir (config_dir()). Used instead
     of a bare os.getcwd() lookup, because a subagent/teammate frequently runs in a
@@ -56,9 +56,14 @@ def claude_dirs(start=None, nearest_only=False):
     the repo-root `.claude` above it. Nearest-first means a more-specific dir still
     overrides a parent. Since the agent-defs here are UNTRACKED (present only in the main
     working tree, absent from worktree checkouts), a nested worktree resolves up to the
-    main repo's defs correctly."""
+    main repo's defs correctly.
+
+    env_pin=False ignores $CLAUDE_PROJECT_DIR entirely: a caller resolving an
+    ARBITRARY directory's config (the dashboard's slash-command discovery walks
+    OTHER sessions' cwds) must not have every lookup pinned to whatever project
+    happened to spawn the calling process."""
     dirs = []
-    env = (os.environ.get("CLAUDE_PROJECT_DIR") or "").strip()
+    env = (os.environ.get("CLAUDE_PROJECT_DIR") or "").strip() if env_pin else ""
     if env:
         c = os.path.join(env, ".claude")
         if os.path.isdir(c):

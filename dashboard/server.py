@@ -627,6 +627,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(tl if tl is not None else {"entries": []})
             if rest == ["errors"]:
                 return self._json(API.errors(sid))
+            if rest == ["commands"]:
+                # the composer's "/" menu: built-ins + the session cwd's
+                # discovered .claude commands/skills (plugins.slash_commands)
+                row = API.session_row(sid) or {}
+                return self._json(plugins.slash_commands(row.get("cwd") or ""))
             if len(rest) == 2 and rest[0] == "view":
                 html = view_payload(sid, rest[1])
                 if html is None:

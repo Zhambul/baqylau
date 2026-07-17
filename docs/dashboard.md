@@ -183,10 +183,11 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
+| `/api/session/<sid>/commands` | the composer's "/" menu: `[{name, desc, src}, …]` — CLI built-ins + the session cwd's discovered `.claude` commands/skills (`plugins.slash_commands`) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); 409 headless, 400 empty, 503 no terminal |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "prompt"?}` → launch `claude [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "model"?, "effort"?, "prompt"?}` → launch `claude [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd/model/effort, 503 no terminal |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
@@ -245,6 +246,27 @@ window (same scoping as tab colours and toasts), so it returns `409` — the
 composer is disabled with a hint for it. Empty text is `400`. The text rides
 kitten's `--stdin` verbatim (no shell, no escape interpretation).
 
+**The composer's "/" menu.** A leading `/` with no whitespace yet opens a
+Claude-Code-style completion menu over `GET /api/session/<sid>/commands`
+(fetched once per session view): ↑/↓ move, Tab completes, Enter completes a
+*partial* token but sends when the token already IS the selection (a
+fully-typed `/compact` sends on one Enter), Esc closes. The list is
+`plugins.slash_commands(cwd)` → `plugins/claude_code/slashcmds.py`: a curated
+`BUILTINS` snapshot of the CLI's built-in commands plus the session cwd's
+discovered custom entries — `commands/**/*.md` (subdirectory-namespaced,
+`gh/fix.md` → `/gh:fix`) and `skills/*/SKILL.md` from every ancestor
+`.claude/` (`model.claude_dirs` with `env_pin=False`: the lookup is for an
+ARBITRARY session's cwd, and a dashboard that happened to be spawned from
+inside some session must not have `$CLAUDE_PROJECT_DIR` pin every lookup to
+that project). Descriptions come from the file's frontmatter `description:`,
+else its first body line. Dedup is by name, built-ins first (the TUI resolves
+those names to itself regardless of what a same-named custom file claims),
+then nearest-first (a project command shadows a user-level one). **The TUI
+stays authoritative**: sending just types `/name …` into the terminal and
+Claude Code's own palette parses and executes it — the menu only has to be
+good enough to complete against, never to validate, so `BUILTINS` drifting
+behind the CLI is harmless (an un-listed command still types fine).
+
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
 `_MODEL_OK` (one clean argv word — an alias like `opus` or a full id like
@@ -266,6 +288,18 @@ prompt rides as a positional `"$@"` arg, never interpolated. Non-POSIX `$SHELL`
 socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
 is `False`, `_frontend()` returns `None`, and both endpoints return a clean
 `503`, never a 500 traceback.
+
+**Jump to the new session.** The launch response carries no session id — none
+exists yet (the session appears through its own `SessionStart`; the server
+deliberately returns no synthetic row, and inventing one would desync the
+list). So the *client* watches: on a successful launch `app.js` stashes the
+sids it already knows plus the launched cwd (`armJump`), and every following
+global `sessions` snapshot is checked (`checkJump`) for a NEW live row in that
+cwd — the first match navigates the browser to it. The watch is cancelled when
+the user opens any session themselves (`route()` clears it on user navigation
+— `checkJump` disarms *before* setting the hash so its own jump doesn't read
+as one) and by a 120 s timeout, so a launch that never produces a session
+(claude failed to start) can't yank the browser somewhere minutes later.
 
 **Audit.** Every attempt lands a `state_files` row: `web-send`
 (`{win, chars, ok}`, keyed to the session's state-DB path) and `web-launch`

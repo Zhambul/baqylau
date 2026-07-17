@@ -21,7 +21,9 @@ const S = {
   ses: null,             // per-session state {es, lastId, stream, stats, agents, costs, meta, timer}
   esGlobal: null,
   folds: new Set(),      // open parked/archived subdivisions ("<cwd>|parked") —
-};                       // survives the list re-renders SSE snapshots trigger
+                         // survives the list re-renders SSE snapshots trigger
+  jump: null,            // pending jump-to-new-session watch ({cwd, known, until})
+};
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 
@@ -186,6 +188,7 @@ function connectGlobal() {
     if (!S.cur) renderList();
     else updateHeadFromList();
     renderAttention();
+    checkJump();
   });
   es.addEventListener("notify", (e) => {
     const d = JSON.parse(e.data);
@@ -204,6 +207,9 @@ window.addEventListener("hashchange", route);
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   if (parts[0] === "s" && parts[1]) {
+    S.jump = null;      // the user picked a session themselves — the pending
+    //                     auto-jump is stale (checkJump clears BEFORE navigating,
+    //                     so its own hash change never lands here armed)
     const sid = decodeURIComponent(parts[1]);
     if (parts[2] === "a" && parts[3]) return showAgent(sid, decodeURIComponent(parts[3]));
     return showSession(sid, parts[2] || "mirror");
@@ -717,6 +723,14 @@ function buildFilterBar() {
 // with a hint when the session isn't live or has no window (a headless/daemon
 // session — the /message endpoint would 409). The sent text surfaces in the
 // stream on its own via the conversation tail, so we only clear + toast.
+//
+// The "/" menu (Claude-Code-style): a leading "/" with no whitespace yet opens
+// a completion menu over GET /api/session/<sid>/commands (built-ins + the
+// session cwd's .claude commands/skills — fetched once per session view).
+// ↑/↓ move, Tab completes, Enter completes a PARTIAL token but sends when the
+// token already IS the selection (so a fully-typed "/compact" sends on one
+// Enter), Esc closes. The TUI stays authoritative — sending just types the
+// command into the terminal and Claude Code's own palette executes it.
 
 function autoGrow(ta) {
   ta.style.height = "auto";
@@ -750,13 +764,116 @@ function buildComposer() {
         if (ses.composer === ta) { ta.disabled = !canSend; btn.disabled = !canSend; ta.focus(); }
       });
   };
-  ta.oninput = () => autoGrow(ta);
+  // --- the "/" command menu ---
+  const menu = el("div", "cmenu");
+  menu.hidden = true;
+  let mItems = [], mSel = 0;
+
+  const cmdsOnce = () => {
+    if (!ses.cmds)
+      ses.cmds = fetch("/api/session/" + encodeURIComponent(S.cur) + "/commands")
+        .then(r => r.ok ? r.json() : [])
+        .catch(() => []);
+    return ses.cmds;
+  };
+  // the current "/" token being completed, or null when the menu shouldn't
+  // show (no leading slash, or whitespace = arguments underway)
+  const token = () => {
+    const v = ta.value;
+    if (!v.startsWith("/")) return null;
+    const head = v.slice(1);
+    return /\s/.test(head) ? null : head;
+  };
+  const closeMenu = () => { menu.hidden = true; mItems = []; };
+  const complete = (c) => {
+    ta.value = "/" + c.name + " ";
+    closeMenu();
+    autoGrow(ta);
+    ta.focus();
+  };
+  const renderMenu = (list) => {
+    mItems = list.slice(0, 30);
+    if (!mItems.length) { closeMenu(); return; }
+    mSel = Math.min(mSel, mItems.length - 1);
+    menu.textContent = "";
+    mItems.forEach((c, i) => {
+      const row = el("div", "cmi" + (i === mSel ? " sel" : ""));
+      row.append(el("span", "cmname", "/" + c.name));
+      if (c.desc) row.append(el("span", "cmdesc", c.desc));
+      if (c.src && c.src !== "built-in") row.append(el("span", "cmsrc", c.src));
+      row.onmousedown = (e) => { e.preventDefault(); complete(c); };
+      menu.append(row);
+    });
+    menu.hidden = false;
+    if (menu.children[mSel]) menu.children[mSel].scrollIntoView({ block: "nearest" });
+  };
+  const refreshMenu = () => {
+    const tok = token();
+    if (tok === null) { closeMenu(); return; }
+    cmdsOnce().then(cmds => {
+      if (ses.composer !== ta || token() !== tok) return;   // view/input moved on
+      mSel = 0;
+      const q = tok.toLowerCase();
+      renderMenu(cmds.filter(c => c.name.toLowerCase().startsWith(q)));
+    });
+  };
+
+  ta.oninput = () => { autoGrow(ta); refreshMenu(); };
+  ta.onblur = () => setTimeout(closeMenu, 150);   // menu clicks preventDefault, so
+  //                                                 they never blur; this catches
+  //                                                 clicking elsewhere on the page
   ta.onkeydown = (e) => {
+    if (!menu.hidden && mItems.length) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        mSel = (mSel + (e.key === "ArrowDown" ? 1 : mItems.length - 1)) % mItems.length;
+        renderMenu(mItems);
+        return;
+      }
+      if (e.key === "Tab") { e.preventDefault(); complete(mItems[mSel]); return; }
+      if (e.key === "Escape") { e.stopPropagation(); closeMenu(); return; }
+      if (e.key === "Enter" && !e.shiftKey) {
+        if (token() !== mItems[mSel].name) {      // partial token: complete first
+          e.preventDefault();
+          complete(mItems[mSel]);
+          return;
+        }
+        closeMenu();                              // exact token: fall through to send
+      }
+    }
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
-  wrap.append(ta, btn);
+  wrap.append(ta, btn, menu);
   return wrap;
+}
+
+/* ---------- jump to a freshly launched session ---------- */
+// A web launch can't know its session id up front — the server deliberately
+// returns no synthetic row; the session appears through its own SessionStart.
+// So the launch stashes the sids we already know and every following global
+// snapshot is checked for a NEW live row in the launched cwd — the first match
+// navigates there. Cancelled when the user opens any session themselves
+// (route() clears the watch on user navigation) or by the timeout: a launch
+// that never produces a session (claude failed to start) must not yank the
+// browser somewhere minutes later.
+const JUMP_TIMEOUT_MS = 120000;
+
+function armJump(cwd) {
+  S.jump = { cwd, known: new Set(S.sessions.map(r => r.sid)),
+             until: Date.now() + JUMP_TIMEOUT_MS };
+}
+
+function checkJump() {
+  const j = S.jump;
+  if (!j) return;
+  if (Date.now() > j.until) { S.jump = null; return; }
+  const row = S.sessions.find(r => r.live && r.cwd === j.cwd && !j.known.has(r.sid));
+  if (!row) return;
+  S.jump = null;                       // clear FIRST — route() treats an armed
+  //                                      watch on a session hash as user intent
+  location.hash = "#/s/" + encodeURIComponent(row.sid);
+  toast("done", "session started", row.title || proj(row));
 }
 
 /* ---------- control plane: the new-session form ---------- */
@@ -840,7 +957,7 @@ function openNewSession(prefillCwd) {
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
     postJSON("/api/sessions/new", body)
-      .then(() => { closeNewSession(); toast("done", "launching…", cwd); })
+      .then(() => { armJump(cwd); closeNewSession(); toast("done", "launching…", cwd); })
       .catch(e => { submit.disabled = false; toast("ask", "launch failed", (e && e.error) || ""); });
   };
   submit.onclick = go;

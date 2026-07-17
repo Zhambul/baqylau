@@ -45,3 +45,11 @@ def conversation(sid, pos=0):
     for the dashboard's merged mirror stream. See transcript.conversation."""
     from plugins.claude_code import transcript
     return transcript.conversation_for(sid, pos)
+
+
+def slash_commands(cwd):
+    """The slash-command provider (plugins.slash_commands fan-out) — the CLI
+    built-ins + the cwd's discovered .claude commands/skills, for the web
+    composer's "/" menu. See slashcmds.py."""
+    from plugins.claude_code import slashcmds
+    return slashcmds.slash_commands(cwd)
