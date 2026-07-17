@@ -187,7 +187,8 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "model"?, "effort"?, "prompt"?}` → launch `claude [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd/model/effort, 503 no terminal |
+| `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `claude [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd/model/effort/resume, 503 no terminal |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
@@ -199,9 +200,10 @@ global) pushed over a held response — no websockets dependency, and
 
 ## Control plane (web writes)
 
-The dashboard was born read-only; these two POST endpoints deliberately break
+The dashboard was born read-only; these POST endpoints deliberately break
 that charter so you can drive a session from the browser: **message a running
-session** and **launch a new one**. Neither writes session state — they reach
+session**, **stop one** (close its tab), and **launch a new one** (fresh,
+`--continue`, or `--resume`). Neither writes session state — they reach
 the TERMINAL through the `Frontend` interface (`send_text` / `launch_tab`, over
 the same silenced `kitten @` machinery the tab painter uses), and Claude Code's
 own hooks then produce whatever state results. The dashboard stays a consumer of
@@ -315,6 +317,34 @@ socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
 is `False`, `_frontend()` returns `None`, and both endpoints return a clean
 `503`, never a 500 traceback.
 
+`POST /api/session/<sid>/stop` closes the session's whole kitty TAB
+(`Frontend.close_tab` → `kitten @ close-tab --match window_id:<win>` — the
+main window, mirror pane, and scorebar go together). This is a **graceful
+stop, not a kill**: kitty HUPs the tab's processes and Claude Code exits
+cleanly on SIGHUP, firing SessionEnd — so the normal end-of-session lifecycle
+(mirror park to `HISTORY_DIR`, audit `sessions` row closed with reason
+`other`, no `/tmp` leftovers) runs on its own. Verified empirically
+2026-07-18: launched a throwaway session, `close-tab`'d it, and confirmed the
+`ended_at`/`end_reason` audit row, the parked state DB, and the clean `/tmp`.
+Headless session (no window) is `409` — there is no tab to close. The page
+puts the button in the session head (live + windowed only) behind a two-step
+confirm (first click arms for 4 s, second fires); a parked session shows a
+**resume** button there instead, which opens the new-session form preset to
+`--resume <sid>`.
+
+**Resume / continue.** The new-session form's "start from" select maps to the
+CLI's own conversation-pickup flags: `continue` → `claude --continue` (the
+directory's most recent conversation), `resume: <sid>` → `claude --resume
+<sid>` — the resume options are the chosen directory's known sessions from the
+current snapshot (title + age), rebuilt as the directory field changes. The
+server validates `resume` against `_SID_OK` (one clean argv word, the same
+alphabet as the sid routes) and rejects `resume`+`continue` together (400,
+like the CLI); both ride as positional `"$@"` words ahead of
+`--model`/`--effort`/prompt, so the injection story is unchanged. A resumed
+conversation **forks to a new sid** (CLAUDE.md: resume forks) — nothing extra
+needed here: the adopt machinery handles the state hand-off as always, and the
+jump watch sees the new live row in the cwd and navigates to it.
+
 **Jump to the new session.** The launch response carries no session id — none
 exists yet (the session appears through its own `SessionStart`; the server
 deliberately returns no synthetic row, and inventing one would desync the
@@ -331,8 +361,9 @@ as one) and by a 120 s timeout, so a launch that never produces a session
 (`{win, chars, ok, tab}` — `tab` is the state at send time, so "my message
 vanished" is answerable as "it queued mid-turn"; keyed to the session's
 state-DB path) and `web-launch`
-(`{cwd, model, effort, ok}`, no session yet so log/path are empty). Failure paths (no window,
-no terminal, send/launch returned false) also write an `A.error` per the
+(`{cwd, model, effort, resume, cont, ok}`, no session yet so log/path are
+empty) and `web-stop` (`{win, ok}`). Failure paths (no window,
+no terminal, send/launch/close returned false) also write an `A.error` per the
 audit-before-swallow rule, so a "my message never arrived" report is answerable
 from the DB.
 

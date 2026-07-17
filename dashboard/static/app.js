@@ -979,7 +979,7 @@ function closeNewSession() {
   $modal.textContent = "";
 }
 
-function openNewSession(prefillCwd) {
+function openNewSession(prefillCwd, resumeSid) {
   $modal.textContent = "";
   const panel = el("div", "nspanel");
   panel.append(el("div", "nstitle", "new session"));
@@ -1000,6 +1000,37 @@ function openNewSession(prefillCwd) {
     dl.append(opt);
   }
   dirRow.append(dir, dl);
+
+  // start from: a fresh conversation (default), `claude --continue` (the
+  // directory's most recent conversation), or `claude --resume <sid>` — the
+  // resume options are this directory's known sessions from the snapshot,
+  // rebuilt when the directory changes. A resumed conversation forks to a
+  // new sid; the adopt machinery and the jump watch handle that on their own.
+  const startRow = el("label", "nsfield");
+  startRow.append(el("span", "nslabel", "start from"));
+  const start = el("select", "nsinput");
+  startRow.append(start);
+  const fillStart = () => {
+    const cwd = dir.value.trim();
+    const prev = start.value;
+    start.textContent = "";
+    const add = (v, txt) => { const o = el("option", "", txt); o.value = v; start.append(o); };
+    add("", "a fresh conversation");
+    add("continue", "continue the most recent conversation");
+    for (const row of S.sessions.filter(r => r.cwd === cwd).slice(0, 15))
+      add("resume:" + row.sid,
+          "resume · " + (row.title || shortSid(row.sid))
+          + (row.started_at ? " · " + ago(row.started_at) : ""));
+    start.value = [...start.options].some(o => o.value === prev) ? prev : "";
+  };
+  fillStart();
+  dir.oninput = fillStart;
+  if (resumeSid) {
+    const v = "resume:" + resumeSid;
+    if (![...start.options].some(o => o.value === v))
+      { const o = el("option", "", "resume · " + shortSid(resumeSid)); o.value = v; start.append(o); }
+    start.value = v;
+  }
 
   // model + effort side by side; "" = the CLI's own default (no flag sent)
   const pick = (label, opts) => {
@@ -1050,6 +1081,8 @@ function openNewSession(prefillCwd) {
     if (!cwd) { dir.focus(); return; }
     submit.disabled = true;
     const body = { cwd };
+    if (start.value === "continue") body.continue = true;
+    else if (start.value.startsWith("resume:")) body.resume = start.value.slice(7);
     if (model.value) body.model = model.value;
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
@@ -1061,7 +1094,7 @@ function openNewSession(prefillCwd) {
   cancel.onclick = closeNewSession;
   dir.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
 
-  panel.append(dirRow, split, promptRow, actions);
+  panel.append(dirRow, startRow, split, promptRow, actions);
   const back = el("div", "nsback");
   back.onclick = (e) => { if (e.target === back) closeNewSession(); };
   back.append(panel);
@@ -1099,6 +1132,45 @@ function renderSessionChrome(tab) {
                meta.live ? "live" : "parked"));
   if (meta.cwd) l1.append(el("span", "sid", meta.cwd));
   l1.append(el("span", "sid", shortSid(S.cur)));
+  // stop (live, windowed): closes the session's kitty tab — a graceful stop
+  // (Claude Code exits on the HUP and SessionEnd runs the normal lifecycle).
+  // Two-step confirm: first click arms for 4s, second click fires.
+  if (meta.live && meta.kitty_window_id) {
+    const stop = el("button", "sstop", "■ stop");
+    stop.title = "close this session's terminal tab";
+    let armed = null;
+    const disarm = () => {
+      armed = null;
+      stop.textContent = "■ stop";
+      stop.classList.remove("arm");
+    };
+    stop.onclick = () => {
+      if (!armed) {
+        stop.textContent = "close session?";
+        stop.classList.add("arm");
+        armed = setTimeout(disarm, 4000);
+        return;
+      }
+      clearTimeout(armed);
+      disarm();
+      stop.disabled = true;
+      postJSON("/api/session/" + encodeURIComponent(S.cur) + "/stop", {})
+        .then(() => toast("done", "session stopped", "terminal tab closed"))
+        .catch(e => {
+          stop.disabled = false;
+          toast("ask", "stop failed", (e && e.error) || "");
+        });
+    };
+    l1.append(stop);
+  }
+  // resume (parked, with a cwd): reopen the new-session form preset to
+  // `claude --resume <this sid>` in this session's directory
+  if (!meta.live && meta.cwd) {
+    const res = el("button", "sresume", "↻ resume");
+    res.title = "start a new tab resuming this conversation";
+    res.onclick = () => openNewSession(meta.cwd, S.cur);
+    l1.append(res);
+  }
   head.append(l1);
   const sr = el("div", "statsrow");
   ses.statsRow = sr;

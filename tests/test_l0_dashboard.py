@@ -744,6 +744,7 @@ class _FakeFE:
     def __init__(self, send_ok=True, launch_ok=True):
         self.sent = []
         self.launched = []
+        self.closed = []
         self.send_ok = send_ok
         self.launch_ok = launch_ok
 
@@ -753,6 +754,10 @@ class _FakeFE:
     def send_text(self, win, text):
         self.sent.append((win, text))
         return self.send_ok
+
+    def close_tab(self, win):
+        self.closed.append(win)
+        return True
 
     def launch_tab(self, cwd, argv):
         self.launched.append((cwd, argv))
@@ -961,6 +966,50 @@ def test_post_new_session_model_effort(dash, monkeypatch, tmp_path):
     n = len(fe.launched)
     for bad in ({"effort": "turbo"}, {"model": "opus high"},
                 {"model": "a b; c"}, {"model": 7}):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/sessions/new", dict({"cwd": str(tmp_path)}, **bad))
+        assert e.value.code == 400
+    assert len(fe.launched) == n
+
+
+def test_post_stop_closes_tab(dash, monkeypatch):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "55")
+    A.session_start({"session_id": "stop1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/stop1/stop", {})
+    assert code == 200 and json.loads(body) == {"ok": True}
+    assert fe.closed == ["55"]
+
+
+def test_post_stop_no_window_is_409(dash, monkeypatch):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)   # headless session
+    A.session_start({"session_id": "stop2", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/stop2/stop", {})
+    assert e.value.code == 409
+    assert fe.closed == []
+
+
+def test_post_new_session_resume_continue(dash, monkeypatch, tmp_path):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    sid = "85065b28-d9ea-4861-b209-bbc871e57357"
+    _post(dash + "/api/sessions/new",
+          {"cwd": str(tmp_path), "resume": sid, "prompt": "go on"})
+    assert fe.launched[-1][1][4:] == ["--resume", sid, "go on"]
+    _post(dash + "/api/sessions/new",
+          {"cwd": str(tmp_path), "continue": True, "model": "opus"})
+    assert fe.launched[-1][1][4:] == ["--continue", "--model", "opus"]
+    # continue: false is a no-flag no-op, not an error
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "continue": False})
+    assert fe.launched[-1][1][4:] == []
+    # invalid: bad resume id / non-bool continue / both at once → 400, no launch
+    n = len(fe.launched)
+    for bad in ({"resume": "x y; z"}, {"resume": 7}, {"continue": "yes"},
+                {"resume": sid, "continue": True}):
         with pytest.raises(urllib.error.HTTPError) as e:
             _post(dash + "/api/sessions/new", dict({"cwd": str(tmp_path)}, **bad))
         assert e.value.code == 400

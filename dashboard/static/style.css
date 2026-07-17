@@ -219,6 +219,16 @@ code, pre, .mono { font-family: var(--mono); }
 /* when the attention bar is showing it takes the 47px slot; drop shead below it */
 body.attn-on .shead { top: 81px; }
 .shead .l1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+/* stop (live) / resume (parked) session actions, pushed to the right edge */
+.sstop, .sresume {
+  margin-left: auto; flex: none; border: none; cursor: pointer;
+  background: transparent; color: var(--dim);
+  box-shadow: var(--card); border-radius: var(--r);
+  padding: 5px 12px; font: 600 11px/1 var(--sans);
+}
+.sstop:hover, .sresume:hover { color: var(--text); box-shadow: var(--card-hover); }
+.sstop.arm { color: #fff; background: var(--red, #b5484d); }
+.sstop:disabled { color: var(--dim2); cursor: default; }
 .shead .proj { color: var(--text); font-weight: 650; font-size: 15px; }
 .shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }
 .statsrow { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px;

@@ -63,6 +63,7 @@ CALLS = {
     # control plane (writes)
     "send_text":          (("7", "hello"), False),
     "launch_tab":         (("/tmp", ["claude"]), False),
+    "close_tab":          (("7",), False),
     # viewport scroll / read
     "scroll_window":      (("7", 12), 1),
     "scroll_window_fast": (("7", 12), False),
@@ -339,6 +340,19 @@ def test_launch_tab_argv(monkeypatch):
                       "--cwd", "/proj", "claude", "fix the bug"]]
     monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
     assert fe.launch_tab("/proj", ["claude"]) is False
+
+
+def test_close_tab_matches_containing_window(monkeypatch):
+    """close_tab → `kitten @ close-tab --match window_id:<win>` (the tab
+    CONTAINING that window). Truthy on rc 0."""
+    calls = []
+    monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
+    assert fe.close_tab("55") is True
+    assert calls == [["/k", "unix:/tmp/x", "close-tab",
+                      "--match", "window_id:55"]]
+    monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
+    assert fe.close_tab("55") is False
 
 
 def test_model_tail_scan_bytes():

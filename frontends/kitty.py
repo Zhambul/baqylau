@@ -103,6 +103,13 @@ def kitten_launch_tab(kitten, listen, cwd, argv):
                       "--cwd", cwd, *argv) == 0
 
 
+def kitten_close_tab(kitten, listen, win):
+    """`kitten @ close-tab --match window_id:<win>` — the tab CONTAINING that
+    window (kitty tab matching supports window_id). True on rc 0."""
+    return kitten_run(kitten, listen, "close-tab",
+                      "--match", f"window_id:{win}") == 0
+
+
 def kitten_ls(kitten, listen):
     """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
     try:
@@ -250,6 +257,9 @@ class KittyFrontend(Frontend):
 
     def launch_tab(self, cwd, argv):
         return kitten_launch_tab(self.kitten, self.listen, cwd, argv)
+
+    def close_tab(self, win):
+        return kitten_close_tab(self.kitten, self.listen, win)
 
     # --- window enumeration -----------------------------------------------------
     def ls(self):

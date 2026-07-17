@@ -697,6 +697,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "message":
             return self.post_message(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "stop":
+            return self.post_stop(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         return self._json({"error": "not found"}, 404)
@@ -776,14 +779,47 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
 
+    def post_stop(self, sid):
+        """Close a session's kitty tab (Frontend.close_tab — main window +
+        mirror + scorebar at once). This is a GRACEFUL stop, not a kill: kitty
+        HUPs the tab's processes, Claude Code exits and fires SessionEnd, and
+        the normal end-of-session lifecycle (mirror park, audit close) runs on
+        its own — verified empirically 2026-07-18 (docs/dashboard.md). 409
+        when the session has no window (headless — nothing to close); 503
+        when no terminal resolves. Every attempt is a `web-stop` state_files
+        row, failures also an A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        win = str(row.get("kitty_window_id") or "")
+        if not win:
+            A.state_file(log, sdb, "web-stop", {"win": "", "ok": False})
+            return self._json({"error": "session has no window (headless)"}, 409)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard stop (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-stop", {"win": win, "ok": False})
+            return self._json({"error": "no terminal available"}, 503)
+        ok = bool(fe.close_tab(win))
+        A.state_file(log, sdb, "web-stop", {"win": win, "ok": ok})
+        if not ok:
+            A.error(log, "dashboard stop (close failed)",
+                    {"sid": sid, "win": win})
+            return self._json({"error": "close failed"}, 502)
+        return self._json({"ok": True})
+
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the
-        cwd isn't an existing directory or model/effort don't validate (model:
-        one clean argv word; effort: the CLI's EFFORTS levels); 503 when no
-        terminal resolves; else the launch, with `--model`/`--effort` riding as
-        positional "$@" words ahead of the prompt. Audited as a `web-launch`
-        state_files row (no session db exists yet, so its log/path are
-        empty)."""
+        cwd isn't an existing directory or model/effort/resume/continue don't
+        validate (model: one clean argv word; effort: the CLI's EFFORTS levels;
+        resume: a clean session id, exclusive with continue); 503 when no
+        terminal resolves; else the launch, with `--resume <sid>`/`--continue`
+        and `--model`/`--effort` riding as positional "$@" words ahead of the
+        prompt. Audited as a `web-launch` state_files row (no session db
+        exists yet, so its log/path are empty)."""
         body = self._post_guard()
         if body is None:
             return
@@ -804,13 +840,35 @@ class Handler(BaseHTTPRequestHandler):
             A.error("", "dashboard new-session (bad effort)",
                     {"effort": repr(effort)})
             return self._json({"error": "invalid effort"}, 400)
+        # resume / continue — the CLI's own conversation-pickup flags. resume
+        # carries a session id (one clean argv word, same alphabet as our sid
+        # routing); continue is a bare flag. Mutually exclusive, like the CLI.
+        # A resumed conversation FORKS to a new sid; the existing adopt
+        # machinery and the page's jump watch both handle that on their own.
+        resume, cont = body.get("resume"), body.get("continue")
+        if resume is not None and (
+                not isinstance(resume, str) or not _SID_OK.match(resume)):
+            A.error("", "dashboard new-session (bad resume)",
+                    {"resume": repr(resume)})
+            return self._json({"error": "invalid resume id"}, 400)
+        if cont not in (None, False, True):
+            A.error("", "dashboard new-session (bad continue)",
+                    {"continue": repr(cont)})
+            return self._json({"error": "invalid continue"}, 400)
+        if resume and cont:
+            A.error("", "dashboard new-session (resume+continue)",
+                    {"resume": repr(resume)})
+            return self._json({"error": "resume and continue are exclusive"}, 400)
         prompt = body.get("prompt")
-        words = ((["--model", model] if model else [])
+        words = ((["--resume", resume] if resume else [])
+                 + (["--continue"] if cont else [])
+                 + (["--model", model] if model else [])
                  + (["--effort", effort] if effort else [])
                  + ([prompt] if isinstance(prompt, str) and prompt.strip()
                     else []))
         argv = launch_argv(words)
-        opts = {"cwd": cwd, "model": model or "", "effort": effort or ""}
+        opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
+                "resume": resume or "", "cont": bool(cont)}
         fe = _frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})

@@ -149,6 +149,14 @@ class Frontend:
         `cwd`. Truthy on success, False on failure."""
         return False
 
+    def close_tab(self, win):
+        """Close the whole tab CONTAINING window `win` (the session's main
+        window + its mirror/scorebar panes). The session process gets SIGHUP
+        and exits gracefully — Claude Code fires SessionEnd on it (verified
+        2026-07-18, docs/dashboard.md), so the normal end-of-session lifecycle
+        (mirror park, audit close) runs on its own. True on success."""
+        return False
+
     # --- viewport scroll / read ---------------------------------------------
     # Slice consumers: claude-mirror.py only (the renderer's click-to-view
     # scroll restore + get_text scroll-position anchor). A frontend without
