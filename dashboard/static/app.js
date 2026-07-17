@@ -72,6 +72,14 @@ const TAB_LABEL = {
   "awaiting-command": "asking you", "awaiting-response": "your turn",
 };
 
+/* The "running now" ribbon: glyph + short label per live `live`-table slot kind
+   (sessionapi.running() — fg command, bg jobs, monitors, streaming agents). */
+const RUN_GLYPH = {
+  "fg": ["⚙", "fg"], "bg": ["⏳", "bg"], "monitor": ["👁", "monitor"],
+  "sub.pid": ["◇", "agent"], "codex": ["◆", "codex"],
+};
+const RUN_ORDER = ["fg", "bg", "monitor", "sub.pid", "codex"];
+
 /* ---------- toasts + OS notifications ---------- */
 
 function toast(kind, t1, t2, onclick) {
@@ -255,7 +263,7 @@ function showSession(sid, tab) {
     leaveSession();
     S.cur = sid;
     S.ses = { lastId: 0, mpos: 0, stream: el("div", "stream"), stats: {}, agents: [],
-              costs: null, meta: null, es: null, timer: null, poll: null,
+              costs: null, running: {}, meta: null, es: null, timer: null, poll: null,
               blocks: new Map(),
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
@@ -267,6 +275,7 @@ function showSession(sid, tab) {
         S.ses.stats = d.stats || {};
         S.ses.agents = d.agents || [];
         S.ses.costs = d.costs || null;
+        S.ses.running = d.running || {};
         renderSessionChrome(tab);
       });
     connectSession(sid);
@@ -296,6 +305,7 @@ function connectSession(sid) {
   es.addEventListener("stats", (e) => { S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
   es.addEventListener("costs", (e) => { S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
+  es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
@@ -531,8 +541,12 @@ function renderSessionChrome(tab) {
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
   head.append(sr);
+  const rr = el("div", "runrow");
+  ses.runRibbon = rr;
+  head.append(rr);
   $view.append(head);
   updateStatsRow();
+  updateRunning();
 
   const tabs = el("div", "tabs");
   const mk = (key, label, count) => {
@@ -608,6 +622,32 @@ function updateStatsRow() {
         (st.msg_read ? " · " + st.msg_read + " read" : ""));
   const errn = (ses.meta && ses.meta.error_count) || 0;
   if (errn) add("", "⚠ " + errn, "warn");
+}
+
+/* The "running now" ribbon — one chip per alive `live`-table slot row
+   (sessionapi.running(), grouped by kind), hidden when nothing is running.
+   Live-updated by the `running` SSE event. */
+function updateRunning() {
+  const ses = S.ses;
+  if (!ses || !ses.runRibbon) return;
+  const run = ses.running || {};
+  const rr = ses.runRibbon;
+  rr.textContent = "";
+  const kinds = RUN_ORDER.concat(
+    Object.keys(run).filter(k => !RUN_ORDER.includes(k)));
+  let any = false;
+  for (const kind of kinds) {
+    const rows = run[kind];
+    if (!rows || !rows.length) continue;
+    const [glyph, label] = RUN_GLYPH[kind] || ["•", kind];
+    for (let i = 0; i < rows.length; i++) {
+      any = true;
+      const chip = el("span", "rchip rk-" + kind.replace(".", "-"));
+      chip.append(el("span", "rg", glyph), document.createTextNode(" " + label));
+      rr.append(chip);
+    }
+  }
+  rr.style.display = any ? "" : "none";
 }
 
 function agentStatus(a) {

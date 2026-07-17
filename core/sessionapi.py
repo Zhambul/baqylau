@@ -297,6 +297,25 @@ def costs(sid):
             "total_usd": sum(cost.values())}
 
 
+def running(sid):
+    """What is EXECUTING under a session right now, grouped by kind — the read
+    model over the state DB's `live` slot table (core/slots.py, S.live_at). It
+    resolves state_db_for(sid) (live or parked — a parked session's rows are all
+    dead) and keeps only rows whose owning pid is still alive, grouped by kind:
+    {kind: [row, ...]} (kinds 'fg'/'bg'/'monitor'/'sub.pid'; the pid-less
+    colour-mapping '<k>.id' rows never survive the alive filter). Empty dict when
+    nothing is live. The dashboard's "running now" ribbon renders one chip per
+    row; a parked session yields {}. A pure reader — never steals a stale slot."""
+    sdb = state_db_for(sid)
+    out = {}
+    if not sdb:
+        return out
+    for row in S.live_at(sdb):
+        if row.get("alive"):
+            out.setdefault(row["kind"], []).append(row)
+    return out
+
+
 def errors(sid):
     """Swallowed-exception rows for a session (chain-aware), oldest first —
     the same evidence errors-CLI/errwatch surface, as dicts."""

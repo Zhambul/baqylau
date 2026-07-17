@@ -185,6 +185,28 @@ code, pre, .mono { font-family: var(--mono); }
 .statsrow .cost { color: var(--orange); }
 .statsrow .warn { color: var(--amber); }
 
+/* "running now" ribbon — one chip per live slot (sessionapi.running()) */
+.runrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.rchip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 1px 8px; border-radius: 999px;
+  font-size: 11px; font-family: var(--mono);
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--mid) 6%, transparent);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+.rchip .rg { font-size: 10px; opacity: .95; }
+.rchip.rk-fg { color: var(--blue);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 34%, transparent); }
+.rchip.rk-bg { color: var(--orange);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--orange) 34%, transparent); }
+.rchip.rk-monitor { color: var(--busy);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--busy) 34%, transparent); }
+.rchip.rk-sub-pid { color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 34%, transparent); }
+.rchip.rk-codex { color: var(--done);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 34%, transparent); }
+
 .tabs { display: flex; gap: 2px; margin: 16px 0 12px;
   box-shadow: inset 0 -1px 0 var(--hair); }
 .tabs a {

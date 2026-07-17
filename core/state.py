@@ -511,6 +511,32 @@ def agents_at(path):
         conn.close()
 
 
+def live_at(path):
+    """Every `live` slot row (core/slots.py's palette + liveness table) as dicts,
+    read-only over an explicit DB path — the ground truth of what is EXECUTING
+    under a session right now: numeric palette slots (kind 'fg'/'bg'/'monitor',
+    key = the slot index) whose pid is the tailer/streamer, the per-agent
+    substream tailer pids (kind 'sub.pid', key = the agent_id), and the pid-less
+    colour-mapping rows (kind '<k>.id'). Each row carries an `alive` verdict from
+    pid_alive() (EPERM = alive — the one canonical probe; a pid-less colour row
+    reads not-alive). This is a READER: it never steals a stale slot the way
+    slots.claim() does (readers never write). [] when the file is missing. The
+    `key` column IS the entry's identity (slot index or agent_id); `slot` is the
+    palette index."""
+    conn = _ro(path)
+    if conn is None:
+        return []
+    try:
+        return [{"kind": kind, "key": key, "pid": pid, "slot": idx,
+                 "start_ts": ts, "alive": pid_alive(pid)}
+                for kind, key, pid, idx, ts in conn.execute(
+                    "SELECT kind, key, pid, idx, start_ts FROM live")]
+    except Exception:
+        return []
+    finally:
+        conn.close()
+
+
 def kv_at(path, key):
     """kv_get() over an explicit DB path, read-only — for consumers reading a
     session's kv rows (the click-to-view `view:<gid>` stashes) without the

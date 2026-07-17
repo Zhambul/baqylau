@@ -272,6 +272,22 @@ one that's merely thin (desc but no transcript yet) renders dim and stays
 clickable — the layout-derivation fallback in `plugins.activity` sometimes
 finds a transcript the audit never saw.
 
+## The "running now" ribbon
+
+The session header carries a compact ribbon under the stats row — one chip per
+thing EXECUTING under the session right now: the foreground command tailer
+(`⚙ fg`), background jobs (`⏳ bg`), monitors (`👁 monitor`), and streaming
+subagents/teammates (`◇ agent`), each tinted by kind. It is fed by the state
+DB's `live` slot table (`core/slots.py`), the same ground truth the tab
+tracker's blue-while-busy signal reads — NOT the audit `streams` table (which
+records lifetimes, not liveness). `sessionapi.running(sid)` resolves
+`state_db_for(sid)` and returns only rows whose owning pid is still alive
+(`state.live_at`'s `pid_alive` verdict — EPERM = alive; the reader never steals
+a stale slot the way `slots.claim` does), grouped by kind. It rides
+`session_payload` as `running` and is pushed as a `running` SSE event on change
+(the same only-on-change, slow-tick cadence as `agents`/`costs`). A parked
+session's rows are all dead, so its ribbon is empty (hidden).
+
 ## Codex runs in the agents list
 
 A session's codex runs ride the same agents list and drill-down, with no

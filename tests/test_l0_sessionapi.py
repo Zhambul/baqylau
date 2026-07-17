@@ -169,6 +169,44 @@ def test_errors_are_fork_aware_and_ordered(monkeypatch, tmp_path):
     assert [e["func"] for e in errs] == ["first thing", "second thing"]
 
 
+def test_live_at_and_running_group_only_alive_rows(monkeypatch, tmp_path):
+    """live_at surfaces every `live` slot row with a pid_alive verdict; running()
+    resolves the state DB and returns only alive rows grouped by kind. Slots are
+    seeded via the product writers (core.slots) so a schema change breaks here."""
+    import subprocess
+
+    from core import slots
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    log = P.mirror_log("run-sess")
+    # a live fg command tailer + a live per-agent substream pid (this process
+    # owns both -> pid_alive True)
+    _, fg_tok = slots.claim("fg", log)
+    assert fg_tok is not None
+    slots.set_owner(fg_tok, os.getpid())
+    slots.pid_set(log, "agentX", os.getpid())
+    # a stale/leaked bg slot whose owning pid is dead — a reader must NOT trust it
+    # as running (set_owner is a product path; no direct SQL seeding needed)
+    _, bg_tok = slots.claim("bg", log)
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    slots.set_owner(bg_tok, dead.pid)
+
+    sdb = API.state_db_for("run-sess")
+    rows = {(r["kind"], r["key"]): r for r in S.live_at(sdb)}
+    assert rows[("fg", "0")]["alive"] is True and rows[("fg", "0")]["slot"] == 0
+    assert rows[("sub.pid", "agentX")]["alive"] is True
+    assert rows[("bg", "0")]["alive"] is False           # dead owner
+
+    run = API.running("run-sess")
+    assert set(run) == {"fg", "sub.pid"}                 # the dead bg row is dropped
+    assert run["fg"][0]["key"] == "0"
+    assert run["sub.pid"][0]["key"] == "agentX"
+    # a session with no state DB (never created) -> empty, no DB conjured
+    assert API.running("nobody") == {}
+    assert S.live_at(str(tmp_path / "claude-mirror-nobody.log.state.db")) == []
+
+
 def test_session_overview_composes(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))

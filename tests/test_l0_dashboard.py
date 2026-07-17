@@ -6,6 +6,7 @@
 # like test_l0_sessionapi.py.
 import gzip
 import json
+import os
 import sys
 import threading
 import urllib.error
@@ -261,6 +262,38 @@ def test_http_sessions_and_ops(dash):
     # the overview composes without error even for a minimal session
     ov = _get_json(dash + "/api/session/dash1")
     assert ov["sid"] == "dash1" and ov["live"] is True
+
+
+def _sse_event(url, want, timeout=10):
+    """Read a per-session SSE stream until an `event: <want>` frame arrives and
+    return its data payload (raw JSON string); '' on timeout/EOF."""
+    r = _req(url, timeout=timeout)
+    try:
+        pending = None
+        for raw in r:
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if line.startswith("event: "):
+                pending = line[len("event: "):]
+            elif line.startswith("data: ") and pending == want:
+                return line[len("data: "):]
+        return ""
+    finally:
+        r.close()
+
+
+def test_running_ribbon_payload_and_sse(dash):
+    """session_payload carries the live-slot ribbon (sessionapi.running()), and
+    the per-session SSE announces it as a `running` event."""
+    from core import slots
+    A.session_start({"session_id": "run1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("run1")
+    slots.claim("monitor", log)                    # owned by THIS process -> alive
+    slots.pid_set(log, "agentR", os.getpid())
+    run = _get_json(dash + "/api/session/run1")["running"]
+    assert "monitor" in run and run["monitor"][0]["alive"] is True
+    assert "sub.pid" in run and run["sub.pid"][0]["key"] == "agentR"
+    data = _sse_event(dash + "/events/session/run1?after=0&mpos=0", "running")
+    assert data and "monitor" in json.loads(data)
 
 
 def test_http_copy_and_view(dash):
