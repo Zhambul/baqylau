@@ -57,8 +57,15 @@ domain name, no client app".
      - service: http_status:404
    ```
 
-   `sudo cloudflared service install` runs it as a LaunchDaemon so it
-   survives reboots.
+   Persistence (as deployed): a user LaunchAgent at
+   `~/Library/LaunchAgents/top.zhambyl.dash-tunnel.plist` running
+   `cloudflared tunnel run claude-dash` (`RunAtLoad` + `KeepAlive`, log at
+   `~/Library/Logs/dash-tunnel.log`) — starts at login, restarts on crash.
+   Why not the alternatives: `brew services start cloudflared` runs the
+   binary with NO arguments (it prints "use cloudflared tunnel run" and
+   exits — the service shows Loaded but never Running), and
+   `sudo cloudflared service install` (a root LaunchDaemon) buys nothing
+   here since the dashboard itself needs the user session anyway.
 4. **Cloudflare Access** (the non-negotiable part): Zero Trust dashboard →
    Access → Applications → Add self-hosted app for `dash.zhambyl.top`,
    policy = Allow, include = your email(s), one-time PIN (or Google) as the
@@ -75,6 +82,14 @@ domain name, no client app".
    ```
 
    Restart the dashboard once after setting it.
+
+**Deployed 2026-07-17**: tunnel `claude-dash`
+(id `0d364fb6-12b7-4fe5-a611-f0a3b44d5f1b`), hostname `dash.zhambyl.top`,
+Access team `fancy-sound-68a3`, one Allow policy (email OTP). Fail-closed
+verified from outside: `/`, `/api/sessions`, `/events`, and a POST with the
+app's own headers all 302 to the Access login with zero rows reaching the
+local server; Universal SSL took ~9 min to issue after the zone went active
+(handshake failures until then are normal for a fresh zone).
 
 ## Day-to-day
 
