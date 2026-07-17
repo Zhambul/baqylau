@@ -1,0 +1,161 @@
+# The web dashboard (`dashboard/` + `bin/claude-dashboard.py`)
+
+A localhost web UI over the whole session estate: every session (live and
+parked) with its mirror stream, scoreboard stats, agents, costs and errors —
+plus the two things a terminal pane can't give you: **drill-down into any
+agent's full activity timeline** and **toast/OS notifications across all
+sessions** when a session starts asking you something or finishes its turn.
+
+It is a CONSUMER, not a producer: everything it shows comes through
+`core/sessionapi.py` (the one read-side door — [sessionapi.md](sessionapi.md))
+and `plugins.activity()`. It writes no session state; its only writes are its
+own singleton pid-lock and audit rows.
+
+```
+bin/claude-dashboard.py     the CLI: serve | start | stop | status | open
+dashboard/server.py         HTTP + SSE + the notification watcher
+dashboard/opshtml.py        paint ops -> HTML (the web presenter)
+dashboard/static/           the single-page app (vanilla JS/CSS, no build step)
+```
+
+`./bin/claude-dashboard.py` (default verb `open`) starts the server if needed
+and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
+
+## Placement: a fourth dependency tier
+
+`dashboard/` sits ABOVE core/plugins/frontends: it imports `core/` and the
+`plugins` registry root (for `activity()`), and nothing imports it back except
+its bin/ entry and the tests. It cannot live in `plugins/` — plugins never
+import each other, and the dashboard needs the cross-plugin registry — and it
+isn't a `frontends/` terminal either (the Frontend interface is about pane
+control; the dashboard has no panes). The precedent is the bin/ renderers,
+which already sit at this height; `dashboard/` is that tier made importable so
+the server is testable in-process.
+
+## Server design (each choice rejects a specific trap)
+
+Decisions inherited from the sessionapi design review (docs/sessionapi.md's
+"web dashboard notes", now implemented):
+
+- **Read-only, 127.0.0.1 only.** The page shows raw command output and
+  transcripts; it must never sit on a routable interface. There is no write
+  endpoint at all — the ⧉ copy endpoint *returns* text; the browser owns its
+  clipboard.
+- **`ThreadingHTTPServer` + per-request fresh `mode=ro` reads** — NOT the OTLP
+  receiver's single-threaded request loop: sqlite connections are
+  thread-affine, and concurrent SSE streams need concurrent handlers. No
+  connection is shared across requests; every read goes through the API's
+  `*_at()`/fresh-conn paths. In particular ops are read via `ops_at()` on the
+  RESOLVED DB path (live or parked) — never `ops_after()`, whose live-path
+  `connect()` would CREATE the DB and fake the session-alive signal for a
+  parked session. (Same reason the click-to-view endpoint reads through
+  `kv_at()`, the read-only twin added for it.)
+- **Singleton + explicit lifecycle** — a `core/locks.py` pid-lock on
+  `paths.DASH_DB` with the port bind as the second guard; started/stopped
+  explicitly by the CLI. Deliberately NOT the OTLP receiver's 900s idle-exit +
+  respawn-on-SessionStart: that lifecycle is correct for a receiver that only
+  matters while sessions emit metrics, and wrong for a dashboard that must be
+  up precisely when you're browsing PARKED sessions at midnight.
+- **Audit shape**: `start` spawns `serve` through `core/spawn.spawn_detached`
+  (the `A.spawn` row), and `serve()` runs inside `core.tail.stream_lifecycle`
+  (kind `dashboard`) — the server's lifetime is a `streams` row whose
+  `end_reason` says how it exited (`stopped` / `port-busy` / lock-denied
+  errors ride `A.error`; a crash closes the row as `crash` with a traceback in
+  `errors`). Request-handler failures audit once per request via `A.error`
+  with the path.
+
+## The web presenter (`opshtml.py`)
+
+The third presenter over vocabularies owned elsewhere (the parse/paint
+precedent): `core/ops.py` owns the op shapes; `claude-mirror.py` paints them
+to ANSI at pane width; `opshtml.py` renders them to HTML. Width-dependent
+layout deliberately does NOT port — wrapping, gutter repetition, rule length
+and chip truncation are CSS facts in a browser (`pre-wrap`, `border-left`,
+block elements, `text-overflow`), so each op maps to a structured block and
+`codefmt.render` runs at an effectively-unwrapped width (`CODE_W`).
+
+**Security — the `neutralize()` analog.** Op text is raw command output
+(attacker-adjacent bytes; the `@kitty-cmd` replay incident is the terminal
+form of this bug class). Every character is `html.escape`d inside
+`ansi_html()`; input first passes `render.neutralize()` so only the two
+sanctioned survivors — SGR styling and OSC 8 hyperlinks — are ever
+*interpreted*, exactly mirroring the terminal renderer. SGR runs become
+inline-styled `<span>`s (truecolor verbatim; 256/16-color mapped); a
+`claude-copy:///<key>/<gid>/<what>` OSC 8 link becomes
+`<a class="cc" data-cc=…>` which the app intercepts — copy verbs call
+`/api/session/<sid>/copy/<gid>/<what>` (served by the SAME `core/copy.collect`
+the terminal click handler uses — one owner of "what does ⧉cmd copy") and put
+the result on the clipboard; the `view` verb fetches the rendered
+`view:<gid>` stash from `/view/<gid>` and toggles it inline, the web twin of
+click-to-view. Any other URL becomes a plain `target=_blank` anchor.
+
+**Why not an xterm.js embed** (the Hermes harness does one): the mirror's
+content is not a pty — it's a structured op stream that reflows. An embedded
+terminal would need a server-side repaint-to-ANSI at the browser's column
+width on every resize (re-implementing claude-mirror.py per client), and adds
+the project's first frontend build dependency. Structured HTML + CSS gets
+reflow for free and keeps the no-build rule.
+
+## Endpoints
+
+| Route | Returns |
+|---|---|
+| `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
+| `/api/sessions` | discovery list + per-row stats + tab state |
+| `/api/session/<sid>` | overview: `session()` + error count |
+| `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
+| `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
+| `/api/session/<sid>/agent/<aid>` | one agent's timeline |
+| `/api/session/<sid>/errors` | swallowed-exception rows |
+| `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
+| `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
+| `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
+| `/events/session/<sid>?after=N` | per-session SSE: `ops`/`stats`/`agents`/`costs`/`tab`, each on change |
+
+SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
+global) pushed over a held response — no websockets dependency, and
+`EventSource` gives the client reconnect for free (the app reconnects with
+`?after=<last seen op id>` so nothing repeats).
+
+## Notifications (the toaster)
+
+One daemon thread diffs the ENTIRE tab table (`sessionapi.tab_states()` — the
+whole-table reader added for exactly this; per-window probes would be N
+queries for one snapshot) once a second, and maps windows to sessions via the
+audit `sessions` rows' `kitty_window_id` (newest session wins the window — a
+kitty window outlives sessions). A transition INTO `awaiting-command` (red —
+Claude is asking you) or `awaiting-response` (green — done, your turn) pushes
+a `notify` event to every `/events` client; the app shows an in-page toast
+always and an OS `Notification` when the page is hidden. The first scan is a
+baseline, never news. Windowless sessions (headless/daemon) produce no
+toasts, same as they have no tab colour — that's the tab system's own
+scoping, not a dashboard limitation.
+
+## The husk rows
+
+`agents()` returns some rows with no kind/desc/transcript: state-DB slot
+records for agents whose streamer never ran (Claude Code's hidden auxiliary
+spawns — the same population the OTEL pipeline exists to price). The API
+reports them (they're real state); the app renders them dim, sorted after the
+attributed agents, still clickable (the layout-derivation fallback in
+`plugins.activity` sometimes finds a transcript the audit never saw).
+
+## Design language
+
+Hermes-harness-inspired (Nous Research's Hermes Agent dashboard): the whole
+theme derives from a 3-color palette via CSS `color-mix()` — near-black
+canvas, one midground accent tinting text/borders/hovers alike — plus a warm
+radial glow vignette and a film-grain noise overlay; borders are 1px INSET
+accent-tinted hairlines (box-shadow), never drop shadows. Retuning the theme
+is editing `--bg`/`--mid`/`--warm-glow` in `style.css`. Status and semantic
+hues are NOT part of the derivation — they stay the terminal system's own
+(`core/tabs.py` COLORS, `core/ops.py` semantic table) so the web and the kitty
+mirror read as one system.
+
+## Testing
+
+`tests/test_l0_dashboard.py`: opshtml contract tests (escaping, SGR/OSC8,
+copy-link specs, lex/num gut bodies), the server on an ephemeral in-process
+port (never through `serve()` — no singleton lock in tests) against data
+seeded via the real product APIs, and the notification watcher's transition
+logic. Import safety for both modules rides `test_import_safety.py`.

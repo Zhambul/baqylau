@@ -14,6 +14,11 @@ core/        tool- and terminal-agnostic runtime — imports nothing outside cor
 frontends/   terminal adapters — import core/ at most
 plugins/     one directory per agent tool — import core/ + frontends/,
              never each other
+dashboard/   the web dashboard, a CONSUMER package (docs/dashboard.md) —
+             imports core/ + the plugins registry root (plugins.activity());
+             nothing imports it back except its bin/ entry and the tests. The
+             bin/ renderers already sit at this height; dashboard/ is that
+             tier made importable so the server is testable in-process.
 bin/         every executable ENTRY script (`bin/claude-*.py`): the assembly
              layer. They may import anything. Their FILENAMES are load-bearing:
              they name the audit DB's handler/script vocabulary

@@ -33,6 +33,8 @@ in a comment at the site and in the commit message.
 
 - `core/` imports only `core/`. `frontends/` import at most `core/`.
   `plugins/<tool>/` import `core/` + `frontends/`, **never another plugin**.
+  `dashboard/` (the consumer tier) imports `core/` + the `plugins` registry
+  root; nothing imports `dashboard/` except its bin/ entry and tests.
   `bin/` scripts may import anything.
 - Surface shared by two plugins goes in `core/` (that's why `streamfmt.py`
   exists) — never solved by a cross-plugin import or by copy-paste.
@@ -76,6 +78,8 @@ backed by grep-style regression tests that will fail the build):
 | Session-data reads by CONSUMERS (pane renderers, tooling, dashboards) | `core/sessionapi.py` — the one door (presentation-channel delegations + the read model; docs/sessionapi.md). Core internals keep reading `core.state` directly; a consumer importing `core.state` reopens the side door (grep test `test_pane_renderers_read_through_sessionapi`) |
 | Claude transcript record shapes (type/user/assistant discrimination, teammate-message unwrap, content-block walk, `result_text`, the `subagents/agent-<id>.*` layout) | `plugins/claude_code/transcript.py` — `parse_line()`/`agent_paths()`; the substream Renderer and `timeline()` are its two presenters (grep test `test_teammsg_regex_has_one_owner`) |
 | stats()/counters→dict shaping | `core/state._stats_from` — shared by `stats()` (live) and `stats_at()` (parked history); a third shaping is drift |
+| Paint-op → HTML rendering (SGR/OSC8→spans, `html.escape` as the neutralize analog, the `data-cc` copy/view scheme) | `dashboard/opshtml.py` — the WEB presenter of `core/ops.py`'s op vocabulary (the mirror's `_render` is the ANSI presenter; a third op renderer needs a reason) |
+| ⧉ copy-text extraction (which ops `cmd`/`out`/`all` collect) | `core/copy.collect` — the terminal click handler AND the dashboard `/copy` endpoint both call it |
 
 Adding a new shared fact? Give it one owner in the most-core module whose
 charter fits, document the owner here, and (if cheap) add a grep test.

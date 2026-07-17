@@ -127,15 +127,11 @@ If a materialized store is ever needed (query performance over huge
 histories), build it as a **derived cache** the API can rebuild from sources
 at any time — never as a source of truth.
 
-## Web dashboard notes (future work, out of scope here)
+## The web dashboard rides this API
 
-The API is transport-agnostic; a dashboard is a thin server over it. Decisions
-already settled for whoever builds it: read-only, 127.0.0.1 only; singleton
-via `core/locks.py` pid-lock + port bind and audit shape
-(`A.spawn` + `stream_lifecycle`) borrowed from the OTLP receiver — but **not**
-its request loop (single-threaded, sqlite thread-affine) nor its lifecycle
-(900s idle-exit + respawn-on-SessionStart would leave the dashboard down
-exactly when browsing parked sessions): use per-request `mode=ro` connections
-and an explicit serve lifecycle, spawned via `core/spawn.spawn_detached`.
-HTML-escaping is the `neutralize()` analog — op/transcript text is raw
-attacker-adjacent bytes in any medium.
+[dashboard.md](dashboard.md) — the dashboard is exactly the thin server this
+API was shaped for: every settled decision from the design review (read-only
+127.0.0.1; per-request `mode=ro` reads, not the OTLP receiver's
+single-threaded loop; explicit serve lifecycle, not idle-exit; `A.spawn` +
+`stream_lifecycle` audit shape; HTML-escaping as the `neutralize()` analog) is
+implemented there, with the rationale recorded next to each choice.

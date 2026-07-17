@@ -130,6 +130,23 @@ def tab_get(win):
     return rows[0] if rows else ""
 
 
+def tab_all():
+    """Every (win, state) row — the dashboard's notification watcher diffs the
+    whole table per poll instead of probing windows one by one. Read via sq()
+    (fresh conn), not sqc(): the caller is a slow (~1s) poller, and holding a
+    cached conn in a long-lived non-scorebar process buys nothing."""
+    if not os.path.isfile(TABDB):
+        return []
+    try:
+        conn = sqlite3.connect(f"file:{TABDB}?mode=ro", uri=True, timeout=0.2)
+        try:
+            return conn.execute("SELECT win, state FROM tab").fetchall()
+        finally:
+            conn.close()
+    except Exception:
+        return []
+
+
 def tab_set(win, state):
     tw("INSERT INTO tab(win, state) VALUES(?, ?) "
        "ON CONFLICT(win) DO UPDATE SET state=excluded.state", (win, state))

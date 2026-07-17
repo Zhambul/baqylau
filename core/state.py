@@ -475,6 +475,23 @@ def agents_at(path):
         conn.close()
 
 
+def kv_at(path, key):
+    """kv_get() over an explicit DB path, read-only — for consumers reading a
+    session's kv rows (the click-to-view `view:<gid>` stashes) without the
+    live-path connect(), which would CREATE the DB and fake the session-alive
+    signal. None when missing/unreadable."""
+    conn = _ro(path)
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT val FROM kv WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def ops_at(path, after_id=0):
     """(last_id, [op, ...]) over an explicit DB path, read-only — the historical
     twin of ops_after() (which serves the live session through the cached writer
@@ -793,6 +810,15 @@ def tab_state(win):
     missing/locked DB)."""
     from core import tabs
     return tabs.tab_get(str(win)) or ""
+
+
+def tab_states():
+    """Every window's tab state as {win: state} — the whole-table companion to
+    tab_state(), for the dashboard's notification watcher (it diffs the table
+    per poll; per-window probes would be N queries for the same snapshot).
+    Same sanctioned-reader status: delegates to tabs.tab_all()."""
+    from core import tabs
+    return {str(w): s for w, s in tabs.tab_all() if s}
 
 
 # The pid-liveness locks (lock_acquire/lock_holder/lock_release, the claims

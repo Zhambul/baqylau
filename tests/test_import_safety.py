@@ -80,6 +80,13 @@ def test_sessionapi_imports_clean():
     _import_fresh("core.sessionapi")
 
 
+def test_dashboard_imports_clean():
+    """dashboard/server.py must not bind a port, take the singleton lock, or
+    open a DB at import (serve() owns all three); opshtml is a pure presenter."""
+    _import_fresh("dashboard.server")
+    _import_fresh("dashboard.opshtml")
+
+
 _STREAM_PROG = """
 import sys, os
 sys.argv = ["import-safety-test"]          # no argv contract available

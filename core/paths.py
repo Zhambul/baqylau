@@ -61,6 +61,12 @@ HISTORY_DIR = os.path.join(
 # the test suite stays hermetic.
 OTLP_DB = _TMP + "/claude-kitty-otlp.db"
 
+# The GLOBAL web-dashboard singleton lock DB (dashboard/server.py). One dashboard
+# process per machine — it serves EVERY session (live and parked), so the lock is
+# per-machine like OTLP_DB, and lives in /tmp for the same self-clear-on-reboot
+# reason (the pid-lock is runtime state; the second guard is the port bind).
+DASH_DB = _TMP + "/claude-kitty-dash.db"
+
 
 def sanitize_sid(sid):
     """A session id as it appears in the mirror-log key."""

@@ -45,6 +45,7 @@ ops_after = S.ops_after
 ops_at    = S.ops_at
 stats     = S.stats
 stats_at  = S.stats_at
+kv_at     = S.kv_at
 version   = S.version
 parked    = S.parked
 kv_get    = S.kv_get
@@ -52,6 +53,7 @@ kv_set    = S.kv_set
 db_path   = S.db_path
 evict     = S.evict
 tab_state = S.tab_state
+tab_states = S.tab_states
 
 
 def _rows(db, sql, params=()):
@@ -121,15 +123,17 @@ def sessions(limit=25):
     on-disk liveness (live state DB in /tmp vs parked history), plus any parked
     DBs the audit never saw (audit disabled at the time) as minimal rows."""
     out, seen = [], set()
-    for sid, cwd, tpath, mlog, st, en, er in _rows(
+    for sid, cwd, tpath, mlog, st, en, er, win in _rows(
             audit_db(),
             "SELECT session_id, cwd, transcript_path, mirror_log, started_at,"
-            " ended_at, end_reason FROM sessions ORDER BY started_at DESC LIMIT ?",
+            " ended_at, end_reason, kitty_window_id FROM sessions"
+            " ORDER BY started_at DESC LIMIT ?",
             (limit,)):
         log = mlog or P.mirror_log(sid)
         seen.add(P.sid_from_log(log))
         out.append({"sid": sid, "cwd": cwd, "transcript_path": tpath, "log": log,
                     "started_at": st, "ended_at": en, "end_reason": er,
+                    "kitty_window_id": win or "",
                     "live": os.path.isfile(P.state_db(log)),
                     "parked": os.path.isfile(P.parked_db(log))})
     try:
@@ -144,6 +148,7 @@ def sessions(limit=25):
         log = P.log_for_key(key)
         out.append({"sid": key, "cwd": "", "transcript_path": "", "log": log,
                     "started_at": None, "ended_at": None, "end_reason": "",
+                    "kitty_window_id": "",
                     "live": os.path.isfile(P.state_db(log)), "parked": True})
     return out
 
