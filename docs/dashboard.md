@@ -56,6 +56,13 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   respawn-on-SessionStart: that lifecycle is correct for a receiver that only
   matters while sessions emit metrics, and wrong for a dashboard that must be
   up precisely when you're browsing PARKED sessions at midnight.
+- **gzip in one place.** `_send` — the single non-SSE response path — gzips its
+  body (`Content-Encoding: gzip`, recomputed `Content-Length`, `Vary:
+  Accept-Encoding`) when the client offers gzip and the body clears `GZIP_MIN`
+  (~1KB); everything routed through it is text (JSON/HTML/CSS/JS/plain). SSE is
+  never compressed — it holds the response open and writes incremental frames
+  through its own `_sse_*` writers, so buffering it through gzip would break the
+  stream.
 - **Audit shape**: `start` spawns `serve` through `core/spawn.spawn_detached`
   (the `A.spawn` row), and `serve()` runs inside `core.tail.stream_lifecycle`
   (kind `dashboard`) — the server's lifetime is a `streams` row whose

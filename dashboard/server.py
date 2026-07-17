@@ -32,6 +32,7 @@
 # /events client, which shows the toast / OS notification. Window-keyed by
 # nature: a headless/daemon session has no window and therefore no toasts,
 # same as it has no tab colour.
+import gzip
 import json
 import os
 import queue
@@ -63,6 +64,7 @@ GLOBAL_TICK_S = 1.0                # sessions-list SSE + notification watcher ca
 SLOW_EVERY = 5                     # slow re-resolves (chain, win map), in ticks
 HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
+GZIP_MIN = 1024                    # compress a _send body only at/above this size
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC = {                         # whitelist — no path resolution on user input
@@ -312,10 +314,27 @@ class Handler(BaseHTTPRequestHandler):
         pass                                # anyway under spawn_detached
 
     # -- plumbing --
+    def _accepts_gzip(self):
+        # honour an explicit `gzip;q=0` refusal; otherwise any gzip token wins.
+        for tok in self.headers.get("Accept-Encoding", "").lower().split(","):
+            tok = tok.strip()
+            if tok == "gzip" or tok.startswith("gzip;"):
+                return "q=0" not in tok or "q=0." in tok
+        return False
+
     def _send(self, code, body, ctype="application/json"):
+        # Everything routed through _send is text (JSON/HTML/CSS/JS/plain), so
+        # it all compresses; SSE never comes here (it holds the response open
+        # and writes incremental frames, which buffering would break). Vary is
+        # set whenever the body could vary by encoding, even when this response
+        # stays plain, so a shared cache keys the two variants apart.
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
+        self.send_header("Vary", "Accept-Encoding")
+        if len(data) >= GZIP_MIN and self._accepts_gzip():
+            data = gzip.compress(data)
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(data)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()

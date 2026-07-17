@@ -4,6 +4,7 @@
 # through the REAL product APIs (core.ops.emit, core.state, core.audit) under
 # the autouse hermetic CLAUDE_AUDIT_DIR + tmp-path mirror prefixes, exactly
 # like test_l0_sessionapi.py.
+import gzip
 import json
 import sys
 import threading
@@ -190,6 +191,60 @@ def test_hidden_agent_husk_rows_are_filtered(dash):
     S.agent_set(log, "real1", desc="do a thing")
     ags = _get_json(dash + "/api/session/dash7")["agents"]
     assert [a["agent_id"] for a in ags] == ["real1"]
+
+
+def _req(url, headers=None, timeout=10):
+    return urllib.request.urlopen(
+        urllib.request.Request(url, headers=headers or {}), timeout=timeout)
+
+
+def test_gzip_large_response_round_trips(dash):
+    # A response at/above GZIP_MIN compresses when the client offers gzip, and
+    # the compressed body decompresses to the byte-identical plain response.
+    A.session_start({"session_id": "gz1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("gz1")
+    for i in range(60):
+        O.emit(log, O.label("block %d" % i, (170, 185, 210), g="g%d" % i),
+               O.gut("output line for block %d " % i * 3, (170, 185, 210),
+                     g="g%d" % i))
+    url = dash + "/api/session/gz1/ops?after=0"
+
+    plain = _req(url)                                  # no Accept-Encoding
+    assert plain.headers.get("Content-Encoding") is None
+    assert plain.headers.get("Vary") == "Accept-Encoding"
+    ref = plain.read()
+    assert len(ref) >= DS.GZIP_MIN
+
+    gz = _req(url, {"Accept-Encoding": "gzip, deflate"})
+    assert gz.headers.get("Content-Encoding") == "gzip"
+    raw = gz.read()                                    # urllib does not auto-inflate
+    assert int(gz.headers.get("Content-Length")) == len(raw)
+    assert len(raw) < len(ref)                         # smaller on the wire
+    assert gzip.decompress(raw) == ref
+
+
+def test_gzip_small_response_stays_plain(dash):
+    # Below the threshold, gzip is skipped even when offered (framing overhead
+    # would outweigh the win); an empty ops tail is well under GZIP_MIN.
+    A.session_start({"session_id": "gz2", "cwd": "/w", "transcript_path": ""})
+    r = _req(dash + "/api/session/gz2/ops?after=999999",
+             {"Accept-Encoding": "gzip"})
+    body = r.read()
+    assert len(body) < DS.GZIP_MIN
+    assert r.headers.get("Content-Encoding") is None
+    assert json.loads(body)["items"] == []
+
+
+def test_sse_is_never_gzipped(dash):
+    # SSE holds the response open and writes incremental frames; buffering it
+    # through gzip would break the stream, so it must stay identity-encoded
+    # even when the client offers gzip.
+    r = _req(dash + "/events", {"Accept-Encoding": "gzip"})
+    try:
+        assert r.headers.get("Content-Type", "").startswith("text/event-stream")
+        assert r.headers.get("Content-Encoding") is None
+    finally:
+        r.close()
 
 
 def test_http_rejects_bad_sids(dash):
