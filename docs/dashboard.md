@@ -6,10 +6,14 @@ plus the two things a terminal pane can't give you: **drill-down into any
 agent's full activity timeline** and **toast/OS notifications across all
 sessions** when a session starts asking you something or finishes its turn.
 
-It is a CONSUMER, not a producer: everything it shows comes through
+It is a CONSUMER, not a producer — read-only **except the control plane** (the
+two write endpoints below): everything it *shows* comes through
 `core/sessionapi.py` (the one read-side door — [sessionapi.md](sessionapi.md))
-and `plugins.activity()`. It writes no session state; its only writes are its
-own singleton pid-lock and audit rows.
+and `plugins.activity()`. It writes no session state directly; its only state
+writes are its own singleton pid-lock and audit rows. The control plane does
+not write session state either — it drives the TERMINAL (types into a window /
+opens a tab) through the `Frontend` interface, and Claude Code's own hooks then
+produce the resulting state. See *Control plane (web writes)* below.
 
 ```
 bin/claude-dashboard.py     the CLI: serve | start | stop | status | open
@@ -23,24 +27,30 @@ and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
 
 ## Placement: a fourth dependency tier
 
-`dashboard/` sits ABOVE core/plugins/frontends: it imports `core/` and the
-`plugins` registry root (for `activity()`), and nothing imports it back except
-its bin/ entry and the tests. It cannot live in `plugins/` — plugins never
-import each other, and the dashboard needs the cross-plugin registry — and it
-isn't a `frontends/` terminal either (the Frontend interface is about pane
-control; the dashboard has no panes). The precedent is the bin/ renderers,
-which already sit at this height; `dashboard/` is that tier made importable so
-the server is testable in-process.
+`dashboard/` sits ABOVE core/plugins/frontends: it imports `core/`, the
+`plugins` registry root (for `activity()`), AND `frontends/` (for the control
+plane — the top consumer tier reaches the terminal the same way the bin/ entry
+scripts do), and nothing imports it back except its bin/ entry and the tests. It
+cannot live in `plugins/` — plugins never import each other, and the dashboard
+needs the cross-plugin registry — and it isn't a `frontends/` terminal either
+(the Frontend interface is about terminal control; the dashboard *uses* it but
+has no panes of its own). The precedent is the bin/ renderers, which already sit
+at this height; `dashboard/` is that tier made importable so the server is
+testable in-process. It reaches a terminal ONLY through `frontends.get()` and
+the `Frontend` interface — never a kitty-only attribute (the frontends contract
+grep test enforces this).
 
 ## Server design (each choice rejects a specific trap)
 
 Decisions inherited from the sessionapi design review (docs/sessionapi.md's
 "web dashboard notes", now implemented):
 
-- **Read-only, 127.0.0.1 only.** The page shows raw command output and
-  transcripts; it must never sit on a routable interface. There is no write
-  endpoint at all — the ⧉ copy endpoint *returns* text; the browser owns its
-  clipboard.
+- **Read-only except the control plane, 127.0.0.1 only.** The page shows raw
+  command output and transcripts; it must never sit on a routable interface. The
+  GET surface is pure read (the ⧉ copy endpoint *returns* text; the browser owns
+  its clipboard). The only writes are the two control-plane POSTs (*Control plane
+  (web writes)* below), which type into / launch a terminal and are guarded
+  against the browser cross-origin vector.
 - **`ThreadingHTTPServer` + per-request fresh `mode=ro` reads** — NOT the OTLP
   receiver's single-threaded request loop: sqlite connections are
   thread-affine, and concurrent SSE streams need concurrent handlers. No
@@ -175,6 +185,8 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
+| `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); 409 headless, 400 empty, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "prompt"?}` → launch `claude [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd, 503 no terminal |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
@@ -183,6 +195,64 @@ SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
 global) pushed over a held response — no websockets dependency, and
 `EventSource` gives the client reconnect for free (the app reconnects with
 `?after=<last seen op id>` so nothing repeats).
+
+## Control plane (web writes)
+
+The dashboard was born read-only; these two POST endpoints deliberately break
+that charter so you can drive a session from the browser: **message a running
+session** and **launch a new one**. Neither writes session state — they reach
+the TERMINAL through the `Frontend` interface (`send_text` / `launch_tab`, over
+the same silenced `kitten @` machinery the tab painter uses), and Claude Code's
+own hooks then produce whatever state results. The dashboard stays a consumer of
+session data; it is now also a driver of the terminal.
+
+**The threat: drive-by RCE via the browser.** These endpoints type into a
+terminal, so an unprotected one is remote code execution triggered by any web
+page you happen to have open. A malicious page cannot reach a routable
+interface (we bind 127.0.0.1 only), but it CAN aim a **simple** cross-origin
+`POST` at `http://127.0.0.1:8377` from the victim's own browser — no preflight,
+no read of the response needed, the type-into-terminal side effect is the whole
+attack. So the defense makes every control-plane POST a **non-simple** request
+the browser must preflight, and we never let the preflight pass
+(`dashboard/server.py` `_post_guard`):
+
+- **JSON content type required** (`Content-Type: application/json`) — a simple
+  request can only be `text/plain` / form encodings, so this alone forces a
+  preflight; a wrong type is `415`.
+- **A custom header required** (`X-Claude-Dash: 1`) — a header a `<form>` or a
+  simple `fetch` cannot set, independently forcing the preflight; absent is
+  `403`.
+- **We answer `OPTIONS` with a bare `501`** (no `do_OPTIONS`, so no
+  `Access-Control-Allow-*` headers ever) — the forced preflight therefore fails
+  and the browser never sends the real POST. Same-origin requests never
+  preflight, so the dashboard's own page is unaffected.
+- **Origin allow-list** as defense in depth — any `Origin` header present and
+  not `http://127.0.0.1:<port>` / `http://localhost:<port>` is `403`.
+- **Body cap** (`POST_MAX`, 64 KiB) and a JSON-object check; a guard rejection
+  closes the connection (an unread body would desync HTTP keep-alive).
+
+`POST /api/session/<sid>/message` `{"text"}` resolves the session's
+`kitty_window_id` (`sessionapi.session_row`) and, when it has one,
+`Frontend.send_text(win, text)` types the text plus a carriage return.
+**Windowed sessions only:** a headless / `claude daemon run` session has no
+window (same scoping as tab colours and toasts), so it returns `409` — the
+composer is disabled with a hint for it. Empty text is `400`. The text rides
+kitten's `--stdin` verbatim (no shell, no escape interpretation).
+
+`POST /api/sessions/new` `{"cwd", "prompt"?}` validates `cwd` is an existing
+directory (`os.path.isdir`, else `400`) and `Frontend.launch_tab(cwd, ["claude"]
++ [prompt?])` opens a new tab; the session then appears through its own
+`SessionStart` (no synthetic row). The server may have no resolvable kitty
+socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
+is `False`, `_frontend()` returns `None`, and both endpoints return a clean
+`503`, never a 500 traceback.
+
+**Audit.** Every attempt lands a `state_files` row: `web-send`
+(`{win, chars, ok}`, keyed to the session's state-DB path) and `web-launch`
+(`{cwd, ok}`, no session yet so log/path are empty). Failure paths (no window,
+no terminal, send/launch returned false) also write an `A.error` per the
+audit-before-swallow rule, so a "my message never arrived" report is answerable
+from the DB.
 
 ## Grouping and titles
 

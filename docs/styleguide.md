@@ -33,9 +33,10 @@ in a comment at the site and in the commit message.
 
 - `core/` imports only `core/`. `frontends/` import at most `core/`.
   `plugins/<tool>/` import `core/` + `frontends/`, **never another plugin**.
-  `dashboard/` (the consumer tier) imports `core/` + the `plugins` registry
-  root; nothing imports `dashboard/` except its bin/ entry and tests.
-  `bin/` scripts may import anything.
+  `dashboard/` (the top consumer tier) imports `core/`, the `plugins` registry
+  root, **and `frontends/`** (for its control plane — the two write endpoints
+  reach the terminal through `frontends.get()`); nothing imports `dashboard/`
+  except its bin/ entry and tests. `bin/` scripts may import anything.
 - Surface shared by two plugins goes in `core/` (that's why `streamfmt.py`
   exists) — never solved by a cross-plugin import or by copy-paste.
 - Terminals are reached only through the `Frontend` interface

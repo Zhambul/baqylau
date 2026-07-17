@@ -737,6 +737,131 @@ def test_notifier_transitions(monkeypatch):
     n.unregister(q)
 
 
+class _FakeFE:
+    """A usable Frontend stub capturing control-plane writes (injected via
+    monkeypatching frontends.get in the server module)."""
+
+    def __init__(self, send_ok=True, launch_ok=True):
+        self.sent = []
+        self.launched = []
+        self.send_ok = send_ok
+        self.launch_ok = launch_ok
+
+    def usable(self):
+        return True
+
+    def send_text(self, win, text):
+        self.sent.append((win, text))
+        return self.send_ok
+
+    def launch_tab(self, cwd, argv):
+        self.launched.append((cwd, argv))
+        return self.launch_ok
+
+
+def _inject_fe(monkeypatch, fe):
+    monkeypatch.setattr(DS.frontends, "get", lambda **kw: fe)
+
+
+def _post(url, body=None, ctype="application/json", header="1", origin=None,
+          raw=None):
+    """A control-plane POST. Defaults pass the guard (JSON + X-Claude-Dash: 1,
+    no Origin); pass ctype=None / header=None / origin=… to exercise a
+    rejection."""
+    data = raw if raw is not None else json.dumps(body or {}).encode()
+    headers = {}
+    if ctype is not None:
+        headers["Content-Type"] = ctype
+    if header is not None:
+        headers["X-Claude-Dash"] = header
+    if origin is not None:
+        headers["Origin"] = origin
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return r.status, r.read().decode("utf-8", "replace")
+
+
+def test_post_message_success(dash, monkeypatch):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "42")      # session_start reads the env
+    A.session_start({"session_id": "msg1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/msg1/message",
+                       {"text": "hello claude"})
+    assert code == 200 and json.loads(body) == {"ok": True}
+    assert fe.sent == [("42", "hello claude")]
+
+
+def test_post_message_no_window_is_409(dash, monkeypatch):
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)   # headless session
+    A.session_start({"session_id": "msg2", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/msg2/message", {"text": "hi"})
+    assert e.value.code == 409
+
+
+def test_post_message_empty_text_is_400(dash, monkeypatch):
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "9")
+    A.session_start({"session_id": "msg3", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/msg3/message", {"text": "   "})
+    assert e.value.code == 400
+
+
+class _NoTermFE:
+    """A frontend with no reachable control channel (dashboard started outside
+    kitty) → _frontend() returns None → a clean 503, never a 500."""
+
+    def usable(self):
+        return False
+
+
+def test_post_message_no_terminal_is_503(dash, monkeypatch):
+    _inject_fe(monkeypatch, _NoTermFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "5")
+    A.session_start({"session_id": "msg4", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/msg4/message", {"text": "hi"})
+    assert e.value.code == 503
+
+
+def test_post_guard_rejections(dash):
+    url = dash + "/api/sessions/new"
+    with pytest.raises(urllib.error.HTTPError) as e:      # missing custom header
+        _post(url, {"cwd": "/w"}, header=None)
+    assert e.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as e:      # wrong origin
+        _post(url, {"cwd": "/w"}, origin="https://evil.test")
+    assert e.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as e:      # not JSON content type
+        _post(url, {"cwd": "/w"}, ctype="text/plain")
+    assert e.value.code == 415
+    with pytest.raises(urllib.error.HTTPError) as e:      # malformed JSON body
+        _post(url, raw=b"{not json")
+    assert e.value.code == 400
+
+
+def test_post_new_session_bad_cwd_is_400(dash, monkeypatch):
+    _inject_fe(monkeypatch, _FakeFE())
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new", {"cwd": "/no/such/dir/here"})
+    assert e.value.code == 400
+
+
+def test_post_new_session_launches(dash, monkeypatch, tmp_path):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    code, body = _post(dash + "/api/sessions/new",
+                       {"cwd": str(tmp_path), "prompt": "do the thing"})
+    assert code == 200 and json.loads(body) == {"ok": True}
+    assert fe.launched == [(str(tmp_path), ["claude", "do the thing"])]
+    # no prompt → just ["claude"]
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert fe.launched[-1] == (str(tmp_path), ["claude"])
+
+
 def test_notifier_ignores_windowless_transitions(monkeypatch):
     n = DS.Notifier()
     n.winmap = {}                             # no session known for the window

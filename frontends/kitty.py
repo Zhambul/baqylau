@@ -79,6 +79,30 @@ def kitten_get_text(kitten, listen, win_id, extent="screen"):
         return None
 
 
+def kitten_send_text(kitten, listen, win, text):
+    """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
+    (with a trailing CR = Enter) precisely so it is never a shell argument NOR a
+    kitten escape vector — `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b`
+    interpretation. True on rc 0. Bounded by KITTEN_TIMEOUT_S like every other
+    mutating call."""
+    try:
+        r = subprocess.run([kitten, "@", "--to", listen, "send-text",
+                            "--match", f"id:{win}", "--stdin"],
+                           input=(text + "\r").encode("utf-8"),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=KITTEN_TIMEOUT_S)
+        return r.returncode == 0
+    except Exception:
+        return False
+
+
+def kitten_launch_tab(kitten, listen, cwd, argv):
+    """`kitten @ launch --type=tab --cwd <cwd> <argv…>` — a new tab running
+    argv (a list, never a shell string, so no interpolation). True on rc 0."""
+    return kitten_run(kitten, listen, "launch", "--type=tab",
+                      "--cwd", cwd, *argv) == 0
+
+
 def kitten_ls(kitten, listen):
     """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
     try:
@@ -219,6 +243,13 @@ class KittyFrontend(Frontend):
     def clear_tab_color(self, win):
         return self.set_tab_color(win, TAB_COLOR_NONE, TAB_COLOR_NONE,
                                   TAB_COLOR_NONE, inactive_fg=TAB_COLOR_NONE)
+
+    # --- control plane (writes) -------------------------------------------------
+    def send_text(self, win, text):
+        return kitten_send_text(self.kitten, self.listen, win, text)
+
+    def launch_tab(self, cwd, argv):
+        return kitten_launch_tab(self.kitten, self.listen, cwd, argv)
 
     # --- window enumeration -----------------------------------------------------
     def ls(self):

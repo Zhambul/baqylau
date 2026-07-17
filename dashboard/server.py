@@ -43,6 +43,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+import frontends
 import plugins
 from core import copy as CP
 from core import locks
@@ -65,6 +66,11 @@ SLOW_EVERY = 5                     # slow re-resolves (chain, win map), in ticks
 HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
+POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
+POST_HEADER = "X-Claude-Dash"      # the custom header a simple cross-origin POST can't add
+# The only Origins a legit same-origin browser POST carries (it usually sends
+# none at all for same-origin fetches; when it does, it is one of these).
+ALLOWED_ORIGINS = {"http://%s:%d" % (HOST, PORT), "http://localhost:%d" % PORT}
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC = {                         # whitelist — no path resolution on user input
@@ -216,6 +222,11 @@ def session_payload(sid):
     data["error_count"] = API.error_count(sid)
     data["title"] = session_title(data.get("transcript_path") or "")
     data["running"] = API.running(sid)
+    # The control-plane composer gates on a reachable window: the mirror is
+    # keyed to a kitty window, and a headless/daemon session has none (the
+    # /message endpoint would 409). Additive field; app.js disables the box.
+    row = API.session_row(sid) or {}
+    data["kitty_window_id"] = str(row.get("kitty_window_id") or "")
     return data
 
 
@@ -445,6 +456,20 @@ def view_payload(sid, gid):
     return opshtml.view_html(ops, sid)
 
 
+def _frontend():
+    """The active Frontend for a CONTROL-PLANE write, or None when no terminal
+    control channel resolves. The dashboard may be started OUTSIDE kitty (its
+    lifecycle is deliberately independent — docs/dashboard.md), so resolve=True
+    lets kitty hunt for its socket beyond the env, and a frontend that isn't
+    usable() degrades to None → the endpoint returns a clean 'no terminal'
+    error, never a 500."""
+    try:
+        fe = frontends.get(resolve=True)
+        return fe if fe.usable() else None
+    except Exception:
+        return None
+
+
 # --- the HTTP handler ------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -577,6 +602,134 @@ class Handler(BaseHTTPRequestHandler):
                 text = CP.collect(sdb, rest[1], rest[2]) if sdb else ""
                 return self._send(200, text, "text/plain; charset=utf-8")
         return self._json({"error": "not found"}, 404)
+
+    # -- POST routing (the control plane) --
+    # The dashboard is READ-ONLY except these two writes, and they TYPE INTO a
+    # terminal — a drive-by RCE if a random website could fire them. Any page
+    # can send a *simple* cross-origin POST at 127.0.0.1 (no preflight), so the
+    # defense is to make these NON-simple: require a JSON content type AND a
+    # custom header (each forces a CORS preflight that a cross-origin page can't
+    # pass, since we answer OPTIONS with a bare 501 — no Access-Control-Allow-*),
+    # and additionally reject any Origin that isn't our own. See docs/dashboard.md.
+    def do_POST(self):
+        url = urlparse(self.path)
+        parts = [unquote(p) for p in url.path.strip("/").split("/") if p]
+        try:
+            self.route_post(url, parts)
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception:
+            A.error("", "dashboard POST", {"path": self.path[:200]})
+            try:
+                self._json({"error": "internal"}, 500)
+            except Exception:
+                pass
+
+    def route_post(self, url, parts):
+        api = parts[1:] if parts[:1] == ["api"] else None
+        if api is None:
+            return self._json({"error": "not found"}, 404)
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "message":
+            return self.post_message(api[1])
+        if api == ["sessions", "new"]:
+            return self.post_new_session()
+        return self._json({"error": "not found"}, 404)
+
+    def _reject(self, code, err):
+        """A guard rejection: close the connection (an unread body would desync
+        a kept-alive connection) and send the JSON error. Returns None (implicit)
+        so the caller can `return self._reject(...)` straight out of _post_guard."""
+        self.close_connection = True
+        self._json({"error": err}, code)
+
+    def _post_guard(self):
+        """Validate a control-plane POST against the browser-vector defense
+        (see do_POST) and return its parsed JSON body — or send a 4xx and return
+        None (the caller just returns). Order: content type, custom header,
+        Origin, size cap, then the JSON parse."""
+        ctype = self.headers.get("Content-Type", "").split(";")[0].strip()
+        if ctype != "application/json":
+            return self._reject(415, "content-type must be application/json")
+        if self.headers.get(POST_HEADER) != "1":
+            return self._reject(403, "missing %s header" % POST_HEADER)
+        origin = self.headers.get("Origin")
+        if origin and origin not in ALLOWED_ORIGINS:
+            return self._reject(403, "cross-origin")
+        try:
+            n = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            n = -1
+        if n < 0 or n > POST_MAX:
+            return self._reject(413, "body too large")
+        try:
+            raw = self.rfile.read(n) if n else b""
+            body = json.loads(raw or b"{}")
+        except (ValueError, OSError):
+            return self._reject(400, "invalid JSON")
+        if not isinstance(body, dict):
+            return self._reject(400, "invalid JSON")
+        return body
+
+    def post_message(self, sid):
+        """Type a message into a session's kitty window (the composer). 4xx when
+        the session has no window (headless/daemon) or the text is empty; 503
+        when no terminal resolves; else Frontend.send_text. Every attempt is a
+        `web-send` state_files row, failures also an A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        text = body.get("text")
+        if not isinstance(text, str) or not text.strip():
+            return self._json({"error": "empty text"}, 400)
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        win = str(row.get("kitty_window_id") or "")
+        if not win:
+            A.state_file(log, sdb, "web-send",
+                         {"win": "", "chars": len(text), "ok": False})
+            return self._json({"error": "session has no window (headless)"}, 409)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard message (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-send",
+                         {"win": win, "chars": len(text), "ok": False})
+            return self._json({"error": "no terminal available"}, 503)
+        ok = bool(fe.send_text(win, text))
+        A.state_file(log, sdb, "web-send",
+                     {"win": win, "chars": len(text), "ok": ok})
+        if not ok:
+            A.error(log, "dashboard message (send failed)",
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True})
+
+    def post_new_session(self):
+        """Launch a new session in a new tab (Frontend.launch_tab). 400 when the
+        cwd isn't an existing directory; 503 when no terminal resolves; else the
+        launch. Audited as a `web-launch` state_files row (no session db exists
+        yet, so its log/path are empty)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        cwd = body.get("cwd")
+        if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
+            return self._json({"error": "cwd is not an existing directory"}, 400)
+        prompt = body.get("prompt")
+        argv = ["claude"] + ([prompt]
+                             if isinstance(prompt, str) and prompt.strip() else [])
+        fe = _frontend()
+        if fe is None:
+            A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
+            A.state_file("", "", "web-launch", {"cwd": cwd, "ok": False})
+            return self._json({"error": "no terminal available"}, 503)
+        ok = bool(fe.launch_tab(cwd, argv))
+        A.state_file("", "", "web-launch", {"cwd": cwd, "ok": ok})
+        if not ok:
+            A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
+            return self._json({"error": "launch failed"}, 502)
+        return self._json({"ok": True})
 
     def static(self, name):
         ctype = STATIC.get(name)

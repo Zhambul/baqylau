@@ -60,6 +60,9 @@ CALLS = {
     "close_pane":         ((), 1),
     "set_user_vars":      (("7", {"claude_session": "sid-1"}), 1),
     "resize_pane":        ((("claude_mirror", "sid-1"), "horizontal", 4), 1),
+    # control plane (writes)
+    "send_text":          (("7", "hello"), False),
+    "launch_tab":         (("/tmp", ["claude"]), False),
     # viewport scroll / read
     "scroll_window":      (("7", 12), 1),
     "scroll_window_fast": (("7", 12), False),
@@ -294,6 +297,48 @@ def test_set_tab_color_socket_miss_falls_back_to_kitten(monkeypatch, tmp_path):
                       "--match", "window_id:7",
                       "active_bg=#ff0000", "active_fg=#000000",
                       "inactive_bg=#7f0000", "inactive_fg=#c0c4cc"]]
+
+
+def test_send_text_uses_stdin_with_enter(monkeypatch):
+    """The control-plane composer: text rides STDIN (verbatim, no escape
+    interpretation) with a trailing CR, never a shell/kitten-escape vector."""
+    calls = {}
+
+    class _R:
+        returncode = 0
+
+    def fake_run(argv, input=None, **kw):
+        calls["argv"] = argv
+        calls["input"] = input
+        return _R()
+
+    monkeypatch.setattr(fk.subprocess, "run", fake_run)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
+    assert fe.send_text("7", "hello world") is True
+    assert calls["argv"] == ["/k", "@", "--to", "unix:/tmp/x", "send-text",
+                             "--match", "id:7", "--stdin"]
+    assert calls["input"] == b"hello world\r"
+
+
+def test_send_text_rc_nonzero_is_false(monkeypatch):
+    class _R:
+        returncode = 1
+
+    monkeypatch.setattr(fk.subprocess, "run", lambda *a, **k: _R())
+    assert _rc_fe("/tmp/x").send_text("7", "hi") is False
+
+
+def test_launch_tab_argv(monkeypatch):
+    """launch_tab → `kitten @ launch --type=tab --cwd <cwd> <argv…>`, argv a
+    list (never a shell string). Truthy on rc 0."""
+    calls = []
+    monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
+    assert fe.launch_tab("/proj", ["claude", "fix the bug"]) is True
+    assert calls == [["/k", "unix:/tmp/x", "launch", "--type=tab",
+                      "--cwd", "/proj", "claude", "fix the bug"]]
+    monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
+    assert fe.launch_tab("/proj", ["claude"]) is False
 
 
 def test_model_tail_scan_bytes():

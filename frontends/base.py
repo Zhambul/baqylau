@@ -132,6 +132,23 @@ class Frontend:
         "horizontal"/"vertical" by `increment` cells (negative shrinks)."""
         return 1
 
+    # --- control plane (writes) ---------------------------------------------
+    # Slice consumers: dashboard/server.py only (the web control plane —
+    # docs/dashboard.md). These are the only Frontend methods that TYPE INTO or
+    # SPAWN a terminal on someone's behalf, so they live behind the same strict
+    # POST guard the dashboard applies; a frontend that can't drive input keeps
+    # the inert False and the endpoint returns a clean "no terminal" error.
+    def send_text(self, win, text):
+        """Type `text` into window `win`, followed by Enter (a carriage
+        return), as-is — no shell and no escape interpretation. True when the
+        terminal acknowledged the write, else False."""
+        return False
+
+    def launch_tab(self, cwd, argv):
+        """Open a NEW tab whose window runs `argv` with working directory
+        `cwd`. Truthy on success, False on failure."""
+        return False
+
     # --- viewport scroll / read ---------------------------------------------
     # Slice consumers: claude-mirror.py only (the renderer's click-to-view
     # scroll restore + get_text scroll-position anchor). A frontend without

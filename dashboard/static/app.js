@@ -12,6 +12,8 @@ const $conn = document.getElementById("conn");
 const $notifbtn = document.getElementById("notifbtn");
 const $attn = document.getElementById("attn");
 const $favicon = document.getElementById("favicon");
+const $newbtn = document.getElementById("newbtn");
+const $modal = document.getElementById("modal");
 
 const S = {
   sessions: [],          // last global snapshot
@@ -32,6 +34,19 @@ function el(tag, cls, text) {
   return n;
 }
 function frag(...kids) { const f = document.createDocumentFragment(); kids.forEach(k => k && f.append(k)); return f; }
+
+// The control-plane write: every POST carries the JSON content type AND the
+// custom X-Claude-Dash header the server's _post_guard demands (both force a
+// CORS preflight a cross-origin page can't pass). Resolves to the parsed JSON
+// on success, rejects with the server's {error} on a 4xx/5xx.
+function postJSON(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Claude-Dash": "1" },
+    body: JSON.stringify(body || {}),
+  }).then(r => r.json().then(
+    d => r.ok ? d : Promise.reject(d || { error: "request failed" })));
+}
 
 function kfmt(n) {
   n = +n || 0;
@@ -251,6 +266,12 @@ function renderDirGroups(rows) {
     hd.append(el("span", "dirname", cwd ? cwd.split("/").filter(Boolean).pop() : "no project"));
     if (cwd) hd.append(el("span", "dirpath", cwd));
     hd.append(el("span", "dircount", grows.length + (grows.length === 1 ? " session" : " sessions")));
+    if (cwd) {
+      const add = el("button", "dirnew", "+");
+      add.title = "new session in " + cwd;
+      add.onclick = () => openNewSession(cwd);
+      hd.append(add);
+    }
     $view.append(hd);
     if (active.length) {
       const grid = el("div", "sgrid");
@@ -690,6 +711,130 @@ function buildFilterBar() {
   return bar;
 }
 
+/* ---------- control plane: the message composer ---------- */
+// A textarea above the mirror feed that types a message into the session's
+// kitty window (POST /message). Enter sends, Shift+Enter is a newline. Disabled
+// with a hint when the session isn't live or has no window (a headless/daemon
+// session — the /message endpoint would 409). The sent text surfaces in the
+// stream on its own via the conversation tail, so we only clear + toast.
+
+function autoGrow(ta) {
+  ta.style.height = "auto";
+  ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+}
+
+function buildComposer() {
+  const ses = S.ses;
+  const meta = ses.meta || {};
+  const wrap = el("div", "composer");
+  const ta = el("textarea", "cinput");
+  ta.rows = 1;
+  ta.spellcheck = false;
+  const canSend = !!(meta.live && meta.kitty_window_id);
+  ta.disabled = !canSend;
+  ta.placeholder = canSend
+    ? "message this session…  (Enter to send · Shift+Enter for newline)"
+    : (meta.live ? "no terminal window — can't message a headless session"
+                 : "session is not live");
+  const btn = el("button", "csend", "send");
+  btn.disabled = !canSend;
+  ses.composer = ta;
+  const send = () => {
+    const text = ta.value.trim();
+    if (!text || ta.disabled) return;
+    ta.disabled = true; btn.disabled = true;
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", { text })
+      .then(() => { ta.value = ""; autoGrow(ta); toast("done", "message sent", ""); })
+      .catch(e => toast("ask", "send failed", (e && e.error) || ""))
+      .finally(() => {
+        if (ses.composer === ta) { ta.disabled = !canSend; btn.disabled = !canSend; ta.focus(); }
+      });
+  };
+  ta.oninput = () => autoGrow(ta);
+  ta.onkeydown = (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+  };
+  btn.onclick = send;
+  wrap.append(ta, btn);
+  return wrap;
+}
+
+/* ---------- control plane: the new-session form ---------- */
+// Lives in the persistent #modal host (outside #view) so a list re-render from
+// an SSE snapshot never blows away a half-typed form. Directory input backed by
+// a <datalist> of the distinct cwds in the current snapshot; optional first
+// prompt; submit POSTs /api/sessions/new and the session appears on its own via
+// SessionStart. The header "+ session" button opens it blank; a dir group's "+"
+// prefills that cwd.
+
+function closeNewSession() {
+  $modal.hidden = true;
+  $modal.textContent = "";
+}
+
+function openNewSession(prefillCwd) {
+  $modal.textContent = "";
+  const panel = el("div", "nspanel");
+  panel.append(el("div", "nstitle", "new session"));
+
+  const dirRow = el("label", "nsfield");
+  dirRow.append(el("span", "nslabel", "directory"));
+  const dir = el("input", "nsinput");
+  dir.type = "text";
+  dir.spellcheck = false;
+  dir.placeholder = "/path/to/project";
+  dir.value = prefillCwd || "";
+  dir.setAttribute("list", "ns-cwds");
+  const dl = el("datalist");
+  dl.id = "ns-cwds";
+  for (const cwd of [...new Set(S.sessions.map(r => r.cwd).filter(Boolean))]) {
+    const opt = el("option");
+    opt.value = cwd;
+    dl.append(opt);
+  }
+  dirRow.append(dir, dl);
+
+  const promptRow = el("label", "nsfield");
+  promptRow.append(el("span", "nslabel", "first prompt (optional)"));
+  const prompt = el("textarea", "nsinput nsprompt");
+  prompt.rows = 3;
+  prompt.spellcheck = false;
+  prompt.placeholder = "what should Claude start on?";
+  promptRow.append(prompt);
+
+  const actions = el("div", "nsactions");
+  const cancel = el("button", "nsbtn", "cancel");
+  const submit = el("button", "nsbtn primary", "launch");
+  actions.append(cancel, submit);
+
+  const go = () => {
+    const cwd = dir.value.trim();
+    if (!cwd) { dir.focus(); return; }
+    submit.disabled = true;
+    const body = { cwd };
+    if (prompt.value.trim()) body.prompt = prompt.value.trim();
+    postJSON("/api/sessions/new", body)
+      .then(() => { closeNewSession(); toast("done", "launching…", cwd); })
+      .catch(e => { submit.disabled = false; toast("ask", "launch failed", (e && e.error) || ""); });
+  };
+  submit.onclick = go;
+  cancel.onclick = closeNewSession;
+  dir.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+
+  panel.append(dirRow, promptRow, actions);
+  const back = el("div", "nsback");
+  back.onclick = (e) => { if (e.target === back) closeNewSession(); };
+  back.append(panel);
+  $modal.append(back);
+  $modal.hidden = false;
+  dir.focus();
+}
+
+$newbtn.onclick = () => openNewSession("");
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$modal.hidden) closeNewSession();
+});
+
 function setBadge(badge, tab) {
   badge.dataset.tab = tab;
   badge.replaceChildren(el("span", "st"),
@@ -745,6 +890,7 @@ function renderSessionChrome(tab) {
   $view.append(body);
 
   if (tab === "mirror") {
+    body.append(buildComposer());
     body.append(buildFilterBar());
     const split = el("div", "split");
     split.append(ses.stream);
