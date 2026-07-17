@@ -1077,6 +1077,59 @@ def test_spawn_detached_detaches_into_own_session(tmp_path, reaper):
     assert int(out.read_text()) != os.getsid(0)
 
 
+# --- opt-in web-dashboard auto-start (split._maybe_autostart_dashboard) ----------
+# CLAUDE_DASHBOARD_AUTOSTART=1 makes a hosted SessionStart spawn-if-not-running
+# the per-machine dashboard, DETACHED via the audited spawn — after a cheap
+# lock_holder+pid_alive liveness check (never a port bind from a hook). Auto-start
+# ONLY (docs/dashboard.md's explicit-lifecycle decision: no idle-exit, no
+# auto-stop). OFF by default: with the env unset nothing spawns and nothing is
+# audited (the OTLP receiver's telemetry-gate precedent).
+
+def _autostart_harness(monkeypatch):
+    from core import spawn as CS
+    from plugins.claude_code import split
+    spawns, panes = [], []
+    monkeypatch.setattr(
+        CS, "spawn_detached",
+        lambda path, argv, log, **k: spawns.append((path, list(argv), k)) or "proc")
+    monkeypatch.setattr(
+        split, "audit_pane",
+        lambda sid, action, ok, detail: panes.append((action, ok, detail)))
+    return split, spawns, panes
+
+
+def test_dashboard_autostart_disabled_no_spawn(monkeypatch):
+    monkeypatch.delenv("CLAUDE_DASHBOARD_AUTOSTART", raising=False)
+    split, spawns, panes = _autostart_harness(monkeypatch)
+    split._maybe_autostart_dashboard("sid-1", "/tmp/x.log")
+    assert spawns == [] and panes == []      # gate returns before touching anything
+
+
+def test_dashboard_autostart_skips_when_already_running(monkeypatch):
+    monkeypatch.setenv("CLAUDE_DASHBOARD_AUTOSTART", "1")
+    split, spawns, panes = _autostart_harness(monkeypatch)
+    from core import locks, state
+    monkeypatch.setattr(locks, "lock_holder", lambda db, key: 4321)
+    monkeypatch.setattr(state, "pid_alive", lambda pid: True)
+    split._maybe_autostart_dashboard("sid-1", "/tmp/x.log")
+    assert spawns == []                      # a live holder means no second server
+    assert panes == [("dash-autostart", 1, "already running (pid 4321)")]
+
+
+def test_dashboard_autostart_spawns_when_no_holder(monkeypatch):
+    monkeypatch.setenv("CLAUDE_DASHBOARD_AUTOSTART", "1")
+    split, spawns, panes = _autostart_harness(monkeypatch)
+    from core import locks, paths as P, state
+    monkeypatch.setattr(locks, "lock_holder", lambda db, key: 0)   # nothing running
+    monkeypatch.setattr(state, "pid_alive", lambda pid: False)
+    split._maybe_autostart_dashboard("sid-1", "/tmp/x.log")
+    assert len(spawns) == 1, spawns
+    path, argv, _ = spawns[0]
+    assert path == os.path.join(P.BIN, "claude-dashboard.py")
+    assert argv == ["serve"]                 # `serve`, not `start` (no port bind from a hook)
+    assert panes == [("dash-autostart", 1, "spawned")]
+
+
 # --- core.hostpane.park_db / decide_log_fate — failure-path fates ---------------
 # A silent park failure used to report "keep-history" while the live DB stayed
 # put (orphaned pollers, reuse-live-db on resume), and the three independent

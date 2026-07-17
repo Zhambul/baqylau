@@ -56,6 +56,22 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   respawn-on-SessionStart: that lifecycle is correct for a receiver that only
   matters while sessions emit metrics, and wrong for a dashboard that must be
   up precisely when you're browsing PARKED sessions at midnight.
+
+  **Opt-in auto-start is one-way.** With `CLAUDE_DASHBOARD_AUTOSTART=1` set
+  (docs/wiring.md), a hosted SessionStart also makes a spawn-if-not-running
+  attempt (`plugins/claude_code/split._maybe_autostart_dashboard`, alongside the
+  OTLP fan-out in `cmd_open`): a cheap `locks.lock_holder` + `pid_alive` check —
+  never a port bind from a hook — and, only when nothing is up,
+  `core/spawn.spawn_detached` of `claude-dashboard.py serve`. This changes only
+  the *start* trigger; the explicit-lifecycle story above is otherwise unchanged
+  — there is still no idle-exit and no auto-STOP (you stop it with
+  `claude-dashboard.py stop`). The dashboard's own singleton lock + port-bind
+  second guard make a lost race harmless (a loser exits with an audited
+  lock-denied/port-busy row), so spawning from every session is safe. OFF by
+  default: with the env unset the gate returns before touching anything and
+  audits nothing — the OTLP receiver's telemetry-gate precedent. The decision is
+  audited on the `pane_events` row `cmd_open` already writes (`dash-autostart:
+  spawned` / `already running (pid N)` / `spawn failed`).
 - **gzip in one place.** `_send` — the single non-SSE response path — gzips its
   body (`Content-Encoding: gzip`, recomputed `Content-Length`, `Vary:
   Accept-Encoding`) when the client offers gzip and the body clears `GZIP_MIN`

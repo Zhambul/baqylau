@@ -123,6 +123,17 @@
   `http.server`; `delta` temporality because the receiver sums datapoints; the
   2 s export interval keeps the scoreboard's `≈ $` reasonably live.
 
+  **Opt-in web-dashboard auto-start.** Setting `CLAUDE_DASHBOARD_AUTOSTART=1`
+  in the same `env` block makes each hosted SessionStart bring up the
+  per-machine web dashboard (`bin/claude-dashboard.py`, [dashboard.md](dashboard.md))
+  if it isn't already running — the same spawn-if-not-running shape as the OTLP
+  receiver, but auto-START only (the dashboard never idle-exits or auto-stops;
+  stop it explicitly with `claude-dashboard.py stop`). OFF by default: without
+  the env nothing spawns. `CLAUDE_DASH_PORT` overrides its port (default 8377).
+  ```json
+  "env": { "CLAUDE_DASHBOARD_AUTOSTART": "1" }
+  ```
+
 - **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
   (codex CLI ≥ 0.142). Like Claude's hook table, this wiring lives outside the
   repo. Enable codex's hook system and point its `SessionStart` at the entry:

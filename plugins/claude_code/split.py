@@ -97,6 +97,46 @@ def audit_state(log, path, action, content):
         pass
 
 
+# --- opt-in web-dashboard auto-start --------------------------------------------
+# The web dashboard (docs/dashboard.md) is a per-machine singleton with an
+# EXPLICIT lifecycle: started/stopped by its CLI, deliberately never idle-exiting
+# (you want it up when browsing PARKED sessions at midnight). With
+# CLAUDE_DASHBOARD_AUTOSTART=1 set, a hosted SessionStart ALSO makes a one-shot
+# spawn-if-not-running attempt, so the dashboard is up whenever you're in a
+# session. Auto-START only — it never auto-STOPS (the explicit-lifecycle decision
+# stands). Opt-in and OFF by default: with the env unset the gate returns before
+# touching anything (the OTEL receiver's CLAUDE_CODE_ENABLE_TELEMETRY precedent,
+# plugins/otel/__init__.py — a silent return, no audit row, so nothing at all
+# changes for anyone without the env).
+DASH_AUTOSTART_ENV = "CLAUDE_DASHBOARD_AUTOSTART"
+
+
+def _maybe_autostart_dashboard(sid, log):
+    """Spawn `claude-dashboard.py serve` DETACHED once per machine when the
+    opt-in env is set and no server is already up. The cheap liveness check is
+    the dashboard's own singleton lock (locks.lock_holder + pid_alive) — we never
+    bind the port from a hook. The dashboard's lock + port-bind second guard make
+    a lost race harmless: a loser exits with an audited lock-denied/port-busy row
+    (docs/dashboard.md). Audited on the pane_events row the rest of cmd_open
+    writes; never raises (hooks must not fail)."""
+    if os.environ.get(DASH_AUTOSTART_ENV) != "1":
+        return
+    from core import locks, spawn
+    from core.state import pid_alive
+    try:
+        pid = locks.lock_holder(P.DASH_DB, "dashboard")
+        if pid and pid_alive(pid):
+            audit_pane(sid, "dash-autostart", 1, "already running (pid %d)" % pid)
+            return
+        dash = os.path.join(BIN, "claude-dashboard.py")
+        proc = spawn.spawn_detached(dash, ["serve"], log,
+                                    purpose="web dashboard (autostart)")
+        audit_pane(sid, "dash-autostart", 1 if proc else 0,
+                   "spawned" if proc else "spawn failed (see audit errors)")
+    except Exception:
+        audit_pane(sid, "dash-autostart", 0, "autostart check failed")
+
+
 # The terminal adapter. resolve=True lets it hunt for its control channel
 # beyond the environment — a keymap-driven `launch --type=background` child
 # does NOT inherit KITTY_LISTEN_ON, so the kitty frontend walks the ppid chain
@@ -412,6 +452,10 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # registry and never block SessionStart.
     import plugins
     plugins.on_session_start(log, os.getcwd(), sid)
+    # Opt-in: bring up the per-machine web dashboard (docs/dashboard.md). Same
+    # SessionStart slot as the OTLP receiver's spawn-if-not-running (the fan-out
+    # above), but NOT its lifecycle — auto-start only, no idle-exit.
+    _maybe_autostart_dashboard(sid, log)
 
 
 def cmd_close():                             # SessionEnd (payload on stdin)
