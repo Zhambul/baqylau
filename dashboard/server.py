@@ -470,6 +470,24 @@ def _frontend():
         return None
 
 
+LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
+
+
+def launch_argv(words):
+    """The argv a web new-session launches: `claude` through the user's
+    INTERACTIVE LOGIN shell. kitty execs launch argv with kitty's OWN env — a
+    GUI kitty has no user PATH (so a bare ["claude"] dies command-not-found and
+    the tab closes instantly, while `kitten @ launch` still exits 0) and no
+    shell aliases. `$SHELL -lic` reproduces exactly what typing `claude` in a
+    fresh tab does: profile PATH, rc aliases. The command string is FIXED; the
+    prompt rides as a positional arg via "$@" (after the $0 placeholder), so it
+    is never interpolated into the shell string."""
+    sh = os.environ.get("SHELL") or "/bin/zsh"
+    if os.path.basename(sh) not in LAUNCH_SHELLS:
+        sh = "/bin/zsh"
+    return [sh, "-lic", 'claude "$@"', "claude", *words]
+
+
 # --- the HTTP handler ------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -717,8 +735,8 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
             return self._json({"error": "cwd is not an existing directory"}, 400)
         prompt = body.get("prompt")
-        argv = ["claude"] + ([prompt]
-                             if isinstance(prompt, str) and prompt.strip() else [])
+        argv = launch_argv([prompt]
+                           if isinstance(prompt, str) and prompt.strip() else [])
         fe = _frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})

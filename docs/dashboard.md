@@ -240,9 +240,18 @@ composer is disabled with a hint for it. Empty text is `400`. The text rides
 kitten's `--stdin` verbatim (no shell, no escape interpretation).
 
 `POST /api/sessions/new` `{"cwd", "prompt"?}` validates `cwd` is an existing
-directory (`os.path.isdir`, else `400`) and `Frontend.launch_tab(cwd, ["claude"]
-+ [prompt?])` opens a new tab; the session then appears through its own
-`SessionStart` (no synthetic row). The server may have no resolvable kitty
+directory (`os.path.isdir`, else `400`) and `Frontend.launch_tab(cwd,
+launch_argv([prompt?]))` opens a new tab; the session then appears through its
+own `SessionStart` (no synthetic row). **The argv is NOT a bare `["claude"]`**
+— kitty execs launch argv with kitty's OWN environment, and a GUI-launched
+kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
+flashes and closes while `kitten @ launch` still exits 0; this shipped once)
+and no shell aliases (`claude` here IS an alias). `launch_argv` therefore runs
+`$SHELL -lic 'claude "$@"' claude <prompt?>` — the user's interactive login
+shell, i.e. exactly what typing `claude` in a fresh tab does (profile PATH, rc
+aliases). Injection safety is preserved: the command string is FIXED and the
+prompt rides as a positional `"$@"` arg, never interpolated. Non-POSIX `$SHELL`
+(fish) falls back to `/bin/zsh` (`LAUNCH_SHELLS`). The server may have no resolvable kitty
 socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
 is `False`, `_frontend()` returns `None`, and both endpoints return a clean
 `503`, never a 500 traceback.

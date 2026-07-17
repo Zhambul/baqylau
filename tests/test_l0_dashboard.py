@@ -856,10 +856,29 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     code, body = _post(dash + "/api/sessions/new",
                        {"cwd": str(tmp_path), "prompt": "do the thing"})
     assert code == 200 and json.loads(body) == {"ok": True}
-    assert fe.launched == [(str(tmp_path), ["claude", "do the thing"])]
-    # no prompt → just ["claude"]
+    # claude runs through the user's interactive login shell (kitty's own env
+    # has no user PATH / aliases); the prompt is a POSITIONAL arg, never
+    # interpolated into the fixed command string.
+    cwd, argv = fe.launched[0]
+    assert cwd == str(tmp_path)
+    sh, flags, script, dollar0 = argv[:4]
+    assert os.path.basename(sh) in DS.LAUNCH_SHELLS
+    assert flags == "-lic" and script == 'claude "$@"' and dollar0 == "claude"
+    assert argv[4:] == ["do the thing"]
+    # no prompt → no positional args after the $0 placeholder
     _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
-    assert fe.launched[-1] == (str(tmp_path), ["claude"])
+    assert fe.launched[-1][1][4:] == []
+    # a hostile prompt stays one argv word — nothing for the shell to parse
+    evil = '"; rm -rf ~; echo "'
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "prompt": evil})
+    assert fe.launched[-1][1][4:] == [evil]
+
+
+def test_launch_argv_falls_back_to_zsh(monkeypatch):
+    monkeypatch.setenv("SHELL", "/opt/homebrew/bin/fish")   # no POSIX "$@"
+    assert DS.launch_argv([])[0] == "/bin/zsh"
+    monkeypatch.delenv("SHELL", raising=False)
+    assert DS.launch_argv([])[0] == "/bin/zsh"
 
 
 def test_notifier_ignores_windowless_transitions(monkeypatch):
