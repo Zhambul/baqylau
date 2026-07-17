@@ -756,12 +756,20 @@ class Handler(BaseHTTPRequestHandler):
             return
         cwd = body.get("cwd")
         if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
+            # repr(): a validation reject must leave the EXACT received bytes
+            # in the audit (invisible characters included) — a remote client's
+            # "but I picked it from the dropdown" is undebuggable otherwise
+            A.error("", "dashboard new-session (bad cwd)", {"cwd": repr(cwd)})
             return self._json({"error": "cwd is not an existing directory"}, 400)
         model, effort = body.get("model"), body.get("effort")
         if model is not None and (
                 not isinstance(model, str) or not _MODEL_OK.match(model)):
+            A.error("", "dashboard new-session (bad model)",
+                    {"model": repr(model)})
             return self._json({"error": "invalid model"}, 400)
         if effort is not None and effort not in EFFORTS:
+            A.error("", "dashboard new-session (bad effort)",
+                    {"effort": repr(effort)})
             return self._json({"error": "invalid effort"}, 400)
         prompt = body.get("prompt")
         words = ((["--model", model] if model else [])
