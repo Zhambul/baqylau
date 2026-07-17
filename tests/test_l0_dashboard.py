@@ -84,6 +84,74 @@ def test_op_items_drop_spacing_and_carry_group():
         [("g9", "label"), (None, "line")]
 
 
+# ------------------------------------------------------------------ md_html
+# The conversation-text markdown subset. The load-bearing property is ESCAPING
+# (the neutralize() analog): <script> must survive as escaped text in EVERY
+# context, never as a tag. Markdown completeness is secondary.
+
+import importlib.util
+
+_HAVE_PYGMENTS = importlib.util.find_spec("pygments") is not None
+
+
+def test_md_html_escapes_script_in_every_context():
+    for txt in ("<script>alert(1)</script>",              # plain paragraph
+                "**<script>x</script>**",                 # inside bold
+                "[<script>](https://x.test/a)"):          # inside link text
+        h = opshtml.md_html(txt)
+        assert "<script>" not in h and "&lt;script&gt;" in h
+    # in a highlighted fence the escaped entity is split across SGR spans, so
+    # &lt;script&gt; isn't contiguous — the load-bearing fact is that neither
+    # the opening nor closing tag survives, and escaping did happen.
+    hf = opshtml.md_html("```python\n<script>alert(1)</script>\n```")
+    assert "<script>" not in hf and "</script>" not in hf and "&lt;" in hf
+
+
+def test_md_html_javascript_link_is_plain_text():
+    h = opshtml.md_html("[click](javascript:alert(1))")
+    assert "<a" not in h                                  # scheme rejected
+    assert "[click](javascript:alert(1))" in h            # rendered literally
+    ok = opshtml.md_html("see [docs](https://x.test/d)")
+    assert '<a href="https://x.test/d" target="_blank" rel="noopener">docs</a>' in ok
+
+
+def test_md_html_block_elements():
+    assert "<h2>Title</h2>" in opshtml.md_html("## Title")
+    ul = opshtml.md_html("- one\n- two")
+    assert ul == "<ul><li>one</li><li>two</li></ul>"
+    ol = opshtml.md_html("1. a\n2. b")
+    assert ol == "<ol><li>a</li><li>b</li></ol>"
+    assert "<blockquote>quoted</blockquote>" in opshtml.md_html("> quoted")
+    assert "<hr>" in opshtml.md_html("above\n\n---\n\nbelow")
+    h = opshtml.md_html("a **bold** and *ital* and `code` word")
+    assert "<strong>bold</strong>" in h and "<em>ital</em>" in h
+    assert "<code>code</code>" in h
+
+
+@pytest.mark.skipif(not _HAVE_PYGMENTS, reason="pygments optional (see coderender)")
+def test_md_html_fenced_python_is_highlighted():
+    # a python fence is coloured through the single lexer owner (render.lexer)
+    # -> SGR -> ansi_html spans; guarded because pygments is an optional dep.
+    h = opshtml.md_html("```python\ndef f(x):\n    return x\n```")
+    assert '<pre class="md-code">' in h and "<span style=\"color:rgb(" in h
+    assert "def" in h and "&lt;" not in h                 # nothing to escape here
+
+
+def test_md_html_malformed_never_raises():
+    for bad in ("```python\nx=1\nno closing fence",       # unclosed fence
+                "**unclosed *nested _ stuff",             # tangled emphasis
+                "###### too deep\n> \n- \n\n\n",          # odd blocks
+                "", None):
+        h = opshtml.md_html(bad)
+        assert isinstance(h, str) and "<script>" not in h
+
+
+def test_msg_html_renders_markdown_body():
+    h = opshtml.msg_html("message", "a **bold** claim")
+    assert 'class="msg message"' in h and "<div class=\"md\">" in h
+    assert "<strong>bold</strong>" in h
+
+
 # ------------------------------------------------------------------ the server
 
 @pytest.fixture
@@ -178,6 +246,25 @@ def test_http_agent_timeline(dash, tmp_path):
     # agents list carries the streams keystone fields the cards render
     ags = _get_json(dash + "/api/session/dash3")["agents"]
     assert ags and ags[0]["end_reason"] == "stop-sentinel"
+
+
+def test_activity_entries_carry_markdown_html(dash, tmp_path):
+    # /activity post-processes the timeline: message/prompt entries gain an
+    # `html` field (md_html of their text) so the page renders markdown; the
+    # raw text field stays untouched (additive shape).
+    tp = tmp_path / "mdconv.jsonl"
+    tp.write_text(
+        json.dumps({"type": "user", "message": {"content": "**do** it"}}) + "\n" +
+        json.dumps({"type": "assistant", "message": {
+            "id": "m1", "content": [
+                {"type": "text", "text": "here is a **bold** answer"}]}}) + "\n")
+    A.session_start({"session_id": "dashmd", "cwd": "/w", "transcript_path": str(tp)})
+    d = _get_json(dash + "/api/session/dashmd/activity")
+    msg = next(e for e in d["entries"] if e["t"] == "message")
+    assert "<strong>bold</strong>" in msg["html"]
+    assert msg["text"] == "here is a **bold** answer"      # raw untouched
+    prompt = next(e for e in d["entries"] if e["t"] == "prompt")
+    assert "<strong>do</strong>" in prompt["html"]
 
 
 def test_hidden_agent_husk_rows_are_filtered(dash):

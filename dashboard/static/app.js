@@ -609,16 +609,16 @@ function timelineEntry(ent) {
 
   if (ent.t === "prompt") {
     kcls = "k-prompt"; ktxt = "prompt"; sum = firstLine(ent.text); open = true;
-    bd.append(pre(ent.text));
+    bd.append(mdOrPre(ent.html, ent.text));
   } else if (ent.t === "teammsg") {
     kcls = "k-teammsg"; ktxt = "✉ " + (ent.sender || "team");
     sum = firstLine(ent.body); open = false;
-    bd.append(pre(ent.body));
+    bd.append(mdOrPre(ent.html, ent.body));
   } else if (ent.t === "message") {
     kcls = ent.final ? "k-final" : "k-message";
     ktxt = ent.final ? "result" : "message";
     sum = firstLine(ent.text); open = !!ent.final;
-    bd.append(pre(ent.text));
+    bd.append(mdOrPre(ent.html, ent.text));
   } else if (ent.t === "compact") {
     kcls = "k-compact"; ktxt = "compact";
     sum = "context compacted"; open = false;
@@ -659,6 +659,15 @@ function timelineEntry(ent) {
 }
 
 function pre(text) { const p = el("pre"); p.textContent = text == null ? "" : String(text); return p; }
+// Server-rendered markdown (opshtml.md_html — escaped there, the same
+// neutralize() analog as op HTML) is the only thing set via innerHTML here;
+// with no `html` field (older provider) fall back to plain textContent.
+function mdOrPre(html, text) {
+  if (html == null) return pre(text);
+  const d = el("div", "md");
+  d.innerHTML = html;
+  return d;
+}
 
 /* ---------- errors tab ---------- */
 

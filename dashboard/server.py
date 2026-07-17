@@ -218,6 +218,22 @@ def session_payload(sid):
     return data
 
 
+def _mdify(tl):
+    """Additively enrich a timeline (plugins.activity result) for the page:
+    message / prompt / teammsg entries gain an `html` field — md_html of their
+    text/body, so the drill-down renders conversation text as readable markdown
+    instead of a plain <pre>. The raw text field is left untouched (the API
+    shape stays additive; app.js falls back to pre(text) when `html` is absent,
+    e.g. for a plugin whose provider predates this)."""
+    for ent in (tl or {}).get("entries", []):
+        t = ent.get("t")
+        if t in ("message", "prompt"):
+            ent["html"] = opshtml.md_html(ent.get("text", ""))
+        elif t == "teammsg":
+            ent["html"] = opshtml.md_html(ent.get("body", ""))
+    return tl
+
+
 def _conv_items(recs):
     return [{"g": None, "t": "msg",
              "html": opshtml.msg_html(r["kind"], r.get("text", ""),
@@ -410,9 +426,9 @@ class Handler(BaseHTTPRequestHandler):
                 last, items = ops_payload(sid, _qint(url, "after"))
                 return self._json({"last": last, "items": items})
             if rest == ["activity"]:
-                return self._json(plugins.activity(sid) or {"entries": []})
+                return self._json(_mdify(plugins.activity(sid)) or {"entries": []})
             if len(rest) == 2 and rest[0] == "agent":
-                tl = plugins.activity(sid, rest[1])
+                tl = _mdify(plugins.activity(sid, rest[1]))
                 return self._json(tl if tl is not None else {"entries": []})
             if rest == ["errors"]:
                 return self._json(API.errors(sid))

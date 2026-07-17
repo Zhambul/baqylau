@@ -309,13 +309,161 @@ def view_html(ops, key=""):
             % "".join(ops_html(ops, key)))
 
 
+# --- markdown subset (md_html) ------------------------------------------------
+# A dependency-free presenter for CONVERSATION text (assistant messages, user
+# prompts, teammate mail). Two rules force the shape: the no-build/no-deps rule
+# (docs/dashboard.md) rules OUT a markdown library, and the security rule (the
+# ansi_html escape discipline above) rules OUT any "escape later" design. So
+# escaping is the FIRST thing done to any text that becomes page content: block
+# STRUCTURE is detected on the raw lines (the sigils #-*>`[]() are ASCII and
+# emit nothing themselves), but every fragment that actually reaches the output
+# is html.escape()d at its leaf — _md_inline escapes before layering emphasis,
+# _md_fence escapes (directly, or via ansi_html on the highlighter's ANSI).
+# No raw byte (<script> included) ever passes through to the page. It is a
+# SUBSET on purpose: correctness of escaping beats markdown completeness, and
+# any malformed input degrades to escaped plain text (md_html's outer guard).
+_MD_HEAD = re.compile(r"^(#{1,4})\s+(.*?)\s*#*\s*$")
+_MD_HR = re.compile(r"^ {0,3}([-*_])(?:\s*\1){2,}\s*$")     # --- / *** / ___
+_MD_UL = re.compile(r"^ {0,3}[-*+]\s+(.*)$")
+_MD_OL = re.compile(r"^ {0,3}\d+[.)]\s+(.*)$")
+_MD_QUOTE = re.compile(r"^ {0,3}>\s?(.*)$")
+_MD_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*([\w.+-]*)\s*$")
+# inline: same battle-tested emphasis shapes as render.markdown (emphasis must
+# hug non-space text, so "2 * 3" and a bare "*" are left alone), plus code
+# spans and http(s)-only links.
+_MD_CODE = re.compile(r"`([^`\n]+?)`")
+_MD_LINK = re.compile(r"\[([^\]\n]*)\]\(([^)\s]+)\)")
+_MD_BOLD = re.compile(r"\*\*(\S.*?\S|\S)\*\*|__(\S.*?\S|\S)__")
+_MD_ITAL = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])"
+                      r"|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])")
+
+
+def _md_inline(text):
+    """Inline markup for one line of RAW text. ESCAPE FIRST — html.escape()
+    runs before any tag is layered on, so every substitution below only
+    rearranges safe bytes and no raw byte reaches the page. Order: stash code
+    spans (their * _ [ ] must not re-interpret), then links (http(s)-only — any
+    other scheme stays literal escaped text), then bold/italic, then restore
+    the stashed code as <code> chips."""
+    text = html.escape(text, quote=False)
+    codes = []
+    text = _MD_CODE.sub(
+        lambda m: codes.append(m.group(1)) or "\x00%d\x00" % (len(codes) - 1), text)
+
+    def _link(m):
+        label, url = m.group(1), m.group(2)
+        # url is already escaped; http(s) only — an (escaped) scheme like
+        # "javascript:" fails this test and the whole match stays literal text.
+        if url.startswith(("http://", "https://")):
+            return "<a href=\"%s\" target=\"_blank\" rel=\"noopener\">%s</a>" \
+                   % (html.escape(url, quote=True), label)
+        return m.group(0)
+
+    text = _MD_LINK.sub(_link, text)
+    text = _MD_BOLD.sub(lambda m: "<strong>%s</strong>" % (m.group(1) or m.group(2)), text)
+    text = _MD_ITAL.sub(lambda m: "<em>%s</em>" % (m.group(1) or m.group(2)), text)
+    return re.sub(r"\x00(\d+)\x00",
+                  lambda m: "<code>%s</code>" % codes[int(m.group(1))], text)
+
+
+def _md_fence(body, lang):
+    """A fenced code block -> one <pre class="md-code">. Highlight through the
+    single lexer owner (render.lexer via coderender.render_code) to ANSI, then
+    reuse ansi_html — the same round-trip _gutbody uses, and the same reason:
+    the producer never ran here, and pygments may be absent (render_code then
+    returns None and we fall back to plain escaped text)."""
+    if lang:
+        try:
+            from core import coderender as C
+            hi = C.render_code(body, lang.lower())
+            if hi is not None:
+                return "<pre class=\"md-code\">%s</pre>" % ansi_html(hi)
+        except Exception:
+            pass                           # unknown lexer / no pygments -> plain
+    return "<pre class=\"md-code\">%s</pre>" % html.escape(body, quote=False)
+
+
+def _md_para(lines):
+    return "<p>%s</p>" % "<br>".join(_md_inline(x) for x in lines)
+
+
+def _md_special(line):
+    """True when `line` opens a block that ends the current paragraph."""
+    return bool(_MD_HEAD.match(line) or _MD_HR.match(line) or _MD_UL.match(line)
+                or _MD_OL.match(line) or _MD_QUOTE.match(line)
+                or _MD_FENCE.match(line))
+
+
+def md_html(text):
+    """Render a markdown SUBSET to safe HTML (headings, bold/italic, inline &
+    fenced code, un/ordered lists, blockquotes, http(s) links, rules,
+    paragraphs). Escape-FIRST and single-level; malformed input NEVER raises —
+    the outer guard returns escaped plain text. See the section header above."""
+    try:
+        # Block STRUCTURE is read from raw lines (sigils are ASCII); every leaf
+        # that reaches output escapes itself (_md_inline / _md_fence).
+        lines = (text or "").split("\n")
+        out, i, n = [], 0, len(lines)
+        while i < n:
+            line = lines[i]
+            m = _MD_FENCE.match(line)
+            if m:                                  # fenced code (to closing fence/EOF)
+                fence, lang, i = m.group(1)[0], m.group(2), i + 1
+                body = []
+                while i < n and not (lines[i].lstrip().startswith(fence * 3)
+                                     and _MD_FENCE.match(lines[i])):
+                    body.append(lines[i]); i += 1
+                i += 1                             # consume the closing fence
+                out.append(_md_fence("\n".join(body), lang))
+                continue
+            if _MD_HR.match(line):
+                out.append("<hr>"); i += 1; continue
+            m = _MD_HEAD.match(line)
+            if m:
+                lv = len(m.group(1))
+                out.append("<h%d>%s</h%d>" % (lv, _md_inline(m.group(2)), lv))
+                i += 1; continue
+            if _MD_QUOTE.match(line):
+                q = []
+                while i < n and _MD_QUOTE.match(lines[i]):
+                    q.append(_MD_QUOTE.match(lines[i]).group(1)); i += 1
+                out.append("<blockquote>%s</blockquote>"
+                           % "<br>".join(_md_inline(x) for x in q))
+                continue
+            if _MD_UL.match(line):
+                items = []
+                while i < n and _MD_UL.match(lines[i]):
+                    items.append(_MD_UL.match(lines[i]).group(1)); i += 1
+                out.append("<ul>%s</ul>"
+                           % "".join("<li>%s</li>" % _md_inline(x) for x in items))
+                continue
+            if _MD_OL.match(line):
+                items = []
+                while i < n and _MD_OL.match(lines[i]):
+                    items.append(_MD_OL.match(lines[i]).group(1)); i += 1
+                out.append("<ol>%s</ol>"
+                           % "".join("<li>%s</li>" % _md_inline(x) for x in items))
+                continue
+            if not line.strip():
+                i += 1; continue
+            para = []
+            while i < n and lines[i].strip() and not _md_special(lines[i]):
+                para.append(lines[i]); i += 1
+            out.append(_md_para(para))
+        return "".join(out)
+    except Exception:
+        return "<p>%s</p>" % html.escape(text or "", quote=False).replace("\n", "<br>")
+
+
 def msg_html(kind, text, sender=""):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
     interleaves them — docs/dashboard.md). kind: prompt | message | teammsg.
-    Same escape discipline as everything else: the text rides ansi_html."""
+    The body rides md_html (readable markdown), which is escape-first like
+    everything else here — the same neutralize() analog."""
     who = {"prompt": "you", "message": "claude"}.get(kind) \
         or ("✉ " + (sender or "team"))
-    return ("<div class=\"msg %s\"><span class=\"who\">%s</span><pre>%s</pre></div>"
-            % (html.escape(kind, quote=True), html.escape(who), ansi_html(text)))
+    return ("<div class=\"msg %s\"><span class=\"who\">%s</span>"
+            "<div class=\"md\">%s</div></div>"
+            % (html.escape(kind, quote=True), html.escape(who), md_html(text)))

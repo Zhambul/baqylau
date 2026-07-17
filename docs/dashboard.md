@@ -96,6 +96,27 @@ the result on the clipboard; the `view` verb fetches the rendered
 `view:<gid>` stash from `/view/<gid>` and toggles it inline, the web twin of
 click-to-view. Any other URL becomes a plain `target=_blank` anchor.
 
+**Markdown for conversation text** (`opshtml.md_html`). Assistant messages,
+user prompts and teammate mail are markdown in practice, so the dashboard
+renders them as markdown instead of a flat `<pre>` — a small dependency-free
+subset (headings, bold/italic, inline & fenced code, un/ordered lists,
+blockquotes, `http(s)` links, rules, paragraphs). Two rules dictate the shape.
+The **no-build/no-deps rule** rules out a markdown library, so it is hand-rolled
+(~150 lines). The **escape rule** (the `neutralize()` analog) rules out any
+"escape later" design: block *structure* is detected on the raw lines (the
+sigils `#-*>`` ``[]()` are ASCII and emit nothing themselves), but every
+fragment that reaches the page is `html.escape`d at its leaf — `_md_inline`
+escapes before layering emphasis, and a fenced block is highlighted through the
+single lexer owner (`render.lexer` via `coderender.render_code`) to ANSI and
+then `ansi_html` (which escapes), falling back to plain escaped text when
+pygments/the lexer is absent. So `<script>` survives as escaped text in every
+context, and a `javascript:` link renders as literal text (only `http(s)` URLs
+become anchors). Malformed markdown never raises — the outer guard returns
+escaped plain text. The timeline endpoints (`/activity`, `/agent`) add an
+`html` field to message/prompt/teammsg entries *additively* (the raw `text`
+stays), and `app.js` uses it via `innerHTML` (server-escaped by construction),
+falling back to `pre(text)` when absent.
+
 **Why not an xterm.js embed** (the Hermes harness does one): the mirror's
 content is not a pty — it's a structured op stream that reflows. An embedded
 terminal would need a server-side repaint-to-ANSI at the browser's column

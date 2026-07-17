@@ -80,7 +80,7 @@ backed by grep-style regression tests that will fail the build):
 | Codex rollout record shapes (turn_context/event_msg/response_item grammar, exec-args decode, patch line counts, exit extraction, `usage_split`) | `plugins/codex/rollout.py` — `parse()`/`parse_line()`; the codex stream Renderer and `timeline()` are its two presenters (grep test `test_renderer_consumes_the_parser`) |
 | Codex run identity in the read model (`codex_aid` — the streams src_path basename, extension stripped) | `core/sessionapi.py` — `codex_aid()`/`codex_runs()`; the codex activity provider resolves ids only through them |
 | stats()/counters→dict shaping | `core/state._stats_from` — shared by `stats()` (live) and `stats_at()` (parked history); a third shaping is drift |
-| Paint-op → HTML rendering (SGR/OSC8→spans, `html.escape` as the neutralize analog, the `data-cc` copy/view scheme) | `dashboard/opshtml.py` — the WEB presenter of `core/ops.py`'s op vocabulary (the mirror's `_render` is the ANSI presenter; a third op renderer needs a reason) |
+| Paint-op → HTML rendering (SGR/OSC8→spans, `html.escape` as the neutralize analog, the `data-cc` copy/view scheme); conversation-text markdown→HTML (`md_html`, escape-first subset) | `dashboard/opshtml.py` — the WEB presenter of `core/ops.py`'s op vocabulary (the mirror's `_render` is the ANSI presenter; a third op renderer needs a reason) |
 | ⧉ copy-text extraction (which ops `cmd`/`out`/`all` collect) | `core/copy.collect` — the terminal click handler AND the dashboard `/copy` endpoint both call it |
 
 Adding a new shared fact? Give it one owner in the most-core module whose
