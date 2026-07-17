@@ -874,6 +874,36 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     assert fe.launched[-1][1][4:] == [evil]
 
 
+def test_extra_origins_parse():
+    assert DS.extra_origins("https://dash.zhambyl.top, https://a.b ,,") == \
+        {"https://dash.zhambyl.top", "https://a.b"}
+    assert DS.extra_origins(None) == set()
+    assert DS.extra_origins("") == set()
+
+
+def test_proxied_origin_allowed(dash, monkeypatch, tmp_path):
+    # a CLAUDE_DASH_ORIGINS origin passes the guard (proxied deployment —
+    # docs/remote.md); anything else stays 403 (covered by the guard test)
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    ext = "https://dash.zhambyl.top"
+    monkeypatch.setattr(DS, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {ext})
+    code, body = _post(dash + "/api/sessions/new",
+                       {"cwd": str(tmp_path)}, origin=ext)
+    assert code == 200 and json.loads(body) == {"ok": True}
+
+
+def test_readonly_kills_control_plane(dash, monkeypatch, tmp_path):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS, "READONLY", True)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert e.value.code == 403
+    assert fe.launched == []
+    assert _get(dash + "/api/sessions")[0] == 200      # reads unaffected
+
+
 def test_post_new_session_model_effort(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)

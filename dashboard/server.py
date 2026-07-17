@@ -70,7 +70,22 @@ POST_MAX = 64 * 1024               # request-body cap for the control-plane POST
 POST_HEADER = "X-Claude-Dash"      # the custom header a simple cross-origin POST can't add
 # The only Origins a legit same-origin browser POST carries (it usually sends
 # none at all for same-origin fetches; when it does, it is one of these).
-ALLOWED_ORIGINS = {"http://%s:%d" % (HOST, PORT), "http://localhost:%d" % PORT}
+# CLAUDE_DASH_ORIGINS extends the set for a proxied deployment (cloudflared /
+# tailscale serve — docs/remote.md): comma-separated FULL origins, scheme and
+# all (e.g. "https://dash.zhambyl.top"). The knob adds origins, never replaces
+# the local ones, and is NOT an exposure switch — the bind stays 127.0.0.1;
+# only an outbound connector on this machine can front the port.
+def extra_origins(raw):
+    """CLAUDE_DASH_ORIGINS → the set of extra allowed origins (comma-separated,
+    whitespace-tolerant, empty entries dropped)."""
+    return {o.strip() for o in (raw or "").split(",") if o.strip()}
+
+
+ALLOWED_ORIGINS = ({"http://%s:%d" % (HOST, PORT), "http://localhost:%d" % PORT}
+                   | extra_origins(os.environ.get("CLAUDE_DASH_ORIGINS")))
+# CLAUDE_DASH_READONLY=1 switches the control plane off entirely (every POST
+# is 403) — remote eyes, no remote hands, whatever the proxy in front allows.
+READONLY = (os.environ.get("CLAUDE_DASH_READONLY") or "") == "1"
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC = {                         # whitelist — no path resolution on user input
@@ -667,8 +682,10 @@ class Handler(BaseHTTPRequestHandler):
     def _post_guard(self):
         """Validate a control-plane POST against the browser-vector defense
         (see do_POST) and return its parsed JSON body — or send a 4xx and return
-        None (the caller just returns). Order: content type, custom header,
-        Origin, size cap, then the JSON parse."""
+        None (the caller just returns). Order: read-only kill switch, content
+        type, custom header, Origin, size cap, then the JSON parse."""
+        if READONLY:
+            return self._reject(403, "control plane disabled (read-only)")
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip()
         if ctype != "application/json":
             return self._reject(415, "content-type must be application/json")

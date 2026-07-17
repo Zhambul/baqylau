@@ -228,6 +228,12 @@ the browser must preflight, and we never let the preflight pass
   preflight, so the dashboard's own page is unaffected.
 - **Origin allow-list** as defense in depth — any `Origin` header present and
   not `http://127.0.0.1:<port>` / `http://localhost:<port>` is `403`.
+  `CLAUDE_DASH_ORIGINS` (comma-separated full origins) EXTENDS the set for a
+  proxied deployment (docs/remote.md) — it never replaces the local ones and
+  is not an exposure switch: the bind stays `127.0.0.1`.
+- **`CLAUDE_DASH_READONLY=1`** kills the control plane outright (every POST
+  `403` before any other guard) — for remote-viewing days when the hands
+  should stay home.
 - **Body cap** (`POST_MAX`, 64 KiB) and a JSON-object check; a guard rejection
   closes the connection (an unread body would desync HTTP keep-alive).
 
