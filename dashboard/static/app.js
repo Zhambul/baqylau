@@ -362,6 +362,7 @@ function connectSession(sid) {
   es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
   es.addEventListener("costs", (e) => { S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
+  es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
@@ -616,11 +617,12 @@ function renderSessionChrome(tab) {
     a.append(document.createTextNode(label));
     if (count) a.append(el("span", "count", String(count)));
     tabs.append(a);
+    return a;
   };
   mk("mirror", "mirror");
   mk("activity", "activity");
   mk("agents", "agents", (ses.agents || []).length);
-  mk("errors", "errors", meta.error_count || 0);
+  ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
   $view.append(tabs);
 
   const body = el("div");
@@ -683,6 +685,32 @@ function updateStatsRow() {
         (st.msg_read ? " · " + st.msg_read + " read" : ""));
   const errn = (ses.meta && ses.meta.error_count) || 0;
   if (errn) add("", "⚠ " + errn, "warn");
+}
+
+/* Live ⚠ error badge — the web sibling of the scorebar's errwatch chip
+   (count-only on the fast path; full tracebacks stay behind the errors tab).
+   Patches the stats-row chip and the errors-tab count in place (no full
+   re-render), and re-fetches the errors list only when that tab is open and
+   the count grew. */
+function updateErrCount(n) {
+  const ses = S.ses;
+  if (!ses) return;
+  const prev = (ses.meta && ses.meta.error_count) || 0;
+  if (ses.meta) ses.meta.error_count = n;
+  updateStatsRow();
+  setTabCount(ses.errTab, n);
+  if (ses.tab === "errors" && n > prev && ses.body) renderErrorsInto(ses.body);
+}
+
+function setTabCount(a, n) {
+  if (!a) return;
+  let c = a.querySelector(".count");
+  if (n) {
+    if (!c) { c = el("span", "count"); a.append(c); }
+    c.textContent = String(n);
+  } else if (c) {
+    c.remove();
+  }
 }
 
 /* The "running now" ribbon — one chip per alive `live`-table slot row

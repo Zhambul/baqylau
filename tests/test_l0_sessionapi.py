@@ -169,6 +169,20 @@ def test_errors_are_fork_aware_and_ordered(monkeypatch, tmp_path):
     assert [e["func"] for e in errs] == ["first thing", "second thing"]
 
 
+def test_error_count_is_fork_aware(monkeypatch, tmp_path):
+    """The cheap COUNT twin of errors() spans the whole fork chain (pre-fork
+    rows live under the OLD sid) and matches len(errors()) exactly — any sid in
+    the chain gives the same number."""
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    assert API.error_count("nobody") == 0             # no audit rows -> 0
+    _adopt("ec-old", "ec-new")
+    A.error(P.mirror_log("ec-old"), "first thing", {"n": 1})
+    A.error(P.mirror_log("ec-new"), "second thing", {"n": 2})
+    assert API.error_count("ec-new") == 2
+    assert API.error_count("ec-old") == 2             # any sid in the chain
+    assert API.error_count("ec-new") == len(API.errors("ec-new"))
+
+
 def test_live_at_and_running_group_only_alive_rows(monkeypatch, tmp_path):
     """live_at surfaces every `live` slot row with a pid_alive verdict; running()
     resolves the state DB and returns only alive rows grouped by kind. Slots are

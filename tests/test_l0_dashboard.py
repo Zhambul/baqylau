@@ -297,6 +297,20 @@ def test_running_ribbon_payload_and_sse(dash):
     assert data and "monitor" in json.loads(data)
 
 
+def test_error_badge_payload_and_sse(dash):
+    """session_payload carries the live ⚠ error count (error_count, chain-aware
+    COUNT — not len(errors())), and the per-session SSE announces it as an
+    `errors` {count} event on the slow cadence."""
+    A.session_start({"session_id": "errS", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("errS")
+    A.error(log, "boom", {"n": 1})
+    A.error(log, "bang", {"n": 2})
+    ov = _get_json(dash + "/api/session/errS")
+    assert ov["error_count"] == 2
+    data = _sse_event(dash + "/events/session/errS?after=0&mpos=0", "errors")
+    assert data and json.loads(data)["count"] == 2
+
+
 def test_http_copy_and_view(dash):
     A.session_start({"session_id": "dash2", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("dash2")

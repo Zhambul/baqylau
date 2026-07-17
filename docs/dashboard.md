@@ -159,7 +159,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`, each on change; a fresh connection's first `ops` event is the anchor-merged backlog (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the anchor-merged backlog (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -338,6 +338,17 @@ a stale slot the way `slots.claim` does), grouped by kind. It rides
 `session_payload` as `running` and is pushed as a `running` SSE event on change
 (the same only-on-change, slow-tick cadence as `agents`/`costs`). A parked
 session's rows are all dead, so its ribbon is empty (hidden).
+
+## The live ⚠ error badge
+
+The stats-row ⚠ chip and the errors-tab count are the web sibling of the
+scorebar's errwatch chip: count-only on the fast path (`sessionapi.error_count`
+is a chain-aware `COUNT(*)`, not `len(errors())` hauling every traceback),
+pushed as an `errors` `{count}` SSE event on the same only-on-change slow
+cadence as `agents`/`costs`/`running`, with the full rows staying behind
+`/api/session/<sid>/errors`; `app.js` patches the chip and the tab count in
+place and re-fetches the errors list only when that tab is open and the count
+grew.
 
 ## Codex runs in the agents list
 

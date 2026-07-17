@@ -327,6 +327,19 @@ def errors(sid):
             for i, ts, sc, fn, tb, ctx in _rows(audit_db(), q, tuple(chain))]
 
 
+def error_count(sid):
+    """The swallowed-exception COUNT for a session (chain-aware) — the cheap
+    twin of errors() for the dashboard's ⚠ badge, which polls it every few
+    seconds and must not haul every full traceback just to show a number. Same
+    scope as errors() (the fork chain; NOT errwatch's global-rows-included chip
+    — the badge is the web sibling of that chip but tracks this session)."""
+    chain = sid_chain(sid)
+    q = ("SELECT COUNT(*) FROM errors WHERE session_id IN (%s)"
+         % _in_clause(len(chain)))
+    rows = _rows(audit_db(), q, tuple(chain))
+    return int(rows[0][0]) if rows else 0
+
+
 def session(sid):
     """One session's overview: identity + fork chain + liveness + scoreboard
     stats (live or parked) + agents + tab state + cost totals."""

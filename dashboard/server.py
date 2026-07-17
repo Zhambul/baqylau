@@ -213,7 +213,7 @@ def session_payload(sid):
     shows (full rows stay behind /errors) and the display title."""
     data = API.session(sid)
     data["agents"] = visible_agents(data.get("agents") or [])
-    data["error_count"] = len(API.errors(sid))
+    data["error_count"] = API.error_count(sid)
     data["title"] = session_title(data.get("transcript_path") or "")
     data["running"] = API.running(sid)
     return data
@@ -521,15 +521,15 @@ class Handler(BaseHTTPRequestHandler):
     def sse_session(self, sid, after, mpos=0):
         """One session's live stream: `ops` (rendered HTML), `msgs` (the
         main-thread conversation from byte cursor `mpos`), `stats`, `agents`,
-        `tab`, `costs`, `running` (the live slot ribbon) — each sent only on
-        change. A FRESH connection
+        `tab`, `costs`, `running` (the live slot ribbon), `errors` (the ⚠
+        swallowed-error count) — each sent only on change. A FRESH connection
         (after=0, mpos=0) gets the anchor-merged backlog as its first ops
         event; a reconnect resumes both cursors and appends in arrival
         order (interleave is a backfill affordance, not a live guarantee)."""
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
-                "running": None}
+                "running": None, "errors": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -574,6 +574,14 @@ class Handler(BaseHTTPRequestHandler):
                 if run != prev["running"]:
                     prev["running"] = run
                     if not self._sse("running", run):
+                        return
+                # the ⚠ error badge, live: a cheap COUNT (no tracebacks) on the
+                # slow cadence, pushed only on change (full rows stay behind
+                # /errors). The web sibling of the scorebar's errwatch chip.
+                ec = API.error_count(sid)
+                if ec != prev["errors"]:
+                    prev["errors"] = ec
+                    if not self._sse("errors", {"count": ec}):
                         return
             tab = (API.tab_states().get(win) or "") if win else ""
             if tab != prev["tab"]:
