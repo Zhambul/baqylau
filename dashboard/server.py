@@ -266,18 +266,35 @@ def _conv_items(recs):
             for r in recs]
 
 
-def merged_backlog(sid, key):
-    """The session view's INITIAL stream: every op interleaved with the
-    main-thread conversation, as stream items ({g, t, html} — see
-    opshtml.op_items). Interleave is by TIMESTAMP first: ops carry a wall-clock
-    `_ts` (core.state) and conversation records carry the transcript line's `ts`
-    (transcript.conversation) — when both are present a record is placed after
-    the last op that chronologically precedes it. Pre-migration history (ops or
-    records without a timestamp) falls back to the tool_use-id ANCHOR: ops carry
-    `g`/`v`, records carry `anchor`, and the record lands after that tool's last
-    op. Records with neither a usable timestamp nor a painted anchor keep their
-    relative order at the head (pre-first-tool / anchor None) or tail (anchor
-    never painted). Returns (last_op_id, transcript_pos, [item, …])."""
+TAIL_BLOCKS = 80       # initial backlog: how many stream BLOCKS to paint at once
+HISTORY_BLOCKS = 40    # /history default page size (blocks), when ?blocks absent
+
+
+def _merge_order(sid, key):
+    """The full oldest->newest interleave of a session's ops and its main-thread
+    conversation, WITHOUT rendering — a list of (slot_id, kind, obj) triples
+    (kind 'op' -> obj is the op dict; 'msg' -> obj is a conversation record) so
+    the block cut discards most ops before the costly op_html render runs. Also
+    returns (last_op_id, transcript_pos).
+
+    Interleave is by TIMESTAMP first: ops carry a wall-clock `_ts` (core.state)
+    and conversation records carry the transcript line's `ts`
+    (transcript.conversation) — when both are present a record lands after the
+    last op that chronologically precedes it. Pre-migration history (no ts)
+    falls back to the tool_use-id ANCHOR (ops carry `g`/`v`, records carry
+    `anchor`; the record lands after that tool's last op). Records with neither
+    keep their relative order at the head (pre-first-tool / anchor None) or tail
+    (anchor never painted).
+
+    The `slot_id` is what makes lazy-backlog cursors gap/overlap-free: it is the
+    row id of the op an item belongs to (an op's own id; a conv record's is the
+    id of the op it follows), 0 for the pre-first-tool HEAD group and last+1 for
+    the never-painted TAIL group. Every window is a contiguous run of whole
+    slots, and the op-id cursor names a slot boundary — see merged_backlog /
+    history. Conversation is parsed in FULL here (cheap relative to op HTML —
+    O(turns) text records vs O(thousands) ops, each op carrying a rendered,
+    possibly large output block) and sliced by the merged window; the returned
+    `mpos` is the whole-transcript end so the live SSE tail resumes correctly."""
     sdb = API.state_db_for(sid)
     last, ops = API.ops_at(sdb, 0) if sdb else (0, [])
     got = plugins.conversation(sid, 0)
@@ -309,13 +326,96 @@ def merged_backlog(sid, key):
     buckets = {}
     for r in recs:
         buckets.setdefault(place(r), []).append(r)
-    out = _conv_items(buckets.get(HEAD, []))
+    tail_slot = (ops[-1].get("_id", 0) + 1) if ops else 1
+    entries = [(0, "msg", r) for r in buckets.get(HEAD, [])]
     for i, op in enumerate(ops):
-        out.extend(opshtml.op_items([op], key))
-        if i in buckets:
-            out.extend(_conv_items(buckets[i]))
-    out.extend(_conv_items(buckets.get(TAIL, [])))
-    return last, mpos, out
+        oid = op.get("_id")
+        entries.append((oid, "op", op))
+        for r in buckets.get(i, []):
+            entries.append((oid, "msg", r))
+    entries.extend((tail_slot, "msg", r) for r in buckets.get(TAIL, []))
+    return entries, last, mpos
+
+
+def _cut_blocks(entries, blocks):
+    """Index into `entries` (oldest->newest) of the START of the newest-`blocks`
+    stream blocks — 0 when they all fit. A block is a distinct non-null group
+    `g` or a standalone item; `rule`/`blank` ops are spacing (dropped by
+    op_items) and count as nothing. Approximate by design (the window size is a
+    soft limit) — cursor correctness rides slot ids, not this count."""
+    seen, count = set(), 0
+    for i in range(len(entries) - 1, -1, -1):
+        _slot, kind, obj = entries[i]
+        if kind == "op":
+            if obj.get("t") in ("rule", "blank"):
+                continue
+            g = obj.get("g") or None
+        else:
+            g = None                           # a conv msg is a standalone block
+        if g is None:
+            count += 1
+        elif g not in seen:
+            seen.add(g)
+            count += 1
+        if count > blocks:
+            return i + 1
+    return 0
+
+
+def _snap(entries, start):
+    """Move `start` back to the beginning of its slot so a window contains only
+    WHOLE slots (its first item is the slot's op, whose id is the cursor) — the
+    guarantee that windows never split a slot across the load boundary."""
+    while start > 0 and entries[start - 1][0] == entries[start][0]:
+        start -= 1
+    return start
+
+
+def _render_window(entries, start, key):
+    """Render entries[start:] to stream items ({g, t, html}); op entries through
+    op_items, msg entries through _conv_items. Only the windowed slice is
+    rendered — the whole point of the block cut."""
+    out = []
+    for _slot, kind, obj in entries[start:]:
+        out.extend(opshtml.op_items([obj], key) if kind == "op"
+                   else _conv_items([obj]))
+    return out
+
+
+def merged_backlog(sid, key, blocks=TAIL_BLOCKS):
+    """The session view's INITIAL stream: the NEWEST `blocks` stream blocks of
+    the op+conversation interleave, rendered to stream items ({g, t, html} — see
+    _merge_order for the interleave rule). Returns
+    (last_op_id, transcript_pos, oldest_op_id, [item, …]): `oldest` is the
+    smallest op id painted — 0 when the whole history fits (nothing older to
+    lazy-load), else the next cursor the client hands /history to load the
+    previous blocks downward."""
+    entries, last, mpos = _merge_order(sid, key)
+    start = _snap(entries, _cut_blocks(entries, blocks))
+    oldest = entries[start][0] if start > 0 else 0
+    return last, mpos, oldest, _render_window(entries, start, key)
+
+
+def history(sid, key, before, blocks):
+    """The `blocks` stream blocks immediately OLDER than op id `before` — the
+    lazy-backlog page. Reuses _merge_order's merge core (one implementation), so
+    the initial backlog + successive history pages concatenate to the unlimited
+    merge with no gap and no overlap. Returns (oldest_op_id, [item, …]): the
+    next cursor (0 when the head is reached — history exhausted). `before` names
+    a slot boundary (a returned `oldest`), so the older universe is every whole
+    slot below it."""
+    if before <= 0:
+        return 0, []
+    entries, _last, _mpos = _merge_order(sid, key)
+    bound = len(entries)
+    for i, (slot, _kind, _obj) in enumerate(entries):
+        if slot >= before:                     # slots are id-ordered ascending
+            bound = i
+            break
+    universe = entries[:bound]
+    start = _snap(universe, _cut_blocks(universe, blocks))
+    oldest = universe[start][0] if start > 0 else 0
+    return oldest, _render_window(universe, start, key)
 
 
 def ops_payload(sid, after):
@@ -453,6 +553,12 @@ class Handler(BaseHTTPRequestHandler):
             if rest == ["ops"]:
                 last, items = ops_payload(sid, _qint(url, "after"))
                 return self._json({"last": last, "items": items})
+            if rest == ["history"]:
+                row = API.session_row(sid)
+                key = P.sid_from_log(row["log"]) if row else sid
+                oldest, items = history(sid, key, _qint(url, "before"),
+                                        _qint(url, "blocks") or HISTORY_BLOCKS)
+                return self._json({"oldest": oldest, "items": items})
             if rest == ["activity"]:
                 return self._json(_mdify(plugins.activity(sid)) or {"entries": []})
             if len(rest) == 2 and rest[0] == "agent":
@@ -534,9 +640,9 @@ class Handler(BaseHTTPRequestHandler):
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
         if not after and not mpos:
-            last, mpos, items = merged_backlog(sid, key)
+            last, mpos, oldest, items = merged_backlog(sid, key)
             if items and not self._sse("ops", {"last": last, "mpos": mpos,
-                                               "items": items}):
+                                               "oldest": oldest, "items": items}):
                 return
         n, beat = 0, time.monotonic()
         while True:

@@ -317,9 +317,10 @@ function showSession(sid, tab) {
   if (S.cur !== sid) {
     leaveSession();
     S.cur = sid;
-    S.ses = { lastId: 0, mpos: 0, stream: el("div", "stream"), stats: {}, agents: [],
-              costs: null, running: {}, meta: null, es: null, agentEs: null,
-              timer: null, poll: null, blocks: new Map(),
+    S.ses = { lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
+              agents: [], costs: null, running: {}, meta: null, es: null, agentEs: null,
+              timer: null, poll: null, blocks: new Map(), moreEl: null,
+              loadingOlder: false,
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
@@ -350,6 +351,9 @@ function connectSession(sid) {
     if (d.last <= S.ses.lastId && !d.items.length) return;
     S.ses.lastId = Math.max(S.ses.lastId, d.last);
     if (d.mpos != null) S.ses.mpos = Math.max(S.ses.mpos, d.mpos);
+    // the initial (fresh-connection) backlog carries `oldest` — the smallest
+    // op id painted; >0 means older blocks exist to lazy-load downward.
+    if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
     appendItems(d.items);
   });
   es.addEventListener("msgs", (e) => {
@@ -389,6 +393,7 @@ function connectSession(sid) {
 // which always wins. Ungrouped items (messages, file-op one-liners) stay
 // inline.
 const KEEP_OPEN = 5;
+const HISTORY_FETCH = 40;      // blocks per lazy-backlog /history page
 
 function enforceWindow() {
   const blocks = [...S.ses.blocks.values()];
@@ -403,6 +408,45 @@ function enforceWindow() {
 // is inserted at the top, so the batch lands newest-first; a block keeps the
 // position of its first op (its body still reads top-down) and new blocks
 // appear above it.
+// A collapsible block card (root/head/chips/sum/body + fold-toggle handler),
+// unplaced — the caller inserts .root and decides tracking. Shared by the live
+// top-prepend path (appendItems) and the older-history bottom-append path
+// (appendOlder).
+function createBlock() {
+  const root = el("div", "blk");
+  root.dataset.open = "1";                       // enforceWindow folds elders
+  root.dataset.kind = "commands";                // refineBlockKind upgrades to "agents"
+  const head = el("div", "bhead");
+  const chips = el("span", "bchips");
+  const sum = el("span", "bsum");
+  const body = el("div", "bbody");
+  head.append(chips, sum);
+  root.append(head, body);
+  const b = { root, chips, sum, body, userSet: false, kindLocked: false };
+  head.onclick = (e) => {
+    if (e.target.closest("a")) return;           // ⧉ links keep working
+    b.userSet = true;
+    root.dataset.open = root.dataset.open === "1" ? "0" : "1";
+  };
+  return b;
+}
+
+// Add one grouped item to a block: label ops become summary chips, everything
+// else appends to the body (and seeds the one-line summary). Body always reads
+// oldest->newest (top-down), matching arrival order.
+function fillBlock(b, it) {
+  if (it.t === "label") {
+    b.chips.insertAdjacentHTML("beforeend", it.html);
+  } else {
+    b.body.insertAdjacentHTML("beforeend", it.html);
+    if (!b.sum.textContent && b.body.lastElementChild) {
+      const line = (b.body.lastElementChild.textContent || "")
+        .trim().split("\n").find(l => l.trim());
+      if (line) b.sum.textContent = line.slice(0, 160);
+    }
+  }
+}
+
 function appendItems(items) {
   const st = S.ses.stream;
   const w = st.querySelector(".waiting");
@@ -416,40 +460,111 @@ function appendItems(items) {
     }
     let b = S.ses.blocks.get(it.g);
     if (!b) {
-      const root = el("div", "blk");
-      root.dataset.open = "1";                     // enforceWindow folds elders
-      root.dataset.kind = "commands";              // refineBlockKind upgrades to "agents"
-      const head = el("div", "bhead");
-      const chips = el("span", "bchips");
-      const sum = el("span", "bsum");
-      const body = el("div", "bbody");
-      head.append(chips, sum);
-      root.append(head, body);
-      st.prepend(root);
-      b = { root, chips, sum, body, userSet: false, kindLocked: false };
-      head.onclick = (e) => {
-        if (e.target.closest("a")) return;         // ⧉ links keep working
-        b.userSet = true;
-        root.dataset.open = root.dataset.open === "1" ? "0" : "1";
-      };
+      b = createBlock();
+      st.prepend(b.root);
       S.ses.blocks.set(it.g, b);
     }
-    if (it.t === "label") {
-      b.chips.insertAdjacentHTML("beforeend", it.html);
-    } else {
-      b.body.insertAdjacentHTML("beforeend", it.html);
-      if (!b.sum.textContent && b.body.lastElementChild) {
-        const line = (b.body.lastElementChild.textContent || "")
-          .trim().split("\n").find(l => l.trim());
-        if (line) b.sum.textContent = line.slice(0, 160);
-      }
-    }
+    fillBlock(b, it);
     refineBlockKind(b, it);
     applyFilterTo(b.root);
   }
   enforceWindow();
-  while (st.childElementCount > 3000) st.lastElementChild.remove();
+  while (st.childElementCount > 3000) {
+    const last = st.lastElementChild;
+    if (!last || last === S.ses.moreEl) break;   // the load-older affordance stays
+    last.remove();
+  }
   updateFilterCount();
+}
+
+// The lazy-backlog downward path (item 3): a chunk of OLDER items (server order
+// oldest->newest) appended at the BOTTOM of the feed — the feed is newest-top,
+// so older loads downward, and each successive page is older still, going lower.
+// Blocks born in this chunk start FOLDED and are NOT tracked in the live
+// S.ses.blocks map or the KEEP_OPEN window (they are history, not the live
+// tail). A group that STRADDLES the load boundary (already live in the map) has
+// its older ops appended into the existing card body at the end — acceptable;
+// older ops trail the newer ones (docs/dashboard.md).
+function appendOlder(items) {
+  const st = S.ses.stream;
+  const local = new Map();                       // g -> block, for this chunk only
+  const frag = document.createDocumentFragment();
+  for (const it of items) {
+    if (!it.g) {
+      const tmp = el("div");
+      tmp.innerHTML = it.html;
+      const elem = tmp.firstElementChild;
+      if (elem) { elem.dataset.kind = ungroupedKind(it, elem); applyFilterTo(elem); frag.append(elem); }
+      continue;
+    }
+    const live = S.ses.blocks.get(it.g);         // straddling group: fold in-place
+    if (live) {
+      fillBlock(live, it);
+      refineBlockKind(live, it);
+      applyFilterTo(live.root);
+      continue;
+    }
+    let b = local.get(it.g);
+    if (!b) {
+      b = createBlock();
+      b.root.dataset.open = "0";                 // history blocks arrive folded
+      local.set(it.g, b);
+      frag.append(b.root);
+    }
+    fillBlock(b, it);
+    refineBlockKind(b, it);
+    applyFilterTo(b.root);
+  }
+  if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
+  else st.append(frag);
+  updateFilterCount();
+}
+
+// The "load older" affordance: a button pinned at the BOTTOM of the feed (a
+// child of the stream, so appendItems' top-prepends never disturb it), shown
+// while older blocks remain (S.ses.oldest > 0) and hidden once /history is
+// exhausted (oldest 0). Each click fetches the previous page and appends it
+// downward via appendOlder; filters apply to those items in appendOlder.
+function ensureMoreEl() {
+  const ses = S.ses;
+  if (!ses) return null;
+  if (ses.moreEl && ses.moreEl.isConnected) return ses.moreEl;
+  const b = el("button", "loadmore");
+  b.hidden = true;
+  b.onclick = () => loadOlder();
+  ses.moreEl = b;
+  ses.stream.append(b);                          // bottom of the feed
+  return b;
+}
+
+function updateMoreBtn() {
+  const ses = S.ses;
+  if (!ses) return;
+  const b = ensureMoreEl();
+  if (!b) return;
+  const has = (ses.oldest | 0) > 0;
+  b.hidden = !has;
+  if (has && !ses.loadingOlder)
+    b.textContent = "load older · " + HISTORY_FETCH + " more blocks…";
+}
+
+function loadOlder() {
+  const ses = S.ses;
+  if (!ses || ses.loadingOlder || (ses.oldest | 0) <= 0) return;
+  ses.loadingOlder = true;
+  const sid = S.cur, before = ses.oldest;
+  if (ses.moreEl) ses.moreEl.textContent = "loading…";
+  fetch("/api/session/" + encodeURIComponent(sid) + "/history?before=" + before
+        + "&blocks=" + HISTORY_FETCH)
+    .then(r => r.json())
+    .then(d => {
+      ses.loadingOlder = false;
+      if (S.cur !== sid) return;                 // navigated away mid-fetch
+      appendOlder(d.items || []);
+      ses.oldest = d.oldest | 0;
+      updateMoreBtn();
+    })
+    .catch(() => { ses.loadingOlder = false; updateMoreBtn(); });
 }
 
 /* ---------- stream search + kind filters ---------- */
@@ -638,6 +753,7 @@ function renderSessionChrome(tab) {
     split.append(rail);
     body.append(split);
     updateAgents();
+    updateMoreBtn();                      // the load-older affordance at the bottom
     applyFilter();                        // re-filter items already in the stream
   } else if (tab === "activity") {
     renderTimelineInto(body, "/api/session/" + encodeURIComponent(S.cur) + "/activity",

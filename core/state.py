@@ -338,17 +338,19 @@ def _select_ops(conn, after_id):
 
 
 def _decode_ops(rows):
-    """Decode (id, op, ts) rows into op dicts, injecting the row's ts under the
-    reserved `_ts` key (None for pre-migration rows). Bad JSON is skipped. The
-    (last_id, [op, ...]) tuple shapes callers see are unchanged — `_ts` is an
-    extra key the mirror renderer ignores (it reads ops via .get) and only the
-    dashboard's timestamp interleave consumes."""
+    """Decode (id, op, ts) rows into op dicts, injecting the row's id under the
+    reserved `_id` key and its ts under `_ts` (None for pre-migration rows). Bad
+    JSON is skipped. The (last_id, [op, ...]) tuple shapes callers see are
+    unchanged — `_id`/`_ts` are extra keys the mirror renderer ignores (it reads
+    ops via .get); only the dashboard consumes them (the timestamp interleave
+    reads `_ts`, and the lazy-backlog op-id cursor reads `_id`)."""
     out = []
     for _id, s, ts in rows:
         try:
             o = json.loads(s)
         except Exception:
             continue
+        o["_id"] = _id
         o["_ts"] = ts
         out.append(o)
     return out

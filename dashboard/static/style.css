@@ -366,6 +366,16 @@ body.attn-on .shead { top: 81px; }
 }
 .waiting { color: var(--dim); padding: 30px 0; text-align: center; }
 
+/* the lazy-backlog "load older" affordance, pinned at the bottom of the feed */
+.loadmore {
+  display: block; width: 100%; margin: 10px 0 2px; padding: 8px 12px;
+  background: var(--panel); color: var(--dim); cursor: pointer; border: none;
+  box-shadow: var(--card); border-radius: var(--r);
+  font: 500 11.5px/1 var(--sans);
+}
+.loadmore:hover { color: var(--text); box-shadow: var(--card-hover); }
+.loadmore[hidden] { display: none; }
+
 /* main-thread conversation blocks, interleaved into the web stream only
    (the terminal mirror deliberately omits them — the main pane shows them) */
 .msg {

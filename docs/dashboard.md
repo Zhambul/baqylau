@@ -153,13 +153,14 @@ reflow for free and keeps the no-build rule.
 | `/api/sessions` | discovery list + per-row stats + tab state |
 | `/api/session/<sid>` | overview: `session()` + error count |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
+| `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the anchor-merged backlog (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -218,6 +219,58 @@ reconnects like the ops `after` cursor) and appends `msgs` events in arrival
 order — interleave is a backfill affordance, not a live-ordering guarantee.
 `/api/session/<sid>/ops` stays PURE ops (the mirror-parity endpoint); the merge
 exists only in the SSE backlog.
+
+## Lazy backlog (a big session paints its newest slice instantly)
+
+A long-running session's merged backlog is multi-MB of rendered HTML — sending
+it all in the first SSE `ops` event stalls the paint. So the initial event
+carries only the NEWEST `TAIL_BLOCKS` (80) stream **blocks**, and older history
+loads on demand.
+
+**One merge core, two windows.** `_merge_order()` builds the full oldest→newest
+interleave once — as `(slot_id, kind, obj)` triples, deliberately UNRENDERED so
+the block cut discards most ops before the costly `op_html` render runs — and
+both `merged_backlog()` (the newest `TAIL_BLOCKS`) and `history()` (the previous
+`N` blocks older than a cursor) slice it the same way (`_cut_blocks` → `_snap` →
+`_render_window`). Factoring the merge, not forking it, is what makes the slices
+provably reconcile: the concatenation of the initial backlog and every `/history`
+page equals the unlimited merge, with no gap and no overlap (a test asserts
+exactly this).
+
+**Why slot ids, not op ids alone.** A "block" (a distinct copy-group `g`, or a
+standalone item) is the unit the *count* limits, but a block can span several op
+rows and a conversation msg has NO op id — so a raw op-id cursor could split a
+block's rendering across the boundary or double-count an interleaved msg. Each
+item instead carries a `slot_id`: the row id of the op it belongs to (an op's
+own id; a conv record's is the id of the op it follows), `0` for the
+pre-first-tool HEAD group, `last+1` for the never-painted TAIL group. Windows are
+always whole slots (`_snap` pulls the cut back to a slot boundary), and the
+`oldest` cursor names a slot boundary — so `history(before=oldest)` takes exactly
+the slots below it. `oldest` is `0` when the whole history already fit (nothing
+to lazy-load). Concurrent streams (a bg job emitting mid-foreground-block) can
+make one group's op rows non-contiguous, so a group CAN straddle the cut — its
+newer ops in the initial window, its older ops in a history page; the client
+folds the older ops into the already-live block card (see below), never a
+duplicate card.
+
+**Conversation is parsed in full, sliced by the window.** Each backlog/history
+call re-parses the whole transcript (cheap relative to op HTML — O(turns) text
+records versus O(thousands) ops, each op carrying a rendered, possibly large
+output block) and slices the conversation implicitly by the merged window; there
+is no separate transcript byte cursor for history. The `mpos` the backlog returns
+is still the whole-transcript end, so the live SSE tail resumes correctly.
+
+**Client (`app.js`).** The feed is newest-top, so older history loads DOWNWARD:
+a `.loadmore` button pinned at the bottom of the stream (a child of the stream,
+so the live top-prepends never disturb it) shows while `S.ses.oldest > 0` and
+clicking fetches `/history` and appends the page via `appendOlder()` — the
+mirror image of the live `appendItems()` top-prepend. `appendOlder` inserts at
+the bottom; blocks born in a history page start FOLDED and are NOT tracked in
+the live `S.ses.blocks` map or the `KEEP_OPEN` window (they are history, not the
+live tail); a straddling group already in the live map has its older ops folded
+into that card's body at the end (older ops trail — acceptable). Filters apply to
+lazily loaded items (`appendOlder` runs the shared `applyFilterTo`). The button
+hides once `/history` reports `oldest == 0`.
 
 ## Live agent timelines
 
@@ -383,4 +436,7 @@ highlight, Edit diff with escaped content, Write cap, Read one-liner, deflist,
 unknown-tool fallback), the server on an ephemeral in-process
 port (never through `serve()` — no singleton lock in tests) against data
 seeded via the real product APIs, and the notification watcher's transition
-logic. Import safety for both modules rides `test_import_safety.py`.
+logic. The lazy-backlog tests assert the tail limit + `oldest` cursor, that
+`/history` chains to exhaustion with the slices concatenating to the unlimited
+merge (no gap, no overlap), and that a straddling group is never duplicated.
+Import safety for both modules rides `test_import_safety.py`.

@@ -577,12 +577,13 @@ def test_merged_backlog_interleaves_by_anchor(dash, tmp_path):
     log = P.mirror_log("dash6")
     O.emit(log, O.label("▶ foreground", (170, 185, 210), g="t1"),
            O.gut("hi", (170, 185, 210), g="t1"))
-    last, mpos, items = DS.merged_backlog("dash6", "dash6")
+    last, mpos, oldest, items = DS.merged_backlog("dash6", "dash6")
     kinds = ["prompt" if "msg prompt" in it["html"] else
              "message" if "msg message" in it["html"] else "op"
              for it in items]
     assert kinds == ["prompt", "op", "op", "message"]
     assert last >= 2 and mpos > 0
+    assert oldest == 0            # whole history fits under the default tail
     assert "run it" in items[0]["html"] and "all done" in items[-1]["html"]
 
 
@@ -620,7 +621,7 @@ def test_merged_backlog_interleaves_by_timestamp(dash, tmp_path):
             {"type": "assistant", "timestamp": iso(t2 + 1),
              "message": {"id": "m3", "content": [
                  {"type": "text", "text": "final msg"}]}}))
-    last, mpos, items = DS.merged_backlog("dash7", "dash7")
+    last, mpos, oldest, items = DS.merged_backlog("dash7", "dash7")
     kinds = ["prompt" if "msg prompt" in it["html"] else
              "message" if "msg message" in it["html"] else "op"
              for it in items]
@@ -631,6 +632,86 @@ def test_merged_backlog_interleaves_by_timestamp(dash, tmp_path):
     assert between < optwo
     assert "first ask" in items[0]["html"] and "final msg" in items[-1]["html"]
     assert last >= 2 and mpos > 0
+
+
+# ------------------------------------------------------- lazy backlog + history
+
+def _blocks(sid, n):
+    """Seed a session with `n` standalone label-op blocks (distinct group), the
+    simplest thing that counts as one stream block each. Returns the op ids in
+    emit order."""
+    A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log(sid)
+    for i in range(n):
+        O.emit(log, O.label("block %d" % i, (170, 185, 210), g="b%d" % i))
+    _, ops = DS.API.ops_at(DS.API.state_db_for(sid), 0)
+    return [op["_id"] for op in ops]
+
+
+def test_merged_backlog_tail_limit_and_oldest(dash):
+    ids = _blocks("lz1", 6)
+    # the whole history fits under a generous limit -> no lazy-load cursor
+    _, _, oldest_all, items_all = DS.merged_backlog("lz1", "lz1", blocks=100)
+    assert oldest_all == 0 and len(items_all) == 6
+    # a tail of 2 blocks paints only the newest two, and reports the smallest
+    # painted op id as the `oldest` cursor (block 4's op id, 0-indexed).
+    _, _, oldest, items = DS.merged_backlog("lz1", "lz1", blocks=2)
+    texts = [it["html"] for it in items]
+    assert len(items) == 2
+    assert "block 4" in texts[0] and "block 5" in texts[1]
+    assert oldest == ids[4]                        # smallest painted op id
+
+
+def test_history_chains_to_exhaustion_no_gap_no_overlap(dash):
+    _blocks("lz2", 7)
+    full = DS.merged_backlog("lz2", "lz2", blocks=1000)[3]     # the unlimited merge
+    last, mpos, oldest, items = DS.merged_backlog("lz2", "lz2", blocks=3)
+    assert len(items) == 3 and oldest > 0
+    acc = list(items)
+    guard = 0
+    while oldest > 0:
+        guard += 1
+        assert guard < 50                          # must terminate
+        oldest, page = DS.history("lz2", "lz2", oldest, 3)
+        acc = page + acc                            # pages are OLDER -> prepend
+    # concatenation of every slice equals the unlimited merge: no gap, no overlap
+    assert [it["html"] for it in acc] == [it["html"] for it in full]
+
+
+def test_history_straddling_group_not_duplicated(dash):
+    # interleaved emits make group g1's ops non-contiguous (id1, id3) around
+    # group g2 (id2); a tail of 1 block puts g1's newest op in the initial
+    # window and its older op in history — the group straddles the boundary but
+    # each op item appears exactly once across the slices.
+    A.session_start({"session_id": "lz3", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("lz3")
+    O.emit(log, O.label("g1 head", (1, 2, 3), g="g1"))
+    O.emit(log, O.label("g2 head", (1, 2, 3), g="g2"))
+    O.emit(log, O.gut("g1 more", (1, 2, 3), g="g1"))
+    _, _, oldest, initial = DS.merged_backlog("lz3", "lz3", blocks=1)
+    assert oldest > 0
+    _, older = DS.history("lz3", "lz3", oldest, 10)
+    ini_g1 = [it for it in initial if it["g"] == "g1"]
+    old_g1 = [it for it in older if it["g"] == "g1"]
+    assert ini_g1 and old_g1                        # g1 straddles the boundary
+    # union carries both g1 ops exactly once (no duplicated card body)
+    allg1 = [it["html"] for it in ini_g1 + old_g1]
+    assert len(allg1) == 2 and len(set(allg1)) == 2
+    assert any("g1 more" in h for h in allg1) and any("g1 head" in h for h in allg1)
+
+
+def test_http_history_endpoint(dash):
+    ids = _blocks("lz4", 5)
+    d = _get_json(dash + "/api/session/lz4/history?before=%d&blocks=2" % ids[3])
+    # before block 3's op id: the previous 2 blocks (1 and 2), newest cursor at
+    # block 1's op id (block 0 still older).
+    texts = [it["html"] for it in d["items"]]
+    assert len(texts) == 2
+    assert "block 1" in texts[0] and "block 2" in texts[1]
+    assert d["oldest"] == ids[1]
+    # before=0 is the exhausted signal (no older content)
+    assert _get_json(dash + "/api/session/lz4/history?before=0&blocks=2") \
+        == {"oldest": 0, "items": []}
 
 
 # ------------------------------------------------------- notification watcher
