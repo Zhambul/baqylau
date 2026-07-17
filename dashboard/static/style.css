@@ -107,16 +107,15 @@ code, pre, .mono { font-family: var(--mono); }
 }
 
 /* ---- sessions list ----------------------------------------------------- */
-.secthead {
-  font-size: 12px; text-transform: uppercase; letter-spacing: .22em;
-  color: var(--text); font-weight: 650; margin: 26px 2px 2px;
-  display: flex; align-items: center; gap: 12px;
+.fold {
+  display: block; background: transparent; border: none; cursor: pointer;
+  color: var(--dim); font: 500 11px/1 var(--sans);
+  text-transform: uppercase; letter-spacing: .14em;
+  padding: 7px 2px; margin: 4px 0 0; text-align: left; width: 100%;
 }
-.secthead::before { content: ""; width: 8px; height: 8px; border-radius: 50%;
-  background: var(--done); box-shadow: 0 0 8px var(--done); }
-.secthead.dimsect { color: var(--dim); }
-.secthead.dimsect::before { background: var(--dim2); box-shadow: none; }
-.secthead:first-child { margin-top: 2px; }
+.fold:hover { color: var(--text); }
+.fold.open { color: var(--text-soft); }
+.sgrid.folded { margin: 4px 0 6px; opacity: .8; }
 .dirhead {
   display: flex; align-items: baseline; gap: 12px;
   margin: 22px 2px 10px; padding-bottom: 6px;

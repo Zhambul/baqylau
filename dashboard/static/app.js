@@ -16,7 +16,10 @@ const S = {
   cur: null,             // sid of the open session view
   ses: null,             // per-session state {es, lastId, stream, stats, agents, costs, meta, timer}
   esGlobal: null,
-};
+  folds: new Set(),      // open parked/archived subdivisions ("<cwd>|parked") —
+};                       // survives the list re-renders SSE snapshots trigger
+
+const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 
 /* ---------- tiny DOM + fmt helpers ---------- */
 
@@ -158,20 +161,12 @@ function renderList() {
     $view.append(el("div", "empty", "no sessions recorded yet"));
     return;
   }
-  const live = S.sessions.filter(r => r.live);
-  const parked = S.sessions.filter(r => !r.live);
-  if (live.length) {
-    $view.append(el("div", "secthead", "active"));
-    renderDirGroups(live);
-  }
-  if (parked.length) {
-    $view.append(el("div", "secthead dimsect", "parked"));
-    renderDirGroups(parked);
-  }
+  renderDirGroups(S.sessions);
 }
 
 function renderDirGroups(rows) {
-  // group by directory; groups ordered by their newest session
+  // one group per directory (ordered by its newest session); inside each:
+  // active cards visible, parked / archived (>3d) as click-to-open folds
   const groups = new Map();
   for (const row of rows) {
     const k = row.cwd || "";
@@ -181,14 +176,43 @@ function renderDirGroups(rows) {
   const ordered = [...groups.entries()].sort((a, b) =>
     Math.max(...b[1].map(r => r.started_at || 0))
     - Math.max(...a[1].map(r => r.started_at || 0)));
+  const now = Date.now() / 1000;
   for (const [cwd, grows] of ordered) {
+    const active = grows.filter(r => r.live);
+    const rest = grows.filter(r => !r.live);
+    const old = r => !r.started_at || now - r.started_at > ARCHIVE_S;
+    const parked = rest.filter(r => !old(r));
+    const archived = rest.filter(old);
+
     const hd = el("div", "dirhead");
     hd.append(el("span", "dirname", cwd ? cwd.split("/").filter(Boolean).pop() : "no project"));
     if (cwd) hd.append(el("span", "dirpath", cwd));
     hd.append(el("span", "dircount", grows.length + (grows.length === 1 ? " session" : " sessions")));
     $view.append(hd);
-    const grid = el("div", "sgrid");
-    for (const row of grows) grid.append(sessionCard(row));
+    if (active.length) {
+      const grid = el("div", "sgrid");
+      for (const row of active) grid.append(sessionCard(row));
+      $view.append(grid);
+    }
+    fold(cwd, "parked", parked);
+    fold(cwd, "archived", archived);
+  }
+}
+
+function fold(cwd, kind, rows) {
+  if (!rows.length) return;
+  const key = cwd + "|" + kind;
+  const open = S.folds.has(key);
+  const btn = el("button", "fold" + (open ? " open" : ""),
+                 (open ? "▾ " : "▸ ") + kind + " · " + rows.length);
+  btn.onclick = () => {
+    S.folds.has(key) ? S.folds.delete(key) : S.folds.add(key);
+    renderList();
+  };
+  $view.append(btn);
+  if (open) {
+    const grid = el("div", "sgrid folded");
+    for (const row of rows) grid.append(sessionCard(row));
     $view.append(grid);
   }
 }
