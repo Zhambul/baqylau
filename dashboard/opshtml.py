@@ -272,13 +272,33 @@ def op_html(op, key=""):
 
 def ops_html(ops, key=""):
     """A batch of ops -> [html, …] (empty strings dropped — unknown op types
-    paint nothing, same as the terminal renderer)."""
+    paint nothing, same as the terminal renderer). Used for the click-to-view
+    stashes, where the terminal block shape is wanted verbatim."""
     out = []
     for op in ops:
         if isinstance(op, dict):
             h = op_html(op, key)
             if h:
                 out.append(h)
+    return out
+
+
+def op_items(ops, key=""):
+    """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
+    folds same-`g` items into one collapsible block (the label ops become the
+    block's summary chips), so a finished command reads as one line instead
+    of a wall. `rule`/`blank` ops are dropped here — they are terminal-width
+    spacing, and the web's block cards separate themselves."""
+    out = []
+    for op in ops:
+        if not isinstance(op, dict):
+            continue
+        t = op.get("t")
+        if t in ("rule", "blank"):
+            continue
+        h = op_html(op, key)
+        if h:
+            out.append({"g": op.get("g") or None, "t": t, "html": h})
     return out
 
 

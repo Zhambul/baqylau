@@ -75,6 +75,14 @@ def test_ops_html_skips_unknown_ops():
         == ['<pre class="opl">a</pre>']
 
 
+def test_op_items_drop_spacing_and_carry_group():
+    items = opshtml.op_items([{"t": "rule"}, {"t": "blank"},
+                              {"t": "label", "s": "h", "c": [1, 2, 3], "g": "g9"},
+                              {"t": "line", "s": "solo"}], "k")
+    assert [(it["g"], it["t"]) for it in items] == \
+        [("g9", "label"), (None, "line")]
+
+
 # ------------------------------------------------------------------ the server
 
 @pytest.fixture
@@ -119,8 +127,10 @@ def test_http_sessions_and_ops(dash):
     row = next(r for r in rows if r["sid"] == "dash1")
     assert row["live"] is True
     d = _get_json(dash + "/api/session/dash1/ops?after=0")
-    assert d["last"] >= 3 and len(d["html"]) >= 3
-    assert any("chip" in h for h in d["html"])
+    assert d["last"] >= 3 and len(d["items"]) >= 3
+    assert any("chip" in it["html"] for it in d["items"])
+    # grouped items carry their copy-group id so the app can fold the block
+    assert all(it["g"] == "g1" for it in d["items"])
     # the overview composes without error even for a minimal session
     ov = _get_json(dash + "/api/session/dash1")
     assert ov["sid"] == "dash1" and ov["live"] is True
@@ -267,12 +277,13 @@ def test_merged_backlog_interleaves_by_anchor(dash, tmp_path):
     log = P.mirror_log("dash6")
     O.emit(log, O.label("▶ foreground", (170, 185, 210), g="t1"),
            O.gut("hi", (170, 185, 210), g="t1"))
-    last, mpos, html = DS.merged_backlog("dash6", "dash6")
-    kinds = ["prompt" if "msg prompt" in h else
-             "message" if "msg message" in h else "op" for h in html]
+    last, mpos, items = DS.merged_backlog("dash6", "dash6")
+    kinds = ["prompt" if "msg prompt" in it["html"] else
+             "message" if "msg message" in it["html"] else "op"
+             for it in items]
     assert kinds == ["prompt", "op", "op", "message"]
     assert last >= 2 and mpos > 0
-    assert "run it" in html[0] and "all done" in html[-1]
+    assert "run it" in items[0]["html"] and "all done" in items[-1]["html"]
 
 
 # ------------------------------------------------------- notification watcher

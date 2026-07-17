@@ -255,7 +255,8 @@ function showSession(sid, tab) {
     leaveSession();
     S.cur = sid;
     S.ses = { lastId: 0, mpos: 0, stream: el("div", "stream"), stats: {}, agents: [],
-              costs: null, meta: null, es: null, timer: null, poll: null };
+              costs: null, meta: null, es: null, timer: null, poll: null,
+              blocks: new Map() };
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
       .then(r => r.json())
@@ -280,16 +281,17 @@ function connectSession(sid) {
   S.ses.es = es;
   es.addEventListener("ops", (e) => {
     const d = JSON.parse(e.data);
-    if (d.last <= S.ses.lastId && !d.html.length) return;
+    if (d.last <= S.ses.lastId && !d.items.length) return;
+    const backlog = S.ses.lastId === 0 && S.ses.mpos === 0;
     S.ses.lastId = Math.max(S.ses.lastId, d.last);
     if (d.mpos != null) S.ses.mpos = Math.max(S.ses.mpos, d.mpos);
-    appendOps(d.html);
+    appendItems(d.items, backlog);
   });
   es.addEventListener("msgs", (e) => {
     const d = JSON.parse(e.data);
     if (d.mpos <= S.ses.mpos) return;
     S.ses.mpos = d.mpos;
-    appendOps(d.html);
+    appendItems(d.items, false);
   });
   es.addEventListener("stats", (e) => { S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
@@ -306,14 +308,54 @@ function connectSession(sid) {
   };
 }
 
-function appendOps(htmlBlocks) {
+// Stream items ({g, t, html}) fold into collapsible BLOCK cards by copy-group
+// id: label ops become the block's summary chips (start chip, then the
+// finished/duration chip), everything else goes to the fold-away body. A
+// block born in the backlog starts collapsed; one born live starts open (you
+// watch it stream) and auto-collapses when its finishing label lands — unless
+// the user has toggled it themselves. Ungrouped items (messages, file-op
+// one-liners) stay inline.
+function appendItems(items, backlog) {
   const st = S.ses.stream;
   const w = st.querySelector(".waiting");
   if (w) w.remove();
   const nearBottom =
     window.innerHeight + window.scrollY >= document.body.scrollHeight - 60;
-  for (const h of htmlBlocks) st.insertAdjacentHTML("beforeend", h);
-  while (st.childElementCount > 4000) st.firstElementChild.remove();
+  for (const it of items) {
+    if (!it.g) { st.insertAdjacentHTML("beforeend", it.html); continue; }
+    let b = S.ses.blocks.get(it.g);
+    if (!b) {
+      const root = el("div", "blk");
+      root.dataset.open = backlog ? "0" : "1";
+      const head = el("div", "bhead");
+      const chips = el("span", "bchips");
+      const sum = el("span", "bsum");
+      const body = el("div", "bbody");
+      head.append(chips, sum);
+      root.append(head, body);
+      st.append(root);
+      b = { root, chips, sum, body, labels: 0, userSet: false };
+      head.onclick = (e) => {
+        if (e.target.closest("a")) return;         // ⧉ links keep working
+        b.userSet = true;
+        root.dataset.open = root.dataset.open === "1" ? "0" : "1";
+      };
+      S.ses.blocks.set(it.g, b);
+    }
+    if (it.t === "label") {
+      b.chips.insertAdjacentHTML("beforeend", it.html);
+      b.labels++;
+      if (b.labels >= 2 && !b.userSet) b.root.dataset.open = "0";
+    } else {
+      b.body.insertAdjacentHTML("beforeend", it.html);
+      if (!b.sum.textContent && b.body.lastElementChild) {
+        const line = (b.body.lastElementChild.textContent || "")
+          .trim().split("\n").find(l => l.trim());
+        if (line) b.sum.textContent = line.slice(0, 160);
+      }
+    }
+  }
+  while (st.childElementCount > 3000) st.firstElementChild.remove();
   if (nearBottom && st.isConnected) window.scrollTo(0, document.body.scrollHeight);
 }
 

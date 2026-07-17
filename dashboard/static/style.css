@@ -211,6 +211,37 @@ code, pre, .mono { font-family: var(--mono); }
 .ob { height: .7em; }
 .orule { box-shadow: inset 0 1px 0 var(--hair); height: 1px; margin: 6px 0; }
 .ol { margin: 2px 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+
+/* collapsible activity blocks (same-`g` items folded by the app) */
+.blk {
+  box-shadow: var(--card); border-radius: var(--r);
+  background: var(--panel); margin: 6px 0; overflow: hidden;
+}
+.blk > .bhead {
+  display: flex; align-items: baseline; gap: 10px;
+  padding: 5px 10px 5px 26px; cursor: pointer; position: relative;
+  min-width: 0;
+}
+.blk > .bhead::before {
+  content: "▸"; position: absolute; left: 10px; color: var(--dim2);
+  font-size: 10px;
+}
+.blk[data-open="1"] > .bhead::before { content: "▾"; }
+.blk > .bhead:hover { background: var(--panel2); }
+.bchips { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: baseline; flex: none; }
+.bchips .ol, .bchips .og { margin: 0; display: inline-flex; border: none; padding: 0; }
+.bsum {
+  color: var(--dim); font: 11px/1.5 var(--mono); flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bbody {
+  box-shadow: inset 0 1px 0 var(--hair);
+  padding: 5px 10px 8px; max-height: 480px; overflow: auto;
+}
+.blk[data-open="0"] > .bbody { display: none; }
+/* ⧉ copy links only materialize on hover — ambient noise otherwise */
+.cl { opacity: 0; transition: opacity .12s; }
+.bhead:hover .cl, .ol:hover .cl, .bbody:hover .cl { opacity: 1; }
 .chip {
   color: #14161c; font-weight: 650; font-size: 12px; font-family: var(--mono);
   padding: 0 8px; border-radius: calc(var(--r) / 2); display: inline-block;
@@ -242,7 +273,7 @@ code, pre, .mono { font-family: var(--mono); }
   letter-spacing: .12em; color: var(--dim); font-family: var(--sans);
   margin-bottom: 3px;
 }
-.msg pre { color: var(--text-soft); }
+.msg pre { color: var(--text-soft); max-height: 340px; overflow: auto; }
 .msg.prompt { border-left-color: var(--gold); }
 .msg.prompt .who { color: var(--gold); }
 .msg.message { border-left-color: color-mix(in srgb, var(--mid) 55%, transparent); }

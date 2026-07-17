@@ -216,20 +216,23 @@ def session_payload(sid):
     return data
 
 
-def _conv_html(recs):
-    return [opshtml.msg_html(r["kind"], r.get("text", ""), r.get("sender", ""))
+def _conv_items(recs):
+    return [{"g": None, "t": "msg",
+             "html": opshtml.msg_html(r["kind"], r.get("text", ""),
+                                      r.get("sender", ""))}
             for r in recs]
 
 
 def merged_backlog(sid, key):
     """The session view's INITIAL stream: every op interleaved with the
-    main-thread conversation. There is no timestamp column to merge on — ops
+    main-thread conversation, as stream items ({g, t, html} — see
+    opshtml.op_items). There is no timestamp column to merge on — ops
     deliberately carry none — but ops and transcript records share the
     tool_use ids (`g`/`v` on ops, `anchor` on conversation records), so each
     message is placed after the LAST op of the tool block it followed in the
     transcript. Messages whose anchor never painted any op (or from before
     the first tool) keep their relative order at the head/tail. Returns
-    (last_op_id, transcript_pos, [html, …])."""
+    (last_op_id, transcript_pos, [item, …])."""
     sdb = API.state_db_for(sid)
     last, ops = API.ops_at(sdb, 0) if sdb else (0, [])
     got = plugins.conversation(sid, 0)
@@ -247,31 +250,30 @@ def merged_backlog(sid, key):
             by_anchor.setdefault(a, []).append(r)
         else:
             head.append(r)      # pre-first-tool, or the anchor never painted
-    out = _conv_html([r for r in head if r.get("anchor") is None])
+    out = _conv_items([r for r in head if r.get("anchor") is None])
     tail = [r for r in head if r.get("anchor") is not None]
     for i, op in enumerate(ops):
-        h = opshtml.op_html(op, key)
-        if h:
-            out.append(h)
+        out.extend(opshtml.op_items([op], key))
         for k in ("g", "v"):
             tid = op.get(k)
             if tid and lastpos.get(tid) == i and tid in by_anchor:
-                out.extend(_conv_html(by_anchor.pop(tid)))
-    out.extend(_conv_html(tail))
+                out.extend(_conv_items(by_anchor.pop(tid)))
+    out.extend(_conv_items(tail))
     return last, mpos, out
 
 
 def ops_payload(sid, after):
-    """(last_id, [html, …]) — rendered server-side so the page never touches
-    raw op bytes. Reads via ops_at on the RESOLVED path (live or parked),
-    which can never create the live DB."""
+    """(last_id, [item, …]) — rendered server-side so the page never touches
+    raw op bytes (items: {g, t, html}, see opshtml.op_items). Reads via
+    ops_at on the RESOLVED path (live or parked), which can never create the
+    live DB."""
     sdb = API.state_db_for(sid)
     if not sdb:
         return after, []
     last, ops = API.ops_at(sdb, after)
     row = API.session_row(sid)
     key = P.sid_from_log(row["log"]) if row else sid
-    return last, opshtml.ops_html(ops, key)
+    return last, opshtml.op_items(ops, key)
 
 
 def view_payload(sid, gid):
@@ -373,8 +375,8 @@ class Handler(BaseHTTPRequestHandler):
             if not rest:
                 return self._json(session_payload(sid))
             if rest == ["ops"]:
-                last, html = ops_payload(sid, _qint(url, "after"))
-                return self._json({"last": last, "html": html})
+                last, items = ops_payload(sid, _qint(url, "after"))
+                return self._json({"last": last, "items": items})
             if rest == ["activity"]:
                 return self._json(plugins.activity(sid) or {"entries": []})
             if len(rest) == 2 and rest[0] == "agent":
@@ -454,9 +456,9 @@ class Handler(BaseHTTPRequestHandler):
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
         if not after and not mpos:
-            last, mpos, html = merged_backlog(sid, key)
-            if html and not self._sse("ops", {"last": last, "mpos": mpos,
-                                              "html": html}):
+            last, mpos, items = merged_backlog(sid, key)
+            if items and not self._sse("ops", {"last": last, "mpos": mpos,
+                                               "items": items}):
                 return
         n, beat = 0, time.monotonic()
         while True:
@@ -466,13 +468,13 @@ class Handler(BaseHTTPRequestHandler):
                 if ops:
                     last = last2
                     if not self._sse("ops", {"last": last,
-                                             "html": opshtml.ops_html(ops, key)}):
+                                             "items": opshtml.op_items(ops, key)}):
                         return
             got = plugins.conversation(sid, mpos)
             if got:
                 recs, mpos = got
                 if recs and not self._sse("msgs", {"mpos": mpos,
-                                                   "html": _conv_html(recs)}):
+                                                   "items": _conv_items(recs)}):
                     return
                 st = API.stats_at(sdb)
                 if st != prev["stats"]:
