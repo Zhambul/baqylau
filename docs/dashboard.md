@@ -341,21 +341,32 @@ server validates `resume` against `_SID_OK` (one clean argv word, the same
 alphabet as the sid routes) and rejects `resume`+`continue` together (400,
 like the CLI); both ride as positional `"$@"` words ahead of
 `--model`/`--effort`/prompt, so the injection story is unchanged. A resumed
-conversation **forks to a new sid** (CLAUDE.md: resume forks) — nothing extra
-needed here: the adopt machinery handles the state hand-off as always, and the
-jump watch sees the new live row in the cwd and navigates to it.
+conversation **forks to a new sid** (CLAUDE.md: resume forks) — but NOT at
+launch: SessionStart fires under the OLD sid (restoring its parked DB, so
+that sid flips parked→live), and the fork happens at the first event after.
+The adopt machinery handles the state hand-off as always; the jump watch must
+target the OLD sid (see below — "new sid in the cwd" alone shipped broken
+once).
 
 **Jump to the new session.** The launch response carries no session id — none
 exists yet (the session appears through its own `SessionStart`; the server
 deliberately returns no synthetic row, and inventing one would desync the
 list). So the *client* watches: on a successful launch `app.js` stashes the
-sids it already knows plus the launched cwd (`armJump`), and every following
-global `sessions` snapshot is checked (`checkJump`) for a NEW live row in that
-cwd — the first match navigates the browser to it. The watch is cancelled when
-the user opens any session themselves (`route()` clears it on user navigation
-— `checkJump` disarms *before* setting the hash so its own jump doesn't read
-as one) and by a 120 s timeout, so a launch that never produces a session
-(claude failed to start) can't yank the browser somewhere minutes later.
+known sids, the currently-LIVE sids, and the launched cwd (`armJump`), and
+every following global `sessions` snapshot is checked (`checkJump`). What
+counts as a hit depends on the start mode — **fresh**: a never-seen live sid
+in that cwd; **resume**: *that* sid coming back to life (matched by sid, not
+cwd — you can resume into a different directory); **continue**: any
+already-known cwd-row flipping parked→live (which conversation `--continue`
+picks is the CLI's own history's business). The `liveAtArm` set is what makes
+the last two work — a plain "new sid" check misses them, because resume and
+continue re-animate an EXISTING sid at SessionStart and only fork to a new
+one at the first event after (this shipped broken once). The watch is
+cancelled when the user opens any session themselves (`route()` clears it on
+user navigation — `checkJump` disarms *before* setting the hash so its own
+jump doesn't read as one) and by a 120 s timeout, so a launch that never
+produces a session (claude failed to start) can't yank the browser somewhere
+minutes later.
 
 **Audit.** Every attempt lands a `state_files` row: `web-send`
 (`{win, chars, ok, tab}` — `tab` is the state at send time, so "my message

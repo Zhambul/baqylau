@@ -941,16 +941,27 @@ function buildComposer() {
 /* ---------- jump to a freshly launched session ---------- */
 // A web launch can't know its session id up front — the server deliberately
 // returns no synthetic row; the session appears through its own SessionStart.
-// So the launch stashes the sids we already know and every following global
-// snapshot is checked for a NEW live row in the launched cwd — the first match
-// navigates there. Cancelled when the user opens any session themselves
-// (route() clears the watch on user navigation) or by the timeout: a launch
-// that never produces a session (claude failed to start) must not yank the
-// browser somewhere minutes later.
+// So the launch stashes what we already know and every following global
+// snapshot is checked — the first match navigates there. What counts as the
+// launched session depends on the start mode:
+//   fresh     — a sid we've never seen, live, in the launched cwd;
+//   resume    — THAT sid coming (back) to life: SessionStart fires under the
+//               OLD sid and restores its parked DB (the fork to a new sid
+//               only happens at the first event after, so "new sid" alone
+//               never matches — this shipped broken once);
+//   continue  — some already-known sid in that cwd flipping parked→live
+//               (which one the CLI picks is its own history's business).
+// Hence the liveAtArm set: a hit is a live cwd-row that is either brand-new
+// OR wasn't live when we armed. Cancelled when the user opens any session
+// themselves (route() clears the watch on user navigation) or by the
+// timeout: a launch that never produces a session (claude failed to start)
+// must not yank the browser somewhere minutes later.
 const JUMP_TIMEOUT_MS = 120000;
 
-function armJump(cwd) {
-  S.jump = { cwd, known: new Set(S.sessions.map(r => r.sid)),
+function armJump(cwd, resumeSid) {
+  S.jump = { cwd, resumeSid: resumeSid || "",
+             known: new Set(S.sessions.map(r => r.sid)),
+             liveAtArm: new Set(S.sessions.filter(r => r.live).map(r => r.sid)),
              until: Date.now() + JUMP_TIMEOUT_MS };
 }
 
@@ -958,7 +969,12 @@ function checkJump() {
   const j = S.jump;
   if (!j) return;
   if (Date.now() > j.until) { S.jump = null; return; }
-  const row = S.sessions.find(r => r.live && r.cwd === j.cwd && !j.known.has(r.sid));
+  // the resumed sid itself wins (its cwd may differ from the launch dir);
+  // otherwise any cwd-row that is brand-new or freshly parked→live
+  const row = (j.resumeSid
+               && S.sessions.find(r => r.live && r.sid === j.resumeSid))
+    || S.sessions.find(r => r.live && r.cwd === j.cwd
+                       && (!j.known.has(r.sid) || !j.liveAtArm.has(r.sid)));
   if (!row) return;
   S.jump = null;                       // clear FIRST — route() treats an armed
   //                                      watch on a session hash as user intent
@@ -1087,7 +1103,7 @@ function openNewSession(prefillCwd, resumeSid) {
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
     postJSON("/api/sessions/new", body)
-      .then(() => { armJump(cwd); closeNewSession(); toast("done", "launching…", cwd); })
+      .then(() => { armJump(cwd, body.resume); closeNewSession(); toast("done", "launching…", cwd); })
       .catch(e => { submit.disabled = false; toast("ask", "launch failed", (e && e.error) || ""); });
   };
   submit.onclick = go;
