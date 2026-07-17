@@ -146,13 +146,19 @@ session AND a first-class HOST on its own: `launch.py` (the detach-fast
 launcher), `watch.py` (the discovery watcher — in a Claude host it streams
 every repo codex run; given a `HOST_PID` it becomes a standalone session
 manager, streaming just this codex session's own rollout and owning teardown),
-`stream.py` (one tailer per codex run), and `session.py` (the standalone-host
+`stream.py` (one tailer per codex run — the paint half), `rollout.py`
+(rollout-record parsing + the drill-down `timeline()`/`activity()` — the
+parse half of the codex parse/paint split, one record-grammar owner shared
+with the mirror renderer, see [sessionapi.md](sessionapi.md)), and
+`session.py` (the standalone-host
 SessionStart handler — see [codex.md](codex.md) › *standalone*). The three
 `claude-codex-*.py` entries plus `claude-codex-session.py` are thin shims in `bin/`.
 `plugins/__init__.py` is the registry: `all_plugins()` (host first),
 `on_session_start(log, cwd, sid)` (SessionStart fan-out — how codex attaches
 its watcher to a Claude host; a plugin failure is audited and never blocks the
-host's SessionStart), and `census(log)` (the scoreboard's ✉-row fan-out).
+host's SessionStart), `census(log)` (the scoreboard's ✉-row fan-out), and the
+read-side fan-outs (`activity`/`session_title`/`conversation` — first plugin
+that recognizes the key wins).
 **Adding support for another agent tool** = a new `plugins/<tool>/` directory
 implementing whichever hooks it needs (`on_session_start` for a secondary
 source; its own entry scripts + hook wiring for a hook-driven host — Claude

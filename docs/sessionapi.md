@@ -28,7 +28,8 @@ Two kinds of surface in one module:
 
   Functions: `sessions()`, `session(sid)`, `session_row(sid)`,
   `state_db_for(sid)`, `agents(sid)`, `agent_transcript(sid, agent_id)`,
-  `costs(sid)`, `errors(sid)`, `sid_chain(sid)`.
+  `codex_runs(sid)` / `codex_aid(src_path)`, `costs(sid)`, `errors(sid)`,
+  `sid_chain(sid)`.
 
 ## The `streams` table is the keystone
 
@@ -83,11 +84,24 @@ the main thread's timeline; user turns that arrive as list-content text
 blocks (a parent-transcript shape the mirror deliberately never painted) are
 surfaced by `timeline()` only.
 
-**codex is deferred**: its stream renderer parses and paints in the same
-methods (no split yet), and there is no durable sid→rollout index — after-
-the-fact recovery goes through the audit `streams` rows (`kind='codex'`,
-`src_path` = the rollout). A codex activity provider needs its own parse
-split first; the registry hook is already in place for it.
+**codex has the same split** (`plugins/codex/rollout.py` — the one owner of
+the rollout record shapes; `stream.py`'s `Renderer.feed_rollout` paints its
+typed records byte-identically to the pre-split renderer, pinned by the e2e
+codex suite). Its `timeline()` returns the SAME dict shape as the claude one,
+so the dashboard drill-down renders a codex run with zero special-casing
+(reasoning records and the task/turn lifecycle are deliberately not entries —
+the same fidelity line the claude timeline draws by dropping thinking
+blocks). There is still no durable sid→rollout index, and none is needed:
+recovery goes through the audit `streams` rows (`kind='codex'`, `src_path` =
+the rollout), read via `sessionapi.codex_runs()`. Because codex tailers
+record no hook `agent_id`, the read model synthesizes one —
+`sessionapi.codex_aid()`, the `src_path` basename with the extension
+stripped — and `agents()` lists codex runs in the same row shape
+(kind `codex`, `desc` = the run label), so the codex provider resolves the
+id straight back to its rollout. A companion job's `.log` run is listed but
+declines drill-down (its activity log is not a rollout); a STANDALONE codex
+session's own rollout answers `activity(sid)` with no agent_id — the
+rollout filename uuid IS the sid.
 
 ## Fidelity ladder (what drill-down can and cannot show)
 

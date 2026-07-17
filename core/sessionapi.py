@@ -189,7 +189,8 @@ def state_db_for(sid):
 # --- the read model -----------------------------------------------------------------
 
 def agents(sid):
-    """All subagents/teammates of a session, chain-aware. The audit `streams`
+    """All subagents/teammates of a session, chain-aware, plus its codex runs
+    (codex_runs() below — same row shape, kind 'codex'). The audit `streams`
     rows are the keystone (src_path IS the transcript, end_reason IS the final
     status — 'stop-sentinel', 'stoppedByUser (manual cancel)',
     'parent-task-resolved (rejected)', …; an ended_at of None on the newest row
@@ -220,6 +221,44 @@ def agents(sid):
             rec["desc"] = arec.get("desc") or ""
             rec["done"] = bool(arec.get("done"))
             rec["slot"] = arec.get("slot")
+    for rec in codex_runs(sid):
+        out[rec["agent_id"]] = rec   # synthesized ids — can't collide with hook agent_ids
+    return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
+
+
+def codex_aid(src_path):
+    """The synthesized agent identity of a codex run — codex tailers record
+    no hook agent_id (a run is session/cwd-attributed, docs/codex.md), so the
+    read model names one by its stream src_path basename, extension stripped:
+    'rollout-<ts>-<uuid>' for a native rollout, the job id for a companion
+    log. One owner (here, styleguide table); the codex activity provider
+    resolves the same ids back through codex_runs()."""
+    return os.path.splitext(os.path.basename(src_path or ""))[0]
+
+
+def codex_runs(sid):
+    """The session's codex runs, chain-aware, from the audit streams keystone
+    (kind='codex' — written by the codex tailer's stream_lifecycle) in the
+    agents() row shape: agent_id is codex_aid(src_path), desc is the run
+    label (the streams task_id: 'cli', 'Review', …), transcript is the run's
+    SOURCE file — a native rollout .jsonl (parseable by the codex activity
+    provider) or a companion job .log (activity log only; no drill-down).
+    A restarted run (several stream rows, one src) merges like a restarted
+    teammate: first start, newest end/status."""
+    chain = sid_chain(sid)
+    out = {}
+    q = ("SELECT src_path, task_id, started_at, ended_at, end_reason,"
+         " lines_emitted FROM streams WHERE kind='codex'"
+         " AND session_id IN (%s) ORDER BY started_at" % _in_clause(len(chain)))
+    for src, task, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
+        aid = codex_aid(src)
+        if not aid:
+            continue
+        rec = out.setdefault(aid, {"agent_id": aid, "kind": "codex",
+                                   "transcript": src or "", "started_at": st,
+                                   "desc": task or ""})
+        rec["ended_at"], rec["end_reason"] = en, er or ""
+        rec["tools"] = lines
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 

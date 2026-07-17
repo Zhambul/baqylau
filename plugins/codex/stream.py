@@ -17,6 +17,10 @@
 #                       written for ANY codex run — incl. a raw `codex` / `codex exec`
 #                       that never touched the companion. JSONFILE is "-"; completion
 #                       is a `task_complete` event with no follow-up turn.
+#                       Rollout-line PARSING lives in plugins/codex/rollout.py (the
+#                       parse half of the parse/paint split, docs/sessionapi.md) —
+#                       this renderer consumes its typed records and owns only the
+#                       paint (chips, caps, colours, scoreboard folds).
 #
 # The colour is passed in as "r,g,b" (the watcher round-robins core.slots.CODEX_
 # PALETTE) — this stream keeps no slot marker, so it never affects the tab colour.
@@ -29,6 +33,7 @@ from core import render as R
 from core import state as S
 from core import streamfmt as SF
 from core import tail as T
+from plugins.codex import rollout as RO
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -109,46 +114,28 @@ FILE_VERB = {"add": ("Write", O.GREEN, "Write"),
              "move": ("Update", O.YELLOW, "Edit")}
 
 
-def _patch_delta(ch):
-    """(added, removed) line counts for one patch_apply_end change entry."""
-    t = ch.get("type")
-    if t == "add":
-        return len((ch.get("content") or "").splitlines()), 0
-    if t == "delete":
-        return 0, len((ch.get("content") or "").splitlines())
-    add = rem = 0
-    for ln in (ch.get("unified_diff") or "").splitlines():
-        if ln.startswith("+") and not ln.startswith("+++"):
-            add += 1
-        elif ln.startswith("-") and not ln.startswith("---"):
-            rem += 1
-    return add, rem
-
-
-def render_patch(p):
-    """patch_apply_end: the authoritative file-op record for a codex run — it
-    carries the RESOLVED absolute paths + per-file diffs (the apply_patch
-    response_item only has repo-relative patch text, so that one is ignored:
-    rendering both would duplicate). One file-op line per changed file + the
-    same scoreboard accounting the substream does for subagent file ops
-    (unique-path files set, ± line sums, Edit/Write tool tallies) — plain
-    bump() rows, no meta: these are file/line deltas, not the token/cost
-    deltas the unattributed-bump anomaly guards."""
-    if not p.get("success"):
+def render_patch(rec):
+    """A parsed rollout `patch` record (plugins/codex/rollout.py — built from
+    patch_apply_end, the authoritative file-op record for a codex run: it
+    carries the RESOLVED absolute paths + per-file diffs; the apply_patch
+    response_item only has repo-relative patch text, so the parser ignores
+    that one: rendering both would duplicate). One file-op line per changed
+    file + the same scoreboard accounting the substream does for subagent
+    file ops (unique-path files set, ± line sums, Edit/Write tool tallies) —
+    plain bump() rows, no meta: these are file/line deltas, not the
+    token/cost deltas the unattributed-bump anomaly guards."""
+    if not rec["success"]:
         O.emit(LOG, O.gut(FAIL + "■ patch failed" + RST, SLOT_RGB))
         return
-    for path, ch in (p.get("changes") or {}).items():
-        if not isinstance(ch, dict):
-            continue
-        verb, rgb, tool = FILE_VERB.get(ch.get("type"), FILE_VERB["update"])
-        name = os.path.basename((path or "").rstrip("/")) or path or "?"
-        add, rem = _patch_delta(ch)
+    for f in rec["files"]:
+        verb, rgb, tool = FILE_VERB.get(f["change"], FILE_VERB["update"])
+        name = os.path.basename((f["path"] or "").rstrip("/")) or f["path"] or "?"
         # The one-liner shape is the shared core builder (streamfmt.file_line —
         # the same anatomy the claude_code file formatters paint); a codex patch
         # has no extent/range/failure variants, just the ± counts.
-        line = SF.file_line(verb, name, rgb, added=add, removed=rem)
+        line = SF.file_line(verb, name, rgb, added=f["added"], removed=f["removed"])
         O.emit(LOG, O.gut(line, SLOT_RGB))
-        O.bump(LOG, tool=tool, file=path, added=add, removed=rem)
+        O.bump(LOG, tool=tool, file=f["path"], added=f["added"], removed=f["removed"])
 
 # A companion job-log line is prefixed with an ISO timestamp; the tail is the event
 # head. Un-prefixed lines are continuation body of the preceding block event.
@@ -271,126 +258,93 @@ class Renderer:
         elif line.strip():
             self.cur_body.append(line)
 
-    # --- rollout (.jsonl) parse: codex's own native session log ---------------------
-    # One handler per record shape, selected via the _EVENT/_RESP tables below —
-    # every event_msg/response_item `type` names exactly one handler (unknown
-    # types fall through silently, as the old ladder did).
+    # --- rollout (.jsonl) paint: codex's own native session log ---------------------
+    # The PARSING lives in plugins/codex/rollout.py (the one owner of the
+    # rollout record shapes); these handlers consume its typed records — one
+    # handler per record kind, selected via the _RO table below (unknown
+    # record types never reach here: the parser returns None for them, as the
+    # old ladder fell through silently).
 
-    def _ro_turn_context(self, p):
+    def _ro_turn_context(self, rec):
         # Model + effort for this turn — shown once (dim ⚙ line) and re-shown
         # only when it changes; the bare model id prices the footer rollup.
-        model = (p.get("model") or "").strip()
-        eff = (((p.get("collaboration_mode") or {}).get("settings") or {})
-               .get("reasoning_effort") or "").strip()
+        model, eff = rec["model"], rec["effort"]
         tag = model + (" · " + eff if eff else "")
         if model and tag != self.ro_tag:
             self.ro_model, self.ro_tag = model, tag
             O.emit(LOG, dim_gut("⚙ " + tag))
 
-    def _ev_token_count(self, p):
-        # Cumulative usage snapshot (info is null on rate-limit-only
-        # events). Folded into the scoreboard ONCE, at the footer — the
-        # totals are cumulative, so summing per-event would double-count.
-        u = (p.get("info") or {}).get("total_token_usage") if isinstance(
-            p.get("info"), dict) else None
-        if isinstance(u, dict):
-            self.ro_usage = u
+    def _ro_usage(self, rec):
+        # Cumulative usage snapshot. Folded into the scoreboard ONCE, at the
+        # footer — the totals are cumulative, so summing per-record would
+        # double-count.
+        self.ro_usage = rec["usage"]
 
-    def _ev_patch_apply_end(self, p):
-        render_patch(p)
+    def _ro_patch(self, rec):
+        render_patch(rec)
 
-    def _ev_context_compacted(self, p):
+    def _ro_compact(self, rec):
         # Same ⟳ treatment the substream gives a compact_boundary, so a
         # gap in a codex run's history reads the same way.
         O.emit(LOG, O.gut(R.fg(*O.YELLOW) + "⟳ compacted" + RST, SLOT_RGB))
 
-    def _ev_task_started(self, p):
+    def _ro_task_started(self, rec):
         self.ro_active = True
         if self.ro_started is None:
-            self.ro_started = p.get("started_at")
+            self.ro_started = rec["at"]
 
-    def _ev_task_complete(self, p):
+    def _ro_task_complete(self, rec):
         self.ro_active = False
-        self.ro_completed = p.get("completed_at") or self.ro_completed
+        self.ro_completed = rec["at"] or self.ro_completed
         self.ro_done_wall = time.time()
 
-    def _ev_turn_aborted(self, p):
+    def _ro_turn_aborted(self, rec):
         self.ro_active, self.ro_aborted, self.ro_done_wall = False, True, time.time()
 
-    def _ev_user_message(self, p):
-        msg = (p.get("message") or "").strip()
-        if msg:
-            g = O.new_group(LOG)
-            O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-                   gutter(cap(msg, CAP_PROMPT), g=g))
+    def _ro_prompt(self, rec):
+        g = O.new_group(LOG)
+        O.emit(LOG, chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
+               gutter(cap(rec["text"], CAP_PROMPT), g=g))
 
-    def _ev_agent_reasoning(self, p):
-        txt = (p.get("text") or "").strip()
-        if txt:
-            g = O.new_group(LOG)
-            O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
-                   dim_gut(cap(txt, CAP_THINK), g=g))
+    def _ro_reasoning(self, rec):
+        g = O.new_group(LOG)
+        O.emit(LOG, chip("⋯", "reasoning", g=g, lk=O.COPY_ALL),
+               dim_gut(cap(rec["text"], CAP_THINK), g=g))
 
-    def _ev_agent_message(self, p):
-        msg = (p.get("message") or "").strip()
-        if msg:
-            self.last_msg = msg
-            g = O.new_group(LOG)
-            O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
-                   gutter(cap(msg, CAP_MSG), g=g))
+    def _ro_message(self, rec):
+        self.last_msg = rec["text"]
+        g = O.new_group(LOG)
+        O.emit(LOG, chip("✎", "message", g=g, lk=O.COPY_ALL),
+               gutter(cap(rec["text"], CAP_MSG), g=g))
 
-    def _rsp_web_search_call(self, p):
-        q = (p.get("action") or {}).get("query") or ""
-        if q:
-            g = O.new_group(LOG)
-            O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL), gutter(cap(q, CAP_HEAD), g=g))
+    def _ro_search(self, rec):
+        g = O.new_group(LOG)
+        O.emit(LOG, chip("⌕", "search", g=g, lk=O.COPY_ALL),
+               gutter(cap(rec["query"], CAP_HEAD), g=g))
 
-    def _rsp_function_call_output(self, p):
+    def _ro_exec_result(self, rec):
         # The exec output record: surface a FAILED exit prominently (the
         # companion path already does this from its "Command failed" lines).
-        out = p.get("output") or ""
-        m = re.search(r"(?:^|\n)(?:Exit code|Process exited with code)[: ]+(\d+)",
-                      out[:300])
-        if m and m.group(1) != "0":
-            self._emit_exit_chip(m.group(1))
+        if rec["exit"] and rec["exit"] != "0":
+            self._emit_exit_chip(rec["exit"])
 
-    def _rsp_function_call(self, p):
-        if p.get("name") != "exec_command":
-            return
-        try:
-            args = json.loads(p.get("arguments") or "{}")
-        except Exception:
-            args = {}
-        cmd = args.get("cmd") or args.get("command") or ""
-        if isinstance(cmd, list):
-            cmd = " ".join(str(x) for x in cmd)
-        if cmd:
-            g = O.new_group(LOG)
-            O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]), O.code(cmd, g=g))
+    def _ro_exec(self, rec):
+        g = O.new_group(LOG)
+        O.emit(LOG, chip("▶", "cmd", g=g, lk=[["cmd", "⧉cmd"]]),
+               O.code(rec["cmd"], g=g))
 
-    _EVENT = {"token_count": _ev_token_count, "patch_apply_end": _ev_patch_apply_end,
-              "context_compacted": _ev_context_compacted,
-              "task_started": _ev_task_started, "task_complete": _ev_task_complete,
-              "turn_aborted": _ev_turn_aborted, "user_message": _ev_user_message,
-              "agent_reasoning": _ev_agent_reasoning,
-              "agent_message": _ev_agent_message}
-    _RESP = {"web_search_call": _rsp_web_search_call,
-             "function_call_output": _rsp_function_call_output,
-             "function_call": _rsp_function_call}
+    _RO = {"turn_context": _ro_turn_context, "usage": _ro_usage,
+           "patch": _ro_patch, "compact": _ro_compact,
+           "task_started": _ro_task_started, "task_complete": _ro_task_complete,
+           "turn_aborted": _ro_turn_aborted, "prompt": _ro_prompt,
+           "reasoning": _ro_reasoning, "message": _ro_message,
+           "search": _ro_search, "exec": _ro_exec,
+           "exec_result": _ro_exec_result}
 
-    def feed_rollout(self, o):
-        t = o.get("type")
-        p = o.get("payload") or {}
-        if t == "turn_context":
-            self._ro_turn_context(p)
-        elif t == "event_msg":
-            h = self._EVENT.get(p.get("type"))
-            if h:
-                h(self, p)
-        elif t == "response_item":
-            h = self._RESP.get(p.get("type"))
-            if h:
-                h(self, p)
+    def feed_rollout(self, rec):
+        h = self._RO.get(rec["kind"])
+        if h:
+            h(self, rec)
 
 
 def read_status():
@@ -436,7 +390,9 @@ def main(run):
                 s = s.strip()
                 if s:
                     try:
-                        rd.feed_rollout(json.loads(s))
+                        rec = RO.parse(json.loads(s))
+                        if rec is not None:
+                            rd.feed_rollout(rec)
                     except Exception:
                         # A COMPLETE line (FileTailer only surfaces newline-
                         # terminated lines — mid-write partials stay pending)
@@ -504,10 +460,9 @@ def main(run):
         # are re-derivable from the audit DB alone). No fold on the parked-DB
         # exit above, and none for companion (.log) runs — their usage isn't
         # in the activity log (their rollout is deliberately not adopted).
-        tin = int(rd.ro_usage.get("input_tokens") or 0)
-        tcache = int(rd.ro_usage.get("cached_input_tokens") or 0)
-        tout = int(rd.ro_usage.get("output_tokens") or 0)
-        fresh = max(tin - tcache, 0)
+        # rollout.usage_split is the ONE total_token_usage mapping (the
+        # timeline read model consumes the same figures).
+        fresh, tout, tcache, tin = RO.usage_split(rd.ro_usage)
         # Shared footer fragment (core/streamfmt.py) — reads=tin: codex's
         # cumulative input_tokens already includes the cached share.
         foot += SF.tok_rollup(fresh, tout, tcache, reads=tin)

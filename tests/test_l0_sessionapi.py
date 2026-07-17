@@ -118,6 +118,29 @@ def test_agents_merges_streams_with_state_records(monkeypatch, tmp_path):
     assert API.agent_transcript("ag-sess", "nope") == ""
 
 
+def test_agents_includes_codex_runs(monkeypatch, tmp_path):
+    """kind='codex' streams rows ride the agents list in the SAME row shape
+    (additive read model): agent_id is the synthesized codex_aid (codex
+    tailers record no hook agent_id), desc is the run label (task_id)."""
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    log = P.mirror_log("cx-sess")
+    src = "/h/.codex/sessions/2026/07/06/rollout-2026-07-06T10-00-00-abcd.jsonl"
+    rid = A.stream_start(log, "codex", task_id="cli", src_path=src)
+    A.stream_end(rid, "task-complete", lines_emitted=7)
+    agents = API.agents("cx-sess")
+    assert len(agents) == 1
+    a = agents[0]
+    assert a["agent_id"] == "rollout-2026-07-06T10-00-00-abcd"
+    assert a["kind"] == "codex" and a["desc"] == "cli"
+    assert a["transcript"] == src
+    assert a["end_reason"] == "task-complete" and a["tools"] == 7
+    assert API.codex_aid(src) == a["agent_id"]
+    # a src-less codex row can't be named — never listed
+    A.stream_start(log, "codex", task_id="ghost", src_path="")
+    assert len(API.agents("cx-sess")) == 1
+
+
 def test_costs_are_fork_aware(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     _adopt("cost-old", "cost-new")

@@ -205,6 +205,19 @@ one that's merely thin (desc but no transcript yet) renders dim and stays
 clickable — the layout-derivation fallback in `plugins.activity` sometimes
 finds a transcript the audit never saw.
 
+## Codex runs in the agents list
+
+A session's codex runs ride the same agents list and drill-down, with no
+dashboard-side special-casing: `sessionapi.agents()` merges the audit
+`streams` rows of `kind='codex'` in the same row shape (kind `codex`, `desc`
+= the run label, `agent_id` = `sessionapi.codex_aid()` — synthesized from the
+stream's src_path basename, since codex tailers record no hook agent_id), and
+`/api/session/<sid>/agent/<aid>` reaches the codex `plugins.activity()`
+provider (`plugins/codex/rollout.timeline` — the same timeline dict shape as
+the claude one, see [sessionapi.md](sessionapi.md)). A companion job's `.log`
+run shows a card but has no parseable rollout — its drill-down renders the
+"no recorded activity" empty state, same as a transcript-less husk.
+
 ## Design language
 
 Hermes-harness-inspired (Nous Research's Hermes Agent dashboard): the whole

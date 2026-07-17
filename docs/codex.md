@@ -59,6 +59,26 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     … `■ codex <label> ended · Ns`. Successful sub-commands are suppressed; a non-zero
     exit shows a red `■ exit N` (on the rollout side parsed from
     `function_call_output`'s "Exit code / Process exited with code" head lines).
+    **Parse/paint split**: rollout-record parsing lives in
+    `plugins/codex/rollout.py` — the ONE owner of the rollout record shapes
+    (the `turn_context`/`event_msg`/`response_item` grammar, exec-arguments
+    decode, patch line counts, exit extraction, and `usage_split`, the one
+    `total_token_usage` → fresh/out/cached mapping) — mirroring
+    `plugins/claude_code/transcript.py`. Two presenters consume its typed
+    records: the stream's `Renderer.feed_rollout` (the mirror's capped,
+    styled paint — byte-identical to the pre-split renderer, pinned by the
+    e2e codex suite) and `rollout.timeline()` (the UNCAPPED drill-down read
+    model behind the codex `plugins.activity()` provider — same dict shape
+    as the claude timeline, so the dashboard renders codex runs unchanged).
+    The provider resolves a run from the audit `streams` keystone
+    (`kind='codex'`, `src_path` = the rollout) via `sessionapi.codex_runs()`;
+    the run's identity in the `agents()` list is `sessionapi.codex_aid()` —
+    the src basename, extension stripped — since a codex run carries no hook
+    `agent_id`. Companion `.log` runs are listed but have no drill-down
+    (their activity log is not a rollout); a standalone codex session's own
+    rollout answers the main-thread `activity(sid)` (uuid == sid). The
+    companion `[ts]`-log parse stays in `stream.py` — a pre-digested display
+    stream, not a record grammar worth a second module.
     The ROLLOUT side additionally renders, from codex's own event stream
     (shapes verified against real `~/.codex/sessions` rollouts, 2026-07):
     - **file ops** from `patch_apply_end` — the authoritative record (resolved
