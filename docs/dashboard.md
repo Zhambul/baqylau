@@ -218,6 +218,31 @@ order — interleave is a backfill affordance, not a live-ordering guarantee.
 `/api/session/<sid>/ops` stays PURE ops (the mirror-parity endpoint); the merge
 exists only in the SSE backlog.
 
+## Stream search + kind filters
+
+The session view's mirror tab carries a filter bar directly above the stream: a
+mono text input plus toggle chips (`all · commands · files · agents ·
+messages`) and an `N of M shown` count. Text filtering is a debounced
+(~150ms) case-insensitive substring over each top-level item's `textContent`
+(folded block bodies included — `textContent` reads hidden children, so a match
+in a collapsed command output still counts without force-opening it). Filtering
+never removes DOM (SSE keeps appending); non-matching items get a `.fhide`
+(`display:none`) class, applied in `appendItems` to newly arrived items too via
+the shared `matchesFilter()` — so a live filter holds as the stream grows.
+Filter state lives on `S.ses.filter` and is cleared when switching sessions
+(a fresh `S.ses`).
+
+Each top-level stream child is stamped with a `data-kind`
+(`commands`/`files`/`agents`/`messages`) ONCE at creation in `appendItems`
+rather than re-sniffed per filter pass — selector stability beats matching the
+exact chip text, which drifts. Blocks default to `commands` and upgrade to
+`agents` on an agent signal (an outer-gutter `.og` wrapper == a subagent's
+nested job, or a block-opening chip that starts with a who-prefix rather than a
+main-session command glyph `▶▷◉■` — subagent/teammate/codex chips lead with
+their label/`codex`). Ungrouped items classify by item type: `msg` items are
+`messages`, file-op one-liners (they carry a `data-v` click-to-view id) are
+`files`, the rest `commands`.
+
 ## Notifications (the toaster)
 
 One daemon thread diffs the ENTIRE tab table (`sessionapi.tab_states()` — the

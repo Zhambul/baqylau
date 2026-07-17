@@ -256,7 +256,8 @@ function showSession(sid, tab) {
     S.cur = sid;
     S.ses = { lastId: 0, mpos: 0, stream: el("div", "stream"), stats: {}, agents: [],
               costs: null, meta: null, es: null, timer: null, poll: null,
-              blocks: new Map() };
+              blocks: new Map(),
+              filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
       .then(r => r.json())
@@ -335,11 +336,17 @@ function appendItems(items) {
   const w = st.querySelector(".waiting");
   if (w) w.remove();
   for (const it of items) {
-    if (!it.g) { st.insertAdjacentHTML("afterbegin", it.html); continue; }
+    if (!it.g) {
+      st.insertAdjacentHTML("afterbegin", it.html);
+      const elem = st.firstElementChild;
+      if (elem) { elem.dataset.kind = ungroupedKind(it, elem); applyFilterTo(elem); }
+      continue;
+    }
     let b = S.ses.blocks.get(it.g);
     if (!b) {
       const root = el("div", "blk");
       root.dataset.open = "1";                     // enforceWindow folds elders
+      root.dataset.kind = "commands";              // refineBlockKind upgrades to "agents"
       const head = el("div", "bhead");
       const chips = el("span", "bchips");
       const sum = el("span", "bsum");
@@ -347,7 +354,7 @@ function appendItems(items) {
       head.append(chips, sum);
       root.append(head, body);
       st.prepend(root);
-      b = { root, chips, sum, body, userSet: false };
+      b = { root, chips, sum, body, userSet: false, kindLocked: false };
       head.onclick = (e) => {
         if (e.target.closest("a")) return;         // ⧉ links keep working
         b.userSet = true;
@@ -365,9 +372,135 @@ function appendItems(items) {
         if (line) b.sum.textContent = line.slice(0, 160);
       }
     }
+    refineBlockKind(b, it);
+    applyFilterTo(b.root);
   }
   enforceWindow();
   while (st.childElementCount > 3000) st.lastElementChild.remove();
+  updateFilterCount();
+}
+
+/* ---------- stream search + kind filters ---------- */
+// Every top-level stream child carries a data-kind (commands · files · agents ·
+// messages) so the filter bar can hide non-matching items via a CSS class
+// (never removing them — SSE keeps appending, and folded bodies stay
+// textContent-searchable). data-kind is stamped once at creation: glyph/who
+// sniffing (below) is stable against the exact chip text, which drifts, so we
+// prefer a stamped attribute over re-sniffing the DOM on every filter pass.
+
+// Main-session command/monitor/bg/fg blocks OPEN with one of these glyphs;
+// subagent/teammate/codex blocks open with a who-prefix (agent label or
+// "codex") before their glyph — that's the command-vs-agent tell.
+const CMD_GLYPH = /^\s*[▶▷◉■]/;
+
+function refineBlockKind(b, it) {
+  if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
+  if (/class="og"/.test(it.html)) {                    // outer gutter == nested subagent job
+    b.root.dataset.kind = "agents";
+    return;
+  }
+  if (it.t === "label" && !b.kindLocked) {
+    const txt = (b.chips.textContent || "").trim();    // the block-opening chip
+    if (txt) {
+      b.root.dataset.kind = CMD_GLYPH.test(txt) ? "commands" : "agents";
+      b.kindLocked = true;
+    }
+  }
+}
+
+function ungroupedKind(it, elem) {
+  if (it.t === "msg") return "messages";
+  // file-op one-liners carry the click-to-view id as data-v (.opl / gut ops)
+  if (elem.matches("[data-v]") || elem.querySelector("[data-v]")) return "files";
+  return "commands";
+}
+
+function streamItems() {
+  return [...S.ses.stream.children].filter(el => el.dataset && el.dataset.kind);
+}
+
+function matchesFilter(elem) {
+  const f = (S.ses && S.ses.filter) || { q: "", kind: "all" };
+  if (f.kind !== "all" && elem.dataset.kind !== f.kind) return false;
+  if (f.q && !(elem.textContent || "").toLowerCase().includes(f.q)) return false;
+  return true;
+}
+
+function applyFilterTo(elem) {
+  if (!elem || !elem.dataset || !elem.dataset.kind) return;
+  const ok = matchesFilter(elem);
+  elem.classList.toggle("fhide", !ok);
+  const f = S.ses && S.ses.filter;
+  elem.classList.toggle("fq", ok && !!(f && f.q));     // subtle text-match highlight
+}
+
+function applyFilter() {
+  if (!S.ses) return;
+  for (const elem of streamItems()) applyFilterTo(elem);
+  updateFilterCount();
+}
+
+function updateFilterCount() {
+  const ses = S.ses;
+  if (!ses || !ses.countEl || !ses.countEl.isConnected) return;
+  const items = streamItems();
+  const shown = items.filter(elem => !elem.classList.contains("fhide")).length;
+  ses.countEl.textContent = shown + " of " + items.length + " shown";
+}
+
+const FILTER_KINDS = ["all", "commands", "files", "agents", "messages"];
+
+function buildFilterBar() {
+  const ses = S.ses;
+  const f = ses.filter;
+  const bar = el("div", "fbar");
+
+  const input = el("input", "finput");
+  input.type = "text";
+  input.placeholder = "filter…";
+  input.spellcheck = false;
+  input.value = f.q;
+  ses.input = input;
+  let deb;
+  input.oninput = () => {
+    clearTimeout(deb);
+    deb = setTimeout(() => { f.q = input.value.trim().toLowerCase(); applyFilter(); }, 150);
+  };
+  input.onkeydown = (e) => {
+    if (e.key === "Escape" && f.q) {
+      input.value = ""; f.q = ""; applyFilter();
+      e.stopPropagation();
+    }
+  };
+
+  const clear = el("button", "fclear", "✕");
+  clear.title = "clear filter";
+
+  const chipwrap = el("div", "fchips");
+  const chips = new Map();
+  for (const key of FILTER_KINDS) {
+    const c = el("button", "fchip" + (f.kind === key ? " on" : ""), key);
+    c.onclick = () => {
+      f.kind = key;
+      chips.forEach((cc, k) => cc.classList.toggle("on", k === key));
+      applyFilter();
+    };
+    chips.set(key, c);
+    chipwrap.append(c);
+  }
+
+  clear.onclick = () => {
+    input.value = ""; f.q = ""; f.kind = "all";
+    chips.forEach((cc, k) => cc.classList.toggle("on", k === "all"));
+    applyFilter();
+    input.focus();
+  };
+
+  const count = el("span", "fcount");
+  ses.countEl = count;
+  bar.append(input, clear, chipwrap, count);
+  ses.filterBar = bar;
+  return bar;
 }
 
 function setBadge(badge, tab) {
@@ -420,6 +553,7 @@ function renderSessionChrome(tab) {
   $view.append(body);
 
   if (tab === "mirror") {
+    body.append(buildFilterBar());
     const split = el("div", "split");
     split.append(ses.stream);
     const rail = el("div", "rail");
@@ -427,6 +561,7 @@ function renderSessionChrome(tab) {
     split.append(rail);
     body.append(split);
     updateAgents();
+    applyFilter();                        // re-filter items already in the stream
   } else if (tab === "activity") {
     renderTimelineInto(body, "/api/session/" + encodeURIComponent(S.cur) + "/activity",
                        "main thread");

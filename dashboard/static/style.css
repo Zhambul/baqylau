@@ -201,6 +201,45 @@ code, pre, .mono { font-family: var(--mono); }
 .split { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 12px; }
 @media (max-width: 1000px) { .split { grid-template-columns: minmax(0, 1fr); } }
 
+/* ---- stream filter bar -------------------------------------------------- */
+.fbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  box-shadow: var(--card); border-radius: var(--r);
+  background: var(--panel); padding: 8px 12px; margin-bottom: 10px;
+}
+.finput {
+  flex: 1; min-width: 140px; background: color-mix(in srgb, var(--bg) 88%, black);
+  color: var(--text); border: none; box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r); padding: 6px 10px;
+  font: 12px/1.4 var(--mono);
+}
+.finput:focus { outline: none; box-shadow: inset 0 0 0 1px var(--hair2); }
+.finput::placeholder { color: var(--dim2); }
+.fclear {
+  background: transparent; color: var(--dim); border: none; cursor: pointer;
+  box-shadow: var(--card); border-radius: var(--r); padding: 5px 9px;
+  font-size: 11px; line-height: 1; flex: none;
+}
+.fclear:hover { color: var(--text); box-shadow: var(--card-hover); }
+.fchips { display: inline-flex; gap: 2px; flex: none; }
+.fchip {
+  background: transparent; color: var(--dim); border: none; cursor: pointer;
+  padding: 5px 11px; border-radius: var(--r);
+  font: 500 11.5px/1 var(--sans);
+}
+.fchip:hover { color: var(--text); }
+.fchip.on {
+  color: var(--text); background: var(--panel2);
+  box-shadow: inset 0 0 0 1px var(--hair);
+}
+.fcount { color: var(--dim2); font: 11px/1 var(--mono); flex: none; margin-left: auto; }
+
+/* hidden by the filter; never removed (SSE keeps appending) */
+.fhide { display: none; }
+/* subtle emphasis on a text-match hit */
+.blk.fq { box-shadow: inset 0 0 0 1px var(--hair2); }
+.blk.fq > .bhead .bsum { color: var(--text-soft); }
+
 /* ---- the mirror stream -------------------------------------------------- */
 .stream {
   background: color-mix(in srgb, var(--bg) 88%, black);
