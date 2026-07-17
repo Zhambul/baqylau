@@ -355,6 +355,9 @@ body.attn-on .shead { top: 81px; }
 .nsinput:focus { outline: none; box-shadow: inset 0 0 0 1px var(--hair2); }
 .nsinput::placeholder { color: var(--dim2); }
 .nsprompt { resize: vertical; min-height: 56px; }
+.nssplit { display: flex; gap: 10px; }
+.nssplit .nsfield { flex: 1; min-width: 0; }
+select.nsinput { appearance: none; -webkit-appearance: none; cursor: pointer; }
 .nsactions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .nsbtn {
   background: transparent; color: var(--dim); border: none; cursor: pointer;

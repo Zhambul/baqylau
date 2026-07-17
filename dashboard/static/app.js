@@ -794,6 +794,30 @@ function openNewSession(prefillCwd) {
   }
   dirRow.append(dir, dl);
 
+  // model + effort side by side; "" = the CLI's own default (no flag sent)
+  const pick = (label, opts) => {
+    const row = el("label", "nsfield");
+    row.append(el("span", "nslabel", label));
+    const sel = el("select", "nsinput");
+    for (const [v, txt] of opts) {
+      const o = el("option", "", txt);
+      o.value = v;
+      sel.append(o);
+    }
+    row.append(sel);
+    return [row, sel];
+  };
+  const [modelRow, model] = pick("model", [
+    ["", "default"], ["fable", "fable"], ["opus", "opus"],
+    ["sonnet", "sonnet"], ["haiku", "haiku"],
+  ]);
+  const [effortRow, effort] = pick("effort", [
+    ["", "default"], ["low", "low"], ["medium", "medium"],
+    ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
+  ]);
+  const split = el("div", "nssplit");
+  split.append(modelRow, effortRow);
+
   const promptRow = el("label", "nsfield");
   promptRow.append(el("span", "nslabel", "first prompt (optional)"));
   const prompt = el("textarea", "nsinput nsprompt");
@@ -812,6 +836,8 @@ function openNewSession(prefillCwd) {
     if (!cwd) { dir.focus(); return; }
     submit.disabled = true;
     const body = { cwd };
+    if (model.value) body.model = model.value;
+    if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
     postJSON("/api/sessions/new", body)
       .then(() => { closeNewSession(); toast("done", "launching…", cwd); })
@@ -821,7 +847,7 @@ function openNewSession(prefillCwd) {
   cancel.onclick = closeNewSession;
   dir.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
 
-  panel.append(dirRow, promptRow, actions);
+  panel.append(dirRow, split, promptRow, actions);
   const back = el("div", "nsback");
   back.onclick = (e) => { if (e.target === back) closeNewSession(); };
   back.append(panel);

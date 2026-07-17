@@ -874,6 +874,31 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     assert fe.launched[-1][1][4:] == [evil]
 
 
+def test_post_new_session_model_effort(dash, monkeypatch, tmp_path):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    # flags ride as "$@" words AHEAD of the prompt
+    _post(dash + "/api/sessions/new",
+          {"cwd": str(tmp_path), "model": "opus", "effort": "high",
+           "prompt": "go"})
+    assert fe.launched[-1][1][4:] == ["--model", "opus",
+                                     "--effort", "high", "go"]
+    # either alone
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "effort": "low"})
+    assert fe.launched[-1][1][4:] == ["--effort", "low"]
+    _post(dash + "/api/sessions/new",
+          {"cwd": str(tmp_path), "model": "claude-fable-5"})
+    assert fe.launched[-1][1][4:] == ["--model", "claude-fable-5"]
+    # invalid values are 400, never launched
+    n = len(fe.launched)
+    for bad in ({"effort": "turbo"}, {"model": "opus high"},
+                {"model": "a b; c"}, {"model": 7}):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/sessions/new", dict({"cwd": str(tmp_path)}, **bad))
+        assert e.value.code == 400
+    assert len(fe.launched) == n
+
+
 def test_launch_argv_falls_back_to_zsh(monkeypatch):
     monkeypatch.setenv("SHELL", "/opt/homebrew/bin/fish")   # no POSIX "$@"
     assert DS.launch_argv([])[0] == "/bin/zsh"

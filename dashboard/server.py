@@ -471,6 +471,9 @@ def _frontend():
 
 
 LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
+EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort levels
+_MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
+                                               # clean argv word, nothing else
 
 
 def launch_argv(words):
@@ -725,25 +728,38 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the
-        cwd isn't an existing directory; 503 when no terminal resolves; else the
-        launch. Audited as a `web-launch` state_files row (no session db exists
-        yet, so its log/path are empty)."""
+        cwd isn't an existing directory or model/effort don't validate (model:
+        one clean argv word; effort: the CLI's EFFORTS levels); 503 when no
+        terminal resolves; else the launch, with `--model`/`--effort` riding as
+        positional "$@" words ahead of the prompt. Audited as a `web-launch`
+        state_files row (no session db exists yet, so its log/path are
+        empty)."""
         body = self._post_guard()
         if body is None:
             return
         cwd = body.get("cwd")
         if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
             return self._json({"error": "cwd is not an existing directory"}, 400)
+        model, effort = body.get("model"), body.get("effort")
+        if model is not None and (
+                not isinstance(model, str) or not _MODEL_OK.match(model)):
+            return self._json({"error": "invalid model"}, 400)
+        if effort is not None and effort not in EFFORTS:
+            return self._json({"error": "invalid effort"}, 400)
         prompt = body.get("prompt")
-        argv = launch_argv([prompt]
-                           if isinstance(prompt, str) and prompt.strip() else [])
+        words = ((["--model", model] if model else [])
+                 + (["--effort", effort] if effort else [])
+                 + ([prompt] if isinstance(prompt, str) and prompt.strip()
+                    else []))
+        argv = launch_argv(words)
+        opts = {"cwd": cwd, "model": model or "", "effort": effort or ""}
         fe = _frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
-            A.state_file("", "", "web-launch", {"cwd": cwd, "ok": False})
+            A.state_file("", "", "web-launch", dict(opts, ok=False))
             return self._json({"error": "no terminal available"}, 503)
         ok = bool(fe.launch_tab(cwd, argv))
-        A.state_file("", "", "web-launch", {"cwd": cwd, "ok": ok})
+        A.state_file("", "", "web-launch", dict(opts, ok=ok))
         if not ok:
             A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
             return self._json({"error": "launch failed"}, 502)

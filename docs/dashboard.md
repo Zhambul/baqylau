@@ -239,9 +239,14 @@ window (same scoping as tab colours and toasts), so it returns `409` — the
 composer is disabled with a hint for it. Empty text is `400`. The text rides
 kitten's `--stdin` verbatim (no shell, no escape interpretation).
 
-`POST /api/sessions/new` `{"cwd", "prompt"?}` validates `cwd` is an existing
-directory (`os.path.isdir`, else `400`) and `Frontend.launch_tab(cwd,
-launch_argv([prompt?]))` opens a new tab; the session then appears through its
+`POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
+`cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
+`_MODEL_OK` (one clean argv word — an alias like `opus` or a full id like
+`claude-fable-5`; the form offers the aliases, the API takes any id) and
+`effort` against `EFFORTS` (the CLI's `low`…`max` levels), then
+`Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?,
+prompt?]))` opens a new tab — the flags are just more positional `"$@"` words
+ahead of the prompt, so the injection story is unchanged; the session then appears through its
 own `SessionStart` (no synthetic row). **The argv is NOT a bare `["claude"]`**
 — kitty execs launch argv with kitty's OWN environment, and a GUI-launched
 kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
@@ -258,7 +263,7 @@ is `False`, `_frontend()` returns `None`, and both endpoints return a clean
 
 **Audit.** Every attempt lands a `state_files` row: `web-send`
 (`{win, chars, ok}`, keyed to the session's state-DB path) and `web-launch`
-(`{cwd, ok}`, no session yet so log/path are empty). Failure paths (no window,
+(`{cwd, model, effort, ok}`, no session yet so log/path are empty). Failure paths (no window,
 no terminal, send/launch returned false) also write an `A.error` per the
 audit-before-swallow rule, so a "my message never arrived" report is answerable
 from the DB.
