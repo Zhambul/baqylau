@@ -51,7 +51,7 @@ from core import ops as O
 from core import panescript as PS
 from core import paths as P
 from core import render as R
-from core import state as St
+from core import sessionapi as St   # the read-side door — presentation channel only
 from core.noaudit import load_audit
 import plugins as PLUGINS
 

@@ -34,6 +34,7 @@ from plugins.claude_code import hookkit as HK
 from plugins.claude_code import model as M
 from plugins.claude_code import stream as ST
 from plugins.claude_code import substream_render as SR
+from plugins.claude_code import transcript as TSC
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -49,7 +50,7 @@ SUB_FG = True
 META = {}
 DEF_TYPE = AGENT_DEF_FILE = AGENT_DEF_MODEL = SETTINGS_MODEL = SESSION_MODEL = None
 EFFORT_CFG = None
-BASE = SUBDIR = JSONL = META_PATH = ""
+JSONL = META_PATH = ""
 STATE_KEY = USAGE_KEY = BILLED_KEY = ""
 REN = None
 
@@ -64,7 +65,7 @@ def _init(argv):
     slot colour, the Renderer)."""
     global AGENT, TPATH, LOG, SLOT, ATYPE, PALETTE, DESC, LABEL, SUB_RGB, SUB_FG
     global META, DEF_TYPE, AGENT_DEF_FILE, AGENT_DEF_MODEL, SETTINGS_MODEL
-    global SESSION_MODEL, EFFORT_CFG, BASE, SUBDIR, JSONL, META_PATH
+    global SESSION_MODEL, EFFORT_CFG, JSONL, META_PATH
     global STATE_KEY, USAGE_KEY, BILLED_KEY, REN
     AGENT   = argv[1]
     TPATH   = argv[2]
@@ -115,10 +116,9 @@ def _init(argv):
     #               for the SAME transcript — without the checkpoint that streamer would
     #               re-render the whole history. Deliberately NOT cleared in cleanup():
     #               it must outlive the streamer to make the resume seamless.
-    BASE = TPATH[:-6] if TPATH.endswith(".jsonl") else TPATH
-    SUBDIR = os.path.join(BASE, "subagents")
-    JSONL  = os.path.join(SUBDIR, f"agent-{AGENT}.jsonl")
-    META_PATH = os.path.join(SUBDIR, f"agent-{AGENT}.meta.json")
+    # Path derivation is owned by transcript.agent_paths (the parse half also
+    # resolves agents' transcripts for the drill-down API from the same place).
+    JSONL, META_PATH = TSC.agent_paths(TPATH, AGENT)
     STATE_KEY = "state:agent." + AGENT          # audit label for checkpoint rows
     USAGE_KEY = "usage_last:" + AGENT           # kv slot for the usage dedup record
     BILLED_KEY = "billed:" + AGENT              # kv slot: {in,out,cache,create,create_1h} this

@@ -96,9 +96,16 @@ shared by BOTH hosts, Claude Code's `split.py` and standalone codex's
 touching function takes the caller's `fe` as its first arg), `copy.py` (the ⧉
 copy-link handler behind the `claude-copy.py` entry — reads a block's
 group-tagged ops read-only and pipes command/output text to the clipboard; see
-[click-to-view.md](click-to-view.md)), and `tabs.py`
+[click-to-view.md](click-to-view.md)), `tabs.py`
 (the tab-state vocabulary: state constants, the `COLORS` hex table every
-frontend paints from, and the global window-keyed tab DB + watcher pid locks).
+frontend paints from, and the global window-keyed tab DB + watcher pid locks),
+and `sessionapi.py` (the READ-SIDE session-data API — the one door for
+consumers: presentation-channel delegations to `core.state` (the mirror/
+scorebar's whole diet — same function objects, zero behavior change) plus a
+read model over the state DB (live + parked), the audit
+`sessions`/`streams`/`otel`/`errors` tables (fork-aware via `sid_chain()`),
+the tab DB, and — plugin-side, through `plugins.activity()` — the
+transcripts; see [sessionapi.md](sessionapi.md)).
 
 `plugins/claude_code/` is the HOST-tool adapter — everything that reads
 Claude Code's own signals: `hookkit.py` (the hook-handler harness, was
@@ -117,7 +124,10 @@ see [wiring.md](wiring.md)), the two
 streamers (`stream.py`, `substream.py` — the latter's block rendering lives
 in `substream_render.py`: an import-safe `Renderer` class with per-tool-kind
 dispatch tables, into which the lifecycle module injects its identity and
-tailer hooks), the tab dispatch (`tabstatus.py` —
+tailer hooks; its LINE PARSING lives in `transcript.py`, the parse half of
+the split — one record grammar owner shared with the drill-down
+`timeline()`/`plugins.activity()` read model, see
+[sessionapi.md](sessionapi.md)), the tab dispatch (`tabstatus.py` —
 maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
 and the pane/session lifecycle (`split.py` — now a thin caller into
 `core/hostpane.py`, which it shares with the codex host). Each `bin/claude-*.py`

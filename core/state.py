@@ -189,12 +189,15 @@ def connect(log):
 
 def evict(log):
     """Close and drop this session's cached state-DB connection, if any. Returns
-    True when a connection was actually closed. For LONG-LIVED MULTI-SESSION
-    processes ONLY (the OTLP receiver): each session that ends (DB parked away)
-    otherwise pins its cached connection + WAL/SHM fds for the process lifetime,
-    because _connect only swaps a cached conn on an inode CHANGE at the path.
-    PER-SESSION processes (streamers, renderers, hooks) must NOT call this —
-    their stale conn after a park is DELIBERATE (_connect's path-gone branch:
+    True when a connection was actually closed. Two sanctioned callers:
+    LONG-LIVED MULTI-SESSION processes (the OTLP receiver — each session that
+    ends otherwise pins its cached connection + WAL/SHM fds for the process
+    lifetime, because _connect only swaps a cached conn on an inode CHANGE at
+    the path), and the mirror renderer's RECREATED-INODE branch (sync_inode saw
+    a NEW file at the path — park/restore or fresh session reusing the key —
+    and must close the fd pinned to the deleted old inode before re-reading).
+    Other per-session processes (streamers, hooks) must NOT call this — their
+    stale conn after a park is DELIBERATE (_connect's path-gone branch:
     reconnecting would recreate the DB whose absence is the session-alive exit
     signal). Never raises."""
     cached = _CONNS.pop(db_path(log), None)
@@ -383,28 +386,117 @@ def stats(log):
     if conn is None:
         return {}
     try:
-        st, tools = {}, {}
-        for k, v in conn.execute("SELECT key, val FROM counters"):
-            if k.startswith("tool:"):
-                tools[k[5:]] = int(v)
-            elif k in INTERNAL_COUNTERS:
-                continue
-            elif k in FLOAT_COUNTERS:
-                st[k] = float(v)
-            else:
-                fv = float(v)
-                st[k] = int(fv) if fv.is_integer() else fv
-        if tools:
-            st["tools"] = tools
-        n = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
-        if n:
-            st["files"] = n
-        tx = kv_get(log, "txlast")
-        if isinstance(tx, dict):
-            st["txlast"] = tx
-        return st
+        return _stats_from(conn)
     except Exception:
         return {}
+
+
+def _stats_from(conn):
+    """The stats() row-shaping over an already-open connection — the ONE owner of
+    the counters→stats dict shape, shared by stats() (live, cached writer conn)
+    and stats_at() (historical, fresh read-only conn)."""
+    st, tools = {}, {}
+    for k, v in conn.execute("SELECT key, val FROM counters"):
+        if k.startswith("tool:"):
+            tools[k[5:]] = int(v)
+        elif k in INTERNAL_COUNTERS:
+            continue
+        elif k in FLOAT_COUNTERS:
+            st[k] = float(v)
+        else:
+            fv = float(v)
+            st[k] = int(fv) if fv.is_integer() else fv
+    if tools:
+        st["tools"] = tools
+    n = conn.execute("SELECT COUNT(*) FROM files").fetchone()[0]
+    if n:
+        st["files"] = n
+    row = conn.execute("SELECT val FROM kv WHERE key='txlast'").fetchone()
+    if row:
+        try:
+            tx = json.loads(row[0])
+        except Exception:
+            tx = None
+        if isinstance(tx, dict):
+            st["txlast"] = tx
+    return st
+
+
+# --- read-only readers over an EXPLICIT DB path (parked history) --------------------
+# The functions above key everything by the LIVE mirror-log path and go through
+# connect(), which CREATES the DB — correct for producers, fatal for a reader
+# probing a parked/historical session (recreating the live DB fakes the
+# session-alive signal). These *_at() twins take the DB path itself (live or
+# paths.parked_db) and open it fresh mode=ro, so a probe can never create the
+# file (styleguide SQL rules). They exist for core/sessionapi.py, the read-side
+# session-data API; producers keep using the live-path functions.
+
+def _ro(path):
+    """Fresh READ-ONLY connection to an explicit state-DB path; None when the
+    file is missing/unopenable. Deliberately un-cached (see the styleguide's
+    cached-ro-conn rule: state-DB reads stay fresh-open because file-absence is
+    a signal, and these callers are one-shot queries, not tick pollers)."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        return sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=1.0)
+    except Exception:
+        return None
+
+
+def stats_at(path):
+    """stats() over an explicit DB path (live or parked), read-only. {} when
+    missing/unreadable — same silent-probe contract as tabs.sq()."""
+    conn = _ro(path)
+    if conn is None:
+        return {}
+    try:
+        return _stats_from(conn)
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def agents_at(path):
+    """Every per-agent record (the agents table) as {agent_id: {slot, desc, pos,
+    done, start_ts}}, read-only over an explicit DB path. {} when missing."""
+    conn = _ro(path)
+    if conn is None:
+        return {}
+    try:
+        return {aid: {"slot": slot, "desc": desc, "pos": pos,
+                      "done": done, "start_ts": ts}
+                for aid, slot, desc, pos, done, ts in conn.execute(
+                    "SELECT agent_id, slot, desc, pos, done, start_ts FROM agents")}
+    except Exception:
+        return {}
+    finally:
+        conn.close()
+
+
+def ops_at(path, after_id=0):
+    """(last_id, [op, ...]) over an explicit DB path, read-only — the historical
+    twin of ops_after() (which serves the live session through the cached writer
+    connection). Same decode-and-skip contract; no reset probe (a parked DB is
+    never recreated under a reader)."""
+    conn = _ro(path)
+    if conn is None:
+        return after_id, []
+    try:
+        rows = conn.execute("SELECT id, op FROM ops WHERE id > ? ORDER BY id",
+                            (after_id,)).fetchall()
+        out = []
+        for _id, s in rows:
+            try:
+                out.append(json.loads(s))
+            except Exception:
+                continue
+        return (rows[-1][0] if rows else after_id), out
+    except Exception:
+        return after_id, []
+    finally:
+        conn.close()
 
 
 def transcript_fold(log, fold):

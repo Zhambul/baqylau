@@ -19,4 +19,5 @@ to already-rejected designs.
 | [otel.md](otel.md) | The OTEL cost pipeline — the singleton OTLP receiver, why OTEL over transcript folding, the SessionEnd fold fallback |
 | [codex.md](codex.md) | Codex streams — the per-session watcher, companion jobs + native rollouts, the standalone codex host |
 | [audit.md](audit.md) | The always-on SQLite audit trail — tables, the universal subscriber, the CLI |
+| [sessionapi.md](sessionapi.md) | The read-side session-data API — presentation channel vs read model, the `streams`-table keystone, fork-aware `sid_chain`, the transcript parse/paint split + `plugins.activity()`, the fidelity ladder, why not an events table |
 | [testing.md](testing.md) | The hermetic e2e suite and its test-only env knobs |

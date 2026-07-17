@@ -75,7 +75,7 @@ from core import panescript as PS
 from core import paths as P
 from core import codefmt as CF
 from core import render as R
-from core import state as St
+from core import sessionapi as St   # the read-side door — presentation channel only
 from core.noaudit import load_audit
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
@@ -768,18 +768,15 @@ def sync_inode(L):
         L.cur_ino = None
     if L.cur_ino is not None and L.cur_ino != L.ino:
         if L.ino is not None:
-            stale = St._CONNS.pop(L.db, None)
-            if stale is not None:
-                try:
-                    # Close, don't just drop: the discarded connection holds
-                    # open fds to the DELETED old inode (+ its WAL/SHM),
-                    # pinning them for this long-lived renderer's lifetime —
-                    # one leak per park/restore or session-recreate cycle.
-                    # (St._connect now also self-evicts on inode change; this
-                    # stays because it drives the paint-state reset below.)
-                    stale[0].close()
-                except Exception:
-                    pass
+            # Close, don't just drop: the discarded connection holds open fds
+            # to the DELETED old inode (+ its WAL/SHM), pinning them for this
+            # long-lived renderer's lifetime — one leak per park/restore or
+            # session-recreate cycle. St.evict is the public close-and-drop
+            # (this recreated-inode branch is one of its two sanctioned
+            # callers — see its docstring); state._connect also self-evicts on
+            # inode change, but this stays because it drives the paint-state
+            # reset below.
+            St.evict(LOG)
             L.last, OPS[:] = 0, []
             VIEW_OPEN.clear(); _VIEW_OPS.clear()
             L.resized = L.force_paint = True

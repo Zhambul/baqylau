@@ -73,6 +73,9 @@ backed by grep-style regression tests that will fail the build):
 | Click-to-view stash-and-link | `file_fmt.stash_view` (over the shared `view_ops`) |
 | Audit warning-light shapes: the `⚠ N` chip, the `⚠ audit:` mirror ops, `POLL_S`/`FLOOD_N`/`TEXT_MAX`, the `errseen` kv checkpoint | `core/errwatch.py` |
 | Cached read-only conns for FIXED-path DBs polled by long-lived processes | `core/tabs.sqc()` (tab DB — all tab-DB reads route through it); `core/errwatch._audit_conn` (audit DB). The per-session STATE DB is deliberately excluded: its reads stay fresh-open (`tabs.sq()` / `state.parked()`'s bare exists check) because file-absence IS the session-alive signal — a cached conn keeps answering from a parked/deleted DB |
+| Session-data reads by CONSUMERS (pane renderers, tooling, dashboards) | `core/sessionapi.py` — the one door (presentation-channel delegations + the read model; docs/sessionapi.md). Core internals keep reading `core.state` directly; a consumer importing `core.state` reopens the side door (grep test `test_pane_renderers_read_through_sessionapi`) |
+| Claude transcript record shapes (type/user/assistant discrimination, teammate-message unwrap, content-block walk, `result_text`, the `subagents/agent-<id>.*` layout) | `plugins/claude_code/transcript.py` — `parse_line()`/`agent_paths()`; the substream Renderer and `timeline()` are its two presenters (grep test `test_teammsg_regex_has_one_owner`) |
+| stats()/counters→dict shaping | `core/state._stats_from` — shared by `stats()` (live) and `stats_at()` (parked history); a third shaping is drift |
 
 Adding a new shared fact? Give it one owner in the most-core module whose
 charter fits, document the owner here, and (if cheap) add a grep test.

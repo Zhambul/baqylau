@@ -57,3 +57,23 @@ def census(log):
         parts += list(ps)
         events += list(ev)
     return parts, events
+
+
+def activity(sid, agent_id=None):
+    """Drill-down fan-out (docs/sessionapi.md): the first plugin that
+    recognizes (sid, agent_id) returns its FULL-FIDELITY activity timeline
+    (claude_code: plugins/claude_code/transcript.timeline over the agent's —
+    or, with agent_id=None, the session's main — transcript); None when no
+    plugin does. codex exposes no provider yet (its stream renderer has no
+    parse/paint split — deferred, see docs/sessionapi.md). Exceptions
+    propagate, same contract as census(): the callers are read-side tools
+    (dashboards/CLIs), not hooks, and swallowing here would hide which
+    provider broke."""
+    for p in all_plugins():
+        fn = getattr(p, "activity", None)
+        if fn is None:
+            continue
+        got = fn(sid, agent_id)
+        if got is not None:
+            return got
+    return None

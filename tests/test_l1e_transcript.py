@@ -1,0 +1,206 @@
+# L1e — the transcript parser (plugins/claude_code/transcript.py): the parse
+# half of the substream's parse/paint split, and the timeline read model behind
+# plugins.activity(). Renderer equivalence is covered by the existing substream
+# suites (l1c dispatch + the e2e flows) — these tests pin the parser's record
+# contract and the timeline's pairing/dedup semantics directly.
+import json
+import os
+import sys
+
+from conftest import REPO
+
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+from plugins.claude_code import transcript as TR
+
+
+def _l(o):
+    return json.dumps(o, ensure_ascii=False)
+
+
+# ------------------------------------------------------------------ parse_line
+
+def test_bad_json_is_a_bad_record():
+    rec = TR.parse_line("{nope")
+    assert rec["kind"] == "bad" and rec["raw"] == "{nope"
+
+
+def test_compact_boundary():
+    rec = TR.parse_line(_l({"type": "system", "subtype": "compact_boundary",
+                            "compactMetadata": {"preTokens": 9}}))
+    assert rec == {"kind": "compact", "meta": {"preTokens": 9}}
+
+
+def test_blank_user_content_is_none():
+    assert TR.parse_line(_l({"type": "user", "message": {"content": "  \n"}})) is None
+
+
+def test_prompt_keeps_unstripped_text():
+    # The renderer strips at paint (cap(text.strip())) — the parser must not
+    # pre-strip, or the pre-split byte-identical contract breaks.
+    rec = TR.parse_line(_l({"type": "user", "message": {"content": "  hi\n"}}))
+    assert rec == {"kind": "prompt", "text": "  hi\n"}
+
+
+def test_teammate_message_unwraps_sender_and_body():
+    body = '<teammate-message teammate_id="lead" color="red">do the thing</teammate-message>'
+    rec = TR.parse_line(_l({"type": "user", "message": {"content": body}}))
+    assert rec == {"kind": "teammsg", "sender": "lead", "body": "do the thing"}
+
+
+def test_results_collects_blocks_in_order_plus_texts():
+    rec = TR.parse_line(_l({
+        "type": "user", "toolUseResult": {"file": {"numLines": 3}},
+        "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "one"},
+            {"type": "text", "text": "a parent-transcript user turn"},
+            {"type": "tool_result", "tool_use_id": "t2", "content": "two",
+             "is_error": True},
+        ]}}))
+    assert rec["kind"] == "results"
+    assert [b["tool_use_id"] for b in rec["blocks"]] == ["t1", "t2"]
+    assert rec["tur"] == {"file": {"numLines": 3}}
+    assert rec["texts"] == ["a parent-transcript user turn"]
+
+
+def test_user_list_without_results_or_texts_is_none():
+    rec = TR.parse_line(_l({"type": "user", "message": {"content": [
+        {"type": "text", "text": "   "}, "loose string"]}}))
+    assert rec is None
+
+
+def test_assistant_blocks_preserve_order_and_skip_thinking():
+    rec = TR.parse_line(_l({"type": "assistant", "message": {
+        "id": "m1", "model": "claude-opus-4-8",
+        "usage": {"input_tokens": 5, "output_tokens": 2},
+        "content": [{"type": "thinking", "thinking": "…"},
+                    {"type": "text", "text": "hi"},
+                    {"type": "tool_use", "id": "t1", "name": "Bash",
+                     "input": {"command": "ls"}}]}}))
+    assert rec["kind"] == "assistant" and rec["id"] == "m1"
+    assert rec["model"] == "claude-opus-4-8"
+    assert rec["blocks"][0] == ("text", "hi")
+    assert rec["blocks"][1][0] == "tool" and rec["blocks"][1][1]["name"] == "Bash"
+
+
+def test_assistant_without_content_list_still_yields_record():
+    # Usage/turn tracking must run even for a blocks-less assistant line.
+    rec = TR.parse_line(_l({"type": "assistant",
+                            "message": {"usage": {"input_tokens": 1}}}))
+    assert rec["kind"] == "assistant" and rec["blocks"] == []
+    rec2 = TR.parse_line(_l({"type": "assistant", "message": {}}))
+    assert rec2["kind"] == "assistant" and rec2["usage"] is None
+
+
+def test_unknown_type_is_none():
+    assert TR.parse_line(_l({"type": "summary", "summary": "x"})) is None
+
+
+# ------------------------------------------------------------------ agent_paths
+
+def test_agent_paths_layout():
+    j, m = TR.agent_paths("/x/session-abc.jsonl", "ag1")
+    assert j == "/x/session-abc/subagents/agent-ag1.jsonl"
+    assert m == "/x/session-abc/subagents/agent-ag1.meta.json"
+    # a non-.jsonl base is used verbatim
+    j2, _ = TR.agent_paths("/x/session-abc", "ag1")
+    assert j2 == "/x/session-abc/subagents/agent-ag1.jsonl"
+
+
+# ------------------------------------------------------------------ timeline
+
+def _write(tmp_path, lines):
+    p = tmp_path / "t.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in lines), encoding="utf-8")
+    return str(p)
+
+
+def test_timeline_pairs_results_and_dedups_usage(tmp_path):
+    path = _write(tmp_path, [
+        {"type": "user", "message": {"content": "do the thing"}},
+        {"type": "assistant", "message": {
+            "id": "m1", "model": "claude-opus-4-8",
+            "usage": {"input_tokens": 10, "output_tokens": 3},
+            "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
+                         "input": {"command": "ls"}}]}},
+        # second JSONL line of the SAME message (per-content-block write):
+        # usage must fold as a delta, not double-count (the 2.2× bug class).
+        {"type": "assistant", "message": {
+            "id": "m1", "model": "claude-opus-4-8",
+            "usage": {"input_tokens": 10, "output_tokens": 7},
+            "content": [{"type": "text", "text": "listing done"}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "a.txt\nb.txt", "is_error": False}]}},
+        {"type": "assistant", "message": {
+            "id": "m2", "usage": {"input_tokens": 4, "output_tokens": 2},
+            "content": [{"type": "text", "text": "all good"}]}},
+    ])
+    tl = TR.timeline(path)
+    kinds = [e["t"] for e in tl["entries"]]
+    assert kinds == ["prompt", "tool", "message", "message"]
+    tool = tl["entries"][1]
+    assert tool["tool"] == "Bash" and tool["input"] == {"command": "ls"}
+    assert tool["output"] == "a.txt\nb.txt" and tool["failed"] is False
+    assert tl["entries"][-1]["final"] is True          # the returned result
+    assert "final" not in tl["entries"][2]
+    assert tl["usage"] == {"in": 14, "out": 9, "cache": 0,
+                           "create": 0, "create_1h": 0}
+    assert tl["tools"] == 1 and tl["model"] == "claude-opus-4-8"
+    assert tl["bad_lines"] == 0
+
+
+def test_timeline_orphan_result_and_failed_flag(tmp_path):
+    path = _write(tmp_path, [
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "never-seen",
+             "content": "boom", "is_error": True}]}},
+    ])
+    tl = TR.timeline(path)
+    assert tl["entries"] == [{"t": "orphan-result", "output": "boom",
+                              "failed": True}]
+
+
+def test_timeline_renders_parent_style_user_text_blocks(tmp_path):
+    # A PARENT transcript's user turns arrive as text blocks inside list
+    # content — invisible to the mirror renderer (deliberately), but the
+    # timeline is the full-fidelity view and must surface them.
+    path = _write(tmp_path, [
+        {"type": "user", "message": {"content": [
+            {"type": "text", "text": "please fix the bug"}]}},
+    ])
+    tl = TR.timeline(path)
+    assert tl["entries"] == [{"t": "prompt", "text": "please fix the bug"}]
+
+
+def test_timeline_counts_bad_lines(tmp_path):
+    p = tmp_path / "t.jsonl"
+    p.write_text('{"type": "user", "message": {"content": "hi"}}\n{oops\n',
+                 encoding="utf-8")
+    tl = TR.timeline(str(p))
+    assert tl["bad_lines"] == 1 and tl["entries"][0]["t"] == "prompt"
+
+
+# ---------------------------------------------------------------- single owner
+
+def test_teammsg_regex_has_one_owner():
+    """The teammate-message wire shape is transcript.py's (styleguide
+    single-owner table) — a second copy anywhere in product code is drift."""
+    hits = []
+    for root in ("core", "plugins", "frontends", "bin"):
+        for dirpath, _dirs, files in os.walk(os.path.join(REPO, root)):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                p = os.path.join(dirpath, f)
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    if "<teammate-message" in fh.read():
+                        hits.append(os.path.relpath(p, REPO))
+    assert hits == ["plugins/claude_code/transcript.py"], hits
+
+
+def test_renderer_aliases_are_the_parser_functions():
+    from plugins.claude_code import substream_render as SR
+    assert SR.result_text is TR.result_text
+    assert SR.input_summary is TR.input_summary

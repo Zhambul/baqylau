@@ -3,15 +3,16 @@
 # The rendering half of the subagent/teammate streamer (entry: claude-substream.py
 # -> plugins/claude_code/substream.py, which owns the lifecycle: argv/env contract,
 # tailer spawning, cancellation signals, resume checkpointing, the footer). This
-# module owns turning transcript records into mirror paint ops: the pure text
-# helpers (cap / result_text / input_summary) and the Renderer class holding the
-# per-run render state (pending message buffer, ctx-tag turn tracking, the pend
-# tool_use ledger, the footer's cumulative usage rollup).
+# module owns turning transcript RECORDS into mirror paint ops — the PAINT half
+# of the parse/paint split: line→record parsing (and the text helpers
+# result_text / input_summary) lives in transcript.py, whose records
+# handle_line dispatches on; the Renderer class holds the per-run render state
+# (pending message buffer, ctx-tag turn tracking, the pend tool_use ledger, the
+# footer's cumulative usage rollup).
 #
 # Import-safe by design (no argv parsing, no META resolution) — substream.py keeps
 # those top-level side effects; everything identity-shaped (LOG, agent id, label,
 # colour, the model/ctx tag callables, the tailer spawners) is INJECTED.
-import json
 import os
 import re
 
@@ -21,6 +22,7 @@ from core import state as S
 from core import streamfmt as SF
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import tools as CT
+from plugins.claude_code import transcript as TR
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 RST = R.RST
@@ -32,13 +34,13 @@ AMBER = R.fg(*O.YELLOW)   # the compact-boundary notice colour
 # streamfmt.file_line straight from CT.FILE_RGB).
 FILE_LABEL = CT.FILE_LABEL
 
-# A message DELIVERED to this teammate appears in its transcript as a plain user
-# record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
-# </teammate-message> (the very first one is the lead's spawn prompt). We render it
-# as "✉ from <sender>" + the unwrapped body, rather than as a raw ⇢ prompt.
-TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>\s*$', re.S)
-_TM_ID  = re.compile(r'teammate_id="([^"]*)"')
-
+# The transcript record shapes (type discrimination, teammate-message
+# unwrapping, content-block walk, tool_result text normalisation) live in
+# transcript.py — the parse half of the parse/paint split; this module is the
+# paint half. Delegating aliases keep the historical call sites/tests working
+# (same pattern as render.py's format_code/render aliases into codefmt).
+result_text = TR.result_text
+input_summary = TR.input_summary
 
 # Line-capped excerpt — shared with the codex stream (core/streamfmt.py).
 cap = SF.cap
@@ -53,45 +55,6 @@ CAP_SENDMSG  = 12   # an outgoing SendMessage body
 CAP_TOOL_REQ = 10   # a generic tool's request summary (query/url/...)
 CAP_BODY     = 60   # a command's output body
 CAP_JOB_NOTE = 8    # a bg/monitor launch note without a job id
-
-
-def result_text(content):
-    if isinstance(content, str):
-        return content
-    if isinstance(content, dict):       # a lone content block — normalise to a 1-list
-        content = [content]
-    if isinstance(content, list):
-        parts = []
-        for b in content:
-            if isinstance(b, dict):
-                t = b.get("type")
-                if t == "text" or isinstance(b.get("text"), str):
-                    parts.append(b.get("text", ""))
-                elif t == "tool_reference":                 # ToolSearch result
-                    parts.append("→ loaded tool: " + str(b.get("tool_name", "")))
-                elif t == "image":
-                    parts.append("[image]")
-                else:                                        # unknown block -> show it
-                    try:
-                        parts.append(json.dumps(b, ensure_ascii=False))
-                    except Exception:
-                        parts.append(str(b))
-            elif isinstance(b, str):
-                parts.append(b)
-        return "\n".join(p for p in parts if p)
-    return str(content)
-
-
-def input_summary(inp):
-    # Compact "key: value" view of a tool's input, so the REQUEST is visible (e.g.
-    # a WebSearch query, a WebFetch url). Used for tools we don't render specially.
-    if not isinstance(inp, dict) or not inp:
-        return ""
-    lines = []
-    for k, v in inp.items():
-        vs = v if isinstance(v, str) else json.dumps(v, ensure_ascii=False)
-        lines.append(f"{k}: {vs}")
-    return "\n".join(lines)
 
 
 class Renderer:
@@ -458,49 +421,43 @@ class Renderer:
     # --- transcript line pump -----------------------------------------------------
 
     def handle_line(self, s):
-        try:
-            o = json.loads(s)
-        except Exception:
-            A.error(self.log, "handle_line", {"agent": self.agent, "line": s[:300]})
+        # Parse via transcript.parse_line (the ONE reader of the record shapes);
+        # this method is pure record→paint dispatch. A "results" record's
+        # `texts` (a parent transcript's user text blocks) are deliberately
+        # ignored here — the pre-split renderer never painted them either;
+        # timeline() is their consumer.
+        rec = TR.parse_line(s)
+        if rec is None:
             return
-        t = o.get("type")
-        msg = o.get("message") or {}
-        content = msg.get("content")
-        if t == "system" and o.get("subtype") == "compact_boundary":
-            self.render_compact(o.get("compactMetadata") or {})
-            return
-        if t == "user":
-            if isinstance(content, str):
-                if content.strip():
-                    m = TEAMMSG.match(content)
-                    if m:
-                        sid = _TM_ID.search(m.group(1))
-                        self.render_teammsg(sid.group(1) if sid else "", m.group(2))
-                    else:
-                        self.render_prompt(content)
-            elif isinstance(content, list):
-                for blk in content:
-                    if isinstance(blk, dict) and blk.get("type") == "tool_result":
-                        self.on_tool_result(blk, o.get("toolUseResult"))
-        elif t == "assistant":
-            u = msg.get("usage")
-            if isinstance(u, dict):           # refresh the live context fill for this turn
+        kind = rec["kind"]
+        if kind == "bad":
+            A.error(self.log, "handle_line", {"agent": self.agent,
+                                              "line": rec["raw"][:300]})
+        elif kind == "compact":
+            self.render_compact(rec["meta"])
+        elif kind == "prompt":
+            self.render_prompt(rec["text"])
+        elif kind == "teammsg":
+            self.render_teammsg(rec["sender"], rec["body"])
+        elif kind == "results":
+            for blk in rec["blocks"]:
+                self.on_tool_result(blk, rec["tur"])
+        elif kind == "assistant":
+            u = rec["usage"]
+            if u is not None:                 # refresh the live context fill for this turn
                 self.last_usage = u
-                self.last_model = msg.get("model") or self.last_model
+                self.last_model = rec["model"] or self.last_model
                 # Accumulate for the ended-footer rollup — once per message.id, deltas
                 # only for repeat lines of the same message (O.usage_fold, the shared
                 # dedup — see usage_last above).
-                d, self.usage_last = ACC.usage_fold(msg.get("id"), ACC.usage_fields(u),
+                d, self.usage_last = ACC.usage_fold(rec["id"], ACC.usage_fields(u),
                                                     self.usage_last)
                 self.tot_in += d[0]; self.tot_out += d[1]; self.tot_cache += d[2]
                 self.tot_create += d[3]; self.tot_create_1h += d[4]
             self.cur_tag = self._ctx_tag()
             self.turn_ctx_shown = False       # each turn shows its ctx % once (msg or tool)
-            if isinstance(content, list):
-                for blk in content:
-                    if not isinstance(blk, dict):
-                        continue
-                    if blk.get("type") == "text":
-                        self.render_message(blk.get("text", ""))
-                    elif blk.get("type") == "tool_use":
-                        self.on_tool_use(blk)
+            for bkind, blk in rec["blocks"]:
+                if bkind == "text":
+                    self.render_message(blk)
+                else:
+                    self.on_tool_use(blk)

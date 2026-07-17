@@ -66,6 +66,20 @@ def test_substream_imports_clean():
     _import_fresh("plugins.claude_code.substream")
 
 
+def test_transcript_imports_clean():
+    """transcript.py (the parse half of the substream split) is a pure parser
+    at import — no argv, no I/O, no DB; its only I/O (timeline/activity) is
+    call-time, and activity's sessionapi import is deferred."""
+    _import_fresh("plugins.claude_code.transcript")
+
+
+def test_sessionapi_imports_clean():
+    """core/sessionapi.py must open no DB at import — it's a read-side leaf
+    consumed by long-lived renderers and (transitively, via plugins.activity)
+    tooling; all its connects are per-call mode=ro."""
+    _import_fresh("core.sessionapi")
+
+
 _STREAM_PROG = """
 import sys, os
 sys.argv = ["import-safety-test"]          # no argv contract available
