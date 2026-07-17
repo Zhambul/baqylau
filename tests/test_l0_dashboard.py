@@ -979,22 +979,25 @@ def test_slash_commands_discovery(tmp_path, monkeypatch):
     assert cmds["deploy"]["desc"] == "user-level deploy"
 
 
-def test_http_session_commands(dash, tmp_path, monkeypatch):
+def test_http_commands(dash, tmp_path, monkeypatch):
+    # cwd-keyed (not sid-keyed): the new-session form completes for a
+    # directory that has no session yet
+    from urllib.parse import quote
     proj = tmp_path / "cproj"
     (proj / ".claude" / "commands").mkdir(parents=True)
     (proj / ".claude" / "commands" / "ship.md").write_text(
         "---\ndescription: ship\n---\n")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "no-such-claude"))
     monkeypatch.delenv("CLAUDE_PROJECT_DIR", raising=False)
-    A.session_start({"session_id": "cmdsid", "cwd": str(proj),
-                     "transcript_path": ""})
-    rows = _get_json(dash + "/api/session/cmdsid/commands")
+    rows = _get_json(dash + "/api/commands?cwd=" + quote(str(proj)))
     byname = {c["name"]: c for c in rows}
     assert byname["ship"]["src"] == "project"
     assert byname["compact"]["src"] == "built-in"
-    # unknown sid: no cwd resolves — still the built-ins, never an error
-    rows = _get_json(dash + "/api/session/nosuchsid/commands")
-    assert any(c["name"] == "compact" for c in rows)
+    # a non-directory cwd degrades to built-ins (+ user-level), never an error
+    for q in ("?cwd=/no/such/dir", ""):
+        rows = _get_json(dash + "/api/commands" + q)
+        assert any(c["name"] == "compact" for c in rows)
+        assert not any(c["name"] == "ship" for c in rows)
 
 
 def test_notifier_ignores_windowless_transitions(monkeypatch):

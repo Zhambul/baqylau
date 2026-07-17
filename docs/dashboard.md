@@ -183,7 +183,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
-| `/api/session/<sid>/commands` | the composer's "/" menu: `[{name, desc, src}, …]` — CLI built-ins + the session cwd's discovered `.claude` commands/skills (`plugins.slash_commands`) |
+| `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); 409 headless, 400 empty, 503 no terminal |
@@ -246,11 +246,16 @@ window (same scoping as tab colours and toasts), so it returns `409` — the
 composer is disabled with a hint for it. Empty text is `400`. The text rides
 kitten's `--stdin` verbatim (no shell, no escape interpretation).
 
-**The composer's "/" menu.** A leading `/` with no whitespace yet opens a
-Claude-Code-style completion menu over `GET /api/session/<sid>/commands`
-(fetched once per session view): ↑/↓ move, Tab completes, Enter completes a
-*partial* token but sends when the token already IS the selection (a
-fully-typed `/compact` sends on one Enter), Esc closes. The list is
+**The "/" menu** (the composer AND the new-session form's first-prompt box —
+one shared `slashMenu` helper in app.js). A leading `/` with no whitespace yet
+opens a Claude-Code-style completion menu over `GET /api/commands?cwd=…` —
+the composer keys it to the session's cwd (fetched once per view), the form
+to whatever directory is currently typed (cached per dir). ↑/↓ move, Tab
+completes, Enter completes a *partial* token but — in the composer — sends
+when the token already IS the selection (a fully-typed `/compact` sends on
+one Enter; in the form Enter always completes, the textarea keeps its
+newline), Esc closes. The menu drops BELOW its host box, never upward over
+the stats row. The list is
 `plugins.slash_commands(cwd)` → `plugins/claude_code/slashcmds.py`: a curated
 `BUILTINS` snapshot of the CLI's built-in commands plus the session cwd's
 discovered custom entries — `commands/**/*.md` (subdirectory-namespaced,

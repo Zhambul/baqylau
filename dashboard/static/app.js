@@ -717,20 +717,107 @@ function buildFilterBar() {
   return bar;
 }
 
+/* ---------- the "/" command menu (composer + new-session prompt) ---------- */
+// Claude-Code-style completion: a leading "/" with no whitespace yet opens a
+// menu over GET /api/commands?cwd=… (built-ins + that directory's .claude
+// commands/skills). ↑/↓ move, Tab completes, Esc closes; Enter completes —
+// except with {enterSends: true} an EXACT token falls through to the caller's
+// send (so a fully-typed "/compact" sends on one Enter). The TUI stays
+// authoritative — sending just types the command into the terminal and Claude
+// Code's own palette executes it. The menu drops BELOW its host box (never up
+// over the stats row); `host` must be position:relative.
+// Wiring contract: the helper listens to input/blur itself; the caller keeps
+// its own oninput (autoGrow) and calls sm.key(e) FIRST in onkeydown — a true
+// return means the menu consumed the key.
+
+function cmdsFor(cwd, cache, key) {
+  if (!cache[key])
+    cache[key] = fetch("/api/commands?cwd=" + encodeURIComponent(cwd || ""))
+      .then(r => r.ok ? r.json() : [])
+      .catch(() => []);
+  return cache[key];
+}
+
+function slashMenu(ta, host, getCmds, opts) {
+  const enterSends = !!(opts && opts.enterSends);
+  const menu = el("div", "cmenu");
+  menu.hidden = true;
+  host.append(menu);
+  let items = [], sel = 0;
+
+  // the "/" token being completed, or null when the menu shouldn't show
+  // (no leading slash, or whitespace = arguments underway)
+  const token = () => {
+    const v = ta.value;
+    if (!v.startsWith("/")) return null;
+    const head = v.slice(1);
+    return /\s/.test(head) ? null : head;
+  };
+  const close = () => { menu.hidden = true; items = []; };
+  const complete = (c) => {
+    ta.value = "/" + c.name + " ";
+    close();
+    ta.focus();
+    ta.dispatchEvent(new Event("input"));   // caller's autoGrow, if any
+  };
+  const render = () => {
+    menu.textContent = "";
+    items.forEach((c, i) => {
+      const row = el("div", "cmi" + (i === sel ? " sel" : ""));
+      row.append(el("span", "cmname", "/" + c.name));
+      if (c.desc) row.append(el("span", "cmdesc", c.desc));
+      if (c.src && c.src !== "built-in") row.append(el("span", "cmsrc", c.src));
+      row.onmousedown = (e) => { e.preventDefault(); complete(c); };
+      menu.append(row);
+    });
+    menu.hidden = !items.length;
+    if (items.length && menu.children[sel])
+      menu.children[sel].scrollIntoView({ block: "nearest" });
+  };
+  const refresh = () => {
+    const tok = token();
+    if (tok === null) { close(); return; }
+    getCmds().then(cmds => {
+      if (!ta.isConnected || token() !== tok) return;   // view/input moved on
+      sel = 0;
+      const q = tok.toLowerCase();
+      items = cmds.filter(c => c.name.toLowerCase().startsWith(q)).slice(0, 30);
+      render();
+    });
+  };
+  const key = (e) => {
+    if (menu.hidden || !items.length) return false;
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      sel = (sel + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length;
+      render();
+      return true;
+    }
+    if (e.key === "Tab") { e.preventDefault(); complete(items[sel]); return true; }
+    if (e.key === "Escape") { e.stopPropagation(); close(); return true; }
+    if (e.key === "Enter" && !e.shiftKey) {
+      if (enterSends && token() === items[sel].name) {
+        close();                            // exact token: fall through to send
+        return false;
+      }
+      e.preventDefault();
+      complete(items[sel]);
+      return true;
+    }
+    return false;
+  };
+  ta.addEventListener("input", refresh);
+  ta.addEventListener("blur", () => setTimeout(close, 150));   // menu clicks
+  //                     preventDefault (never blur); this catches clicks away
+  return { key };
+}
+
 /* ---------- control plane: the message composer ---------- */
 // A textarea above the mirror feed that types a message into the session's
 // kitty window (POST /message). Enter sends, Shift+Enter is a newline. Disabled
 // with a hint when the session isn't live or has no window (a headless/daemon
 // session — the /message endpoint would 409). The sent text surfaces in the
 // stream on its own via the conversation tail, so we only clear + toast.
-//
-// The "/" menu (Claude-Code-style): a leading "/" with no whitespace yet opens
-// a completion menu over GET /api/session/<sid>/commands (built-ins + the
-// session cwd's .claude commands/skills — fetched once per session view).
-// ↑/↓ move, Tab completes, Enter completes a PARTIAL token but sends when the
-// token already IS the selection (so a fully-typed "/compact" sends on one
-// Enter), Esc closes. The TUI stays authoritative — sending just types the
-// command into the terminal and Claude Code's own palette executes it.
 
 function autoGrow(ta) {
   ta.style.height = "auto";
@@ -764,87 +851,17 @@ function buildComposer() {
         if (ses.composer === ta) { ta.disabled = !canSend; btn.disabled = !canSend; ta.focus(); }
       });
   };
-  // --- the "/" command menu ---
-  const menu = el("div", "cmenu");
-  menu.hidden = true;
-  let mItems = [], mSel = 0;
-
-  const cmdsOnce = () => {
-    if (!ses.cmds)
-      ses.cmds = fetch("/api/session/" + encodeURIComponent(S.cur) + "/commands")
-        .then(r => r.ok ? r.json() : [])
-        .catch(() => []);
-    return ses.cmds;
-  };
-  // the current "/" token being completed, or null when the menu shouldn't
-  // show (no leading slash, or whitespace = arguments underway)
-  const token = () => {
-    const v = ta.value;
-    if (!v.startsWith("/")) return null;
-    const head = v.slice(1);
-    return /\s/.test(head) ? null : head;
-  };
-  const closeMenu = () => { menu.hidden = true; mItems = []; };
-  const complete = (c) => {
-    ta.value = "/" + c.name + " ";
-    closeMenu();
-    autoGrow(ta);
-    ta.focus();
-  };
-  const renderMenu = (list) => {
-    mItems = list.slice(0, 30);
-    if (!mItems.length) { closeMenu(); return; }
-    mSel = Math.min(mSel, mItems.length - 1);
-    menu.textContent = "";
-    mItems.forEach((c, i) => {
-      const row = el("div", "cmi" + (i === mSel ? " sel" : ""));
-      row.append(el("span", "cmname", "/" + c.name));
-      if (c.desc) row.append(el("span", "cmdesc", c.desc));
-      if (c.src && c.src !== "built-in") row.append(el("span", "cmsrc", c.src));
-      row.onmousedown = (e) => { e.preventDefault(); complete(c); };
-      menu.append(row);
-    });
-    menu.hidden = false;
-    if (menu.children[mSel]) menu.children[mSel].scrollIntoView({ block: "nearest" });
-  };
-  const refreshMenu = () => {
-    const tok = token();
-    if (tok === null) { closeMenu(); return; }
-    cmdsOnce().then(cmds => {
-      if (ses.composer !== ta || token() !== tok) return;   // view/input moved on
-      mSel = 0;
-      const q = tok.toLowerCase();
-      renderMenu(cmds.filter(c => c.name.toLowerCase().startsWith(q)));
-    });
-  };
-
-  ta.oninput = () => { autoGrow(ta); refreshMenu(); };
-  ta.onblur = () => setTimeout(closeMenu, 150);   // menu clicks preventDefault, so
-  //                                                 they never blur; this catches
-  //                                                 clicking elsewhere on the page
+  // the "/" menu — commands for THIS session's cwd, fetched once per view
+  const sm = slashMenu(ta, wrap,
+    () => cmdsFor(meta.cwd, ses, "cmds"),
+    { enterSends: true });
+  ta.oninput = () => autoGrow(ta);
   ta.onkeydown = (e) => {
-    if (!menu.hidden && mItems.length) {
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        mSel = (mSel + (e.key === "ArrowDown" ? 1 : mItems.length - 1)) % mItems.length;
-        renderMenu(mItems);
-        return;
-      }
-      if (e.key === "Tab") { e.preventDefault(); complete(mItems[mSel]); return; }
-      if (e.key === "Escape") { e.stopPropagation(); closeMenu(); return; }
-      if (e.key === "Enter" && !e.shiftKey) {
-        if (token() !== mItems[mSel].name) {      // partial token: complete first
-          e.preventDefault();
-          complete(mItems[mSel]);
-          return;
-        }
-        closeMenu();                              // exact token: fall through to send
-      }
-    }
+    if (sm.key(e)) return;
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
-  wrap.append(ta, btn, menu);
+  wrap.append(ta, btn);
   return wrap;
 }
 
@@ -942,6 +959,13 @@ function openNewSession(prefillCwd) {
   prompt.spellcheck = false;
   prompt.placeholder = "what should Claude start on?";
   promptRow.append(prompt);
+  // "/" completion here too — cwd-keyed to whatever directory is currently
+  // typed (cached per dir, so flipping between dirs doesn't refetch)
+  const cmdCache = {};
+  const spm = slashMenu(prompt, promptRow,
+    () => { const c = dir.value.trim(); return cmdsFor(c, cmdCache, c); },
+    {});
+  prompt.onkeydown = (e) => { spm.key(e); };
 
   const actions = el("div", "nsactions");
   const cancel = el("button", "nsbtn", "cancel");

@@ -307,10 +307,11 @@ body.attn-on .shead { top: 81px; }
   background: var(--panel); padding: 8px 10px; margin-bottom: 10px;
   position: relative;               /* the "/" menu anchors to the composer box */
 }
-/* the "/" command menu — floats just above the composer, scrolls past ~9 rows */
+/* the "/" command menu — drops BELOW its host box (downward over the stream /
+   form actions, never up over the stats row), scrolls past ~9 rows */
 .cmenu {
-  position: absolute; left: 10px; right: 10px; bottom: calc(100% + 4px);
-  z-index: 30; max-height: 260px; overflow-y: auto;
+  position: absolute; left: 10px; right: 10px; top: calc(100% + 4px);
+  z-index: 50; max-height: 260px; overflow-y: auto;
   background: var(--panel); box-shadow: var(--card-hover);
   border-radius: var(--r); padding: 4px;
 }
@@ -363,7 +364,8 @@ body.attn-on .shead { top: 81px; }
   padding: 18px 18px 14px;
 }
 .nstitle { color: var(--text); font-weight: 650; font-size: 14px; margin-bottom: 14px; }
-.nsfield { display: block; margin-bottom: 12px; }
+.nsfield { display: block; margin-bottom: 12px; position: relative; }
+.nsfield .cmenu { left: 0; right: 0; }        /* the field has no side padding */
 .nslabel { display: block; color: var(--dim); font-size: 11px; margin-bottom: 4px; }
 .nsinput {
   width: 100%; box-sizing: border-box;

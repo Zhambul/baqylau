@@ -607,6 +607,16 @@ class Handler(BaseHTTPRequestHandler):
         api = parts[1:]
         if api == ["sessions"]:
             return self._json(sessions_payload())
+        if api == ["commands"]:
+            # the "/" menus (composer + new-session prompt): built-ins + the
+            # given directory's discovered .claude commands/skills. cwd-keyed,
+            # not sid-keyed — the new-session form completes for a directory
+            # that has no session yet; a non-directory degrades to built-ins
+            # + user-level entries, never an error.
+            cwd = (parse_qs(url.query).get("cwd") or [""])[0]
+            if not os.path.isdir(cwd):
+                cwd = ""
+            return self._json(plugins.slash_commands(cwd))
         if len(api) >= 2 and api[0] == "session" and _sid(api[1]):
             sid, rest = api[1], api[2:]
             if not rest:
@@ -627,11 +637,6 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(tl if tl is not None else {"entries": []})
             if rest == ["errors"]:
                 return self._json(API.errors(sid))
-            if rest == ["commands"]:
-                # the composer's "/" menu: built-ins + the session cwd's
-                # discovered .claude commands/skills (plugins.slash_commands)
-                row = API.session_row(sid) or {}
-                return self._json(plugins.slash_commands(row.get("cwd") or ""))
             if len(rest) == 2 and rest[0] == "view":
                 html = view_payload(sid, rest[1])
                 if html is None:
