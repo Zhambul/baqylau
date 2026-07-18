@@ -49,6 +49,7 @@ from core import copy as CP
 from core import locks
 from core import paths as P
 from core import sessionapi as API
+from core import spawn as SP
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
@@ -940,14 +941,52 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, "web-interrupt", {"win": "", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
+        # Press-time transcript size — the escape-recheck's growth baseline
+        # (stat'd BEFORE the key lands so even the interrupt line counts as
+        # growth). '' / unstat-able transcript degrades to the recheck's own
+        # start-time baseline.
+        tpath = row.get("transcript_path") or ""
+        try:
+            tsize = os.path.getsize(tpath) if tpath else -1
+        except OSError:
+            tsize = -1
         ok = bool(fe.send_key(win, "escape"))
         A.state_file(log, sdb, "web-interrupt",
                      {"win": win, "ok": ok, "tab": tab})
+        if ok and tab in (tabs.THINKING, tabs.WORKING):
+            # An Esc killed mid-think leaves NO signal anywhere (the known
+            # interrupt-watch gap) — but a WEB interrupt is itself an event,
+            # so spawn the escape-recheck: flip the dead magenta green unless
+            # any real signal (state movement / transcript growth) shows up
+            # within its grace. Detached + audited (A.spawn); its verdict
+            # lands as tab_transitions rows under DISPATCH escape-recheck.
+            self._spawn_escape_recheck(fe, win, log, tpath, tsize)
         if not ok:
             A.error(log, "dashboard interrupt (send failed)",
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "tab": tab})
+
+    def _spawn_escape_recheck(self, fe, win, log, tpath, tsize):
+        """Detached `claude-tab-status.py escape-recheck <log> <transcript>
+        <press-size>` for the session's window. Env carries the window id +
+        the terminal-reach vars (fe.export_env — the detached process is
+        re-parented, so the ppid socket walk can't find kitty). Spawn failure
+        is audited by spawn_detached; assembly failure lands its own A.error
+        (the recovery not firing must never be invisible)."""
+        try:
+            fe.export_env()
+            env = dict(os.environ)
+            env["KITTY_WINDOW_ID"] = str(win)
+            args = ["escape-recheck", log, tpath]
+            if tsize >= 0:
+                args.append(str(tsize))
+            SP.spawn_detached(os.path.join(P.BIN, "claude-tab-status.py"),
+                              args, log, env=env,
+                              purpose="watcher:escape-recheck")
+        except Exception:
+            A.error(log, "dashboard interrupt (escape-recheck spawn)",
+                    {"win": win})
 
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the

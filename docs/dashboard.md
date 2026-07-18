@@ -383,6 +383,15 @@ only, no confirm — it matches pressing Esc in the terminal) and as the
 **Esc key** on the session view itself: a document-level fallback that fires
 only when no overlay (modal, slash menu, filter, dropdown) claimed the
 Escape, so muscle memory from the terminal carries over to the browser.
+When the Escape lands on a MAGENTA tab (`thinking`/`working`) the endpoint
+also spawns the **`escape-recheck`** tab dispatch (detached
+`claude-tab-status.py escape-recheck <log> <transcript> <press-size>`, env
+carrying the window id): an Esc that kills a turn mid-think leaves no
+signal anywhere (the interrupt-watch KNOWN GAP — docs/tab-colors.md), so
+the tab would sit magenta and the dashboard would keep showing busy; a web
+interrupt is itself an event, so the recheck flips the dead magenta green
+unless any real signal (tab-state movement, transcript growth over the
+press-time size) appears within its 2s grace.
 
 **The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
 app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with

@@ -186,25 +186,49 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   watcher alive until its 30m ceiling, which is harmless (the next prompt reuses
   it via the pid lock). The stale sample is audited once
   ("stale pre-turn row — paint failed/lagged"). On seeing the
-  interrupt line it re-checks the state: green/idle means the turn already
-  resolved (do nothing); blue means a live command/agent whose own
+  interrupt line it first checks what FOLLOWS it in the transcript (after one
+  settle tick): a **queued message** changes what the interrupt means — Claude
+  Code interrupts the running turn and *immediately delivers* the queued
+  prompt, so a new turn starts thinking right away, repaints magenta within
+  the 0.5s tick, and a green flip would paint "done" over a live think (stuck
+  green until the first tool event repainted — reported live from the web stop
+  button). A plain cancel leaves the interrupt line as the transcript's LAST
+  record; a queued delivery appends the user-prompt record right after it —
+  in that case the watcher audits ("queued prompt delivered"), advances past
+  it and **keeps watching** (the delivered turn is mid-flight and deserves the
+  same recovery). Otherwise it re-checks the state: green/idle means the turn
+  already resolved (do nothing); blue means a live command/agent whose own
   writer-liveness recovery is faster and authoritative (defer, or it would race
   `bg-recheck` and could paint "done" over a still-live bg job); magenta or red
   has no other signal, so it flips green.
 - **Cancelling before the model has produced anything at all** (mid-thinking,
   before the turn's first hook) is the one case with **no signal whatsoever** —
   confirmed empirically: the harness silently rewinds the turn for editing, and
-  *nothing* is written anywhere (no transcript line, no sidecar file). This case
-  is **deliberately left unhandled**: the tab stays magenta until the next
-  interaction resets it. A timeout backstop (`idle-watch`, "fully quiet for
-  `CLAUDE_TAB_IDLE_SECS` → green") existed for it and was **removed** — long
-  thinking fires zero hooks and writes nothing, which is *exactly* the same
-  signature as the cancel, so any timeout short enough to be useful (30s)
-  false-positived on every long thinking stretch, turning the tab green
-  mid-turn. That false "your turn" fired on *every* long think and actively
-  misled; the stale magenta it protected against is rare, happens with the user
-  at the keyboard (they just pressed Esc), and self-corrects at the next prompt —
-  which the cancelling user is typically about to type anyway.
+  *nothing* is written anywhere (no transcript line, no sidecar file). For a
+  TERMINAL Esc this case is **deliberately left unhandled**: the tab stays
+  magenta until the next interaction resets it. A timeout backstop
+  (`idle-watch`, "fully quiet for `CLAUDE_TAB_IDLE_SECS` → green") existed for
+  it and was **removed** — long thinking fires zero hooks and writes nothing,
+  which is *exactly* the same signature as the cancel, so any timeout short
+  enough to be useful (30s) false-positived on every long thinking stretch,
+  turning the tab green mid-turn. That false "your turn" fired on *every* long
+  think and actively misled; the stale magenta it protected against is rare,
+  happens with the user at the keyboard (they just pressed Esc), and
+  self-corrects at the next prompt — which the cancelling user is typically
+  about to type anyway. **A WEB interrupt is the exception that CAN be
+  handled** (`escape-recheck`, spawned by the dashboard's `/interrupt`
+  endpoint — docs/dashboard.md): unlike a terminal Esc, the press itself is an
+  event *we* generated — we know an Escape reached a busy tab, where the TUI's
+  meaning of Esc is turn-interrupt — so a backstop keyed to that press honours
+  the events-never-timeouts rule. It waits `ESCAPE_GRACE_S` (2s) and flips the
+  magenta green only on **total silence**: any tab-state movement bails (a
+  real signal handled it), and any transcript growth over the press-time
+  baseline bails too — the state poll alone is NOT enough, because a new
+  prompt submitted within the grace repaints the same magenta invisibly (the
+  paint dedup skips identical colours), which would put green over a live
+  think; the prompt's transcript record is what makes it visible. Magenta
+  only: blue and red keep their own recoveries, and any cancel that wrote the
+  interrupt line is `interrupt-watch`'s.
 
 
 ## Notes / tweaking

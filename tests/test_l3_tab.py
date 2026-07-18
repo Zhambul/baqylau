@@ -316,12 +316,15 @@ def test_probe_never_creates_state_db(run_hook, test_env, session, fake_kitten):
 
 # ------------------------------------------- interrupt-watch turn-over gate
 
-def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None):
+def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None,
+                          queued=False):
     """Run run_interruptwatch in-process, fully sequenced (no timing races):
     tab_get returns states[i] on its i-th call (last value repeats), and the
     synthetic interrupt line is appended to the transcript during tab_get call
-    number `interrupt_at` (None = never). Returns (resolved_state, end_reason,
-    [audited transition reasons])."""
+    number `interrupt_at` (None = never; queued=True also appends the
+    immediately-delivered queued user-prompt record right after it, the way
+    Claude Code does when a message was queued at interrupt time). Returns
+    (resolved_state, end_reason, [audited transition reasons])."""
     import sys as _sys
     from conftest import REPO
     if REPO not in _sys.path:
@@ -349,6 +352,8 @@ def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None):
         if interrupt_at is not None and tick["n"] == interrupt_at:
             with open(transcript, "a") as f:
                 f.write('{"text":"[Request interrupted by user]"}\n')
+                if queued:
+                    f.write('{"type":"user","message":{"content":"queued"}}\n')
         return states[min(tick["n"], len(states) - 1)]
 
     monkeypatch.setattr(T, "WIN", "9")
@@ -396,6 +401,108 @@ def test_interruptwatch_recheck_defers_when_turn_resolved(monkeypatch, tmp_path)
         interrupt_at=1)
     assert state is None
     assert reason == "interrupt-seen-but-turn-already-over"
+
+
+def test_interruptwatch_queued_prompt_keeps_watching(monkeypatch, tmp_path):
+    """An interrupt with a QUEUED message is not a cancel-to-idle: Claude Code
+    delivers the queued prompt immediately and a new turn starts thinking, so
+    flipping green painted "done" over a live think (stuck green until the
+    first tool event — reported live). The user-prompt record right after the
+    interrupt line is the tell: the watcher must NOT flip, and must KEEP
+    watching the delivered turn until it genuinely ends."""
+    state, reason, reasons = _drive_interruptwatch(
+        monkeypatch, tmp_path,
+        states=["thinking", "thinking", "working", "awaiting-response"],
+        interrupt_at=1, queued=True)
+    assert state is None, "flipped green over the queued prompt's turn"
+    assert reason == "turn-over"          # kept watching to the genuine end
+    assert any("queued prompt delivered" in r for r in reasons)
+
+
+def _drive_escaperecheck(monkeypatch, tmp_path, states, grow_at=None,
+                         baseline=None):
+    """Run d_escape_recheck in-process, sequenced like _drive_interruptwatch:
+    tab_get returns states[i] per call (call 0 is the pre-loop start read;
+    last value repeats), and the transcript grows during tab_get call number
+    `grow_at`. Returns (resolved_state, [audited transition reasons])."""
+    import sys as _sys
+    from conftest import REPO
+    if REPO not in _sys.path:
+        _sys.path.insert(0, REPO)
+    import plugins.claude_code.tabstatus as T
+
+    transcript = tmp_path / "sess-esc.jsonl"
+    transcript.write_text('{"type":"user"}\n')
+    reasons = []
+
+    class _A:
+        def transition(self, sid, win, dispatch, prev, new, applied, reason):
+            reasons.append(reason)
+
+    tick = {"n": -1}
+
+    def fake_tab_get(win):
+        tick["n"] += 1
+        if grow_at is not None and tick["n"] == grow_at:
+            with open(transcript, "a") as f:
+                f.write('{"type":"user","message":{"content":"new prompt"}}\n')
+        return states[min(tick["n"], len(states) - 1)]
+
+    argv = ["claude-tab-status.py", "escape-recheck",
+            "/tmp/claude-mirror-sess-esc.log", str(transcript)]
+    if baseline is not None:
+        argv.append(str(baseline))
+    monkeypatch.setattr(_sys, "argv", argv)
+    monkeypatch.setattr(T, "WIN", "9")
+    monkeypatch.setattr(T, "A", _A())
+    monkeypatch.setattr(T, "tab_get", fake_tab_get)
+    monkeypatch.setattr(T, "WATCH_POLL_S", 0.001)
+    monkeypatch.setattr(T, "ESCAPE_GRACE_S", 0.02)   # keep the full-grace path fast
+    return T.d_escape_recheck(), reasons
+
+
+def test_escaperecheck_flips_dead_magenta(monkeypatch, tmp_path):
+    """The mid-thinking cancel gap, closed for a WEB interrupt: Esc into a
+    thinking tab, then total silence (no state movement, no transcript bytes)
+    -> the turn is dead, flip green."""
+    state, _ = _drive_escaperecheck(monkeypatch, tmp_path, states=["thinking"])
+    assert state == "awaiting-response"
+
+
+def test_escaperecheck_bails_on_new_prompt(monkeypatch, tmp_path):
+    """The re-prompt race: a NEW message within the grace repaints the same
+    magenta invisibly (dedup), so the state poll alone can't see it — the
+    transcript growth must bail the flip, or green paints over a live think
+    (the exact false-positive the banned idle-timeout had)."""
+    state, reasons = _drive_escaperecheck(
+        monkeypatch, tmp_path, states=["thinking"], grow_at=2)
+    assert state is None, "flipped green over a freshly-submitted turn"
+    assert any("transcript moved" in r for r in reasons)
+
+
+def test_escaperecheck_bails_on_press_time_growth(monkeypatch, tmp_path):
+    """The press-time baseline: a prompt landing in the spawn-latency gap
+    (before the recheck's own first stat) is still growth — the dashboard
+    passes the size it measured BEFORE sending the Escape."""
+    state, reasons = _drive_escaperecheck(
+        monkeypatch, tmp_path, states=["thinking"], baseline=0)
+    assert state is None
+    assert any("transcript moved" in r for r in reasons)
+
+
+def test_escaperecheck_bails_on_state_movement_and_non_magenta(monkeypatch,
+                                                              tmp_path):
+    """Any state movement means a real signal handled it; and a non-magenta
+    start belongs to the other recoveries (writer-liveness on blue, dialog
+    outcomes on red) — both must leave the tab alone."""
+    state, reasons = _drive_escaperecheck(
+        monkeypatch, tmp_path, states=["thinking", "awaiting-response"])
+    assert state is None
+    assert any("state moved on" in r for r in reasons)
+    state, reasons = _drive_escaperecheck(
+        monkeypatch, tmp_path, states=["executing"])
+    assert state is None
+    assert any("not on magenta" in r for r in reasons)
 
 
 # ------------------------------------------------- frontend substitutability

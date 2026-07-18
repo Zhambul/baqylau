@@ -102,7 +102,8 @@ def _win():
 
 # Test-suite-only cadence override (docs/testing.md): one value that replaces
 # every watcher/grace sleep below (bg-watch 2s, interrupt-watch 0.5s, bg-recheck
-# grace 4s). Unset (the shipped default) leaves each sleep its literal value —
+# grace 4s, escape-recheck 0.25s). Unset (the shipped default) leaves each sleep
+# its literal value —
 # written as `time.sleep(WATCH_POLL_S or <literal>)` so the defaults stay
 # greppable at their use sites.
 WATCH_POLL_S = float(os.environ.get("CLAUDE_WATCH_POLL_S") or 0)
@@ -113,6 +114,11 @@ WATCH_POLL_S = float(os.environ.get("CLAUDE_WATCH_POLL_S") or 0)
 # via _dur_label) honest instead of silently scaling.
 BGWATCH_MAX_S = 3600        # bg-watch gives up after ~1h of live markers
 INTERRUPT_MAX_S = 1800      # interrupt-watch gives up after ~30m without a cancel
+ESCAPE_GRACE_S = 2.0        # escape-recheck: how long a web Esc into magenta may
+#                             stay signal-less before the turn is declared dead
+#                             (the transcript line, when one is coming, lands
+#                             well inside this — interrupt-watch flips within
+#                             one 0.5s tick and the state change bails us out)
 # bg-watch green-flip grace: the team must stay quiet across this many
 # consecutive checks (~BG_MISS_GRACE_N * poll seconds) before declaring green,
 # so a teammate's inter-task marker gap doesn't flip the tab early.
@@ -299,7 +305,7 @@ def _ensure_win():
     if _win() or not _fe().usable():
         return
     sid = ""
-    if DISPATCH in ("bg-recheck", "bg-watch", "agent-start"):
+    if DISPATCH in ("bg-recheck", "bg-watch", "agent-start", "escape-recheck"):
         sid = sid_from_key(sys.argv[2] if len(sys.argv) > 2 else "")
     elif DISPATCH == "interrupt-watch":
         t = sys.argv[2] if len(sys.argv) > 2 else ""
@@ -440,6 +446,35 @@ def run_interruptwatch(transcript):
                 except OSError:
                     chunk = b""
                 if b"[Request interrupted by user]" in chunk:
+                    # A QUEUED message changes what this interrupt MEANS:
+                    # Claude Code interrupts the turn and immediately
+                    # delivers the queued prompt — a NEW turn starts thinking
+                    # right away, repaints magenta within our tick, and a
+                    # green flip paints "done" over it (stuck green through
+                    # the whole think; only the first tool event corrected it
+                    # — reported live from the web stop button). The tell is
+                    # in the transcript: a plain cancel leaves the interrupt
+                    # line LAST, a queued delivery appends the user-prompt
+                    # record right after it. One settle tick before deciding,
+                    # so a near-simultaneous delivery isn't misread as a
+                    # plain cancel — and on the queued case KEEP WATCHING:
+                    # the delivered turn is mid-flight and deserves the same
+                    # cancel recovery as any other.
+                    mark = pos + chunk.index(b"[Request interrupted by user]")
+                    time.sleep(poll)
+                    try:
+                        with open(transcript, "rb") as f:
+                            f.seek(mark)
+                            after = f.read()
+                    except OSError:
+                        after = b""
+                    if any(b'"type":"user"' in ln
+                           for ln in after.split(b"\n")[1:]):
+                        audit_tx(tab_get(_win()), "", 0,
+                                 "interrupt-watch: queued prompt delivered on "
+                                 "the interrupt — the new turn owns the tab")
+                        pos = mark + len(after)
+                        continue
                     break
                 pos = size
         else:
@@ -615,6 +650,75 @@ def d_bg_recheck():
     return WORKING if kind == "sub" else AWAITING_RESPONSE
 
 
+def d_escape_recheck():
+    """escape-recheck (spawned by the web dashboard after a successful
+    /interrupt Escape into a MAGENTA tab): recovery for the mid-thinking
+    cancel gap interrupt-watch documents as deliberately unhandled — an Esc
+    before the model has produced anything leaves no hook, no transcript
+    line, nothing, so magenta sticks until the next interaction. For a
+    TERMINAL Esc that stays unhandled (no signal exists at all, and the
+    banned idle-timeout backstop false-positived on every long think because
+    thinking and cancel look identical from outside). A WEB interrupt is
+    different in kind: the press itself is an EVENT we generated — we KNOW an
+    Escape reached a busy tab, where the TUI's meaning of Esc is
+    turn-interrupt — so a short recheck keyed to that press honours the
+    "events, never idle timeouts" rule. Wait ESCAPE_GRACE_S; if the tab is
+    still on the SAME magenta state, the turn is dead — flip green. ANY state
+    movement in the gap means a real signal handled it (the transcript line →
+    interrupt-watch's green, a hook repaint, Stop) → bail. Magenta only:
+    blue has writer-liveness/bg-recheck, red's dialog outcomes fire their own
+    events, and any cancel that DID write the transcript line is
+    interrupt-watch's.
+
+    The state poll alone is NOT enough: a NEW prompt submitted within the
+    grace window repaints the same magenta invisibly (main()'s dedup skips
+    the identical colour and tab rows carry no ts), so a user who interrupts
+    and immediately re-prompts would get green painted over a live think.
+    That's why the recheck ALSO watches the TRANSCRIPT (argv[3]): a new
+    prompt lands there the moment it's submitted, and an interrupt that had
+    partial output lands the "[Request interrupted by user]" line — while a
+    turn killed mid-think writes NOTHING (the very gap this recovers). Any
+    transcript growth over the PRESS-TIME baseline (argv[4], stat'd by the
+    dashboard right before the send_key, so not even the spawn-latency
+    sub-second is blind) ⇒ a real signal exists ⇒ bail. Only total silence —
+    no state movement AND no transcript bytes — flips."""
+    global MLOG, AUDIT_SID, REASON
+    MLOG = sys.argv[2] if len(sys.argv) > 2 else ""   # this session's log key
+    transcript = sys.argv[3] if len(sys.argv) > 3 else ""
+    AUDIT_SID = sid_from_key(MLOG)
+    start = tab_get(_win()) if _win() else ""
+    if start not in (THINKING, WORKING):
+        audit_tx(start, "", 0,
+                 "escape-recheck: tab not on magenta — other recoveries own it")
+        return None
+
+    def tsize():
+        try:
+            return os.path.getsize(transcript) if transcript else 0
+        except OSError:
+            return 0
+
+    try:
+        size0 = int(sys.argv[4])            # press-time baseline from the dashboard
+    except (IndexError, ValueError):
+        size0 = tsize()                     # fallback: our own start is close enough
+    poll = WATCH_POLL_S or 0.25
+    for _ in range(max(1, int(ESCAPE_GRACE_S / poll))):
+        time.sleep(poll)
+        cur = tab_get(_win()) if _win() else ""
+        if cur != start:
+            audit_tx(cur, "", 0,
+                     "escape-recheck: state moved on — a real signal handled it")
+            return None
+        if tsize() != size0:
+            audit_tx(cur, "", 0, "escape-recheck: transcript moved — a new "
+                     "prompt or the interrupt line landed, real signals own it")
+            return None
+    REASON = (f"escape-recheck: web Esc into {start} left no turn-over signal "
+              f"for {_dur_label(ESCAPE_GRACE_S)} — mid-thinking cancel gap")
+    return AWAITING_RESPONSE
+
+
 def d_thinking():
     """UserPromptSubmit: besides the literal colour (handled by the paint table
     at the bottom, as before), starts this turn's interrupt-watch — see its
@@ -718,6 +822,7 @@ DISPATCHES = {
     "bg-watch":        d_bg_watch,
     "interrupt-watch": d_interrupt_watch,
     "bg-recheck":      d_bg_recheck,
+    "escape-recheck":  d_escape_recheck,
     THINKING:        d_thinking,
     "notify":          d_notify,
     "pretool":         d_pretool,

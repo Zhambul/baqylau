@@ -804,6 +804,9 @@ class _FakeFE:
         self.keyed.append((win, keys))
         return self.send_ok
 
+    def export_env(self):
+        pass
+
     def close_tab(self, win):
         self.closed.append(win)
         return True
@@ -1086,6 +1089,40 @@ def test_post_interrupt_sends_escape(dash, monkeypatch):
     assert code == 200 and json.loads(body) == {"ok": True, "tab": ""}
     assert fe.keyed == [("66", ("escape",))]
     assert fe.closed == []                    # never touches the tab
+
+
+def test_post_interrupt_magenta_spawns_escape_recheck(dash, monkeypatch,
+                                                      tmp_path):
+    # an Esc into a THINKING tab may be the signal-less mid-thinking cancel —
+    # the endpoint spawns the escape-recheck with the press-time transcript
+    # size as the growth baseline; a non-busy tab spawns nothing
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    spawned = []
+    monkeypatch.setattr(DS.SP, "spawn_detached",
+                        lambda path, argv, log, env=None, purpose="", **kw:
+                        spawned.append((path, argv, env, purpose)) or None)
+    tp = tmp_path / "intr3.jsonl"
+    tp.write_text('{"type":"user"}\n')
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    A.session_start({"session_id": "intr3", "cwd": "/w",
+                     "transcript_path": str(tp)})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"77": "thinking"})
+    code, body = _post(dash + "/api/session/intr3/interrupt", {})
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking"}
+    assert len(spawned) == 1
+    path, argv, env, purpose = spawned[0]
+    assert path.endswith("claude-tab-status.py")
+    assert argv[:2] == ["escape-recheck", DS.P.mirror_log("intr3")]
+    assert argv[2] == str(tp)
+    assert argv[3] == str(tp.stat().st_size)      # press-time baseline
+    assert env["KITTY_WINDOW_ID"] == "77"
+    assert purpose == "watcher:escape-recheck"
+    # green tab -> no recheck (nothing to recover)
+    monkeypatch.setattr(DS.API, "tab_states",
+                        lambda: {"77": "awaiting-response"})
+    _post(dash + "/api/session/intr3/interrupt", {})
+    assert len(spawned) == 1
 
 
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):
