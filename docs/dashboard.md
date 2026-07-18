@@ -1278,6 +1278,24 @@ hues are NOT part of the derivation — they stay the terminal system's own
 (`core/tabs.py` COLORS, `core/ops.py` semantic table) so the web and the kitty
 mirror read as one system.
 
+**State tint.** The tab state doesn't stop at the badge dot: the whole surface
+washes with the state hue — the session cards on the main list, the session
+header (the web scoreboard: title line, stats row, ctx bar), and the agent
+cards — as a soft 135° gradient (≈13% → 3% → transparent, layered over the
+normal panel background) plus a state-tinted inset hairline replacing the
+neutral `--card` one. One custom property drives it: `--state`, defaulting to
+`--idle` grey and remapped by `[data-tab=…]` (busy magenta · executing blue ·
+asking red · your-turn green — same buckets as the badge dot); everything else
+derives via `color-mix()`, so the wash stays subtle on the near-black canvas.
+The attribute is stamped by `sessionCard()`/`renderSessionChrome()` and kept
+live by `setBadge()` (which re-stamps the enclosing `.shead` on every `tab`
+SSE event); the list cards re-stamp on each global-snapshot re-render. Agent
+cards key off agent STATUS instead (`data-st` from `agentStatus()`: running
+blue, done green, cancelled/crashed red, unknown amber) since a subagent has
+no tab of its own. The tint made the "live" chip redundant — it's gone from
+both the session cards and the header; only the inactive states still label
+themselves (`parked`/`gone`).
+
 ## Testing
 
 `tests/test_l0_dashboard.py`: opshtml contract tests (escaping, SGR/OSC8,

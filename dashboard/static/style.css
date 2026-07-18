@@ -169,14 +169,41 @@ code, pre, .mono { font-family: var(--mono); }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .dirhead .dircount { color: var(--dim2); font-size: 11px; flex: none; }
 .sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 12px; }
+
+/* ---- state tint ---------------------------------------------------------
+   The session's tab state washes the WHOLE surface — session cards, the
+   session header (the web scoreboard), and agent cards — as a soft diagonal
+   gradient plus a state-tinted hairline, not just the badge dot. --state is
+   the one hue each surface derives from via color-mix(); defaults must come
+   FIRST so the equal-specificity [data-tab] mappings below win. */
+.scard, .shead, .acard { --state: var(--idle); }
+[data-tab="thinking"], [data-tab="working"] { --state: var(--busy); }
+[data-tab="executing"], [data-tab="awaiting-bg"] { --state: var(--exec); }
+[data-tab="awaiting-command"] { --state: var(--ask); }
+[data-tab="awaiting-response"] { --state: var(--done); }
+/* agent cards key off agent STATUS (agentStatus), not the session tab */
+.acard[data-st="st-run"] { --state: var(--exec); }
+.acard[data-st="st-ok"] { --state: var(--done); }
+.acard[data-st="st-bad"] { --state: var(--red); }
+.acard[data-st="st-warn"] { --state: var(--amber); }
+/* the tinted hairlines the washed surfaces share */
+.scard, .shead, .acard {
+  --scard: inset 0 0 0 1px color-mix(in srgb, var(--state) 26%, var(--hair));
+  --scard-hover: inset 0 0 0 1px color-mix(in srgb, var(--state) 46%, var(--hair2));
+}
+
 .scard {
   display: block; color: var(--text);
-  background: linear-gradient(180deg, var(--panel2), var(--panel));
-  box-shadow: var(--card); border-radius: var(--r);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--state) 13%, transparent),
+      color-mix(in srgb, var(--state) 3%, transparent) 55%, transparent),
+    linear-gradient(180deg, var(--panel2), var(--panel));
+  box-shadow: var(--scard); border-radius: var(--r);
   padding: 13px 15px; position: relative;
   transition: box-shadow .15s, transform .15s;
 }
-.scard:hover { box-shadow: var(--card-hover); transform: translateY(-1px); }
+.scard:hover { box-shadow: var(--scard-hover); transform: translateY(-1px); }
 .scard .proj { color: var(--text); font-weight: 620; font-size: 14px; }
 .scard .sid { color: var(--dim); font-size: 11px; margin-top: 1px; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-right: 70px; }
@@ -202,18 +229,20 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 1px 8px; border-radius: calc(var(--r) / 2);
   box-shadow: var(--card); color: var(--dim);
 }
-.chip2.live { color: var(--done);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 40%, transparent); }
 .chip2.parked { color: var(--text-soft); }
 
 /* ---- session view ------------------------------------------------------ */
 .shead {
   position: sticky; top: 47px; z-index: 40;
-  background: linear-gradient(180deg,
-    color-mix(in srgb, var(--panel2) 92%, transparent),
-    color-mix(in srgb, var(--panel) 88%, transparent));
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--state) 15%, transparent),
+      color-mix(in srgb, var(--state) 4%, transparent) 55%, transparent),
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--panel2) 92%, transparent),
+      color-mix(in srgb, var(--panel) 88%, transparent));
   backdrop-filter: blur(10px);
-  box-shadow: var(--card); border-radius: var(--r);
+  box-shadow: var(--scard); border-radius: var(--r);
   padding: 11px 15px; margin-bottom: 12px;
 }
 /* when the attention bar is showing it takes the 47px slot; drop shead below it */
@@ -792,11 +821,16 @@ body.modal-open { overflow: hidden; }
   position: sticky; top: 132px; max-height: calc(100vh - 145px); overflow-y: auto; }
 .acard {
   display: block; color: var(--text);
-  background: var(--panel); box-shadow: var(--card);
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, var(--state) 12%, transparent),
+      color-mix(in srgb, var(--state) 3%, transparent) 60%, transparent)
+    var(--panel);
+  box-shadow: var(--scard);
   border-radius: var(--r); padding: 10px 13px;
   transition: box-shadow .15s;
 }
-.acard:hover { box-shadow: var(--card-hover); }
+.acard:hover { box-shadow: var(--scard-hover); }
 .acard .aid { color: var(--text); font-size: 12px; font-weight: 600; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .acard .desc { color: var(--text-soft); font-size: 11.5px; margin-top: 2px;

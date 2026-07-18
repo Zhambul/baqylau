@@ -418,14 +418,18 @@ function fold(cwd, kind, rows) {
 
 function sessionCard(row) {
   const a = el("a", "scard");
+  a.dataset.tab = row.tab || "";        // state tint (style.css --state wash)
   a.href = "#/s/" + encodeURIComponent(row.sid);
   const st = row.stats || {};
   a.append(el("div", "proj", row.title || proj(row)));
   a.append(el("div", "sid", row.sid));
-  const corner = el("div", "corner");
-  corner.append(el("span", "chip2 " + (row.live ? "live" : "parked"),
-                   row.live ? "live" : (row.parked ? "parked" : "gone")));
-  a.append(corner);
+  // no "live" chip — the state tint + badge already say it; only the
+  // inactive states (parked/gone) need explaining
+  if (!row.live) {
+    const corner = el("div", "corner");
+    corner.append(el("span", "chip2 parked", row.parked ? "parked" : "gone"));
+    a.append(corner);
+  }
   const r = el("div", "row");
   const badge = el("span", "badge");
   badge.dataset.tab = row.tab || "";
@@ -2081,6 +2085,9 @@ function setBadge(badge, tab) {
   badge.dataset.tab = tab;
   badge.replaceChildren(el("span", "st"),
                         document.createTextNode(TAB_LABEL[tab] || tab || "no tab"));
+  // the whole session header (the web scoreboard) washes with the state hue
+  const head = badge.closest(".shead");
+  if (head) head.dataset.tab = tab;
 }
 
 function renderSessionChrome(tab) {
@@ -2090,6 +2097,7 @@ function renderSessionChrome(tab) {
   $view.textContent = "";
 
   const head = el("div", "shead");
+  head.dataset.tab = meta.tab || "";    // state tint; live via setBadge()
   const l1 = el("div", "l1");
   l1.append(el("span", "proj",
                meta.title || (meta.cwd ? proj(meta) : shortSid(S.cur))));
@@ -2097,8 +2105,8 @@ function renderSessionChrome(tab) {
   ses.badge = badge;
   setBadge(badge, meta.tab || "");
   l1.append(badge);
-  l1.append(el("span", "chip2 " + (meta.live ? "live" : "parked"),
-               meta.live ? "live" : "parked"));
+  // "live" goes unsaid (state tint + badge carry it); parked still shows
+  if (!meta.live) l1.append(el("span", "chip2 parked", "parked"));
   if (meta.cwd) l1.append(el("span", "sid", meta.cwd));
   const sidChip = el("span", "sid copysid", shortSid(S.cur));
   sidChip.title = "click to copy the full session id";
@@ -2382,13 +2390,14 @@ function sortedAgents(agents) {
 }
 
 function agentCard(a) {
+  const [sttxt, stcls] = agentStatus(a);
   const card = el("a", "acard" + (isHusk(a) ? " husk" : ""));
+  card.dataset.st = stcls;              // state tint keyed off agent status
   card.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
   const name = a.desc || a.agent_id;      // the Task description IS the name
   card.append(el("div", "aid", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
   if (a.desc) card.append(el("div", "desc", a.agent_id));
   const m = el("div", "meta");
-  const [sttxt, stcls] = agentStatus(a);
   m.append(el("span", stcls, sttxt));
   if (a.tools != null) m.append(el("span", "", a.tools + " events"));
   if (a.started_at && a.ended_at)
