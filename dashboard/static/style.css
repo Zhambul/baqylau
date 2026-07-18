@@ -230,6 +230,16 @@ code, pre, .mono { font-family: var(--mono); }
   box-shadow: var(--card); color: var(--dim);
 }
 .chip2.parked { color: var(--text-soft); }
+/* the live card's corner ✕ — compact .sstop sibling; .arm matches .sstop.arm */
+.xclose {
+  flex: none; border: none; cursor: pointer;
+  background: transparent; color: var(--dim);
+  box-shadow: var(--card); border-radius: calc(var(--r) / 2);
+  padding: 2px 8px; font: 600 11px/1.4 var(--sans);
+}
+.xclose:hover { color: var(--text); box-shadow: var(--card-hover); }
+.xclose.arm { color: #fff; background: var(--red, #b5484d); }
+.xclose:disabled { color: var(--dim2); cursor: default; }
 
 /* ---- session view ------------------------------------------------------ */
 .shead {

@@ -440,12 +440,15 @@ function sessionCard(row) {
   a.append(el("div", "proj", row.title || proj(row)));
   a.append(el("div", "sid", row.sid));
   // no "live" chip — the state tint + badge already say it; only the
-  // inactive states (parked/gone) need explaining
-  if (!row.live) {
-    const corner = el("div", "corner");
+  // inactive states (parked/gone) need explaining. A live windowed session
+  // gets the ✕ close in the same corner slot instead — the header's close
+  // reachable straight from the list.
+  const corner = el("div", "corner");
+  if (!row.live)
     corner.append(el("span", "chip2 parked", row.parked ? "parked" : "gone"));
-    a.append(corner);
-  }
+  else if (row.kitty_window_id)
+    corner.append(cardClose(row.sid));
+  if (corner.childNodes.length) a.append(corner);
   const r = el("div", "row");
   const badge = el("span", "badge");
   badge.dataset.tab = row.tab || "";
@@ -461,6 +464,42 @@ function sessionCard(row) {
   if (row.ctx) a.append(ctxBar(row.ctx));
   return a;
 }
+// the list-card ✕ — POST /api/session/<sid>/stop, the same graceful tab
+// close as the session header's "✕ close" (kitty HUPs the tab, Claude Code
+// exits, SessionEnd parks the mirror), with the same two-step confirm: first
+// click arms ("close?") for 4 s, second fires. Lives inside the card <a>, so
+// clicks must not bubble into a navigation. No hash change on success — the
+// card demotes to parked on its own via the SSE sessions push.
+function cardClose(sid) {
+  const btn = el("button", "xclose", "✕");
+  btn.title = "close this session's terminal tab";
+  let armed = null;
+  const disarm = () => {
+    armed = null;
+    btn.textContent = "✕";
+    btn.classList.remove("arm");
+  };
+  btn.onclick = (e) => {
+    e.preventDefault(); e.stopPropagation();
+    if (!armed) {
+      btn.textContent = "close?";
+      btn.classList.add("arm");
+      armed = setTimeout(disarm, 4000);
+      return;
+    }
+    clearTimeout(armed);
+    disarm();
+    btn.disabled = true;
+    postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
+      .then(() => toast("done", "session closed", "terminal tab closed"))
+      .catch(err => {
+        btn.disabled = false;
+        toast("ask", "close failed", (err && err.error) || "");
+      });
+  };
+  return btn;
+}
+
 function seg(text) { const s = el("span"); s.append(el("span", "v", text)); return s; }
 function segc(text, cls) { const s = el("span"); s.append(el("span", cls, text)); return s; }
 // git chip — "⎇ branch" plus "⋔ worktree" when the session's checkout is a

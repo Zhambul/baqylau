@@ -521,6 +521,12 @@ navigates back to the sessions list (the session just ended — staying on its
 now-dead view helps nobody; skipped if the user already navigated elsewhere
 while the POST was in flight). A parked session shows a **resume** button
 there instead, which opens the new-session form preset to `--resume <sid>`.
+The same close is reachable from the **sessions list**: a live windowed
+session's card carries a corner **✕** (`cardClose`, the slot the parked/gone
+chip uses on inactive cards) with the same two-step arm and the same `/stop`
+POST — the button lives inside the card's `<a>`, so its clicks
+preventDefault/stopPropagation instead of navigating, and success changes no
+hash: the card demotes to parked on its own via the SSE `sessions` push.
 
 `POST /api/session/<sid>/interrupt` presses **Escape** in the session's
 window (`Frontend.send_key(win, "escape")` → `kitten @ send-key`) — the TUI's
