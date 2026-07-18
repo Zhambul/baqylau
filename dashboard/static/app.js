@@ -1399,6 +1399,39 @@ function openNewSession(prefillCwd, resumeSid) {
 
 $newbtn.onclick = () => openNewSession("");
 
+/* ---------- readline-style editing keys (kitty-like) ---------- */
+// ⌥W deletes the word left of the cursor, ⌥A jumps to line start, ⌥E to line
+// end — the kitty/shell editing keys, in every dashboard text box (composer,
+// first prompt, directory, filter). One delegated listener: element handlers
+// (slash menu, suggest, filter-Esc) run first and none of them claim ⌥-keys.
+// Match on e.code, not e.key — macOS Option produces "∑"/"å" and ⌥E is a
+// dead key, so e.key never reads as the letter. ⌥W dispatches an input event
+// so autoGrow / the suggest and filter oninput hooks see the edit.
+document.addEventListener("keydown", (e) => {
+  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  const t = e.target;
+  if (!t || (t.tagName !== "TEXTAREA" &&
+             !(t.tagName === "INPUT" && t.type === "text"))) return;
+  const v = t.value, s = t.selectionStart, se = t.selectionEnd;
+  if (e.code === "KeyW") {          // delete word (or the selection) leftward
+    let a = s, b = se;
+    if (a === b) {
+      while (a > 0 && /\s/.test(v[a - 1])) a--;
+      while (a > 0 && !/\s/.test(v[a - 1])) a--;
+    }
+    t.value = v.slice(0, a) + v.slice(b);
+    t.setSelectionRange(a, a);
+    t.dispatchEvent(new Event("input"));
+  } else if (e.code === "KeyA") {   // start of the current line
+    const p = s === 0 ? 0 : v.lastIndexOf("\n", s - 1) + 1;
+    t.setSelectionRange(p, p);
+  } else if (e.code === "KeyE") {   // end of the current line
+    const p = v.indexOf("\n", se);
+    t.setSelectionRange(p < 0 ? v.length : p, p < 0 ? v.length : p);
+  } else return;
+  e.preventDefault();
+});
+
 // Esc in a live session view = interrupt the agent (the terminal's own Esc,
 // via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
 // slash menu, filter, dropdowns) either runs first here or stopPropagation()s
