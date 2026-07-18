@@ -386,7 +386,8 @@ so detection is client-side by necessity, `platform === "MacIntel" &&
 maxTouchPoints > 1` being the one remaining tell; Macs report 0 touch
 points, iPads 5. The placeholders drop the Enter hints there too) — and the
 textarea auto-grows with its content (`autoGrow`), capped
-at `GROW_CAP` = 40% of the viewport (mirrored as `max-height: 40vh` in CSS)
+at `GROW_CAP` = 40% of the viewport (mirrored as `max-height: 40dvh` in CSS —
+dynamic vh, so an open on-screen keyboard shrinks the cap with the layout)
 so a long paste can't swallow the page. Every dashboard text box (the two
 message boxes plus the directory and filter fields — one delegated document
 listener over `textarea`/`input[type=text]`) also gets the kitty/shell
@@ -1760,6 +1761,48 @@ header scrolls away — the control gestures are document-level (Esc =
 interrupt, etc.) and the attention bar + toasts still surface state — so
 don't re-pin it as a "fix"; if the mouse path to ■ stop ever matters, the
 answer is a collapsing slim bar, not restoring the full sticky header.
+
+## Mobile / iPad
+
+The layout is width-clean at every iPad viewport (probed headless-WebKit at
+13"/11"/mini portrait + landscape: zero `scrollWidth` overflow on the list and
+session views) — what actually broke iPad was **zoom, not layout**: iPadOS
+Safari auto-zooms the page ~1.3× whenever focus lands on a text control whose
+font-size is under 16px, the zoom never resets on blur, and it survives
+rotation. The dashboard's inputs were 12–12.5px and `app.js` auto-focused the
+composer on every session open — so opening any session zoomed the page
+(horizontal panning in portrait, "mysteriously zoomed in" after rotating).
+Three rules keep the bug class out:
+
+- **No focused text control under 16px on touch.** The
+  `@media (pointer: coarse)` block at the bottom of `style.css` bumps every
+  focusable box (`.cinput`, `.finput`, `.nsinput`, `.askother`, `.renamein`)
+  to 16px; a new text control must join that list. Desktop keeps the dense
+  12.5px. Belt-and-braces, the viewport meta carries `maximum-scale=1`, which
+  suppresses only the *automatic* focus zoom — Safari has ignored
+  `maximum-scale` for user pinch gestures since iOS 10, so accessibility zoom
+  still works.
+- **No unasked-for `.focus()` on touch.** Every non-user-initiated focus site
+  (view-open composer focus, new-session form focus, post-send refocus) is
+  gated on `!IS_IPAD` — besides the zoom, each one pops the on-screen keyboard
+  over the content. User-initiated ones (tapping ✎ rename, "chat about this")
+  stay.
+- **No hover-only affordances.** Touch has no hover: `@media (hover: none)`
+  keeps the hover-revealed controls (the ⧉ copy links, the prompt bubbles'
+  rewind ↶) permanently visible. A new `opacity: 0`-until-hover reveal needs a
+  `hover: none` override in the same commit.
+
+The rest of the touch section is ergonomics, not bug-fix: `touch-action:
+manipulation` on `html` (kills double-tap smart-zoom on fold headers/tabs;
+pan and pinch still work), tap targets grown toward the 44px HIG guideline
+under `(pointer: coarse)` (36–40px effective — padding grows the hit area,
+not the type), `viewport-fit=cover` + `env(safe-area-inset-*)` gutters on
+`#top`/`#attn`/`#view`/`#toasts` (the shared `--gx` gutter var, 12px under
+900px), `interactive-widget=resizes-content` + `40dvh` grow caps so the
+keyboard resizes the layout instead of hiding the composer, and — below the
+1000px `.split` breakpoint — the agents rail flips from a sticky sidebar to a
+horizontally swipable card strip *above* the stream (`order: -1`; its DOM
+position would otherwise bury the agent cards below a long stream).
 
 ## Testing
 

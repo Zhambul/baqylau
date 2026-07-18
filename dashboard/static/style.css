@@ -44,6 +44,9 @@
   --sans: "Inter", system-ui, -apple-system, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --r: 0.5rem;
+  /* horizontal page gutter — shared by #top/#attn/#view, shrunk on narrow
+     screens by the mobile section at the bottom of this file */
+  --gx: 20px;
 }
 
 * { box-sizing: border-box; }
@@ -76,7 +79,8 @@ code, pre, .mono { font-family: var(--mono); }
 #top {
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 20px;
+  padding: 10px max(var(--gx), env(safe-area-inset-right))
+           10px max(var(--gx), env(safe-area-inset-left));
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--bg) 90%, transparent),
     color-mix(in srgb, var(--bg) 72%, transparent));
@@ -107,7 +111,9 @@ code, pre, .mono { font-family: var(--mono); }
 #attn {
   position: sticky; top: 47px; z-index: 46;
   display: flex; align-items: center; gap: 8px;
-  padding: 6px 20px; min-height: 34px; overflow-x: auto;
+  padding: 6px max(var(--gx), env(safe-area-inset-right))
+           6px max(var(--gx), env(safe-area-inset-left));
+  min-height: 34px; overflow-x: auto;
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--bg) 92%, transparent),
     color-mix(in srgb, var(--bg) 80%, transparent));
@@ -143,7 +149,9 @@ code, pre, .mono { font-family: var(--mono); }
 .attn-pill.self { opacity: .5; }        /* the session you're already viewing */
 
 /* ---- layout ----------------------------------------------------------- */
-#view { max-width: 1500px; margin: 0 auto; padding: 20px; }
+#view { max-width: 1500px; margin: 0 auto;
+  padding: 20px max(var(--gx), env(safe-area-inset-right))
+           20px max(var(--gx), env(safe-area-inset-left)); }
 .mhead {
   font-size: 11px; text-transform: uppercase; letter-spacing: .16em;
   color: var(--dim); margin: 4px 2px 12px; font-weight: 550;
@@ -169,7 +177,9 @@ code, pre, .mono { font-family: var(--mono); }
 .dirhead .dirpath { color: var(--dim); font-size: 11px; font-family: var(--mono);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; flex: 1; }
 .dirhead .dircount { color: var(--dim2); font-size: 11px; flex: none; }
-.sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 12px; }
+/* min(350px, 100%): a viewport narrower than one 350px card (a phone) shrinks
+   the column instead of overflowing the page */
+.sgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(350px, 100%), 1fr)); gap: 12px; }
 
 /* ---- state tint ---------------------------------------------------------
    The session's tab state washes the WHOLE surface — session cards, the
@@ -359,6 +369,8 @@ code, pre, .mono { font-family: var(--mono); }
 
 .split { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 12px; }
 @media (max-width: 1000px) { .split { grid-template-columns: minmax(0, 1fr); } }
+/* the rail's own narrow restyle lives NEXT TO its base rule below — a media
+   block placed before an equal-specificity base rule loses the cascade */
 
 /* ---- stream filter bar -------------------------------------------------- */
 .fbar {
@@ -399,7 +411,10 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 7px 16px; background: var(--panel);
   box-shadow: inset 0 -1px 0 var(--hair);
 }
-.acct { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+/* wrap + max-width: the row (name + two ubars, ~500px) must fold on a narrow
+   screen — #accounts has no internal scroll, an unwrapped row widens the page */
+.acct { display: inline-flex; flex-wrap: wrap; align-items: center;
+        gap: 4px 10px; min-width: 0; max-width: 100%; }
 .acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; min-width: 14ch; }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
 .ubar { display: inline-flex; align-items: center; gap: 5px; }
@@ -605,7 +620,8 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .cmsrc { margin-left: auto; flex: none; font: 10px/1 var(--mono); color: var(--dim2); }
 .cinput {
-  flex: 1; resize: none; overflow-y: auto; max-height: 40vh;  /* == GROW_CAP */
+  flex: 1; resize: none; overflow-y: auto;
+  max-height: 40vh; max-height: 40dvh;  /* == GROW_CAP; dvh: keyboard-aware */
   background: color-mix(in srgb, var(--bg) 88%, black);
   color: var(--text); border: none; box-shadow: inset 0 0 0 1px var(--hair);
   border-radius: var(--r); padding: 8px 10px;
@@ -693,8 +709,8 @@ body.modal-open { overflow: hidden; }
 .nsinput:focus { outline: none; box-shadow: inset 0 0 0 1px var(--hair2); }
 .nsinput::placeholder { color: var(--dim2); }
 .nsprompt {                       /* auto-grows with content (autoGrow) */
-  resize: none; overflow-y: auto;
-  min-height: 56px; max-height: 40vh;  /* == GROW_CAP */
+  resize: none; overflow-y: auto; min-height: 56px;
+  max-height: 40vh; max-height: 40dvh;  /* == GROW_CAP; dvh: keyboard-aware */
 }
 .nssplit { display: flex; gap: 10px; }
 .nssplit .nsfield { flex: 1; min-width: 0; }
@@ -913,6 +929,20 @@ body.modal-open { overflow: hidden; }
 /* when the attention bar is showing it takes the below-header slot; drop the
    sticky rail below it (min-height 34px) so the two never overlap */
 body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
+/* single-column .split (the 1000px breakpoint above): the rail's DOM position
+   would bury the agent cards BELOW a long stream — order: -1 lifts it above
+   instead, restyled from a sticky sidebar into a horizontally swipable strip.
+   AFTER the base rules: an equal-specificity media block placed before them
+   would lose the cascade. */
+@media (max-width: 1000px) {
+  .rail, body.attn-on .rail {
+    order: -1; position: static; top: auto; max-height: none;
+    flex-direction: row; overflow-y: visible; overflow-x: auto;
+    padding-bottom: 2px;
+  }
+  .rail .mhead { flex: none; align-self: center; margin: 0; }
+  .rail .acard { flex: 0 0 260px; }
+}
 .acard {
   display: block; color: var(--text);
   background:
@@ -1016,8 +1046,11 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 
 /* ---- toasts ------------------------------------------------------------------ */
 #toasts {
-  position: fixed; right: 16px; bottom: 16px; z-index: 100;
-  display: flex; flex-direction: column; gap: 8px; max-width: 360px;
+  position: fixed; z-index: 100;
+  right: max(16px, env(safe-area-inset-right));
+  bottom: max(16px, env(safe-area-inset-bottom));
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: min(360px, calc(100vw - 24px));
 }
 .toast {
   background: var(--panel2);
@@ -1036,3 +1069,46 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 ::-webkit-scrollbar { height: 8px; width: 8px; }
 ::-webkit-scrollbar-thumb { background: var(--hair2); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* ---- touch / mobile (iPad) ----------------------------------------------
+   The layout itself is width-clean at every iPad viewport — what broke iPad
+   was ZOOM: iPadOS Safari auto-zooms the page ~1.3x when focus lands on a
+   text control under 16px, the zoom never resets, and it survives rotation
+   (the "zoomed in after rotating" + "horizontal panning in portrait"
+   symptoms). Never add a focusable text control that the coarse-pointer
+   override below doesn't cover, and never .focus() a box on view-open when
+   IS_IPAD (app.js gates those sites). The viewport meta's maximum-scale=1
+   suppresses the same auto-zoom belt-and-braces. */
+
+/* no double-tap smart-zoom on chrome (fold headers, tabs, buttons) —
+   pan + pinch-zoom still work */
+html { touch-action: manipulation; }
+
+@media (pointer: coarse) {
+  /* ≥16px focused text == no Safari auto-zoom; desktop keeps its density */
+  .cinput, .finput, .nsinput, .askother, .shead .proj input.renamein {
+    font-size: 16px;
+  }
+  /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
+     information density; padding grows the hit area, not the type) */
+  .ghost, .fchip, .fclear, .xclose, .sstop, .sresume, .nsbtn, .dirnew,
+  .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn {
+    min-height: 36px;
+  }
+  .tabs a { padding: 10px 15px; }
+  .qx { padding: 6px 8px; font-size: 12px; }
+  .cmi, .nsdropitem { padding: 9px 8px; }
+  .askopt { padding: 10px 11px; }
+  .msg.prompt .rw { padding: 5px 10px; }
+}
+
+@media (hover: none) {
+  /* hover-revealed affordances have no hover to reveal them on touch —
+     the ⧉ copy links and the prompt bubbles' rewind ↶ stay visible */
+  .cl { opacity: .75; }
+  .msg.prompt .rw { opacity: 1; }
+}
+
+@media (max-width: 900px) {
+  :root { --gx: 12px; }
+}

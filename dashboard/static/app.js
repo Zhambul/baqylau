@@ -36,7 +36,11 @@ const S = {
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compact)
 
-// iPad detection for the message boxes' Enter behavior. Since iPadOS 13
+// iPad detection — gates the message boxes' Enter behavior AND every
+// non-user-initiated .focus() (view-open, form-open, post-send refocus:
+// unasked-for focus pops the on-screen keyboard, and focusing a text control
+// is what triggers Safari's page auto-zoom — style.css touch section has the
+// full story). Since iPadOS 13
 // Safari masquerades as desktop Safari — identical User-Agent, "MacIntel"
 // platform — so the ONE tell left is touch: Macs report 0 maxTouchPoints,
 // iPads 5. (The /iPad/ UA test still catches the non-default "Request
@@ -1802,7 +1806,12 @@ function buildComposer() {
       })
       .catch(e => toast("ask", "send failed", (e && e.error) || ""))
       .finally(() => {
-        if (ses.composer === ta) { ta.disabled = !canSend; btn.disabled = !canSend; ta.focus(); }
+        // refocus for the next message — except on an iPad, where it would
+        // yank the on-screen keyboard back up after a button-tap send
+        if (ses.composer === ta) {
+          ta.disabled = !canSend; btn.disabled = !canSend;
+          if (!IS_IPAD) ta.focus();
+        }
       });
   };
   // cosmetic busy hint: the send button reads "queue" while a turn is running
@@ -2223,8 +2232,10 @@ function openNewSession(prefillCwd, resumeSid) {
   $modal.hidden = false;
   document.body.classList.add("modal-open");      // scroll-lock the page behind
   // a known directory (remembered/prefilled) means the next thing you type is
-  // the prompt — focusing the dir field there just pops its suggestion look
-  (dir.value.trim() ? prompt : dir).focus();
+  // the prompt — focusing the dir field there just pops its suggestion look.
+  // Not on an iPad: the unasked-for keyboard covers half the form (and focus
+  // triggers Safari's page auto-zoom — see style.css touch section)
+  if (!IS_IPAD) (dir.value.trim() ? prompt : dir).focus();
 }
 
 $newbtn.onclick = () => openNewSession("");
@@ -2969,8 +2980,10 @@ function renderSessionChrome(tab) {
     // detached node is a no-op), and only when the box can send (a disabled
     // parked/headless composer takes no input anyway). The document-level
     // gestures (Esc, ⌃-keys, ⌃⇧←/→) are focus-independent, so this only
-    // redirects plain typing.
-    if (!ses.composer.disabled) ses.composer.focus();
+    // redirects plain typing. Not on an iPad: an unasked-for focus pops the
+    // on-screen keyboard over the stream on every session open (and focus is
+    // what triggers Safari's page auto-zoom — see style.css touch section).
+    if (!ses.composer.disabled && !IS_IPAD) ses.composer.focus();
     body.append(buildQueueBar());
     body.append(buildFilterBar());
     const split = el("div", "split");
