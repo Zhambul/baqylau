@@ -441,14 +441,21 @@ cancelled); mid-turn the typed command lands in the TUI input like any
 composer send (it queues — rewinding is an idle-session gesture). Same
 guard chain and window discipline as the other writes; audited as
 `web-rewind` (`{win, ok, tab}`). The page wires it as the **↶ rewind**
-button, and the session view's **Esc key** as the double-press upgrade: a
-first Esc streams immediately as its own `/interrupt` (busy tab →
-"interrupted" toast, idle → "press Esc again quickly for rewind"), a
-second press within `ESC_DOUBLE_MS` (450 ms) fires `/rewind` INSTEAD of a
-second Escape — the first press has already landed, which mirrors the
-terminal gesture (a real double-press's first Esc also acts alone before
-the second triggers the menu), and a third rapid press streams as a plain
-Esc, which closes the panel.
+button, and the session view's **Esc key** as an ATOMIC gesture: a lone
+press is HELD for `ESC_DOUBLE_MS` (450 ms) then classified — single press
+→ one `/interrupt` (an Escape key event; busy tab → "interrupted" toast,
+idle → "double-press Esc for rewind"), rapid double → ONLY `/rewind`,
+with **no Escape sent at all**. Streaming the first press immediately
+shipped and corrupted the rewind: the in-flight Escape and the `/rewind`
+text race through two server threads with variable kitten latency, and
+one landed MID-TEXT — the input cleared after "/rewi" and the surviving
+"nd" tail was submitted into the chat as a message. Nothing streams until
+the gesture is decided, so nothing can interleave; the 450 ms hold on a
+real interrupt is imperceptible next to the HTTP+kitten pipeline.
+Residual accepted mismatch: a SLOW double-press (>450 ms) is two
+interrupts to us, while the TUI's own (flaky) double-Esc detection may
+still open the panel on those two Escapes — unavoidable in any design
+that must send Escape key events for interrupts.
 
 **The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
 app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with

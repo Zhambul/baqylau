@@ -1478,7 +1478,12 @@ function interruptSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
-    .then(() => toast("done", "interrupted", "Esc sent to the session"))
+    .then(r => {
+      if (BUSY_TABS.includes(r && r.tab))
+        toast("done", "interrupted", "Esc sent to the session");
+      else
+        toast("done", "Esc sent", "double-press Esc for rewind");
+    })
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }
 
@@ -1494,40 +1499,39 @@ function rewindSession() {
     .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
 }
 
-// A first Esc streams to the terminal immediately as /interrupt; a RAPID
-// second Esc (within ESC_DOUBLE_MS) upgrades the gesture to /rewind — the
-// TYPED command, not a second Escape key event: replaying the double-press
-// via send-key proved inherently flaky in a live experiment (~2/3 opened at
-// the best gap, at ANY gap/focus), while typed /rewind opened the panel
-// every time (Claude Code documents them as identical). The already-sent
-// first Esc mirrors the terminal gesture, where a double-press's first Esc
-// also lands alone (hint/interrupt) before the second triggers the menu.
+// The Esc GESTURE is atomic — hold a lone press for ESC_DOUBLE_MS, then
+// classify: single press → one /interrupt (an Escape key event), rapid
+// double → ONLY /rewind (the typed command), with NO Escape sent at all.
+// Streaming the first press immediately shipped and corrupted the rewind:
+// its in-flight Escape raced the /rewind text through two server threads
+// and once landed MID-TEXT — the input cleared after "/rewi", the "nd"
+// tail re-typed into the empty box, and the Enter submitted "nd" into the
+// chat. Nothing streams until the gesture is decided, so nothing can
+// interleave. The hold delays a real interrupt by 450ms — imperceptible
+// next to the HTTP+kitten pipeline. Residual accepted mismatch: a SLOW
+// double-press (>450ms) is two interrupts to us, but the TUI's own flaky
+// double-Esc detection may still open the panel on those two Escapes.
 const ESC_DOUBLE_MS = 450;
-let lastEsc = 0;
+let escHold = null;
 const BUSY_TABS = ["thinking", "working", "executing", "awaiting-bg"];
-function pressEsc() {
+function escGesture() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
-  const now = Date.now();
-  if (now - lastEsc < ESC_DOUBLE_MS) {
-    lastEsc = 0;              // a third rapid press streams as a plain Esc
+  if (escHold) {
+    clearTimeout(escHold);
+    escHold = null;           // a third rapid press starts a fresh gesture
     rewindSession();
     return;
   }
-  lastEsc = now;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
-    .then(r => {
-      if (BUSY_TABS.includes(r && r.tab))
-        toast("done", "interrupted", "Esc sent to the session");
-      else
-        toast("done", "Esc sent", "press Esc again quickly for rewind");
-    })
-    .catch(e => toast("ask", "Esc failed", (e && e.error) || ""));
+  escHold = setTimeout(() => {
+    escHold = null;
+    interruptSession();
+  }, ESC_DOUBLE_MS);
 }
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$modal.hidden) return closeNewSession();
-  pressEsc();
+  escGesture();
 });
 
 function setBadge(badge, tab) {
