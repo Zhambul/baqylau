@@ -233,7 +233,7 @@ reflow for free and keeps the no-build rule.
 | Route | Returns |
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
-| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree/dirty, below) |
+| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree/root/dirty, below) |
 | `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git`; agent rows carry their own `ctx` |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
@@ -1407,7 +1407,12 @@ session header's title line (live via the `git` SSE event on the slow cadence).
 subprocess for branch/worktree** (this runs per row per poll tick): walk up from the cwd to the
 first `.git`; a directory is a main checkout, a file is a linked worktree
 (`gitdir: .../worktrees/<name>` — the name is the `⋔` chip) or a submodule
-(no `worktrees` segment → no name). HEAD at the resolved gitdir gives the
+(no `worktrees` segment → no name). A linked worktree's payload also carries
+`root` — the MAIN checkout that owns it (`gitdir` is
+`<root>/.git/worktrees/<name>`; `null` for a main checkout): that is the list
+page's grouping key (*Grouping and titles* below) and the toast `project`
+name, so a worktree session files under its project. HEAD at the resolved
+gitdir gives the
 branch (`ref: refs/heads/<b>`, or a 7-char sha when detached). The ancestor
 walk + gitdir indirection is cached per cwd forever; HEAD itself is re-read on
 every call (one tiny file), so a branch switch shows on the next poll and a
@@ -1432,10 +1437,17 @@ tick.
 
 ## Grouping and titles
 
-The sessions view groups by DIRECTORY (cwd — the audit `sessions` row),
-groups ordered by their most recently ACTIVE session (`last_active`, the
-recency paragraph below); the directory name lives on the group
-header, so the card itself is titled by the SESSION's name. That name comes
+The sessions view groups by PROJECT directory — `git.root || cwd` (cwd from
+the audit `sessions` row, root from `git_info`, the git-chips section above):
+a linked-worktree session files under the main checkout that owns it, not its
+worktree dir, so N agents fanned out over `.claude/worktrees/*` of one repo
+stay ONE group (the per-card `⋔` chip is what tells them apart, and the group
+header's "+" launches new sessions at the main checkout). A parked session
+whose worktree was since REMOVED degrades to its own cwd-keyed group
+(`git_info` returns null once the `.git` file is gone — the branch chip drops
+the same way). Groups are ordered by their most recently ACTIVE session
+(`last_active`, the recency paragraph below); the directory name lives on the
+group header, so the card itself is titled by the SESSION's name. That name comes
 from `plugins.session_title(transcript_path)` — a path-keyed fan-out (the
 list view already holds every row's path; 50 sid-keyed `session_row()`
 resolutions per poll would be waste). The claude_code provider

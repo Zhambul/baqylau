@@ -187,10 +187,15 @@ class Notifier:
             row = self.winmap.get(win)
             if not row:
                 continue
+            # a worktree session's toast names the PROJECT (the owning main
+            # checkout), not the worktree dir — same root||cwd resolution the
+            # list page groups by (git_info is cached, cheap here)
+            cwd = row.get("cwd") or ""
+            home = (git_info(cwd) or {}).get("root") or cwd
             self.push("notify", {
                 "kind": kind, "state": state, "sid": row.get("sid"),
-                "cwd": row.get("cwd") or "",
-                "project": os.path.basename(row.get("cwd") or "") or row.get("sid"),
+                "cwd": cwd,
+                "project": os.path.basename(home) or row.get("sid"),
                 # resolved at push time, not winmap-refresh time: the title is
                 # transcript-derived and the transcript just grew ((path, size)
                 # cache in session_title keeps this cheap)
@@ -277,16 +282,18 @@ def _git_dirty(cwd):
 
 
 def _git_resolve(cwd):
-    """Walk up from cwd to its checkout: (gitdir, worktree_name) — gitdir the
-    directory holding HEAD, worktree_name the linked-worktree name when `.git`
-    is a FILE pointing into .../worktrees/<name> (a `git worktree add` /
-    EnterWorktree checkout), else None. None when cwd is in no checkout.
-    File reads only — never a `git` subprocess (this runs per row per poll)."""
+    """Walk up from cwd to its checkout: (gitdir, worktree_name, root) — gitdir
+    the directory holding HEAD, worktree_name the linked-worktree name when
+    `.git` is a FILE pointing into .../worktrees/<name> (a `git worktree add` /
+    EnterWorktree checkout), and root the MAIN checkout owning that worktree
+    (gitdir is <root>/.git/worktrees/<name>); both None for a main checkout.
+    None when cwd is in no checkout. File reads only — never a `git`
+    subprocess (this runs per row per poll)."""
     d = cwd
     while d and os.path.isdir(d):
         dotgit = os.path.join(d, ".git")
         if os.path.isdir(dotgit):
-            return dotgit, None
+            return dotgit, None, None
         if os.path.isfile(dotgit):
             try:
                 with open(dotgit, encoding="utf-8", errors="replace") as fh:
@@ -298,9 +305,12 @@ def _git_resolve(cwd):
             gd = first[len("gitdir:"):].strip()
             if not os.path.isabs(gd):
                 gd = os.path.normpath(os.path.join(d, gd))
-            wt = os.path.basename(gd) if (os.sep + "worktrees" + os.sep) in gd \
-                else None
-            return gd, wt
+            if (os.sep + "worktrees" + os.sep) in gd:
+                wt = os.path.basename(gd)
+                root = os.path.dirname(os.path.dirname(os.path.dirname(gd)))
+            else:
+                wt = root = None
+            return gd, wt, root
         parent = os.path.dirname(d)
         if parent == d:
             return None
@@ -310,9 +320,12 @@ def _git_resolve(cwd):
 
 def git_info(cwd):
     """The checkout state of a session's cwd, for the git chips: {"branch",
-    "worktree", "dirty"} — branch the HEAD ref's short name (a 7-char sha when
-    detached), worktree the linked-worktree name or None for a main checkout,
-    dirty the uncommitted-changes flag behind the branch chip's `*` (True/
+    "worktree", "root", "dirty"} — branch the HEAD ref's short name (a 7-char
+    sha when detached), worktree the linked-worktree name or None for a main
+    checkout, root the MAIN checkout directory owning a linked worktree (None
+    for a main checkout — the list page groups sessions by root||cwd, so a
+    worktree session files under its project, not its worktree dir), dirty
+    the uncommitted-changes flag behind the branch chip's `*` (True/
     False/None-unknown — _git_dirty). None when cwd isn't inside a git
     checkout (or its worktree was removed)."""
     if not cwd:
@@ -323,7 +336,7 @@ def git_info(cwd):
         _GIT[cwd] = hit
     if not hit:
         return None
-    gitdir, wt = hit
+    gitdir, wt, root = hit
     try:
         with open(os.path.join(gitdir, "HEAD"), encoding="utf-8",
                   errors="replace") as fh:
@@ -335,7 +348,8 @@ def git_info(cwd):
         branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
     else:
         branch = head[:7] or "?"
-    return {"branch": branch, "worktree": wt, "dirty": _git_dirty(cwd)}
+    return {"branch": branch, "worktree": wt, "root": root,
+            "dirty": _git_dirty(cwd)}
 
 
 _CTX = {}         # transcript_path -> (size, ctx): same (path, size) cache key

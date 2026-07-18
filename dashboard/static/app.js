@@ -421,11 +421,15 @@ function renderList(force) {
 }
 
 function groupSessions(rows) {
-  // one group per directory (ordered by its newest session); inside each:
-  // active cards visible, parked / archived (>3d) as click-to-open folds
+  // one group per PROJECT directory (ordered by its newest session); inside
+  // each: active cards visible, parked / archived (>3d) as click-to-open
+  // folds. A linked-worktree session files under the main checkout that owns
+  // it (git.root — server git_info), not its worktree dir: N agents fanned
+  // out over worktrees of one repo are one project, and the per-card ⋔ chip
+  // already tells them apart.
   const groups = new Map();
   for (const row of rows) {
-    const k = row.cwd || "";
+    const k = (row.git && row.git.root) || row.cwd || "";
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(row);
   }
