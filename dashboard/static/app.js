@@ -1468,44 +1468,45 @@ function interruptSession() {
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }
 
-// Double Esc = Claude Code's rewind gesture (/rewind — the checkpoint menu,
-// which opens IN THE TERMINAL; the web only mirrors the presses). The BUTTON
-// replays both presses server-side at human speed.
+// Rewind = Claude Code's checkpoint menu, which opens IN THE TERMINAL. The
+// server TYPES the /rewind command (identical to double-Esc per the docs,
+// and deterministic where synthesized key events were not).
 function rewindSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
     .then(() => toast("done", "rewind",
-                      "double Esc sent — pick a checkpoint in the kitty tab"))
+                      "/rewind sent — pick a checkpoint in the kitty tab"))
     .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
 }
 
-// The KEYBOARD does no double-press detection of its own: Claude Code's
-// second-Esc window is state-based with no documented timing, so a client
-// window either under- or over-shoots it (a 350ms batching hold shipped and
-// mismatched in BOTH directions — web said rewind / kitty didn't, and web
-// said double interrupt / kitty rewound). Instead every Esc press streams
-// to the terminal immediately as its own /interrupt POST — the TUI is the
-// ONLY detector, so kitty's outcome is right by construction — and the
-// toast is presentation only: a second press within ESC_SEQ_MS is LABELLED
-// as the rewind gesture, and the response's tab state phrases the first.
-const ESC_SEQ_MS = 1500;
+// A first Esc streams to the terminal immediately as /interrupt; a RAPID
+// second Esc (within ESC_DOUBLE_MS) upgrades the gesture to /rewind — the
+// TYPED command, not a second Escape key event: replaying the double-press
+// via send-key proved inherently flaky in a live experiment (~2/3 opened at
+// the best gap, at ANY gap/focus), while typed /rewind opened the panel
+// every time (Claude Code documents them as identical). The already-sent
+// first Esc mirrors the terminal gesture, where a double-press's first Esc
+// also lands alone (hint/interrupt) before the second triggers the menu.
+const ESC_DOUBLE_MS = 450;
 let lastEsc = 0;
 const BUSY_TABS = ["thinking", "working", "executing", "awaiting-bg"];
 function pressEsc() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
-  const second = Date.now() - lastEsc < ESC_SEQ_MS;
-  lastEsc = Date.now();
+  const now = Date.now();
+  if (now - lastEsc < ESC_DOUBLE_MS) {
+    lastEsc = 0;              // a third rapid press streams as a plain Esc
+    rewindSession();
+    return;
+  }
+  lastEsc = now;
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
     .then(r => {
-      if (second)
-        toast("done", "Esc ×2",
-              "rewind opens in the kitty tab when the input was empty");
-      else if (BUSY_TABS.includes(r && r.tab))
+      if (BUSY_TABS.includes(r && r.tab))
         toast("done", "interrupted", "Esc sent to the session");
       else
-        toast("done", "Esc sent", "press Esc again for rewind");
+        toast("done", "Esc sent", "press Esc again quickly for rewind");
     })
     .catch(e => toast("ask", "Esc failed", (e && e.error) || ""));
 }

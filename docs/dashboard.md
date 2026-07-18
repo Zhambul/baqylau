@@ -422,36 +422,33 @@ interrupt is itself an event, so the recheck flips the dead magenta green
 unless any real signal (tab-state movement, transcript growth over the
 press-time size) appears within its 2s grace.
 
-`POST /api/session/<sid>/rewind` presses **Escape twice** — Claude Code's
-double-Esc gesture, identical to its `/rewind` command: on empty input it
-opens the rewind/checkpoint menu (restore code and/or conversation,
-summarize from/up to a point; checkpoints are automatic, one per user
-prompt — code.claude.com/docs/en/checkpointing.md). The menu opens **in the
-terminal** — the web mirrors the key presses, navigating it happens in the
-kitty tab (the toast says so). Two SEPARATE `send_key` calls with a
-`REWIND_GAP_S` (500 ms) beat: the TUI's double-press detection wants two
-discrete key events at HUMAN speed — one send-key call batches its keys
-into a single press,press,release,release burst, and a 150 ms gap shipped
-and the TUI sometimes missed the second press; ~500 ms is the hand-pressed
-cadence observed opening the panel live, and Claude Code's second-Esc
-acceptance is state-based and generous (no documented timing window), so
-slower is safe. Same guard chain, window discipline and `escape-recheck`
-backstop as `/interrupt` (mid-turn the first Esc interrupts — the TUI's
-own semantics); audited as `web-rewind` (`{win, ok, tab}`, `ok` = both
-presses accepted). The page wires it as the **↶ rewind** button. The
-session view's **Esc key** deliberately does NO double-press detection of
-its own: Claude Code's second-Esc window has no fixed timing, so any
-client-side window either under- or over-shoots it — a 350 ms batching
-hold shipped and mismatched in BOTH directions (web said rewind while
-kitty saw nothing; web said double interrupt while kitty rewound). Every
-Esc press streams to the terminal immediately as its own `/interrupt`
-POST, making the TUI the ONLY double-press detector — kitty's outcome is
-right by construction — and the page's labelling is presentation only: a
-second press within `ESC_SEQ_MS` (1.5 s) gets the "Esc ×2 — rewind"
-toast, a first press on a busy tab gets "interrupted", on an idle one
-"Esc sent". A double press does spawn two escape-rechecks when magenta —
-harmless (both verify silence; the second usually bails "state moved
-on").
+`POST /api/session/<sid>/rewind` **types the `/rewind` command**
+(`Frontend.send_text`) — which Claude Code documents as identical to
+double-Esc: both open the rewind/checkpoint menu (restore code and/or
+conversation, summarize from/up to a point; checkpoints are automatic, one
+per user prompt — code.claude.com/docs/en/checkpointing.md). The menu
+opens **in the terminal** — navigating it happens in the kitty tab (the
+toast says so). **Why typed, not synthesized double-Esc key events** —
+measured on a live idle throwaway session (2026-07-18): two `send-key`
+Escapes opened the panel only ~2/3 of the time at the BEST gap (0.15 s),
+~1/3 at 0.5 s, never from one batched send-key call, and focusing the
+window made no difference — the TUI's double-press detection is simply not
+reliable against synthesized key events at any cadence (two shipped
+attempts tuned the gap in both directions before the experiment settled
+it); typed `/rewind` opened the panel **every time**. No Escape is pressed
+on this path, so there is deliberately NO `escape-recheck` (nothing is
+cancelled); mid-turn the typed command lands in the TUI input like any
+composer send (it queues — rewinding is an idle-session gesture). Same
+guard chain and window discipline as the other writes; audited as
+`web-rewind` (`{win, ok, tab}`). The page wires it as the **↶ rewind**
+button, and the session view's **Esc key** as the double-press upgrade: a
+first Esc streams immediately as its own `/interrupt` (busy tab →
+"interrupted" toast, idle → "press Esc again quickly for rewind"), a
+second press within `ESC_DOUBLE_MS` (450 ms) fires `/rewind` INSTEAD of a
+second Escape — the first press has already landed, which mirrors the
+terminal gesture (a real double-press's first Esc also acts alone before
+the second triggers the menu), and a third rapid press streams as a plain
+Esc, which closes the panel.
 
 **The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
 app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with

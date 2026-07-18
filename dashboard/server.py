@@ -68,14 +68,6 @@ HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
-REWIND_GAP_S = 0.5                 # beat between the rewind's two Escape presses —
-#                                    the TUI's double-press detection wants two
-#                                    discrete key events at human speed (0.15s
-#                                    shipped and the TUI sometimes missed the
-#                                    second press; ~0.5s is the hand-pressed
-#                                    cadence observed opening the panel live,
-#                                    and Claude Code's second-Esc window is
-#                                    state-based/generous, so slower is safe)
 POST_HEADER = "X-Claude-Dash"      # the custom header a simple cross-origin POST can't add
 # The only Origins a legit same-origin browser POST carries (it usually sends
 # none at all for same-origin fetches; when it does, it is one of these).
@@ -937,26 +929,49 @@ class Handler(BaseHTTPRequestHandler):
         (headless — nothing to interrupt); 503 when no terminal resolves.
         Every attempt is a `web-interrupt` state_files row, failures also an
         A.error."""
-        return self._escape_press(sid, "interrupt", "web-interrupt", presses=1)
+        return self._escape_press(sid, "interrupt", "web-interrupt")
 
     def post_rewind(self, sid):
-        """Press Escape TWICE in the session's window — Claude Code's
-        double-Esc gesture, which opens its rewind/checkpoint panel IN THE
-        TERMINAL (the panel is the TUI's; the web only mirrors the presses,
-        so navigating it happens in the kitty tab). Two separate send_key
-        calls with a REWIND_GAP_S beat between them — the TUI's double-press
-        detection wants two discrete presses (a single call's
-        press,press,release,release is one burst), and two spaced calls are
-        exactly what was observed opening the panel live. Mid-turn the first
-        Esc interrupts and the second opens the panel — the TUI's own
-        double-Esc semantics — so the same escape-recheck backstop applies.
-        Audited as `web-rewind` (`{win, ok, tab}`)."""
-        return self._escape_press(sid, "rewind", "web-rewind", presses=2)
+        """TYPE `/rewind` into the session's window (Frontend.send_text) —
+        the command Claude Code documents as identical to double-Esc: both
+        open the rewind/checkpoint panel IN THE TERMINAL (navigating it
+        happens in the kitty tab). Deliberately NOT synthesized Escape key
+        events: replaying the double-press via send-key proved inherently
+        flaky in a controlled experiment on a live idle session — ~2/3 at
+        the best gap (0.15s), ~1/3 at 0.5s, 0 for one batched send-key
+        call, focus made no difference — while the typed command opened the
+        panel every time. No Escape is pressed, so no escape-recheck (there
+        is no cancel to recover); mid-turn the typed command lands in the
+        TUI's input like any composer send. Audited as `web-rewind`
+        (`{win, ok, tab}`)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard rewind (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
+            return self._json({"error": "no terminal available"}, 503)
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
+            return self._json({"error": "session has no live window"}, 409)
+        tab = API.tab_states().get(win) or ""
+        ok = bool(fe.send_text(win, "/rewind"))
+        A.state_file(log, sdb, "web-rewind", {"win": win, "ok": ok, "tab": tab})
+        if not ok:
+            A.error(log, "dashboard rewind (send failed)",
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True, "tab": tab})
 
-    def _escape_press(self, sid, verb, action, presses):
-        """Shared body of post_interrupt/post_rewind: guard, resolve the LIVE
-        window, send `presses` Escape key events, audit as `action`, and
-        spawn the escape-recheck when the press landed on magenta."""
+    def _escape_press(self, sid, verb, action):
+        """Body of post_interrupt: guard, resolve the LIVE window, press
+        Escape, audit as `action`, and spawn the escape-recheck when the
+        press landed on magenta."""
         body = self._post_guard()
         if body is None:
             return
@@ -986,9 +1001,6 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             tsize = -1
         ok = bool(fe.send_key(win, "escape"))
-        for _ in range(presses - 1):
-            time.sleep(REWIND_GAP_S)
-            ok = bool(fe.send_key(win, "escape")) and ok
         A.state_file(log, sdb, action, {"win": win, "ok": ok, "tab": tab})
         if ok and tab in (tabs.THINKING, tabs.WORKING):
             # An Esc killed mid-think leaves NO signal anywhere (the known
