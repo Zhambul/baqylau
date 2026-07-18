@@ -40,6 +40,15 @@ def session_title(transcript_path):
     return transcript.session_title(transcript_path)
 
 
+def context(transcript_path, main=False):
+    """The context-saturation provider (plugins.context fan-out) — the last
+    assistant record's usage in a Claude transcript's tail, as {used, window,
+    pct, model}; None for files this parser doesn't speak. See
+    transcript.context_probe."""
+    from plugins.claude_code import transcript
+    return transcript.context_probe(transcript_path, main=main)
+
+
 def conversation(sid, pos=0):
     """The main-thread conversation provider (plugins.conversation fan-out)
     for the dashboard's merged mirror stream. See transcript.conversation."""

@@ -234,6 +234,58 @@ def session_title(path):
     return summary or prompt
 
 
+CTX_TAIL_B = 262144     # tail-window bytes context_probe scans backwards for the
+#                         LAST assistant-usage record: a single Write/tool_result
+#                         line can run >100KB, so the naming-record window (64KB)
+#                         is too tight; the bounded read keeps the no-full-read
+#                         rule — a transcript whose final assistant record sits
+#                         deeper than this simply shows no ctx
+
+
+def context_probe(path, main=False):
+    """Context saturation from a transcript's tail — the LAST assistant
+    record's usage IS the occupied window of the most recent turn (fresh +
+    cache-write + cache-read input; model.context_used), and its `model` id
+    resolves the window size (model.context_window). Returns {"used",
+    "window", "pct", "model"}, or None (unreadable / no assistant usage in the
+    tail window — a fresh session, or a codex rollout this parser doesn't
+    speak). main=True skips isSidechain records: an inline sidechain turn in a
+    MAIN transcript belongs to its agent, and its (smaller) usage would paint a
+    phantom shrink over the main thread's fill — the same main/agent split as
+    accounting.bump_transcript vs fold_usage."""
+    from plugins.claude_code import model as M   # deferred: keep parse_line import-light
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - CTX_TAIL_B))
+            lines = fh.read().split(b"\n")
+    except OSError:
+        return None
+    if size > CTX_TAIL_B:
+        lines = lines[1:]                   # first line of a mid-file seek is torn
+    for raw in reversed(lines):
+        if b'"usage"' not in raw or b'"assistant"' not in raw:
+            continue
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(o, dict) or o.get("type") != "assistant":
+            continue
+        if main and o.get("isSidechain"):
+            continue
+        msg = o.get("message") or {}
+        used = M.context_used(msg.get("usage"))
+        if used <= 0:
+            continue
+        window = M.context_window(msg.get("model"))
+        return {"used": used, "window": window,
+                "pct": min(100, used * 100 // window),
+                "model": msg.get("model") or ""}
+    return None
+
+
 def _complete_lines(path, pos):
     """Complete lines from byte `pos`: ([line, …], new_pos). A trailing
     partial line is NOT consumed (new_pos stops before it), so a json parse

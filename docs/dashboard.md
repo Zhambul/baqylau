@@ -176,8 +176,8 @@ reflow for free and keeps the no-build rule.
 | Route | Returns |
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
-| `/api/sessions` | discovery list + per-row stats + tab state |
-| `/api/session/<sid>` | overview: `session()` + error count |
+| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) |
+| `/api/session/<sid>` | overview: `session()` + error count + `ctx`; agent rows carry their own `ctx` |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
@@ -191,7 +191,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then `sessions` snapshots on change + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -930,6 +930,38 @@ terminal scoreboard (id row), and a **strip across the top of every dashboard
 page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (the
 freshest snapshot across that account's sessions), polled slowly and hidden until
 some account has usage. The `web-launch` audit row records the chosen `account`.
+
+## Context saturation (the ctx chips)
+
+How full each context window is — `ctx 42%` on the main page's session cards,
+`ctx 42% (84k/200k)` in the session header's stats row (live via the `ctx` SSE
+event), and `ctx NN%` on every agent card (rail + agents tab, riding the
+`agents` event). Quiet until it matters: plain below 70%, amber at 70, red at
+90 (`ctxCls` in app.js, `.cxwarn`/`.cxhot`).
+
+**One data path, no new store.** The transcript IS the record of occupancy: the
+LAST assistant record's usage is exactly what the model saw on the most recent
+turn — fresh + cache-write + cache-read input tokens (`model.context_used`, the
+one owner of that arithmetic; output tokens are what came back, not context) —
+and that record's `model` id sizes the window (`model.context_window`, same
+known-1M resolution the substream footer uses). `transcript.context_probe`
+reads a bounded tail (`CTX_TAIL_B`, no full-read — a final record buried deeper
+than the window just yields no chip), skipping `isSidechain` records for a MAIN
+transcript (`main=True` — an inline agent turn's smaller usage would paint a
+phantom shrink; an agent's own transcript IS its sidechain turns, so agent
+callers keep the default). Exposed as the path-keyed `plugins.context()`
+fan-out (like `session_title` — the dashboard's rows already hold every
+transcript path: the sessions row's `transcript_path`, the agent row's streams
+`src_path`); a codex rollout finds no provider and shows no chip. The server
+caches by `(path, size)` (`session_ctx`, the `_TITLES` pattern) so the polls
+re-probe only when a transcript grows.
+
+**Why not the state DB / OTEL / the status line:** the scoreboard's `txlast`
+carry froze when accounting went OTEL-authoritative (the fold now runs only as
+a SessionEnd fallback), OTEL datapoints are per-session sums with no per-request
+grouping (occupancy is a *last-request* fact, not a total), and the status-line
+stdin carries rate limits, not context. The transcript tail is live, survives
+parking (transcripts persist), and covers agents uniformly.
 
 ## Grouping and titles
 

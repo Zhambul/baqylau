@@ -726,6 +726,17 @@ def test_settings_env_falsy_value_and_global_local_ignored(tmp_path, monkeypatch
     assert M.settings_env("CLAUDE_MIRROR_STEP", nearest_only=True) == ""
 
 
+def test_context_used_is_every_input_token_the_model_saw():
+    # The ONE ctx-occupancy arithmetic (styleguide table): fresh + cache-write
+    # + cache-read input; output excluded; garbage-tolerant.
+    from plugins.claude_code import model as M
+    assert M.context_used({"input_tokens": 10, "cache_creation_input_tokens": 5,
+                           "cache_read_input_tokens": 85, "output_tokens": 999}) == 100
+    assert M.context_used({"input_tokens": 10}) == 10
+    assert M.context_used(None) == 0
+    assert M.context_used("junk") == 0
+
+
 # --- plugins/otel/config.port — the ONE port resolver ----------------------------
 
 def test_otel_port_is_single_sited(monkeypatch):

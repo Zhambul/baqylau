@@ -267,6 +267,69 @@ def test_timeline_since_concatenation_matches_whole_file(tmp_path):
     assert merged == whole
 
 
+# ------------------------------------------------------------- context_probe
+
+def _wt(tmp_path, name, *objs):
+    p = tmp_path / name
+    p.write_text("".join(json.dumps(o) + "\n" for o in objs))
+    return str(p)
+
+
+def test_context_probe_last_assistant_usage_wins(tmp_path):
+    # The LAST assistant record's usage IS the occupied window (fresh +
+    # cache-write + cache-read; output excluded), its model id sizes it.
+    p = _wt(tmp_path, "ctx1.jsonl",
+            {"type": "user", "message": {"content": "hi"}},
+            {"type": "assistant", "message": {"id": "m1", "model": "claude-haiku-4-5",
+             "usage": {"input_tokens": 10, "cache_creation_input_tokens": 5,
+                       "cache_read_input_tokens": 100, "output_tokens": 999}}},
+            {"type": "assistant", "message": {"id": "m2", "model": "claude-haiku-4-5",
+             "usage": {"input_tokens": 20, "cache_creation_input_tokens": 0,
+                       "cache_read_input_tokens": 79980, "output_tokens": 1}}})
+    assert TR.context_probe(p) == {"used": 80000, "window": 200000, "pct": 40,
+                                   "model": "claude-haiku-4-5"}
+
+
+def test_context_probe_main_skips_sidechain(tmp_path):
+    # main=True: an inline sidechain turn belongs to its agent — its smaller
+    # usage must not paint a phantom shrink over the main thread's fill. An
+    # agent's OWN transcript is its sidechain turns, so the default keeps them.
+    p = _wt(tmp_path, "ctx2.jsonl",
+            {"type": "assistant", "message": {"model": "claude-haiku-4-5",
+             "usage": {"input_tokens": 100000, "output_tokens": 2}}},
+            {"type": "assistant", "isSidechain": True,
+             "message": {"model": "claude-haiku-4-5",
+                         "usage": {"input_tokens": 50, "output_tokens": 1}}})
+    assert TR.context_probe(p, main=True)["used"] == 100000
+    assert TR.context_probe(p)["used"] == 50
+
+
+def test_context_probe_none_without_usage(tmp_path):
+    p = _wt(tmp_path, "ctx3.jsonl",
+            {"type": "user", "message": {"content": "hi"}},
+            {"type": "assistant", "message": {"content": [
+                {"type": "text", "text": "no usage yet"}]}})
+    assert TR.context_probe(p) is None
+    assert TR.context_probe(str(tmp_path / "absent.jsonl")) is None
+
+
+def test_context_probe_bounded_tail(tmp_path):
+    # The no-full-read rule: a usage record buried deeper than CTX_TAIL_B is
+    # deliberately out of reach; one within the window is found past torn-line
+    # trimming even when the file itself is larger than the window.
+    filler = [{"type": "user", "message": {"content": [
+        {"type": "tool_result", "tool_use_id": "t", "content": "x" * 4000}]}}
+        for _ in range(80)]
+    usage_row = {"type": "assistant", "message": {"model": "claude-haiku-4-5",
+                 "usage": {"input_tokens": 77, "output_tokens": 1}}}
+    deep = _wt(tmp_path, "ctx4.jsonl", usage_row, *filler)
+    assert os.path.getsize(deep) > TR.CTX_TAIL_B
+    assert TR.context_probe(deep) is None
+    near = _wt(tmp_path, "ctx5.jsonl", *filler, usage_row)
+    assert os.path.getsize(near) > TR.CTX_TAIL_B
+    assert TR.context_probe(near)["used"] == 77
+
+
 # ---------------------------------------------------------------- single owner
 
 def test_teammsg_regex_has_one_owner():

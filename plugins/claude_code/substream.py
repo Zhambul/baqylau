@@ -225,14 +225,9 @@ def model_ctx():
 
 
 def ctx_used():
-    # The occupied context window for the latest assistant turn: every input token the
-    # model saw — fresh + just-cached + replayed-from-cache. output_tokens is excluded
-    # (that's what it produced back, not context). 0 if no usage seen yet.
-    if not REN.last_usage:
-        return 0
-    return (REN.last_usage.get("input_tokens", 0)
-            + REN.last_usage.get("cache_creation_input_tokens", 0)
-            + REN.last_usage.get("cache_read_input_tokens", 0))
+    # The occupied context window for the latest assistant turn — the arithmetic
+    # is model.context_used (one owner, styleguide table). 0 if no usage seen yet.
+    return M.context_used(REN.last_usage)
 
 
 def ctx_tag():

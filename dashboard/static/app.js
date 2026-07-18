@@ -422,6 +422,7 @@ function sessionCard(row) {
   if (st.commands) r.append(seg(st.commands + " cmds"));
   const tok = (st.tk_in | 0) + (st.tk_out | 0) + (st.tk_read | 0) + (st.tk_create | 0);
   if (tok) r.append(seg(kfmt(tok) + " tok"));
+  if (row.ctx) r.append(segc("ctx " + row.ctx.pct + "%", ctxCls(row.ctx.pct) || "v"));
   if (st.cost) r.append(segc(usd(st.cost), "cost"));
   if (row.started_at) r.append(seg(ago(row.started_at)));
   a.append(r);
@@ -429,6 +430,9 @@ function sessionCard(row) {
 }
 function seg(text) { const s = el("span"); s.append(el("span", "v", text)); return s; }
 function segc(text, cls) { const s = el("span"); s.append(el("span", cls, text)); return s; }
+// context-saturation chip colour: quiet until it matters ("" = the host's
+// default text class), amber at 70%, red at 90%
+function ctxCls(pct) { return pct >= 90 ? "cxhot" : pct >= 70 ? "cxwarn" : ""; }
 
 function updateHeadFromList() {
   const row = S.sessions.find(r => r.sid === S.cur);
@@ -442,7 +446,7 @@ function showSession(sid, tab) {
     leaveSession();
     S.cur = sid;
     S.ses = { lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
-              agents: [], costs: null, running: {}, meta: null, es: null, agentEs: null,
+              agents: [], costs: null, ctx: null, running: {}, meta: null, es: null, agentEs: null,
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               loadingOlder: false, queue: [],
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
@@ -455,6 +459,7 @@ function showSession(sid, tab) {
         S.ses.stats = d.stats || {};
         S.ses.agents = d.agents || [];
         S.ses.costs = d.costs || null;
+        S.ses.ctx = d.ctx || null;
         S.ses.running = d.running || {};
         renderSessionChrome(tab);
       });
@@ -489,6 +494,7 @@ function connectSession(sid) {
   es.addEventListener("stats", (e) => { S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
   es.addEventListener("costs", (e) => { S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
+  es.addEventListener("ctx", (e) => { S.ses.ctx = JSON.parse(e.data).ctx; updateStatsRow(); });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
@@ -2222,6 +2228,11 @@ function updateStatsRow() {
   if (tot)
     add("Σ", kfmt(tot) + " (" + kfmt(tin) + " in · " + kfmt(tout) + " out · "
         + kfmt(tread) + " cache · " + kfmt(tcre) + " write)");
+  // main thread's context saturation — live via the `ctx` SSE event
+  const cx = ses.ctx;
+  if (cx && cx.used)
+    add("ctx", cx.pct + "% (" + kfmt(cx.used) + "/" + kfmt(cx.window) + ")",
+        ctxCls(cx.pct));
   const cost = (ses.costs && ses.costs.total_usd) || st.cost;
   if (cost) add("≈", usd(cost), "cost");
   if (st.msg_delivered)
@@ -2314,6 +2325,7 @@ function agentCard(a) {
   const [sttxt, stcls] = agentStatus(a);
   m.append(el("span", stcls, sttxt));
   if (a.tools != null) m.append(el("span", "", a.tools + " events"));
+  if (a.ctx) m.append(el("span", ctxCls(a.ctx.pct), "ctx " + a.ctx.pct + "%"));
   if (a.started_at && a.ended_at)
     m.append(el("span", "", dur(a.ended_at - a.started_at)));
   else if (a.started_at)

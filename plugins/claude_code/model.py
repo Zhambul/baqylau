@@ -127,6 +127,20 @@ def context_window(*models):
     return 200_000
 
 
+def context_used(usage):
+    """The occupied context window from ONE assistant message's usage dict:
+    every input token the model saw — fresh + just-cached + replayed-from-cache.
+    output_tokens is excluded (what the model produced back, not context). 0
+    when usage is absent/malformed. The ONE owner of this arithmetic
+    (styleguide table) — the substream's ctx tag/footer and
+    transcript.context_probe (the dashboard's saturation chips) both call it."""
+    if not isinstance(usage, dict):
+        return 0
+    return (int(usage.get("input_tokens") or 0)
+            + int(usage.get("cache_creation_input_tokens") or 0)
+            + int(usage.get("cache_read_input_tokens") or 0))
+
+
 def fm_field(path, field):
     """Scalar field from a markdown file's YAML frontmatter (the first
     --- ... --- block); None when absent/unreadable."""

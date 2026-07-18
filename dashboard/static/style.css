@@ -240,6 +240,10 @@ body.attn-on .shead { top: 81px; }
 .statsrow .pos { color: var(--green); }
 .statsrow .cost { color: var(--orange); }
 .statsrow .warn { color: var(--amber); }
+/* context-saturation chips (stats row, session cards, agent rail) — quiet
+   until it matters: no class below 70%, amber ≥70, red ≥90 (app.js ctxCls) */
+.cxwarn { color: var(--amber); }
+.cxhot { color: var(--red); }
 
 /* "running now" ribbon — one chip per live slot (sessionapi.running()) */
 .runrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

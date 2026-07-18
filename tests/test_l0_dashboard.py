@@ -416,6 +416,41 @@ def _agent_transcript(tmp_path, sid, aid):
     return tp
 
 
+def test_context_saturation_payloads_and_sse(dash, tmp_path):
+    """The ctx-saturation chips' one data path (plugins.context over transcript
+    tails, (path, size)-cached): sessions rows and the session overview carry
+    the MAIN transcript's {used, window, pct, model} — sidechain records
+    skipped — agent rows carry their OWN transcript's, and the per-session SSE
+    announces the main figure as a `ctx` event."""
+    tp = tmp_path / "ctx-main.jsonl"
+    tp.write_text(
+        json.dumps({"type": "assistant", "message": {
+            "id": "m1", "model": "claude-haiku-4-5",
+            "usage": {"input_tokens": 1000, "cache_read_input_tokens": 99000,
+                      "output_tokens": 5}}}) + "\n" +
+        json.dumps({"type": "assistant", "isSidechain": True, "message": {
+            "id": "m2", "model": "claude-haiku-4-5",
+            "usage": {"input_tokens": 7, "output_tokens": 1}}}) + "\n")
+    A.session_start({"session_id": "ctxS", "cwd": "/w",
+                     "transcript_path": str(tp)})
+    atp = tmp_path / "agent-agC.jsonl"
+    atp.write_text(json.dumps({"type": "assistant", "isSidechain": True,
+                               "message": {"id": "a1", "model": "claude-haiku-4-5",
+                                           "usage": {"input_tokens": 60000,
+                                                     "output_tokens": 9}}}) + "\n")
+    A.stream_start(P.mirror_log("ctxS"), "subagent", agent_id="agC",
+                   src_path=str(atp))
+    row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ctxS")
+    assert row["ctx"] == {"used": 100000, "window": 200000, "pct": 50,
+                          "model": "claude-haiku-4-5"}
+    ov = _get_json(dash + "/api/session/ctxS")
+    assert ov["ctx"]["pct"] == 50                   # the sidechain row didn't win
+    ag = next(a for a in ov["agents"] if a["agent_id"] == "agC")
+    assert ag["ctx"]["used"] == 60000 and ag["ctx"]["pct"] == 30
+    data = _sse_event(dash + "/events/session/ctxS?after=0&mpos=0", "ctx")
+    assert data and json.loads(data)["ctx"]["pct"] == 50
+
+
 def test_activity_since_fanout(dash, tmp_path):
     """plugins.activity_since resolves (sid, agent_id) to the claude provider's
     (entries, resolutions, new_pos); an unknown pair falls through to None."""

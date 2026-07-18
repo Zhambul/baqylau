@@ -235,6 +235,31 @@ def session_title(tpath):
     return title
 
 
+_CTX = {}         # transcript_path -> (size, ctx): same (path, size) cache key
+#                   as _TITLES — saturation only changes when the file grows, and
+#                   the list/agents polls must not re-read every transcript tail
+#                   per tick. The main= flag is per-path-constant (a path is
+#                   always a main transcript or always an agent's), so it stays
+#                   out of the key.
+
+
+def session_ctx(tpath, main=False):
+    """plugins.context() (the {used, window, pct, model} saturation of the
+    file's last turn) behind the (path, size) cache; None when unknown."""
+    if not tpath:
+        return None
+    try:
+        size = os.path.getsize(tpath)
+    except OSError:
+        return None
+    hit = _CTX.get(tpath)
+    if hit and hit[0] == size:
+        return hit[1]
+    ctx = plugins.context(tpath, main=main)
+    _CTX[tpath] = (size, ctx)
+    return ctx
+
+
 def sessions_payload():
     """The sessions list, enriched with what the list view shows per row:
     scoreboard stats (read-only, live or parked), the tab state, and the
@@ -259,6 +284,7 @@ def sessions_payload():
         row["stats"] = st
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
         row["title"] = session_title(row.get("transcript_path") or "")
+        row["ctx"] = session_ctx(row.get("transcript_path") or "", main=True)
         out.append(row)
     return out
 
@@ -304,13 +330,26 @@ def visible_agents(agents):
             or a.get("slot") is not None or a.get("started_at")]
 
 
+def agents_ctx(agents):
+    """Stamp each agent row with its own transcript's context saturation
+    (session_ctx over the streams-keystone src_path — an agent transcript is
+    its sidechain turns, so main=False). Rows whose file yields nothing (husk
+    rows, codex rollouts — no codex context provider yet) stay unstamped."""
+    for a in agents:
+        ctx = session_ctx(a.get("transcript") or "")
+        if ctx:
+            a["ctx"] = ctx
+    return agents
+
+
 def session_payload(sid):
     """One session's overview — session() plus the error count the ⚠ badge
     shows (full rows stay behind /errors) and the display title."""
     data = API.session(sid)
-    data["agents"] = visible_agents(data.get("agents") or [])
+    data["agents"] = agents_ctx(visible_agents(data.get("agents") or []))
     data["error_count"] = API.error_count(sid)
     data["title"] = session_title(data.get("transcript_path") or "")
+    data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
     data["running"] = API.running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
@@ -1648,7 +1687,8 @@ class Handler(BaseHTTPRequestHandler):
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
-                "running": None, "errors": None, "ask": None, "plan": None}
+                "running": None, "errors": None, "ask": None, "plan": None,
+                "ctx": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -1685,10 +1725,18 @@ class Handler(BaseHTTPRequestHandler):
                 # lingering tab state forever (green while kitty is magenta)
                 row = API.session_row(sid) or {}
                 win = str(row.get("kitty_window_id") or "") or win
-                agents = visible_agents(API.agents(sid))
+                agents = agents_ctx(visible_agents(API.agents(sid)))
                 if agents != prev["agents"]:
                     prev["agents"] = agents
                     if not self._sse("agents", agents):
+                        return
+                # the main thread's context saturation — the stats row's ctx
+                # chip, live (the transcript grew → the (path, size) cache
+                # re-probes; pushed only on change like everything else here)
+                ctx = session_ctx(row.get("transcript_path") or "", main=True)
+                if ctx != prev["ctx"]:
+                    prev["ctx"] = ctx
+                    if not self._sse("ctx", {"ctx": ctx}):
                         return
                 costs = API.costs(sid)
                 if costs != prev["costs"]:

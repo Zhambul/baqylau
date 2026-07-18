@@ -168,6 +168,25 @@ def slash_commands(cwd):
     return out
 
 
+def context(transcript_path, main=False):
+    """Context-saturation fan-out (path-keyed like session_title — the
+    dashboard's rows already hold each transcript path): the first plugin that
+    recognizes the file returns {"used", "window", "pct", "model"} for its
+    most recent turn — how full the context window is; None when no plugin
+    does (a fresh transcript, a codex rollout — no codex provider yet).
+    main=True marks a HOST session's main transcript (the claude_code provider
+    skips sidechain records there). Same exception contract as
+    census()/activity(): the callers are read-side dashboards, not hooks."""
+    for p in all_plugins():
+        fn = getattr(p, "context", None)
+        if fn is None:
+            continue
+        got = fn(transcript_path, main)
+        if got is not None:
+            return got
+    return None
+
+
 def conversation(sid, pos=0):
     """Main-thread conversation records from byte `pos` for the dashboard's
     merged mirror stream: (records, new_pos) from the first plugin that

@@ -71,6 +71,7 @@ backed by grep-style regression tests that will fail the build):
 | Tailer env contract `CLAUDE_STREAM_*` | `hookkit.stream_env()` — launchers pass the raw command, never the render decision |
 | Usage dedup + Σ-row arithmetic | `accounting.usage_fold` + `ops.split_tokens` |
 | settings.json env-block layering | `model.settings_env` (`nearest_only=` preserves split.py's walk) |
+| Context-window occupancy arithmetic (used = fresh + cache-write + cache-read input) + per-model window size | `plugins/claude_code/model.py` — `context_used()`/`context_window()`; the substream's ctx tag/footer and `transcript.context_probe` (the dashboard's ctx chips, `plugins.context()`) are its consumers |
 | File-op payload shapes, `FILE_LABEL`/`FILE_RGB` | `plugins/claude_code/tools.py` |
 | Monitor signature-token extraction (the `find_proc` wire contract) | `plugins/claude_code/stream.monitor_sig` |
 | Click-to-view stash-and-link | `file_fmt.stash_view` (over the shared `view_ops`) |
