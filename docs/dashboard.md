@@ -1689,23 +1689,35 @@ the no-title fallback. The first scan is a baseline, never news. Windowless sess
 toasts, same as they have no tab colour — that's the tab system's own
 scoping, not a dashboard limitation.
 
-**The attention bar is the persistent complement to the toasts.** Toasts are
-transient (a 7s slide-in on the transition); the bar is the standing view of
-what needs you *right now*. A slim hairline bar pinned under the header on
-every view (`#attn` in index.html — a fixed container outside `#view`, so it
-survives the router's re-renders) lists every LIVE session whose tab state is
+**The session strip is the persistent complement to the toasts.** Toasts are
+transient (a 7s slide-in on the transition); the strip is the standing view of
+every live chat, doubling as the session switcher while you're inside one. A
+slim hairline bar pinned under the header on every view (`#attn` in
+index.html — a fixed container outside `#view`, so it survives the router's
+re-renders) lists EVERY live session as a jump pill, needs-you states first:
 `awaiting-command` as a red pulsing pill (`--ask`, the badge's own dot
-animation) and every `awaiting-response` session as a quieter green pill
-(`--done`) after them; it is `hidden` entirely when nothing needs attention,
-and when it shows, `body.attn-on` drops the session view's sticky agents rail
-(`.rail`) below it so the two never overlap. It is fed by the same global `sessions` SSE
+animation), `awaiting-response` as a quieter green pill (`--done`), then the
+rest with a colored dot only and no ring — busy (`--busy` magenta,
+thinking/working), running (`--exec` blue, executing/awaiting-bg), and idle
+(grey, quietest — including tabless headless/daemon sessions, whose `tab` is
+`""`). The tab-state→pill mapping is `ATTN_CLASS` in app.js, mirroring the
+kitty tab palette. Within a state group pills sort by label then sid, NOT
+recency — the bar re-renders on every snapshot tick, and pills that shuffle
+under the cursor are a misclick trap (a session still *moves* when its state
+group changes; surfacing on becoming-red is the point). It is `hidden`
+entirely only when no session is live, and when it shows, `body.attn-on`
+drops the session view's sticky agents rail (`.rail`) below it so the two
+never overlap. It is fed by the same global `sessions` SSE
 snapshots the app already holds (`renderAttention()` reruns on every snapshot)
 plus the open session's per-session `tab` SSE event, which patches that row in
 place so the bar reacts before the next global snapshot lands. The count of
-asking sessions also prefixes the browser tab title (`(2) claude · dashboard`)
+asking sessions (only asking — busy/idle chats are ambient, not news) also
+prefixes the browser tab title (`(2) claude · dashboard`)
 and swaps the favicon to a red-dotted variant, so a backgrounded tab still
 shows the ask count. The currently-open session's own pill is de-emphasized
-(it's the one you're already looking at) but still shown, for consistency.
+(it's the one you're already looking at) but still shown, for consistency —
+and, now that every chat is listed, so you always see where you are among
+them.
 
 ## The husk rows (hidden agents)
 
@@ -1796,10 +1808,10 @@ themselves (`parked`/`gone`).
 is deliberately NOT sticky — it was once pinned under the top bar, but a
 tall header (title + two action rows + stats + ctx bar) hogged viewport over
 the conversation. Only the global chrome stays pinned: the top bar, the
-attention bar, and the agents rail (sticky beside the stream, yielding to the
-attention bar via `body.attn-on .rail`). Nothing becomes unreachable when the
+session strip, and the agents rail (sticky beside the stream, yielding to the
+strip via `body.attn-on .rail`). Nothing becomes unreachable when the
 header scrolls away — the control gestures are document-level (Esc =
-interrupt, etc.) and the attention bar + toasts still surface state — so
+interrupt, etc.) and the session strip + toasts still surface state — so
 don't re-pin it as a "fix"; if the mouse path to ■ stop ever matters, the
 answer is a collapsing slim bar, not restoring the full sticky header.
 

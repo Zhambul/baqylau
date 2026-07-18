@@ -178,13 +178,17 @@ function initNotifBtn() {
   }
 }
 
-/* ---------- persistent attention bar ---------- */
+/* ---------- persistent session strip ---------- */
 // The standing complement to the transient toasts: a slim bar under the header,
-// on every view, listing every LIVE session that needs you — asking (red,
-// awaiting-command) pills first, your-turn (green, awaiting-response) quieter
-// after them — hidden entirely when nothing does. Fed from the global S.sessions
-// snapshots the app already holds, plus the open session's `tab` SSE event
-// (which patches its row in place so the bar reacts before the next snapshot).
+// on every view, listing EVERY live session as a jump pill — needs-you states
+// lead (asking red + pulse, your-turn green), then busy (magenta), running
+// (blue), idle (grey, quietest) — hidden entirely when nothing is live. Inside
+// a session view it doubles as the chat switcher. Fed from the global
+// S.sessions snapshots the app already holds, plus the open session's `tab`
+// SSE event (which patches its row in place so the bar reacts before the next
+// snapshot). Within a state group pills sort by label+sid, NOT recency: the
+// bar re-renders every snapshot tick, and pills that shuffle under the cursor
+// are a misclick trap.
 
 const BASE_TITLE = "claude · dashboard";
 const FAV_GLYPH = "<text y='13' font-size='13'>⬡</text>";
@@ -195,37 +199,45 @@ const favData = (extra) =>
 const FAVICON = favData("");
 const FAVICON_ASK = favData("<circle cx='12' cy='4' r='4' fill='#e06c75'/>");
 
+// tab state → pill class (the dot/ring color, mirroring the kitty tab
+// palette) + its needs-you-first sort rank. Anything unmapped — idle, or ""
+// for a tabless headless/daemon session — is the grey idle pill.
+const ATTN_CLASS = {
+  "awaiting-command": "ask", "awaiting-response": "done",
+  "thinking": "busy", "working": "busy",
+  "executing": "run", "awaiting-bg": "run",
+};
+const ATTN_RANK = { ask: 0, done: 1, busy: 2, run: 3, idle: 4 };
+
 function attnPill(row) {
-  const asking = row.tab === "awaiting-command";
-  const a = el("a", "attn-pill " + (asking ? "ask" : "done")
-                   + (row.sid === S.cur ? " self" : ""));
+  const cls = ATTN_CLASS[row.tab] || "idle";
+  const a = el("a", "attn-pill " + cls + (row.sid === S.cur ? " self" : ""));
   a.href = "#/s/" + encodeURIComponent(row.sid);
   a.append(el("span", "adot"));
   a.append(el("span", "alabel", row.title || proj(row)));
-  a.title = (asking ? "asking you" : "your turn") + " · " + row.sid;
+  a.title = (TAB_LABEL[row.tab] || row.tab || "no tab") + " · " + row.sid;
   return a;
 }
 
 function renderAttention() {
   if (!$attn) return;
-  const asking = [], yours = [];
-  for (const row of S.sessions) {
-    if (!row.live) continue;
-    if (row.tab === "awaiting-command") asking.push(row);
-    else if (row.tab === "awaiting-response") yours.push(row);
-  }
-  const show = asking.length + yours.length > 0;
+  const live = S.sessions.filter(r => r.live);
+  live.sort((a, b) =>
+    ATTN_RANK[ATTN_CLASS[a.tab] || "idle"] - ATTN_RANK[ATTN_CLASS[b.tab] || "idle"]
+    || (a.title || proj(a)).localeCompare(b.title || proj(b))
+    || (a.sid < b.sid ? -1 : 1));
+  const asking = live.filter(r => r.tab === "awaiting-command").length;
+  const show = live.length > 0;
   $attn.hidden = !show;
   document.body.classList.toggle("attn-on", show);
   $attn.textContent = "";
   if (show) {
-    if (asking.length)
-      $attn.append(el("span", "alead ask", asking.length + " asking"));
-    for (const row of asking) $attn.append(attnPill(row));
-    for (const row of yours) $attn.append(attnPill(row));
+    if (asking)
+      $attn.append(el("span", "alead ask", asking + " asking"));
+    for (const row of live) $attn.append(attnPill(row));
   }
-  document.title = asking.length ? "(" + asking.length + ") " + BASE_TITLE : BASE_TITLE;
-  if ($favicon) $favicon.href = asking.length ? FAVICON_ASK : FAVICON;
+  document.title = asking ? "(" + asking + ") " + BASE_TITLE : BASE_TITLE;
+  if ($favicon) $favicon.href = asking ? FAVICON_ASK : FAVICON;
 }
 
 /* ---------- account usage strip (top of every page) ---------- */
@@ -767,7 +779,7 @@ function connectSession(sid) {
     if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
     if (S.ses && S.ses.cancelMode) S.ses.cancelMode(d.tab || "");
     if (S.ses && S.ses.quickMode) S.ses.quickMode(d.tab || "");
-    // patch the open session's row so the attention bar reacts before the
+    // patch the open session's row so the session strip reacts before the
     // next global snapshot lands (item 4: react to the per-session tab event)
     const row = S.sessions.find(r => r.sid === S.cur);
     if (row) row.tab = d.tab || "";

@@ -104,10 +104,12 @@ code, pre, .mono { font-family: var(--mono); }
 .ghost:hover { color: var(--text); box-shadow: var(--card-hover); }
 #fsbtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
 
-/* ---- global attention bar (persistent complement to toasts) ----------- */
-/* Slim hairline bar under the header, on every view; hidden when nothing
-   needs you. Red asking pills (--ask + pulse) then quiet green your-turn
-   pills (--done). One row, horizontal-scrolls if it overflows. */
+/* ---- global session strip (persistent complement to toasts) ----------- */
+/* Slim hairline bar under the header, on every view; hidden when nothing is
+   live. Every live session gets a jump pill: red asking (--ask + pulse) and
+   green your-turn (--done) lead with a colored ring; busy/run/idle pills are
+   quieter — colored dot only, plain hairline. One row, horizontal-scrolls if
+   it overflows. */
 #attn {
   position: sticky; top: 47px; z-index: 46;
   display: flex; align-items: center; gap: 8px;
@@ -145,6 +147,10 @@ code, pre, .mono { font-family: var(--mono); }
 .attn-pill.done { color: var(--done);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 32%, transparent); }
 .attn-pill.done .adot { background: var(--done); }
+.attn-pill.busy .adot { background: var(--busy); }
+.attn-pill.run .adot { background: var(--exec); }
+.attn-pill.idle { color: var(--dim); }
+.attn-pill.idle .adot { background: var(--idle); }
 .attn-pill:hover { color: var(--text); box-shadow: var(--card-hover); }
 .attn-pill.self { opacity: .5; }        /* the session you're already viewing */
 
@@ -254,7 +260,7 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---- session view ------------------------------------------------------ */
 /* Deliberately NOT sticky: the header scrolls away with the page — only the
-   top bar and attention bar stay pinned (the keyboard gestures are document-
+   top bar and session strip stay pinned (the keyboard gestures are document-
    level, so stop/rewind stay reachable without it). Opaque like .scard: it
    never floats over content, so no translucency/backdrop blur. */
 .shead {
@@ -935,7 +941,7 @@ body.modal-open { overflow: hidden; }
 /* ---- agents rail -------------------------------------------------------- */
 .rail { display: flex; flex-direction: column; gap: 8px; align-self: start;
   position: sticky; top: 59px; max-height: calc(100vh - 72px); overflow-y: auto; }
-/* when the attention bar is showing it takes the below-header slot; drop the
+/* when the session strip is showing it takes the below-header slot; drop the
    sticky rail below it (min-height 34px) so the two never overlap */
 body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 /* single-column .split (the 1000px breakpoint above): the rail's DOM position
