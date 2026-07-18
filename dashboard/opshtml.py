@@ -356,32 +356,82 @@ _MD_LINK = re.compile(r"\[([^\]\n]*)\]\(([^)\s]+)\)")
 _MD_BOLD = re.compile(r"\*\*(\S.*?\S|\S)\*\*|__(\S.*?\S|\S)__")
 _MD_ITAL = re.compile(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])"
                       r"|(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])")
+# a bare URL in prose (autolinked). Runs on ESCAPED text, so raw <> can't
+# occur — the tempered class stops at their &lt;/&gt; entities instead (an
+# adjacent "<" belongs to the prose, not the URL; mid-URL &amp; still passes);
+# \x00/\x01 are excluded so a URL can never swallow a stashed
+# code-span/link placeholder.
+_MD_URL = re.compile(r"https?://(?:(?!&lt;|&gt;)[^\s\x00\x01])+")
+# what _trim_url peels off a bare URL's tail: prose punctuation the sentence
+# owns, not the URL — the &amp; entity (a raw trailing "&") FIRST, since it
+# also ends in ";" and peeling just the ";" would strand a broken "&amp",
+# then the raw single chars (quotes stay raw under escape(quote=False)).
+_URL_TRAIL = ("&amp;", ".", ",", ";", ":", "!", "?", "*", "'", "\"")
+
+
+def _trim_url(url):
+    """Split a bare-URL match into (url, trailing prose punctuation): in
+    'see https://x.test.' the period is the sentence's, '<https://x>' arrives
+    escaped as '&lt;…&gt;', and a ')' is peeled only while unbalanced so a
+    wiki-style '…/Foo_(bar)' path survives while '(see https://x)' drops it."""
+    trail = ""
+    while True:
+        for t in _URL_TRAIL:
+            if url.endswith(t):
+                url, trail = url[:-len(t)], t + trail
+                break
+        else:
+            if url.endswith(")") and url.count("(") < url.count(")"):
+                url, trail = url[:-1], ")" + trail
+            else:
+                return url, trail
 
 
 def _md_inline(text):
     """Inline markup for one line of RAW text. ESCAPE FIRST — html.escape()
     runs before any tag is layered on, so every substitution below only
     rearranges safe bytes and no raw byte reaches the page. Order: stash code
-    spans (their * _ [ ] must not re-interpret), then links (http(s)-only — any
-    other scheme stays literal escaped text), then bold/italic, then restore
-    the stashed code as <code> chips."""
+    spans (their * _ [ ] must not re-interpret), then links — markdown
+    [label](url) and bare-URL autolinks, http(s)-only either way; any other
+    scheme stays literal escaped text — stashed too, so emphasis can't chew a
+    URL's _ or * and the autolink pass can't re-match inside a built href;
+    then bold/italic over the remaining prose, then restore the stashes."""
     text = html.escape(text, quote=False)
     codes = []
     text = _MD_CODE.sub(
         lambda m: codes.append(m.group(1)) or "\x00%d\x00" % (len(codes) - 1), text)
+    links = []
+
+    def _emph(t):
+        t = _MD_BOLD.sub(lambda m: "<strong>%s</strong>" % (m.group(1) or m.group(2)), t)
+        return _MD_ITAL.sub(lambda m: "<em>%s</em>" % (m.group(1) or m.group(2)), t)
+
+    def _stash(url, label):
+        # url is already escaped, so only quotes still need attribute-arming
+        # (html.escape()ing again would double-escape its &amp; entities).
+        links.append("<a href=\"%s\" target=\"_blank\" rel=\"noopener\">%s</a>"
+                     % (url.replace("\"", "&quot;"), label))
+        return "\x01%d\x01" % (len(links) - 1)
 
     def _link(m):
         label, url = m.group(1), m.group(2)
-        # url is already escaped; http(s) only — an (escaped) scheme like
-        # "javascript:" fails this test and the whole match stays literal text.
+        # http(s) only — an (escaped) scheme like "javascript:" fails this
+        # test and the whole match stays literal text. Emphasis inside the
+        # label renders here, before the anchor is stashed away from _emph.
         if url.startswith(("http://", "https://")):
-            return "<a href=\"%s\" target=\"_blank\" rel=\"noopener\">%s</a>" \
-                   % (html.escape(url, quote=True), label)
+            return _stash(url, _emph(label))
         return m.group(0)
 
+    def _auto(m):
+        url, trail = _trim_url(m.group(0))
+        if not url.split("://", 1)[1]:         # trimmed down to a bare scheme
+            return m.group(0)
+        return _stash(url, url) + trail
+
     text = _MD_LINK.sub(_link, text)
-    text = _MD_BOLD.sub(lambda m: "<strong>%s</strong>" % (m.group(1) or m.group(2)), text)
-    text = _MD_ITAL.sub(lambda m: "<em>%s</em>" % (m.group(1) or m.group(2)), text)
+    text = _MD_URL.sub(_auto, text)
+    text = _emph(text)
+    text = re.sub(r"\x01(\d+)\x01", lambda m: links[int(m.group(1))], text)
     return re.sub(r"\x00(\d+)\x00",
                   lambda m: "<code>%s</code>" % codes[int(m.group(1))], text)
 

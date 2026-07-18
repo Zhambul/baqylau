@@ -175,7 +175,17 @@ single lexer owner (`render.lexer` via `coderender.render_code`) to ANSI and
 then `ansi_html` (which escapes), falling back to plain escaped text when
 pygments/the lexer is absent. So `<script>` survives as escaped text in every
 context, and a `javascript:` link renders as literal text (only `http(s)` URLs
-become anchors). Malformed markdown never raises — the outer guard returns
+become anchors). Bare `http(s)://` URLs in prose are **autolinked** — people
+paste URLs without `[label](…)` dressing, and a dead URL in a message bubble
+is exactly the thing you want to click. `_md_inline` stashes both link kinds
+(markdown links and autolinks) as placeholders before the emphasis pass, so a
+URL's `_`/`*` can never be chewed into `<em>`/`<strong>` (emphasis *around* a
+URL, and inside a markdown label, still renders) and the autolink pass can
+never re-match inside an already-built `href`; `_trim_url` peels the
+sentence's trailing punctuation (`.`,`)` only while unbalanced — a wiki-style
+`…/Foo_(bar)` survives — and the `&lt;`/`&gt;` of a raw `<…>` wrapper) off
+the match, and URLs inside code spans stay literal text. Malformed markdown
+never raises — the outer guard returns
 escaped plain text. Pipe tables are the one block needing **two-line
 lookahead** (a header row with a `|` over a `|---|`-shaped delimiter row with
 the *same* cell count — the GFM rule; a mismatch stays a paragraph), checked

@@ -197,6 +197,42 @@ def test_md_html_table_interrupts_paragraph():
     assert "<tr><td>1</td><td>2</td></tr>" in h
 
 
+def test_md_html_bare_url_autolinks():
+    # a bare http(s) URL in prose becomes an anchor (label = the URL); the
+    # sentence's trailing punctuation, a wrapping (…) / <…>, and a raw
+    # trailing & stay prose — but a wiki-style balanced (…) path survives.
+    h = opshtml.md_html("go to https://x.test/signup and sign up")
+    assert ('<a href="https://x.test/signup" target="_blank" rel="noopener">'
+            "https://x.test/signup</a>") in h
+    h = opshtml.md_html("read https://x.test/a. then (see https://x.test/b) "
+                        "or <https://x.test/c> or https://x.test/d&")
+    for u in ("https://x.test/a", "https://x.test/b", "https://x.test/c",
+              "https://x.test/d"):
+        assert '<a href="%s"' % u in h
+    assert "/a." not in h and "/b)" not in h and "/c&" not in h and "/d&" not in h
+    wiki = opshtml.md_html("https://x.test/wiki/Foo_(bar)")
+    assert '<a href="https://x.test/wiki/Foo_(bar)"' in wiki
+
+
+def test_md_html_bare_url_emphasis_and_escaping_safe():
+    # autolinked URLs are stashed before the emphasis pass, so a URL's _ / *
+    # can't be chewed into <em>/<strong> — while emphasis AROUND one still
+    # renders; & in a query survives as exactly ONE entity in the href.
+    h = opshtml.md_html("see https://x.test/p?a=1&b=2 and **https://x.test/q__r__s**")
+    assert '<a href="https://x.test/p?a=1&amp;b=2"' in h
+    assert "&amp;amp;" not in h
+    assert '<strong><a href="https://x.test/q__r__s"' in h and "<em>" not in h
+
+
+def test_md_html_bare_url_leaves_code_and_links_alone():
+    # inside a code span a URL stays literal text, and a markdown link's href
+    # must not be autolinked a second time.
+    h = opshtml.md_html("run `curl https://x.test/a` now")
+    assert "<code>curl https://x.test/a</code>" in h and "<a " not in h
+    h = opshtml.md_html("see [docs](https://x.test/d)")
+    assert h.count("<a ") == 1
+
+
 def test_md_html_malformed_never_raises():
     for bad in ("```python\nx=1\nno closing fence",       # unclosed fence
                 "**unclosed *nested _ stuff",             # tangled emphasis
