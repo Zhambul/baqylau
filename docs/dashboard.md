@@ -595,6 +595,20 @@ tab is invisible to the web until its fork lands (no hook, no transcript
 write) — the page keeps showing the dead turns until reload/next-send,
 and its `ups` hints go stale, which the text-verified scan absorbs.
 
+Adjacent documented facts the driver leans on or tolerates
+(code.claude.com/docs/en/checkpointing.md + changelog; researched
+2026-07-18): checkpoints cap at 100 per session (hard-coded — `SCAN_MAX`
+mirrors it); file snapshotting can be disabled
+(`fileCheckpointingEnabled` / `CLAUDE_CODE_DISABLE_FILE_CHECKPOINTING=1`),
+which just makes every checkpoint a "No code changes" entry — a code-mode
+request there is the normal `option` bail; and after a `/clear` the menu
+grows a `/resume <sid> (previous session)` entry that is not a prompt —
+the text scan walks past it like any non-matching entry. There is NO
+programmatic restore API to prefer over the menu (no CLI flag, no
+external SDK call — the open feature request is anthropics/claude-code
+#16976), which is why screen-driving the TUI is not a stopgap but the
+only sanctioned path.
+
 The page wires rewind as the **↶ rewind**
 button, and the session view's **Esc key** as an ATOMIC gesture: a lone
 press is HELD for `ESC_DOUBLE_MS` (450 ms) then classified — single press
