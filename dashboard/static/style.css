@@ -876,6 +876,15 @@ body.modal-open { overflow: hidden; }
   border-left: 3px solid var(--dim2);
 }
 .md hr { border: none; border-top: 1px solid var(--hair); margin: 11px 0; }
+.md .md-tbl { overflow-x: auto; margin: 7px 0; }
+.md table { border-collapse: collapse; font-size: 12.5px; }
+.md th, .md td {
+  padding: 3px 9px; text-align: left; vertical-align: top;
+  border: 1px solid var(--hair);
+}
+.md th { color: var(--text); font-weight: 650; background: var(--panel2); }
+.md th.ta-c, .md td.ta-c { text-align: center; }
+.md th.ta-r, .md td.ta-r { text-align: right; }
 .msg .md { max-height: 360px; overflow: auto; }
 .ent .bd .md { max-height: 440px; overflow: auto; }
 

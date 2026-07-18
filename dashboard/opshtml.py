@@ -331,7 +331,7 @@ def view_html(ops, key=""):
 # (docs/dashboard.md) rules OUT a markdown library, and the security rule (the
 # ansi_html escape discipline above) rules OUT any "escape later" design. So
 # escaping is the FIRST thing done to any text that becomes page content: block
-# STRUCTURE is detected on the raw lines (the sigils #-*>`[]() are ASCII and
+# STRUCTURE is detected on the raw lines (the sigils #-*>`[]()| are ASCII and
 # emit nothing themselves), but every fragment that actually reaches the output
 # is html.escape()d at its leaf — _md_inline escapes before layering emphasis,
 # _md_fence escapes (directly, or via ansi_html on the highlighter's ANSI).
@@ -344,6 +344,10 @@ _MD_UL = re.compile(r"^ {0,3}[-*+]\s+(.*)$")
 _MD_OL = re.compile(r"^ {0,3}\d+[.)]\s+(.*)$")
 _MD_QUOTE = re.compile(r"^ {0,3}>\s?(.*)$")
 _MD_FENCE = re.compile(r"^ {0,3}(`{3,}|~{3,})\s*([\w.+-]*)\s*$")
+# a pipe-table delimiter row: cells of :?-+:? split by |, optional outer pipes.
+# The regex alone also matches a bare "---" (zero pipes) — _md_tsep additionally
+# requires a "|" so it can never collide with _MD_HR.
+_MD_TSEP = re.compile(r"^ {0,3}\|?\s*:?-+:?\s*(?:\|\s*:?-+:?\s*)*\|?\s*$")
 # inline: same battle-tested emphasis shapes as render.markdown (emphasis must
 # hug non-space text, so "2 * 3" and a bare "*" are left alone), plus code
 # spans and http(s)-only links.
@@ -403,6 +407,56 @@ def _md_para(lines):
     return "<p>%s</p>" % "<br>".join(_md_inline(x) for x in lines)
 
 
+def _md_tsep(line):
+    """True when `line` is a table delimiter row (|---|:---:|…)."""
+    return "|" in line and bool(_MD_TSEP.match(line))
+
+
+def _md_cells(line):
+    """Split one table row into raw cell texts. \\| is a literal pipe (stashed
+    through the split, restored raw — _md_inline escapes it at the leaf); one
+    leading/trailing pipe is decoration, not an empty cell. Subset limitation:
+    a bare | inside a backtick code span still splits the cell."""
+    line = line.strip().replace("\\|", "\x00")
+    if line.startswith("|"):
+        line = line[1:]
+    if line.endswith("|"):
+        line = line[:-1]
+    return [c.strip().replace("\x00", "|") for c in line.split("|")]
+
+
+def _md_table_start(lines, i):
+    """Two-line lookahead (the one block that needs it): a header row with a
+    pipe, over a delimiter row with the SAME cell count (the GFM rule — a
+    mismatch means it isn't a table and stays a paragraph)."""
+    return (i + 1 < len(lines) and "|" in lines[i] and _md_tsep(lines[i + 1])
+            and len(_md_cells(lines[i])) == len(_md_cells(lines[i + 1])))
+
+
+def _md_table(lines, i):
+    """Consume a pipe table at `lines[i]` -> (html, next_i). Alignment comes
+    from the delimiter colons as a CLOSED class vocabulary (ta-c/ta-r; left is
+    the default) — never from input text. Body rows are padded/truncated to
+    the header's column count (GFM behavior); a pipe-less or blank line ends
+    the table. Every cell rides _md_inline, so escaping is unchanged."""
+    head, seps = _md_cells(lines[i]), _md_cells(lines[i + 1])
+    aligns = ["ta-c" if s.startswith(":") and s.endswith(":")
+              else "ta-r" if s.endswith(":") else "" for s in seps]
+
+    def row(tag, cells):
+        return "<tr>%s</tr>" % "".join(
+            "<%s%s>%s</%s>" % (tag, " class=\"%s\"" % aligns[k] if aligns[k] else "",
+                               _md_inline(c), tag)
+            for k, c in enumerate(cells))
+
+    body, i = [], i + 2
+    while i < len(lines) and "|" in lines[i] and lines[i].strip():
+        body.append(row("td", (_md_cells(lines[i]) + [""] * len(head))[:len(head)]))
+        i += 1
+    return ("<div class=\"md-tbl\"><table><thead>%s</thead><tbody>%s</tbody>"
+            "</table></div>" % (row("th", head), "".join(body))), i
+
+
 def _md_special(line):
     """True when `line` opens a block that ends the current paragraph."""
     return bool(_MD_HEAD.match(line) or _MD_HR.match(line) or _MD_UL.match(line)
@@ -412,9 +466,10 @@ def _md_special(line):
 
 def md_html(text):
     """Render a markdown SUBSET to safe HTML (headings, bold/italic, inline &
-    fenced code, un/ordered lists, blockquotes, http(s) links, rules,
-    paragraphs). Escape-FIRST and single-level; malformed input NEVER raises —
-    the outer guard returns escaped plain text. See the section header above."""
+    fenced code, un/ordered lists, blockquotes, http(s) links, rules, pipe
+    tables, paragraphs). Escape-FIRST and single-level; malformed input NEVER
+    raises — the outer guard returns escaped plain text. See the section
+    header above."""
     try:
         # Block STRUCTURE is read from raw lines (sigils are ASCII); every leaf
         # that reaches output escapes itself (_md_inline / _md_fence).
@@ -431,6 +486,10 @@ def md_html(text):
                     body.append(lines[i]); i += 1
                 i += 1                             # consume the closing fence
                 out.append(_md_fence("\n".join(body), lang))
+                continue
+            if _md_table_start(lines, i):
+                tbl, i = _md_table(lines, i)
+                out.append(tbl)
                 continue
             if _MD_HR.match(line):
                 out.append("<hr>"); i += 1; continue
@@ -463,7 +522,8 @@ def md_html(text):
             if not line.strip():
                 i += 1; continue
             para = []
-            while i < n and lines[i].strip() and not _md_special(lines[i]):
+            while i < n and lines[i].strip() and not _md_special(lines[i]) \
+                    and not _md_table_start(lines, i):
                 para.append(lines[i]); i += 1
             out.append(_md_para(para))
         return "".join(out)

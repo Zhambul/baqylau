@@ -154,6 +154,49 @@ def test_md_html_fenced_python_is_highlighted():
     assert "def" in h and "&lt;" not in h                 # nothing to escape here
 
 
+def test_md_html_pipe_table():
+    h = opshtml.md_html("| Engine | WER |\n|---|---|\n| Nova-3 | ~5.3% |\n"
+                        "| Whisper | ~7.4% |")
+    assert '<div class="md-tbl"><table><thead>' in h
+    assert "<tr><th>Engine</th><th>WER</th></tr>" in h
+    assert "<tr><td>Nova-3</td><td>~5.3%</td></tr>" in h
+    assert "<tr><td>Whisper</td><td>~7.4%</td></tr>" in h
+
+
+def test_md_html_table_alignment_and_cells():
+    # colons -> the closed class vocabulary; cells ride _md_inline (escaped,
+    # emphasis works); \| is a literal pipe; ragged rows pad/truncate to the
+    # header width.
+    h = opshtml.md_html("| a | b | c |\n|:---:|---:|---|\n"
+                        "| **x** | <script>y</script> | l \\| r | extra |\n"
+                        "| short |")
+    assert '<th class="ta-c">a</th>' in h and '<th class="ta-r">b</th>' in h
+    assert "<th>c</th>" in h                              # left = no class
+    assert '<td class="ta-c"><strong>x</strong></td>' in h
+    assert "<script>" not in h and "&lt;script&gt;y&lt;/script&gt;" in h
+    assert "<td>l | r</td>" in h
+    assert "extra" not in h                               # truncated to 3 cols
+    assert ('<tr><td class="ta-c">short</td><td class="ta-r"></td><td></td>'
+            "</tr>") in h
+
+
+def test_md_html_table_needs_delimiter_and_matching_width():
+    # a pipe line with no delimiter row underneath stays a paragraph...
+    assert "<table>" not in opshtml.md_html("a | b\nplain text")
+    # ...as does a header/delimiter cell-count mismatch (the GFM rule)...
+    assert "<table>" not in opshtml.md_html("| a | b |\n|---|---|---|")
+    # ...and a bare --- is still an <hr>, never a table delimiter.
+    assert "<hr>" in opshtml.md_html("---")
+
+
+def test_md_html_table_interrupts_paragraph():
+    # the two-line lookahead: a table directly under a text line must not get
+    # swallowed into the paragraph; a pipe-less line ends the table.
+    h = opshtml.md_html("intro line\n| a | b |\n|---|---|\n| 1 | 2 |\nafter")
+    assert "<p>intro line</p>" in h and "<p>after</p>" in h
+    assert "<tr><td>1</td><td>2</td></tr>" in h
+
+
 def test_md_html_malformed_never_raises():
     for bad in ("```python\nx=1\nno closing fence",       # unclosed fence
                 "**unclosed *nested _ stuff",             # tangled emphasis

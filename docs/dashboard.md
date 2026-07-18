@@ -163,19 +163,29 @@ click-to-view. Any other URL becomes a plain `target=_blank` anchor.
 user prompts and teammate mail are markdown in practice, so the dashboard
 renders them as markdown instead of a flat `<pre>` — a small dependency-free
 subset (headings, bold/italic, inline & fenced code, un/ordered lists,
-blockquotes, `http(s)` links, rules, paragraphs). Two rules dictate the shape.
-The **no-build/no-deps rule** rules out a markdown library, so it is hand-rolled
-(~150 lines). The **escape rule** (the `neutralize()` analog) rules out any
-"escape later" design: block *structure* is detected on the raw lines (the
-sigils `#-*>`` ``[]()` are ASCII and emit nothing themselves), but every
-fragment that reaches the page is `html.escape`d at its leaf — `_md_inline`
+blockquotes, `http(s)` links, rules, pipe tables, paragraphs). Two rules
+dictate the shape. The **no-build/no-deps rule** rules out a markdown library,
+so it is hand-rolled (~200 lines). The **escape rule** (the `neutralize()`
+analog) rules out any "escape later" design: block *structure* is detected on
+the raw lines (the sigils `#-*>`` ``[]()|` are ASCII and emit nothing
+themselves), but every fragment that reaches the page is `html.escape`d at its
+leaf — `_md_inline`
 escapes before layering emphasis, and a fenced block is highlighted through the
 single lexer owner (`render.lexer` via `coderender.render_code`) to ANSI and
 then `ansi_html` (which escapes), falling back to plain escaped text when
 pygments/the lexer is absent. So `<script>` survives as escaped text in every
 context, and a `javascript:` link renders as literal text (only `http(s)` URLs
 become anchors). Malformed markdown never raises — the outer guard returns
-escaped plain text. The timeline endpoints (`/activity`, `/agent`) add an
+escaped plain text. Pipe tables are the one block needing **two-line
+lookahead** (a header row with a `|` over a `|---|`-shaped delimiter row with
+the *same* cell count — the GFM rule; a mismatch stays a paragraph), checked
+both in the main loop and in the paragraph accumulator so a table directly
+under a text line isn't swallowed into it; delimiter colons map to a closed
+alignment-class vocabulary (`ta-c`/`ta-r`), body rows pad/truncate to the
+header width, `\|` is a literal pipe, and the accepted subset limitation is
+that a bare `|` inside a backtick code span still splits the cell. Wide tables
+scroll horizontally inside their own `.md-tbl` wrapper instead of stretching
+the bubble. The timeline endpoints (`/activity`, `/agent`) add an
 `html` field to message/prompt/teammsg entries *additively* (the raw `text`
 stays), and `app.js` uses it via `innerHTML` (server-escaped by construction),
 falling back to `pre(text)` when absent.
