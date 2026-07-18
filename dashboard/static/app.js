@@ -1146,8 +1146,22 @@ function dropdown() {
   };
 }
 
+// Last-used launch prefs (directory/model/effort) — preselected the next time
+// the form opens (launches are usually the same project on the same settings).
+// Written only on a successful launch; an explicit prefill (a dir group's "+",
+// a resume button) still wins over the remembered directory.
+const NS_LAST_KEY = "claude-dash:ns-last";
+const nsLast = () => {
+  try { return JSON.parse(localStorage.getItem(NS_LAST_KEY)) || {}; }
+  catch { return {}; }
+};
+const nsRemember = (prefs) => {
+  try { localStorage.setItem(NS_LAST_KEY, JSON.stringify(prefs)); } catch {}
+};
+
 function openNewSession(prefillCwd, resumeSid) {
   $modal.textContent = "";
+  const last = nsLast();
   const panel = el("div", "nspanel");
   panel.append(el("div", "nstitle", "new session"));
 
@@ -1157,7 +1171,7 @@ function openNewSession(prefillCwd, resumeSid) {
   dir.type = "text";
   dir.spellcheck = false;
   dir.placeholder = "/path/to/project";
-  dir.value = prefillCwd || "";
+  dir.value = prefillCwd || last.cwd || "";
   dir.setAttribute("list", "ns-cwds");
   const dl = el("datalist");
   dl.id = "ns-cwds";
@@ -1195,7 +1209,9 @@ function openNewSession(prefillCwd, resumeSid) {
     start.value = v;
   }
 
-  // model + effort side by side; "" = the CLI's own default (no flag sent)
+  // model + effort side by side — concrete values only, no "default" entry
+  // (the user always launches with explicit flags; the remembered last-used
+  // value is the preselection, with a fixed first-ever fallback)
   const pick = (label, opts) => {
     const row = el("label", "nsfield");
     row.append(el("span", "nslabel", label));
@@ -1225,13 +1241,15 @@ function openNewSession(prefillCwd, resumeSid) {
     .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
 
   const [modelRow, model] = pick("model", [
-    ["", "default"], ["fable", "fable"], ["opus", "opus"],
+    ["fable", "fable"], ["opus", "opus"],
     ["sonnet", "sonnet"], ["haiku", "haiku"],
   ]);
+  model.value = model.has(last.model) ? last.model : "fable";
   const [effortRow, effort] = pick("effort", [
-    ["", "default"], ["low", "low"], ["medium", "medium"],
+    ["low", "low"], ["medium", "medium"],
     ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
   ]);
+  effort.value = effort.has(last.effort) ? last.effort : "high";
   const split = el("div", "nssplit");
   split.append(modelRow, effortRow);
   const split2 = el("div", "nssplit");
@@ -1269,7 +1287,10 @@ function openNewSession(prefillCwd, resumeSid) {
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
     postJSON("/api/sessions/new", body)
-      .then(() => { armJump(cwd, body.resume); closeNewSession(); toast("done", "launching…", cwd); })
+      .then(() => {
+        nsRemember({ cwd, model: model.value, effort: effort.value });
+        armJump(cwd, body.resume); closeNewSession(); toast("done", "launching…", cwd);
+      })
       .catch(e => { submit.disabled = false; toast("ask", "launch failed", (e && e.error) || ""); });
   };
   submit.onclick = go;

@@ -371,6 +371,17 @@ and native-ish keyboard handling (↑/↓/Enter/Space, Esc closes the menu witho
 closing the modal via `stopPropagation`). The directory field's `<datalist>`
 completion stays native — it is freeform-with-suggestions, not a picker.
 
+**The form remembers the last launch** (`claude-dash:ns-last` in
+localStorage, written only on a *successful* launch): the directory, model
+and effort preselect to their last-used values the next time the form opens
+— launches are usually the same project on the same settings. An explicit
+prefill (a dir group's "+", a parked session's resume button) still wins over
+the remembered directory. Model and effort offer **concrete values only — no
+"default" entry**: every launch sends explicit `--model`/`--effort` flags
+(first-ever fallbacks `fable`/`high` before anything is remembered). The API
+keeps `model`/`effort` optional — absent flags remain valid for other
+clients; only the form always sends them.
+
 **Resume / continue.** The new-session form's "start from" picker maps to the
 CLI's own conversation-pickup flags: `continue` → `claude --continue` (the
 directory's most recent conversation), `resume: <sid>` → `claude --resume
