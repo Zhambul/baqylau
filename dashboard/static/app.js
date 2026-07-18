@@ -1592,8 +1592,14 @@ function renderSessionChrome(tab) {
       clearTimeout(armed);
       disarm();
       cls.disabled = true;
-      postJSON("/api/session/" + encodeURIComponent(S.cur) + "/stop", {})
-        .then(() => toast("done", "session closed", "terminal tab closed"))
+      const sid = S.cur;
+      postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
+        .then(() => {
+          toast("done", "session closed", "terminal tab closed");
+          // the session just ended — back to the list, unless the user
+          // already navigated elsewhere while the POST was in flight
+          if (S.cur === sid) location.hash = "#/";
+        })
         .catch(e => {
           cls.disabled = false;
           toast("ask", "close failed", (e && e.error) || "");

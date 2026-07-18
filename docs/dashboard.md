@@ -391,9 +391,11 @@ cleanly on SIGHUP, firing SessionEnd — so the normal end-of-session lifecycle
 `ended_at`/`end_reason` audit row, the parked state DB, and the clean `/tmp`.
 Headless session (no window) is `409` — there is no tab to close. The page
 puts a **close** button in the session head (live + windowed only) behind a
-two-step confirm (first click arms for 4 s, second fires); a parked session
-shows a **resume** button there instead, which opens the new-session form
-preset to `--resume <sid>`.
+two-step confirm (first click arms for 4 s, second fires); on success it
+navigates back to the sessions list (the session just ended — staying on its
+now-dead view helps nobody; skipped if the user already navigated elsewhere
+while the POST was in flight). A parked session shows a **resume** button
+there instead, which opens the new-session form preset to `--resume <sid>`.
 
 `POST /api/session/<sid>/interrupt` presses **Escape** in the session's
 window (`Frontend.send_key(win, "escape")` → `kitten @ send-key`) — the TUI's
