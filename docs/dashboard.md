@@ -401,6 +401,28 @@ interrupt is itself an event, so the recheck flips the dead magenta green
 unless any real signal (tab-state movement, transcript growth over the
 press-time size) appears within its 2s grace.
 
+`POST /api/session/<sid>/rewind` presses **Escape twice** — Claude Code's
+double-Esc gesture, identical to its `/rewind` command: on empty input it
+opens the rewind/checkpoint menu (restore code and/or conversation,
+summarize from/up to a point; checkpoints are automatic, one per user
+prompt — code.claude.com/docs/en/checkpointing.md). The menu opens **in the
+terminal** — the web mirrors the key presses, navigating it happens in the
+kitty tab (the toast says so). Two SEPARATE `send_key` calls with a
+`REWIND_GAP_S` (150 ms) beat: the TUI's double-press detection wants two
+discrete key events, and one send-key call batches its keys into a single
+press,press,release,release burst (two spaced calls are exactly what was
+observed opening the panel live). Same guard chain, window discipline and
+`escape-recheck` backstop as `/interrupt` (mid-turn the first Esc
+interrupts — the TUI's own semantics); audited as `web-rewind`
+(`{win, ok, tab}`, `ok` = both presses accepted). The page wires it as the
+**↶ rewind** button, and the session view's **Esc key** does double-press
+detection to match the terminal gesture: a single Esc is HELD for
+`ESC_DOUBLE_MS` (350 ms) before becoming `/interrupt`; a second Esc inside
+the window upgrades the gesture to one `/rewind` POST — without the hold,
+each press fired its own `/interrupt` and a double-Esc read as a double
+interrupt (two toasts, two rechecks) even though the terminal correctly
+opened the rewind panel.
+
 **The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
 app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with
 `appearance: none` and always opens the native white macOS popup for the

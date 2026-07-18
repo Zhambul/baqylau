@@ -68,6 +68,9 @@ HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
+REWIND_GAP_S = 0.15                # beat between the rewind's two Escape presses —
+#                                    the TUI's double-press detection wants two
+#                                    discrete key events, not one send-key burst
 POST_HEADER = "X-Claude-Dash"      # the custom header a simple cross-origin POST can't add
 # The only Origins a legit same-origin browser POST carries (it usually sends
 # none at all for same-origin fetches; when it does, it is one of these).
@@ -795,6 +798,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "interrupt":
             return self.post_interrupt(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "rewind":
+            return self.post_rewind(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         return self._json({"error": "not found"}, 404)
@@ -922,6 +928,26 @@ class Handler(BaseHTTPRequestHandler):
         (headless — nothing to interrupt); 503 when no terminal resolves.
         Every attempt is a `web-interrupt` state_files row, failures also an
         A.error."""
+        return self._escape_press(sid, "interrupt", "web-interrupt", presses=1)
+
+    def post_rewind(self, sid):
+        """Press Escape TWICE in the session's window — Claude Code's
+        double-Esc gesture, which opens its rewind/checkpoint panel IN THE
+        TERMINAL (the panel is the TUI's; the web only mirrors the presses,
+        so navigating it happens in the kitty tab). Two separate send_key
+        calls with a REWIND_GAP_S beat between them — the TUI's double-press
+        detection wants two discrete presses (a single call's
+        press,press,release,release is one burst), and two spaced calls are
+        exactly what was observed opening the panel live. Mid-turn the first
+        Esc interrupts and the second opens the panel — the TUI's own
+        double-Esc semantics — so the same escape-recheck backstop applies.
+        Audited as `web-rewind` (`{win, ok, tab}`)."""
+        return self._escape_press(sid, "rewind", "web-rewind", presses=2)
+
+    def _escape_press(self, sid, verb, action, presses):
+        """Shared body of post_interrupt/post_rewind: guard, resolve the LIVE
+        window, send `presses` Escape key events, audit as `action`, and
+        spawn the escape-recheck when the press landed on magenta."""
         body = self._post_guard()
         if body is None:
             return
@@ -930,15 +956,15 @@ class Handler(BaseHTTPRequestHandler):
         sdb = API.state_db_for(sid) or P.state_db(log)
         fe = _frontend()
         if fe is None:
-            A.error(log, "dashboard interrupt (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-interrupt", {"win": "", "ok": False})
+            A.error(log, "dashboard %s (no terminal)" % verb, {"sid": sid})
+            A.state_file(log, sdb, action, {"win": "", "ok": False})
             return self._json({"error": "no terminal available"}, 503)
         # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
         # NOT the audit row's stale start-time id (an Escape into a reused id
         # would interrupt an unrelated session — see _live_window).
         win = fe.window_for_session(sid) or ""
         if not win:
-            A.state_file(log, sdb, "web-interrupt", {"win": "", "ok": False})
+            A.state_file(log, sdb, action, {"win": "", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
         # Press-time transcript size — the escape-recheck's growth baseline
@@ -951,8 +977,10 @@ class Handler(BaseHTTPRequestHandler):
         except OSError:
             tsize = -1
         ok = bool(fe.send_key(win, "escape"))
-        A.state_file(log, sdb, "web-interrupt",
-                     {"win": win, "ok": ok, "tab": tab})
+        for _ in range(presses - 1):
+            time.sleep(REWIND_GAP_S)
+            ok = bool(fe.send_key(win, "escape")) and ok
+        A.state_file(log, sdb, action, {"win": win, "ok": ok, "tab": tab})
         if ok and tab in (tabs.THINKING, tabs.WORKING):
             # An Esc killed mid-think leaves NO signal anywhere (the known
             # interrupt-watch gap) — but a WEB interrupt is itself an event,
@@ -962,7 +990,7 @@ class Handler(BaseHTTPRequestHandler):
             # lands as tab_transitions rows under DISPATCH escape-recheck.
             self._spawn_escape_recheck(fe, win, log, tpath, tsize)
         if not ok:
-            A.error(log, "dashboard interrupt (send failed)",
+            A.error(log, "dashboard %s (send failed)" % verb,
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "tab": tab})

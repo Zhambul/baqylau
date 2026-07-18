@@ -1125,6 +1125,48 @@ def test_post_interrupt_magenta_spawns_escape_recheck(dash, monkeypatch,
     assert len(spawned) == 1
 
 
+def test_post_rewind_sends_double_escape(dash, monkeypatch):
+    # rewind = Claude Code's double-Esc gesture: TWO discrete Escape key
+    # events (separate send_key calls), never touching the tab
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS, "REWIND_GAP_S", 0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+    A.session_start({"session_id": "rew1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/rew1/interrupt", {})
+    assert json.loads(body) == {"ok": True, "tab": ""}
+    assert fe.keyed == [("88", ("escape",))]          # single press = interrupt
+    code, body = _post(dash + "/api/session/rew1/rewind", {})
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": ""}
+    assert fe.keyed[1:] == [("88", ("escape",)), ("88", ("escape",))]
+    assert fe.closed == []
+    # same live-tag discipline as interrupt/stop
+    fe.wins["rew1"] = None
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rew1/rewind", {})
+    assert e.value.code == 409
+    assert len(fe.keyed) == 3
+
+
+def test_post_rewind_magenta_spawns_escape_recheck(dash, monkeypatch,
+                                                   tmp_path):
+    # a rewind pressed mid-turn interrupts first (the TUI's own double-Esc
+    # semantics), so the same mid-thinking recovery applies
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS, "REWIND_GAP_S", 0)
+    spawned = []
+    monkeypatch.setattr(DS.SP, "spawn_detached",
+                        lambda path, argv, log, env=None, purpose="", **kw:
+                        spawned.append(argv) or None)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "89")
+    A.session_start({"session_id": "rew2", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "working"})
+    code, _ = _post(dash + "/api/session/rew2/rewind", {})
+    assert code == 200
+    assert len(spawned) == 1 and spawned[0][0] == "escape-recheck"
+
+
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):
     # same live-tag discipline as stop/message: an Escape into a reused
     # window id would interrupt an unrelated session

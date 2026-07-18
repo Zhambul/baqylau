@@ -1530,6 +1530,12 @@ function renderSessionChrome(tab) {
     stop.title = "interrupt the agent (Esc)";
     stop.onclick = () => interruptSession();
     l1.append(stop);
+    // rewind: Claude Code's double-Esc — opens the checkpoint menu in the
+    // kitty tab (the panel is the TUI's own; navigate it there)
+    const rew = el("button", "sstop", "↶ rewind");
+    rew.title = "open the rewind menu in the terminal (Esc Esc)";
+    rew.onclick = () => rewindSession();
+    l1.append(rew);
     // close: closes the session's kitty tab — a graceful stop (Claude Code
     // exits on the HUP and SessionEnd runs the normal lifecycle).
     // Two-step confirm: first click arms for 4s, second click fires.
