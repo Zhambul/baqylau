@@ -235,6 +235,72 @@ def session_title(tpath):
     return title
 
 
+_GIT = {}         # cwd -> the _git_resolve result (None = not a checkout). The
+#                   ancestor walk + gitdir indirection is stable for a cwd, so it
+#                   caches forever; HEAD itself is re-read on every call (one tiny
+#                   file) so a branch switch shows on the next poll.
+
+
+def _git_resolve(cwd):
+    """Walk up from cwd to its checkout: (gitdir, worktree_name) — gitdir the
+    directory holding HEAD, worktree_name the linked-worktree name when `.git`
+    is a FILE pointing into .../worktrees/<name> (a `git worktree add` /
+    EnterWorktree checkout), else None. None when cwd is in no checkout.
+    File reads only — never a `git` subprocess (this runs per row per poll)."""
+    d = cwd
+    while d and os.path.isdir(d):
+        dotgit = os.path.join(d, ".git")
+        if os.path.isdir(dotgit):
+            return dotgit, None
+        if os.path.isfile(dotgit):
+            try:
+                with open(dotgit, encoding="utf-8", errors="replace") as fh:
+                    first = fh.readline().strip()
+            except OSError:
+                return None
+            if not first.startswith("gitdir:"):
+                return None
+            gd = first[len("gitdir:"):].strip()
+            if not os.path.isabs(gd):
+                gd = os.path.normpath(os.path.join(d, gd))
+            wt = os.path.basename(gd) if (os.sep + "worktrees" + os.sep) in gd \
+                else None
+            return gd, wt
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+    return None
+
+
+def git_info(cwd):
+    """The checkout state of a session's cwd, for the git chips: {"branch",
+    "worktree"} — branch the HEAD ref's short name (a 7-char sha when
+    detached), worktree the linked-worktree name or None for a main checkout.
+    None when cwd isn't inside a git checkout (or its worktree was removed)."""
+    if not cwd:
+        return None
+    hit = _GIT.get(cwd, False)
+    if hit is False:
+        hit = _git_resolve(cwd)
+        _GIT[cwd] = hit
+    if not hit:
+        return None
+    gitdir, wt = hit
+    try:
+        with open(os.path.join(gitdir, "HEAD"), encoding="utf-8",
+                  errors="replace") as fh:
+            head = fh.read().strip()
+    except OSError:
+        return None
+    if head.startswith("ref:"):
+        ref = head[4:].strip()
+        branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
+    else:
+        branch = head[:7] or "?"
+    return {"branch": branch, "worktree": wt}
+
+
 _CTX = {}         # transcript_path -> (size, ctx): same (path, size) cache key
 #                   as _TITLES — saturation only changes when the file grows, and
 #                   the list/agents polls must not re-read every transcript tail
@@ -285,6 +351,7 @@ def sessions_payload():
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
         row["title"] = session_title(row.get("transcript_path") or "")
         row["ctx"] = session_ctx(row.get("transcript_path") or "", main=True)
+        row["git"] = git_info(row.get("cwd") or "")
         out.append(row)
     return out
 
@@ -350,6 +417,7 @@ def session_payload(sid):
     data["error_count"] = API.error_count(sid)
     data["title"] = session_title(data.get("transcript_path") or "")
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
+    data["git"] = git_info(data.get("cwd") or "")
     data["running"] = API.running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
@@ -1688,7 +1756,7 @@ class Handler(BaseHTTPRequestHandler):
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
-                "ctx": None}
+                "ctx": None, "git": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -1737,6 +1805,13 @@ class Handler(BaseHTTPRequestHandler):
                 if ctx != prev["ctx"]:
                     prev["ctx"] = ctx
                     if not self._sse("ctx", {"ctx": ctx}):
+                        return
+                # the header's git chip, live — a checkout/branch switch (or a
+                # removed worktree) shows on the slow cadence
+                git = git_info(row.get("cwd") or "")
+                if git != prev["git"]:
+                    prev["git"] = git
+                    if not self._sse("git", {"git": git}):
                         return
                 costs = API.costs(sid)
                 if costs != prev["costs"]:

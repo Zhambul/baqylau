@@ -243,6 +243,13 @@ body.attn-on .shead { top: 81px; }
 .statsrow .cost { color: var(--orange); }
 .statsrow .warn { color: var(--amber); }
 
+/* git chip (app.js gitChip/setGitChip) — "⎇ branch" + "⋔ worktree" on the
+   session cards and the session header's title line */
+.gitchip { display: inline-flex; align-items: baseline; gap: 8px; font: 11px/1 var(--mono); }
+.gitchip[hidden] { display: none; }
+.gitchip .gb { color: var(--accent, #6b9bd1); }
+.gitchip .gw { color: var(--amber, #d1a35a); }
+
 /* context-saturation bar (app.js ctxBar) — the account-limit ubar's bigger
    sibling, one full row wherever it appears: session cards, the session
    header (.big), agent cards. Accent fill, amber ≥70%, red ≥90%. */

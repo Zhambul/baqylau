@@ -451,6 +451,37 @@ def test_context_saturation_payloads_and_sse(dash, tmp_path):
     assert data and json.loads(data)["ctx"]["pct"] == 50
 
 
+def test_git_chip_payloads(dash, tmp_path):
+    """sessions rows and the overview carry the cwd's checkout state {branch,
+    worktree}, read from the .git files directly (never a git subprocess): a
+    main checkout resolves HEAD's ref short name, a linked worktree (a .git
+    FILE pointing into .../worktrees/<name>) carries the worktree name and a
+    detached HEAD shows a 7-char sha, and a non-checkout cwd carries None."""
+    repo = tmp_path / "repo"
+    (repo / ".git").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/feat/x\n")
+    wtgd = repo / ".git" / "worktrees" / "wt1"
+    wtgd.mkdir(parents=True)
+    (wtgd / "HEAD").write_text("abcdef0123456789abcdef0123456789abcdef01\n")
+    wt = tmp_path / "wt1"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: %s\n" % wtgd)
+    A.session_start({"session_id": "gitA", "cwd": str(repo), "transcript_path": ""})
+    A.session_start({"session_id": "gitB", "cwd": str(wt), "transcript_path": ""})
+    A.session_start({"session_id": "gitC", "cwd": str(tmp_path / "nowhere"),
+                     "transcript_path": ""})
+    rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
+    assert rows["gitA"]["git"] == {"branch": "feat/x", "worktree": None}
+    assert rows["gitB"]["git"] == {"branch": "abcdef0", "worktree": "wt1"}
+    assert rows["gitC"]["git"] is None
+    ov = _get_json(dash + "/api/session/gitB")
+    assert ov["git"] == {"branch": "abcdef0", "worktree": "wt1"}
+    # HEAD is re-read each call: a branch switch shows without cache eviction
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
+    assert rows["gitA"]["git"]["branch"] == "main"
+
+
 def test_activity_since_fanout(dash, tmp_path):
     """plugins.activity_since resolves (sid, agent_id) to the claude provider's
     (entries, resolutions, new_pos); an unknown pair falls through to None."""

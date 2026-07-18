@@ -176,8 +176,8 @@ reflow for free and keeps the no-build rule.
 | Route | Returns |
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
-| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) |
-| `/api/session/<sid>` | overview: `session()` + error count + `ctx`; agent rows carry their own `ctx` |
+| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree, below) |
+| `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git`; agent rows carry their own `ctx` |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
@@ -191,7 +191,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then `sessions` snapshots on change + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -964,6 +964,22 @@ a SessionEnd fallback), OTEL datapoints are per-session sums with no per-request
 grouping (occupancy is a *last-request* fact, not a total), and the status-line
 stdin carries rate limits, not context. The transcript tail is live, survives
 parking (transcripts persist), and covers agents uniformly.
+
+## Git chips (branch + worktree)
+
+Which checkout a session runs in — `⎇ branch` (accent) plus `⋔ <name>` (amber)
+when the cwd is a linked worktree — on each session card's stats row and the
+session header's title line (live via the `git` SSE event on the slow cadence).
+`git_info(cwd)` in server.py reads the `.git` files directly, **never a `git`
+subprocess** (this runs per row per poll tick): walk up from the cwd to the
+first `.git`; a directory is a main checkout, a file is a linked worktree
+(`gitdir: .../worktrees/<name>` — the name is the `⋔` chip) or a submodule
+(no `worktrees` segment → no name). HEAD at the resolved gitdir gives the
+branch (`ref: refs/heads/<b>`, or a 7-char sha when detached). The ancestor
+walk + gitdir indirection is cached per cwd forever; HEAD itself is re-read on
+every call (one tiny file), so a branch switch shows on the next poll and a
+removed worktree drops the chip. A cwd outside any checkout carries
+`git: null` and no chip renders.
 
 ## Grouping and titles
 

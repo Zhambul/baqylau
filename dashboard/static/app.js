@@ -424,12 +424,29 @@ function sessionCard(row) {
   if (tok) r.append(seg(kfmt(tok) + " tok"));
   if (st.cost) r.append(segc(usd(st.cost), "cost"));
   if (row.started_at) r.append(seg(ago(row.started_at)));
+  if (row.git) r.append(gitChip(row.git));
   a.append(r);
   if (row.ctx) a.append(ctxBar(row.ctx));
   return a;
 }
 function seg(text) { const s = el("span"); s.append(el("span", "v", text)); return s; }
 function segc(text, cls) { const s = el("span"); s.append(el("span", cls, text)); return s; }
+// git chip — "⎇ branch" plus "⋔ worktree" when the session's checkout is a
+// linked worktree (git worktree add / EnterWorktree). Fill an existing span
+// (the header's live chip) or make one (session cards).
+function setGitChip(chip, g) {
+  chip.textContent = "";
+  chip.hidden = !g;
+  if (!g) return;
+  chip.append(el("span", "gb", "⎇ " + g.branch));
+  if (g.worktree) chip.append(el("span", "gw", "⋔ " + g.worktree));
+}
+function gitChip(g) {
+  const s = el("span", "gitchip");
+  setGitChip(s, g);
+  return s;
+}
+
 // context-saturation bar — the account-limit bar's (acctPill's ubar) bigger
 // sibling, one full row wherever it appears: session cards, the session
 // header (big=true), agent cards. Accent fill, amber ≥70%, red ≥90%.
@@ -507,6 +524,12 @@ function connectSession(sid) {
   es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
   es.addEventListener("costs", (e) => { S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("ctx", (e) => { S.ses.ctx = JSON.parse(e.data).ctx; updateStatsRow(); });
+  es.addEventListener("git", (e) => {
+    const g = JSON.parse(e.data).git || null;
+    if (!S.ses) return;
+    if (S.ses.meta) S.ses.meta.git = g;
+    if (S.ses.gitChip) setGitChip(S.ses.gitChip, g);
+  });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
@@ -2064,6 +2087,11 @@ function renderSessionChrome(tab) {
   sidChip.title = "click to copy the full session id";
   sidChip.onclick = () => copySid(S.cur);
   l1.append(sidChip);
+  // the checkout this session runs in — live via the `git` SSE event
+  const gitc = el("span", "gitchip");
+  ses.gitChip = gitc;
+  setGitChip(gitc, meta.git);
+  l1.append(gitc);
   // which subscription account this chat runs under (◈ c2 · claude-01)
   const acc = meta.account || {};
   if (acc.slug || acc.label) {
