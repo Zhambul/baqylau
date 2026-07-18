@@ -68,9 +68,14 @@ HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
-REWIND_GAP_S = 0.15                # beat between the rewind's two Escape presses —
+REWIND_GAP_S = 0.5                 # beat between the rewind's two Escape presses —
 #                                    the TUI's double-press detection wants two
-#                                    discrete key events, not one send-key burst
+#                                    discrete key events at human speed (0.15s
+#                                    shipped and the TUI sometimes missed the
+#                                    second press; ~0.5s is the hand-pressed
+#                                    cadence observed opening the panel live,
+#                                    and Claude Code's second-Esc window is
+#                                    state-based/generous, so slower is safe)
 POST_HEADER = "X-Claude-Dash"      # the custom header a simple cross-origin POST can't add
 # The only Origins a legit same-origin browser POST carries (it usually sends
 # none at all for same-origin fetches; when it does, it is one of these).

@@ -417,20 +417,29 @@ summarize from/up to a point; checkpoints are automatic, one per user
 prompt — code.claude.com/docs/en/checkpointing.md). The menu opens **in the
 terminal** — the web mirrors the key presses, navigating it happens in the
 kitty tab (the toast says so). Two SEPARATE `send_key` calls with a
-`REWIND_GAP_S` (150 ms) beat: the TUI's double-press detection wants two
-discrete key events, and one send-key call batches its keys into a single
-press,press,release,release burst (two spaced calls are exactly what was
-observed opening the panel live). Same guard chain, window discipline and
-`escape-recheck` backstop as `/interrupt` (mid-turn the first Esc
-interrupts — the TUI's own semantics); audited as `web-rewind`
-(`{win, ok, tab}`, `ok` = both presses accepted). The page wires it as the
-**↶ rewind** button, and the session view's **Esc key** does double-press
-detection to match the terminal gesture: a single Esc is HELD for
-`ESC_DOUBLE_MS` (350 ms) before becoming `/interrupt`; a second Esc inside
-the window upgrades the gesture to one `/rewind` POST — without the hold,
-each press fired its own `/interrupt` and a double-Esc read as a double
-interrupt (two toasts, two rechecks) even though the terminal correctly
-opened the rewind panel.
+`REWIND_GAP_S` (500 ms) beat: the TUI's double-press detection wants two
+discrete key events at HUMAN speed — one send-key call batches its keys
+into a single press,press,release,release burst, and a 150 ms gap shipped
+and the TUI sometimes missed the second press; ~500 ms is the hand-pressed
+cadence observed opening the panel live, and Claude Code's second-Esc
+acceptance is state-based and generous (no documented timing window), so
+slower is safe. Same guard chain, window discipline and `escape-recheck`
+backstop as `/interrupt` (mid-turn the first Esc interrupts — the TUI's
+own semantics); audited as `web-rewind` (`{win, ok, tab}`, `ok` = both
+presses accepted). The page wires it as the **↶ rewind** button. The
+session view's **Esc key** deliberately does NO double-press detection of
+its own: Claude Code's second-Esc window has no fixed timing, so any
+client-side window either under- or over-shoots it — a 350 ms batching
+hold shipped and mismatched in BOTH directions (web said rewind while
+kitty saw nothing; web said double interrupt while kitty rewound). Every
+Esc press streams to the terminal immediately as its own `/interrupt`
+POST, making the TUI the ONLY double-press detector — kitty's outcome is
+right by construction — and the page's labelling is presentation only: a
+second press within `ESC_SEQ_MS` (1.5 s) gets the "Esc ×2 — rewind"
+toast, a first press on a busy tab gets "interrupted", on an idle one
+"Esc sent". A double press does spawn two escape-rechecks when magenta —
+harmless (both verify silence; the second usually bails "state moved
+on").
 
 **The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
 app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with

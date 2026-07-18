@@ -1469,9 +1469,8 @@ function interruptSession() {
 }
 
 // Double Esc = Claude Code's rewind gesture (/rewind — the checkpoint menu,
-// which opens IN THE TERMINAL; the web only mirrors the presses). One POST
-// sends both Escapes — posting each press as its own /interrupt read as a
-// double interrupt.
+// which opens IN THE TERMINAL; the web only mirrors the presses). The BUTTON
+// replays both presses server-side at human speed.
 function rewindSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
@@ -1481,25 +1480,39 @@ function rewindSession() {
     .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
 }
 
-// A single Esc is held for ESC_DOUBLE_MS before it becomes an interrupt; a
-// second Esc inside that window upgrades the gesture to rewind. The hold is
-// imperceptible for the interrupt case and buys exact TUI parity: one press
-// = interrupt, two = rewind.
-const ESC_DOUBLE_MS = 350;
-let escPending = null;
+// The KEYBOARD does no double-press detection of its own: Claude Code's
+// second-Esc window is state-based with no documented timing, so a client
+// window either under- or over-shoots it (a 350ms batching hold shipped and
+// mismatched in BOTH directions — web said rewind / kitty didn't, and web
+// said double interrupt / kitty rewound). Instead every Esc press streams
+// to the terminal immediately as its own /interrupt POST — the TUI is the
+// ONLY detector, so kitty's outcome is right by construction — and the
+// toast is presentation only: a second press within ESC_SEQ_MS is LABELLED
+// as the rewind gesture, and the response's tab state phrases the first.
+const ESC_SEQ_MS = 1500;
+let lastEsc = 0;
+const BUSY_TABS = ["thinking", "working", "executing", "awaiting-bg"];
+function pressEsc() {
+  const meta = (S.ses && S.ses.meta) || {};
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  const second = Date.now() - lastEsc < ESC_SEQ_MS;
+  lastEsc = Date.now();
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
+    .then(r => {
+      if (second)
+        toast("done", "Esc ×2",
+              "rewind opens in the kitty tab when the input was empty");
+      else if (BUSY_TABS.includes(r && r.tab))
+        toast("done", "interrupted", "Esc sent to the session");
+      else
+        toast("done", "Esc sent", "press Esc again for rewind");
+    })
+    .catch(e => toast("ask", "Esc failed", (e && e.error) || ""));
+}
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$modal.hidden) return closeNewSession();
-  if (escPending) {
-    clearTimeout(escPending);
-    escPending = null;
-    rewindSession();
-    return;
-  }
-  escPending = setTimeout(() => {
-    escPending = null;
-    interruptSession();
-  }, ESC_DOUBLE_MS);
+  pressEsc();
 });
 
 function setBadge(badge, tab) {
