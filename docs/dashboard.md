@@ -1182,7 +1182,13 @@ not per-keystroke; nobody is blocked waiting on this card).
 
 A mic button on the **composer** and on the **new-session form's first-prompt
 box** (`dictation(ta)` in app.js — one controller per textarea, the same
-helper both sites; `.micbtn`, pulsing `--ask` red while listening). Click,
+helper both sites; `.micbtn`, a three-state story in the tab-colour
+vocabulary: grey idle → pulsing `--exec` blue while CONNECTING (mic
+permission + token mint run CONCURRENTLY — `Promise.allSettled`, so a
+granted-after-failure stream is still released and the mic indicator can't
+stick on — then the ws handshake + worklet load) → pulsing `--ask` red while
+listening; the blue phase is why the delay between click and red reads as
+startup, not deadness). Click,
 speak, and the transcript splices into the textarea **as you speak** —
 interim results land ~100ms behind the voice and are REPLACED in place as
 Deepgram firms them up, so the box always shows the current best guess and

@@ -1596,28 +1596,33 @@ function dictation(ta) {
     // Safari creates gesture-less contexts suspended and keeps them so
     const ctx = new AudioContext();
     if (ctx.state === "suspended") ctx.resume();
-    let stream, tok;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia(
-        { audio: { echoCancellation: true, noiseSuppression: true } });
-    } catch (e) {
+    // Mic permission and token mint are independent (the sample rate comes
+    // from the ctx, which exists already) — run them CONCURRENTLY to shave
+    // ~300–500ms off every activation. allSettled, not all: if one leg fails
+    // the other may still resolve later, and a granted-after-failure stream
+    // must be released or the tab's mic indicator sticks on. (First-ever use
+    // can sit >30s in the permission prompt and outlive the JWT — the ws
+    // then fails its handshake and toasts; the retry has a warm permission.)
+    const [ms, mt] = await Promise.allSettled([
+      navigator.mediaDevices.getUserMedia(
+        { audio: { echoCancellation: true, noiseSuppression: true } }),
+      postJSON("/api/dictate/token",
+               { sample_rate: Math.round(ctx.sampleRate) }),
+    ]);
+    if (ms.status === "rejected" || mt.status === "rejected") {
+      if (ms.status === "fulfilled")
+        ms.value.getTracks().forEach(t => t.stop());
       ctx.close();
       btn.classList.remove("wait");
-      toast("ask", "microphone blocked",
-            "allow mic access for this site and retry");
+      if (ms.status === "rejected")
+        toast("ask", "microphone blocked",
+              "allow mic access for this site and retry");
+      else
+        toast("ask", "dictation unavailable",
+              (mt.reason && mt.reason.error) || "token mint failed");
       return;
     }
-    try {
-      tok = await postJSON("/api/dictate/token",
-                           { sample_rate: Math.round(ctx.sampleRate) });
-    } catch (e) {
-      stream.getTracks().forEach(t => t.stop());
-      ctx.close();
-      btn.classList.remove("wait");
-      toast("ask", "dictation unavailable",
-            (e && e.error) || "token mint failed");
-      return;
-    }
+    const stream = ms.value, tok = mt.value;
 
     // The splice: everything before/after the caret at mic-start stays put;
     // dictated text grows between them as committed (finalized) + interim

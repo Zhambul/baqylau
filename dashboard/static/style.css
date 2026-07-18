@@ -649,7 +649,16 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .micbtn svg { width: 15px; height: 15px; display: block; }
 .micbtn:hover { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
-.micbtn.wait { color: var(--dim); cursor: progress; }
+/* connecting: --exec blue, the tab vocabulary's "running" — a faster pulse
+   than .rec so the two states read differently even at a glance */
+.micbtn.wait {
+  color: var(--exec); cursor: progress;
+  animation: micwait 1.1s ease-in-out infinite;
+}
+@keyframes micwait {
+  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 55%, transparent); }
+  50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 15%, transparent); }
+}
 .micbtn.rec { color: var(--ask); animation: micpulse 1.6s ease-in-out infinite; }
 @keyframes micpulse {
   0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 55%, transparent); }
