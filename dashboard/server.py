@@ -1290,6 +1290,12 @@ class Handler(BaseHTTPRequestHandler):
                     if not self._sse("stats", st):
                         return
             if n % SLOW_EVERY == 0:
+                # a resume moves the session to a NEW kitty window (the
+                # SessionStart upsert refreshes the sessions row) — re-resolve,
+                # or a stream opened before the move polls the dead window's
+                # lingering tab state forever (green while kitty is magenta)
+                row = API.session_row(sid) or {}
+                win = str(row.get("kitty_window_id") or "") or win
                 agents = visible_agents(API.agents(sid))
                 if agents != prev["agents"]:
                     prev["agents"] = agents

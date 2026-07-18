@@ -672,6 +672,14 @@ order — interleave is a backfill affordance, not a live-ordering guarantee.
 `/api/session/<sid>/ops` stays PURE ops (the mirror-parity endpoint); the merge
 exists only in the SSE backlog.
 
+**The `tab` event re-resolves the window mid-stream.** `sse_session` resolves
+the session's `kitty_window_id` at connect, but a RESUME moves the session to
+a NEW kitty window while streams are open (the SessionStart upsert refreshes
+the sessions row) — so the loop re-reads the row on the slow cadence before
+polling `tab_states()`. Without this, a stream opened before the resume
+polled the dead window's lingering tab state forever: the page showed the
+old window's green while the real tab sat magenta (shipped).
+
 ## Lazy backlog (a big session paints its newest slice instantly)
 
 A long-running session's merged backlog is multi-MB of rendered HTML — sending
