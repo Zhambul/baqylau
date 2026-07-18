@@ -231,6 +231,8 @@ body.attn-on .shead { top: 81px; }
 .sstop:disabled { color: var(--dim2); cursor: default; }
 .shead .proj { color: var(--text); font-weight: 650; font-size: 15px; }
 .shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }
+.shead .sid.copysid { cursor: pointer; }
+.shead .sid.copysid:hover { color: var(--text-soft); text-decoration: underline dotted; }
 .statsrow { display: flex; flex-wrap: wrap; gap: 4px 16px; margin-top: 8px;
   color: var(--text-soft); font-size: 12px; font-family: var(--mono); }
 .statsrow .v { color: var(--text); }

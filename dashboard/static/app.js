@@ -85,6 +85,11 @@ function proj(row) {
   return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
 }
 function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…" + sid.slice(-4) : sid; }
+function copySid(sid) {
+  navigator.clipboard.writeText(sid).then(
+    () => toast("done", "copied session id", sid),
+    () => toast("ask", "copy failed", "clipboard permission?"));
+}
 
 const TAB_LABEL = {
   "": "no tab", "idle": "idle", "thinking": "busy", "working": "busy",
@@ -941,9 +946,13 @@ function drainQueue(items) {
 // stream on its own via the conversation tail, so we only clear + toast —
 // unless the response says it QUEUED (see above), which adds a ⧗ chip.
 
+// Both message boxes (the composer and the form's first prompt) grow with
+// their content, capped at a viewport fraction so a long paste can't swallow
+// the page (the CSS max-height mirrors this cap as 40vh).
+const GROW_CAP = 0.4;
 function autoGrow(ta) {
   ta.style.height = "auto";
-  ta.style.height = Math.min(ta.scrollHeight, 160) + "px";
+  ta.style.height = Math.min(ta.scrollHeight, Math.round(innerHeight * GROW_CAP)) + "px";
 }
 
 function buildComposer() {
@@ -1260,15 +1269,21 @@ function openNewSession(prefillCwd, resumeSid) {
   const prompt = el("textarea", "nsinput nsprompt");
   prompt.rows = 3;
   prompt.spellcheck = false;
-  prompt.placeholder = "what should Claude start on?";
+  prompt.placeholder =
+    "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
   promptRow.append(prompt);
   // "/" completion here too — cwd-keyed to whatever directory is currently
   // typed (cached per dir, so flipping between dirs doesn't refetch)
   const cmdCache = {};
   const spm = slashMenu(prompt, promptRow,
     () => { const c = dir.value.trim(); return cmdsFor(c, cmdCache, c); },
-    {});
-  prompt.onkeydown = (e) => { spm.key(e); };
+    { enterSends: true });
+  // composer UX: grow with the message, Enter launches, Shift+Enter newline
+  prompt.oninput = () => autoGrow(prompt);
+  prompt.onkeydown = (e) => {
+    if (spm.key(e)) return;
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
+  };
 
   const actions = el("div", "nsactions");
   const cancel = el("button", "nsbtn", "cancel");
@@ -1334,7 +1349,10 @@ function renderSessionChrome(tab) {
   l1.append(el("span", "chip2 " + (meta.live ? "live" : "parked"),
                meta.live ? "live" : "parked"));
   if (meta.cwd) l1.append(el("span", "sid", meta.cwd));
-  l1.append(el("span", "sid", shortSid(S.cur)));
+  const sidChip = el("span", "sid copysid", shortSid(S.cur));
+  sidChip.title = "click to copy the full session id";
+  sidChip.onclick = () => copySid(S.cur);
+  l1.append(sidChip);
   // which subscription account this chat runs under (◈ c2 · claude-01)
   const acc = meta.account || {};
   if (acc.slug || acc.label) {
