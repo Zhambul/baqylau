@@ -1038,6 +1038,7 @@ def _bounce_rig(monkeypatch, fronts, bundle="app.term"):
     monkeypatch.setattr(DS, "_activate_app",
                         lambda b: activated.append(b) or True)
     monkeypatch.setattr(DS, "REFOCUS_POLL_S", 0.01)
+    monkeypatch.setattr(DS, "REFOCUS_SETTLE_S", 0)
     return fe, activated, front_calls
 
 
@@ -1269,7 +1270,8 @@ def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     assert fe.keyed == [("88", ("escape",))]          # single press = interrupt
     code, body = _post(dash + "/api/session/rew1/rewind", {})
     assert code == 200
-    assert json.loads(body) == {"ok": True, "tab": "", "mode": "rewind"}
+    assert json.loads(body) == {"ok": True, "tab": "", "mode": "rewind",
+                                "restored": ""}   # idle: nothing to restore
     assert fe.sent == [("88", "/rewind")]             # typed, not key events
     assert fe.keyed == [("88", ("escape",))]          # no extra Escapes
     assert fe.closed == []
@@ -1296,10 +1298,14 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "89")
     A.session_start({"session_id": "rew2", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "working"})
+    # the cancel restores the session's last user prompt — returned so the
+    # page can prefill its composer
+    monkeypatch.setattr(DS, "_last_prompt", lambda sid: "the cancelled message")
     code, body = _post(dash + "/api/session/rew2/rewind", {})
     assert code == 200
     assert json.loads(body) == {"ok": True, "tab": "working",
-                                "mode": "cancel-edit"}
+                                "mode": "cancel-edit",
+                                "restored": "the cancelled message"}
     assert fe.keyed == [("89", ("escape",)), ("89", ("escape",))]
     assert fe.sent == []                              # nothing typed mid-turn
     assert len(spawned) == 1 and spawned[0][0] == "escape-recheck"
@@ -1309,6 +1315,27 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     code, body = _post(dash + "/api/session/rew2/rewind", {})
     assert json.loads(body)["mode"] == "cancel-edit"
     assert len(spawned) == 1
+
+
+def test_post_message_clear_draft_kills_line_first(dash, monkeypatch):
+    # a send after a mid-turn cancel-edit must REPLACE the TUI's restored
+    # draft, not append: clear_draft presses Ctrl+U before typing
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "71")
+    A.session_start({"session_id": "cd1", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS, "DRAFT_CLEAR_GAP_S", 0)
+    code, body = _post(dash + "/api/session/cd1/message",
+                       {"text": "edited message", "clear_draft": True})
+    assert code == 200 and json.loads(body)["ok"] is True
+    # ctrl+u (kill to start) AND ctrl+k (kill to end) clear the whole line
+    # regardless of cursor position, before typing
+    assert fe.keyed == [("71", ("ctrl+u",)), ("71", ("ctrl+k",))]
+    assert fe.sent == [("71", "edited message")]
+    # a normal send presses no key
+    fe.keyed.clear()
+    _post(dash + "/api/session/cd1/message", {"text": "plain"})
+    assert fe.keyed == []
 
 
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):

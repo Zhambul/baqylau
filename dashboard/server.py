@@ -116,6 +116,10 @@ QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING,
              tabs.AWAITING_BG, tabs.AWAITING_COMMAND)
 
+DRAFT_CLEAR_GAP_S = 0.12           # beat between the clear_draft kill (ctrl+u/k)
+#                                    and typing the replacement — send_text on
+#                                    the kill's heels raced it and ate the first
+#                                    word (post_message)
 DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 #                                    Escapes — measured 3/3 reliable mid-turn
 #                                    (the idle rewind-menu detection is flaky at
@@ -560,6 +564,24 @@ def view_payload(sid, gid):
     return opshtml.view_html(ops, sid)
 
 
+def _last_prompt(sid):
+    """The session's LAST main-thread user prompt text (via
+    plugins.conversation), or '' — what a mid-turn cancel-edit restores into
+    the input, so the page can prefill its composer with it. Best-effort: a
+    read failure just yields '' (the cancel still happened in the terminal)."""
+    try:
+        got = plugins.conversation(sid)
+        if not got:
+            return ""
+        recs, _ = got
+        for r in reversed(recs):
+            if r.get("kind") == "prompt":
+                return r.get("text") or ""
+    except Exception:
+        pass
+    return ""
+
+
 def _frontend():
     """The active Frontend for a CONTROL-PLANE write, or None when no terminal
     control channel resolves. The dashboard may be started OUTSIDE kitty (its
@@ -650,15 +672,22 @@ def launch_argv(words, cmd="claude"):
 # `lsappinfo` + `open -b` are plain LaunchServices calls — no Apple-events /
 # accessibility permission prompts, unlike System Events AppleScript.
 REFOCUS_POLL_S = 0.25              # frontmost-app poll cadence after a launch
-REFOCUS_POLLS = 48                 # ~12s watch window: the launch steal lands
+REFOCUS_POLLS = 120                # ~30s watch window: the launch steal lands
                                    # within the first poll, but the session's
-                                   # OWN startup re-steals later — SessionStart
-                                   # opens the mirror/scorebar panes (more
-                                   # kitty window creations, observed ~3s in,
-                                   # after claude's boot) — so the watch must
-                                   # outlive the whole startup
-REFOCUS_MAX = 5                    # bounce cap per launch (each pane open can
+                                   # OWN startup re-steals repeatedly —
+                                   # SessionStart opens the mirror/scorebar
+                                   # panes and sizes them (more kitty window
+                                   # creations; live-measured steals at 2.2s /
+                                   # 3.0s / 5.8s, with a straggler past 12s
+                                   # that outlived the first ~12s window) — so
+                                   # the watch must outlive the whole startup
+                                   # with margin
+REFOCUS_MAX = 8                    # bounce cap per launch (each pane open can
                                    # steal again; a runaway fight is worse)
+REFOCUS_SETTLE_S = 0.5             # post-bounce grace before the next steal
+                                   # check — an activation that lands mid-Space-
+                                   # switch animation must not read as a fresh
+                                   # steal and double-count against the cap
 
 
 def _front_app():
@@ -699,22 +728,27 @@ def _bounce_focus(before, terminal_app):
     — a deliberate user app-switch mid-window must not be yanked back. The
     outcome is audited as a `web-launch-refocus` state_files row (`clean` =
     the terminal never took over, `bounced xN to <app>`, `activate failed`)."""
-    bounces = 0
+    t0 = time.time()
+    steals = []        # seconds-into-watch of each detected steal — the audit
+    #                    evidence for WHAT keeps stealing (a burst right after
+    #                    a bounce = the activation not sticking; spread points
+    #                    = the session startup's successive pane opens)
     outcome = "clean"
     for _ in range(REFOCUS_POLLS):
         time.sleep(REFOCUS_POLL_S)
         now = _front_app()
         if now and now != before and now == terminal_app:
+            steals.append(round(time.time() - t0, 2))
             if not _activate_app(before):
                 outcome = "activate failed"
                 break
-            bounces += 1
-            outcome = "bounced x%d to %s" % (bounces, before)
-            if bounces >= REFOCUS_MAX:
+            outcome = "bounced x%d to %s" % (len(steals), before)
+            if len(steals) >= REFOCUS_MAX:
                 break
+            time.sleep(REFOCUS_SETTLE_S)
     A.state_file("", "", "web-launch-refocus",
                  {"before": before, "terminal": terminal_app,
-                  "outcome": outcome})
+                  "outcome": outcome, "steals": steals})
 
 
 # --- the HTTP handler ------------------------------------------------------------------
@@ -945,13 +979,21 @@ class Handler(BaseHTTPRequestHandler):
         """Type a message into a session's kitty window (the composer). 4xx when
         the session has no window (headless/daemon) or the text is empty; 503
         when no terminal resolves; else Frontend.send_text. Every attempt is a
-        `web-send` state_files row, failures also an A.error."""
+        `web-send` state_files row, failures also an A.error.
+
+        `clear_draft` (bool): press Ctrl+U (kill-line) BEFORE typing — the
+        page sets it when sending an edited message after a mid-turn
+        cancel-edit (post_rewind), because the TUI input still holds the
+        restored draft and a bare send_text would CONCATENATE onto it (the
+        "nd" corruption class). Ctrl+U clears the TUI line first so the typed
+        text REPLACES the draft."""
         body = self._post_guard()
         if body is None:
             return
         text = body.get("text")
         if not isinstance(text, str) or not text.strip():
             return self._json({"error": "empty text"}, 400)
+        clear_draft = bool(body.get("clear_draft"))
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
@@ -973,9 +1015,19 @@ class Handler(BaseHTTPRequestHandler):
         # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
         # row too — "my message vanished" is answerable as "it queued mid-turn"
         tab = API.tab_states().get(win) or ""
+        if clear_draft:
+            # kill the restored draft: ctrl+u (to line start) AND ctrl+k (to
+            # line end) so a cursor anywhere in the draft clears the WHOLE
+            # line, then a beat before typing — send_text hard on the heels of
+            # the kill raced it and ate the first word (observed live: "echo
+            # REPLACED_OK" arrived as "\n REPLACED_OK")
+            fe.send_key(win, "ctrl+u")
+            fe.send_key(win, "ctrl+k")
+            time.sleep(DRAFT_CLEAR_GAP_S)
         ok = bool(fe.send_text(win, text))
         A.state_file(log, sdb, "web-send",
-                     {"win": win, "chars": len(text), "ok": ok, "tab": tab})
+                     {"win": win, "chars": len(text), "ok": ok, "tab": tab,
+                      "clear_draft": clear_draft})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
@@ -1067,8 +1119,13 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
+        restored = ""
         if tab in BUSY_TABS:
             mode = "cancel-edit"
+            # the message the cancel restores into the input for editing IS
+            # the session's last user prompt — read it BEFORE the Escapes so
+            # the page can prefill its composer + drop the cancelled bubble
+            restored = _last_prompt(sid)
             tpath = row.get("transcript_path") or ""
             try:
                 tsize = os.path.getsize(tpath) if tpath else -1
@@ -1088,7 +1145,8 @@ class Handler(BaseHTTPRequestHandler):
             A.error(log, "dashboard rewind (send failed)",
                     {"sid": sid, "win": win, "mode": mode})
             return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "tab": tab, "mode": mode})
+        return self._json({"ok": True, "tab": tab, "mode": mode,
+                           "restored": restored})
 
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press
