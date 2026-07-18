@@ -43,16 +43,16 @@
   | Hook | Routes to (in `_plan`) |
   |------|------------------------|
   | `SessionStart`     | tab `idle` + `split.handle("open")` |
-  | `UserPromptSubmit` | tab `thinking` |
-  | `PreToolUse`       | tab `pretool` (all tools) · `Task\|Agent` → `subagent_fmt.run_phase("push")` (stashes the Task description for the upcoming `SubagentStart`) · `Bash` → `cmd_pre` (rewrites the command to stream live — see [streaming.md](streaming.md) › *Live foreground streaming*; its `updatedInput` JSON is printed to the dispatcher's **stdout**, which is the one Claude Code reads) |
-  | `PostToolUse` / `PostToolUseFailure` | tab `posttool` (all tools; ignored for an `agent_id` inner call) · `Bash` → `cmd_fmt` · `Read\|Edit\|Write\|MultiEdit\|NotebookEdit` → `file_fmt` · `Monitor` → `monitor_fmt`. **Failures fire `PostToolUseFailure`, not `PostToolUse`** — the dispatcher routes both identically, so a non-zero-exit command still reaches the mirror |
+  | `UserPromptSubmit` | tab `thinking` + `ask_fmt` (clears a stale `ask-pending` stash — a new turn means the question dialog is gone; see dashboard.md › *Web ask*) |
+  | `PreToolUse`       | tab `pretool` (all tools) · `Task\|Agent` → `subagent_fmt.run_phase("push")` (stashes the Task description for the upcoming `SubagentStart`) · `Bash` → `cmd_pre` (rewrites the command to stream live — see [streaming.md](streaming.md) › *Live foreground streaming*; its `updatedInput` JSON is printed to the dispatcher's **stdout**, which is the one Claude Code reads) · `AskUserQuestion` → `ask_fmt` (stashes the pending questions in the state DB kv `ask-pending` — the web ask card's source; dashboard.md › *Web ask*) |
+  | `PostToolUse` / `PostToolUseFailure` | tab `posttool` (all tools; ignored for an `agent_id` inner call) · `Bash` → `cmd_fmt` · `Read\|Edit\|Write\|MultiEdit\|NotebookEdit` → `file_fmt` · `Monitor` → `monitor_fmt` · `AskUserQuestion` → `ask_fmt` (a real answer — clears `ask-pending`; the decline paths fire NO closing hook, so the turn-boundary clears below cover them). **Failures fire `PostToolUseFailure`, not `PostToolUse`** — the dispatcher routes both identically, so a non-zero-exit command still reaches the mirror |
   | `SubagentStart`    | `subagent_fmt.run_phase("start")` (header `▶ <type> · <desc>` + colour slot; teammates arrive here too) |
   | `SubagentStop`     | `subagent_fmt.run_phase("stop")` (footer + releases the slot) |
   | `TaskCreated` / `TaskCompleted` | `task_fmt` (`✚`/`✓ task #N · <subject>` to the mirror) |
   | `PreCompact`       | tab `working` (compaction is busy with no tool/reply signal of its own — paint the busy magenta so the tab doesn't sit stale through it; `working`, not `thinking`, so no interrupt-watch is started) |
   | `Notification`     | tab `notify` (permission/approval → red `awaiting-command`; "waiting for your input" → green `awaiting-response`) |
-  | `Stop`             | tab `stop` + `stop_fmt` (folds the turn's token/cost spend into the scoreboard) |
-  | `StopFailure`      | tab `stop` (turn ended on an API error — keep the tab off the "busy" colour) + `stop_fmt` (fold whatever landed in the transcript; and when the payload carries an `agent_id` — a subagent that died on an API error, which fires no `SubagentStop` — finalise that agent's block/slot via `subagent_fmt.finalize`, else its streamer hangs and the tab stays blue) |
+  | `Stop`             | tab `stop` + `stop_fmt` (folds the turn's token/cost spend into the scoreboard) + `ask_fmt` (turn-boundary clear of a declined ask's stash) |
+  | `StopFailure`      | tab `stop` (turn ended on an API error — keep the tab off the "busy" colour) + `stop_fmt` (fold whatever landed in the transcript; and when the payload carries an `agent_id` — a subagent that died on an API error, which fires no `SubagentStop` — finalise that agent's block/slot via `subagent_fmt.finalize`, else its streamer hangs and the tab stays blue) + `ask_fmt` (same turn-boundary clear as `Stop`) |
   | `SessionEnd`       | tab `clear` + `split.handle("close")` |
   | *every other event* (`Setup`, `PermissionRequest`, …) | no functional handler — records only the universal audit-subscriber row (below) |
 

@@ -1593,6 +1593,331 @@ def test_rewindmenu_entry_match_is_truncation_aware():
     assert not RM.entry_matches("other …", long)
 
 
+class _AskFE(_FakeFE):
+    """_FakeFE plus a reactive simulation of the AskUserQuestion dialog, per
+    the live captures (2026-07-18): a header-chip bar, one pane per question
+    (numbered options; multiSelect checkboxes; a "Type something" row whose
+    label mutates to the typed text; multiSelect's unnumbered Submit row),
+    "Chat about this" below a rule, and the review pane. Key semantics as
+    measured: single-select digits answer+advance (a sole single-select
+    question submits outright), multiSelect digits toggle, typing goes into
+    the focused Type row, Enter there selects (single) / toggles (multi),
+    left/right move tabs (left no-ops at the first), review digit 1 submits."""
+
+    def __init__(self, questions):
+        super().__init__()
+        self.questions = questions
+        n = len(questions)
+        self.tab = 0                    # question index; n = the review pane
+        self.cursor = 0                 # row index on the current pane
+        self.open = True
+        self.single = {}                # qi -> answered label/text
+        self.checks = [set() for _ in range(n)]
+        self.typed = [""] * n
+        self.submitted = None           # final {question: answer} on submit
+        self.chatted = False
+
+    # pane rows, mirroring the real numbering: options 1..k, Type row k+1,
+    # then (multi only) the unnumbered Submit row; Chat is the next digit
+    def _labels(self, qi):
+        q = self.questions[qi]
+        return [o["label"] for o in q.get("options") or []]
+
+    def _type_label(self, qi):
+        return self.typed[qi] or ("Type something"
+                                  + ("" if self.questions[qi].get("multiSelect")
+                                     else "."))
+
+    def _rows(self, qi):
+        q = self.questions[qi]
+        labels = self._labels(qi)
+        rows = [(str(i + 1), lb) for i, lb in enumerate(labels)]
+        rows.append((str(len(labels) + 1), self._type_label(qi)))
+        if q.get("multiSelect"):
+            rows.append(("", "Submit"))
+        return rows                     # Chat row rendered separately
+
+    def _advance(self):
+        self.tab += 1
+        self.cursor = 0
+        if self.tab >= len(self.questions):
+            if len(self.questions) == 1 \
+                    and not self.questions[0].get("multiSelect"):
+                self._finish()          # sole single-select: no review pane
+
+    def _finish(self):
+        out = {}
+        for qi, q in enumerate(self.questions):
+            if q.get("multiSelect"):
+                sel = [lb for lb in self._labels(qi)
+                       if lb in self.checks[qi]]
+                if self.typed[qi] and "__typed__" in self.checks[qi]:
+                    sel.append(self.typed[qi])
+                out[q["question"]] = ", ".join(sel)
+            else:
+                out[q["question"]] = self.single.get(qi, "")
+        self.submitted = out
+        self.open = False
+
+    def send_text(self, win, text):
+        ok = super().send_text(win, text)
+        if not self.open or self.tab >= len(self.questions):
+            return ok
+        qi, q = self.tab, self.questions[self.tab]
+        if self.cursor == len(self._labels(qi)):     # the Type row
+            self.typed[qi] = text
+            if not q.get("multiSelect"):             # the CR selects+advances
+                self.single[qi] = text
+                self._advance()
+        return ok
+
+    def send_key(self, win, *keys):
+        ok = super().send_key(win, *keys)
+        for k in keys:
+            if not self.open:
+                continue
+            if self.tab >= len(self.questions):      # review pane
+                if k == "1":
+                    self._finish()
+                elif k == "left":
+                    self.tab = len(self.questions) - 1
+                    self.cursor = 0
+                continue
+            qi, q = self.tab, self.questions[self.tab]
+            labels = self._labels(qi)
+            nrows = len(self._rows(qi)) + 1          # + the Chat row
+            if k == "left":
+                if self.tab > 0:
+                    self.tab -= 1
+                    self.cursor = 0
+            elif k == "right":
+                self.tab += 1
+                self.cursor = 0
+            elif k == "up":
+                self.cursor = max(0, self.cursor - 1)
+            elif k == "down":
+                self.cursor = min(nrows - 1, self.cursor + 1)
+            elif k == "enter" and self.cursor == len(labels):
+                if q.get("multiSelect"):             # toggle the custom row
+                    self.checks[qi] ^= {"__typed__"}
+            elif k.isdigit():
+                d = int(k)
+                if d == len(labels) + (3 if q.get("multiSelect") else 2):
+                    self.chatted = True              # "Chat about this"
+                    self.open = False
+                elif 1 <= d <= len(labels):
+                    if q.get("multiSelect"):
+                        self.checks[qi] ^= {labels[d - 1]}
+                    else:
+                        self.single[qi] = labels[d - 1]
+                        self._advance()
+        return ok
+
+    def get_text(self, win, extent="screen"):
+        if not self.open:
+            return "❯ composer\n  -- INSERT --"
+        chips = "  ".join(
+            ("☒ " if (self.single.get(i) or self.checks[i]) else "☐ ")
+            + (q.get("header") or "Q%d" % (i + 1))
+            for i, q in enumerate(self.questions))
+        bar = "←  %s  ✔ Submit  →" % chips
+        if self.tab >= len(self.questions):
+            return "\n".join([bar, "", "Review your answers", "",
+                              "Ready to submit your answers?", "",
+                              "❯ 1. Submit answers", "  2. Cancel"])
+        qi, q = self.tab, self.questions[self.tab]
+        lines = [bar, "", q.get("question") or "", ""]
+        for i, (digit, label) in enumerate(self._rows(qi)):
+            cur = "❯ " if i == self.cursor else "  "
+            if not digit:
+                lines.append(cur + "   Submit")
+                continue
+            check = ""
+            if q.get("multiSelect"):
+                on = (label in self.checks[qi]
+                      or (i == len(self._labels(qi))
+                          and "__typed__" in self.checks[qi]))
+                check = "[✔] " if on else "[ ] "
+            lines.append("%s%s. %s%s" % (cur, digit, check, label))
+        chat_digit = len(self._rows(qi)) + 1
+        lines += ["────────", "  %d. Chat about this" % chat_digit, "",
+                  "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+        return "\n".join(lines)
+
+
+def _ask_env(monkeypatch, sid, win, fe, questions, tid="toolu_a1"):
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.askdialog, "POLL_S", 0.01)
+    monkeypatch.setattr(DS.askdialog, "KEY_GAP_S", 0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", win)
+    A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+    S.kv_set(DS.P.mirror_log(sid), "ask-pending",
+              {"tool_use_id": tid, "questions": questions})
+
+
+_ASK_1S = [{"question": "Which fruit?", "header": "Fruit", "multiSelect": False,
+            "options": [{"label": "Apple", "description": "crisp"},
+                        {"label": "Banana", "description": "soft"},
+                        {"label": "Cherry", "description": "tart"}]}]
+_ASK_2Q = [{"question": "Pick a planet", "header": "Planet",
+            "multiSelect": False,
+            "options": [{"label": "Mars"}, {"label": "Venus"}]},
+           {"question": "Pick metals", "header": "Metals", "multiSelect": True,
+            "options": [{"label": "Iron"}, {"label": "Copper"},
+                        {"label": "Zinc"}]}]
+
+
+def test_post_answer_single_label(dash, monkeypatch):
+    # one single-select question: the digit answers AND submits (no review)
+    fe = _AskFE(_ASK_1S)
+    _ask_env(monkeypatch, "ask1", "41", fe, _ASK_1S)
+    code, body = _post(dash + "/api/session/ask1/answer",
+                       {"tool_use_id": "toolu_a1",
+                        "answers": [{"selected": ["Banana"], "other": ""}]})
+    assert code == 200 and json.loads(body) == {"ok": True, "chat": False}
+    assert fe.submitted == {"Which fruit?": "Banana"}
+
+
+def test_post_answer_two_questions_mixed(dash, monkeypatch):
+    # the live-verified shape: single label + multiSelect labels + custom
+    # text, driven through the review pane ("1. Submit answers")
+    fe = _AskFE(_ASK_2Q)
+    _ask_env(monkeypatch, "ask2", "42", fe, _ASK_2Q)
+    code, body = _post(dash + "/api/session/ask2/answer",
+                       {"tool_use_id": "toolu_a1",
+                        "answers": [{"selected": ["Venus"], "other": ""},
+                                    {"selected": ["Iron", "Zinc"],
+                                     "other": "titanium"}]})
+    assert code == 200
+    assert fe.submitted == {"Pick a planet": "Venus",
+                            "Pick metals": "Iron, Zinc, titanium"}
+
+
+def test_post_answer_multi_diffs_against_screen(dash, monkeypatch):
+    # digits TOGGLE — boxes the user pre-checked in the terminal must be
+    # reconciled (unwanted ones toggled OFF), never blindly re-pressed
+    fe = _AskFE(_ASK_2Q)
+    fe.single[0] = "Mars"          # Q1 already answered in the TUI
+    fe.tab = 1                     # dialog sitting on Q2
+    fe.checks[1] = {"Copper"}      # an unwanted pre-toggle
+    _ask_env(monkeypatch, "ask3", "43", fe, _ASK_2Q)
+    code, _ = _post(dash + "/api/session/ask3/answer",
+                    {"tool_use_id": "toolu_a1",
+                     "answers": [{"selected": ["Mars"], "other": ""},
+                                 {"selected": ["Zinc"], "other": ""}]})
+    assert code == 200
+    assert fe.submitted == {"Pick a planet": "Mars", "Pick metals": "Zinc"}
+
+
+def test_post_answer_chat_about_this(dash, monkeypatch):
+    fe = _AskFE(_ASK_1S)
+    _ask_env(monkeypatch, "ask4", "44", fe, _ASK_1S)
+    code, body = _post(dash + "/api/session/ask4/answer",
+                       {"tool_use_id": "toolu_a1", "chat": True})
+    assert code == 200 and json.loads(body) == {"ok": True, "chat": True}
+    assert fe.chatted and fe.submitted is None
+
+
+def test_post_answer_free_text_single(dash, monkeypatch):
+    fe = _AskFE(_ASK_1S)
+    _ask_env(monkeypatch, "ask5", "45", fe, _ASK_1S)
+    code, _ = _post(dash + "/api/session/ask5/answer",
+                    {"tool_use_id": "toolu_a1",
+                     "answers": [{"selected": [], "other": "oolong tea"}]})
+    assert code == 200
+    assert fe.submitted == {"Which fruit?": "oolong tea"}
+
+
+def test_post_answer_guards(dash, monkeypatch):
+    # stale/missing stash and a wrong answers count are refused BEFORE any
+    # key is pressed; a stash without a dialog on screen bails at "open"
+    fe = _AskFE(_ASK_1S)
+    _ask_env(monkeypatch, "ask6", "46", fe, _ASK_1S)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ask6/answer",
+              {"tool_use_id": "toolu_WRONG", "answers": []})
+    assert e.value.code == 409 and "expired" in json.loads(e.value.read())["error"]
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ask6/answer",
+              {"tool_use_id": "toolu_a1", "answers": []})
+    assert e.value.code == 400
+    assert fe.keyed == [] and fe.submitted is None
+    fe.open = False                       # dialog dismissed in the terminal
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ask6/answer",
+              {"tool_use_id": "toolu_a1",
+               "answers": [{"selected": ["Apple"], "other": ""}]})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["step"] == "open"
+    # no pending stash at all
+    S.kv_del(DS.P.mirror_log("ask6"), "ask-pending")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ask6/answer",
+              {"tool_use_id": "toolu_a1", "answers": []})
+    assert e.value.code == 409
+    assert "no pending" in json.loads(e.value.read())["error"]
+
+
+# real screen captures (live session 2026-07-18) the askdialog parsers pin
+_ASK_MULTI_SCREEN = """\
+❯ a scrollback prompt echo at column 0
+────
+←  ☒ Toppings  ✔ Submit  →
+
+Which toppings?
+
+❯ 1. [ ] Cheese
+  Melted cheese topping
+  2. [✔] Olives
+  Sliced black or green olives
+  3. [ ] Onions
+  Diced or sliced onions
+  4. [✔] Peppers
+  Bell or chili peppers
+  5. [ ] Type something
+     Submit
+────
+  6. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel"""
+
+_ASK_REVIEW_SCREEN = """\
+←  ☒ Pets  ☒ Drink  ✔ Submit  →
+
+Review your answers
+
+ ● Cats or dogs?
+   → Cats
+ ● Tea or coffee?
+   → Coffee
+
+Ready to submit your answers?
+
+❯ 1. Submit answers
+  2. Cancel"""
+
+
+def test_askdialog_parsers_pin_the_real_screens():
+    AD = DS.askdialog
+    assert AD.dialog_open(_ASK_MULTI_SCREEN)
+    assert not AD.review_open(_ASK_MULTI_SCREEN)
+    rs = AD.rows(_ASK_MULTI_SCREEN)
+    assert [(r["digit"], r["label"], r["check"]) for r in rs] == [
+        ("1", "Cheese", False), ("2", "Olives", True),
+        ("3", "Onions", False), ("4", "Peppers", True),
+        ("5", "Type something", False), ("", "Submit", None),
+        ("6", "Chat about this", None)]
+    assert [r["cursor"] for r in rs] == [True] + [False] * 6
+    qs = [{"question": "Which toppings?"}, {"question": "Other thing?"}]
+    assert AD.current_question(_ASK_MULTI_SCREEN, qs) == 0
+    # the column-0 scrollback echo is outside the chip-bar region
+    assert "scrollback" not in AD.region(_ASK_MULTI_SCREEN)
+    assert AD.review_open(_ASK_REVIEW_SCREEN)
+    assert not AD.dialog_open(_ASK_REVIEW_SCREEN)
+    assert AD.current_question(_ASK_REVIEW_SCREEN, qs) is None
+    assert not AD.dialog_open("❯ composer\n  -- INSERT --")
+
+
 def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     # resending an edited message after a mid-turn cancel-edit: the TUI still
     # holds the restored draft, so clear_draft kills the line (ctrl+u to

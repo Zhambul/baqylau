@@ -90,13 +90,21 @@ def _split(cmd):
 
 _STOP_FOLD = _fmt("claude-stop-fmt.py", "stop_fmt")
 
+# The AskUserQuestion pending-state tracker (the web dashboard's ask card):
+# stashes on PreToolUse, clears on PostToolUse(+Failure) / the turn boundaries
+# — the decline paths (Esc, "Chat about this") fire NO closing hook at all
+# (measured 2026-07-18), so the turn-boundary events are the clear signal.
+_ASK = _fmt("claude-ask-fmt.py", "ask_fmt", matcher="AskUserQuestion")
+_ASK_TURN = _fmt("claude-ask-fmt.py", "ask_fmt")
+
 _ROUTES = {
     "SessionStart": [_tab("idle"), _split("open")],
-    "UserPromptSubmit": [_tab("thinking")],
+    "UserPromptSubmit": [_tab("thinking"), _ASK_TURN],
     "PreToolUse": [
         _tab("pretool"),                     # matcher .* in the old wiring
         _phase("push", matcher="Task|Agent"),
         _fmt("claude-cmd-pre.py", "cmd_pre", matcher="Bash"),
+        _ASK,
     ],
     # Failures arrive on PostToolUseFailure, not PostToolUse — both events get the
     # same routing or failures silently vanish (CLAUDE.md invariant).
@@ -106,9 +114,10 @@ _ROUTES = {
         _fmt("claude-file-fmt.py", "file_fmt",
              matcher="Read|Edit|Write|MultiEdit|NotebookEdit"),
         _fmt("claude-monitor-fmt.py", "monitor_fmt", matcher="Monitor"),
+        _ASK,
     ],
     "Notification": [_tab("notify")],
-    "Stop": [_tab("stop"), _STOP_FOLD],
+    "Stop": [_tab("stop"), _STOP_FOLD, _ASK_TURN],
     "SessionEnd": [
         _tab("clear"),
         # Fold any final-turn tail the last Stop MISSED: Stop fires at each turn

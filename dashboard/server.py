@@ -55,7 +55,7 @@ from core import spawn as SP
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard import opshtml, rewindmenu
+from dashboard import askdialog, opshtml, rewindmenu
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -323,7 +323,21 @@ def session_payload(sid):
             and row.get("kitty_window_id") and sid not in live_wins):
         data["live"] = False
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
+    data["ask"] = _ask_pending(sid) if data.get("live") else None
     return data
+
+
+def _ask_pending(sid):
+    """The session's pending AskUserQuestion, or None — the `ask-pending` kv
+    stash plugins/claude_code/ask_fmt.py maintains (write on PreToolUse,
+    cleared on answer/turn-boundary). Read-only (kv_at — never creates the
+    state DB). The page renders it as the ask card; /answer verifies the
+    DIALOG on screen anyway, so a stale stash can never mis-answer."""
+    sdb = API.state_db_for(sid)
+    if not sdb:
+        return None
+    pending = API.kv_at(sdb, "ask-pending")
+    return pending if isinstance(pending, dict) else None
 
 
 def _enrich_entry(ent):
@@ -910,6 +924,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "rewind-to":
             return self.post_rewind_to(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "answer":
+            return self.post_answer(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         return self._json({"error": "not found"}, 404)
@@ -1203,6 +1220,73 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True, "mode": mode, "restored": restored,
                            "degraded": res["degraded"]})
 
+    def post_answer(self, sid):
+        """Answer the session's OPEN AskUserQuestion dialog from the web (the
+        ask card — docs/dashboard.md, *Web ask*): drives the TUI's own dialog
+        with screen-verified key events (dashboard/askdialog.drive).
+
+        Body: `tool_use_id` — must match the `ask-pending` stash (a stale
+        card is refused before any key is pressed); either `chat: true` (the
+        dialog's own "Chat about this" — declines + invites discussion; the
+        page then focuses its composer) or `answers` — a list aligned with
+        the stash's questions: {"selected": [labels…], "other": "text"} per
+        question (multiSelect may combine both; single-select uses one or
+        the other).
+
+        409 on a missing/expired stash, a stash/window mismatch, or any
+        dialog step that didn't verify (AskError — the dialog is left OPEN,
+        never Escape-closed: Escape would DECLINE the questions; `step` says
+        what failed and a retry from the card re-normalizes). Every attempt
+        is a `web-answer` state_files row, failures also an A.error. The
+        card itself clears via the SSE `ask` event when the answer's
+        PostToolUse drops the stash — the true end-to-end signal."""
+        body = self._post_guard()
+        if body is None:
+            return
+        chat = bool(body.get("chat"))
+        answers = body.get("answers")
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        pending = _ask_pending(sid)
+        if not pending:
+            return self._json({"error": "no pending question"}, 409)
+        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id") or ""):
+            return self._json({"error": "ask expired — a newer question "
+                               "replaced it (refresh)"}, 409)
+        questions = pending.get("questions") or []
+        if not chat and (not isinstance(answers, list)
+                         or len(answers) != len(questions)):
+            return self._json({"error": "answers must match the %d question%s"
+                               % (len(questions),
+                                  "" if len(questions) == 1 else "s")}, 400)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard answer (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-answer",
+                         {"win": "", "ok": False, "chat": chat})
+            return self._json({"error": "no terminal available"}, 503)
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-answer",
+                         {"win": "", "ok": False, "chat": chat})
+            return self._json({"error": "session has no live window"}, 409)
+        try:
+            askdialog.drive(fe, win, questions, answers or [], chat=chat)
+        except askdialog.AskError as e:
+            A.error(log, "dashboard answer (%s)" % e.step,
+                    {"sid": sid, "win": win, "chat": chat,
+                     "detail": str(e)})
+            A.state_file(log, sdb, "web-answer",
+                         {"win": win, "ok": False, "chat": chat,
+                          "step": e.step,
+                          "tool_use_id": pending.get("tool_use_id") or ""})
+            return self._json({"error": str(e), "step": e.step}, 409)
+        A.state_file(log, sdb, "web-answer",
+                     {"win": win, "ok": True, "chat": chat,
+                      "tool_use_id": pending.get("tool_use_id") or ""})
+        return self._json({"ok": True, "chat": chat})
+
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press
         Escape, audit as `action`, and spawn the escape-recheck when the
@@ -1426,7 +1510,7 @@ class Handler(BaseHTTPRequestHandler):
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
-                "running": None, "errors": None}
+                "running": None, "errors": None, "ask": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -1490,6 +1574,13 @@ class Handler(BaseHTTPRequestHandler):
             if tab != prev["tab"]:
                 prev["tab"] = tab
                 if not self._sse("tab", {"tab": tab}):
+                    return
+            # the pending AskUserQuestion card (fast cadence — the dialog just
+            # appeared and the user is waiting to be asked); None clears it
+            ask = _ask_pending(sid)
+            if ask != prev["ask"]:
+                prev["ask"] = ask
+                if not self._sse("ask", {"ask": ask}):
                     return
             now = time.monotonic()
             if now - beat > HEARTBEAT_S:

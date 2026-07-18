@@ -491,6 +491,12 @@ function connectSession(sid) {
   es.addEventListener("costs", (e) => { S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
+  es.addEventListener("ask", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    if (S.ses.meta) S.ses.meta.ask = d.ask || null;
+    renderAsk();
+  });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
@@ -964,6 +970,145 @@ function drainQueue(items) {
     if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
   }
   if (hit) renderQueue();
+}
+
+/* ---------- the ask card (AskUserQuestion from the web) ---------- */
+// While Claude's question dialog is up in the terminal, the session SSE
+// carries the pending ask (the PreToolUse stash — plugins/claude_code/
+// ask_fmt.py) and this card mirrors it above the composer: option buttons
+// (radio-style for single-select, toggles for multiSelect), a free-text
+// "type your own" per question (the dialog's "Type something" row), a
+// submit row, and "chat about this" (the dialog's own decline-and-discuss).
+// Answers POST /answer, where the server drives the REAL dialog with
+// screen-verified key events (dashboard/askdialog.py). The card clears via
+// the SSE `ask` event when the answer's PostToolUse drops the stash.
+
+function buildAskCard() {
+  const wrap = el("div", "askwrap");
+  S.ses.askEl = wrap;
+  renderAsk();
+  return wrap;
+}
+
+function renderAsk() {
+  const ses = S.ses;
+  if (!ses || !ses.askEl) return;
+  const wrap = ses.askEl;
+  wrap.textContent = "";
+  const ask = ses.meta && ses.meta.ask;
+  wrap.hidden = !ask;
+  if (!ask) return;
+  const qs = ask.questions || [];
+  // per-ask draft state, keyed by tool_use_id so a NEW ask resets it
+  if (!ses.askState || ses.askState.id !== ask.tool_use_id)
+    ses.askState = { id: ask.tool_use_id,
+                     answers: qs.map(() => ({ selected: [], other: "" })) };
+  const st = ses.askState;
+  const card = el("div", "askcard");
+  const head = el("div", "askhead");
+  head.append(el("span", "asktitle",
+                 "claude is asking" + (qs.length > 1 ? " — " + qs.length + " questions" : "")));
+  const chatB = el("button", "askchat", "chat about this");
+  chatB.title = "dismiss the questions and discuss in the chat instead";
+  chatB.onclick = () => submitAsk(ask, null, true);
+  head.append(chatB);
+  card.append(head);
+  const sub = el("button", "asksubmit", "submit answers");
+  const syncSubmit = () => {
+    sub.disabled = !st.answers.every(a => a.selected.length || a.other.trim());
+  };
+  qs.forEach((q, qi) => {
+    const qbox = el("div", "askq");
+    const qhead = el("div", "askqhead");
+    if (q.header) qhead.append(el("span", "askhdr", q.header));
+    qhead.append(el("span", "askqtext", q.question || ""));
+    qbox.append(qhead);
+    const opts = el("div", "askopts");
+    const paintAll = () => [...opts.children].forEach(c =>
+      c.classList.toggle("on", st.answers[qi].selected.includes(c.dataset.label)));
+    (q.options || []).forEach(o => {
+      const b = el("button", "askopt");
+      b.dataset.label = o.label || "";
+      b.append(el("span", "aol", o.label || ""));
+      if (o.description) b.append(el("span", "aod", o.description));
+      b.onclick = () => {
+        const a = st.answers[qi];
+        if (q.multiSelect) {
+          a.selected = a.selected.includes(o.label)
+            ? a.selected.filter(x => x !== o.label)
+            : [...a.selected, o.label];
+        } else {
+          a.selected = [o.label];
+          a.other = "";
+          if (other) other.value = "";
+          // one single-select question: a click answers AND submits, exactly
+          // like the TUI's digit press
+          if (qs.length === 1) { paintAll(); return submitAsk(ask, st.answers, false); }
+        }
+        paintAll();
+        syncSubmit();
+      };
+      opts.append(b);
+    });
+    qbox.append(opts);
+    const other = el("input", "askother");
+    other.type = "text";
+    other.spellcheck = false;
+    other.placeholder = q.multiSelect
+      ? "add your own answer…" : "or type your own answer…";
+    other.value = st.answers[qi].other;
+    other.oninput = () => {
+      st.answers[qi].other = other.value;
+      if (!q.multiSelect && other.value.trim()) {
+        st.answers[qi].selected = [];
+        paintAll();
+      }
+      syncSubmit();
+    };
+    other.onkeydown = (e) => {
+      e.stopPropagation();                  // keep Esc/gestures out of typing
+      if (e.key === "Enter" && other.value.trim() && !sub.disabled)
+        submitAsk(ask, st.answers, false);
+    };
+    qbox.append(other);
+    paintAll();
+    card.append(qbox);
+  });
+  const foot = el("div", "askfoot");
+  foot.append(sub);
+  sub.onclick = () => submitAsk(ask, st.answers, false);
+  card.append(foot);
+  syncSubmit();
+  wrap.append(card);
+}
+
+function submitAsk(ask, answers, chat) {
+  const ses = S.ses;
+  if (!ses || !S.cur) return;
+  const body = { tool_use_id: ask.tool_use_id || "" };
+  if (chat) body.chat = true;
+  else body.answers = (answers || []).map(a =>
+    ({ selected: a.selected, other: (a.other || "").trim() }));
+  if (ses.askEl)
+    ses.askEl.querySelectorAll("button,input").forEach(x => x.disabled = true);
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body)
+    .then(() => {
+      if (chat) {
+        toast("done", "over to chat",
+              "questions dismissed — type your message below");
+        if (ses.composer) ses.composer.focus();
+      } else {
+        toast("done", "answered", "answers submitted to the session");
+      }
+      // optimistic hide — the SSE `ask` event (stash cleared by the answer's
+      // PostToolUse) is the real confirmation
+      if (ses.meta) ses.meta.ask = null;
+      renderAsk();
+    })
+    .catch(e => {
+      toast("ask", "answer failed", (e && e.error) || "");
+      renderAsk();                           // re-enable for a retry
+    });
 }
 
 /* ---------- control plane: the message composer ---------- */
@@ -1901,6 +2046,7 @@ function renderSessionChrome(tab) {
   $view.append(body);
 
   if (tab === "mirror") {
+    body.append(buildAskCard());            // pending question, above the composer
     body.append(buildComposer());
     // type right away on open — no click needed. After append (focus() on a
     // detached node is a no-op), and only when the box can send (a disabled

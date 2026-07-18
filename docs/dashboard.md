@@ -721,6 +721,79 @@ the tab state at press time says what the Escape landed on). Failure paths
 `A.error` per the audit-before-swallow rule, so a "my message never arrived"
 report is answerable from the DB.
 
+## Web ask (`POST /api/session/<sid>/answer`) — AskUserQuestion from the browser
+
+When Claude asks a question (the AskUserQuestion tool), the session view
+grows an **ask card** above the composer mirroring the TUI dialog: one
+block per question (the header chip + question text), option buttons
+(radio-style single-select, toggle multiSelect), a free-text "type your
+own" input per question (the dialog's "Type something" row), a submit
+row, and **chat about this** (the dialog's own decline-and-discuss). A
+lone single-select question submits on the option click itself — the
+same one-keystroke feel as the TUI's digit press.
+
+**Detection** is a hook stash, because the dialog is otherwise just
+pixels: `plugins/claude_code/ask_fmt.py` (routed by the dispatcher on
+PreToolUse/PostToolUse(+Failure) matcher `AskUserQuestion`, plus
+Stop/StopFailure and UserPromptSubmit) writes the pending ask —
+`tool_input.questions` verbatim + `tool_use_id` — to the state DB kv
+`ask-pending` on PreToolUse, and clears it on the answer's PostToolUse
+or, crucially, at the TURN BOUNDARY: every decline path (Esc in the
+terminal, "Chat about this", an Enter on the EMPTY "Type something" row)
+resolves the tool as "User declined to answer questions" with **no
+closing hook at all** (measured 2026-07-18; 243 PreToolUse vs 230
+PostToolUse in the historical audit — the 13 unmatched are declines), so
+Stop/UserPromptSubmit are the clear signal. The stash respects the
+main-session-only invariant (`agent_id` events ignored) and the
+ghost-DB rule (`state.parked()` guard — an unhosted/headless session
+gets no stash, and `kv_get` must never create the DB whose existence is
+the session-alive signal). Reads are `kv_at` (ro). The session snapshot
+carries `ask`, and the session SSE emits an `ask` event on every change
+(fast cadence) — the card appears the moment the dialog does and
+disappears when ANY answer path resolves it, web or terminal.
+
+**Answering** drives the TUI's own dialog — `dashboard/askdialog.py`,
+the rewindmenu philosophy (screen-verified key events, never a blind
+press) but deliberately NOT unified with it: different anatomy, and
+OPPOSITE bail semantics — rewindmenu bails by pressing Escape, while
+here **Escape declines the whole question set**, so a failed step leaves
+the dialog exactly as it was (AskError → 409 with `step`; a retry
+re-normalizes). The measured key model it encodes:
+
+- single-select: a digit answers and auto-advances; the sole question of
+  a one-question ask submits the tool outright (no review pane);
+- multiSelect: a digit TOGGLES its checkbox — so the driver DIFFS the
+  desired selection against the checkboxes the screen actually shows
+  (boxes the user pre-toggled in the terminal are reconciled, not
+  re-pressed); `right` from a non-edit row moves to the next tab;
+- free text: arrow onto the "Type something" row (navigated by its ROW
+  NUMBER, `len(options)+1` — the label mutates to whatever was last
+  typed), type (the text replaces the label inline), then Enter:
+  single-select selects+advances, multiSelect toggles the custom row
+  checked (measured: the typed CR alone commits but does NOT check);
+  then leave the edit row with `up` before any tab navigation (on the
+  edit row left/right move the TEXT cursor);
+- `left` at the first question is a no-op, so `left`×len(questions)
+  deterministically normalizes to question 1 from any state (including
+  the review pane, including a half-answered dialog);
+- the review pane ("Review your answers") follows the last question;
+  digit `1` = "Submit answers". PostToolUse then fires with `answers`
+  {question → label, ", "-joined labels (custom text joins as a label),
+  or the free text} — verified live for every shape: single label,
+  free-text-only, two-question mixed with custom multi text
+  (`{"Pick a planet": "Venus", "Pick metals": "Iron, Zinc, titanium"}`),
+  and chat-about-this.
+
+The endpoint guards before any key: the body's `tool_use_id` must match
+the stash (a STALE card — a newer ask replaced it — is a clean 409
+"expired"), the answers list must match the question count, and the
+dialog must actually be on screen (`step: open` 409 otherwise — e.g.
+answered in the terminal while the card sat open; the SSE clear races
+the click). Every attempt is a `web-answer` state_files row
+(`{win, ok, chat, tool_use_id}` (+`step` on a bail)), failures also an
+`A.error`. The card clears optimistically on 200 and authoritatively via
+the SSE `ask` event when the stash drops.
+
 ## Accounts & usage
 
 The machine juggles several Claude subscriptions through the `claude-subscription`

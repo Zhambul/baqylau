@@ -122,6 +122,27 @@ def notification(s, message="Claude needs your permission to use Bash"):
     return base(s, "Notification", message=message)
 
 
+def pre_ask(s, questions, tid="toolu_ask1", agent_id=None):
+    """PreToolUse(AskUserQuestion) — shape per the live capture 2026-07-18:
+    tool_input carries `questions` [{question, header, options[{label,
+    description}], multiSelect}], and tool_use_id keys the pending stash."""
+    d = base(s, "PreToolUse", tool_name="AskUserQuestion", tool_use_id=tid,
+             tool_input={"questions": questions})
+    if agent_id:
+        d["agent_id"] = agent_id
+    return d
+
+
+def post_ask(s, questions, answers, tid="toolu_ask1"):
+    """PostToolUse(AskUserQuestion) — fires ONLY on a real submit (declines
+    fire nothing); tool_input gains `answers` {question: label|", "-joined|
+    free text} + `annotations`."""
+    ti = {"questions": questions, "answers": answers, "annotations": {}}
+    return base(s, "PostToolUse", tool_name="AskUserQuestion",
+                tool_use_id=tid, tool_input=ti,
+                tool_response={"questions": questions, "answers": answers})
+
+
 def stop(s, failure=False):
     return base(s, "StopFailure" if failure else "Stop")
 

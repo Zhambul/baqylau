@@ -5,6 +5,7 @@
 # collapsed to claude-hook.py), the universal subscriber row on every event, the
 # PreToolUse(Bash) updatedInput stdout contract, and the never-fail invariant.
 import json
+import os
 
 import oracle
 import payloads as P
@@ -108,22 +109,25 @@ def _names(ev, tool=""):
 
 def test_plan_sequences_pinned():
     tab = "claude-tab-status.py"
+    ask = "claude-ask-fmt.py"
     assert _names("SessionStart") == [tab, "claude-split.py"]
-    assert _names("UserPromptSubmit") == [tab]
+    assert _names("UserPromptSubmit") == [tab, ask]   # ask: turn-boundary clear
     assert _names("PreToolUse", "Bash") == [tab, "claude-cmd-pre.py"]
     assert _names("PreToolUse", "Task") == [tab, "claude-subagent-fmt.py"]
     assert _names("PreToolUse", "Agent") == [tab, "claude-subagent-fmt.py"]
+    assert _names("PreToolUse", "AskUserQuestion") == [tab, ask]
     assert _names("PreToolUse", "Read") == [tab]
     for ev in ("PostToolUse", "PostToolUseFailure"):  # failure pairing
         assert _names(ev, "Bash") == [tab, "claude-cmd-fmt.py"]
         for t in ("Read", "Edit", "Write", "MultiEdit", "NotebookEdit"):
             assert _names(ev, t) == [tab, "claude-file-fmt.py"]
         assert _names(ev, "Monitor") == [tab, "claude-monitor-fmt.py"]
+        assert _names(ev, "AskUserQuestion") == [tab, ask]
         assert _names(ev, "WebFetch") == [tab]
         assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
     assert _names("Notification") == [tab]
     for ev in ("Stop", "StopFailure"):
-        assert _names(ev) == [tab, "claude-stop-fmt.py"]
+        assert _names(ev) == [tab, "claude-stop-fmt.py", ask]
     # SessionEnd: the stop-fold step is ORDERED before split-close.
     assert _names("SessionEnd") == [tab, "claude-stop-fmt.py", "claude-split.py"]
     assert _names("SubagentStart") == ["claude-subagent-fmt.py"]
@@ -189,3 +193,99 @@ def test_dispatch_lazy_handler_imports(test_env):
                        timeout=30)
     assert r.returncode == 0 and "OK" in r.stdout, (
         "dispatch imported eagerly:\n%s%s" % (r.stdout, r.stderr))
+
+
+# --------------------------------------------- the AskUserQuestion state stash
+
+# the web dashboard's ask card (docs/dashboard.md, *Web ask*): PreToolUse
+# stashes the pending questions in the state DB kv, the answer's PostToolUse
+# clears it — and because every DECLINE path (Esc, "Chat about this",
+# empty-"Type something" Enter) fires NO closing hook at all (measured
+# 2026-07-18), the turn boundaries (Stop, UserPromptSubmit) clear it too.
+
+ASK_QS = [{"question": "Which fruit?", "header": "Fruit",
+           "options": [{"label": "Apple", "description": "crisp"},
+                       {"label": "Banana", "description": "soft"}],
+           "multiSelect": False}]
+
+
+def _pending(s):
+    rows = s.query_state("SELECT val FROM kv WHERE key='ask-pending'")
+    return json.loads(rows[0][0]) if rows else None
+
+
+def _seed_state_db(run_hook, s):
+    # a HOSTED session's state DB exists from SessionStart on — any producer
+    # write creates it; ask_fmt itself deliberately never does (see below)
+    run_hook(HOOK, P.post_bash(s, "echo seed"))
+
+
+def test_ask_pretool_stashes_pending(run_hook, test_env, session):
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.pre_ask(s, ASK_QS))
+    pend = _pending(s)
+    assert pend["tool_use_id"] == "toolu_ask1"
+    assert pend["questions"] == ASK_QS
+    assert "claude-ask-fmt.py" in handlers(test_env, s.sid)
+    assert any(a == "ask-pending" and '"write"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_ask_posttool_clears_answered(run_hook, test_env, session):
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.pre_ask(s, ASK_QS))
+    run_hook(HOOK, P.post_ask(s, ASK_QS, {"Which fruit?": "Banana"}))
+    assert _pending(s) is None
+    assert any(a == "ask-pending" and "answered" in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_ask_turn_boundaries_clear_the_decline(run_hook, test_env, session):
+    # Esc / "Chat about this" fire NO hook — the Stop at turn end (or the next
+    # UserPromptSubmit) is what drops the stale stash
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.pre_ask(s, ASK_QS))
+    assert _pending(s) is not None
+    run_hook(HOOK, P.stop(s))
+    assert _pending(s) is None
+    assert any(a == "ask-pending" and "turn ended" in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    # and UserPromptSubmit, independently
+    run_hook(HOOK, P.pre_ask(s, ASK_QS, tid="toolu_ask2"))
+    assert _pending(s) is not None
+    run_hook(HOOK, P.user_prompt(s, "never mind"))
+    assert _pending(s) is None
+
+
+def test_ask_stop_without_pending_writes_nothing(run_hook, test_env, session):
+    # Stop fires every turn — an empty clear must not spam state_files rows
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.stop(s))
+    assert not any(a == "ask-pending"
+                   for _p, a, c in oracle.state_files(test_env, s.sid))
+
+
+def test_ask_subagent_is_ignored(run_hook, test_env, session):
+    # an agent_id-carrying ask belongs to a subagent's inner dialog — never
+    # the main session's card (CLAUDE.md main-session-only invariant)
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.pre_ask(s, ASK_QS, agent_id="agent-x"))
+    assert _pending(s) is None
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_ask_unhosted_session_creates_no_ghost_db(run_hook, test_env, session):
+    # a headless/daemon session has NO state DB — the stash must not create
+    # one (its file-existence is the session-alive signal watchers poll)
+    s = session.make()
+    run_hook(HOOK, P.pre_ask(s, ASK_QS))
+    run_hook(HOOK, P.stop(s))
+    assert not os.path.exists(s.state_db)
+    assert not oracle.errors(test_env, s.sid)
