@@ -472,9 +472,20 @@ def msg_html(kind, text, sender=""):
     everything else here — the same neutralize() analog."""
     who = {"prompt": "you", "message": "claude"}.get(kind) \
         or ("✉ " + (sender or "team"))
-    return ("<div class=\"msg %s\"><span class=\"who\">%s</span>"
+    extra = ""
+    if kind == "prompt":
+        # the web rewind picker needs the prompt's RAW text (the rendered
+        # markdown is lossy): data-txt is what the page POSTs to /rewind-to
+        # and prefills the composer with after a restore; the ↶ button is
+        # hover/pick-mode revealed by CSS and handled by feed delegation
+        extra = " data-txt=\"%s\"" % html.escape(text or "", quote=True)
+        who = ("%s<button class=\"rw\" title=\"rewind to here\">↶</button>"
+               % html.escape(who))
+    else:
+        who = html.escape(who)
+    return ("<div class=\"msg %s\"%s><span class=\"who\">%s</span>"
             "<div class=\"md\">%s</div></div>"
-            % (html.escape(kind, quote=True), html.escape(who), md_html(text)))
+            % (html.escape(kind, quote=True), extra, who, md_html(text)))
 
 
 # --- rich tool rendering (tool_html / tool_output_html) -----------------------

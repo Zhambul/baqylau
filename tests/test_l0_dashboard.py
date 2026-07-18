@@ -1320,6 +1320,251 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     assert len(spawned) == 1
 
 
+class _MenuFE(_FakeFE):
+    """_FakeFE plus a tiny simulation of Claude Code's rewind menu, so
+    rewindmenu.drive's SCREEN-VERIFIED navigation runs against reactive
+    screens instead of a canned transcript of get_text results: `/rewind`
+    opens the checkpoint list, up/down move the cursor (pegging at the
+    edges like the real TUI), Enter opens the numbered confirm menu, a
+    digit selects (recorded in .picked) and Escape backs out one level.
+    Screen shapes copied from live captures (2026-07-18): indented menu
+    cursor rows, a column-0 scrollback prompt echo that must NOT parse as
+    the cursor, the "(current)" trailing entry, numbered confirm rows."""
+
+    def __init__(self, prompts, options=("Restore code and conversation",
+                                         "Restore conversation",
+                                         "Restore code", "Never mind")):
+        super().__init__()
+        self.prompts = list(prompts)         # oldest-first menu first-lines
+        self.options = list(options)
+        self.state = "idle"                  # idle | menu | confirm
+        self.cursor = len(self.prompts)      # start on "(current)"
+        self.picked = None                   # (prompt index, option label)
+
+    def send_text(self, win, text):
+        ok = super().send_text(win, text)
+        if text == "/rewind" and self.state == "idle":
+            self.state, self.cursor = "menu", len(self.prompts)
+        return ok
+
+    def send_key(self, win, *keys):
+        ok = super().send_key(win, *keys)
+        for k in keys:
+            if self.state == "menu":
+                if k == "up":
+                    self.cursor = max(0, self.cursor - 1)
+                elif k == "down":
+                    self.cursor = min(len(self.prompts), self.cursor + 1)
+                elif k == "enter" and self.cursor < len(self.prompts):
+                    self.state = "confirm"
+                elif k == "escape":
+                    self.state = "idle"
+            elif self.state == "confirm":
+                if k == "escape":
+                    self.state = "menu"
+                elif k.isdigit() and 1 <= int(k) <= len(self.options):
+                    self.picked = (self.cursor, self.options[int(k) - 1])
+                    self.state = "idle"
+        return ok
+
+    def get_text(self, win, extent="screen"):
+        if self.state == "menu":
+            rows = ["❯ a scrollback prompt echo at column 0", "", "  Rewind",
+                    "", "  Restore the code and/or conversation to the point…"]
+            for i, p in enumerate(self.prompts + ["(current)"]):
+                rows += [("  ❯ " if i == self.cursor else "    ") + p, ""]
+            rows.append("  Enter to continue · Esc to cancel")
+            return "\n".join(rows)
+        if self.state == "confirm":
+            rows = ["", "  Rewind", "", "  Confirm you want to restore to the"
+                    " point before you sent this message:", ""]
+            for i, o in enumerate(self.options):
+                rows.append(("  ❯ " if i == 0 else "    ")
+                            + "%d. %s" % (i + 1, o))
+            return "\n".join(rows)
+        return "❯ composer\n  -- INSERT --"
+
+
+def _rewind_env(monkeypatch, sid, win, fe):
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.rewindmenu, "POLL_S", 0.01)
+    monkeypatch.setattr(DS.rewindmenu, "KEY_GAP_S", 0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", win)
+    A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+
+
+def test_post_rewind_to_drives_the_menu(dash, monkeypatch):
+    # full web rewind: /rewind typed, the checkpoint list navigated to the
+    # TARGET prompt (verified by its menu text — the entry is the prompt's
+    # first line), the confirm option picked by LABEL, and the restored text
+    # echoed back for the page's composer prefill
+    fe = _MenuFE(prompts=["make alpha", "make beta"])
+    _rewind_env(monkeypatch, "rwt1", "31", fe)
+    code, body = _post(dash + "/api/session/rwt1/rewind-to",
+                       {"text": "make beta\nsecond line the menu never shows",
+                        "mode": "both", "ups": 1})
+    assert code == 200
+    assert json.loads(body) == {
+        "ok": True, "mode": "both",
+        "restored": "make beta\nsecond line the menu never shows"}
+    assert fe.picked == (1, "Restore code and conversation")
+    assert ("31", "/rewind") in fe.sent
+    assert fe.state == "idle"                 # menu fully closed
+
+
+def test_post_rewind_to_digit_follows_labels(dash, monkeypatch):
+    # the confirm menu's NUMBERING SHIFTS with content (no code changes ⇒
+    # "Restore conversation" is 1., not 2.) — the digit must come from the
+    # parsed labels, never a hard-coded position
+    fe = _MenuFE(prompts=["only prompt"],
+                 options=("Restore conversation", "Summarize from here",
+                          "Summarize up to here", "Never mind"))
+    _rewind_env(monkeypatch, "rwt2", "32", fe)
+    code, body = _post(dash + "/api/session/rwt2/rewind-to",
+                       {"text": "only prompt", "mode": "conversation",
+                        "ups": 1})
+    assert code == 200 and json.loads(body)["ok"] is True
+    assert fe.picked == (0, "Restore conversation")
+
+
+def test_post_rewind_to_stale_hint_self_corrects(dash, monkeypatch):
+    # a stale page hint (dead-branch bubbles the menu doesn't list) bursts to
+    # the wrong entry — the text-verified scan walks up to the top, then back
+    # down through the list, and still lands on the right checkpoint. Also
+    # the code-only mode: no `restored` (the TUI composer got no draft).
+    fe = _MenuFE(prompts=["p one", "p two", "p three"])
+    _rewind_env(monkeypatch, "rwt3", "33", fe)
+    code, body = _post(dash + "/api/session/rwt3/rewind-to",
+                       {"text": "p three", "mode": "code", "ups": 3})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "mode": "code", "restored": ""}
+    assert fe.picked == (2, "Restore code")
+
+
+def test_post_rewind_to_busy_is_409(dash, monkeypatch):
+    # mid-turn the double-Esc gesture means CANCEL, and a typed /rewind would
+    # queue as a message — the endpoint refuses outright
+    fe = _MenuFE(prompts=["p"])
+    _rewind_env(monkeypatch, "rwt4", "34", fe)
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"34": "working"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rwt4/rewind-to",
+              {"text": "p", "mode": "both", "ups": 1})
+    assert e.value.code == 409
+    assert fe.sent == [] and fe.state == "idle"     # nothing typed
+
+
+def test_post_rewind_to_not_found_bails_closed(dash, monkeypatch):
+    # a target the menu doesn't list (e.g. rewound away in kitty since the
+    # page loaded) scans the whole list, then Escapes the menu shut — the
+    # session is never left sitting inside an open menu
+    fe = _MenuFE(prompts=["p one", "p two"])
+    _rewind_env(monkeypatch, "rwt5", "35", fe)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rwt5/rewind-to",
+              {"text": "no such prompt", "mode": "both", "ups": 1})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["step"] == "find"
+    assert fe.state == "idle" and fe.picked is None
+
+
+def test_post_rewind_to_missing_option_bails_closed(dash, monkeypatch):
+    # asking for a code restore at a checkpoint with no code changes: the
+    # option isn't on the confirm menu — back out (both menus closed), 409
+    fe = _MenuFE(prompts=["p"],
+                 options=("Restore conversation", "Summarize from here",
+                          "Never mind"))
+    _rewind_env(monkeypatch, "rwt6", "36", fe)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rwt6/rewind-to",
+              {"text": "p", "mode": "code", "ups": 1})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["step"] == "option"
+    assert fe.state == "idle" and fe.picked is None
+
+
+# real screen captures (live session, 2026-07-18; longest prompt lines
+# shortened for the linter — shapes and prefixes untouched) the parsers pin
+_MENU_SCREEN = """\
+❯ Use the Write tool to write the word ALPHA into rewind-test.txt.
+
+⏺ Done.
+
+  Rewind
+
+  Restore the code and/or conversation to the point before…
+
+    Use the Write tool to write the word ALPHA into rewind-test.txt.
+    rewind-test.txt +1
+
+  ❯ Now use Write to overwrite /private/tmp/rewind-test.txt with the single word BETA. Reply with one word.
+    rewind-test.txt +1 -1
+
+    This is a deliberately very long first line meant to overflow the menu entry width and show truncation …
+    No code changes
+
+    (current)
+
+  Enter to continue · Esc to cancel"""
+
+_CONFIRM_SCREEN = """\
+  Rewind
+
+  Confirm you want to restore to the point before you sent this message:
+
+  │ Now use Write to overwrite /private/tmp/rewind-test.txt with the single word BETA. Reply with one word.
+  │ (52s ago)
+
+  The conversation will be forked.
+  The code will be restored +1 -1 in rewind-test.txt.
+
+  ❯ 1. Restore code and conversation
+    2. Restore conversation
+    3. Restore code
+    4. Summarize from here
+  ↓ 5. Summarize up to here
+
+  ⚠ Rewinding does not affect files edited manually or via bash."""
+
+
+def test_rewindmenu_parsers_pin_the_real_screens():
+    RM = DS.rewindmenu
+    assert RM.menu_open(_MENU_SCREEN)
+    assert not RM.confirm_open(_MENU_SCREEN)
+    # the column-0 scrollback prompt echo is NOT the cursor; the indented
+    # "  ❯ " row is
+    assert RM.cursor_entry(_MENU_SCREEN) == ("Now use Write to overwrite "
+        "/private/tmp/rewind-test.txt with the single word BETA. "
+        "Reply with one word.")
+    assert RM.confirm_open(_CONFIRM_SCREEN)
+    assert not RM.menu_open(_CONFIRM_SCREEN)
+    assert RM.confirm_options(_CONFIRM_SCREEN) == {
+        "restore code and conversation": "1",
+        "restore conversation": "2",
+        "restore code": "3",
+        "summarize from here": "4",
+        "summarize up to here": "5",     # the ↓ scroll indicator is tolerated
+    }
+    assert not RM.menu_open("❯ composer\n  -- INSERT --")
+    assert RM.menu_region("no menu here at all") == ""
+
+
+def test_rewindmenu_entry_match_is_truncation_aware():
+    RM = DS.rewindmenu
+    long = ("This is a deliberately very long first line meant to overflow "
+            "the rewind menu entry width and show me how truncation is "
+            "rendered at the edge of the pane, if at all, in the checkpoint "
+            "list.\nSecond line here.")
+    trunc = ("This is a deliberately very long first line meant to overflow "
+             "the rewind menu entry width and show me how truncation is "
+             "rendered …")
+    assert RM.entry_matches(trunc, long)             # ellipsis = prefix match
+    assert RM.entry_matches("short prompt", "short prompt\nsecond line")
+    assert not RM.entry_matches("short prompt", "short prompt but longer")
+    assert not RM.entry_matches("(current)", "anything")
+    assert not RM.entry_matches("other …", long)
+
+
 def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     # resending an edited message after a mid-turn cancel-edit: the TUI still
     # holds the restored draft, so clear_draft kills the line (ctrl+u to

@@ -55,7 +55,7 @@ from core import spawn as SP
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard import opshtml
+from dashboard import opshtml, rewindmenu
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -907,6 +907,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "rewind":
             return self.post_rewind(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "rewind-to":
+            return self.post_rewind_to(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         return self._json({"error": "not found"}, 404)
@@ -1125,6 +1128,79 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "tab": tab, "mode": mode,
                            "restored": restored})
+
+    def post_rewind_to(self, sid):
+        """FULL web rewind — restore the session to the checkpoint of a
+        SPECIFIC prompt without touching the kitty tab (docs/dashboard.md,
+        *Web rewind*): drives Claude Code's own rewind menu in the session's
+        window via dashboard/rewindmenu.drive (typed `/rewind`, screen-
+        verified navigation, digit resolved from the parsed option labels).
+
+        Body: `text` — the target prompt's full text (menu entries are its
+        first line, truncation-aware); `mode` — "conversation" | "both" |
+        "code" (rewindmenu.MODE_LABELS); `ups` — the target's `up`-press
+        distance from the menu's "(current)" cursor start (newer prompts
+        + 1), a jump hint the text-verify scan corrects.
+
+        409 when the tab is BUSY (mid-turn the double-Esc gesture means
+        cancel, not rewind — and a typed `/rewind` would just queue as a
+        message) or when the step didn't verify (MenuError — menus already
+        closed; `step` says which). The response's `restored` echoes `text`
+        for conversation restores — Claude Code puts the rewound prompt back
+        into the TUI input, so the page prefills its composer and resends
+        with clear_draft, the cancel-edit contract. Every attempt is a
+        `web-rewind-to` state_files row carrying mode/ups/steps/digit (or
+        the failing step), failures also an A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        text = body.get("text")
+        mode = body.get("mode") or "conversation"
+        if not isinstance(text, str) or not text.strip():
+            return self._json({"error": "empty text"}, 400)
+        if mode not in rewindmenu.MODE_LABELS:
+            return self._json({"error": "bad mode"}, 400)
+        try:
+            ups = max(0, int(body.get("ups") or 0))
+        except (TypeError, ValueError):
+            ups = 0
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard rewind-to (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-rewind-to",
+                         {"win": "", "ok": False, "mode": mode})
+            return self._json({"error": "no terminal available"}, 503)
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-rewind-to",
+                         {"win": "", "ok": False, "mode": mode})
+            return self._json({"error": "session has no live window"}, 409)
+        tab = API.tab_states().get(win) or ""
+        if tab in BUSY_TABS:
+            A.state_file(log, sdb, "web-rewind-to",
+                         {"win": win, "ok": False, "tab": tab, "mode": mode,
+                          "step": "busy"})
+            return self._json(
+                {"error": "session is busy — stop or cancel it first",
+                 "tab": tab}, 409)
+        try:
+            res = rewindmenu.drive(fe, win, text, mode, ups=ups)
+        except rewindmenu.MenuError as e:
+            A.error(log, "dashboard rewind-to (%s)" % e.step,
+                    {"sid": sid, "win": win, "mode": mode, "detail": str(e)})
+            A.state_file(log, sdb, "web-rewind-to",
+                         {"win": win, "ok": False, "tab": tab, "mode": mode,
+                          "ups": ups, "step": e.step})
+            return self._json({"error": str(e), "step": e.step}, 409)
+        A.state_file(log, sdb, "web-rewind-to",
+                     {"win": win, "ok": True, "tab": tab, "mode": mode,
+                      "ups": ups, "steps": res["steps"],
+                      "digit": res["digit"]})
+        restored = text if mode in ("conversation", "both") else ""
+        return self._json({"ok": True, "mode": mode, "restored": restored})
 
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press

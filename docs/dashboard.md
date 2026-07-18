@@ -478,7 +478,10 @@ meaning fired (its toast differs), and rides the `web-rewind` audit row
 (`{win, ok, tab, mode}`). On `cancel-edit` the response also carries
 `restored` — the session's last user prompt (`_last_prompt` →
 `plugins.conversation`), the message Claude Code puts back into the input.
-Same guard chain and window discipline as the other writes.
+Same guard chain and window discipline as the other writes. The page now
+calls this endpoint only for the MID-TURN meaning (the cancel); its idle
+rewind is the full web rewind below — the endpoint's idle branch (type
+`/rewind`, navigate in kitty) survives for API callers and tests.
 
 **What the page does on `cancel-edit` — the full loop, no jumping to the
 terminal.** It drops the cancelled prompt bubble from the feed (abandoned
@@ -520,13 +523,86 @@ Only a user record (a real new prompt, or the `[Request interrupted by
 user]` line) means a real signal owns the tab; metadata-only growth is
 ignored and the dead magenta still flips.
 
+## Web rewind (`POST /api/session/<sid>/rewind-to`) — the full thing, no kitty hop
+
+"Rewind to a specific message, choose what to restore" works entirely from
+the page: the feed's prompt bubbles ARE the checkpoint list (Claude Code
+checkpoints every user prompt), each carries a hover-revealed **↶** button
+(picking mode — the idle ↶-button/double-Esc meaning — reveals them all
+and makes whole bubbles clickable), and the mode menu on it mirrors Claude
+Code's own confirm options (`RW_MODES` ↔ `rewindmenu.MODE_LABELS`:
+conversation / code + conversation / code).
+
+**Why drive the TUI menu at all?** A rewind is invisible outside the live
+process: it writes NOTHING to the transcript at restore time — the
+conversation state changes in memory, the file keeps every record, and
+only the NEXT send materializes the fork (a user record whose
+`parentUuid` points back at the fork point, the abandoned branch left in
+place; verified live 2026-07-18). File snapshots do live on disk
+(`~/.claude/file-history/<sid>/<hash>@vN`, mapped by the transcript's
+`file-history-snapshot`/`-delta` records keyed to prompt uuids), so CODE
+could be restored externally — but conversation could not, and a partial
+reimplementation would drift. So `dashboard/rewindmenu.py` drives Claude
+Code's own menu in the session's window, with every step verified by
+reading the screen back (`Frontend.get_text`), never pressing blind:
+
+- type `/rewind` (the 100%-reliable opener; draft killed first — Ctrl+U/K
+  — so a held draft can't corrupt the command), poll until the checkpoint
+  list renders (`menu_open`: the `Rewind` header + `Enter to continue`
+  footer, anchored at the LAST header occurrence so scrollback can't
+  spoof it);
+- the list is one entry per LIVE-BRANCH user prompt, oldest first, cursor
+  starting on the trailing `(current)` — burst the page's `ups` hint
+  (`up`-press distance = newer prompt bubbles + 1) blind, then VERIFY the
+  cursor entry against the target text (`entry_matches` — an entry is the
+  prompt's first line, truncated to pane width with a trailing `…`, so
+  truncation is a prefix match; cursor rows are indented `  ❯ `, which is
+  what separates them from column-0 scrollback prompt echoes); a miss
+  scans up to the top, then back down through the whole list — so a STALE
+  page hint (dead-branch bubbles the menu doesn't list, e.g. after a
+  kitty-side rewind the web never saw) self-corrects, and a target that
+  is genuinely gone bails;
+- Enter, then pick the restore option **by parsed LABEL, never position**:
+  the confirm menu's numbering SHIFTS with content (with code changes
+  `Restore conversation` is `2.`, without them it is `1.`) — a digit key
+  selects immediately;
+- poll until the menu is gone. ANY unverified step raises `MenuError`
+  (its `.step` names the failing stage: `open`/`find`/`confirm`/`option`/
+  `close`) after Escape-closing whatever was open — the session is never
+  left sitting inside a menu — and the endpoint returns it as a 409.
+
+The endpoint refuses a BUSY tab outright (409 — mid-turn the gesture
+means cancel, and a typed `/rewind` would just queue as a message; stop
+or cancel first). Success returns `restored` (the target text) for the
+conversation-restoring modes: Claude Code puts the rewound prompt back
+into the TUI input, so the page runs the same tail as cancel-edit
+(`prefillComposer`) — composer prefilled, next send `clear_draft` — and
+`applyRewind` un-renders everything from the target bubble on, matching
+what the terminal now shows (optimistic like cancel-edit: the transcript
+keeps the dead branch, a full reload re-shows it). A code-only restore
+changes no conversation, so nothing is dropped. Every attempt is a
+`web-rewind-to` state_files row (`{win, ok, tab, mode, ups, steps,
+digit}` on success, `{…, step}` on a bail), failures also an `A.error`.
+
+Verified end-to-end live (2026-07-18): both-mode restore (file reverted +
+composer prefilled), conversation-only with a deliberately WRONG hint
+(the scan self-corrected; digit resolved to `2` — the label rule doing
+real work), code-mode at a no-code-change checkpoint (clean `option`
+bail, menus closed), and a nonexistent target (clean `find` bail).
+
+Known limit, same family as the cancel one: a rewind done IN the kitty
+tab is invisible to the web until its fork lands (no hook, no transcript
+write) — the page keeps showing the dead turns until reload/next-send,
+and its `ups` hints go stale, which the text-verified scan absorbs.
+
 The page wires rewind as the **↶ rewind**
 button, and the session view's **Esc key** as an ATOMIC gesture: a lone
 press is HELD for `ESC_DOUBLE_MS` (450 ms) then classified — single press
 → one `/interrupt` (an Escape key event; busy tab → "interrupted" toast,
-idle → "double-press Esc for rewind"), rapid double → ONLY `/rewind`
-(which itself splits cancel-edit vs menu server-side), with **no separate
-Escape sent at all**. Streaming the first press immediately
+idle → "double-press Esc for rewind"), rapid double → the double-Esc
+meaning split CLIENT-side by tab state: mid-turn the `/rewind` POST (the
+cancel-edit above), idle picking mode (no POST until you pick a message),
+with **no separate Escape sent at all**. Streaming the first press immediately
 shipped and corrupted the rewind: the in-flight Escape and the `/rewind`
 text race through two server threads with variable kitten latency, and
 one landed MID-TEXT — the input cleared after "/rewi" and the surviving

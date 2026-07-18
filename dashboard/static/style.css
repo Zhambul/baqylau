@@ -564,8 +564,42 @@ body.modal-open { overflow: hidden; }
   letter-spacing: .12em; color: var(--dim); font-family: var(--sans);
   margin-bottom: 3px;
 }
-.msg.prompt { border-left-color: var(--gold); }
+.msg.prompt { border-left-color: var(--gold); position: relative; }
 .msg.prompt .who { color: var(--gold); }
+
+/* full web rewind (docs/dashboard.md, *Web rewind*): every prompt bubble is a
+   checkpoint — ↶ reveals on hover (or all at once in picking mode, the idle
+   ↶-button/double-Esc meaning), and the mode menu mirrors Claude Code's own
+   confirm options */
+.msg.prompt .rw {
+  position: absolute; top: 4px; right: 6px; padding: 2px 8px;
+  border: none; border-radius: 999px; cursor: pointer;
+  background: var(--panel2); color: var(--gold);
+  font: 600 12px/1.4 var(--sans); opacity: 0; transition: opacity .12s;
+}
+.msg.prompt:hover .rw, .rwpick .msg.prompt .rw { opacity: 1; }
+.msg.prompt .rw:hover { box-shadow: var(--card-hover); }
+.rwpick .msg.prompt { cursor: pointer;
+  outline: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent); }
+.rwmenu {
+  position: absolute; top: 26px; right: 6px; z-index: 30;
+  display: flex; flex-direction: column; gap: 2px; padding: 6px;
+  background: var(--panel); border-radius: var(--r);
+  box-shadow: var(--card-hover);
+}
+.rwmenu .rwhead {
+  padding: 3px 8px 5px; color: var(--dim);
+  font: 600 10.5px/1.3 var(--sans); text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.rwmenu .rwopt {
+  padding: 6px 10px; border: none; border-radius: 6px; cursor: pointer;
+  background: var(--panel2); color: var(--text-soft); text-align: left;
+  font: 500 12px/1.3 var(--sans);
+}
+.rwmenu .rwopt:hover { color: var(--text); background: color-mix(in srgb, var(--mid) 16%, var(--bg)); }
+.rwmenu .rwopt:disabled { opacity: .5; cursor: default; }
+.rwmenu .rwx { color: var(--dim); background: transparent; }
 .msg.message { border-left-color: color-mix(in srgb, var(--mid) 55%, transparent); }
 .msg.teammsg { border-left-color: var(--busy); }
 .msg.teammsg .who { color: var(--busy); }

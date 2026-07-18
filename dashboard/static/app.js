@@ -1514,25 +1514,16 @@ function interruptSession() {
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }
 
-// The double-Esc gesture — its MEANING is the TUI's, decided server-side by
-// the tab state at gesture time: mid-turn it cancels the work and restores
-// the last message for editing (two real Escapes); idle it opens the
-// rewind/checkpoint menu (typed /rewind). Both happen IN THE TERMINAL; the
-// response's mode says which fired.
+// The double-Esc gesture — its MEANING is the TUI's, decided by the tab
+// state at gesture time: mid-turn it cancels the work and restores the last
+// message for editing (the cancelEdit POST — two real Escapes server-side);
+// idle it means REWIND, which the web now does fully itself (rewind picking
+// mode below — no more "go open the kitty tab").
 function rewindSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
-    .then(r => {
-      if (r && r.mode === "cancel-edit") {
-        applyCancelEdit(r.restored || "");
-        toast("done", "cancelled", "message restored below — edit and resend");
-      } else {
-        toast("done", "rewind",
-              "/rewind sent — pick a checkpoint in the kitty tab");
-      }
-    })
-    .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
+  if (CANCEL_TABS.includes(liveTab())) return cancelEdit();
+  rewindPickMode(true);
 }
 
 // The live tab state of the open session (the SSE `tab` event patches the
@@ -1591,6 +1582,16 @@ function applyCancelEdit(restored) {
   const feed = ses.stream;
   const bubble = feed && feed.querySelector(".msg.prompt");
   if (bubble) bubble.remove();
+  prefillComposer(restored);
+}
+
+// The shared tail of cancel-edit and web rewind: the TUI now holds the
+// restored prompt as its input draft, so prefill OUR composer with the same
+// text (only when empty — never clobber what you were typing) and make the
+// next send replace the TUI draft (clear_draft) instead of appending to it.
+function prefillComposer(restored) {
+  const ses = S.ses;
+  if (!ses) return;
   const ta = ses.composer;
   if (ta && restored && !ta.value.trim()) {
     ta.value = restored;
@@ -1598,9 +1599,122 @@ function applyCancelEdit(restored) {
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
   }
-  // the next send must REPLACE the TUI's restored draft, not append to it
   ses.clearDraftNext = true;
 }
+
+/* ---------- full web rewind (docs/dashboard.md, *Web rewind*) ---------- */
+// The feed's prompt bubbles ARE the checkpoint list: every user prompt is a
+// checkpoint in Claude Code, so "rewind to a specific message" is a click on
+// its bubble — a ↶ button each .msg.prompt carries (hover-revealed; pick mode
+// reveals them all). The chosen mode POSTs /rewind-to, where the server
+// drives Claude Code's own rewind menu in the session's window with screen-
+// verified key events (dashboard/rewindmenu.py) — nothing to do in kitty.
+
+// Picking mode: the idle meaning of ↶ rewind / double-Esc. Reveals every
+// bubble's ↶ and waits for a click; Esc or a second toggle leaves.
+function rewindPickMode(on) {
+  const ses = S.ses;
+  if (!ses || !ses.stream) return;
+  const want = on === undefined ? !ses.stream.classList.contains("rwpick") : !!on;
+  ses.stream.classList.toggle("rwpick", want);
+  if (want)
+    toast("done", "rewind", "pick a message to rewind to (Esc to leave)");
+  else closeRewindMenu();
+}
+
+function inRewindPick() {
+  const st = S.ses && S.ses.stream;
+  return !!(st && st.classList.contains("rwpick"));
+}
+
+function closeRewindMenu() {
+  document.querySelectorAll(".rwmenu").forEach(m => m.remove());
+}
+
+// The per-message mode menu — Claude Code's own confirm options, minus the
+// summarize pair (a web summarize would need the composer anyway). The
+// labels match rewindmenu.MODE_LABELS server-side.
+const RW_MODES = [
+  ["both", "restore code and conversation"],
+  ["conversation", "restore conversation"],
+  ["code", "restore code"],
+];
+
+function openRewindMenu(bubble) {
+  closeRewindMenu();
+  const menu = el("div", "rwmenu");
+  menu.append(el("div", "rwhead", "rewind to before this message?"));
+  for (const [mode, label] of RW_MODES) {
+    const b = el("button", "rwopt", label);
+    b.onclick = (e) => { e.stopPropagation(); doRewindTo(bubble, mode, menu); };
+    menu.append(b);
+  }
+  const x = el("button", "rwopt rwx", "never mind");
+  x.onclick = (e) => { e.stopPropagation(); closeRewindMenu(); };
+  menu.append(x);
+  bubble.append(menu);
+}
+
+function doRewindTo(bubble, mode, menu) {
+  const meta = (S.ses && S.ses.meta) || {};
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  if (CANCEL_TABS.includes(liveTab())) {
+    toast("ask", "session is busy", "stop or cancel the turn first");
+    return;
+  }
+  const text = bubble.dataset.txt || "";
+  if (!text.trim()) return;
+  // the jump hint: the target's `up`-press distance from the menu's
+  // "(current)" cursor start = newer prompts + 1. Newer bubbles precede it
+  // in the feed (newest-first); a stale count only slows the server's
+  // text-verified scan, never mis-selects.
+  let ups = 1;
+  for (let n = bubble.previousElementSibling; n; n = n.previousElementSibling)
+    if (n.classList && n.classList.contains("prompt")) ups++;
+  menu.querySelectorAll("button").forEach(b => b.disabled = true);
+  toast("done", "rewinding…", "driving the checkpoint menu");
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind-to",
+           { text, mode, ups })
+    .then(r => {
+      rewindPickMode(false);
+      if (r && r.restored) {
+        applyRewind(bubble, r.restored);
+        toast("done", "rewound", mode === "both"
+              ? "code + conversation restored — edit and resend below"
+              : "conversation restored — edit and resend below");
+      } else {
+        closeRewindMenu();
+        toast("done", "code restored", "conversation kept");
+      }
+    })
+    .catch(e => {
+      menu.querySelectorAll("button").forEach(b => b.disabled = false);
+      toast("ask", "rewind failed", (e && e.error) || "");
+    });
+}
+
+// A conversation restore un-renders everything from the target prompt on —
+// kitty's TUI does the same. Optimistic like applyCancelEdit: the transcript
+// still holds the dead branch (a rewind writes nothing until the next send
+// forks it), so a full reload re-shows it; this view matches the terminal.
+function applyRewind(bubble, restored) {
+  while (bubble.previousElementSibling) bubble.previousElementSibling.remove();
+  bubble.remove();
+  prefillComposer(restored);
+}
+
+// Feed delegation: ↶ on a prompt bubble (hover or pick mode) opens the mode
+// menu; in pick mode the whole bubble is a target.
+document.addEventListener("click", (e) => {
+  const rw = e.target.closest && e.target.closest(".msg.prompt .rw");
+  if (rw) { e.preventDefault(); return openRewindMenu(rw.closest(".msg.prompt")); }
+  if (e.target.closest && e.target.closest(".rwmenu")) return;
+  if (inRewindPick()) {
+    const bubble = e.target.closest && e.target.closest(".msg.prompt");
+    if (bubble) return openRewindMenu(bubble);
+    rewindPickMode(false);            // clicked elsewhere — leave pick mode
+  } else closeRewindMenu();           // click-away closes a hover-opened menu
+});
 
 // The Esc GESTURE is atomic — hold a lone press for ESC_DOUBLE_MS, then
 // classify: single press → one /interrupt (an Escape key event), rapid
@@ -1634,6 +1748,8 @@ function escGesture() {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$modal.hidden) return closeNewSession();
+  if (document.querySelector(".rwmenu")) return closeRewindMenu();
+  if (inRewindPick()) return rewindPickMode(false);
   escGesture();
 });
 
@@ -1695,10 +1811,11 @@ function renderSessionChrome(tab) {
     ses.cancelMode = (tab) => { cancel.disabled = !CANCEL_TABS.includes(tab); };
     ses.cancelMode(liveTab());
     l1.append(cancel);
-    // rewind: Claude Code's double-Esc — opens the checkpoint menu in the
-    // kitty tab (the panel is the TUI's own; navigate it there)
+    // rewind: Claude Code's double-Esc — mid-turn it cancels for editing;
+    // idle it enters picking mode: click a message below, choose what to
+    // restore, and the server drives the TUI's own checkpoint menu
     const rew = el("button", "sstop", "↶ rewind");
-    rew.title = "double-Esc: rewind menu, or mid-turn cancel + edit last message";
+    rew.title = "rewind: pick a message to restore to (mid-turn: cancel + edit)";
     rew.onclick = () => rewindSession();
     l1.append(rew);
     // close: closes the session's kitty tab — a graceful stop (Claude Code
