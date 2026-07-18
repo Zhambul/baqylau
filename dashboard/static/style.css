@@ -260,6 +260,10 @@ body.attn-on .shead { top: 81px; }
 .sstop:hover, .sresume:hover { color: var(--text); box-shadow: var(--card-hover); }
 .sstop.arm { color: #fff; background: var(--red, #b5484d); }
 .sstop:disabled { color: var(--dim2); cursor: default; }
+/* quick-command picker (second actrow): the model/effort dropdowns anchor
+   inside their button's wrap and reuse the rewind menu's look (.rwmenu) */
+.qcwrap { position: relative; display: inline-flex; }
+.qcwrap .qcmenu { top: calc(100% + 4px); left: 0; right: auto; }
 .shead .proj { color: var(--text); font-weight: 650; font-size: 15px; }
 .shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }
 .shead .sid.copysid { cursor: pointer; }

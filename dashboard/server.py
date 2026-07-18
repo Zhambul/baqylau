@@ -831,6 +831,11 @@ LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
 EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort levels
 _MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
                                                # clean argv word, nothing else
+# The scoreboard's quick-command row (post_command, docs/dashboard.md *Web
+# quick commands*): model args are _MODEL_OK's one-clean-word alphabet plus
+# the CLI's literal `[1m]` context suffix (`/model sonnet[1m]`); effort args
+# are the same EFFORTS levels the launch form validates.
+_MODEL_ARG_OK = re.compile(r"^[A-Za-z0-9._-]+(\[1m\])?$")
 
 
 def launch_argv(words, cmd="claude"):
@@ -1090,6 +1095,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "message":
             return self.post_message(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "command":
+            return self.post_command(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "stop":
             return self.post_stop(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -1214,6 +1222,75 @@ class Handler(BaseHTTPRequestHandler):
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
+
+    def post_command(self, sid):
+        """The scoreboard's quick-command row — type one of the TUI's OWN
+        slash commands into the session's window: `{"cmd": "compact"}` →
+        `/compact`, `{"cmd": "model", "arg": <alias|id>}` → `/model <arg>`,
+        `{"cmd": "effort", "arg": <level>}` → `/effort <arg>` (both set
+        immediately, no picker dialog — the model-config docs). A FIXED
+        vocabulary, 400 on anything else — the arg is validated
+        (_MODEL_ARG_OK / EFFORTS) precisely because it is typed into a
+        terminal, and compact takes no arg (the closed vocabulary IS the
+        point; free-form text is the composer's job). Delivery matches
+        post_message (bracketed paste + CR via the live claude_session
+        window), so mid-turn the command lands in the TUI's message queue and
+        runs at the turn boundary (`queued` in the reply) — but a RED tab
+        (awaiting-command: a modal dialog is up) is a 409: pasted text would
+        land IN the dialog, its digits deciding it. Every attempt is a
+        `web-command` state_files row, failures also an A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        cmd, arg = body.get("cmd"), body.get("arg")
+        if cmd == "compact" and not arg:
+            text = "/compact"
+        elif cmd == "model" and isinstance(arg, str) \
+                and _MODEL_ARG_OK.match(arg):
+            text = "/model " + arg
+        elif cmd == "effort" and arg in EFFORTS:
+            text = "/effort " + arg
+        else:
+            # repr(): same rule as new-session validation — a reject must
+            # leave the exact received bytes in the audit
+            A.error("", "dashboard command (bad cmd)",
+                    {"sid": sid, "cmd": repr(cmd), "arg": repr(arg)})
+            return self._json({"error": "unknown command"}, 400)
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard command (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-command",
+                         {"win": "", "cmd": cmd, "arg": arg or "",
+                          "ok": False})
+            return self._json({"error": "no terminal available"}, 503)
+        # AUTHORITATIVE window: the live claude_session=<sid> pane tag, same
+        # as post_message (a reused stale id would type into an unrelated tab)
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-command",
+                         {"win": "", "cmd": cmd, "arg": arg or "",
+                          "ok": False})
+            return self._json({"error": "session has no live window"}, 409)
+        tab = API.tab_states().get(win) or ""
+        if tab == tabs.AWAITING_COMMAND:
+            A.state_file(log, sdb, "web-command",
+                         {"win": win, "cmd": cmd, "arg": arg or "",
+                          "ok": False, "tab": tab})
+            return self._json({"error": "a dialog is open — answer it first"},
+                              409)
+        ok = bool(fe.paste_text(win, text))
+        A.state_file(log, sdb, "web-command",
+                     {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
+                      "tab": tab})
+        if not ok:
+            A.error(log, "dashboard command (send failed)",
+                    {"sid": sid, "win": win, "cmd": cmd})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True, "queued": tab in QUEUE_TABS,
+                           "tab": tab})
 
     def post_stop(self, sid):
         """Close a session's kitty tab (Frontend.close_tab — main window +

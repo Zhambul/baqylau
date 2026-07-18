@@ -188,6 +188,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
+| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; replies `{ok, queued, tab}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
@@ -339,6 +340,58 @@ the oldest live session and ← at the newest. Works with focus anywhere,
 including a text box — macOS claims ⌃←/→ for Spaces but nothing claims
 ⌃⇧←/→, so the only thing shadowed is a selection gesture that already
 lives on ⌥⇧/⌘⇧.
+
+## Web quick commands (`POST /api/session/<sid>/command`)
+
+The scoreboard's SECOND action row (its own line under
+stop/cancel/rewind/close — live-with-window sessions only, like the buttons
+above it): **⊜ compact**, **✦ model ▾**, **⚡ effort ▾**. Each just types one
+of the TUI's OWN slash commands into the session's window — `/compact`,
+`/model <alias>`, `/effort <level>` — because Claude Code applies all three
+immediately when given an argument (no picker dialog opens; the model-config
+docs). The TUI stays authoritative, same philosophy as the "/" menu: the web
+never re-implements compaction or model switching, it only presses the
+button.
+
+Measured live (v2.1.214, 2026-07-18): `/model <arg>` and `/effort <arg>`
+don't just switch the running session — the TUI **also saves the choice as
+the user's default for new sessions** ("Set model to Sonnet 5 and saved as
+your default…", persisted to settings.json `model`/`effortLevel`). That is
+exactly what typing the command in the terminal does, so the buttons inherit
+it (the tooltips say so); a "session-only" variant would need the picker
+dialog's `s` key and a full screen-driver — deliberately not built while the
+argument form does the job.
+
+Server side (`post_command`) the vocabulary is CLOSED — `{"cmd": "compact"}`
+(argless), `{"cmd": "model", "arg"}` with the arg validated against
+`_MODEL_ARG_OK` (`_MODEL_OK`'s one-clean-word alphabet plus the CLI's literal
+`[1m]` context suffix, e.g. `sonnet[1m]`), `{"cmd": "effort", "arg"}` against
+`EFFORTS`; anything else is `400` and never reaches the terminal (free-form
+text is the composer's job — this endpoint exists so a *button* can't be
+talked into typing arbitrary bytes). Delivery is exactly a composer send
+(live `claude_session` window resolve, bracketed paste + separate CR), so a
+mid-turn command lands in Claude Code's message queue and runs at the turn
+boundary — the reply carries `queued`/`tab` like `/message` and the page
+toasts "queued — runs when the turn ends". The one refusal beyond
+post_message's: a RED tab (`awaiting-command` — a modal dialog is up) is a
+`409`, because pasted text would land IN the dialog and its digits would
+*decide* it; the row's buttons also disable client-side on the same tab state
+(`ses.quickMode`, fed by the SSE `tab` event next to `cancelMode`). Every
+attempt is a `web-command` state_files row (`{win, cmd, arg, ok, tab}`),
+failures also an `A.error`.
+
+The client row (app.js `act2` in `renderSessionChrome`): compact carries the
+close button's two-step arm ("compact now?", 4 s) — a misclick would
+summarize the conversation out from under you; model and effort open
+`.rwmenu`-styled dropdowns (`.qcwrap`/`.qcmenu`, Esc or click-away closes)
+listing the new-session form's model aliases (`MODEL_CHOICES` —
+fable/opus/sonnet/haiku) and the `EFFORTS` levels. The model button's label
+shows the session's CURRENT model (`✦ opus-4.8 ▾`) from the ctx probe's
+`model` field, refreshed by the same `ctx` SSE event that drives the ctx bar
+(`shortModel` in app.js is the display twin of `model.short_model` — the
+Python side is the authority); effort has no current-value label because
+effort is config-only, readable from no transcript
+(`plugins/claude_code/model.py`).
 
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against

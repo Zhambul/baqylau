@@ -1083,6 +1083,77 @@ def test_post_message_no_terminal_is_503(dash, monkeypatch):
     assert e.value.code == 503
 
 
+def test_post_command_sends_slash_text(dash, monkeypatch):
+    # the quick-command row types the TUI's OWN slash commands — exact text,
+    # bracketed paste like the composer (never send_text)
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "61")
+    A.session_start({"session_id": "qc1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/qc1/command", {"cmd": "compact"})
+    assert code == 200 and json.loads(body) == {"ok": True, "queued": False,
+                                                "tab": ""}
+    code, _ = _post(dash + "/api/session/qc1/command",
+                    {"cmd": "model", "arg": "sonnet[1m]"})
+    assert code == 200
+    code, _ = _post(dash + "/api/session/qc1/command",
+                    {"cmd": "effort", "arg": "low"})
+    assert code == 200
+    assert fe.pasted == [("61", "/compact"), ("61", "/model sonnet[1m]"),
+                         ("61", "/effort low")]
+    assert fe.sent == []
+
+
+def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
+    # fixed vocabulary: unknown command, missing/dirty model arg (a shell
+    # metacharacter must never reach the terminal), unknown effort level,
+    # and compact-with-arg all reject without a keystroke
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "62")
+    A.session_start({"session_id": "qc2", "cwd": "/w", "transcript_path": ""})
+    for bad in ({"cmd": "clear"}, {"cmd": "model"},
+                {"cmd": "model", "arg": "opus; rm -rf /"},
+                {"cmd": "model", "arg": "opus[2m]"},
+                {"cmd": "effort", "arg": "turbo"},
+                {"cmd": "compact", "arg": "focus on the tests"}):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/session/qc2/command", bad)
+        assert e.value.code == 400
+    assert fe.pasted == []
+
+
+def test_post_command_dialog_and_queue_tabs(dash, monkeypatch):
+    # awaiting-command (red — a modal dialog is up) refuses: pasted text
+    # would land IN the dialog, its digits deciding it. A busy tab queues
+    # like any typed input and the reply says so.
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "63")
+    A.session_start({"session_id": "qc3", "cwd": "/w", "transcript_path": ""})
+    states = {"63": "awaiting-command"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/qc3/command", {"cmd": "compact"})
+    assert e.value.code == 409
+    assert fe.pasted == []
+    states["63"] = "working"
+    code, body = _post(dash + "/api/session/qc3/command",
+                       {"cmd": "effort", "arg": "high"})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "queued": True, "tab": "working"}
+    assert fe.pasted == [("63", "/effort high")]
+
+
+def test_post_command_no_window_is_409(dash, monkeypatch):
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)   # headless session
+    A.session_start({"session_id": "qc4", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/qc4/command", {"cmd": "compact"})
+    assert e.value.code == 409
+
+
 def test_post_guard_rejections(dash):
     url = dash + "/api/sessions/new"
     with pytest.raises(urllib.error.HTTPError) as e:      # missing custom header

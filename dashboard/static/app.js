@@ -97,6 +97,22 @@ function proj(row) {
   return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
 }
 function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…" + sid.slice(-4) : sid; }
+// "claude-opus-4-8" → "opus-4.8" — display twin of model.short_model (the
+// Python side is the authority; this only styles the model button's label):
+// drop "claude-", join short numeric version parts with ".", skip 8-digit
+// date suffixes, drop "[1m]".
+function shortModel(m) {
+  let s = String(m || "").toLowerCase().replace("[1m]", "").trim();
+  if (!s) return "";
+  if (s.startsWith("claude-")) s = s.slice(7);
+  const parts = s.split("-");
+  const ver = [];
+  for (const p of parts.slice(1)) {
+    if (/^\d{1,2}$/.test(p)) ver.push(p);
+    else break;
+  }
+  return parts[0] + (ver.length ? "-" + ver.join(".") : "");
+}
 function copySid(sid) {
   navigator.clipboard.writeText(sid).then(
     () => toast("done", "copied session id", sid),
@@ -567,6 +583,7 @@ function connectSession(sid) {
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
     if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
     if (S.ses && S.ses.cancelMode) S.ses.cancelMode(d.tab || "");
+    if (S.ses && S.ses.quickMode) S.ses.quickMode(d.tab || "");
     // patch the open session's row so the attention bar reacts before the
     // next global snapshot lands (item 4: react to the per-session tab event)
     const row = S.sessions.find(r => r.sid === S.cur);
@@ -1928,6 +1945,65 @@ function prefillComposer(restored) {
   ses.clearDraftNext = true;
 }
 
+/* ---------- quick commands (docs/dashboard.md, *Web quick commands*) ----------
+   The scoreboard's SECOND action row (under stop/cancel/rewind/close):
+   compact + the model and effort pickers. Each sends one of the TUI's OWN
+   slash commands through POST /command (fixed vocabulary server-side, never
+   free text); mid-turn it queues like any typed input (`queued` in the
+   reply), and a red asking-you tab disables the row — pasted text would land
+   in the open dialog (the server 409s as the backstop). */
+
+// The picker choices. Model aliases match the new-session form's list (the
+// CLI resolves them); effort matches the server's EFFORTS levels.
+const MODEL_CHOICES = [["fable", "fable"], ["opus", "opus"],
+                       ["sonnet", "sonnet"], ["haiku", "haiku"]];
+const EFFORT_CHOICES = [["low", "low"], ["medium", "medium"],
+                        ["high", "high"], ["xhigh", "xhigh"], ["max", "max"]];
+
+function closeQuickMenu() {
+  document.querySelectorAll(".qcmenu").forEach(m => m.remove());
+}
+
+function sendQuickCmd(cmd, arg) {
+  if (!S.cur) return;
+  const label = "/" + cmd + (arg ? " " + arg : "");
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
+           arg ? { cmd, arg } : { cmd })
+    .then(r => toast("done", label,
+                     r.queued ? "queued — runs when the turn ends" : "sent"))
+    .catch(e => toast("ask", label + " failed", (e && e.error) || ""));
+}
+
+// A rwmenu-styled dropdown anchored inside the button's .qcwrap. A second
+// click on the same button toggles it closed; the document click-away
+// handler below closes it from anywhere outside the wrap.
+function openQuickMenu(wrap, title, cmd, choices) {
+  const again = wrap.querySelector(".qcmenu");
+  closeQuickMenu();
+  if (again) return;
+  const menu = el("div", "rwmenu qcmenu");
+  menu.append(el("div", "rwhead", title));
+  for (const [val, label] of choices) {
+    const b = el("button", "rwopt", label);
+    b.onclick = () => { closeQuickMenu(); sendQuickCmd(cmd, val); };
+    menu.append(b);
+  }
+  wrap.append(menu);
+}
+document.addEventListener("click", (e) => {
+  if (!e.target.closest(".qcwrap")) closeQuickMenu();
+});
+
+// The model button's label carries the session's CURRENT model when the ctx
+// probe knows it (meta/SSE `ctx` — the transcript tail's last assistant
+// record), so the row doubles as a live model indicator.
+function setModelBtn(btn) {
+  const ses = S.ses;
+  const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
+  const m = shortModel(cx && cx.model);
+  btn.textContent = "✦ " + (m || "model") + " ▾";
+}
+
 /* ---------- full web rewind (docs/dashboard.md, *Web rewind*) ---------- */
 // The feed's prompt bubbles ARE the checkpoint list: every user prompt is a
 // checkpoint in Claude Code, so "rewind to a specific message" is a click on
@@ -2078,6 +2154,7 @@ function escGesture() {
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$modal.hidden) return closeNewSession();
+  if (document.querySelector(".qcmenu")) return closeQuickMenu();
   if (document.querySelector(".rwmenu")) return closeRewindMenu();
   if (inRewindPick()) return rewindPickMode(false);
   escGesture();
@@ -2208,8 +2285,66 @@ function renderSessionChrome(tab) {
     res.onclick = () => openNewSession(meta.cwd, S.cur);
     act.append(res);
   }
+  // quick commands on their OWN second row under the action buttons: compact
+  // + the model/effort pickers, each typing the TUI's own slash command into
+  // the session (docs/dashboard.md, *Web quick commands*). Live-only like
+  // stop/cancel — there is no window to type into otherwise.
+  const act2 = el("div", "actrow");
+  if (meta.live && meta.kitty_window_id) {
+    // compact: two-step confirm like close — a misclick summarizes the whole
+    // conversation out from under you, so it arms first
+    const cpt = el("button", "sstop", "⊜ compact");
+    cpt.title = "compact the conversation (/compact)";
+    let cptArmed = null;
+    const cptDisarm = () => {
+      cptArmed = null;
+      cpt.textContent = "⊜ compact";
+      cpt.classList.remove("arm");
+    };
+    cpt.onclick = () => {
+      if (!cptArmed) {
+        cpt.textContent = "compact now?";
+        cpt.classList.add("arm");
+        cptArmed = setTimeout(cptDisarm, 4000);
+        return;
+      }
+      clearTimeout(cptArmed);
+      cptDisarm();
+      sendQuickCmd("compact");
+    };
+    act2.append(cpt);
+    // model: dropdown picker; the label shows the ctx probe's current model
+    // (live via the `ctx` SSE event → updateStatsRow)
+    const mwrap = el("span", "qcwrap");
+    const mdl = el("button", "sstop");
+    ses.modelBtn = mdl;
+    setModelBtn(mdl);
+    mdl.title = "switch the model (/model — also saves as your new-session default)";
+    mdl.onclick = () => openQuickMenu(mwrap, "switch model", "model",
+                                      MODEL_CHOICES);
+    mwrap.append(mdl);
+    act2.append(mwrap);
+    // effort: dropdown picker (current effort is config-only — not readable
+    // from any transcript, see plugins/claude_code/model.py — so no label)
+    const ewrap = el("span", "qcwrap");
+    const eff = el("button", "sstop", "⚡ effort ▾");
+    eff.title = "set the reasoning effort (/effort — also saves as your new-session default)";
+    eff.onclick = () => openQuickMenu(ewrap, "set effort", "effort",
+                                      EFFORT_CHOICES);
+    ewrap.append(eff);
+    act2.append(ewrap);
+    // a red tab = a modal dialog is up — pasted text would land IN it (the
+    // server 409s too; disabling just says so up front). Live via the same
+    // SSE tab event as cancelMode.
+    ses.quickMode = (tab) => {
+      const block = tab === "awaiting-command";
+      for (const b of [cpt, mdl, eff]) b.disabled = block;
+    };
+    ses.quickMode(liveTab());
+  }
   head.append(l1);
   if (act.childElementCount) head.append(act);
+  if (act2.childElementCount) head.append(act2);
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
   head.append(sr);
@@ -2310,6 +2445,8 @@ function updateStatsRow() {
   const errn = (ses.meta && ses.meta.error_count) || 0;
   if (errn) add("", "⚠ " + errn, "warn");
   // the main thread's ctx bar on its own row — live via the `ctx` SSE event
+  // the model quick-button's label follows the same ctx probe
+  if (ses.modelBtn) setModelBtn(ses.modelBtn);
   if (ses.ctxRow) {
     ses.ctxRow.textContent = "";
     const cx = ses.ctx;
