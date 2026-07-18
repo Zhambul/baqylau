@@ -610,6 +610,19 @@ chip uses on inactive cards) with the same two-step arm and the same `/stop`
 POST — the button lives inside the card's `<a>`, so its clicks
 preventDefault/stopPropagation instead of navigating, and success changes no
 hash: the card demotes to parked on its own via the SSE `sessions` push.
+Unlike the header buttons, the card ✕'s arm and in-flight state live in `S`
+(`S.armClose` — one `{sid, until}` slot, a deadline, not a timer handle —
+and the `S.closing` sid set), NOT in the button's closure/DOM: the per-tick
+`sessions` push rebuilds every changed card wholesale (`patchCards`
+`replaceChildren`), and a live card's row — the only kind that shows a ✕ —
+changes every tick, so button-held state died within ~1s of arming and the
+"close?" confirm was gone before it could be clicked. The constructor
+re-derives both states, so a rebuilt (or fully re-rendered) button resumes
+the arm with the remaining window; stale disarm timers left on replaced
+predecessor buttons no-op via a sid+deadline check. The single slot also
+means arming one card steals the arm from any other — one live confirm at a
+time. The header close/compact keep closure-local arm state on purpose:
+nothing tears the detail view's action row down mid-arm.
 
 `POST /api/session/<sid>/interrupt` presses **Escape** in the session's
 window (`Frontend.send_key(win, "escape")` → `kitten @ send-key`) — the TUI's

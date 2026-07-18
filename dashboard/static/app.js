@@ -27,9 +27,14 @@ const S = {
   cards: new Map(),      // sid -> mounted list-card element (the patch targets)
   rowPrev: new Map(),    // sid -> JSON of the row the mounted card shows
   listKey: null,         // listShape() of the last full list render
+  armClose: null,        // {sid, until} — the one armed card-✕ confirm; a
+                         // DEADLINE held here (not in the button) so it
+                         // survives the per-tick card rebuilds (patchCards)
+  closing: new Set(),    // sids with a close POST in flight (card ✕ disabled)
 };
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
+const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compact)
 
 // iPad detection for the message boxes' Enter behavior. Since iPadOS 13
 // Safari masquerades as desktop Safari — identical User-Agent, "MacIntel"
@@ -538,29 +543,48 @@ function sessionCard(row) {
 // click arms ("close?") for 4 s, second fires. Lives inside the card <a>, so
 // clicks must not bubble into a navigation. No hash change on success — the
 // card demotes to parked on its own via the SSE sessions push.
+// Deliberately different from the header ✕ (which keeps closure-local arm
+// state): the arm + in-flight state live in S (S.armClose/S.closing, keyed
+// by sid, the arm as a DEADLINE not a timer handle) because the per-tick
+// sessions push rebuilds a changed card wholesale (patchCards
+// replaceChildren) — and a live card's row changes every tick, so
+// closure/DOM-held state died within ~1s of arming: the confirm reverted
+// before it could be clicked. The constructor re-derives both states, so a
+// rebuilt button resumes the arm with the REMAINING window; stale timers
+// from replaced predecessors are neutered by the sid+deadline check.
 function cardClose(sid) {
   const btn = el("button", "xclose", "✕");
   btn.title = "close this session's terminal tab";
-  let armed = null;
+  btn.disabled = S.closing.has(sid);
+  const armed = () =>
+    S.armClose && S.armClose.sid === sid && Date.now() < S.armClose.until;
   const disarm = () => {
-    armed = null;
-    btn.textContent = "✕";
-    btn.classList.remove("arm");
+    if (S.armClose && S.armClose.sid === sid && Date.now() >= S.armClose.until)
+      S.armClose = null;
+    if (!armed()) { btn.textContent = "✕"; btn.classList.remove("arm"); }
   };
+  const showArmed = () => {
+    btn.textContent = "close?";
+    btn.classList.add("arm");
+    setTimeout(disarm, S.armClose.until - Date.now());
+  };
+  if (armed()) showArmed();          // rebuilt mid-arm: restore the confirm
   btn.onclick = (e) => {
     e.preventDefault(); e.stopPropagation();
-    if (!armed) {
-      btn.textContent = "close?";
-      btn.classList.add("arm");
-      armed = setTimeout(disarm, 4000);
+    if (!armed()) {
+      S.armClose = { sid, until: Date.now() + ARM_MS };
+      showArmed();
       return;
     }
-    clearTimeout(armed);
-    disarm();
+    S.armClose = null;
+    btn.textContent = "✕";
+    btn.classList.remove("arm");
     btn.disabled = true;
+    S.closing.add(sid);      // on success the card demotes to parked (✕ gone)
     postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
+        S.closing.delete(sid);
         btn.disabled = false;
         toast("ask", "close failed", (err && err.error) || "");
       });
@@ -2572,7 +2596,7 @@ function renderSessionChrome(tab) {
       if (!armed) {
         cls.textContent = "close session?";
         cls.classList.add("arm");
-        armed = setTimeout(disarm, 4000);
+        armed = setTimeout(disarm, ARM_MS);
         return;
       }
       clearTimeout(armed);
@@ -2621,7 +2645,7 @@ function renderSessionChrome(tab) {
       if (!cptArmed) {
         cpt.textContent = "compact now?";
         cpt.classList.add("arm");
-        cptArmed = setTimeout(cptDisarm, 4000);
+        cptArmed = setTimeout(cptDisarm, ARM_MS);
         return;
       }
       clearTimeout(cptArmed);
