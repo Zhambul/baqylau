@@ -248,7 +248,11 @@ the browser must preflight, and we never let the preflight pass
 `Frontend.send_text(win, text)` types the text plus a carriage return.
 **Windowed sessions only:** a headless / `claude daemon run` session has no
 window (same scoping as tab colours and toasts), so it returns `409` — the
-composer is disabled with a hint for it. Empty text is `400`. The text rides
+composer is disabled with a hint for it. When it CAN send, the composer takes
+focus as the mirror view opens, so typing works immediately without a click
+(safe because every document-level gesture — Esc, the ⌃ readline keys, ⌃⇧←/→
+— is focus-independent; autofocus only redirects plain typing). Empty text is
+`400`. The text rides
 kitten's `--stdin` verbatim (no shell, no escape interpretation). **The Enter
 is a separate second `send-text` call** (`SEND_ENTER_GAP_S`, 150 ms, after the
 message write — `frontends/kitty.py kitten_send_text`): appended to the same

@@ -1641,6 +1641,12 @@ function renderSessionChrome(tab) {
 
   if (tab === "mirror") {
     body.append(buildComposer());
+    // type right away on open — no click needed. After append (focus() on a
+    // detached node is a no-op), and only when the box can send (a disabled
+    // parked/headless composer takes no input anyway). The document-level
+    // gestures (Esc, ⌃-keys, ⌃⇧←/→) are focus-independent, so this only
+    // redirects plain typing.
+    if (!ses.composer.disabled) ses.composer.focus();
     body.append(buildQueueBar());
     body.append(buildFilterBar());
     const split = el("div", "split");
