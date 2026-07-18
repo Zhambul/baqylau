@@ -116,6 +116,23 @@ def session_title(transcript_path):
     return ""
 
 
+def set_session_title(transcript_path, name):
+    """Session-rename fan-out (path-keyed like session_title — the write half
+    of that read): the first plugin that OWNS the file appends its naming
+    record and returns True; None when no plugin recognizes the path (the
+    dashboard then 409s — e.g. a codex rollout, which must never receive a
+    Claude `agent-name` record). Exceptions (OSError from the append)
+    propagate — the caller is the dashboard's control plane, not a hook."""
+    for p in all_plugins():
+        fn = getattr(p, "set_session_title", None)
+        if fn is None:
+            continue
+        got = fn(transcript_path, name)
+        if got is not None:
+            return got
+    return None
+
+
 def accounts():
     """The launchable subscription accounts for the dashboard's new-session
     picker (plugins.claude_code.account.registry): one entry per switcher

@@ -332,6 +332,53 @@ def test_context_probe_bounded_tail(tmp_path):
 
 # ---------------------------------------------------------------- single owner
 
+def test_set_session_title_writer(tmp_path):
+    """The write half of the naming channel: appends exactly one agent-name
+    line (sessionId from the filename stem) that round-trips through
+    session_title; refuses non-projects layouts and never creates a file."""
+    d = tmp_path / "projects" / "-w-proj"
+    d.mkdir(parents=True)
+    p = d / "sid-1.jsonl"
+    p.write_text(_l({"type": "ai-title", "aiTitle": "auto"}) + "\n")
+    assert TR.set_session_title(str(p), "hand picked") is True
+    lines = p.read_text().splitlines()
+    assert len(lines) == 2
+    assert json.loads(lines[-1]) == {"type": "agent-name",
+                                     "agentName": "hand picked",
+                                     "sessionId": "sid-1"}
+    assert TR.session_title(str(p)) == "hand picked"
+    # non-projects layout (a codex rollout): refused, untouched
+    r = tmp_path / "rollouts" / "r1.jsonl"
+    r.parent.mkdir()
+    r.write_text("{}\n")
+    assert TR.set_session_title(str(r), "x") is None
+    assert r.read_text() == "{}\n"
+    # a missing file is never created just to name it
+    gone = d / "absent.jsonl"
+    assert TR.set_session_title(str(gone), "x") is None
+    assert not gone.exists()
+    # not a .jsonl at all
+    assert TR.set_session_title(str(d / "notes.txt"), "x") is None
+
+
+def test_agent_name_record_has_one_owner():
+    """The `agent-name` naming-record shape is transcript.py's (styleguide
+    single-owner table) — reader AND writer; a second encoding anywhere in
+    product code is drift. The tell is the `agentName` FIELD literal (prose
+    mentions of "agent-name" in docstrings are fine and don't count)."""
+    hits = []
+    for root in ("core", "plugins", "frontends", "bin", "dashboard"):
+        for dirpath, _dirs, files in os.walk(os.path.join(REPO, root)):
+            for f in files:
+                if not f.endswith(".py"):
+                    continue
+                p = os.path.join(dirpath, f)
+                with open(p, encoding="utf-8", errors="replace") as fh:
+                    if "agentName" in fh.read():
+                        hits.append(os.path.relpath(p, REPO))
+    assert hits == ["plugins/claude_code/transcript.py"], hits
+
+
 def test_teammsg_regex_has_one_owner():
     """The teammate-message wire shape is transcript.py's (styleguide
     single-owner table) — a second copy anywhere in product code is drift."""

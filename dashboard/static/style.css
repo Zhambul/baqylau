@@ -265,6 +265,13 @@ body.attn-on .shead { top: 81px; }
 .qcwrap { position: relative; display: inline-flex; }
 .qcwrap .qcmenu { top: calc(100% + 4px); left: 0; right: auto; }
 .shead .proj { color: var(--text); font-weight: 650; font-size: 15px; }
+/* the inline rename input the ✎ button swaps into the title span */
+.shead .proj input.renamein {
+  font: inherit; color: var(--text); min-width: 240px;
+  background: color-mix(in srgb, var(--bg) 88%, black);
+  border: 1px solid var(--dim2); border-radius: var(--r); padding: 2px 8px;
+}
+.shead .proj input.renamein:focus { outline: none; border-color: var(--dim); }
 .shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }
 .shead .sid.copysid { cursor: pointer; }
 .shead .sid.copysid:hover { color: var(--text-soft); text-decoration: underline dotted; }

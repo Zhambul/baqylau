@@ -564,6 +564,15 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.git = g;
     if (S.ses.gitChip) setGitChip(S.ses.gitChip, g);
   });
+  es.addEventListener("title", (e) => {
+    // a web rename or a fresh auto ai-title — retitle the header in place,
+    // but never clobber an inline rename edit in progress
+    const t = JSON.parse(e.data).title || "";
+    if (!S.ses) return;
+    if (S.ses.meta) S.ses.meta.title = t;
+    if (t && S.ses.projEl && !S.ses.projEl.querySelector("input"))
+      S.ses.projEl.textContent = t;
+  });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
@@ -2169,6 +2178,52 @@ function setBadge(badge, tab) {
   if (head) head.dataset.tab = tab;
 }
 
+function startRenameHeader() {
+  // inline rename: swap the header title span for an input; Enter submits,
+  // Esc/blur cancels. The server cleans the name (control-strip + cap) and
+  // replies the stored title, which also rides the `title` SSE push.
+  const ses = S.ses;
+  if (!ses || !ses.projEl || ses.projEl.querySelector("input")) return;
+  const span = ses.projEl;
+  const old = span.textContent;
+  const inp = el("input", "renamein");
+  inp.value = (ses.meta && ses.meta.title) || "";
+  inp.maxLength = 120;                  // mirrors the server's RENAME_MAX
+  let done = false;
+  const restore = (txt) => span.replaceChildren(document.createTextNode(txt));
+  const cancel = () => { if (!done) { done = true; restore(old); } };
+  const submit = () => {
+    if (done) return;
+    const name = inp.value.trim();
+    if (!name) return cancel();
+    done = true;
+    inp.disabled = true;
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rename", {name})
+      .then((d) => {
+        if (ses.meta) ses.meta.title = d.title || name;
+        restore(d.title || name);
+        toast("done", "renamed",
+              d.tab_retitled ? "picker + tab" : "picker (tab on next resume)");
+      })
+      .catch((e) => {
+        restore(old);
+        toast("ask", "rename failed", (e && e.error) || "");
+      });
+  };
+  inp.onkeydown = (e) => {
+    // stopPropagation is load-bearing: the document-level keydown handler
+    // reads Escape as the interrupt/rewind-pick gesture — typing in the
+    // rename box must never leak there
+    e.stopPropagation();
+    if (e.key === "Enter") submit();
+    else if (e.key === "Escape") cancel();
+  };
+  inp.onblur = () => cancel();          // a stray click = cancel, same as Esc
+  span.replaceChildren(inp);
+  inp.focus();
+  inp.select();
+}
+
 function renderSessionChrome(tab) {
   const ses = S.ses;
   if (!ses) return;
@@ -2178,8 +2233,10 @@ function renderSessionChrome(tab) {
   const head = el("div", "shead");
   head.dataset.tab = meta.tab || "";    // state tint; live via setBadge()
   const l1 = el("div", "l1");
-  l1.append(el("span", "proj",
-               meta.title || (meta.cwd ? proj(meta) : shortSid(S.cur))));
+  const projSpan = el("span", "proj",
+                      meta.title || (meta.cwd ? proj(meta) : shortSid(S.cur)));
+  ses.projEl = projSpan;                // the `title` SSE + inline rename target
+  l1.append(projSpan);
   const badge = el("span", "badge");
   ses.badge = badge;
   setBadge(badge, meta.tab || "");
@@ -2214,6 +2271,14 @@ function renderSessionChrome(tab) {
   // the action buttons live on their OWN row (actrow) — inside l1 they
   // floated to wherever the title/chips left room, moving with title width
   const act = el("div", "actrow");
+  // rename: deliberately OUTSIDE the live gate — it works for live AND parked
+  // sessions (the server appends the agent-name naming record to the
+  // transcript; a live kitty tab also retitles in place — docs/dashboard.md
+  // "Web rename")
+  const ren = el("button", "sstop", "✎ rename");
+  ren.title = "rename this session (resume picker + tab)";
+  ren.onclick = () => startRenameHeader();
+  act.append(ren);
   if (meta.live && meta.kitty_window_id) {
     // stop: interrupt the agent in place — an Escape key press in the
     // session's window (the TUI's own interrupt; Esc here does the same).

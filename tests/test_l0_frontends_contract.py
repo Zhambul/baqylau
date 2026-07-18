@@ -67,6 +67,7 @@ CALLS = {
     "send_key":           (("7", "escape"), False),
     "launch_tab":         (("/tmp", ["claude"]), False),
     "close_tab":          (("7",), False),
+    "set_tab_title":      (("7", "new name"), False),
     # viewport scroll / read
     "scroll_window":      (("7", 12), 1),
     "scroll_window_fast": (("7", 12), False),

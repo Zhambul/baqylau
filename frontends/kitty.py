@@ -170,6 +170,15 @@ def kitten_close_tab(kitten, listen, win):
                       "--match", f"window_id:{win}") == 0
 
 
+def kitten_set_tab_title(kitten, listen, win, title):
+    """`kitten @ set-tab-title --match window_id:<win> <title>` — explicit
+    (sticky) title on the tab CONTAINING that window. True on rc 0. No
+    raw-socket fast path, deliberately different from set_tab_color: this is
+    a rare user action off the dashboard, not the blocking hook path."""
+    return kitten_run(kitten, listen, "set-tab-title",
+                      "--match", f"window_id:{win}", title) == 0
+
+
 def kitten_ls(kitten, listen):
     """Parsed `kitten @ ls` (the OS-window/tab/window tree), or [] on failure."""
     try:
@@ -330,6 +339,9 @@ class KittyFrontend(Frontend):
 
     def close_tab(self, win):
         return kitten_close_tab(self.kitten, self.listen, win)
+
+    def set_tab_title(self, win, title):
+        return kitten_set_tab_title(self.kitten, self.listen, win, title)
 
     # --- window enumeration -----------------------------------------------------
     def ls(self):

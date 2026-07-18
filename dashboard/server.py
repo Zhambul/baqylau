@@ -839,6 +839,12 @@ _MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — o
 # the CLI's literal `[1m]` context suffix (`/model sonnet[1m]`); effort args
 # are the same EFFORTS levels the launch form validates.
 _MODEL_ARG_OK = re.compile(r"^[A-Za-z0-9._-]+(\[1m\])?$")
+RENAME_MAX = 120     # rename display cap — picker/tab truncate anyway; a
+                     # protocol-abuse guard on the appended record, not a format limit
+_NAME_CTRL = re.compile(r"[\x00-\x1f\x7f]+")   # control bytes never enter a name:
+                                               # it goes VERBATIM to set-tab-title
+                                               # and the picker — the OSC/CSI
+                                               # injection class neutralize() exists for
 
 
 def launch_argv(words, cmd="claude"):
@@ -1107,6 +1113,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "interrupt":
             return self.post_interrupt(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "rename":
+            return self.post_rename(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "rewind":
             return self.post_rewind(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -1341,6 +1350,59 @@ class Handler(BaseHTTPRequestHandler):
         Every attempt is a `web-interrupt` state_files row, failures also an
         A.error."""
         return self._escape_press(sid, "interrupt", "web-interrupt")
+
+    def post_rename(self, sid):
+        """Rename a session: append the `agent-name` naming record to its
+        transcript (plugins.set_session_title — the /rename channel, docs/
+        session-naming-findings.md) and, when a live window exists, also
+        Frontend.set_tab_title so the kitty tab moves NOW (sticky — the tab
+        stops following auto ai-titles; docs/dashboard.md *Web rename*).
+        DELIBERATELY unlike post_message, no terminal / no window is NOT an
+        error here — a parked session (or a dashboard outside kitty) still
+        gets the JSONL rename and only the tab retitle degrades. Always
+        appends, even mid-turn (a single atomic O_APPEND line — the tab state
+        rides the audit row so a race is diagnosable). Every post-validation
+        attempt is a `web-rename` state_files row, failures also an A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        name = body.get("name")
+        if not isinstance(name, str):
+            return self._json({"error": "empty name"}, 400)
+        name = _NAME_CTRL.sub(" ", name).strip()[:RENAME_MAX].strip()
+        if not name:
+            return self._json({"error": "empty name"}, 400)
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        tpath = row.get("transcript_path") or ""
+        if not tpath or not os.path.isfile(tpath):
+            A.state_file(log, sdb, "web-rename",
+                         {"win": "", "chars": len(name), "ok": False,
+                          "reason": "no transcript"})
+            return self._json({"error": "no transcript"}, 409)
+        fe = _frontend()
+        win = (fe.window_for_session(sid) or "") if fe else ""
+        tab = (API.tab_states().get(win) or "") if win else ""
+        try:
+            appended = plugins.set_session_title(tpath, name)
+        except OSError:
+            A.error(log, "dashboard rename (append failed)", {"sid": sid})
+            A.state_file(log, sdb, "web-rename",
+                         {"win": win, "chars": len(name), "ok": False,
+                          "tab": tab})
+            return self._json({"error": "append failed"}, 502)
+        if appended is None:        # no plugin owns the file (a codex rollout)
+            A.state_file(log, sdb, "web-rename",
+                         {"win": win, "chars": len(name), "ok": False,
+                          "reason": "unsupported"})
+            return self._json({"error": "unsupported session"}, 409)
+        tab_retitled = bool(fe.set_tab_title(win, name)) if (fe and win) else False
+        A.state_file(log, sdb, "web-rename",
+                     {"win": win, "chars": len(name), "ok": True, "tab": tab,
+                      "tab_retitled": tab_retitled})
+        return self._json({"ok": True, "title": name,
+                           "tab_retitled": tab_retitled})
 
     def post_rewind(self, sid):
         """The double-Esc GESTURE, whose meaning in Claude Code depends on
@@ -1872,7 +1934,7 @@ class Handler(BaseHTTPRequestHandler):
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
-                "ctx": None, "git": None}
+                "ctx": None, "git": None, "title": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -1921,6 +1983,14 @@ class Handler(BaseHTTPRequestHandler):
                 if ctx != prev["ctx"]:
                     prev["ctx"] = ctx
                     if not self._sse("ctx", {"ctx": ctx}):
+                        return
+                # the header's title, live — a web rename or a fresh auto
+                # ai-title shows on the slow cadence (the (path, size)-cached
+                # session_title makes the probe a getsize when nothing grew)
+                t = session_title(row.get("transcript_path") or "")
+                if t != prev["title"]:
+                    prev["title"] = t
+                    if not self._sse("title", {"title": t}):
                         return
                 # the header's git chip, live — a checkout/branch switch (or a
                 # removed worktree) shows on the slow cadence

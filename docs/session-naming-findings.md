@@ -4,9 +4,13 @@
 `claude --resume` picker and (b) the live kitty tab/window title — ideally set
 programmatically by a script/hook (not only by a human typing `/rename`).
 
-**Status:** research + on-disk verification complete. No code written yet. This doc is the
-full context for whichever agent implements it (intended target: a *separate* hooks/scripts
-project, not this repo).
+**Status:** research + on-disk verification complete — and since 2026-07-18 **partially
+implemented in THIS repo** as the web dashboard's rename button (docs/dashboard.md *Web
+rename*): the JSONL-append + `set-tab-title` composition recommended in §5, with the
+`agent-name` writer living next to its parser (`plugins/claude_code/transcript.set_session_title`,
+single-owner + grep-test-enforced), the endpoint at `dashboard/server.py post_rename`, and
+`web-rename` audit rows. The SessionStart-hook auto-naming half remains unimplemented (its
+intended target was a *separate* hooks/scripts project).
 
 > Environment where this was verified: macOS, kitty, Claude Code with
 > `CLAUDE_CODE_SESSION_ID` present, session file format as of 2026-07. **Field names and
@@ -232,10 +236,11 @@ Feasible with a single script. Both inputs verified present here:
 3. **Format fragility** — `agent-name`/`agentName` is version-specific; verify before trusting.
 4. **Override semantics** — after `set-tab-title`, that tab ignores Claude Code's titles for the
    rest of the session (usually desired for a deliberately-named session).
-5. **Cross-project note** — this repo (kitty integration) deliberately never writes the session
-   JSONL (it only writes its own `/tmp` state DBs) and requires audit wiring for new features.
-   The intended home is a *separate* hooks project, so those repo-specific invariants may not
-   apply there — but the safety caveats above do.
+5. **Cross-project note** — this repo historically never wrote the session JSONL (only its own
+   `/tmp` state DBs). The web rename (2026-07-18) is now the ONE sanctioned exception: a single
+   atomic append through the record shape's owner (`transcript.set_session_title`), with
+   `web-rename` audit rows per the repo's audit-coverage rule (docs/dashboard.md *Web rename*).
+   Any OTHER JSONL write still needs the same scrutiny — the safety caveats above stand.
 
 **Recommended lowest-risk composition:** always set the **tab** (safe, instant); append the
 **`agent-name`** line only when **not mid-turn** (e.g. Stop hook settle), so the picker catches

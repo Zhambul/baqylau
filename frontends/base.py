@@ -186,6 +186,15 @@ class Frontend:
         (mirror park, audit close) runs on its own. True on success."""
         return False
 
+    def set_tab_title(self, win, title):
+        """Explicitly title the tab CONTAINING window `win` (the web rename).
+        STICKY in kitty: an explicit tab title stops following the active
+        window's OSC title — Claude Code's auto ai-title — for the rest of the
+        session, which is deliberate for a deliberately-named session
+        (docs/session-naming-findings.md §4). True when the terminal accepted
+        the call, else False."""
+        return False
+
     # --- viewport scroll / read ---------------------------------------------
     # Slice consumers: claude-mirror.py only (the renderer's click-to-view
     # scroll restore + get_text scroll-position anchor). A frontend without

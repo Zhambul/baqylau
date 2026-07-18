@@ -1,12 +1,13 @@
 # plugins/claude_code/transcript.py — Claude Code transcript PARSING.
 #
 # The parse half of the substream's parse/paint split (docs/sessionapi.md).
-# This module is the ONE reader of the Claude Code transcript JSONL record
-# shapes — the type/user/assistant discrimination, the teammate-message
-# unwrapping, the content-block walk, the tool_result text normalisation — for
-# BOTH a subagent's transcript (subagents/agent-<id>.jsonl) and the parent
-# session's own transcript (the same record grammar). Two presenters consume
-# its records:
+# This module is the ONE owner of the Claude Code transcript JSONL record
+# shapes — reader AND writer: the type/user/assistant discrimination, the
+# teammate-message unwrapping, the content-block walk, the tool_result text
+# normalisation — for BOTH a subagent's transcript (subagents/agent-<id>.jsonl)
+# and the parent session's own transcript (the same record grammar); the one
+# sanctioned WRITE is set_session_title()'s `agent-name` naming-record append
+# (the dashboard's web rename). Two presenters consume its records:
 #
 #   substream_render.Renderer.handle_line  — the mirror's CAPPED, styled paint
 #   timeline() below                       — the UNCAPPED drill-down entries
@@ -15,7 +16,8 @@
 #
 # Re-encoding a transcript record shape anywhere else is a bug (styleguide
 # single-owner table). parse_line() is pure (no I/O, no state); the only
-# I/O here is timeline()/activity()'s own file read.
+# I/O here is timeline()/activity()'s own file read and set_session_title()'s
+# one-line append.
 #
 # parse_line(s) returns one record per JSONL line (None = nothing renderable):
 #   {"kind": "bad", "raw": s}                       unparseable JSON
@@ -232,6 +234,29 @@ def session_title(path):
     except OSError:
         return ""
     return summary or prompt
+
+
+def set_session_title(path, name):
+    """Append the `agent-name` naming record — the /rename channel `_title_records`
+    parses back (docs/session-naming-findings.md §2) — to a Claude session
+    transcript: the web rename's write half. True on success; None when `path`
+    is not a Claude session transcript (`…/projects/<hash>/<sid>.jsonl` — a
+    codex standalone host's transcript_path is a codex ROLLOUT, and a missing
+    file must never be created just to name it). OSError propagates — the
+    caller (dashboard/server.py post_rename) turns it into a 502 + A.error;
+    this is a user-facing request/reply path, not a hook, so no swallow here.
+    `sessionId` derives from the FILENAME stem, not the caller's sid — an
+    adopt/fork chain's current sid differs from the transcript's own (the
+    findings doc: "sessionId must match the filename")."""
+    if not path.endswith(".jsonl") or not os.path.isfile(path) or \
+            os.path.basename(os.path.dirname(os.path.dirname(path))) != "projects":
+        return None
+    sid = os.path.basename(path)[:-len(".jsonl")]
+    rec = json.dumps({"type": "agent-name", "agentName": name,
+                      "sessionId": sid}, ensure_ascii=False)
+    with open(path, "a", encoding="utf-8") as fh:
+        fh.write(rec + "\n")                # ONE write: atomic O_APPEND line
+    return True
 
 
 CTX_TAIL_B = 262144     # tail-window bytes context_probe scans backwards for the

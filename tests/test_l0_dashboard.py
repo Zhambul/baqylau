@@ -970,6 +970,7 @@ class _FakeFE:
         self.launched = []
         self.closed = []
         self.keyed = []
+        self.titled = []
         self.send_ok = send_ok
         self.launch_ok = launch_ok
         self.wins = {}          # sid -> live window override (stale/missing tag)
@@ -1003,6 +1004,10 @@ class _FakeFE:
 
     def close_tab(self, win):
         self.closed.append(win)
+        return True
+
+    def set_tab_title(self, win, title):
+        self.titled.append((win, title))
         return True
 
     def launch_tab(self, cwd, argv):
@@ -1195,6 +1200,165 @@ def test_post_command_no_window_is_409(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/qc4/command", {"cmd": "compact"})
     assert e.value.code == 409
+
+
+def _rename_transcript(tmp_path, sid, *objs):
+    # a transcript at the REAL layout (…/projects/<hash>/<sid>.jsonl) — the
+    # set_session_title recognition gate refuses anything else
+    d = tmp_path / "projects" / "-w-proj"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / (sid + ".jsonl")
+    p.write_text(_jl(*objs))
+    return str(p)
+
+
+def test_post_rename_appends_and_retitles_live(dash, monkeypatch, tmp_path):
+    from plugins.claude_code import transcript as TR
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "42")
+    tp = _rename_transcript(tmp_path, "ren1",
+                            {"type": "user", "message": {"content": "hi"}},
+                            {"type": "ai-title", "aiTitle": "auto title"})
+    A.session_start({"session_id": "ren1", "cwd": "/w", "transcript_path": tp})
+    code, body = _post(dash + "/api/session/ren1/rename", {"name": "my session"})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "title": "my session",
+                                "tab_retitled": True}
+    # the appended record IS the /rename channel: last line, sessionId from
+    # the filename stem, and it round-trips through the title parser
+    with open(tp) as fh:
+        rec = json.loads(fh.read().splitlines()[-1])
+    assert rec == {"type": "agent-name", "agentName": "my session",
+                   "sessionId": "ren1"}
+    assert TR.session_title(tp) == "my session"
+    assert fe.titled == [("42", "my session")]
+
+
+def test_post_rename_parked_no_window_still_appends(dash, monkeypatch,
+                                                    tmp_path):
+    # DELIBERATELY unlike post_message: no live window is NOT an error — the
+    # JSONL rename still lands, only the tab retitle degrades
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+    tp = _rename_transcript(tmp_path, "ren2",
+                            {"type": "user", "message": {"content": "hi"}})
+    A.session_start({"session_id": "ren2", "cwd": "/w", "transcript_path": tp})
+    code, body = _post(dash + "/api/session/ren2/rename", {"name": "parked one"})
+    assert code == 200
+    d = json.loads(body)
+    assert d["ok"] is True and d["tab_retitled"] is False
+    with open(tp) as fh:
+        assert json.loads(fh.read().splitlines()[-1])["agentName"] == "parked one"
+    assert fe.titled == []
+
+
+def test_post_rename_no_terminal_still_appends(dash, monkeypatch, tmp_path):
+    # ...and no terminal at all (dashboard outside kitty) is not an error
+    # either — post_message's 503 deliberately does not apply here
+    _inject_fe(monkeypatch, _NoTermFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "5")
+    tp = _rename_transcript(tmp_path, "ren3",
+                            {"type": "user", "message": {"content": "hi"}})
+    A.session_start({"session_id": "ren3", "cwd": "/w", "transcript_path": tp})
+    code, body = _post(dash + "/api/session/ren3/rename", {"name": "still works"})
+    assert code == 200 and json.loads(body)["tab_retitled"] is False
+    with open(tp) as fh:
+        assert json.loads(fh.read().splitlines()[-1])["agentName"] == "still works"
+
+
+def test_post_rename_empty_name_is_400(dash, monkeypatch, tmp_path):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "9")
+    tp = _rename_transcript(tmp_path, "ren4",
+                            {"type": "user", "message": {"content": "hi"}})
+    A.session_start({"session_id": "ren4", "cwd": "/w", "transcript_path": tp})
+    with open(tp) as fh:
+        before = fh.read()
+    for bad in ({}, {"name": "   "}, {"name": "\x1b\x07\n \x00"}, {"name": 7}):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/session/ren4/rename", bad)
+        assert e.value.code == 400
+    with open(tp) as fh:
+        assert fh.read() == before
+    assert fe.titled == []
+
+
+def test_post_rename_no_transcript_is_409(dash, monkeypatch, tmp_path):
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "9")
+    A.session_start({"session_id": "ren5", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ren5/rename", {"name": "x"})
+    assert e.value.code == 409
+    # a recorded path that no longer exists: 409, and NEVER created just to
+    # name it (the "a" open would)
+    gone = str(tmp_path / "projects" / "-w-proj" / "ren5b.jsonl")
+    A.session_start({"session_id": "ren5b", "cwd": "/w",
+                     "transcript_path": gone})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ren5b/rename", {"name": "x"})
+    assert e.value.code == 409
+    assert not os.path.exists(gone)
+
+
+def test_post_rename_unsupported_transcript_is_409(dash, monkeypatch,
+                                                   tmp_path):
+    # a transcript_path OUTSIDE the projects/ layout (a codex standalone
+    # host's rollout) must never receive a Claude agent-name record
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "9")
+    d = tmp_path / "rollouts"
+    d.mkdir()
+    tp = str(d / "rollout-ren6.jsonl")
+    with open(tp, "w") as fh:
+        fh.write(_jl({"type": "session_meta"}))
+    A.session_start({"session_id": "ren6", "cwd": "/w", "transcript_path": tp})
+    with open(tp) as fh:
+        before = fh.read()
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ren6/rename", {"name": "x"})
+    assert e.value.code == 409
+    with open(tp) as fh:
+        assert fh.read() == before
+
+
+def test_post_rename_strips_controls_and_caps(dash, monkeypatch, tmp_path):
+    # control bytes (the OSC/CSI injection class) never enter the stored
+    # name or the set-tab-title arg; over-long names cap at RENAME_MAX
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "11")
+    tp = _rename_transcript(tmp_path, "ren7",
+                            {"type": "user", "message": {"content": "hi"}})
+    A.session_start({"session_id": "ren7", "cwd": "/w", "transcript_path": tp})
+    code, body = _post(dash + "/api/session/ren7/rename",
+                       {"name": "a\x1b]2;evil\x07b\nc"})
+    stored = json.loads(body)["title"]
+    assert stored == "a ]2;evil b c"
+    long = "x" * (DS.RENAME_MAX + 300)
+    code, body = _post(dash + "/api/session/ren7/rename", {"name": long})
+    assert json.loads(body)["title"] == "x" * DS.RENAME_MAX
+    with open(tp) as fh:
+        rec = json.loads(fh.read().splitlines()[-1])
+    assert rec["agentName"] == "x" * DS.RENAME_MAX
+    assert fe.titled[-1] == ("11", "x" * DS.RENAME_MAX)
+
+
+def test_post_rename_updates_session_payload_title(dash, monkeypatch,
+                                                   tmp_path):
+    # the (path, size) title cache self-invalidates on the append — the very
+    # next GET shows the new name (list + header payloads share session_title)
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "12")
+    tp = _rename_transcript(tmp_path, "ren8",
+                            {"type": "ai-title", "aiTitle": "auto"})
+    A.session_start({"session_id": "ren8", "cwd": "/w", "transcript_path": tp})
+    assert _get_json(dash + "/api/session/ren8")["title"] == "auto"
+    _post(dash + "/api/session/ren8/rename", {"name": "picked by hand"})
+    assert _get_json(dash + "/api/session/ren8")["title"] == "picked by hand"
 
 
 def test_post_guard_rejections(dash):

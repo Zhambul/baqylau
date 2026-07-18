@@ -40,6 +40,15 @@ def session_title(transcript_path):
     return transcript.session_title(transcript_path)
 
 
+def set_session_title(transcript_path, name):
+    """The session-rename provider (plugins.set_session_title fan-out) — append
+    the `agent-name` naming record to a Claude session transcript; None for
+    files this plugin doesn't own (e.g. a codex rollout). See
+    transcript.set_session_title."""
+    from plugins.claude_code import transcript
+    return transcript.set_session_title(transcript_path, name)
+
+
 def context(transcript_path, main=False):
     """The context-saturation provider (plugins.context fan-out) — the last
     assistant record's usage in a Claude transcript's tail, as {used, window,
