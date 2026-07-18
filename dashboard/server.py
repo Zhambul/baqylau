@@ -109,6 +109,19 @@ NOTIFY_STATES = {tabs.AWAITING_COMMAND: "asking", tabs.AWAITING_RESPONSE: "done"
 # NOT here: a dialog is up and typed text goes to the DIALOG, not the queue.
 QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 
+# Tab states in which the session is MID-TURN — where Claude Code's double-Esc
+# means "cancel the work and restore the last message for editing", not the
+# rewind menu (post_rewind mirrors that split). awaiting-command (red) counts:
+# a dialog is mid-turn, and Esc-Esc there dismisses + cancels.
+BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING,
+             tabs.AWAITING_BG, tabs.AWAITING_COMMAND)
+
+DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
+#                                    Escapes — measured 3/3 reliable mid-turn
+#                                    (the idle rewind-menu detection is flaky at
+#                                    every gap, which is why THAT path types
+#                                    /rewind instead — see post_rewind)
+
 _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 
 # This process's identity, sent as the global SSE `hello` event. A page that
@@ -1017,18 +1030,27 @@ class Handler(BaseHTTPRequestHandler):
         return self._escape_press(sid, "interrupt", "web-interrupt")
 
     def post_rewind(self, sid):
-        """TYPE `/rewind` into the session's window (Frontend.send_text) —
-        the command Claude Code documents as identical to double-Esc: both
-        open the rewind/checkpoint panel IN THE TERMINAL (navigating it
-        happens in the kitty tab). Deliberately NOT synthesized Escape key
-        events: replaying the double-press via send-key proved inherently
-        flaky in a controlled experiment on a live idle session — ~2/3 at
-        the best gap (0.15s), ~1/3 at 0.5s, 0 for one batched send-key
-        call, focus made no difference — while the typed command opened the
-        panel every time. No Escape is pressed, so no escape-recheck (there
-        is no cancel to recover); mid-turn the typed command lands in the
-        TUI's input like any composer send. Audited as `web-rewind`
-        (`{win, ok, tab}`)."""
+        """The double-Esc GESTURE, whose meaning in Claude Code depends on
+        session state — mirrored here by the tab state at gesture time:
+
+        MID-TURN (busy tab): double-Esc CANCELS the current work and
+        restores the last message into the input for editing (it leaves the
+        conversation). Mirrored with TWO Escape key events
+        `DOUBLE_ESC_GAP_S` apart — measured 3/3 reliable mid-turn on a live
+        session (2026-07-18), unlike the idle rewind-menu detection — plus
+        the magenta escape-recheck (the same experiment showed the tab
+        stays stuck thinking after the cancel). Editing then happens in the
+        kitty tab.
+
+        IDLE: double-Esc opens the rewind/checkpoint menu — mirrored by
+        TYPING `/rewind` (documented identical; synthesized double-press
+        key events opened the menu only ~2/3 at the best gap while the
+        typed command opened it every time). No Escape pressed ⇒ no
+        recheck.
+
+        The response's `mode` (`cancel-edit` | `rewind`) tells the page
+        which meaning fired; the same field rides the `web-rewind` audit
+        row (`{win, ok, tab, mode}`)."""
         body = self._post_guard()
         if body is None:
             return
@@ -1045,13 +1067,28 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
-        ok = bool(fe.send_text(win, "/rewind"))
-        A.state_file(log, sdb, "web-rewind", {"win": win, "ok": ok, "tab": tab})
+        if tab in BUSY_TABS:
+            mode = "cancel-edit"
+            tpath = row.get("transcript_path") or ""
+            try:
+                tsize = os.path.getsize(tpath) if tpath else -1
+            except OSError:
+                tsize = -1
+            ok = bool(fe.send_key(win, "escape"))
+            time.sleep(DOUBLE_ESC_GAP_S)
+            ok = bool(fe.send_key(win, "escape")) and ok
+            if ok and tab in (tabs.THINKING, tabs.WORKING):
+                self._spawn_escape_recheck(fe, win, log, tpath, tsize)
+        else:
+            mode = "rewind"
+            ok = bool(fe.send_text(win, "/rewind"))
+        A.state_file(log, sdb, "web-rewind",
+                     {"win": win, "ok": ok, "tab": tab, "mode": mode})
         if not ok:
             A.error(log, "dashboard rewind (send failed)",
-                    {"sid": sid, "win": win})
+                    {"sid": sid, "win": win, "mode": mode})
             return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "tab": tab})
+        return self._json({"ok": True, "tab": tab, "mode": mode})
 
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press

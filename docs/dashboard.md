@@ -443,33 +443,51 @@ carrying the window id): an Esc that kills a turn mid-think leaves no
 signal anywhere (the interrupt-watch KNOWN GAP — docs/tab-colors.md), so
 the tab would sit magenta and the dashboard would keep showing busy; a web
 interrupt is itself an event, so the recheck flips the dead magenta green
-unless any real signal (tab-state movement, transcript growth over the
-press-time size) appears within its 2s grace.
+unless any real signal (tab-state movement, or a new `"type":"user"`
+transcript record past the press-time size) appears within its 2s grace.
 
-`POST /api/session/<sid>/rewind` **types the `/rewind` command**
-(`Frontend.send_text`) — which Claude Code documents as identical to
-double-Esc: both open the rewind/checkpoint menu (restore code and/or
-conversation, summarize from/up to a point; checkpoints are automatic, one
-per user prompt — code.claude.com/docs/en/checkpointing.md). The menu
-opens **in the terminal** — navigating it happens in the kitty tab (the
-toast says so). **Why typed, not synthesized double-Esc key events** —
-measured on a live idle throwaway session (2026-07-18): two `send-key`
-Escapes opened the panel only ~2/3 of the time at the BEST gap (0.15 s),
-~1/3 at 0.5 s, never from one batched send-key call, and focusing the
-window made no difference — the TUI's double-press detection is simply not
-reliable against synthesized key events at any cadence (two shipped
-attempts tuned the gap in both directions before the experiment settled
-it); typed `/rewind` opened the panel **every time**. No Escape is pressed
-on this path, so there is deliberately NO `escape-recheck` (nothing is
-cancelled); mid-turn the typed command lands in the TUI input like any
-composer send (it queues — rewinding is an idle-session gesture). Same
-guard chain and window discipline as the other writes; audited as
-`web-rewind` (`{win, ok, tab}`). The page wires it as the **↶ rewind**
+`POST /api/session/<sid>/rewind` mirrors Claude Code's double-Esc, whose
+MEANING depends on session state — and the endpoint splits on the tab
+state at gesture time:
+
+- **MID-TURN** (a `BUSY_TABS` colour): double-Esc CANCELS the running work
+  and restores the last message into the input for editing (removing it
+  from the conversation). Mirrored with **two Escape key events**
+  `DOUBLE_ESC_GAP_S` (150 ms) apart — measured **3/3 reliable** mid-turn
+  on a live session (2026-07-18), unlike the idle menu — plus the same
+  magenta `escape-recheck` (that experiment showed the tab stays stuck
+  `thinking` after the cancel). Editing then happens in the kitty tab.
+- **IDLE**: double-Esc opens the rewind/checkpoint menu (restore code
+  and/or conversation, summarize; checkpoints are automatic, one per user
+  prompt — code.claude.com/docs/en/checkpointing.md). Mirrored by **typing
+  `/rewind`** (documented identical) — NOT synthesized key events:
+  measured on a live idle session, two `send-key` Escapes opened the menu
+  only ~2/3 of the time at the BEST gap (0.15 s), ~1/3 at 0.5 s, never
+  from one batched call, focus irrelevant, while typed `/rewind` opened it
+  **every time**. No Escape ⇒ no recheck.
+
+The response's `mode` (`cancel-edit` | `rewind`) tells the page which
+meaning fired (its toast differs), and rides the `web-rewind` audit row
+(`{win, ok, tab, mode}`). Same guard chain and window discipline as the
+other writes.
+
+The **`escape-recheck`** that both the interrupt and the mid-turn
+cancel-edit spawn watches the transcript for a new `"type":"user"` RECORD,
+not raw byte growth: the cancel-edit gesture appends pure METADATA
+(`ai-title`, `last-prompt`) right after killing the turn, and a
+raw-growth bail false-positived on the gesture's own records — the tab
+sat magenta until a later gesture's recheck flipped it (observed live).
+Only a user record (a real new prompt, or the `[Request interrupted by
+user]` line) means a real signal owns the tab; metadata-only growth is
+ignored and the dead magenta still flips.
+
+The page wires rewind as the **↶ rewind**
 button, and the session view's **Esc key** as an ATOMIC gesture: a lone
 press is HELD for `ESC_DOUBLE_MS` (450 ms) then classified — single press
 → one `/interrupt` (an Escape key event; busy tab → "interrupted" toast,
-idle → "double-press Esc for rewind"), rapid double → ONLY `/rewind`,
-with **no Escape sent at all**. Streaming the first press immediately
+idle → "double-press Esc for rewind"), rapid double → ONLY `/rewind`
+(which itself splits cancel-edit vs menu server-side), with **no separate
+Escape sent at all**. Streaming the first press immediately
 shipped and corrupted the rewind: the in-flight Escape and the `/rewind`
 text race through two server threads with variable kitten latency, and
 one landed MID-TEXT — the input cleared after "/rewi" and the surviving

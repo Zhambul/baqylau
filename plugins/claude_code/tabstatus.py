@@ -674,14 +674,19 @@ def d_escape_recheck():
     grace window repaints the same magenta invisibly (main()'s dedup skips
     the identical colour and tab rows carry no ts), so a user who interrupts
     and immediately re-prompts would get green painted over a live think.
-    That's why the recheck ALSO watches the TRANSCRIPT (argv[3]): a new
-    prompt lands there the moment it's submitted, and an interrupt that had
-    partial output lands the "[Request interrupted by user]" line — while a
-    turn killed mid-think writes NOTHING (the very gap this recovers). Any
-    transcript growth over the PRESS-TIME baseline (argv[4], stat'd by the
-    dashboard right before the send_key, so not even the spawn-latency
-    sub-second is blind) ⇒ a real signal exists ⇒ bail. Only total silence —
-    no state movement AND no transcript bytes — flips."""
+    That's why the recheck ALSO watches the TRANSCRIPT (argv[3]) from the
+    PRESS-TIME baseline (argv[4], stat'd by the dashboard right before the
+    send_key, so not even the spawn-latency sub-second is blind) — but only
+    for `"type":"user"` RECORDS, not raw growth: a new prompt lands as a
+    user record the moment it's submitted, and an interrupt that had
+    partial output lands the "[Request interrupted by user]" line (also a
+    user record) — while the double-Esc CANCEL-EDIT gesture appends pure
+    METADATA (`ai-title`, `last-prompt`) right after killing the turn, and
+    a raw-growth bail false-positived on exactly that (observed live: the
+    first recheck bailed on the edit-restore's own records and the tab sat
+    magenta until a second gesture's recheck flipped it). User record ⇒ a
+    real signal owns the tab ⇒ bail; metadata-only growth or total silence
+    ⇒ the turn is dead ⇒ flip."""
     global MLOG, AUDIT_SID, REASON
     MLOG = sys.argv[2] if len(sys.argv) > 2 else ""   # this session's log key
     transcript = sys.argv[3] if len(sys.argv) > 3 else ""
@@ -699,9 +704,9 @@ def d_escape_recheck():
             return 0
 
     try:
-        size0 = int(sys.argv[4])            # press-time baseline from the dashboard
+        pos = int(sys.argv[4])              # press-time baseline from the dashboard
     except (IndexError, ValueError):
-        size0 = tsize()                     # fallback: our own start is close enough
+        pos = tsize()                       # fallback: our own start is close enough
     poll = WATCH_POLL_S or 0.25
     for _ in range(max(1, int(ESCAPE_GRACE_S / poll))):
         time.sleep(poll)
@@ -710,10 +715,22 @@ def d_escape_recheck():
             audit_tx(cur, "", 0,
                      "escape-recheck: state moved on — a real signal handled it")
             return None
-        if tsize() != size0:
-            audit_tx(cur, "", 0, "escape-recheck: transcript moved — a new "
-                     "prompt or the interrupt line landed, real signals own it")
-            return None
+        size = tsize()
+        if size > pos:
+            try:
+                with open(transcript, "rb") as f:
+                    f.seek(pos)
+                    chunk = f.read(size - pos)
+            except OSError:
+                chunk = b""
+            end = chunk.rfind(b"\n")        # complete lines only — never scan
+            if end >= 0:                    # a torn record (read-exactly rule)
+                if b'"type":"user"' in chunk[:end]:
+                    audit_tx(cur, "", 0, "escape-recheck: user record appeared "
+                             "— a new prompt or the interrupt line landed, "
+                             "real signals own it")
+                    return None
+                pos += end + 1              # metadata-only growth: keep waiting
     REASON = (f"escape-recheck: web Esc into {start} left no turn-over signal "
               f"for {_dur_label(ESCAPE_GRACE_S)} — mid-thinking cancel gap")
     return AWAITING_RESPONSE

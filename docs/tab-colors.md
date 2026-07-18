@@ -221,14 +221,19 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   event *we* generated — we know an Escape reached a busy tab, where the TUI's
   meaning of Esc is turn-interrupt — so a backstop keyed to that press honours
   the events-never-timeouts rule. It waits `ESCAPE_GRACE_S` (2s) and flips the
-  magenta green only on **total silence**: any tab-state movement bails (a
-  real signal handled it), and any transcript growth over the press-time
-  baseline bails too — the state poll alone is NOT enough, because a new
-  prompt submitted within the grace repaints the same magenta invisibly (the
-  paint dedup skips identical colours), which would put green over a live
-  think; the prompt's transcript record is what makes it visible. Magenta
-  only: blue and red keep their own recoveries, and any cancel that wrote the
-  interrupt line is `interrupt-watch`'s.
+  magenta green only on **silence**: any tab-state movement bails (a real
+  signal handled it), and a new `"type":"user"` transcript RECORD past the
+  press-time baseline bails too — the state poll alone is NOT enough, because
+  a new prompt submitted within the grace repaints the same magenta invisibly
+  (the paint dedup skips identical colours), which would put green over a live
+  think; the prompt's user record is what makes it visible. It matches a user
+  record specifically, NOT raw byte growth: the dashboard's mid-turn
+  cancel-edit gesture (double-Esc — docs/dashboard.md) appends pure metadata
+  (`ai-title`, `last-prompt`) right after killing the turn, and a raw-growth
+  bail false-positived on the gesture's own records, leaving the tab stuck
+  magenta (observed live). Magenta only: blue and red keep their own
+  recoveries, and any cancel that wrote the interrupt line is
+  `interrupt-watch`'s.
 
 
 ## Notes / tweaking

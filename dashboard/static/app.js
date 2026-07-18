@@ -1487,15 +1487,23 @@ function interruptSession() {
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }
 
-// Rewind = Claude Code's checkpoint menu, which opens IN THE TERMINAL. The
-// server TYPES the /rewind command (identical to double-Esc per the docs,
-// and deterministic where synthesized key events were not).
+// The double-Esc gesture — its MEANING is the TUI's, decided server-side by
+// the tab state at gesture time: mid-turn it cancels the work and restores
+// the last message for editing (two real Escapes); idle it opens the
+// rewind/checkpoint menu (typed /rewind). Both happen IN THE TERMINAL; the
+// response's mode says which fired.
 function rewindSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
-    .then(() => toast("done", "rewind",
-                      "/rewind sent — pick a checkpoint in the kitty tab"))
+    .then(r => {
+      if (r && r.mode === "cancel-edit")
+        toast("done", "cancelled",
+              "message restored for editing in the kitty tab");
+      else
+        toast("done", "rewind",
+              "/rewind sent — pick a checkpoint in the kitty tab");
+    })
     .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
 }
 
@@ -1587,7 +1595,7 @@ function renderSessionChrome(tab) {
     // rewind: Claude Code's double-Esc — opens the checkpoint menu in the
     // kitty tab (the panel is the TUI's own; navigate it there)
     const rew = el("button", "sstop", "↶ rewind");
-    rew.title = "open the rewind menu in the terminal (Esc Esc)";
+    rew.title = "double-Esc: rewind menu, or mid-turn cancel + edit last message";
     rew.onclick = () => rewindSession();
     l1.append(rew);
     // close: closes the session's kitty tab — a graceful stop (Claude Code

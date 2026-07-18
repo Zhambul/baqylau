@@ -420,11 +420,12 @@ def test_interruptwatch_queued_prompt_keeps_watching(monkeypatch, tmp_path):
 
 
 def _drive_escaperecheck(monkeypatch, tmp_path, states, grow_at=None,
-                         baseline=None):
+                         baseline=None, grow_lines=None):
     """Run d_escape_recheck in-process, sequenced like _drive_interruptwatch:
     tab_get returns states[i] per call (call 0 is the pre-loop start read;
     last value repeats), and the transcript grows during tab_get call number
-    `grow_at`. Returns (resolved_state, [audited transition reasons])."""
+    `grow_at` — by a user-prompt record unless `grow_lines` overrides the
+    appended text. Returns (resolved_state, [audited transition reasons])."""
     import sys as _sys
     from conftest import REPO
     if REPO not in _sys.path:
@@ -445,7 +446,8 @@ def _drive_escaperecheck(monkeypatch, tmp_path, states, grow_at=None,
         tick["n"] += 1
         if grow_at is not None and tick["n"] == grow_at:
             with open(transcript, "a") as f:
-                f.write('{"type":"user","message":{"content":"new prompt"}}\n')
+                f.write(grow_lines if grow_lines is not None else
+                        '{"type":"user","message":{"content":"new prompt"}}\n')
         return states[min(tick["n"], len(states) - 1)]
 
     argv = ["claude-tab-status.py", "escape-recheck",
@@ -472,22 +474,35 @@ def test_escaperecheck_flips_dead_magenta(monkeypatch, tmp_path):
 def test_escaperecheck_bails_on_new_prompt(monkeypatch, tmp_path):
     """The re-prompt race: a NEW message within the grace repaints the same
     magenta invisibly (dedup), so the state poll alone can't see it — the
-    transcript growth must bail the flip, or green paints over a live think
-    (the exact false-positive the banned idle-timeout had)."""
+    transcript's new user record must bail the flip, or green paints over a
+    live think (the exact false-positive the banned idle-timeout had)."""
     state, reasons = _drive_escaperecheck(
         monkeypatch, tmp_path, states=["thinking"], grow_at=2)
     assert state is None, "flipped green over a freshly-submitted turn"
-    assert any("transcript moved" in r for r in reasons)
+    assert any("user record appeared" in r for r in reasons)
 
 
 def test_escaperecheck_bails_on_press_time_growth(monkeypatch, tmp_path):
     """The press-time baseline: a prompt landing in the spawn-latency gap
-    (before the recheck's own first stat) is still growth — the dashboard
+    (before the recheck's own first stat) is still seen — the dashboard
     passes the size it measured BEFORE sending the Escape."""
     state, reasons = _drive_escaperecheck(
         monkeypatch, tmp_path, states=["thinking"], baseline=0)
     assert state is None
-    assert any("transcript moved" in r for r in reasons)
+    assert any("user record appeared" in r for r in reasons)
+
+
+def test_escaperecheck_ignores_metadata_growth(monkeypatch, tmp_path):
+    """The cancel-edit gesture appends pure metadata (ai-title, last-prompt)
+    right after killing the turn — a raw-growth bail false-positived on the
+    gesture's own records and left the tab magenta (observed live). Metadata
+    growth must NOT bail; the dead magenta still flips."""
+    state, _ = _drive_escaperecheck(
+        monkeypatch, tmp_path, states=["thinking"], grow_at=2,
+        grow_lines=('{"type":"ai-title","aiTitle":"t"}\n'
+                    '{"type":"last-prompt","lastPrompt":"p"}\n'))
+    assert state == "awaiting-response", \
+        "metadata append blocked the mid-thinking cancel recovery"
 
 
 def test_escaperecheck_bails_on_state_movement_and_non_magenta(monkeypatch,
