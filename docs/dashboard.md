@@ -772,7 +772,13 @@ audit `sessions` rows' `kitty_window_id` (newest session wins the window — a
 kitty window outlives sessions). A transition INTO `awaiting-command` (red —
 Claude is asking you) or `awaiting-response` (green — done, your turn) pushes
 a `notify` event to every `/events` client; the app shows an in-page toast
-always and an OS `Notification` when the page is hidden. The payload carries
+always and an OS `Notification` when the page is hidden. The win→session map
+depends on `audit.session_start`'s upsert REFRESHING `kitty_window_id` (and
+clearing `ended_at`): a resume fires SessionStart again under the same sid
+from a NEW kitty window, and before the upsert refreshed the id the map kept
+pointing at the dead window — a resumed session's toasts silently vanished
+(no error anywhere; the notifier just found no row for the new window and
+skipped). The payload carries
 the session TITLE (`session_title` over the row's transcript, resolved at
 push time — the transcript just grew, so a winmap-refresh-time title would be
 stale) and the app shows it as the toast/notification body line, so

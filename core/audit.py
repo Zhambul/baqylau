@@ -484,7 +484,16 @@ def session_start(d):
             " VALUES(:session_id, :cwd, :project_slug, :transcript_path, :mirror_log,"
             " :kitty_window_id, :started_at, :env)"
             " ON CONFLICT(session_id) DO UPDATE SET started_at=excluded.started_at,"
-            " transcript_path=excluded.transcript_path, env=excluded.env",
+            " transcript_path=excluded.transcript_path, env=excluded.env,"
+            # the session is alive again (a resume restarts it under the SAME
+            # sid) — a lingering ended_at/end_reason would say otherwise
+            " ended_at=NULL, end_reason=NULL,"
+            # a resumed session reopens in a NEW kitty window; without this the
+            # dashboard's win->session map (toasts) points at the dead window
+            # forever. Guarded: a daemon-origin SessionStart has a SCRUBBED env
+            # (no KITTY_WINDOW_ID) and must not erase a valid window id.
+            " kitty_window_id=CASE WHEN excluded.kitty_window_id<>''"
+            " THEN excluded.kitty_window_id ELSE kitty_window_id END",
             cols)
         conn.commit()
     except Exception:

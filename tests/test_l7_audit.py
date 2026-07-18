@@ -479,6 +479,24 @@ def test_writers_direct_row_shapes(test_env):
     assert r["otel"] == [("claude_code.token.usage", "main", "m", "input", 3.0, 1)]
 
 
+def test_session_start_resume_refreshes_window(test_env):
+    """A resume fires SessionStart AGAIN under the same sid, from a NEW kitty
+    window: the upsert must refresh kitty_window_id (the dashboard's toast
+    win->session map reads it — a stale id made a resumed session's toasts
+    silently vanish) and clear ended_at/end_reason (the session is alive
+    again). A daemon-origin SessionStart arrives with a SCRUBBED env (no
+    KITTY_WINDOW_ID) and must NOT erase the known window."""
+    start = "A.session_start({'session_id': 'resu', 'cwd': '/w'})\n"
+    _audit_calls(dict(test_env, KITTY_WINDOW_ID="110"), start)
+    _audit_calls(test_env, "A.session_end({'session_id': 'resu'}, 'exit')\n")
+    _audit_calls(dict(test_env, KITTY_WINDOW_ID="123"), start)
+    q = ("SELECT kitty_window_id, ended_at IS NULL, end_reason IS NULL"
+         " FROM sessions WHERE session_id='resu'")
+    assert oracle.q(test_env, q) == [("123", 1, 1)]
+    _audit_calls(test_env, start)                  # scrubbed-env restart
+    assert oracle.q(test_env, q) == [("123", 1, 1)]
+
+
 def test_spool_replay_produces_identical_rows(test_env):
     """DB unusable -> every writer spools; ingest must yield the same rows as the
     direct path — in particular sessions/streams rows must NOT grow a stray `ts`
