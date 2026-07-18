@@ -2029,25 +2029,35 @@ function sendQuickCmd(cmd, arg) {
     .catch(e => toast("ask", label + " failed", (e && e.error) || ""));
 }
 
-// A rwmenu-styled dropdown anchored inside the button's .qcwrap. A second
-// click on the same button toggles it closed; the document click-away
-// handler below closes it from anywhere outside the wrap.
-function openQuickMenu(wrap, title, cmd, choices) {
+// A dropdown anchored inside the button's .qcwrap, in the SAME visual
+// language as the new-session form's dropdown() (.nsdropmenu/.nsdropitem —
+// the dashboard's one picker look); `cur` marks the current value's row .sel
+// like dropdown() does. A second click on the same button toggles it closed;
+// the document click-away handler below closes it from anywhere outside the
+// wrap, Esc via the document keydown handler.
+function openQuickMenu(wrap, cmd, choices, cur) {
   const again = wrap.querySelector(".qcmenu");
   closeQuickMenu();
   if (again) return;
-  const menu = el("div", "rwmenu qcmenu");
-  menu.append(el("div", "rwhead", title));
+  const menu = el("div", "nsdropmenu qcmenu");
   for (const [val, label] of choices) {
-    const b = el("button", "rwopt", label);
-    b.onclick = () => { closeQuickMenu(); sendQuickCmd(cmd, val); };
-    menu.append(b);
+    const row = el("div", "nsdropitem" + (val === cur ? " sel" : ""), label);
+    row.onclick = () => { closeQuickMenu(); sendQuickCmd(cmd, val); };
+    menu.append(row);
   }
   wrap.append(menu);
 }
 document.addEventListener("click", (e) => {
   if (!e.target.closest(".qcwrap")) closeQuickMenu();
 });
+
+// The session's current model FAMILY (a MODEL_CHOICES value) when the ctx
+// probe knows it — shortModel's leading word ("opus-4.8" → "opus").
+function curModelFamily() {
+  const ses = S.ses;
+  const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
+  return (shortModel(cx && cx.model) || "").split("-")[0];
+}
 
 // The model button's label carries the session's CURRENT model when the ctx
 // probe knows it (meta/SSE `ctx` — the transcript tail's last assistant
@@ -2085,10 +2095,11 @@ function inRewindPick() {
 }
 
 function closeRewindMenu() {
-  // :not(.qcmenu) — the quick-command pickers reuse the .rwmenu look but own
-  // their lifecycle (closeQuickMenu + the .qcwrap click-away); the feed
-  // delegation handler below calls this on ANY click, and without the
-  // exclusion it removed a quick-command menu in the same click that opened it
+  // :not(.qcmenu) — the quick-command pickers once reused the .rwmenu class
+  // and the feed delegation handler below (which calls this on ANY click)
+  // removed them in the same click that opened them; they are .nsdropmenu-
+  // styled now, but keep the exclusion so a future .rwmenu-classed menu with
+  // its own lifecycle can't regress the same way
   document.querySelectorAll(".rwmenu:not(.qcmenu)").forEach(m => m.remove());
 }
 
@@ -2435,8 +2446,8 @@ function renderSessionChrome(tab) {
     ses.modelBtn = mdl;
     setModelBtn(mdl);
     mdl.title = "switch the model (/model — also saves as your new-session default)";
-    mdl.onclick = () => openQuickMenu(mwrap, "switch model", "model",
-                                      MODEL_CHOICES);
+    mdl.onclick = () => openQuickMenu(mwrap, "model", MODEL_CHOICES,
+                                      curModelFamily());
     mwrap.append(mdl);
     act2.append(mwrap);
     // effort: dropdown picker (current effort is config-only — not readable
@@ -2444,8 +2455,9 @@ function renderSessionChrome(tab) {
     const ewrap = el("span", "qcwrap");
     const eff = el("button", "sstop", "⚡ effort ▾");
     eff.title = "set the reasoning effort (/effort — also saves as your new-session default)";
-    eff.onclick = () => openQuickMenu(ewrap, "set effort", "effort",
-                                      EFFORT_CHOICES);
+    // no current-value highlight: effort is config-only, readable from no
+    // transcript (plugins/claude_code/model.py)
+    eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES, "");
     ewrap.append(eff);
     act2.append(ewrap);
     // a red tab = a modal dialog is up — pasted text would land IN it (the

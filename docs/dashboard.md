@@ -432,14 +432,17 @@ failures also an `A.error`.
 The client row (app.js `act2` in `renderSessionChrome`): compact carries the
 close button's two-step arm ("compact now?", 4 s) — a misclick would
 summarize the conversation out from under you; model and effort open
-`.rwmenu`-styled dropdowns (`.qcwrap`/`.qcmenu`, Esc or click-away closes)
-listing the new-session form's model aliases (`MODEL_CHOICES` —
-fable/opus/sonnet/haiku) and the `EFFORTS` levels. The styling class is
-SHARED with the rewind menu but the lifecycles are not: `closeRewindMenu()`
-must select `.rwmenu:not(.qcmenu)` — the rewind feed-delegation handler runs
-on every document click and its click-away branch once removed the
-quick-command menu in the same click that opened it (the pickers looked
-dead). The model button's label
+dropdowns in the new-session form's own picker language
+(`.nsdropmenu`/`.nsdropitem` + the anchoring `.qcwrap`/`.qcmenu` classes,
+Esc or click-away closes; the model menu marks the current family `.sel`
+like `dropdown()` does) listing the form's model aliases (`MODEL_CHOICES` —
+fable/opus/sonnet/haiku) and the `EFFORTS` levels. They briefly reused the
+rewind menu's `.rwmenu` class, which taught a lesson that outlives the
+styling: `closeRewindMenu()` keeps selecting `.rwmenu:not(.qcmenu)` because
+the rewind feed-delegation handler runs on every document click and its
+click-away branch once removed the quick-command menu in the same click
+that opened it (the pickers looked dead) — any future menu sharing that
+class needs the same exclusion. The model button's label
 shows the session's CURRENT model (`✦ opus-4.8 ▾`) from the ctx probe's
 `model` field, refreshed by the same `ctx` SSE event that drives the ctx bar
 (`shortModel` in app.js is the display twin of `model.short_model` — the
