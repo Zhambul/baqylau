@@ -1816,7 +1816,11 @@ function renderSessionChrome(tab) {
     // restore, and the server drives the TUI's own checkpoint menu
     const rew = el("button", "sstop", "↶ rewind");
     rew.title = "rewind: pick a message to restore to (mid-turn: cancel + edit)";
-    rew.onclick = () => rewindSession();
+    // stopPropagation is load-bearing: the ENABLING click must not bubble to
+    // the document click-away handler, which reads any non-bubble click in
+    // picking mode as "leave" — without it the mode self-cancelled in the
+    // same event (toast shown, buttons never revealed)
+    rew.onclick = (e) => { e.stopPropagation(); rewindSession(); };
     l1.append(rew);
     // close: closes the session's kitty tab — a graceful stop (Claude Code
     // exits on the HUP and SessionEnd runs the normal lifecycle).
