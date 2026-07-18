@@ -1403,7 +1403,8 @@ tick.
 ## Grouping and titles
 
 The sessions view groups by DIRECTORY (cwd — the audit `sessions` row),
-groups ordered by their newest session; the directory name lives on the group
+groups ordered by their most recently ACTIVE session (`last_active`, the
+recency paragraph below); the directory name lives on the group
 header, so the card itself is titled by the SESSION's name. That name comes
 from `plugins.session_title(transcript_path)` — a path-keyed fan-out (the
 list view already holds every row's path; 50 sid-keyed `session_row()`
@@ -1428,6 +1429,26 @@ rename lands at EOF so the tail window always sees it initially. Agent cards
 follow the same rule: the Task description
 (`desc` from the state DB's agents table) IS the agent's name; the raw
 `agent_id` drops to the subtitle.
+
+**The time chip is recency, not age.** Every time-flavored thing on the list
+— the card's "2m ago" chip, group order, the 3d archive boundary, the resume
+dropdown's "· 2m ago" — keys off `last_active` (`sessions_payload` →
+`_last_active`), not `started_at`: the transcript's mtime (the file grows on
+every turn — the same activity signal interrupt-watch and escape-recheck
+trust), else the audit `ended_at`, else the state DB's mtime (the audit-less
+minimal parked rows carry no transcript path), else `started_at`. **Why not
+`started_at` directly** (the original design): an unlabeled "1h ago" on a
+session card universally reads as *last activity*, so a live session an hour
+into its work looked stale while actively streaming — and a week-old session
+touched yesterday got folded into the archive. **Why not the audit
+`hook_events MAX(ts)`:** a per-row query against the big audit DB per tick
+vs one `stat` on a path the row already carries — and the audit can be
+disabled. `last_active` stays IN the SSE diff key (unlike `paused`): it
+moves only when the transcript actually grows, which is genuine news and
+arrives alongside stats changes anyway. Known wrinkle, accepted: a web
+rename appends a naming record, so it bumps recency — it *is* user activity.
+Agent cards keep `ago(started_at)` deliberately — a *running* agent's age is
+the meaningful number, and it becomes a `dur()` once it ends.
 
 ## The list renders once, then patches
 

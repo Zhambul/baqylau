@@ -104,6 +104,12 @@ function ago(ts) {
   if (s < 86400) return (s / 3600 | 0) + "h ago";
   return (s / 86400 | 0) + "d ago";
 }
+// the session's recency: last_active (server-computed — transcript mtime,
+// with ended_at / state-DB-mtime / started_at fallbacks) for everything
+// time-flavored on the list — the card chip, group order, the archive
+// boundary, the resume dropdown. started_at survives for rows pushed by a
+// not-yet-restarted server.
+function lastActive(row) { return row.last_active || row.started_at || 0; }
 function proj(row) {
   const c = row.cwd || "";
   return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
@@ -412,10 +418,11 @@ function groupSessions(rows) {
     groups.get(k).push(row);
   }
   const ordered = [...groups.entries()].sort((a, b) =>
-    Math.max(...b[1].map(r => r.started_at || 0))
-    - Math.max(...a[1].map(r => r.started_at || 0)));
+    Math.max(...b[1].map(lastActive))
+    - Math.max(...a[1].map(lastActive)));
   const now = Date.now() / 1000;
-  const old = r => !r.started_at || now - r.started_at > ARCHIVE_S;
+  // recency, not age: a week-old session touched yesterday isn't archived
+  const old = r => !lastActive(r) || now - lastActive(r) > ARCHIVE_S;
   return ordered.map(([cwd, grows]) => ({
     cwd, count: grows.length,
     active: grows.filter(r => r.live),
@@ -536,7 +543,9 @@ function sessionCard(row) {
   const tok = (st.tk_in | 0) + (st.tk_out | 0) + (st.tk_read | 0) + (st.tk_create | 0);
   if (tok) r.append(seg(kfmt(tok) + " tok"));
   if (st.cost) r.append(segc(usd(st.cost), "cost"));
-  if (row.started_at) r.append(seg(ago(row.started_at)));
+  // recency, not age: started_at here read as staleness — a live session an
+  // hour into its work showed "1h ago" while actively streaming
+  if (lastActive(row)) r.append(seg(ago(lastActive(row))));
   if (row.git) r.append(gitChip(row.git));
   a.append(r);
   if (row.ctx) a.append(ctxBar(row.ctx));
@@ -2108,7 +2117,7 @@ function openNewSession(prefillCwd, resumeSid) {
     for (const row of S.sessions.filter(r => r.cwd === cwd).slice(0, 15))
       items.push(["resume:" + row.sid,
                   "resume · " + (row.title || shortSid(row.sid))
-                  + (row.started_at ? " · " + ago(row.started_at) : "")]);
+                  + (lastActive(row) ? " · " + ago(lastActive(row)) : "")]);
     start.fill(items);
   };
   fillStart();

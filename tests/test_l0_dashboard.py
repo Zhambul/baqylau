@@ -389,6 +389,35 @@ def test_sessions_stats_cache_by_db_sig(dash, monkeypatch):
     assert row["stats"].get("commands") == 2 and len(calls) > n
 
 
+def test_sessions_last_active_fallback_chain(dash, tmp_path):
+    """The list card's recency chip: `last_active` is the transcript's mtime
+    (the file grows on every turn), else the audit ended_at, else the state
+    DB's mtime, else started_at — started_at alone read as staleness on a
+    live session an hour into its work."""
+    # transcript present → its mtime wins
+    tr = tmp_path / "tr.jsonl"
+    tr.write_text("{}\n")
+    os.utime(tr, (1_000_000, 1_000_000))
+    A.session_start({"session_id": "dla1", "cwd": "/w",
+                     "transcript_path": str(tr)})
+    # transcript gone + ended → the audit ended_at
+    A.session_start({"session_id": "dla2", "cwd": "/w",
+                     "transcript_path": str(tmp_path / "gone.jsonl")})
+    A.session_end({"session_id": "dla2"}, "other")
+    # no transcript, still open, state DB on disk → the state DB's mtime
+    A.session_start({"session_id": "dla3", "cwd": "/w", "transcript_path": ""})
+    S.incr(P.mirror_log("dla3"), commands=1)
+    os.utime(P.state_db(P.mirror_log("dla3")), (2_000_000, 2_000_000))
+    # nothing at all → started_at
+    A.session_start({"session_id": "dla4", "cwd": "/w", "transcript_path": ""})
+
+    rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
+    assert rows["dla1"]["last_active"] == 1_000_000
+    assert rows["dla2"]["last_active"] == rows["dla2"]["ended_at"] > 0
+    assert rows["dla3"]["last_active"] == 2_000_000
+    assert rows["dla4"]["last_active"] == rows["dla4"]["started_at"] > 0
+
+
 def test_live_windows_memoized_by_ttl(monkeypatch):
     """_live_windows runs ONE `kitten @ ls` per _LIVE_TTL window and serves
     the memo in between (the ~21ms subprocess was the server's largest

@@ -363,6 +363,30 @@ def session_ctx(tpath, main=False):
     return ctx
 
 
+def _last_active(row, sdb):
+    """The session's last-activity timestamp, for the list card's recency
+    chip: the transcript's mtime (the file grows on every turn — the same
+    activity signal interrupt-watch and escape-recheck trust), else the audit
+    ended_at, else the state DB's mtime (the audit-less minimal parked rows
+    carry no transcript path), else started_at. Why not started_at directly:
+    an unlabeled "1h ago" reads as staleness, and a live session an hour into
+    its work showed exactly that while actively streaming. Why not the audit
+    hook_events MAX(ts): a per-row query against the big audit DB per tick vs
+    one stat on a path the row already carries — and the audit can be off."""
+    tpath = row.get("transcript_path") or ""
+    if tpath:
+        try:
+            return os.path.getmtime(tpath)
+        except OSError:
+            pass
+    if row.get("ended_at"):
+        return row["ended_at"]
+    try:
+        return os.path.getmtime(sdb)
+    except OSError:
+        return row.get("started_at")
+
+
 _STATS = {}       # state-db path -> (sig, stats): the list poll must not open
 #                   50 sqlite connections per tick — parked DBs never change
 #                   and idle live ones change rarely. The sig is _db_sig (DB
@@ -408,8 +432,10 @@ def _db_cached(cache, sdb, read):
 
 def sessions_payload():
     """The sessions list, enriched with what the list view shows per row:
-    scoreboard stats (read-only, live or parked), the tab state, and the
-    display title (plugins.session_title over the transcript). `live` is
+    scoreboard stats (read-only, live or parked), the tab state, the
+    display title (plugins.session_title over the transcript), and
+    `last_active` (the recency chip / group order / archive boundary —
+    _last_active). `live` is
     corrected to require an OPEN tab (see _live_windows): a session whose state
     DB lingers but whose tab is gone (closed without a SessionEnd — crash/kill,
     or a leaked DB) is demoted to not-live so it can't masquerade as running."""
@@ -432,6 +458,7 @@ def sessions_payload():
         row["title"] = session_title(row.get("transcript_path") or "")
         row["ctx"] = session_ctx(row.get("transcript_path") or "", main=True)
         row["git"] = git_info(row.get("cwd") or "")
+        row["last_active"] = _last_active(row, sdb)
         out.append(row)
     return out
 
