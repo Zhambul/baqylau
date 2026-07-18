@@ -1434,6 +1434,28 @@ document.addEventListener("keydown", (e) => {
   e.preventDefault();
 });
 
+/* ---------- ⌃⇧←/→ cycle through live sessions (kitty's tab keys) ---------- */
+// Mirrors kitty's next/previous-tab shortcuts: step through the LIVE sessions
+// oldest-first (creation order, like the tab bar), wrapping at the ends. From
+// the list view or a parked session — nowhere in the cycle — → enters at the
+// first (oldest) live session and ← at the last. Deliberately not gated on
+// input focus: macOS claims ⌃←/→ (Spaces) but nothing claims ⌃⇧←/→, and in a
+// text box it shadows only a selection gesture that already lives on ⌥⇧/⌘⇧.
+document.addEventListener("keydown", (e) => {
+  if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
+  const dir = e.code === "ArrowRight" ? 1 : e.code === "ArrowLeft" ? -1 : 0;
+  if (!dir) return;
+  e.preventDefault();
+  const live = S.sessions.filter(r => r.live)
+    .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
+  if (!live.length) return;
+  const at = live.findIndex(r => r.sid === S.cur);
+  const to = at < 0 ? (dir > 0 ? 0 : live.length - 1)
+                    : (at + dir + live.length) % live.length;
+  if (live[to].sid !== S.cur)
+    location.hash = "#/s/" + encodeURIComponent(live[to].sid);
+});
+
 // Esc in a live session view = interrupt the agent (the terminal's own Esc,
 // via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
 // slash menu, filter, dropdowns) either runs first here or stopPropagation()s

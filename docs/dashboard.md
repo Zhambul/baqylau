@@ -319,6 +319,15 @@ accelerators live on ⌘), matching is on `e.code` so a non-QWERTY layout
 can't move the keys, and ⌃W dispatches an `input` event so `autoGrow` and
 the suggest/filter `oninput` hooks see the edit.
 
+**⌃⇧←/→ cycle through live sessions** — kitty's next/previous-tab keys,
+mirrored: the cycle is the LIVE sessions ordered oldest-first (creation
+order, the same order kitty's tab bar holds them in), wrapping at the ends;
+from the list view or a parked session (nowhere in the cycle) → enters at
+the oldest live session and ← at the newest. Works with focus anywhere,
+including a text box — macOS claims ⌃←/→ for Spaces but nothing claims
+⌃⇧←/→, so the only thing shadowed is a selection gesture that already
+lives on ⌥⇧/⌘⇧.
+
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
 `_MODEL_OK` (one clean argv word — an alias like `opus` or a full id like
