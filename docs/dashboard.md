@@ -176,7 +176,7 @@ reflow for free and keeps the no-build rule.
 | Route | Returns |
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
-| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree, below) |
+| `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree/dirty, below) |
 | `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git`; agent rows carry their own `ctx` |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
@@ -983,11 +983,12 @@ parking (transcripts persist), and covers agents uniformly.
 
 ## Git chips (branch + worktree)
 
-Which checkout a session runs in — `⎇ branch` (accent) plus `⋔ <name>` (amber)
+Which checkout a session runs in — `⎇ branch` (accent, a trailing `*` when
+the checkout has uncommitted changes) plus `⋔ <name>` (amber)
 when the cwd is a linked worktree — on each session card's stats row and the
 session header's title line (live via the `git` SSE event on the slow cadence).
 `git_info(cwd)` in server.py reads the `.git` files directly, **never a `git`
-subprocess** (this runs per row per poll tick): walk up from the cwd to the
+subprocess for branch/worktree** (this runs per row per poll tick): walk up from the cwd to the
 first `.git`; a directory is a main checkout, a file is a linked worktree
 (`gitdir: .../worktrees/<name>` — the name is the `⋔` chip) or a submodule
 (no `worktrees` segment → no name). HEAD at the resolved gitdir gives the
@@ -996,6 +997,22 @@ walk + gitdir indirection is cached per cwd forever; HEAD itself is re-read on
 every call (one tiny file), so a branch switch shows on the next poll and a
 removed worktree drops the chip. A cwd outside any checkout carries
 `git: null` and no chip renders.
+
+**The dirty `*`** follows the status-line convention (claude-hud, which the
+statusline shim wraps): dirty = `git -c core.quotePath=false
+--no-optional-locks status --porcelain` printing *anything* — staged,
+unstaged, and untracked all count. Worktree/index dirtiness is NOT derivable
+from `.git` metadata (detecting it is exactly the index stat-cache walk `git
+status` performs), so this is the ONE sanctioned `git` subprocess in the
+dashboard (`_git_dirty`): TTL-cached per cwd (`DIRTY_TTL_S` = 10s — bounds it
+to one probe per checkout per TTL, not per row per tick; a flip shows within
+TTL + one slow tick), `DIRTY_TIMEOUT_S` = 1s so a huge or network-mounted
+repo can't stall a poll tick, `--no-optional-locks` so the read-only observer
+never touches the index. The payload's `dirty` is three-valued: true/false
+from a successful probe, `null` = unknown (no git binary, timeout, or a
+broken checkout) — which renders as no marker, same as clean; failures are
+cached under the same TTL so a repo that can't answer isn't re-probed every
+tick.
 
 ## Grouping and titles
 

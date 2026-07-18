@@ -240,6 +240,40 @@ _GIT = {}         # cwd -> the _git_resolve result (None = not a checkout). The
 #                   caches forever; HEAD itself is re-read on every call (one tiny
 #                   file) so a branch switch shows on the next poll.
 
+_DIRTY = {}       # cwd -> (monotonic expiry, True|False|None). The dirty probe
+#                   is the ONE sanctioned `git` subprocess here — worktree/index
+#                   dirtiness is not derivable from .git metadata (detecting it
+#                   IS `git status`'s stat-cache job), so it can't be a file
+#                   read like the rest of git_info. The TTL cache bounds it to
+#                   one probe per checkout per DIRTY_TTL_S instead of per row
+#                   per tick; racing SSE threads at worst duplicate one probe.
+DIRTY_TTL_S = 10.0     # dirty staleness bound (matches the slow SSE cadence ~3s
+#                        polls: a flip shows within TTL + one tick)
+DIRTY_TIMEOUT_S = 1.0  # a huge/network-mounted repo must not stall a poll tick;
+#                        timeout -> None (unknown) cached like any other result
+
+
+def _git_dirty(cwd):
+    """Whether the checkout at cwd has uncommitted changes — the status-line
+    dirty `*` (claude-hud: any `git status --porcelain` output counts, staged/
+    unstaged/untracked alike). --no-optional-locks keeps this read-only
+    observer from touching the index; None = unknown (no git, timeout, or a
+    broken/fake checkout), which renders as no marker."""
+    now = time.monotonic()
+    hit = _DIRTY.get(cwd)
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        res = subprocess.run(
+            ["git", "-c", "core.quotePath=false", "--no-optional-locks",
+             "status", "--porcelain"],
+            cwd=cwd, capture_output=True, timeout=DIRTY_TIMEOUT_S)
+        dirty = bool(res.stdout.strip()) if res.returncode == 0 else None
+    except (OSError, subprocess.SubprocessError):
+        dirty = None
+    _DIRTY[cwd] = (now + DIRTY_TTL_S, dirty)
+    return dirty
+
 
 def _git_resolve(cwd):
     """Walk up from cwd to its checkout: (gitdir, worktree_name) — gitdir the
@@ -275,9 +309,11 @@ def _git_resolve(cwd):
 
 def git_info(cwd):
     """The checkout state of a session's cwd, for the git chips: {"branch",
-    "worktree"} — branch the HEAD ref's short name (a 7-char sha when
-    detached), worktree the linked-worktree name or None for a main checkout.
-    None when cwd isn't inside a git checkout (or its worktree was removed)."""
+    "worktree", "dirty"} — branch the HEAD ref's short name (a 7-char sha when
+    detached), worktree the linked-worktree name or None for a main checkout,
+    dirty the uncommitted-changes flag behind the branch chip's `*` (True/
+    False/None-unknown — _git_dirty). None when cwd isn't inside a git
+    checkout (or its worktree was removed)."""
     if not cwd:
         return None
     hit = _GIT.get(cwd, False)
@@ -298,7 +334,7 @@ def git_info(cwd):
         branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ref
     else:
         branch = head[:7] or "?"
-    return {"branch": branch, "worktree": wt}
+    return {"branch": branch, "worktree": wt, "dirty": _git_dirty(cwd)}
 
 
 _CTX = {}         # transcript_path -> (size, ctx): same (path, size) cache key

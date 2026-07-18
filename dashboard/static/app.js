@@ -448,13 +448,15 @@ function sessionCard(row) {
 function seg(text) { const s = el("span"); s.append(el("span", "v", text)); return s; }
 function segc(text, cls) { const s = el("span"); s.append(el("span", cls, text)); return s; }
 // git chip — "⎇ branch" plus "⋔ worktree" when the session's checkout is a
-// linked worktree (git worktree add / EnterWorktree). Fill an existing span
-// (the header's live chip) or make one (session cards).
+// linked worktree (git worktree add / EnterWorktree). A trailing "*" marks
+// uncommitted changes, the status-line convention (dirty is true/false/null —
+// null = unknown, no marker). Fill an existing span (the header's live chip)
+// or make one (session cards).
 function setGitChip(chip, g) {
   chip.textContent = "";
   chip.hidden = !g;
   if (!g) return;
-  chip.append(el("span", "gb", "⎇ " + g.branch));
+  chip.append(el("span", "gb", "⎇ " + g.branch + (g.dirty ? "*" : "")));
   if (g.worktree) chip.append(el("span", "gw", "⋔ " + g.worktree));
 }
 function gitChip(g) {

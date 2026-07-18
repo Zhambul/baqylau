@@ -7,6 +7,8 @@
 import gzip
 import json
 import os
+import shutil
+import subprocess
 import sys
 import textwrap
 import threading
@@ -454,10 +456,13 @@ def test_context_saturation_payloads_and_sse(dash, tmp_path):
 
 def test_git_chip_payloads(dash, tmp_path):
     """sessions rows and the overview carry the cwd's checkout state {branch,
-    worktree}, read from the .git files directly (never a git subprocess): a
-    main checkout resolves HEAD's ref short name, a linked worktree (a .git
-    FILE pointing into .../worktrees/<name>) carries the worktree name and a
-    detached HEAD shows a 7-char sha, and a non-checkout cwd carries None."""
+    worktree, dirty}, branch/worktree read from the .git files directly (never
+    a git subprocess): a main checkout resolves HEAD's ref short name, a
+    linked worktree (a .git FILE pointing into .../worktrees/<name>) carries
+    the worktree name and a detached HEAD shows a 7-char sha, and a
+    non-checkout cwd carries None. These synthetic .git dirs aren't real
+    checkouts, so the dirty probe (`git status`, the branch chip's `*`)
+    resolves to None = unknown — the degraded shape is itself the contract."""
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/feat/x\n")
@@ -472,15 +477,45 @@ def test_git_chip_payloads(dash, tmp_path):
     A.session_start({"session_id": "gitC", "cwd": str(tmp_path / "nowhere"),
                      "transcript_path": ""})
     rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
-    assert rows["gitA"]["git"] == {"branch": "feat/x", "worktree": None}
-    assert rows["gitB"]["git"] == {"branch": "abcdef0", "worktree": "wt1"}
+    assert rows["gitA"]["git"] == {"branch": "feat/x", "worktree": None,
+                                   "dirty": None}
+    assert rows["gitB"]["git"] == {"branch": "abcdef0", "worktree": "wt1",
+                                   "dirty": None}
     assert rows["gitC"]["git"] is None
     ov = _get_json(dash + "/api/session/gitB")
-    assert ov["git"] == {"branch": "abcdef0", "worktree": "wt1"}
+    assert ov["git"] == {"branch": "abcdef0", "worktree": "wt1", "dirty": None}
     # HEAD is re-read each call: a branch switch shows without cache eviction
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
     assert rows["gitA"]["git"]["branch"] == "main"
+
+
+def test_git_dirty_marker(dash, tmp_path):
+    """the git payload's dirty flag over a REAL checkout: clean -> False,
+    an untracked file -> True (any `git status --porcelain` output counts,
+    the status-line `*` convention). Two separate cwds because the probe is
+    TTL-cached per cwd (DIRTY_TTL_S) — a same-cwd flip inside the test would
+    need a TTL wait."""
+    if not shutil.which("git"):
+        pytest.skip("no git binary")
+    env = {"HOME": str(tmp_path), "PATH": os.environ.get("PATH", "")}
+    for name, mess in (("clean", False), ("dirty", True)):
+        repo = tmp_path / name
+        repo.mkdir()
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)],
+                       check=True, env=env)
+        subprocess.run(["git", "-C", str(repo), "-c", "user.email=t@t",
+                        "-c", "user.name=t", "commit", "-q", "--allow-empty",
+                        "-m", "seed"], check=True, env=env)
+        if mess:
+            (repo / "untracked.txt").write_text("x\n")
+        A.session_start({"session_id": "gd-" + name, "cwd": str(repo),
+                         "transcript_path": ""})
+    rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
+    assert rows["gd-clean"]["git"] == {"branch": "main", "worktree": None,
+                                       "dirty": False}
+    assert rows["gd-dirty"]["git"] == {"branch": "main", "worktree": None,
+                                       "dirty": True}
 
 
 def test_activity_since_fanout(dash, tmp_path):
