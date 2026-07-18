@@ -312,12 +312,12 @@ body.attn-on .shead { top: 81px; }
 
 /* ---- account usage strip (under the header) ----------------------------- */
 #accounts {
-  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+  display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
   padding: 7px 16px; background: var(--panel);
   box-shadow: inset 0 -1px 0 var(--hair);
 }
 .acct { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
-.acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; }
+.acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; min-width: 14ch; }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
 .ubar { display: inline-flex; align-items: center; gap: 5px; }
 .ubar .ulabel { color: var(--dim); font: 10px/1 var(--mono); }
