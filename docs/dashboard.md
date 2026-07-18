@@ -283,10 +283,9 @@ one shared `slashMenu` helper in app.js). A leading `/` with no whitespace yet
 opens a Claude-Code-style completion menu over `GET /api/commands?cwd=…` —
 the composer keys it to the session's cwd (fetched once per view), the form
 to whatever directory is currently typed (cached per dir). ↑/↓ move, Tab
-completes, Enter completes a *partial* token but — in the composer — sends
-when the token already IS the selection (a fully-typed `/compact` sends on
-one Enter; in the form Enter always completes, the textarea keeps its
-newline), Esc closes. The menu drops BELOW its host box, never upward over
+completes, Enter completes a *partial* token but sends/launches when the
+token already IS the selection (a fully-typed `/compact` goes through on one
+Enter — both boxes pass `enterSends`), Esc closes. The menu drops BELOW its host box, never upward over
 the stats row. The list is
 `plugins.slash_commands(cwd)` → `plugins/claude_code/slashcmds.py`: a curated
 `BUILTINS` snapshot of the CLI's built-in commands plus the session cwd's
@@ -303,6 +302,12 @@ stays authoritative**: sending just types `/name …` into the terminal and
 Claude Code's own palette parses and executes it — the menu only has to be
 good enough to complete against, never to validate, so `BUILTINS` drifting
 behind the CLI is harmless (an un-listed command still types fine).
+
+**Both message boxes share the Claude Code input UX**: Enter sends (the
+composer) / launches (the form's first prompt), Shift+Enter inserts a
+newline, and the textarea auto-grows with its content (`autoGrow`), capped
+at `GROW_CAP` = 40% of the viewport (mirrored as `max-height: 40vh` in CSS)
+so a long paste can't swallow the page.
 
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
