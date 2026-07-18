@@ -210,7 +210,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
-| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; replies `{ok, queued, tab}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
+| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
@@ -375,11 +375,32 @@ The scoreboard's SECOND action row (its own line under
 stop/cancel/rewind/close — live-with-window sessions only, like the buttons
 above it): **⊜ compact**, **✦ model ▾**, **⚡ effort ▾**. Each just types one
 of the TUI's OWN slash commands into the session's window — `/compact`,
-`/model <alias>`, `/effort <level>` — because Claude Code applies all three
-immediately when given an argument (no picker dialog opens; the model-config
-docs). The TUI stays authoritative, same philosophy as the "/" menu: the web
-never re-implements compaction or model switching, it only presses the
-button.
+`/model <alias>`, `/effort <level>`. The TUI stays authoritative, same
+philosophy as the "/" menu: the web never re-implements compaction or model
+switching, it only presses the button.
+
+**The switch-confirm menu (`dashboard/confirmdialog.py`).** v2.1.214 applied
+`/model`/`/effort` with an argument outright; newer builds (observed live
+2026-07-18) interpose a numbered are-you-sure menu when the switch would
+invalidate the conversation's prompt cache — "Change effort level? … ❯ 1.
+Yes, switch to low / 2. No, go back" — and the command does NOTHING until it
+is answered, so the web click looked dead (reported live). The clicked
+button IS the user's consent, so after the paste (non-queued only)
+`post_command` runs `confirmdialog.confirm`: poll the screen up to
+`OPEN_TIMEOUT_S` for the menu, press its own Yes digit, verify it closed.
+Detection is by SHAPE, not header text — a ❯-cursored numbered list in the
+screen TAIL (`TAIL_LINES`) with one label leading "Yes" and one "No" —
+because the model variant's wording is unmeasured and scrollback prose / the
+bare composer `❯` must never match (a false press types a digit into the
+chat). No menu inside the window is a clean non-event (`confirm: "none"` —
+same level, or no cache to invalidate); a menu that stays open after Yes is
+`confirm: "failed"` (still 200 — the command WAS typed; the menu is left
+open, never Escaped, and the page toasts "answer the confirm dialog in the
+terminal"). A QUEUED command (busy tab) gets no confirm watch — the menu
+only opens at the turn boundary, minutes away; if it pops unanswered there,
+the red-tab notification is the surface. Each attempt is a
+`web-command-confirm` state_files row (`{win, cmd, confirm}`), failures also
+an `A.error`.
 
 Measured live (v2.1.214, 2026-07-18): `/model <arg>` and `/effort <arg>`
 don't just switch the running session — the TUI **also saves the choice as
@@ -388,7 +409,7 @@ your default…", persisted to settings.json `model`/`effortLevel`). That is
 exactly what typing the command in the terminal does, so the buttons inherit
 it (the tooltips say so); a "session-only" variant would need the picker
 dialog's `s` key and a full screen-driver — deliberately not built while the
-argument form does the job.
+argument form (plus the confirm auto-answer above) does the job.
 
 Server side (`post_command`) the vocabulary is CLOSED — `{"cmd": "compact"}`
 (argless), `{"cmd": "model", "arg"}` with the arg validated against

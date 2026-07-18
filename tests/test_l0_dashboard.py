@@ -999,6 +999,14 @@ class _FakeFE:
         self.keyed.append((win, keys))
         return self.send_ok
 
+    def get_text(self, win, extent="screen"):
+        # screens pop in order; the last one sticks (a stable final state)
+        if len(self.screens) > 1:
+            return self.screens.pop(0)
+        return self.screens[0] if self.screens else ""
+
+    screens = ()
+
     def export_env(self):
         pass
 
@@ -1133,23 +1141,84 @@ def test_post_message_no_terminal_is_503(dash, monkeypatch):
 
 def test_post_command_sends_slash_text(dash, monkeypatch):
     # the quick-command row types the TUI's OWN slash commands — exact text,
-    # bracketed paste like the composer (never send_text)
+    # bracketed paste like the composer (never send_text). Blank screens: no
+    # switch-confirm menu opens, so model/effort reply confirm="none" with no
+    # key pressed
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.confirmdialog, "OPEN_TIMEOUT_S", 0.05)
     monkeypatch.setenv("KITTY_WINDOW_ID", "61")
     A.session_start({"session_id": "qc1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/qc1/command", {"cmd": "compact"})
     assert code == 200 and json.loads(body) == {"ok": True, "queued": False,
                                                 "tab": ""}
-    code, _ = _post(dash + "/api/session/qc1/command",
-                    {"cmd": "model", "arg": "sonnet[1m]"})
-    assert code == 200
-    code, _ = _post(dash + "/api/session/qc1/command",
-                    {"cmd": "effort", "arg": "low"})
-    assert code == 200
+    code, body = _post(dash + "/api/session/qc1/command",
+                       {"cmd": "model", "arg": "sonnet[1m]"})
+    assert code == 200 and json.loads(body)["confirm"] == "none"
+    code, body = _post(dash + "/api/session/qc1/command",
+                       {"cmd": "effort", "arg": "low"})
+    assert code == 200 and json.loads(body)["confirm"] == "none"
     assert fe.pasted == [("61", "/compact"), ("61", "/model sonnet[1m]"),
                          ("61", "/effort low")]
-    assert fe.sent == []
+    assert fe.sent == [] and fe.keyed == []
+
+
+# the switch-confirm menu as the TUI paints it (observed live 2026-07-18):
+# indented ❯-cursored numbered options, Yes first — but the digit is resolved
+# from the labels, never assumed. (_CONFIRM_SCREEN further down in this file
+# is the rewind confirm pane — a different dialog.)
+_SWITCH_CONFIRM_SCREEN = """\
+ Change effort level?        Your next response will be slower
+
+ This conversation is cached for the current effort level.
+
+ ❯ 1. Yes, switch to low
+     2. No, go back
+"""
+
+
+def test_post_command_answers_switch_confirm_menu(dash, monkeypatch):
+    # /effort opened the TUI's are-you-sure menu (the prompt-cache warning) —
+    # the server presses its own Yes digit and verifies the menu closed;
+    # unanswered, the web click looked dead (reported live 2026-07-18)
+    fe = _FakeFE()
+    fe.screens = [_SWITCH_CONFIRM_SCREEN, ""]   # menu up → gone after Yes
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "65")
+    A.session_start({"session_id": "qc5", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/qc5/command",
+                       {"cmd": "effort", "arg": "low"})
+    assert code == 200 and json.loads(body)["confirm"] == "confirmed"
+    assert fe.pasted == [("65", "/effort low")]
+    assert fe.keyed == [("65", ("1",))]
+
+
+def test_post_command_stuck_confirm_menu_reports_failed(dash, monkeypatch):
+    # the menu never closes after Yes: still 200 (the command WAS typed) but
+    # confirm="failed" so the page tells the user to answer in the terminal;
+    # the menu is left open — never Escaped away
+    fe = _FakeFE()
+    fe.screens = [_SWITCH_CONFIRM_SCREEN]       # sticks forever
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.confirmdialog, "STEP_TIMEOUT_S", 0.05)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "66")
+    A.session_start({"session_id": "qc6", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/qc6/command",
+                       {"cmd": "effort", "arg": "low"})
+    assert code == 200 and json.loads(body)["confirm"] == "failed"
+    assert fe.keyed == [("66", ("1",))]
+
+
+def test_confirm_find_menu_shape_not_prose():
+    # detection is by SHAPE: a ❯-cursored numbered list with Yes+No labels.
+    # The bare composer prompt and scrollback prose that happens to enumerate
+    # Yes/No must NOT match (a false press would type a digit into the chat)
+    from dashboard import confirmdialog as cd
+    assert cd.find_menu(_SWITCH_CONFIRM_SCREEN) == "1"
+    assert cd.find_menu("") is None
+    assert cd.find_menu("some output\n❯ \n") is None          # bare prompt
+    assert cd.find_menu("1. Yes, option A\n2. No, option B\n") is None  # no ❯
+    assert cd.find_menu(" ❯ 1. Restore code\n   2. No, go back\n") is None
 
 
 def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
@@ -1189,8 +1258,11 @@ def test_post_command_dialog_and_queue_tabs(dash, monkeypatch):
     code, body = _post(dash + "/api/session/qc3/command",
                        {"cmd": "effort", "arg": "high"})
     assert code == 200
+    # queued: NO confirm watch (the command runs at the turn boundary — no
+    # menu to wait for now), so no `confirm` field and no screen reads
     assert json.loads(body) == {"ok": True, "queued": True, "tab": "working"}
     assert fe.pasted == [("63", "/effort high")]
+    assert fe.keyed == []
 
 
 def test_post_command_no_window_is_409(dash, monkeypatch):

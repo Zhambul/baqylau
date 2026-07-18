@@ -56,7 +56,8 @@ from core import state as ST
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard import askdialog, opshtml, plandialog, rewindmenu
+from dashboard import askdialog, confirmdialog, opshtml, plandialog, \
+    rewindmenu
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -1239,8 +1240,9 @@ class Handler(BaseHTTPRequestHandler):
         """The scoreboard's quick-command row — type one of the TUI's OWN
         slash commands into the session's window: `{"cmd": "compact"}` →
         `/compact`, `{"cmd": "model", "arg": <alias|id>}` → `/model <arg>`,
-        `{"cmd": "effort", "arg": <level>}` → `/effort <arg>` (both set
-        immediately, no picker dialog — the model-config docs). A FIXED
+        `{"cmd": "effort", "arg": <level>}` → `/effort <arg>` (both may open
+        the TUI's switch-confirm menu, auto-answered Yes below — the reply's
+        `confirm` field). A FIXED
         vocabulary, 400 on anything else — the arg is validated
         (_MODEL_ARG_OK / EFFORTS) precisely because it is typed into a
         terminal, and compact takes no arg (the closed vocabulary IS the
@@ -1301,8 +1303,27 @@ class Handler(BaseHTTPRequestHandler):
             A.error(log, "dashboard command (send failed)",
                     {"sid": sid, "win": win, "cmd": cmd})
             return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "queued": tab in QUEUE_TABS,
-                           "tab": tab})
+        res = {"ok": True, "queued": tab in QUEUE_TABS, "tab": tab}
+        if cmd in ("model", "effort") and tab not in QUEUE_TABS:
+            # newer TUI builds interpose a Yes/No switch-confirm menu (the
+            # prompt-cache warning) instead of applying outright — unanswered
+            # it makes the click look dead, so press its own Yes (the button
+            # IS the consent), screen-verified: dashboard/confirmdialog.py.
+            # Mid-turn (queued) the command only runs at the turn boundary,
+            # so there is no menu to wait for here — an unanswered late menu
+            # surfaces as the red-tab notification.
+            try:
+                c = confirmdialog.confirm(fe, win)
+                res["confirm"] = "confirmed" if c["dialog"] else "none"
+            except Exception as e:      # ConfirmError or a frontend hiccup —
+                # the menu (if any) is left open for the terminal user
+                A.error(log, "dashboard command (confirm failed)",
+                        {"sid": sid, "win": win, "cmd": cmd, "err": str(e)})
+                res["confirm"] = "failed"
+            A.state_file(log, sdb, "web-command-confirm",
+                         {"win": win, "cmd": cmd,
+                          "confirm": res["confirm"]})
+        return self._json(res)
 
     def post_stop(self, sid):
         """Close a session's kitty tab (Frontend.close_tab — main window +

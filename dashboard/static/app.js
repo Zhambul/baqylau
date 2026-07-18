@@ -2017,8 +2017,15 @@ function sendQuickCmd(cmd, arg) {
   const label = "/" + cmd + (arg ? " " + arg : "");
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
            arg ? { cmd, arg } : { cmd })
-    .then(r => toast("done", label,
-                     r.queued ? "queued — runs when the turn ends" : "sent"))
+    .then(r => {
+      // `confirm`: the server auto-answers the TUI's switch-confirm menu
+      // when /model // /effort opens one (the prompt-cache warning)
+      const sub = r.queued ? "queued — runs when the turn ends"
+        : r.confirm === "failed"
+          ? "sent — answer the confirm dialog in the terminal"
+          : r.confirm === "confirmed" ? "switched (dialog confirmed)" : "sent";
+      toast(r.confirm === "failed" ? "ask" : "done", label, sub);
+    })
     .catch(e => toast("ask", label + " failed", (e && e.error) || ""));
 }
 
