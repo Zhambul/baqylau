@@ -336,7 +336,13 @@ lives on ⌥⇧/⌘⇧.
 `Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?,
 prompt?]))` opens a new tab — the flags are just more positional `"$@"` words
 ahead of the prompt, so the injection story is unchanged; the session then appears through its
-own `SessionStart` (no synthetic row). **The argv is NOT a bare `["claude"]`**
+own `SessionStart` (no synthetic row). The launch is `--keep-focus`: the user
+is *in the browser* — without it kitty focuses the new tab and macOS activates
+the kitty app over the browser (a plain `kitten @ launch --type=tab` takes
+focus, and a remote launch that takes focus also raises/activates the OS
+window). The tab is created in the background and the new session's card shows
+up on the dashboard as usual; whoever wants the terminal switches to it
+themselves. **The argv is NOT a bare `["claude"]`**
 — kitty execs launch argv with kitty's OWN environment, and a GUI-launched
 kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
 flashes and closes while `kitten @ launch` still exits 0; this shipped once)
