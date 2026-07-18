@@ -116,6 +116,7 @@ def test_plan_sequences_pinned():
     assert _names("PreToolUse", "Task") == [tab, "claude-subagent-fmt.py"]
     assert _names("PreToolUse", "Agent") == [tab, "claude-subagent-fmt.py"]
     assert _names("PreToolUse", "AskUserQuestion") == [tab, ask]
+    assert _names("PreToolUse", "ExitPlanMode") == [tab, ask]
     assert _names("PreToolUse", "Read") == [tab]
     for ev in ("PostToolUse", "PostToolUseFailure"):  # failure pairing
         assert _names(ev, "Bash") == [tab, "claude-cmd-fmt.py"]
@@ -123,6 +124,7 @@ def test_plan_sequences_pinned():
             assert _names(ev, t) == [tab, "claude-file-fmt.py"]
         assert _names(ev, "Monitor") == [tab, "claude-monitor-fmt.py"]
         assert _names(ev, "AskUserQuestion") == [tab, ask]
+        assert _names(ev, "ExitPlanMode") == [tab, ask]
         assert _names(ev, "WebFetch") == [tab]
         assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
     assert _names("Notification") == [tab]
@@ -289,3 +291,41 @@ def test_ask_unhosted_session_creates_no_ghost_db(run_hook, test_env, session):
     run_hook(HOOK, P.stop(s))
     assert not os.path.exists(s.state_db)
     assert not oracle.errors(test_env, s.sid)
+
+
+ASK_PLAN = {"plan": "# Plan\n1. do it", "planFilePath": "/tmp/p.md"}
+
+
+def _plan_pending(s):
+    rows = s.query_state("SELECT val FROM kv WHERE key='plan-pending'")
+    return json.loads(rows[0][0]) if rows else None
+
+
+def test_plan_pretool_stashes_pending(run_hook, test_env, session):
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.base(s, "PreToolUse", tool_name="ExitPlanMode",
+                          tool_use_id="toolu_plan1", tool_input=ASK_PLAN))
+    pend = _plan_pending(s)
+    assert pend == {"tool_use_id": "toolu_plan1", "plan": "# Plan\n1. do it",
+                    "planFilePath": "/tmp/p.md"}
+    assert any(a == "plan-pending" and '"write"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_plan_posttool_clears_only_its_key(run_hook, test_env, session):
+    # the tool-scoped clear: an ExitPlanMode approval must not drop a pending
+    # ask stash (and vice versa) — only the turn boundaries clear both
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.pre_ask(s, ASK_QS))
+    run_hook(HOOK, P.base(s, "PreToolUse", tool_name="ExitPlanMode",
+                          tool_use_id="toolu_plan1", tool_input=ASK_PLAN))
+    run_hook(HOOK, P.base(s, "PostToolUse", tool_name="ExitPlanMode",
+                          tool_use_id="toolu_plan1", tool_input=ASK_PLAN,
+                          tool_response=ASK_PLAN))
+    assert _plan_pending(s) is None
+    assert _pending(s) is not None          # the ask stash survived
+    run_hook(HOOK, P.stop(s))               # boundary clears the rest
+    assert _pending(s) is None

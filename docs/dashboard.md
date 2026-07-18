@@ -794,6 +794,71 @@ the click). Every attempt is a `web-answer` state_files row
 `A.error`. The card clears optimistically on 200 and authoritatively via
 the SSE `ask` event when the stash drops.
 
+## Web plan mode (`POST /api/session/<sid>/plan-decision`) — ExitPlanMode from the browser
+
+When Claude presents a plan (ExitPlanMode — the "Ready to code? … Would
+you like to proceed?" dialog), the session view grows a **plan card**
+above the composer: the plan itself rendered as markdown (`plan_html`,
+the server-side md_html of the PreToolUse payload's `plan` — the raw
+markdown rides the hook, measured 2026-07-18, alongside `planFilePath`),
+the dialog's decision buttons, a feedback box mirroring the "Tell Claude
+what to change" row, and **keep planning** (the dialog's own Esc).
+
+**Detection** rides the same stash as the ask card:
+`plugins/claude_code/ask_fmt.py` is the pending MODAL-DIALOG tracker for
+both tools (dispatcher matcher `AskUserQuestion|ExitPlanMode`) — kv
+`plan-pending` written on PreToolUse, cleared on the tool's own
+PostToolUse(+Failure) and at the turn boundaries, because every plan
+decline (terminal Esc, a typed feedback) fires NO closing hook — the
+transcript just gains the rejection `tool_result` ("The user doesn't
+want to proceed…"). The clears are TOOL-SCOPED: an ExitPlanMode approval
+drops only `plan-pending`, never a co-pending ask stash (and vice
+versa); the turn boundaries drop both. Snapshot carries `plan`, the
+session SSE emits a `plan` event on change.
+
+**The decision buttons come from the live screen** — `POST
+/plan-options` (`dashboard/plandialog.options`, read-only, no key
+pressed): the labels VARY with the session's permission mode ("Yes, and
+bypass permissions" in a bypass session vs "Yes, and auto-accept edits"
+elsewhere — measured), and they exist nowhere but the dialog pixels, so
+hardcoding them would drift. The card fetches once per render; a parse
+failure degrades to the feedback box + "decide in the terminal".
+
+**Deciding** (`POST /plan-decision`, `dashboard/plandialog.py` — third
+sibling of rewindmenu/askdialog, same screen-verified philosophy):
+
+- `digit` + `label` — press that decision row, after verifying the
+  screen STILL shows that label on that digit (the dialog may have been
+  replaced since the options were fetched — label drift is a 409 with
+  nothing pressed). A decision digit selects immediately (measured:
+  approve fired PostToolUse, flipped the permission mode per the chosen
+  option, and executed the plan);
+- `feedback` — the "Tell Claude what to change" row: its digit only
+  FOCUSES the editable row (measured — unlike the decision rows), typed
+  text goes inline and Enter submits the rejection-with-feedback.
+  Newlines collapse to spaces (single-line editor; a raw CR mid-text
+  would submit early);
+- `dismiss: true` — Escape, the TUI's own reject-and-keep-planning.
+
+Bail semantics match askdialog, NOT rewindmenu: a failed step leaves the
+dialog exactly as it was (an Escape bail would REJECT a plan the user
+may still want to approve) — PlanError → 409 with `step`. An `open` bail
+(the dialog is gone while the stash lingers — resolved in the terminal,
+the turn-boundary clear not yet fired) **self-heals the stash**
+(`_heal_stash` → `state.kv_del_at`, the explicit-path fresh-connection
+delete: the request runs on a handler THREAD, where kv_del's cached
+connection would silently no-op under sqlite's check_same_thread), so
+the page's card clears on the next SSE tick; the same heal applies to
+the ask card's `open` bail. Every attempt is a `web-plan` state_files
+row (`{win, ok, kind: decide|feedback|dismiss, label, tool_use_id}`,
++`step` on a bail), failures also an `A.error`.
+
+Verified live end-to-end (2026-07-18): feedback → Claude revised the
+plan (and the final output honored it), dismiss → rejected in place,
+approve by digit+label → PostToolUse + the plan executed; options parsed
+from the live dialog exactly; stash lifecycle audited write→remove with
+reasons (`answered` / `new prompt` / overwrite-by-revision).
+
 ## Accounts & usage
 
 The machine juggles several Claude subscriptions through the `claude-subscription`

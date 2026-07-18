@@ -52,10 +52,11 @@ from core import locks
 from core import paths as P
 from core import sessionapi as API
 from core import spawn as SP
+from core import state as ST
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard import askdialog, opshtml, rewindmenu
+from dashboard import askdialog, opshtml, plandialog, rewindmenu
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -324,20 +325,53 @@ def session_payload(sid):
         data["live"] = False
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
     data["ask"] = _ask_pending(sid) if data.get("live") else None
+    data["plan"] = _plan_pending(sid) if data.get("live") else None
     return data
 
 
-def _ask_pending(sid):
-    """The session's pending AskUserQuestion, or None — the `ask-pending` kv
-    stash plugins/claude_code/ask_fmt.py maintains (write on PreToolUse,
-    cleared on answer/turn-boundary). Read-only (kv_at — never creates the
-    state DB). The page renders it as the ask card; /answer verifies the
-    DIALOG on screen anyway, so a stale stash can never mis-answer."""
+def _dialog_pending(sid, key):
+    """A pending modal-dialog stash (`ask-pending` / `plan-pending`), or None
+    — the kv rows plugins/claude_code/ask_fmt.py maintains (write on
+    PreToolUse, cleared on answer/turn-boundary). Read-only (kv_at — never
+    creates the state DB). The endpoints verify the DIALOG on screen anyway,
+    so a stale stash can never mis-answer."""
     sdb = API.state_db_for(sid)
     if not sdb:
         return None
-    pending = API.kv_at(sdb, "ask-pending")
+    pending = API.kv_at(sdb, key)
     return pending if isinstance(pending, dict) else None
+
+
+def _ask_pending(sid):
+    return _dialog_pending(sid, "ask-pending")
+
+
+def _plan_pending(sid):
+    """The pending plan, ENRICHED for the page: `plan_html` (the markdown
+    rendered server-side, the msg-bubble md_html — escape-first)."""
+    pending = _dialog_pending(sid, "plan-pending")
+    if pending and "plan_html" not in pending:
+        pending = dict(pending)
+        pending["plan_html"] = opshtml.md_html(pending.get("plan") or "")
+    return pending
+
+
+def _heal_stash(sid, log, sdb, key, step):
+    """An endpoint's `open` bail means the dialog is GONE while the stash
+    lingers (resolved in the terminal; the turn-boundary clear hasn't fired
+    yet) — drop the stash so the page's card clears on the next SSE tick
+    instead of sitting stale. Audited like ask_fmt's own removes."""
+    if step != "open":
+        return
+    try:
+        # kv_del_at, not kv_del: this runs on a request-handler THREAD, and
+        # kv_del's cached connection is bound to whichever thread created it
+        # (sqlite check_same_thread) — the delete would silently no-op
+        if ST.kv_del_at(sdb, key):
+            A.state_file(log, sdb, key,
+                         {"action": "remove", "reason": "web open-bail"})
+    except Exception:
+        A.error(log, "dashboard stash heal (%s)" % key, {"sid": sid})
 
 
 def _enrich_entry(ent):
@@ -927,6 +961,12 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "answer":
             return self.post_answer(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "plan-options":
+            return self.post_plan_options(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "plan-decision":
+            return self.post_plan_decision(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         return self._json({"error": "not found"}, 404)
@@ -1281,11 +1321,109 @@ class Handler(BaseHTTPRequestHandler):
                          {"win": win, "ok": False, "chat": chat,
                           "step": e.step,
                           "tool_use_id": pending.get("tool_use_id") or ""})
+            _heal_stash(sid, log, sdb, "ask-pending", e.step)
             return self._json({"error": str(e), "step": e.step}, 409)
         A.state_file(log, sdb, "web-answer",
                      {"win": win, "ok": True, "chat": chat,
                       "tool_use_id": pending.get("tool_use_id") or ""})
         return self._json({"ok": True, "chat": chat})
+
+    def _plan_guard(self, sid):
+        """The shared head of the two plan endpoints: guard the POST, match
+        the stash, resolve the live window. Returns (body, pending, fe, win,
+        log, sdb) — or (None, …) after sending the error response."""
+        none = (None,) * 6
+        body = self._post_guard()
+        if body is None:
+            return none
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        pending = _plan_pending(sid)
+        if not pending:
+            self._json({"error": "no pending plan"}, 409)
+            return none
+        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id")
+                                               or ""):
+            self._json({"error": "plan expired — a newer plan replaced it "
+                        "(refresh)"}, 409)
+            return none
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard plan (no terminal)", {"sid": sid})
+            self._json({"error": "no terminal available"}, 503)
+            return none
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            self._json({"error": "session has no live window"}, 409)
+            return none
+        return body, pending, fe, win, log, sdb
+
+    def post_plan_options(self, sid):
+        """The plan card's decision buttons — the dialog's option labels VARY
+        with the session's permission mode ("Yes, and bypass permissions" vs
+        "Yes, and auto-accept edits"), so the page fetches them from the live
+        screen (plandialog.options — read-only: no key is pressed). An `open`
+        bail self-heals the stash (the dialog resolved in the terminal)."""
+        body, pending, fe, win, log, sdb = self._plan_guard(sid)
+        if body is None:
+            return
+        try:
+            opts = plandialog.options(fe, win)
+        except plandialog.PlanError as e:
+            _heal_stash(sid, log, sdb, "plan-pending", e.step)
+            return self._json({"error": str(e), "step": e.step}, 409)
+        return self._json({"ok": True, "options": opts})
+
+    def post_plan_decision(self, sid):
+        """Decide the OPEN plan dialog from the web (docs/dashboard.md, *Web
+        plan mode*): drives the TUI's own dialog via dashboard/plandialog.
+
+        Body (one of, after `tool_use_id` matching the `plan-pending` stash):
+        `digit` + `label` — press that decision row, verified against the
+        live screen (label drift = 409, nothing pressed); `feedback` — the
+        "Tell Claude what to change" row: focus, type, Enter (rejects with
+        feedback; newlines collapse — single-line editor); `dismiss: true` —
+        Escape, the TUI's own reject-and-keep-planning.
+
+        409 on stash mismatch or any unverified step (PlanError — the dialog
+        is left OPEN: an Escape bail would REJECT a plan the user may still
+        approve; `open` bails self-heal the stash). Every attempt is a
+        `web-plan` state_files row, failures also an A.error. The card
+        clears via the SSE `plan` event when the stash drops (approval's
+        PostToolUse, or the turn boundary after a reject)."""
+        body, pending, fe, win, log, sdb = self._plan_guard(sid)
+        if body is None:
+            return
+        tid = pending.get("tool_use_id") or ""
+        if body.get("dismiss"):
+            kind, run = "dismiss", (plandialog.dismiss, (fe, win))
+        elif isinstance(body.get("feedback"), str) \
+                and body["feedback"].strip():
+            kind = "feedback"
+            run = (plandialog.feedback, (fe, win, body["feedback"]))
+        elif body.get("digit") and isinstance(body.get("label"), str):
+            kind = "decide"
+            run = (plandialog.decide,
+                   (fe, win, str(body["digit"]), body["label"]))
+        else:
+            return self._json({"error": "need digit+label, feedback, or "
+                               "dismiss"}, 400)
+        try:
+            run[0](*run[1])
+        except plandialog.PlanError as e:
+            A.error(log, "dashboard plan (%s)" % e.step,
+                    {"sid": sid, "win": win, "kind": kind,
+                     "detail": str(e)})
+            A.state_file(log, sdb, "web-plan",
+                         {"win": win, "ok": False, "kind": kind,
+                          "step": e.step, "tool_use_id": tid})
+            _heal_stash(sid, log, sdb, "plan-pending", e.step)
+            return self._json({"error": str(e), "step": e.step}, 409)
+        A.state_file(log, sdb, "web-plan",
+                     {"win": win, "ok": True, "kind": kind,
+                      "label": body.get("label") or "", "tool_use_id": tid})
+        return self._json({"ok": True, "kind": kind})
 
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press
@@ -1510,7 +1648,7 @@ class Handler(BaseHTTPRequestHandler):
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
-                "running": None, "errors": None, "ask": None}
+                "running": None, "errors": None, "ask": None, "plan": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -1575,12 +1713,17 @@ class Handler(BaseHTTPRequestHandler):
                 prev["tab"] = tab
                 if not self._sse("tab", {"tab": tab}):
                     return
-            # the pending AskUserQuestion card (fast cadence — the dialog just
-            # appeared and the user is waiting to be asked); None clears it
+            # the pending modal-dialog cards (fast cadence — the dialog just
+            # appeared and the user is waiting); None clears each card
             ask = _ask_pending(sid)
             if ask != prev["ask"]:
                 prev["ask"] = ask
                 if not self._sse("ask", {"ask": ask}):
+                    return
+            plan = _plan_pending(sid)
+            if plan != prev["plan"]:
+                prev["plan"] = plan
+                if not self._sse("plan", {"plan": plan}):
                     return
             now = time.monotonic()
             if now - beat > HEARTBEAT_S:

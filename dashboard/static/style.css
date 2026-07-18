@@ -401,6 +401,37 @@ body.attn-on .shead { top: 81px; }
 }
 .asksubmit:hover:not(:disabled) { box-shadow: var(--card-hover); }
 
+/* the plan card — ExitPlanMode approval mirrored from the terminal dialog
+   (docs/dashboard.md, *Web plan mode*); --gold, the plan/reasoning accent */
+.planwrap[hidden] { display: none; }
+.plancard {
+  margin: 0 0 10px; padding: 10px 12px 12px;
+  background: var(--panel); border-radius: var(--r);
+  box-shadow: var(--card-hover);
+  border-left: 3px solid var(--gold);
+}
+.plantitle {
+  flex: 1; color: var(--gold); font: 650 11px/1.3 var(--sans);
+  text-transform: uppercase; letter-spacing: .1em;
+}
+.planbody {
+  max-height: 42vh; overflow-y: auto; margin: 4px 0 10px;
+  padding: 9px 12px; border-radius: 8px;
+  background: var(--panel2); box-shadow: inset 0 0 0 1px var(--hair);
+}
+.planbtns { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.planopt {
+  border: none; border-radius: 8px; padding: 7px 12px; cursor: pointer;
+  background: color-mix(in srgb, var(--gold) 14%, var(--bg));
+  color: var(--text); font: 600 12px/1.4 var(--sans); text-align: left;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 40%, transparent);
+}
+.planopt:hover:not(:disabled) { box-shadow: var(--card-hover); color: var(--gold); }
+.planopt:disabled { opacity: .55; cursor: default; }
+.plandim { color: var(--dim); font: 400 11.5px/1.4 var(--sans); }
+.planfb { display: flex; gap: 6px; align-items: center; }
+.planfb .askother { margin-top: 0; flex: 1; }
+
 .composer {
   display: flex; align-items: flex-end; gap: 8px;
   box-shadow: var(--card); border-radius: var(--r);

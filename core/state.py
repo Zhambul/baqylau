@@ -556,6 +556,28 @@ def kv_at(path, key):
         conn.close()
 
 
+def kv_del_at(path, key):
+    """kv_del() over an explicit DB path on a FRESH, short-lived connection —
+    the write sibling of kv_at, for multi-threaded consumers (the dashboard's
+    stash self-heal): kv_del's cached live-path connection is bound to the
+    thread that created it, so a call from another thread silently no-ops
+    inside its swallow. mode=rw (never creates — the file's existence is the
+    session-alive signal). True when the row is gone, else False."""
+    try:
+        conn = sqlite3.connect("file:%s?mode=rw" % path, uri=True,
+                               timeout=5.0)
+    except Exception:
+        return False
+    try:
+        conn.execute("DELETE FROM kv WHERE key=?", (key,))
+        conn.commit()
+        return True
+    except Exception:
+        return False
+    finally:
+        conn.close()
+
+
 def ops_at(path, after_id=0):
     """(last_id, [op, ...]) over an explicit DB path, read-only — the historical
     twin of ops_after() (which serves the live session through the cached writer

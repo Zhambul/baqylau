@@ -497,6 +497,12 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.ask = d.ask || null;
     renderAsk();
   });
+  es.addEventListener("plan", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    if (S.ses.meta) S.ses.meta.plan = d.plan || null;
+    renderPlan();
+  });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
@@ -1108,6 +1114,106 @@ function submitAsk(ask, answers, chat) {
     .catch(e => {
       toast("ask", "answer failed", (e && e.error) || "");
       renderAsk();                           // re-enable for a retry
+    });
+}
+
+/* ---------- the plan card (ExitPlanMode approval from the web) ---------- */
+// While Claude's plan-approval dialog is up in the terminal, the session SSE
+// carries the pending plan (the PreToolUse stash — plan markdown rendered
+// server-side as plan_html) and this card mirrors it above the composer.
+// The DECISION buttons come from the live screen (POST /plan-options —
+// their labels vary with the session's permission mode), a feedback box
+// mirrors the dialog's "Tell Claude what to change" row, and "keep planning"
+// is the dialog's own Esc. Decisions POST /plan-decision, where the server
+// drives the real dialog screen-verified (dashboard/plandialog.py).
+
+function buildPlanCard() {
+  const wrap = el("div", "planwrap");
+  S.ses.planEl = wrap;
+  renderPlan();
+  return wrap;
+}
+
+function renderPlan() {
+  const ses = S.ses;
+  if (!ses || !ses.planEl) return;
+  const wrap = ses.planEl;
+  wrap.textContent = "";
+  const plan = ses.meta && ses.meta.plan;
+  wrap.hidden = !plan;
+  if (!plan) return;
+  const card = el("div", "plancard");
+  const head = el("div", "askhead");
+  head.append(el("span", "plantitle", "claude has a plan — proceed?"));
+  const dis = el("button", "askchat", "keep planning");
+  dis.title = "reject the plan and stay in plan mode (the dialog's Esc)";
+  dis.onclick = () => submitPlan(plan, { dismiss: true }, "plan dismissed",
+                                 "Claude keeps planning");
+  head.append(dis);
+  card.append(head);
+  const body = el("div", "planbody md");
+  body.innerHTML = plan.plan_html || "";
+  card.append(body);
+  const btns = el("div", "planbtns");
+  btns.append(el("span", "plandim", "loading options…"));
+  card.append(btns);
+  const fb = el("div", "planfb");
+  const fbIn = el("input", "askother");
+  fbIn.type = "text";
+  fbIn.spellcheck = false;
+  fbIn.placeholder = "tell Claude what to change…";
+  fbIn.onkeydown = (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter" && fbIn.value.trim())
+      submitPlan(plan, { feedback: fbIn.value.trim() }, "feedback sent",
+                 "Claude will revise the plan");
+  };
+  const fbB = el("button", "askchat", "send feedback");
+  fbB.onclick = () => {
+    if (fbIn.value.trim())
+      submitPlan(plan, { feedback: fbIn.value.trim() }, "feedback sent",
+                 "Claude will revise the plan");
+  };
+  fb.append(fbIn, fbB);
+  card.append(fb);
+  wrap.append(card);
+  // the decision buttons come from the LIVE dialog (labels vary with the
+  // session's permission mode) — fetched once per card render
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-options",
+           { tool_use_id: plan.tool_use_id || "" })
+    .then(r => {
+      btns.textContent = "";
+      (r.options || []).forEach(o => {
+        if (o.feedback) return;            // the feedback row is the box above
+        const b = el("button", "planopt", o.label);
+        b.onclick = () => submitPlan(plan, { digit: o.digit, label: o.label },
+                                     "decided", o.label);
+        btns.append(b);
+      });
+    })
+    .catch(e => {
+      btns.textContent = "";
+      btns.append(el("span", "plandim",
+                     "options unavailable — " + ((e && e.error) || "") +
+                     " (decide in the terminal, or send feedback below)"));
+    });
+}
+
+function submitPlan(plan, body, okTitle, okDetail) {
+  const ses = S.ses;
+  if (!ses || !S.cur) return;
+  body.tool_use_id = plan.tool_use_id || "";
+  if (ses.planEl)
+    ses.planEl.querySelectorAll("button,input").forEach(x => x.disabled = true);
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-decision", body)
+    .then(() => {
+      toast("done", okTitle, okDetail);
+      if (ses.meta) ses.meta.plan = null;   // optimistic — SSE confirms
+      renderPlan();
+    })
+    .catch(e => {
+      toast("ask", "plan decision failed", (e && e.error) || "");
+      renderPlan();                          // re-enable for a retry
     });
 }
 
@@ -2046,7 +2152,8 @@ function renderSessionChrome(tab) {
   $view.append(body);
 
   if (tab === "mirror") {
-    body.append(buildAskCard());            // pending question, above the composer
+    body.append(buildPlanCard());           // pending plan approval …
+    body.append(buildAskCard());            // … and question, above the composer
     body.append(buildComposer());
     // type right away on open — no click needed. After append (focus() on a
     // detached node is a no-op), and only when the box can send (a disabled

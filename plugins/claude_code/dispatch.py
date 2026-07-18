@@ -90,11 +90,13 @@ def _split(cmd):
 
 _STOP_FOLD = _fmt("claude-stop-fmt.py", "stop_fmt")
 
-# The AskUserQuestion pending-state tracker (the web dashboard's ask card):
-# stashes on PreToolUse, clears on PostToolUse(+Failure) / the turn boundaries
-# — the decline paths (Esc, "Chat about this") fire NO closing hook at all
-# (measured 2026-07-18), so the turn-boundary events are the clear signal.
-_ASK = _fmt("claude-ask-fmt.py", "ask_fmt", matcher="AskUserQuestion")
+# The pending MODAL-DIALOG tracker (the web dashboard's ask + plan cards):
+# stashes on PreToolUse of AskUserQuestion/ExitPlanMode, clears on the tool's
+# PostToolUse(+Failure) / the turn boundaries — the decline paths (Esc, "Chat
+# about this", plan feedback) fire NO closing hook at all (measured
+# 2026-07-18), so the turn-boundary events are the clear signal.
+_ASK = _fmt("claude-ask-fmt.py", "ask_fmt",
+            matcher="AskUserQuestion|ExitPlanMode")
 _ASK_TURN = _fmt("claude-ask-fmt.py", "ask_fmt")
 
 _ROUTES = {

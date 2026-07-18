@@ -1918,6 +1918,192 @@ def test_askdialog_parsers_pin_the_real_screens():
     assert not AD.dialog_open("❯ composer\n  -- INSERT --")
 
 
+class _PlanFE(_FakeFE):
+    """_FakeFE plus a reactive simulation of the ExitPlanMode approval dialog
+    (live captures 2026-07-18): "Would you like to proceed?" + numbered rows,
+    where a decision digit selects immediately, the "Tell Claude what to
+    change" digit only FOCUSES its editable row (typed text + CR rejects with
+    feedback), and Escape rejects outright."""
+
+    OPTIONS = ("Yes, and bypass permissions", "Yes, manually approve edits",
+               "No, refine with Ultraplan on Claude Code on the web",
+               "Tell Claude what to change")
+
+    def __init__(self, options=OPTIONS):
+        super().__init__()
+        self.options = list(options)
+        self.open = True
+        self.cursor = 0
+        self.decided = None
+        self.fb = None
+
+    def send_key(self, win, *keys):
+        ok = super().send_key(win, *keys)
+        for k in keys:
+            if not self.open:
+                continue
+            if k == "escape":
+                self.decided, self.open = "esc", False
+            elif k.isdigit() and 1 <= int(k) <= len(self.options):
+                label = self.options[int(k) - 1]
+                if label.startswith("Tell Claude"):
+                    self.cursor = int(k) - 1          # focus, not select
+                else:
+                    self.decided, self.open = label, False
+        return ok
+
+    def send_text(self, win, text):
+        ok = super().send_text(win, text)
+        if self.open and self.options[self.cursor].startswith("Tell Claude"):
+            self.fb, self.open = text, False
+        return ok
+
+    def get_text(self, win, extent="screen"):
+        if not self.open:
+            return "❯ composer\n  -- INSERT --"
+        rows = ["scrollback noise", "",
+                "   Claude has written up a plan and is ready to execute. "
+                "Would you like to proceed?", ""]
+        for i, o in enumerate(self.options):
+            rows.append(("   ❯ " if i == self.cursor else "     ")
+                        + "%d. %s" % (i + 1, o))
+            if o.startswith("Tell Claude"):
+                rows.append("        shift+tab to approve with this feedback")
+        return "\n".join(rows)
+
+
+_PLAN_PEND = {"tool_use_id": "toolu_p1", "plan": "# Plan\n1. do the thing",
+              "planFilePath": "/tmp/plan.md"}
+
+
+def _plan_env(monkeypatch, sid, win, fe):
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.plandialog, "POLL_S", 0.01)
+    monkeypatch.setenv("KITTY_WINDOW_ID", win)
+    A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+    S.kv_set(DS.P.mirror_log(sid), "plan-pending", dict(_PLAN_PEND))
+
+
+def test_post_plan_options_reads_live_labels(dash, monkeypatch):
+    # the option labels vary with the session's permission mode, so the card
+    # fetches them from the LIVE screen — read-only, no key pressed
+    fe = _PlanFE()
+    _plan_env(monkeypatch, "pl1", "51", fe)
+    code, body = _post(dash + "/api/session/pl1/plan-options",
+                       {"tool_use_id": "toolu_p1"})
+    assert code == 200
+    opts = json.loads(body)["options"]
+    assert [o["label"] for o in opts] == list(_PlanFE.OPTIONS)
+    assert [o["feedback"] for o in opts] == [False, False, False, True]
+    assert fe.keyed == [] and fe.decided is None
+
+
+def test_post_plan_decide_verifies_the_label(dash, monkeypatch):
+    fe = _PlanFE()
+    _plan_env(monkeypatch, "pl2", "52", fe)
+    # label drift (the dialog was replaced since the page fetched options):
+    # refused, nothing pressed
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/pl2/plan-decision",
+              {"tool_use_id": "toolu_p1", "digit": "1",
+               "label": "Yes, and auto-accept edits"})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["step"] == "option"
+    assert fe.decided is None
+    # matching label: pressed, dialog resolves
+    code, body = _post(dash + "/api/session/pl2/plan-decision",
+                       {"tool_use_id": "toolu_p1", "digit": "2",
+                        "label": "Yes, manually approve edits"})
+    assert code == 200 and json.loads(body) == {"ok": True, "kind": "decide"}
+    assert fe.decided == "Yes, manually approve edits"
+
+
+def test_post_plan_feedback_and_dismiss(dash, monkeypatch):
+    fe = _PlanFE()
+    _plan_env(monkeypatch, "pl3", "53", fe)
+    code, body = _post(dash + "/api/session/pl3/plan-decision",
+                       {"tool_use_id": "toolu_p1",
+                        "feedback": "shorter\nplease"})
+    assert code == 200 and json.loads(body)["kind"] == "feedback"
+    # newlines collapse — the row is a single-line editor and a raw CR
+    # mid-text would submit early
+    assert fe.fb == "shorter please"
+    # a second dialog: dismiss = the TUI's own Esc reject
+    fe2 = _PlanFE()
+    _plan_env(monkeypatch, "pl4", "54", fe2)
+    code, body = _post(dash + "/api/session/pl4/plan-decision",
+                       {"tool_use_id": "toolu_p1", "dismiss": True})
+    assert code == 200 and json.loads(body)["kind"] == "dismiss"
+    assert fe2.decided == "esc"
+
+
+def test_post_plan_guards_and_open_bail_heals(dash, monkeypatch):
+    fe = _PlanFE()
+    _plan_env(monkeypatch, "pl5", "55", fe)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/pl5/plan-decision",
+              {"tool_use_id": "toolu_STALE", "dismiss": True})
+    assert e.value.code == 409
+    assert "expired" in json.loads(e.value.read())["error"]
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/pl5/plan-decision",
+              {"tool_use_id": "toolu_p1"})
+    assert e.value.code == 400
+    # dialog resolved in the terminal → `open` bail 409 AND the stash is
+    # self-healed so the page's card clears on the next SSE tick
+    fe.open = False
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/pl5/plan-options",
+              {"tool_use_id": "toolu_p1"})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["step"] == "open"
+    assert S.kv_at(DS.P.state_db(DS.P.mirror_log("pl5")),
+                   "plan-pending") is None
+    # …and with the stash gone the next call is a clean "no pending plan"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/pl5/plan-options",
+              {"tool_use_id": "toolu_p1"})
+    assert "no pending" in json.loads(e.value.read())["error"]
+
+
+# the real captured plan dialog (live session 2026-07-18) the parsers pin
+_PLAN_SCREEN = """\
+   Here is Claude's plan:
+  ╌╌╌╌╌╌╌╌
+   Plan: Create /private/tmp/plan-test.txt
+
+   Steps
+
+   1. Write /private/tmp/plan-test.txt with the content PLANNED.
+   2. Verify with cat /private/tmp/plan-test.txt.
+  ╌╌╌╌╌╌╌╌
+
+   Claude has written up a plan and is ready to execute. Would you like to proceed?
+
+   ❯ 1. Yes, and bypass permissions
+     2. Yes, manually approve edits
+     3. No, refine with Ultraplan on Claude Code on the web
+     4. Tell Claude what to change
+        shift+tab to approve with this feedback
+
+   ctrl+g to edit in Vim · ~/.config/plans/make-a-tiny-plan.md"""
+
+
+def test_plandialog_parsers_pin_the_real_screen():
+    PD = DS.plandialog
+    assert PD.dialog_open(_PLAN_SCREEN)
+    rs = PD.rows(_PLAN_SCREEN)
+    # the plan's own numbered STEPS are above the proceed anchor — they must
+    # not parse as decision rows (the region starts at the anchor)
+    assert [(r["digit"], r["label"], r["feedback"]) for r in rs] == [
+        ("1", "Yes, and bypass permissions", False),
+        ("2", "Yes, manually approve edits", False),
+        ("3", "No, refine with Ultraplan on Claude Code on the web", False),
+        ("4", "Tell Claude what to change", True)]
+    assert [r["cursor"] for r in rs] == [True, False, False, False]
+    assert not PD.dialog_open("❯ composer\n  -- INSERT --")
+
+
 def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     # resending an edited message after a mid-turn cancel-edit: the TUI still
     # holds the restored draft, so clear_draft kills the line (ctrl+u to
