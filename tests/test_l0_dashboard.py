@@ -218,6 +218,11 @@ def test_tool_output_html_only_bash():
 def dash(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    # Hermetic default: never enumerate the REAL kitty windows from the read
+    # path (that would demote test sessions to not-live when the suite runs
+    # inside a live kitty session). None = "can't enumerate → keep the state-DB
+    # liveness signal"; a demotion test overrides this with a controlled map.
+    monkeypatch.setattr(DS, "_live_windows", lambda: None)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), DS.Handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -747,9 +752,19 @@ class _FakeFE:
         self.closed = []
         self.send_ok = send_ok
         self.launch_ok = launch_ok
+        self.wins = {}          # sid -> live window override (stale/missing tag)
 
     def usable(self):
         return True
+
+    def window_for_session(self, sid, tree=None):
+        # simulate the live claude_session=<sid> pane tag: by default the
+        # recorded (healthy, non-stale) window id; a test sets self.wins[sid]
+        # to model a stale/missing tag (None) that must be refused
+        if sid in self.wins:
+            return self.wins[sid]
+        row = DS.API.session_row(sid) or {}
+        return str(row.get("kitty_window_id") or "") or None
 
     def send_text(self, win, text):
         self.sent.append((win, text))
@@ -980,6 +995,50 @@ def test_post_stop_closes_tab(dash, monkeypatch):
     code, body = _post(dash + "/api/session/stop1/stop", {})
     assert code == 200 and json.loads(body) == {"ok": True}
     assert fe.closed == ["55"]
+
+
+def test_post_stop_refuses_stale_window(dash, monkeypatch):
+    # the bug: a session's recorded window id goes stale (kitty reuses ids), so
+    # the pane is no longer tagged with this sid. Stop must resolve the LIVE
+    # tag (window_for_session), find none, and refuse — never close the tab
+    # that inherited the stale id.
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "11")
+    A.session_start({"session_id": "stale1", "cwd": "/w", "transcript_path": ""})
+    fe.wins["stale1"] = None                  # the claude_session tag is gone
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/stale1/stop", {})
+    assert e.value.code == 409
+    assert fe.closed == []                     # nothing closed — the fix
+    # message is refused the same way (typing into a reused id is just as bad)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "5")
+    A.session_start({"session_id": "stale2", "cwd": "/w", "transcript_path": ""})
+    fe.wins["stale2"] = None
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/stale2/message", {"text": "hi"})
+    assert e.value.code == 409
+    assert fe.sent == []
+
+
+def test_closed_tab_not_marked_live(dash, monkeypatch):
+    # a session whose state DB lingers but whose tab is gone must NOT show live
+    monkeypatch.setenv("KITTY_WINDOW_ID", "11")
+    A.session_start({"session_id": "ghost", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("ghost")
+    O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
+    # window enumeration returns a map WITHOUT this sid → tab is closed
+    monkeypatch.setattr(DS, "_live_windows", lambda: {"other": "99"})
+    row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
+    assert row["live"] is False                # demoted — the requirement
+    ov = _get_json(dash + "/api/session/ghost")
+    assert ov["live"] is False and ov["kitty_window_id"] == ""
+    # when the tab IS open (sid in the map) it stays live and controllable
+    monkeypatch.setattr(DS, "_live_windows", lambda: {"ghost": "11"})
+    row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
+    assert row["live"] is True
+    ov = _get_json(dash + "/api/session/ghost")
+    assert ov["live"] is True and ov["kitty_window_id"] == "11"
 
 
 def test_post_stop_no_window_is_409(dash, monkeypatch):

@@ -318,9 +318,29 @@ socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
 is `False`, `_frontend()` returns `None`, and both endpoints return a clean
 `503`, never a 500 traceback.
 
+**Liveness = an OPEN tab, not a lingering state DB.** A session's `live` flag
+is *not* just "its `/tmp` state DB exists" — that only means the session was
+never PARKED, and a tab closed WITHOUT a SessionEnd (crash / `kill -9`, or a
+leaked test DB) leaves the state DB intact, so the session would masquerade as
+running with a `kitty_window_id` that kitty has since REUSED for an unrelated
+tab. Both payloads therefore reconcile against `_live_windows()` — one
+`kitten @ ls` (memoized `_LIVE_TTL`) mapping each pane's `claude_session=<sid>`
+user-var → its window id, the authoritative "which sessions have an open tab".
+A state-DB-live session that ever had a window but isn't in that map is demoted
+to not-live (and its control plane disabled). When no frontend resolves (map is
+`None`) the state-DB signal is kept as-is — we don't mark sessions dead we
+can't verify. This is also why the control-plane writes below resolve the
+**live** window rather than the stored id.
+
 `POST /api/session/<sid>/stop` closes the session's whole kitty TAB
 (`Frontend.close_tab` → `kitten @ close-tab --match window_id:<win>` — the
-main window, mirror pane, and scorebar go together). This is a **graceful
+main window, mirror pane, and scorebar go together). **The target window is
+resolved by the live `claude_session=<sid>` tag (`window_for_session`), NEVER
+the audit row's start-time `kitty_window_id`** — that id goes stale (kitty
+reuses window ids), and closing by a reused id once closed an unrelated live
+tab (a leaked smoke-test session's window id had been reassigned to the user's
+own tab). No live tag ⇒ `409`, nothing closed. `post_message` resolves the
+same way (typing into a reused id is just as dangerous). This is a **graceful
 stop, not a kill**: kitty HUPs the tab's processes and Claude Code exits
 cleanly on SIGHUP, firing SessionEnd — so the normal end-of-session lifecycle
 (mirror park to `HISTORY_DIR`, audit `sessions` row closed with reason

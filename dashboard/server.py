@@ -209,13 +209,23 @@ def session_title(tpath):
 def sessions_payload():
     """The sessions list, enriched with what the list view shows per row:
     scoreboard stats (read-only, live or parked), the tab state, and the
-    display title (plugins.session_title over the transcript)."""
+    display title (plugins.session_title over the transcript). `live` is
+    corrected to require an OPEN tab (see _live_windows): a session whose state
+    DB lingers but whose tab is gone (closed without a SessionEnd — crash/kill,
+    or a leaked DB) is demoted to not-live so it can't masquerade as running."""
     tabstates = API.tab_states()
+    live_wins = _live_windows()
     out = []
     for row in API.sessions(SESSIONS_LIMIT):
         sdb = P.state_db(row["log"])
         if not os.path.isfile(sdb):
             sdb = P.parked_db(row["log"])
+        # demote a state-DB-live session whose window is gone. Only when we can
+        # actually enumerate windows (live_wins is not None) and the session
+        # ever HAD a window (a headless/daemon session legitimately has none).
+        if (row.get("live") and live_wins is not None
+                and row.get("kitty_window_id") and row["sid"] not in live_wins):
+            row["live"] = False
         st = API.stats_at(sdb)
         row["stats"] = st
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
@@ -273,11 +283,18 @@ def session_payload(sid):
     data["error_count"] = API.error_count(sid)
     data["title"] = session_title(data.get("transcript_path") or "")
     data["running"] = API.running(sid)
-    # The control-plane composer gates on a reachable window: the mirror is
-    # keyed to a kitty window, and a headless/daemon session has none (the
-    # /message endpoint would 409). Additive field; app.js disables the box.
+    # Correct `live` to require an OPEN tab and gate the control plane on the
+    # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
+    # audit row's start-time id — kitty reuses window ids, so a leaked/parked
+    # "live" session would otherwise show a stop button that closes an
+    # unrelated tab (see _live_windows). A session whose state DB lingers but
+    # whose window is gone (closed without a SessionEnd) is demoted to not-live.
+    live_wins = _live_windows()
     row = API.session_row(sid) or {}
-    data["kitty_window_id"] = str(row.get("kitty_window_id") or "")
+    if (data.get("live") and live_wins is not None
+            and row.get("kitty_window_id") and sid not in live_wins):
+        data["live"] = False
+    data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
     return data
 
 
@@ -530,6 +547,47 @@ def _frontend():
         return fe if fe.usable() else None
     except Exception:
         return None
+
+
+_LIVE_WINS = {"ts": -1e9, "val": None}   # memo: {sid: win_id} tagged in a live pane
+_LIVE_TTL = 0.8                          # bound kitten-ls calls under the 1s tick
+
+
+def _live_windows():
+    """{sid: window_id} for every kitty pane CURRENTLY tagged
+    claude_session=<sid> — the authoritative 'which sessions have an OPEN tab'.
+    One `kitten @ ls`, memoized for _LIVE_TTL. None when no frontend resolves
+    (can't tell → callers keep the state-DB liveness signal rather than wrongly
+    marking sessions dead).
+
+    Why this exists: the audit row's kitty_window_id is a START-TIME snapshot,
+    and 'the state DB file exists' only means the session was never PARKED — a
+    tab closed WITHOUT a SessionEnd (crash / kill -9, or a leaked test DB)
+    leaves both intact, so the session shows live with a window id that kitty
+    has since reused for an unrelated tab. Keying on the live user-var tag is
+    the only collision-proof truth."""
+    now = time.monotonic()
+    if now - _LIVE_WINS["ts"] < _LIVE_TTL:
+        return _LIVE_WINS["val"]
+    fe = _frontend()
+    val = None
+    if fe is not None:
+        try:
+            val = {}
+            for _osw, _tab, w in fe.iter_windows():
+                sid = (w.get("user_vars") or {}).get("claude_session")
+                if sid and w.get("id") is not None:
+                    val.setdefault(sid, str(w["id"]))
+        except Exception:
+            val = None
+    _LIVE_WINS["ts"], _LIVE_WINS["val"] = now, val
+    return val
+
+
+def _live_window(sid):
+    """The kitty window CURRENTLY tagged claude_session=<sid>, or '' — the ONLY
+    trustworthy handle for the control-plane display gate. See _live_windows."""
+    return (_live_windows() or {}).get(sid, "")
 
 
 LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
@@ -788,17 +846,20 @@ class Handler(BaseHTTPRequestHandler):
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
-        win = str(row.get("kitty_window_id") or "")
-        if not win:
-            A.state_file(log, sdb, "web-send",
-                         {"win": "", "chars": len(text), "ok": False})
-            return self._json({"error": "session has no window (headless)"}, 409)
         fe = _frontend()
         if fe is None:
             A.error(log, "dashboard message (no terminal)", {"sid": sid})
             A.state_file(log, sdb, "web-send",
-                         {"win": win, "chars": len(text), "ok": False})
+                         {"win": "", "chars": len(text), "ok": False})
             return self._json({"error": "no terminal available"}, 503)
+        # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
+        # NOT the audit row's stale start-time id (typing into a reused id would
+        # land in an unrelated tab — see _live_window). '' ⇒ nothing to message.
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-send",
+                         {"win": "", "chars": len(text), "ok": False})
+            return self._json({"error": "session has no live window"}, 409)
         # the tab state AT SEND TIME decides whether this send starts a turn
         # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
         # row too — "my message vanished" is answerable as "it queued mid-turn"
@@ -827,15 +888,19 @@ class Handler(BaseHTTPRequestHandler):
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
-        win = str(row.get("kitty_window_id") or "")
-        if not win:
-            A.state_file(log, sdb, "web-stop", {"win": "", "ok": False})
-            return self._json({"error": "session has no window (headless)"}, 409)
         fe = _frontend()
         if fe is None:
             A.error(log, "dashboard stop (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-stop", {"win": win, "ok": False})
+            A.state_file(log, sdb, "web-stop", {"win": "", "ok": False})
             return self._json({"error": "no terminal available"}, 503)
+        # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
+        # NOT the audit row's stale start-time id. Closing by a reused stale id
+        # would close an UNRELATED live tab — the exact bug this fixes (a leaked
+        # smoke-test session's reused window id closed the user's own tab).
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-stop", {"win": "", "ok": False})
+            return self._json({"error": "session has no live window"}, 409)
         ok = bool(fe.close_tab(win))
         A.state_file(log, sdb, "web-stop", {"win": win, "ok": ok})
         if not ok:
