@@ -1317,27 +1317,6 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     assert len(spawned) == 1
 
 
-def test_post_message_clear_draft_kills_line_first(dash, monkeypatch):
-    # a send after a mid-turn cancel-edit must REPLACE the TUI's restored
-    # draft, not append: clear_draft presses Ctrl+U before typing
-    fe = _FakeFE()
-    _inject_fe(monkeypatch, fe)
-    monkeypatch.setenv("KITTY_WINDOW_ID", "71")
-    A.session_start({"session_id": "cd1", "cwd": "/w", "transcript_path": ""})
-    monkeypatch.setattr(DS, "DRAFT_CLEAR_GAP_S", 0)
-    code, body = _post(dash + "/api/session/cd1/message",
-                       {"text": "edited message", "clear_draft": True})
-    assert code == 200 and json.loads(body)["ok"] is True
-    # ctrl+u (kill to start) AND ctrl+k (kill to end) clear the whole line
-    # regardless of cursor position, before typing
-    assert fe.keyed == [("71", ("ctrl+u",)), ("71", ("ctrl+k",))]
-    assert fe.sent == [("71", "edited message")]
-    # a normal send presses no key
-    fe.keyed.clear()
-    _post(dash + "/api/session/cd1/message", {"text": "plain"})
-    assert fe.keyed == []
-
-
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):
     # same live-tag discipline as stop/message: an Escape into a reused
     # window id would interrupt an unrelated session

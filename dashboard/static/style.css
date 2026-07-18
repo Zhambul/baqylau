@@ -385,6 +385,25 @@ body.attn-on .shead { top: 81px; }
 }
 .csend:hover:not(:disabled) { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
 .csend:disabled { color: var(--dim2); cursor: default; }
+/* mid-turn cancel-edit hint: the cancelled message, shown above the composer
+   (editing/resending happens in the kitty tab — the TUI mangles pasted text
+   after a cancel, so the web can't reliably resend an edited copy) */
+.cancelhint {
+  display: flex; align-items: baseline; gap: 8px;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--amber) 42%, transparent);
+  border-radius: var(--r); background: color-mix(in srgb, var(--amber) 6%, transparent);
+  padding: 6px 10px; margin-bottom: 8px; font-size: 12px;
+}
+.cancelhint .chlabel { color: var(--amber); flex: none; font: 600 11px/1.4 var(--mono); }
+.cancelhint .chtext {
+  color: var(--text-soft); min-width: 0; flex: 1;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono);
+}
+.cancelhint .chx {
+  flex: none; background: transparent; border: none; color: var(--dim2);
+  cursor: pointer; font-size: 12px; padding: 0 2px;
+}
+.cancelhint .chx:hover { color: var(--text); }
 
 /* ---- queued-message chips (Claude Code's mid-turn queue) ----------------- */
 .cqueue { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 10px; }

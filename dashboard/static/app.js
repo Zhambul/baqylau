@@ -1497,14 +1497,56 @@ function rewindSession() {
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
     .then(r => {
-      if (r && r.mode === "cancel-edit")
-        toast("done", "cancelled",
-              "message restored for editing in the kitty tab");
-      else
+      if (r && r.mode === "cancel-edit") {
+        applyCancelEdit(r.restored || "");
+        toast("done", "cancelled", "message restored for editing in the kitty tab");
+      } else {
         toast("done", "rewind",
               "/rewind sent — pick a checkpoint in the kitty tab");
+      }
     })
     .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
+}
+
+// Mirror Claude Code's mid-turn cancel-edit on the web, as far as the terminal
+// reliably allows: the cancelled prompt bubble is dropped from the feed (it's
+// abandoned — kitty un-renders it too). The EDIT itself happens in the kitty
+// tab, where Claude Code natively restored the message into the input: the web
+// can't reliably resend an edited copy, because the TUI mangles pasted text
+// after a cancel (drops leading bytes / inserts newlines, nondeterministically
+// — measured, not a timing bug), so a web-composer edit-and-resend would
+// corrupt the message. The restored text is shown as a dim hint under the
+// composer so you can see/copy what was cancelled while you edit in kitty.
+function applyCancelEdit(restored) {
+  const ses = S.ses;
+  if (!ses) return;
+  // drop the cancelled prompt bubble (newest .msg.prompt — items prepend, so
+  // it's the FIRST in the feed). Optimistic: the transcript keeps the record
+  // (verified — a mid-turn cancel doesn't rewrite the file), so a full reload
+  // re-shows it; within this view the append-only feed keeps it hidden.
+  const feed = ses.stream;
+  const bubble = feed && feed.querySelector(".msg.prompt");
+  if (bubble) bubble.remove();
+  // show the restored text as a copyable hint (edit/resend happens in kitty)
+  if (ses.composer && restored) showCancelHint(ses, restored);
+}
+
+function showCancelHint(ses, text) {
+  const wrap = ses.composer.parentElement;   // the .composer flex row
+  if (!wrap || !wrap.parentElement) return;
+  let hint = ses.cancelHint;
+  if (!hint || !hint.isConnected) {
+    hint = el("div", "cancelhint");
+    wrap.before(hint);                       // a full-width row above the composer
+    ses.cancelHint = hint;
+  }
+  hint.textContent = "";
+  hint.append(el("span", "chlabel", "cancelled — edit & resend in the kitty tab:"),
+              el("span", "chtext", text));
+  const x = el("button", "chx", "✕");
+  x.title = "dismiss";
+  x.onclick = () => hint.remove();
+  hint.append(x);
 }
 
 // The Esc GESTURE is atomic — hold a lone press for ESC_DOUBLE_MS, then

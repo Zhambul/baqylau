@@ -116,10 +116,6 @@ QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING,
              tabs.AWAITING_BG, tabs.AWAITING_COMMAND)
 
-DRAFT_CLEAR_GAP_S = 0.12           # beat between the clear_draft kill (ctrl+u/k)
-#                                    and typing the replacement — send_text on
-#                                    the kill's heels raced it and ate the first
-#                                    word (post_message)
 DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 #                                    Escapes — measured 3/3 reliable mid-turn
 #                                    (the idle rewind-menu detection is flaky at
@@ -979,21 +975,13 @@ class Handler(BaseHTTPRequestHandler):
         """Type a message into a session's kitty window (the composer). 4xx when
         the session has no window (headless/daemon) or the text is empty; 503
         when no terminal resolves; else Frontend.send_text. Every attempt is a
-        `web-send` state_files row, failures also an A.error.
-
-        `clear_draft` (bool): press Ctrl+U (kill-line) BEFORE typing — the
-        page sets it when sending an edited message after a mid-turn
-        cancel-edit (post_rewind), because the TUI input still holds the
-        restored draft and a bare send_text would CONCATENATE onto it (the
-        "nd" corruption class). Ctrl+U clears the TUI line first so the typed
-        text REPLACES the draft."""
+        `web-send` state_files row, failures also an A.error."""
         body = self._post_guard()
         if body is None:
             return
         text = body.get("text")
         if not isinstance(text, str) or not text.strip():
             return self._json({"error": "empty text"}, 400)
-        clear_draft = bool(body.get("clear_draft"))
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
@@ -1015,19 +1003,9 @@ class Handler(BaseHTTPRequestHandler):
         # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
         # row too — "my message vanished" is answerable as "it queued mid-turn"
         tab = API.tab_states().get(win) or ""
-        if clear_draft:
-            # kill the restored draft: ctrl+u (to line start) AND ctrl+k (to
-            # line end) so a cursor anywhere in the draft clears the WHOLE
-            # line, then a beat before typing — send_text hard on the heels of
-            # the kill raced it and ate the first word (observed live: "echo
-            # REPLACED_OK" arrived as "\n REPLACED_OK")
-            fe.send_key(win, "ctrl+u")
-            fe.send_key(win, "ctrl+k")
-            time.sleep(DRAFT_CLEAR_GAP_S)
         ok = bool(fe.send_text(win, text))
         A.state_file(log, sdb, "web-send",
-                     {"win": win, "chars": len(text), "ok": ok, "tab": tab,
-                      "clear_draft": clear_draft})
+                     {"win": win, "chars": len(text), "ok": ok, "tab": tab})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})

@@ -472,8 +472,26 @@ state at gesture time:
 
 The response's `mode` (`cancel-edit` | `rewind`) tells the page which
 meaning fired (its toast differs), and rides the `web-rewind` audit row
-(`{win, ok, tab, mode}`). Same guard chain and window discipline as the
-other writes.
+(`{win, ok, tab, mode}`). On `cancel-edit` the response also carries
+`restored` — the session's last user prompt (`_last_prompt` →
+`plugins.conversation`), the message Claude Code puts back into the input.
+Same guard chain and window discipline as the other writes.
+
+**What the page does on `cancel-edit`, and why editing stays in the
+terminal.** It drops the cancelled prompt bubble from the feed (abandoned
+— kitty un-renders it too; optimistic, since a mid-turn cancel does NOT
+rewrite the transcript, so a full reload re-shows it) and displays
+`restored` as a dim hint above the composer. The EDIT itself happens in
+the kitty tab, where Claude Code natively restored the message — the web
+deliberately does NOT offer edit-and-resend, because the Claude Code TUI
+MANGLES programmatically-sent text after a cancel: measured live
+(2026-07-18), clearing the restored draft (`ctrl+u`, `ctrl+u`+`ctrl+k`,
+backspaces) and typing a replacement nondeterministically dropped 3–9
+leading bytes and inserted stray newlines (`echo REPLACED` arrived as
+`\n REPLACED`), and a 3-second settle before typing failed identically —
+so it is NOT a race that a gap fixes. A web composer that resent an edited
+copy would corrupt the message, so the reliable boundary is: web cancels +
+reflects, terminal edits.
 
 The **`escape-recheck`** that both the interrupt and the mid-turn
 cancel-edit spawn watches the transcript for a new `"type":"user"` RECORD,
