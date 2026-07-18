@@ -44,6 +44,9 @@ KITTY_RC_VERSION = [0, 26, 0]
 RC_CMD_KEY = b"@kitty-cmd"
 RC_CMD_DCS = b"\x1bP" + RC_CMD_KEY
 RC_ST = b"\x1b\\"
+# kitty.app's macOS bundle identifier — what LaunchServices (`lsappinfo`)
+# reports when kitty is the frontmost app; the Frontend.app_id() answer.
+KITTY_BUNDLE_ID = "net.kovidgoyal.kitty"
 
 
 def find_kitten():
@@ -122,12 +125,17 @@ def kitten_send_key(kitten, listen, win, *keys):
 
 
 def kitten_launch_tab(kitten, listen, cwd, argv):
-    """`kitten @ launch --type=tab --keep-focus --cwd <cwd> <argv…>` — a new
-    tab running argv (a list, never a shell string, so no interpolation).
-    `--keep-focus` because the only caller is the web dashboard's new-session:
-    without it kitty focuses the new tab AND macOS activates the kitty app,
-    yanking the user out of the browser they launched from. True on rc 0."""
-    return kitten_run(kitten, listen, "launch", "--type=tab", "--keep-focus",
+    """`kitten @ launch --type=tab --cwd <cwd> <argv…>` — a new tab running
+    argv (a list, never a shell string, so no interpolation). True on rc 0.
+    Deliberately NOT `--keep-focus`: when kitty is a background app (the web
+    dashboard's launch — the user is in a browser), kitty's keep-focus path
+    "restores" focus to the previous window via focus_os_window(raise=True),
+    which ACTIVATES the kitty app over the browser (verified against a
+    plain-config kitty 0.45: plain launch leaves the browser frontmost,
+    --keep-focus yanks kitty to the front). The dashboard compensates for
+    the arrangement-dependent cases where a plain launch still activates
+    kitty with its own macOS focus-bounce guard (dashboard/server.py)."""
+    return kitten_run(kitten, listen, "launch", "--type=tab",
                       "--cwd", cwd, *argv) == 0
 
 
@@ -243,6 +251,9 @@ class KittyFrontend(Frontend):
 
     def export_env(self):
         os.environ["KITTY_LISTEN_ON"] = self.listen or ""
+
+    def app_id(self):
+        return KITTY_BUNDLE_ID
 
     def _run(self, *args):
         return kitten_run(self.kitten, self.listen, *args)

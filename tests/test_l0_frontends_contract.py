@@ -46,6 +46,7 @@ CALLS = {
     "usable":             ((), False),
     "current_window":     ((), ""),
     "export_env":         ((), None),
+    "app_id":             ((), ""),
     # tab colour
     "set_tab_color":      (("7", "#ff0000", "#000000", "#7f0000"), 1),
     "clear_tab_color":    (("7",), 1),
@@ -350,19 +351,28 @@ def test_send_text_enter_write_failure_is_false(monkeypatch):
 
 
 def test_launch_tab_argv(monkeypatch):
-    """launch_tab → `kitten @ launch --type=tab --keep-focus --cwd <cwd>
-    <argv…>`, argv a list (never a shell string). --keep-focus: the caller is
-    the web dashboard — a focusing launch activates the terminal app on macOS
-    and yanks the user out of the browser. Truthy on rc 0."""
+    """launch_tab → `kitten @ launch --type=tab --cwd <cwd> <argv…>`, argv a
+    list (never a shell string). Truthy on rc 0. NO --keep-focus: on a
+    background kitty (the dashboard launch) kitty's keep-focus path raises
+    the previous window's OS window, ACTIVATING kitty over the browser —
+    the opposite of what it promises (see kitten_launch_tab)."""
     calls = []
     monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
     fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
     assert fe.launch_tab("/proj", ["claude", "fix the bug"]) is True
     assert calls == [["/k", "unix:/tmp/x", "launch", "--type=tab",
-                      "--keep-focus", "--cwd", "/proj",
-                      "claude", "fix the bug"]]
+                      "--cwd", "/proj", "claude", "fix the bug"]]
     monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
     assert fe.launch_tab("/proj", ["claude"]) is False
+
+
+def test_app_id_is_the_kitty_bundle_id():
+    """app_id → kitty.app's macOS bundle id (what lsappinfo reports when
+    kitty is frontmost — the dashboard focus-bounce guard compares against
+    it); the inert stub answers ""."""
+    assert KittyFrontend(listen="unix:/tmp/x", kitten="/k").app_id() \
+        == "net.kovidgoyal.kitty"
+    assert Frontend().app_id() == ""
 
 
 def test_close_tab_matches_containing_window(monkeypatch):

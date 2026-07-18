@@ -340,13 +340,31 @@ lives on ⌥⇧/⌘⇧.
 `Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?,
 prompt?]))` opens a new tab — the flags are just more positional `"$@"` words
 ahead of the prompt, so the injection story is unchanged; the session then appears through its
-own `SessionStart` (no synthetic row). The launch is `--keep-focus`: the user
-is *in the browser* — without it kitty focuses the new tab and macOS activates
-the kitty app over the browser (a plain `kitten @ launch --type=tab` takes
-focus, and a remote launch that takes focus also raises/activates the OS
-window). The tab is created in the background and the new session's card shows
-up on the dashboard as usual; whoever wants the terminal switches to it
-themselves. **The argv is NOT a bare `["claude"]`**
+own `SessionStart` (no synthetic row).
+
+**The focus-bounce guard (macOS).** The user is *in the browser* — but a
+launch can make macOS activate kitty over it (arrangement-dependent: it
+reproduced solidly against a live long-running fullscreen instance, then
+stopped when the Space layout changed; fresh instances never reproduce it).
+kitty's `--keep-focus` flag is NOT the fix — it is measurably worse: on a
+background kitty its "restore focus to the previous window" path calls
+`focus_os_window(raise=True)` whenever no kitty OS window is focused (i.e.
+always, when you launch from a browser), which activates the app every time
+(verified against a plain-config kitty 0.45: plain launch leaves the browser
+frontmost, `--keep-focus` yanks kitty up — so `kitten_launch_tab` deliberately
+passes no focus flag). Since no launch flag prevents the steal from outside
+the terminal, the endpoint compensates after the fact: capture the frontmost
+app's bundle id *before* the launch (`lsappinfo` — plain LaunchServices, no
+TCC/automation prompts), then a daemon thread watches the frontmost app for
+`REFOCUS_POLLS × REFOCUS_POLL_S` (~2s); if the TERMINAL app (`Frontend.
+app_id()` — kitty: `net.kovidgoyal.kitty`) becomes frontmost, `open -b
+<before>` hands focus straight back. ONLY the terminal triggers the bounce —
+a deliberate user app-switch inside the window must never be yanked back —
+and the guard is skipped entirely when the terminal was already frontmost at
+click time, off-mac, or when the frontend has no `app_id()` (the inert stub).
+Every watch writes one `web-launch-refocus` state_files row (`before`/
+`terminal`/`outcome`: `clean` = never stole, `bounced to <app>`, `activate
+failed`). **The argv is NOT a bare `["claude"]`**
 — kitty execs launch argv with kitty's OWN environment, and a GUI-launched
 kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
 flashes and closes while `kitten @ launch` still exits 0; this shipped once)

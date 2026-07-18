@@ -14,7 +14,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 import pytest
-from conftest import REPO
+from conftest import REPO, wait_until
 
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
@@ -314,6 +314,38 @@ def test_error_badge_payload_and_sse(dash):
     assert ov["error_count"] == 2
     data = _sse_event(dash + "/events/session/errS?after=0&mpos=0", "errors")
     assert data and json.loads(data)["count"] == 2
+
+
+def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):
+    """A resume moves the session to a NEW kitty window (the SessionStart
+    upsert refreshes the sessions row) — a session SSE stream opened BEFORE
+    the move must re-resolve the window on the slow cadence instead of polling
+    the dead window's lingering tab state forever (shipped: the page showed
+    the dead window's green while kitty was magenta)."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "71")
+    A.session_start({"session_id": "resse", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states",
+                        lambda: {"71": "awaiting-response", "72": "thinking"})
+    seen = []
+    r = _req(dash + "/events/session/resse?after=0&mpos=0", timeout=15)
+    try:
+        pending = None
+        for raw in r:
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if line.startswith("event: "):
+                pending = line[len("event: "):]
+            elif line.startswith("data: ") and pending == "tab":
+                seen.append(json.loads(line[len("data: "):])["tab"])
+                if seen[-1] == "thinking":
+                    break
+                # first tab arrived on the OLD window — now "resume": the
+                # upsert moves the sessions row to window 72
+                monkeypatch.setenv("KITTY_WINDOW_ID", "72")
+                A.session_start({"session_id": "resse", "cwd": "/w",
+                                 "transcript_path": ""})
+    finally:
+        r.close()
+    assert seen[0] == "awaiting-response" and seen[-1] == "thinking", seen
 
 
 def test_http_copy_and_view(dash):
@@ -827,6 +859,13 @@ class _FakeFE:
         self.launched.append((cwd, argv))
         return self.launch_ok
 
+    def app_id(self):
+        # "" = no OS-level app identity → the focus-bounce guard stays off;
+        # the bounce tests override this with a real-looking bundle id
+        return self.bundle_id
+
+    bundle_id = ""
+
 
 def _inject_fe(monkeypatch, fe):
     monkeypatch.setattr(DS.frontends, "get", lambda **kw: fe)
@@ -979,6 +1018,65 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     evil = '"; rm -rf ~; echo "'
     _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "prompt": evil})
     assert fe.launched[-1][1][4:] == [evil]
+
+
+def _bounce_rig(monkeypatch, fronts, bundle="app.term"):
+    """Wire the focus-bounce guard for a test: a _FakeFE with an OS app id, a
+    scripted _front_app sequence (call 1 = the pre-launch capture, the rest =
+    the watch polls; the last value repeats), a recorded _activate_app, and a
+    fast poll cadence. Returns (fe, activated, front_calls) — front_calls
+    counts _front_app probes, the watch-progress observable."""
+    fe = _FakeFE()
+    fe.bundle_id = bundle
+    seq, activated, front_calls = list(fronts), [], []
+
+    def front():
+        front_calls.append(1)
+        return seq.pop(0) if len(seq) > 1 else seq[0]
+
+    monkeypatch.setattr(DS, "_front_app", front)
+    monkeypatch.setattr(DS, "_activate_app",
+                        lambda b: activated.append(b) or True)
+    monkeypatch.setattr(DS, "REFOCUS_POLL_S", 0.01)
+    return fe, activated, front_calls
+
+
+def test_new_session_bounces_focus_when_terminal_steals(dash, monkeypatch,
+                                                        tmp_path):
+    # the terminal becomes frontmost after the launch → the guard hands focus
+    # back to the app that was frontmost at click time (the user's browser)
+    fe, activated, _ = _bounce_rig(monkeypatch, ["com.browser", "app.term"])
+    _inject_fe(monkeypatch, fe)
+    code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert code == 200 and fe.launched
+    wait_until(lambda: activated == ["com.browser"],
+               desc="focus bounced back to the browser")
+
+
+def test_new_session_no_bounce_when_focus_unchanged_or_user_switch(
+        dash, monkeypatch, tmp_path):
+    # frontmost never changes → no bounce; and a change to some OTHER app (the
+    # user deliberately switching mid-window) must never be yanked back
+    for fronts in (["com.browser"], ["com.browser", "com.other"]):
+        fe, activated, front_calls = _bounce_rig(monkeypatch, fronts)
+        _inject_fe(monkeypatch, fe)
+        code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+        assert code == 200
+        # the watch runs its full window (capture + every poll) and never fires
+        wait_until(lambda fc=front_calls: len(fc) >= 1 + DS.REFOCUS_POLLS,
+                   desc="watch ran to the end without bouncing")
+        assert activated == []
+
+
+def test_new_session_guard_off_without_app_id(dash, monkeypatch, tmp_path):
+    # a frontend with no OS-level app identity (the inert stub, a future
+    # terminal that can't name itself) → the guard never probes the OS
+    fe = _FakeFE()                                     # bundle_id stays ""
+    _inject_fe(monkeypatch, fe)
+    probed = []
+    monkeypatch.setattr(DS, "_front_app", lambda: probed.append(1) or "x")
+    code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert code == 200 and probed == []
 
 
 def test_extra_origins_parse():
@@ -1137,10 +1235,10 @@ def test_post_interrupt_magenta_spawns_escape_recheck(dash, monkeypatch,
     assert len(spawned) == 1
 
 
-def test_post_rewind_types_the_command(dash, monkeypatch):
-    # rewind TYPES /rewind (documented identical to double-Esc, and
-    # deterministic where synthesized double-press key events were ~2/3
-    # flaky at any gap) — no Escape key events, tab untouched
+def test_post_rewind_idle_types_the_command(dash, monkeypatch):
+    # IDLE double-Esc = the rewind menu: TYPES /rewind (documented identical
+    # to double-Esc, and deterministic where synthesized double-press key
+    # events were ~2/3 flaky at any gap) — no Escape key events
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "88")
@@ -1149,7 +1247,8 @@ def test_post_rewind_types_the_command(dash, monkeypatch):
     assert json.loads(body) == {"ok": True, "tab": ""}
     assert fe.keyed == [("88", ("escape",))]          # single press = interrupt
     code, body = _post(dash + "/api/session/rew1/rewind", {})
-    assert code == 200 and json.loads(body) == {"ok": True, "tab": ""}
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "tab": "", "mode": "rewind"}
     assert fe.sent == [("88", "/rewind")]             # typed, not key events
     assert fe.keyed == [("88", ("escape",))]          # no extra Escapes
     assert fe.closed == []
@@ -1161,11 +1260,14 @@ def test_post_rewind_types_the_command(dash, monkeypatch):
     assert fe.sent == [("88", "/rewind")]
 
 
-def test_post_rewind_never_spawns_escape_recheck(dash, monkeypatch):
-    # no Escape is pressed on the rewind path, so there is no cancel gap to
-    # recover — even on a magenta tab it must NOT spawn the recheck
+def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
+    # MID-TURN double-Esc = cancel + restore the last message for editing:
+    # TWO Escape key events (measured 3/3 reliable mid-turn), never the typed
+    # command (which would queue as a message), plus the magenta recheck (the
+    # cancel leaves the tab stuck thinking — same experiment)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS, "DOUBLE_ESC_GAP_S", 0)
     spawned = []
     monkeypatch.setattr(DS.SP, "spawn_detached",
                         lambda path, argv, log, env=None, purpose="", **kw:
@@ -1174,8 +1276,18 @@ def test_post_rewind_never_spawns_escape_recheck(dash, monkeypatch):
     A.session_start({"session_id": "rew2", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "working"})
     code, body = _post(dash + "/api/session/rew2/rewind", {})
-    assert code == 200 and json.loads(body) == {"ok": True, "tab": "working"}
-    assert spawned == []
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "tab": "working",
+                                "mode": "cancel-edit"}
+    assert fe.keyed == [("89", ("escape",)), ("89", ("escape",))]
+    assert fe.sent == []                              # nothing typed mid-turn
+    assert len(spawned) == 1 and spawned[0][0] == "escape-recheck"
+    # blue (executing) is also mid-turn = cancel-edit, but NOT magenta — the
+    # bg writer-liveness recovery owns it, so no recheck
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "executing"})
+    code, body = _post(dash + "/api/session/rew2/rewind", {})
+    assert json.loads(body)["mode"] == "cancel-edit"
+    assert len(spawned) == 1
 
 
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):

@@ -59,6 +59,14 @@ class Frontend:
         hook's env and later shell out to the tab dispatcher)."""
         return None
 
+    def app_id(self):
+        """The OS-level application identifier of the terminal APP (macOS
+        bundle id — kitty: net.kovidgoyal.kitty), or "" when unknown. Lets a
+        consumer recognise "the terminal just became the frontmost app"
+        without naming a specific terminal (the dashboard's focus-bounce
+        guard after a web launch)."""
+        return ""
+
     # --- tab colour ---------------------------------------------------------
     # Slice consumers: plugins/claude_code/tabstatus.py only (the tab
     # dispatcher paints and clears; nothing else touches tab colour).
@@ -154,10 +162,10 @@ class Frontend:
 
     def launch_tab(self, cwd, argv):
         """Open a NEW tab whose window runs `argv` with working directory
-        `cwd`, WITHOUT stealing focus (the caller is the web dashboard — the
-        user is in a browser and must stay there; on macOS a focusing launch
-        also activates the terminal app). Truthy on success, False on
-        failure."""
+        `cwd`. Truthy on success, False on failure. May focus the new tab
+        inside the terminal; callers who must keep the OS-level focus where
+        it is (the web dashboard — its user is in a browser) compensate
+        themselves (the dashboard's macOS focus-bounce guard)."""
         return False
 
     def close_tab(self, win):

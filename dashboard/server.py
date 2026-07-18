@@ -38,6 +38,8 @@ import os
 import queue
 import re
 import signal
+import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -624,6 +626,67 @@ def launch_argv(words, cmd="claude"):
     return [sh, "-lic", '%s "$@"' % cmd, cmd, *words]
 
 
+# --- macOS focus bounce ----------------------------------------------------------------
+# Launching a tab can make macOS activate the terminal app over the browser
+# the user launched from (kitty raises itself in some window/Space
+# arrangements — and its --keep-focus flag makes this WORSE for a
+# background-app launch, see frontends/kitty.py kitten_launch_tab). There is
+# no launch flag that prevents it from outside the terminal, so the launch
+# endpoint compensates after the fact: remember the frontmost app at click
+# time, watch for the TERMINAL taking over, and hand focus straight back.
+# `lsappinfo` + `open -b` are plain LaunchServices calls — no Apple-events /
+# accessibility permission prompts, unlike System Events AppleScript.
+REFOCUS_POLL_S = 0.25              # frontmost-app poll cadence after a launch
+REFOCUS_POLLS = 8                  # ~2s watch window (the steal, when it
+                                   # happens, lands within the first poll)
+
+
+def _front_app():
+    """The frontmost macOS app's bundle id, or "" (non-mac / any failure)."""
+    if sys.platform != "darwin":
+        return ""
+    try:
+        asn = subprocess.run(["lsappinfo", "front"], capture_output=True,
+                             text=True, timeout=2).stdout.strip()
+        if not asn:
+            return ""
+        out = subprocess.run(["lsappinfo", "info", "-only", "bundleid", asn],
+                             capture_output=True, text=True, timeout=2).stdout
+        m = re.search(r'"CFBundleIdentifier"\s*=\s*"([^"]+)"', out)
+        return m.group(1) if m else ""
+    except Exception:
+        return ""
+
+
+def _activate_app(bundle_id):
+    """LaunchServices activation of an already-running app. True on rc 0."""
+    try:
+        return subprocess.run(["open", "-b", bundle_id], capture_output=True,
+                              timeout=5).returncode == 0
+    except Exception:
+        return False
+
+
+def _bounce_focus(before, terminal_app):
+    """The post-launch focus watch (runs on a daemon thread — the HTTP
+    response must never wait on it): if the terminal app becomes frontmost
+    inside the watch window, re-activate `before`. ONLY the terminal triggers
+    the bounce — a deliberate user app-switch mid-window must not be yanked
+    back. The outcome is audited as a `web-launch-refocus` state_files row
+    (`clean` = terminal never took over, the common case)."""
+    outcome = "clean"
+    for _ in range(REFOCUS_POLLS):
+        time.sleep(REFOCUS_POLL_S)
+        now = _front_app()
+        if now and now != before and now == terminal_app:
+            outcome = ("bounced to %s" % before) if _activate_app(before) \
+                else "activate failed"
+            break
+    A.state_file("", "", "web-launch-refocus",
+                 {"before": before, "terminal": terminal_app,
+                  "outcome": outcome})
+
+
 # --- the HTTP handler ------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -1115,11 +1178,21 @@ class Handler(BaseHTTPRequestHandler):
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
             A.state_file("", "", "web-launch", dict(opts, ok=False))
             return self._json({"error": "no terminal available"}, 503)
+        # the focus-bounce guard (see the block above launch_argv): the
+        # frontmost app must be captured BEFORE the launch — the steal can
+        # land before the kitten call returns. Skipped when the terminal was
+        # ALREADY frontmost at click time — a user launching from a
+        # terminal-front arrangement keeps what they had.
+        term = fe.app_id()
+        before = _front_app() if term else ""
         ok = bool(fe.launch_tab(cwd, argv))
         A.state_file("", "", "web-launch", dict(opts, ok=ok))
         if not ok:
             A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
             return self._json({"error": "launch failed"}, 502)
+        if before and before != term:
+            threading.Thread(target=_bounce_focus, args=(before, term),
+                             daemon=True, name="web-launch-refocus").start()
         return self._json({"ok": True})
 
     def static(self, name):
