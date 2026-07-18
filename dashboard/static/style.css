@@ -329,6 +329,7 @@ body.attn-on .shead { top: 81px; }
 .ubar.warn .ufill { background: var(--amber, #d1a35a); }
 .ubar.hot .ufill { background: var(--red, #b5484d); }
 .ubar .upct { color: var(--text-soft); font: 10px/1 var(--mono); }
+.ubar .ureset { color: var(--dim2); font: 10px/1 var(--mono); white-space: nowrap; }
 
 /* which account a session runs under (in its header) */
 .acctchip {

@@ -211,7 +211,7 @@ function acctPill(a) {
     track.append(fill);
     seg.append(track, el("span", "upct", pct + "%"));
     const reset = u && u[resetKey];
-    if (reset) seg.title = label + " resets " + resetAgo(reset);
+    if (reset) seg.append(el("span", "ureset", "resets " + resetAgo(reset)));
     return seg;
   };
   if (fh != null) pill.append(bar("5h", fh, "five_hour_reset"));
