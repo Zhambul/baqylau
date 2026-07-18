@@ -240,10 +240,26 @@ body.attn-on .shead { top: 81px; }
 .statsrow .pos { color: var(--green); }
 .statsrow .cost { color: var(--orange); }
 .statsrow .warn { color: var(--amber); }
-/* context-saturation chips (stats row, session cards, agent rail) — quiet
-   until it matters: no class below 70%, amber ≥70, red ≥90 (app.js ctxCls) */
-.cxwarn { color: var(--amber); }
-.cxhot { color: var(--red); }
+
+/* context-saturation bar (app.js ctxBar) — the account-limit ubar's bigger
+   sibling, one full row wherever it appears: session cards, the session
+   header (.big), agent cards. Accent fill, amber ≥70%, red ≥90%. */
+.cbar { display: flex; align-items: center; gap: 8px; margin-top: 9px; width: 100%; }
+.cbar .clabel { color: var(--dim); font: 10px/1 var(--mono); flex: none; }
+.cbar .ctrack {
+  flex: 1; height: 7px; border-radius: 4px; overflow: hidden; min-width: 40px;
+  background: color-mix(in srgb, var(--bg) 80%, black);
+}
+.cbar .cfill { display: block; height: 100%; background: var(--accent, #6b9bd1); }
+.cbar.warn .cfill { background: var(--amber, #d1a35a); }
+.cbar.hot .cfill { background: var(--red, #b5484d); }
+.cbar .cpct { color: var(--text); font: 600 11px/1 var(--mono); flex: none; }
+.cbar .cdetail { color: var(--dim2); font: 10px/1 var(--mono); flex: none; white-space: nowrap; }
+.cbar.big { margin-top: 8px; max-width: 520px; }
+.cbar.big .ctrack { height: 9px; border-radius: 5px; }
+.cbar.big .clabel { font-size: 11px; }
+.cbar.big .cpct { font-size: 12.5px; }
+.cbar.big .cdetail { font-size: 11px; }
 
 /* "running now" ribbon — one chip per live slot (sessionapi.running()) */
 .runrow { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }

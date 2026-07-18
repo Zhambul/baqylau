@@ -422,17 +422,29 @@ function sessionCard(row) {
   if (st.commands) r.append(seg(st.commands + " cmds"));
   const tok = (st.tk_in | 0) + (st.tk_out | 0) + (st.tk_read | 0) + (st.tk_create | 0);
   if (tok) r.append(seg(kfmt(tok) + " tok"));
-  if (row.ctx) r.append(segc("ctx " + row.ctx.pct + "%", ctxCls(row.ctx.pct) || "v"));
   if (st.cost) r.append(segc(usd(st.cost), "cost"));
   if (row.started_at) r.append(seg(ago(row.started_at)));
   a.append(r);
+  if (row.ctx) a.append(ctxBar(row.ctx));
   return a;
 }
 function seg(text) { const s = el("span"); s.append(el("span", "v", text)); return s; }
 function segc(text, cls) { const s = el("span"); s.append(el("span", cls, text)); return s; }
-// context-saturation chip colour: quiet until it matters ("" = the host's
-// default text class), amber at 70%, red at 90%
-function ctxCls(pct) { return pct >= 90 ? "cxhot" : pct >= 70 ? "cxwarn" : ""; }
+// context-saturation bar — the account-limit bar's (acctPill's ubar) bigger
+// sibling, one full row wherever it appears: session cards, the session
+// header (big=true), agent cards. Accent fill, amber ≥70%, red ≥90%.
+function ctxBar(cx, big) {
+  const bar = el("div", "cbar" + (cx.pct >= 90 ? " hot" : cx.pct >= 70 ? " warn" : "")
+                        + (big ? " big" : ""));
+  bar.append(el("span", "clabel", "ctx"));
+  const track = el("span", "ctrack");
+  const fill = el("span", "cfill");
+  fill.style.width = Math.max(0, Math.min(100, cx.pct)) + "%";
+  track.append(fill);
+  bar.append(track, el("span", "cpct", cx.pct + "%"));
+  bar.append(el("span", "cdetail", kfmt(cx.used) + " / " + kfmt(cx.window)));
+  return bar;
+}
 
 function updateHeadFromList() {
   const row = S.sessions.find(r => r.sid === S.cur);
@@ -2142,6 +2154,9 @@ function renderSessionChrome(tab) {
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
   head.append(sr);
+  const cr = el("div", "ctxrow");     // the main thread's ctx bar, its own row
+  ses.ctxRow = cr;
+  head.append(cr);
   const rr = el("div", "runrow");
   ses.runRibbon = rr;
   head.append(rr);
@@ -2228,11 +2243,6 @@ function updateStatsRow() {
   if (tot)
     add("Σ", kfmt(tot) + " (" + kfmt(tin) + " in · " + kfmt(tout) + " out · "
         + kfmt(tread) + " cache · " + kfmt(tcre) + " write)");
-  // main thread's context saturation — live via the `ctx` SSE event
-  const cx = ses.ctx;
-  if (cx && cx.used)
-    add("ctx", cx.pct + "% (" + kfmt(cx.used) + "/" + kfmt(cx.window) + ")",
-        ctxCls(cx.pct));
   const cost = (ses.costs && ses.costs.total_usd) || st.cost;
   if (cost) add("≈", usd(cost), "cost");
   if (st.msg_delivered)
@@ -2240,6 +2250,13 @@ function updateStatsRow() {
         (st.msg_read ? " · " + st.msg_read + " read" : ""));
   const errn = (ses.meta && ses.meta.error_count) || 0;
   if (errn) add("", "⚠ " + errn, "warn");
+  // the main thread's ctx bar on its own row — live via the `ctx` SSE event
+  if (ses.ctxRow) {
+    ses.ctxRow.textContent = "";
+    const cx = ses.ctx;
+    if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
+    ses.ctxRow.style.display = cx && cx.used ? "" : "none";
+  }
 }
 
 /* Live ⚠ error badge — the web sibling of the scorebar's errwatch chip
@@ -2325,12 +2342,12 @@ function agentCard(a) {
   const [sttxt, stcls] = agentStatus(a);
   m.append(el("span", stcls, sttxt));
   if (a.tools != null) m.append(el("span", "", a.tools + " events"));
-  if (a.ctx) m.append(el("span", ctxCls(a.ctx.pct), "ctx " + a.ctx.pct + "%"));
   if (a.started_at && a.ended_at)
     m.append(el("span", "", dur(a.ended_at - a.started_at)));
   else if (a.started_at)
     m.append(el("span", "", ago(a.started_at)));
   card.append(m);
+  if (a.ctx) card.append(ctxBar(a.ctx));
   return card;
 }
 

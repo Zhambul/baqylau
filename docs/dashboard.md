@@ -931,13 +931,15 @@ page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (th
 freshest snapshot across that account's sessions), polled slowly and hidden until
 some account has usage. The `web-launch` audit row records the chosen `account`.
 
-## Context saturation (the ctx chips)
+## Context saturation (the ctx bars)
 
-How full each context window is — `ctx 42%` on the main page's session cards,
-`ctx 42% (84k/200k)` in the session header's stats row (live via the `ctx` SSE
-event), and `ctx NN%` on every agent card (rail + agents tab, riding the
-`agents` event). Quiet until it matters: plain below 70%, amber at 70, red at
-90 (`ctxCls` in app.js, `.cxwarn`/`.cxhot`).
+How full each context window is — a filled progress bar in the account-limit
+strip's visual language (`ctxBar` in app.js, the `ubar`'s bigger sibling:
+`ctx [██████░░░░] 42% · 84k / 200k`), always on its OWN row: under each
+session card's stats on the main page, a dedicated row in the session header
+(`.big`, live via the `ctx` SSE event), and under every agent card's meta
+(rail + agents tab, riding the `agents` event). Accent fill normally, amber at
+70%, red at 90% (`.cbar.warn`/`.cbar.hot`).
 
 **One data path, no new store.** The transcript IS the record of occupancy: the
 LAST assistant record's usage is exactly what the model saw on the most recent
