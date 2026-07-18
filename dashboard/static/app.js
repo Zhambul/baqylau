@@ -1817,21 +1817,54 @@ function buildComposer() {
   ta.rows = 1;
   ta.spellcheck = false;
   const canSend = !!(meta.live && meta.kitty_window_id);
-  ta.disabled = !canSend;
+  // RESUME MODE (docs/dashboard.md *Resume & send*): a parked session's
+  // composer stays fully usable — typing, "/" menu, dictation — and the one
+  // send button (relabeled "resume & send") is the single door from parked
+  // to live: it relaunches the conversation through the existing
+  // /api/sessions/new resume+prompt path, the message riding the LAUNCH
+  // ARGV (never typed into a half-started TUI — no readiness race), under
+  // the session's own account. Headless-live stays disabled — those aren't
+  // asleep, they just have no window; resume is the wrong medicine.
+  const canResume = !meta.live && !!meta.cwd;
+  const usable = canSend || canResume;
+  ta.disabled = !usable;
   ta.placeholder = canSend
     ? (IS_IPAD ? "message this session…"
                : "message this session…  (Enter to send · Shift+Enter for newline)")
-    : (meta.live ? "no terminal window — can't message a headless session"
-                 : "session is not live");
-  const btn = el("button", "csend", "send");
-  btn.disabled = !canSend;
+    : canResume
+      ? (IS_IPAD ? "message this parked session — sending resumes it"
+                 : "message this parked session — sending resumes it  "
+                   + "(Enter to resume & send)")
+      : (meta.live ? "no terminal window — can't message a headless session"
+                   : "session is not live");
+  const btn = el("button", "csend", canResume ? "resume & send" : "send");
+  btn.disabled = !usable;
   ses.composer = ta;
   const dic = dictation(ta);
+  dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
   const send = () => {
     dic.stop();          // the visible (validated) text is what sends
     const text = ta.value.trim();
     if (!text || ta.disabled) return;
     ta.disabled = true; btn.disabled = true;
+    if (canResume) {
+      const body = { cwd: meta.cwd, resume: S.cur, prompt: text };
+      const slug = meta.account && meta.account.slug;
+      if (slug) body.account = slug;   // wake it under ITS account, silently
+      postJSON("/api/sessions/new", body)
+        .then(() => {
+          // the revived session appears via its own SessionStart (then forks
+          // sids — adopt); the armed jump follows it, same as a form resume
+          armJump(meta.cwd, S.cur);
+          toast("done", "resuming session", "your message starts the revived turn");
+        })
+        .catch(e => {
+          // the draft survives in the box — nothing is lost on a failed wake
+          toast("ask", "resume failed", (e && e.error) || "");
+          ta.disabled = false; btn.disabled = false; ta.focus();
+        });
+      return;
+    }
     // after a mid-turn cancel-edit the TUI holds the restored draft, so this
     // edited send must replace it (server: Ctrl+U/K then bracketed paste)
     const msg = { text };
@@ -1860,7 +1893,8 @@ function buildComposer() {
   // cosmetic busy hint: the send button reads "queue" while a turn is running
   // (kept fresh by the `tab` SSE event; the server's verdict stays authoritative)
   ses.composerMode = (tab) => {
-    btn.textContent = canSend && QUEUE_TABS.includes(tab) ? "queue" : "send";
+    if (!canSend) return;          // the parked/headless labels are fixed
+    btn.textContent = QUEUE_TABS.includes(tab) ? "queue" : "send";
   };
   ses.composerMode(((S.sessions.find(r => r.sid === S.cur) || {}).tab)
                    || (meta.tab || ""));

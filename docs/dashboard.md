@@ -352,6 +352,31 @@ deliberately NOT in `QUEUE_TABS`: a dialog is up and typed text goes to the
 DIALOG, not the input box — a send then is neither immediate nor queued, and
 claiming "queued" would be a lie.
 
+**Resume & send (a parked session's composer).** A parked session's composer
+is NOT disabled — everything passive works exactly like live (typing, the
+"/" menu, dictation; all free drafts), and the one send button, relabeled
+**"resume & send"**, is the single door from parked to live. Pressing it
+POSTs the existing `/api/sessions/new` with `{cwd, resume: <sid>, prompt:
+<text>, account: <the session's own statusline-stashed slug>}` — so the
+message rides the LAUNCH ARGV (`claude --resume <sid> "<text>"`) and Claude
+Code consumes it at startup itself. Why not enable the /message endpoint and
+deliver after waking: "kitty tab exists" ≠ "the TUI's input is ready", and
+text typed into a half-started TUI gets eaten (the same class of race the
+bracketed-paste and DRAFT_CLEAR_GAP_S notes above exist for) — argv delivery
+has no readiness window at all. The armed `armJump(cwd, sid)` watch then
+follows the revived session (SessionStart under the OLD sid, adopt-fork
+after — the *jump* section's resume case), the toast says "resuming
+session", and on ANY failure (dead cwd → 400, no terminal → 503) the draft
+stays in the box — nothing is lost on a failed wake. The heavyweight action
+stays deliberate by wording alone: from the iPad, "resume & send" opens a
+real kitty tab on the laptop — the label is the consent. Reused, not new:
+the launch is the form's own audited `web-launch` path (the row carries
+`resume` + `account` + `ok`), so there is no new server surface and no new
+audit row kind. Headless-live sessions (live, no window) stay disabled —
+they aren't asleep, resume is the wrong medicine — and their mic button is
+now honestly `disabled` (dim, inert) instead of a live-looking button that
+swallowed clicks (`ta.disabled` guard in `dictation.start`).
+
 **The "/" menu** (the composer AND the new-session form's first-prompt box —
 one shared `slashMenu` helper in app.js). A leading `/` with no whitespace yet
 opens a Claude-Code-style completion menu over `GET /api/commands?cwd=…` —
@@ -1193,7 +1218,11 @@ startup, not deadness). Click,
 speak, and the transcript splices into the textarea **as you speak** —
 interim results land ~100ms behind the voice and are REPLACED in place as
 Deepgram firms them up, so the box always shows the current best guess and
-you visually validate before sending. Engine: **Deepgram Nova-3 streaming**
+you visually validate before sending. On a PARKED session the mic works the
+same and everything dictated is a free draft — only the composer's "resume
+& send" button wakes anything (*Resume & send* above); on a headless-live
+session the button is honestly `disabled`, matching its dead composer.
+Engine: **Deepgram Nova-3 streaming**
 (`interim_results=true`, `smart_format`), chosen over the free Web Speech API
 for accuracy and for **keyterm prompting** — repo jargon ("scorebar",
 "tailer") the generic engines mangle.
