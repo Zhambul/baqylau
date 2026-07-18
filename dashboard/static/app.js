@@ -24,6 +24,9 @@ const S = {
   folds: new Set(),      // open parked/archived subdivisions ("<cwd>|parked") —
                          // survives the list re-renders SSE snapshots trigger
   jump: null,            // pending jump-to-new-session watch ({cwd, known, until})
+  cards: new Map(),      // sid -> mounted list-card element (the patch targets)
+  rowPrev: new Map(),    // sid -> JSON of the row the mounted card shows
+  listKey: null,         // listShape() of the last full list render
 };
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
@@ -363,17 +366,33 @@ function showList() {
       .then(d => { S.sessions = d; renderList(); renderAttention(); });
 }
 
-function renderList() {
+function renderList(force) {
   if (S.cur) return;
-  $view.textContent = "";
   if (!S.sessions.length) {
+    S.listKey = null;
+    $view.textContent = "";
     $view.append(el("div", "empty", "no sessions recorded yet"));
     return;
   }
-  renderDirGroups(S.sessions);
+  // Same shape as the last full render (and its DOM is still mounted — a
+  // session view wipes $view, so a stale card map must not be patched
+  // blind) → update changed cards in place instead of rebuilding: the SSE
+  // pushes a fresh snapshot every tick while anything is active, and a full
+  // teardown per second lost hover/scroll state and burned layout for rows
+  // that hadn't changed.
+  const groups = groupSessions(S.sessions);
+  const shape = listShape(groups);
+  const anchor = S.cards.values().next().value;
+  if (!force && shape === S.listKey && anchor && anchor.isConnected)
+    return patchCards();
+  $view.textContent = "";
+  S.cards.clear();
+  S.rowPrev.clear();
+  renderDirGroups(groups);
+  S.listKey = shape;
 }
 
-function renderDirGroups(rows) {
+function groupSessions(rows) {
   // one group per directory (ordered by its newest session); inside each:
   // active cards visible, parked / archived (>3d) as click-to-open folds
   const groups = new Map();
@@ -386,31 +405,74 @@ function renderDirGroups(rows) {
     Math.max(...b[1].map(r => r.started_at || 0))
     - Math.max(...a[1].map(r => r.started_at || 0)));
   const now = Date.now() / 1000;
-  for (const [cwd, grows] of ordered) {
-    const active = grows.filter(r => r.live);
-    const rest = grows.filter(r => !r.live);
-    const old = r => !r.started_at || now - r.started_at > ARCHIVE_S;
-    const parked = rest.filter(r => !old(r));
-    const archived = rest.filter(old);
+  const old = r => !r.started_at || now - r.started_at > ARCHIVE_S;
+  return ordered.map(([cwd, grows]) => ({
+    cwd, count: grows.length,
+    active: grows.filter(r => r.live),
+    parked: grows.filter(r => !r.live && !old(r)),
+    archived: grows.filter(r => !r.live && old(r)),
+  }));
+}
 
+// What makes the list's SHAPE: group order, which cards are VISIBLE (active +
+// open folds), fold counts/open state. Rows changing in place don't move the
+// shape (they patch); anything here changing forces the full rebuild — so a
+// live↔parked flip, a new session, or a fold toggle re-lays the list, while
+// a stats tick only touches its own card.
+function listShape(groups) {
+  return JSON.stringify(groups.map(g => [
+    g.cwd, g.active.map(r => r.sid),
+    g.parked.length,
+    S.folds.has(g.cwd + "|parked") ? g.parked.map(r => r.sid) : 0,
+    g.archived.length,
+    S.folds.has(g.cwd + "|archived") ? g.archived.map(r => r.sid) : 0,
+  ]));
+}
+
+function renderDirGroups(groups) {
+  for (const g of groups) {
     const hd = el("div", "dirhead");
-    hd.append(el("span", "dirname", cwd ? cwd.split("/").filter(Boolean).pop() : "no project"));
-    if (cwd) hd.append(el("span", "dirpath", cwd));
-    hd.append(el("span", "dircount", grows.length + (grows.length === 1 ? " session" : " sessions")));
-    if (cwd) {
+    hd.append(el("span", "dirname", g.cwd ? g.cwd.split("/").filter(Boolean).pop() : "no project"));
+    if (g.cwd) hd.append(el("span", "dirpath", g.cwd));
+    hd.append(el("span", "dircount", g.count + (g.count === 1 ? " session" : " sessions")));
+    if (g.cwd) {
       const add = el("button", "dirnew", "+");
-      add.title = "new session in " + cwd;
-      add.onclick = () => openNewSession(cwd);
+      add.title = "new session in " + g.cwd;
+      add.onclick = () => openNewSession(g.cwd);
       hd.append(add);
     }
     $view.append(hd);
-    if (active.length) {
+    if (g.active.length) {
       const grid = el("div", "sgrid");
-      for (const row of active) grid.append(sessionCard(row));
+      for (const row of g.active) grid.append(mountCard(row));
       $view.append(grid);
     }
-    fold(cwd, "parked", parked);
-    fold(cwd, "archived", archived);
+    fold(g.cwd, "parked", g.parked);
+    fold(g.cwd, "archived", g.archived);
+  }
+}
+
+function mountCard(row) {
+  const c = sessionCard(row);
+  S.cards.set(row.sid, c);
+  S.rowPrev.set(row.sid, JSON.stringify(row));
+  return c;
+}
+
+// In-place update: same shape, so every visible row already has a card —
+// rebuild the innards of just the cards whose row data changed. The card
+// <a> itself survives, so scroll position, :hover, and the rest of the
+// list's layout stay put.
+function patchCards() {
+  for (const row of S.sessions) {
+    const card = S.cards.get(row.sid);
+    if (!card) continue;
+    const enc = JSON.stringify(row);
+    if (enc === S.rowPrev.get(row.sid)) continue;
+    S.rowPrev.set(row.sid, enc);
+    const fresh = sessionCard(row);
+    card.dataset.tab = fresh.dataset.tab;
+    card.replaceChildren(...fresh.childNodes);
   }
 }
 
@@ -422,15 +484,21 @@ function fold(cwd, kind, rows) {
                  (open ? "▾ " : "▸ ") + kind + " · " + rows.length);
   btn.onclick = () => {
     S.folds.has(key) ? S.folds.delete(key) : S.folds.add(key);
-    renderList();
+    renderList(true);
   };
   $view.append(btn);
   if (open) {
     const grid = el("div", "sgrid folded");
-    for (const row of rows) grid.append(sessionCard(row));
+    for (const row of rows) grid.append(mountCard(row));
     $view.append(grid);
   }
 }
+
+// Relative "ago" labels and the 3d archived boundary depend on the CLOCK,
+// not on data — and with the server's paused-blind diff an idle list gets no
+// sessions events at all, so nothing would ever re-run them. One full render
+// a minute (registered at boot) keeps them honest for free.
+const LIST_REFRESH_MS = 60000;
 
 function sessionCard(row) {
   const a = el("a", "scard");
@@ -3111,3 +3179,4 @@ route();
 renderAttention();
 refreshAccounts();
 setInterval(refreshAccounts, ACCOUNTS_POLL_MS);
+setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);

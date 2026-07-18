@@ -240,7 +240,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
-| `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then `sessions` snapshots on change + `notify` toasts |
+| `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then `sessions` snapshots on change (per `_snap_key`, the paused-blind diff — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`plan`/`tasks`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
@@ -1305,6 +1305,48 @@ rename lands at EOF so the tail window always sees it initially. Agent cards
 follow the same rule: the Task description
 (`desc` from the state DB's agents table) IS the agent's name; the raw
 `agent_id` drops to the subtitle.
+
+## The list renders once, then patches
+
+Two layers used to make the sessions list rebuild its entire DOM every
+second. The server pushed a fresh `sessions` snapshot on every 1s tick
+because consecutive snapshots always *differed*: the scorebar accrues
+`stats.paused` roughly once per second for every session sitting at a prompt
+(its awaiting-pause accumulator), so an otherwise idle dashboard still
+churned 84KB/s per client. And on every push the client's `renderList()`
+wiped `$view` and rebuilt every group header, fold, and card — losing hover
+state and burning layout for rows that hadn't changed.
+
+Both halves are fixed independently:
+
+- **Server — the paused-blind diff (`_snap_key`).** The change-detection key
+  for the global stream is the snapshot minus `stats.paused`. Only the DIFF
+  is blind: a pushed payload still carries the exact value. This is
+  behavior-preserving for the card's ⏱ chip because that shows elapsed
+  MINUS paused — constant while paused accrues — so the frozen card a
+  suppressed push leaves behind already displays the right number. An idle
+  dashboard now receives zero `sessions` events.
+- **Client — shape-keyed patching.** `renderList()` computes `listShape()` —
+  group order, which cards are VISIBLE (active + open folds), fold
+  counts/open state — and while the shape matches the last full render (and
+  that DOM is still mounted: a session view wipes `$view`, so a stale card
+  map must never be patched blind), it only patches: `patchCards()` rebuilds
+  the innards of exactly the cards whose row JSON changed, in place. The
+  card element itself survives, so scroll, `:hover`, and the rest of the
+  layout stay put. A live↔parked flip, a new session, or a fold toggle
+  changes the shape and takes the full-rebuild path, which is also where the
+  `S.cards`/`S.rowPrev` maps are rebuilt.
+- **The clock still moves.** Relative "ago" labels and the 3d archived
+  boundary depend on wall time, not data — with idle pushes suppressed
+  nothing would ever recompute them, so a boot-registered timer forces one
+  full render per `LIST_REFRESH_MS` (60s).
+
+**Why not per-row delta events:** the snapshot is already small (≤50 rows),
+the SSE only fires during genuine activity now, and a delta protocol would
+need its own resync story across reconnects — the full snapshot IS the
+resync. **Why not virtual-DOM diffing:** the row JSON comparison already
+skips unchanged cards; the only DOM work left is proportional to what
+actually changed.
 
 ## The conversation in the web stream
 

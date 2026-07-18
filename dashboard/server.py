@@ -436,6 +436,22 @@ def sessions_payload():
     return out
 
 
+def _snap_key(snap):
+    """The global stream's change-detection key: the snapshot minus
+    stats['paused']. The scorebar accrues that float ~once per second for
+    every session sitting at a prompt (its awaiting-pause accumulator), which
+    made consecutive snapshots differ on EVERY tick — an 84KB resend plus a
+    full client list re-render per second on an otherwise idle dashboard.
+    Only the diff is paused-blind: a pushed payload still carries the exact
+    value, and the card's ⏱ (elapsed MINUS paused) is constant while paused
+    accrues, so the frozen card a suppressed push leaves behind is already
+    showing the right number."""
+    return json.dumps(
+        [dict(r, stats={k: v for k, v in (r.get("stats") or {}).items()
+                        if k != "paused"}) for r in snap],
+        default=str)
+
+
 def accounts_payload():
     """The launchable accounts + their latest known usage, for the new-session
     picker AND the dashboard's top usage strip. Registry from
@@ -1985,8 +2001,8 @@ class Handler(BaseHTTPRequestHandler):
         changed boot id on reconnect is how an OPEN page learns its loaded JS
         may be stale; twice a redeploy shipped while a page sat open and its
         old handlers ran against the new server, audit-visibly), then a
-        `sessions` snapshot whenever the list changes, plus every `notify`
-        toast the watcher pushes."""
+        `sessions` snapshot whenever the list changes (per _snap_key — the
+        paused-blind diff), plus every `notify` toast the watcher pushes."""
         self._sse_start()
         q = NOTIFIER.register()
         try:
@@ -1996,7 +2012,7 @@ class Handler(BaseHTTPRequestHandler):
             snap = sessions_payload()
             if not self._sse("sessions", snap):
                 return
-            prev = json.dumps(snap, default=str)
+            prev = _snap_key(snap)
             while True:
                 drained = False
                 try:
@@ -2008,7 +2024,7 @@ class Handler(BaseHTTPRequestHandler):
                 except queue.Empty:
                     pass
                 snap = sessions_payload()
-                enc = json.dumps(snap, default=str)
+                enc = _snap_key(snap)
                 if enc != prev:
                     if not self._sse("sessions", snap):
                         return
