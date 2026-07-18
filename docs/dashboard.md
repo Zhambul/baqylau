@@ -292,7 +292,8 @@ the composer keys it to the session's cwd (fetched once per view), the form
 to whatever directory is currently typed (cached per dir). ↑/↓ move, Tab
 completes, Enter completes a *partial* token but sends/launches when the
 token already IS the selection (a fully-typed `/compact` goes through on one
-Enter — both boxes pass `enterSends`), Esc closes. The menu drops BELOW its host box, never upward over
+Enter — both boxes pass `enterSends: !IS_IPAD`, so on an iPad Enter always
+completes and never falls through to a send), Esc closes. The menu drops BELOW its host box, never upward over
 the stats row. The list is
 `plugins.slash_commands(cwd)` → `plugins/claude_code/slashcmds.py`: a curated
 `BUILTINS` snapshot of the CLI's built-in commands plus the session cwd's
@@ -312,7 +313,13 @@ behind the CLI is harmless (an un-listed command still types fine).
 
 **Both message boxes share the Claude Code input UX**: Enter sends (the
 composer) / launches (the form's first prompt), Shift+Enter inserts a
-newline, and the textarea auto-grows with its content (`autoGrow`), capped
+newline — **except on an iPad**, where Enter is always a newline and only
+the send/launch button submits (`IS_IPAD` in app.js: iPadOS Safari
+masquerades as desktop Safari — identical User-Agent, `MacIntel` platform —
+so detection is client-side by necessity, `platform === "MacIntel" &&
+maxTouchPoints > 1` being the one remaining tell; Macs report 0 touch
+points, iPads 5. The placeholders drop the Enter hints there too) — and the
+textarea auto-grows with its content (`autoGrow`), capped
 at `GROW_CAP` = 40% of the viewport (mirrored as `max-height: 40vh` in CSS)
 so a long paste can't swallow the page. Every dashboard text box (the two
 message boxes plus the directory and filter fields — one delegated document

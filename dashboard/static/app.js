@@ -28,6 +28,18 @@ const S = {
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 
+// iPad detection for the message boxes' Enter behavior. Since iPadOS 13
+// Safari masquerades as desktop Safari — identical User-Agent, "MacIntel"
+// platform — so the ONE tell left is touch: Macs report 0 maxTouchPoints,
+// iPads 5. (The /iPad/ UA test still catches the non-default "Request
+// Mobile Website" mode.) On an iPad the on-screen keyboard's return key is
+// the only Enter there is, so Enter must insert a newline and the send
+// button is the sole way to send; a hardware keyboard follows the same rule
+// for consistency. Detection is client-side by necessity — the server never
+// sees a distinguishing header (Safari sends no UA client hints).
+const IS_IPAD = /iPad/.test(navigator.userAgent)
+  || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+
 /* ---------- tiny DOM + fmt helpers ---------- */
 
 function el(tag, cls, text) {
@@ -879,7 +891,8 @@ function buildFilterBar() {
 // menu over GET /api/commands?cwd=… (built-ins + that directory's .claude
 // commands/skills). ↑/↓ move, Tab completes, Esc closes; Enter completes —
 // except with {enterSends: true} an EXACT token falls through to the caller's
-// send (so a fully-typed "/compact" sends on one Enter). The TUI stays
+// send (so a fully-typed "/compact" sends on one Enter; both boxes pass
+// !IS_IPAD, since on an iPad Enter never sends). The TUI stays
 // authoritative — sending just types the command into the terminal and Claude
 // Code's own palette executes it. The menu drops BELOW its host box (never up
 // over the stats row); `host` must be position:relative.
@@ -1271,7 +1284,8 @@ function submitPlan(plan, body, okTitle, okDetail) {
 
 /* ---------- control plane: the message composer ---------- */
 // A textarea above the mirror feed that types a message into the session's
-// kitty window (POST /message). Enter sends, Shift+Enter is a newline. Disabled
+// kitty window (POST /message). Enter sends, Shift+Enter is a newline — except
+// on an iPad (IS_IPAD), where Enter is a newline and only the button sends. Disabled
 // with a hint when the session isn't live or has no window (a headless/daemon
 // session — the /message endpoint would 409). The sent text surfaces in the
 // stream on its own via the conversation tail, so we only clear + toast —
@@ -1296,7 +1310,8 @@ function buildComposer() {
   const canSend = !!(meta.live && meta.kitty_window_id);
   ta.disabled = !canSend;
   ta.placeholder = canSend
-    ? "message this session…  (Enter to send · Shift+Enter for newline)"
+    ? (IS_IPAD ? "message this session…"
+               : "message this session…  (Enter to send · Shift+Enter for newline)")
     : (meta.live ? "no terminal window — can't message a headless session"
                  : "session is not live");
   const btn = el("button", "csend", "send");
@@ -1336,11 +1351,11 @@ function buildComposer() {
   // the "/" menu — commands for THIS session's cwd, fetched once per view
   const sm = slashMenu(ta, wrap,
     () => cmdsFor(meta.cwd, ses, "cmds"),
-    { enterSends: true });
+    { enterSends: !IS_IPAD });
   ta.oninput = () => autoGrow(ta);
   ta.onkeydown = (e) => {
     if (sm.key(e)) return;
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
   wrap.append(ta, btn);
@@ -1683,20 +1698,22 @@ function openNewSession(prefillCwd, resumeSid) {
   const prompt = el("textarea", "nsinput nsprompt");
   prompt.rows = 3;
   prompt.spellcheck = false;
-  prompt.placeholder =
-    "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
+  prompt.placeholder = IS_IPAD
+    ? "what should Claude start on?"
+    : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
   promptRow.append(prompt);
   // "/" completion here too — cwd-keyed to whatever directory is currently
   // typed (cached per dir, so flipping between dirs doesn't refetch)
   const cmdCache = {};
   const spm = slashMenu(prompt, promptRow,
     () => { const c = dir.value.trim(); return cmdsFor(c, cmdCache, c); },
-    { enterSends: true });
+    { enterSends: !IS_IPAD });
   // composer UX: grow with the message, Enter launches, Shift+Enter newline
+  // (on an iPad Enter is a newline and only the launch button launches)
   prompt.oninput = () => autoGrow(prompt);
   prompt.onkeydown = (e) => {
     if (spm.key(e)) return;
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
+    if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
   };
 
   const actions = el("div", "nsactions");
