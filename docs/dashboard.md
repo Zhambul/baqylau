@@ -356,15 +356,21 @@ passes no focus flag). Since no launch flag prevents the steal from outside
 the terminal, the endpoint compensates after the fact: capture the frontmost
 app's bundle id *before* the launch (`lsappinfo` — plain LaunchServices, no
 TCC/automation prompts), then a daemon thread watches the frontmost app for
-`REFOCUS_POLLS × REFOCUS_POLL_S` (~2s); if the TERMINAL app (`Frontend.
-app_id()` — kitty: `net.kovidgoyal.kitty`) becomes frontmost, `open -b
-<before>` hands focus straight back. ONLY the terminal triggers the bounce —
-a deliberate user app-switch inside the window must never be yanked back —
-and the guard is skipped entirely when the terminal was already frontmost at
-click time, off-mac, or when the frontend has no `app_id()` (the inert stub).
-Every watch writes one `web-launch-refocus` state_files row (`before`/
-`terminal`/`outcome`: `clean` = never stole, `bounced to <app>`, `activate
-failed`). **The argv is NOT a bare `["claude"]`**
+`REFOCUS_POLLS × REFOCUS_POLL_S` (~12s); whenever the TERMINAL app
+(`Frontend.app_id()` — kitty: `net.kovidgoyal.kitty`) becomes frontmost,
+`open -b <before>` hands focus straight back. NOT once-and-done: the launch
+steal is only the first — the new session's SessionStart opens its
+mirror/scorebar panes seconds later (more kitty window creations, observed
+~3s in after claude's boot) and each can steal AGAIN; a single-bounce ~2s
+watch shipped first and was live-verified re-stolen by exactly that, which
+is why the watch outlives the whole startup and keeps bouncing, capped at
+`REFOCUS_MAX` (a runaway focus fight would be worse than the steal). ONLY
+the terminal triggers a bounce — a deliberate user app-switch inside the
+window must never be yanked back — and the guard is skipped entirely when
+the terminal was already frontmost at click time, off-mac, or when the
+frontend has no `app_id()` (the inert stub). Every watch writes one
+`web-launch-refocus` state_files row (`before`/`terminal`/`outcome`: `clean`
+= never stole, `bounced xN to <app>`, `activate failed`). **The argv is NOT a bare `["claude"]`**
 — kitty execs launch argv with kitty's OWN environment, and a GUI-launched
 kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
 flashes and closes while `kitten @ launch` still exits 0; this shipped once)

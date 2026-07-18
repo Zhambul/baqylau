@@ -637,8 +637,15 @@ def launch_argv(words, cmd="claude"):
 # `lsappinfo` + `open -b` are plain LaunchServices calls — no Apple-events /
 # accessibility permission prompts, unlike System Events AppleScript.
 REFOCUS_POLL_S = 0.25              # frontmost-app poll cadence after a launch
-REFOCUS_POLLS = 8                  # ~2s watch window (the steal, when it
-                                   # happens, lands within the first poll)
+REFOCUS_POLLS = 48                 # ~12s watch window: the launch steal lands
+                                   # within the first poll, but the session's
+                                   # OWN startup re-steals later — SessionStart
+                                   # opens the mirror/scorebar panes (more
+                                   # kitty window creations, observed ~3s in,
+                                   # after claude's boot) — so the watch must
+                                   # outlive the whole startup
+REFOCUS_MAX = 5                    # bounce cap per launch (each pane open can
+                                   # steal again; a runaway fight is worse)
 
 
 def _front_app():
@@ -669,19 +676,29 @@ def _activate_app(bundle_id):
 
 def _bounce_focus(before, terminal_app):
     """The post-launch focus watch (runs on a daemon thread — the HTTP
-    response must never wait on it): if the terminal app becomes frontmost
-    inside the watch window, re-activate `before`. ONLY the terminal triggers
-    the bounce — a deliberate user app-switch mid-window must not be yanked
-    back. The outcome is audited as a `web-launch-refocus` state_files row
-    (`clean` = terminal never took over, the common case)."""
+    response must never wait on it): whenever the terminal app becomes
+    frontmost inside the watch window, re-activate `before`. NOT
+    once-and-done: the launch steal is only the first — the new session's
+    SessionStart opens its mirror/scorebar panes seconds later and each pane
+    creation can steal again (live-verified: a single bounce got re-stolen by
+    the pane opens ~3s in), so the watch keeps bouncing (capped at
+    REFOCUS_MAX) until the window closes. ONLY the terminal triggers a bounce
+    — a deliberate user app-switch mid-window must not be yanked back. The
+    outcome is audited as a `web-launch-refocus` state_files row (`clean` =
+    the terminal never took over, `bounced xN to <app>`, `activate failed`)."""
+    bounces = 0
     outcome = "clean"
     for _ in range(REFOCUS_POLLS):
         time.sleep(REFOCUS_POLL_S)
         now = _front_app()
         if now and now != before and now == terminal_app:
-            outcome = ("bounced to %s" % before) if _activate_app(before) \
-                else "activate failed"
-            break
+            if not _activate_app(before):
+                outcome = "activate failed"
+                break
+            bounces += 1
+            outcome = "bounced x%d to %s" % (bounces, before)
+            if bounces >= REFOCUS_MAX:
+                break
     A.state_file("", "", "web-launch-refocus",
                  {"before": before, "terminal": terminal_app,
                   "outcome": outcome})

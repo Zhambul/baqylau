@@ -1044,13 +1044,34 @@ def _bounce_rig(monkeypatch, fronts, bundle="app.term"):
 def test_new_session_bounces_focus_when_terminal_steals(dash, monkeypatch,
                                                         tmp_path):
     # the terminal becomes frontmost after the launch → the guard hands focus
-    # back to the app that was frontmost at click time (the user's browser)
-    fe, activated, _ = _bounce_rig(monkeypatch, ["com.browser", "app.term"])
+    # back to the app that was frontmost at click time (the user's browser).
+    # A PERSISTENT steal (here: the terminal wins every poll) keeps getting
+    # bounced — the session's own startup re-steals after the launch steal
+    # (SessionStart's pane opens) — capped at REFOCUS_MAX, then the watch ends.
+    fe, activated, front_calls = _bounce_rig(monkeypatch,
+                                             ["com.browser", "app.term"])
     _inject_fe(monkeypatch, fe)
     code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
     assert code == 200 and fe.launched
-    wait_until(lambda: activated == ["com.browser"],
-               desc="focus bounced back to the browser")
+    wait_until(lambda: len(activated) == DS.REFOCUS_MAX,
+               desc="kept bouncing up to the cap")
+    assert activated == ["com.browser"] * DS.REFOCUS_MAX
+    # the watch ended AT the cap: one capture + one poll per bounce, no more
+    assert len(front_calls) == 1 + DS.REFOCUS_MAX
+
+
+def test_new_session_bounce_recovers_intermittent_resteal(dash, monkeypatch,
+                                                          tmp_path):
+    # steal → bounce → quiet → RE-steal (the pane open) → bounce again; the
+    # watch never stops at the first bounce
+    fe, activated, _ = _bounce_rig(
+        monkeypatch, ["com.browser", "app.term", "com.browser", "app.term",
+                      "com.browser"])
+    _inject_fe(monkeypatch, fe)
+    code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert code == 200
+    wait_until(lambda: activated == ["com.browser", "com.browser"],
+               desc="both steals bounced")
 
 
 def test_new_session_no_bounce_when_focus_unchanged_or_user_switch(
