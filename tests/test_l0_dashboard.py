@@ -1209,6 +1209,21 @@ def test_post_command_stuck_confirm_menu_reports_failed(dash, monkeypatch):
     assert fe.keyed == [("66", ("1",))]
 
 
+def test_session_detail_effort_from_settings(dash, tmp_path):
+    # the effort quick-button's label: the SAVED effortLevel (every applied
+    # /effort writes itself through to settings — per-session effort is
+    # readable from nowhere else), resolved for the session's cwd via the
+    # plugins.effort_default fan-out; here the hermetic config dir's
+    # settings.json is the only layer
+    cfg = os.environ["CLAUDE_CONFIG_DIR"]
+    with open(os.path.join(cfg, "settings.json"), "w") as fh:
+        json.dump({"effortLevel": "xhigh"}, fh)
+    A.session_start({"session_id": "eff1", "cwd": str(tmp_path),
+                     "transcript_path": ""})
+    code, body = _get(dash + "/api/session/eff1")
+    assert code == 200 and json.loads(body)["effort"] == "xhigh"
+
+
 def test_confirm_find_menu_shape_not_prose():
     # detection is by SHAPE: a ❯-cursored numbered list with Yes+No labels.
     # The bare composer prompt and scrollback prose that happens to enumerate

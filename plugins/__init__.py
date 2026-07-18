@@ -185,6 +185,25 @@ def slash_commands(cwd):
     return out
 
 
+def effort_default(cwd):
+    """Saved-effort fan-out (cwd-keyed like slash_commands — the caller
+    already holds the session's cwd): the first plugin that knows a saved
+    effort level for sessions under `cwd` returns it ("low"…"max"); "" when
+    none does. Backs the dashboard's effort quick-button label: per-session
+    effort is readable from no transcript, but every `/effort <level>` saves
+    itself as the settings default, so the saved value IS the last applied
+    one. Same exception contract as census()/activity(): the caller is the
+    read-side dashboard, not a hook."""
+    for p in all_plugins():
+        fn = getattr(p, "effort_default", None)
+        if fn is None:
+            continue
+        got = fn(cwd)
+        if got:
+            return got
+    return ""
+
+
 def context(transcript_path, main=False):
     """Context-saturation fan-out (path-keyed like session_title — the
     dashboard's rows already hold each transcript path): the first plugin that

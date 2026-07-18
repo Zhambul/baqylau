@@ -73,6 +73,17 @@ def slash_commands(cwd):
     return slashcmds.slash_commands(cwd)
 
 
+def effort_default(cwd):
+    """The saved-effort provider (plugins.effort_default fan-out) — the merged
+    settings' `effortLevel` resolved for the session's cwd. The TUI persists
+    every `/effort <level>` there (docs/dashboard.md, *Web quick commands*),
+    so this tracks the last applied effort; a session-only override isn't
+    readable anywhere (see model.py's header). None when unset."""
+    from plugins.claude_code import model
+    return model.settings_field("effortLevel", start=cwd or None,
+                                env_pin=False) or None
+
+
 def accounts():
     """The account-registry provider (plugins.accounts fan-out) — the plain
     default plus the switcher's accounts.tsv rows. See account.registry."""

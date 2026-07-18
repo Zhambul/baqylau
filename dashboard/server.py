@@ -455,6 +455,11 @@ def session_payload(sid):
     data["title"] = session_title(data.get("transcript_path") or "")
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
     data["git"] = git_info(data.get("cwd") or "")
+    # the effort quick-button's label (docs/dashboard.md, *Web quick
+    # commands*): the SAVED effort level — every /effort persists itself
+    # there, so it is the last applied value; per-session effort is readable
+    # from nowhere else
+    data["effort"] = plugins.effort_default(data.get("cwd") or "")
     data["running"] = API.running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
@@ -1955,7 +1960,7 @@ class Handler(BaseHTTPRequestHandler):
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
-                "ctx": None, "git": None, "title": None}
+                "ctx": None, "git": None, "title": None, "effort": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2019,6 +2024,13 @@ class Handler(BaseHTTPRequestHandler):
                 if git != prev["git"]:
                     prev["git"] = git
                     if not self._sse("git", {"git": git}):
+                        return
+                # the effort quick-button, live — a terminal-side /effort
+                # saves to settings and shows here on the slow cadence
+                eff = plugins.effort_default(row.get("cwd") or "")
+                if eff != prev["effort"]:
+                    prev["effort"] = eff
+                    if not self._sse("effort", {"effort": eff}):
                         return
                 costs = API.costs(sid)
                 if costs != prev["costs"]:

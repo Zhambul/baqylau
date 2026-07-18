@@ -191,14 +191,17 @@ def def_field(def_file, field):
     return None if (not v or v == "inherit") else v
 
 
-def settings_field(field):
+def settings_field(field, start=None, env_pin=True):
     """A field from the merged settings (project overriding global). Layered
     across ALL ancestor .claude dirs (claude_dirs, nearest-first) for the same
     subdir/worktree reason as agent_def_file — else a teammate in a subdirectory
     skips the project settings and falls straight through to ~/.claude. First
-    non-empty wins; settings.local.json shadows settings.json per dir."""
+    non-empty wins; settings.local.json shadows settings.json per dir.
+    `start`/`env_pin` pass through to claude_dirs — an out-of-process reader
+    (the dashboard) resolves for a SESSION's cwd, not its own (same reason
+    slashcmds passes them)."""
     paths = []
-    for c in claude_dirs():
+    for c in claude_dirs(start=start, env_pin=env_pin):
         paths += [os.path.join(c, "settings.local.json"),
                   os.path.join(c, "settings.json")]
     for p in paths:

@@ -446,9 +446,20 @@ class needs the same exclusion. The model button's label
 shows the session's CURRENT model (`✦ opus-4.8 ▾`) from the ctx probe's
 `model` field, refreshed by the same `ctx` SSE event that drives the ctx bar
 (`shortModel` in app.js is the display twin of `model.short_model` — the
-Python side is the authority); effort has no current-value label because
-effort is config-only, readable from no transcript
-(`plugins/claude_code/model.py`).
+Python side is the authority). Both labels stay CURRENT: an applied web
+switch updates them optimistically (`applyQuickSwitch` — for model a
+`pendingModel` override that holds until the ctx probe's family confirms it
+on the next assistant turn; the probe's model is stale until then). The
+effort label (`⚡ high ▾`) shows the SAVED effort level — session meta
+`effort` + the SSE `effort` event, backed by the `plugins.effort_default(cwd)`
+fan-out over `model.settings_field("effortLevel", start=cwd)`: per-session
+effort is readable from no transcript (`plugins/claude_code/model.py`), but
+every applied `/effort <level>` — terminal or web — persists itself as the
+settings default, so the saved value IS the last applied one (a
+terminal-side `/effort` reaches the open page on the SSE slow cadence). The
+honest residual: a session started with `--effort X` that never ran
+`/effort` shows the saved default, not X — that flag is recorded nowhere
+readable.
 
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against

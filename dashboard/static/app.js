@@ -612,6 +612,12 @@ function connectSession(sid) {
     if (t && S.ses.projEl && !S.ses.projEl.querySelector("input"))
       S.ses.projEl.textContent = t;
   });
+  es.addEventListener("effort", (e) => {
+    if (S.ses && S.ses.meta) {
+      S.ses.meta.effort = JSON.parse(e.data).effort;
+      if (S.ses.effortBtn) setEffortBtn(S.ses.effortBtn);
+    }
+  });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
@@ -2025,6 +2031,7 @@ function sendQuickCmd(cmd, arg) {
           ? "sent — answer the confirm dialog in the terminal"
           : r.confirm === "confirmed" ? "switched (dialog confirmed)" : "sent";
       toast(r.confirm === "failed" ? "ask" : "done", label, sub);
+      if (!r.queued && r.confirm !== "failed") applyQuickSwitch(cmd, arg);
     })
     .catch(e => toast("ask", label + " failed", (e && e.error) || ""));
 }
@@ -2051,22 +2058,53 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest(".qcwrap")) closeQuickMenu();
 });
 
+// Optimistic button refresh after an APPLIED switch (not queued, confirm
+// menu not stuck): the ctx probe only learns a model change on the next
+// assistant turn, and a settings write reaches the SSE `effort` push on the
+// slow cadence — the successful click itself is the freshest signal.
+function applyQuickSwitch(cmd, arg) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (cmd === "model") {
+    ses.pendingModel = arg.replace("[1m]", "");
+    if (ses.modelBtn) setModelBtn(ses.modelBtn);
+  } else if (cmd === "effort") {
+    if (ses.meta) ses.meta.effort = arg;
+    if (ses.effortBtn) setEffortBtn(ses.effortBtn);
+  }
+}
+
 // The session's current model FAMILY (a MODEL_CHOICES value) when the ctx
 // probe knows it — shortModel's leading word ("opus-4.8" → "opus").
 function curModelFamily() {
   const ses = S.ses;
+  if (ses && ses.pendingModel) return ses.pendingModel;
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
   return (shortModel(cx && cx.model) || "").split("-")[0];
 }
 
 // The model button's label carries the session's CURRENT model when the ctx
 // probe knows it (meta/SSE `ctx` — the transcript tail's last assistant
-// record), so the row doubles as a live model indicator.
+// record), so the row doubles as a live model indicator. A just-switched
+// model shows as pendingModel until the probe's family confirms it (the
+// ctx model stays stale until the next assistant turn).
 function setModelBtn(btn) {
   const ses = S.ses;
   const cx = (ses && (ses.ctx || (ses.meta && ses.meta.ctx))) || null;
   const m = shortModel(cx && cx.model);
+  if (ses && ses.pendingModel) {
+    if ((m || "").split("-")[0] === ses.pendingModel) ses.pendingModel = null;
+    else { btn.textContent = "✦ " + ses.pendingModel + " ▾"; return; }
+  }
   btn.textContent = "✦ " + (m || "model") + " ▾";
+}
+
+// The effort button's label carries the SAVED effort level (meta/SSE
+// `effort` — the settings' effortLevel, which every applied /effort writes
+// through); bare "effort" when unknown.
+function setEffortBtn(btn) {
+  const meta = (S.ses && S.ses.meta) || {};
+  btn.textContent = "⚡ " + (meta.effort || "effort") + " ▾";
 }
 
 /* ---------- full web rewind (docs/dashboard.md, *Web rewind*) ---------- */
@@ -2453,11 +2491,12 @@ function renderSessionChrome(tab) {
     // effort: dropdown picker (current effort is config-only — not readable
     // from any transcript, see plugins/claude_code/model.py — so no label)
     const ewrap = el("span", "qcwrap");
-    const eff = el("button", "sstop", "⚡ effort ▾");
+    const eff = el("button", "sstop");
+    ses.effortBtn = eff;
+    setEffortBtn(eff);
     eff.title = "set the reasoning effort (/effort — also saves as your new-session default)";
-    // no current-value highlight: effort is config-only, readable from no
-    // transcript (plugins/claude_code/model.py)
-    eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES, "");
+    eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES,
+                                      (ses.meta && ses.meta.effort) || "");
     ewrap.append(eff);
     act2.append(ewrap);
     // a red tab = a modal dialog is up — pasted text would land IN it (the
