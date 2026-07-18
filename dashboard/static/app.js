@@ -14,6 +14,7 @@ const $attn = document.getElementById("attn");
 const $favicon = document.getElementById("favicon");
 const $newbtn = document.getElementById("newbtn");
 const $modal = document.getElementById("modal");
+const $accounts = document.getElementById("accounts");
 
 const S = {
   sessions: [],          // last global snapshot
@@ -174,6 +175,69 @@ function renderAttention() {
   }
   document.title = asking.length ? "(" + asking.length + ") " + BASE_TITLE : BASE_TITLE;
   if ($favicon) $favicon.href = asking.length ? FAVICON_ASK : FAVICON;
+}
+
+/* ---------- account usage strip (top of every page) ---------- */
+// A slim strip under the header showing each subscription account's latest
+// 5-hour / 7-day rate-limit usage (GET /api/accounts — aggregated per account
+// from the status-line capture, docs/dashboard.md). Polled on a slow timer
+// (usage moves slowly, and it's ambient); hidden entirely when no account has
+// any usage captured yet. The default account is labeled "default"; others by
+// their switcher label (c2 · claude-01).
+
+const ACCOUNTS_POLL_MS = 60000;
+
+function usagePct(u, key) {
+  const v = u && u[key];
+  return typeof v === "number" ? v : null;
+}
+
+function acctPill(a) {
+  const u = a.usage;
+  const pill = el("div", "acct");
+  const name = a.slug ? a.slug + " · " + a.label : a.label;
+  pill.append(el("span", "aname", name));
+  const fh = usagePct(u, "five_hour"), sd = usagePct(u, "seven_day");
+  if (fh == null && sd == null) {
+    pill.append(el("span", "adim", "no usage yet"));
+    return pill;
+  }
+  const bar = (label, pct, resetKey) => {
+    const seg = el("span", "ubar" + (pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
+    seg.append(el("span", "ulabel", label));
+    const track = el("span", "utrack");
+    const fill = el("span", "ufill");
+    fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    track.append(fill);
+    seg.append(track, el("span", "upct", pct + "%"));
+    const reset = u && u[resetKey];
+    if (reset) seg.title = label + " resets " + resetAgo(reset);
+    return seg;
+  };
+  if (fh != null) pill.append(bar("5h", fh, "five_hour_reset"));
+  if (sd != null) pill.append(bar("7d", sd, "seven_day_reset"));
+  return pill;
+}
+
+function resetAgo(epochS) {
+  const s = epochS - Date.now() / 1000;
+  if (s <= 0) return "now";
+  if (s < 3600) return "in " + (s / 60 | 0) + "m";
+  if (s < 86400) return "in " + (s / 3600 | 0) + "h" + String(s % 3600 / 60 | 0).padStart(2, "0") + "m";
+  return "in " + (s / 86400 | 0) + "d" + String(s % 86400 / 3600 | 0).padStart(2, "0") + "h";
+}
+
+function renderAccounts(list) {
+  if (!$accounts) return;
+  const withUsage = (list || []).filter(a => a.usage);
+  $accounts.hidden = !withUsage.length;
+  $accounts.textContent = "";
+  for (const a of withUsage) $accounts.append(acctPill(a));
+}
+
+function refreshAccounts() {
+  fetch("/api/accounts").then(r => r.json())
+    .then(renderAccounts).catch(() => {});
 }
 
 /* ---------- global event stream ---------- */
@@ -1061,6 +1125,27 @@ function openNewSession(prefillCwd, resumeSid) {
     row.append(sel);
     return [row, sel];
   };
+  // account picker — the subscription to launch under (default `claude`, or a
+  // switcher alias c1/c2). Populated from /api/accounts (cached in S.accts);
+  // each option shows the account's latest usage inline when known.
+  const [acctRow, acct] = pick("account", [["", "default"]]);
+  const fillAccts = (list) => {
+    const prev = acct.value;
+    acct.textContent = "";
+    for (const a of list) {
+      const u = a.usage;
+      const usage = u && (typeof u.five_hour === "number" || typeof u.seven_day === "number")
+        ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
+      const o = el("option", "", (a.slug ? a.slug + " · " + a.label : a.label) + usage);
+      o.value = a.slug;
+      acct.append(o);
+    }
+    acct.value = [...acct.options].some(o => o.value === prev) ? prev : "";
+  };
+  if (S.accts) fillAccts(S.accts);
+  fetch("/api/accounts").then(r => r.json())
+    .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
+
   const [modelRow, model] = pick("model", [
     ["", "default"], ["fable", "fable"], ["opus", "opus"],
     ["sonnet", "sonnet"], ["haiku", "haiku"],
@@ -1071,6 +1156,8 @@ function openNewSession(prefillCwd, resumeSid) {
   ]);
   const split = el("div", "nssplit");
   split.append(modelRow, effortRow);
+  const split2 = el("div", "nssplit");
+  split2.append(acctRow);
 
   const promptRow = el("label", "nsfield");
   promptRow.append(el("span", "nslabel", "first prompt (optional)"));
@@ -1099,6 +1186,7 @@ function openNewSession(prefillCwd, resumeSid) {
     const body = { cwd };
     if (start.value === "continue") body.continue = true;
     else if (start.value.startsWith("resume:")) body.resume = start.value.slice(7);
+    if (acct.value) body.account = acct.value;
     if (model.value) body.model = model.value;
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
@@ -1110,7 +1198,7 @@ function openNewSession(prefillCwd, resumeSid) {
   cancel.onclick = closeNewSession;
   dir.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
 
-  panel.append(dirRow, startRow, split, promptRow, actions);
+  panel.append(dirRow, startRow, split2, split, promptRow, actions);
   const back = el("div", "nsback");
   back.onclick = (e) => { if (e.target === back) closeNewSession(); };
   back.append(panel);
@@ -1148,6 +1236,21 @@ function renderSessionChrome(tab) {
                meta.live ? "live" : "parked"));
   if (meta.cwd) l1.append(el("span", "sid", meta.cwd));
   l1.append(el("span", "sid", shortSid(S.cur)));
+  // which subscription account this chat runs under (◈ c2 · claude-01)
+  const acc = meta.account || {};
+  if (acc.slug || acc.label) {
+    const chip = el("span", "acctchip");
+    chip.append(el("span", "ag", "◈"), document.createTextNode(
+      " " + (acc.slug ? acc.slug + " · " + acc.label : acc.label)));
+    const u = meta.usage;
+    if (u) {
+      const parts = [];
+      if (typeof u.five_hour === "number") parts.push("5h " + u.five_hour + "%");
+      if (typeof u.seven_day === "number") parts.push("7d " + u.seven_day + "%");
+      if (parts.length) chip.append(el("span", "ausage", parts.join(" · ")));
+    }
+    l1.append(chip);
+  }
   // stop (live, windowed): closes the session's kitty tab — a graceful stop
   // (Claude Code exits on the HUP and SessionEnd runs the normal lifecycle).
   // Two-step confirm: first click arms for 4s, second click fires.
@@ -1679,3 +1782,5 @@ initNotifBtn();
 connectGlobal();
 route();
 renderAttention();
+refreshAccounts();
+setInterval(refreshAccounts, ACCOUNTS_POLL_MS);

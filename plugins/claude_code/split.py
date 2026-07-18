@@ -43,6 +43,7 @@ from core.noaudit import load_audit       # noqa: E402
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import hostpane as HP           # noqa: E402  (shared host pane lifecycle)
 from core import paths as P               # noqa: E402
+from core import state as S               # noqa: E402  (account kv stamp at open)
 from core import tabs as T                # noqa: E402  (adopt_note — sid-fork registry)
 from plugins.claude_code import hookkit as HK  # noqa: E402  (log_path + the injected-payload accessor)
 from plugins.claude_code import model as M     # noqa: E402  (settings_env)
@@ -424,6 +425,15 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # on a fresh session they'd start, find no DB, and exit instantly (the old
     # design's `: > "$log"` provided this same guarantee for the log file).
     HP.ensure_db(log)
+    # Stamp the account this session runs under (the switcher's env contract —
+    # plugins.claude_code.account) into the state DB now that it exists, so the
+    # scoreboard/dashboard show the c1/c2/default label from the first paint;
+    # the status-line shim refreshes it (+ usage) thereafter. Best-effort.
+    try:
+        from plugins.claude_code import account as _acc
+        S.kv_set(log, "account", _acc.current())
+    except Exception:
+        A.error(log, "split account capture")
     tag_window(sid)
     # Register this as the last HOSTED session in this cwd — the predecessor
     # candidate adopt.py consumes if the sid forks (on --resume AND on

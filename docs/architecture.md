@@ -126,7 +126,11 @@ parsing, the `PRICES` table, `cost_usd`, the `usage_fold` message-id dedup,
 `claude_msgs.py`), `slashcmds.py` (slash-command discovery for the web
 composer's "/" menu: the curated `BUILTINS` snapshot + the cwd's
 `.claude/commands`/`.claude/skills` walk, behind the `plugins.slash_commands`
-fan-out — see [dashboard.md](dashboard.md)), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
+fan-out — see [dashboard.md](dashboard.md)), `account.py` (the
+subscription-account vocabulary: the switcher's env contract + `accounts.tsv`
+registry, behind `plugins.accounts`/`account_alias`), `statusline.py` (the
+status-line shim's capture half — stashes per-session 5h/7d usage + account
+from the status-line stdin, behind `bin/claude-statusline.py`), the seven hook-handler bodies (`cmd_pre`, `cmd_fmt`,
 `file_fmt`, `subagent_fmt`, `monitor_fmt`, `task_fmt`, `stop_fmt`), the
 single per-event **`dispatch.py`** (behind the `claude-hook.py` entry — reads
 the payload once and fans out in-process to the tab dispatch, the right

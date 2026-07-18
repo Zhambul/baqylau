@@ -134,6 +134,21 @@
   "env": { "CLAUDE_DASHBOARD_AUTOSTART": "1" }
   ```
 
+- **`~/.claude/settings.json` `statusLine`** — the account-usage capture shim
+  ([dashboard.md](dashboard.md) › *Accounts & usage*). Claude Code exposes
+  per-session rate-limit data (5h/7d) ONLY on the status-line command's stdin, so
+  `bin/claude-statusline.py` is installed as the `statusLine.command` with the
+  user's real status-line command as its argv — it stashes the usage + account
+  into the state DB, then runs the real command with the same stdin and forwards
+  its output. Wiring is a one-line PREPEND of the shim path to the existing
+  command (backed up to `settings.json.bak-kitty-statusline`); revert by dropping
+  the prefix. OPTIONAL: without it the account label still works (captured at
+  SessionStart from the switcher env) — only the 5h/7d usage numbers go dark.
+  ```json
+  "statusLine": { "type": "command",
+    "command": "/ABS/PATH/kitty/bin/claude-statusline.py <your real status-line command>" }
+  ```
+
 - **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
   (codex CLI ≥ 0.142). Like Claude's hook table, this wiring lives outside the
   repo. Enable codex's hook system and point its `SessionStart` at the entry:

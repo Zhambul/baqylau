@@ -181,8 +181,36 @@ def compose(w, mparts, st, nerr=0):
     the state DB, read once and shared, so all five rows agree (no torn reads)."""
     now = time.time()
 
-    # Row 0: session id — always visible, truncated to width (dim glyph, brighter id).
-    line_sid = R.DIM + " ⬡ " + R.RST + VAL + fit(session_id(), max(1, w - 3)) + R.RST
+    # Row 0: session id + the account this chat runs under + its 5h/7d usage.
+    # The id is always kept (truncated only if the pane is too narrow); the
+    # account and usage extras append after it and tail-drop first (usage
+    # before account) when they don't fit — so a narrow pane still shows the id.
+    acc = St.kv_get(LOG, "account") or {}
+    usage = St.kv_get(LOG, "usage") or {}
+    accs = ((acc.get("slug") + " · " + acc.get("label", "")) if acc.get("slug")
+            else acc.get("label", ""))
+    extras = []                                       # (plain, styled), drop-order
+    if accs:
+        extras.append((accs, R.DIM + "◈ " + R.RST + SLATE + accs + R.RST))
+    uparts = []
+    if isinstance(usage.get("five_hour"), int):
+        uparts.append("5h %d%%" % usage["five_hour"])
+    if isinstance(usage.get("seven_day"), int):
+        uparts.append("7d %d%%" % usage["seven_day"])
+    if uparts:
+        u = " · ".join(uparts)
+        extras.append((u, style("usage", u)))         # neutral: brighten digits
+    avail = max(1, w - 3)
+
+    def extras_w(lst):
+        return sum(SEP_W + len(p) for p, _ in lst)
+
+    while extras and 12 + extras_w(extras) > avail:   # keep >= a short id stub
+        extras.pop()
+    sid_shown = fit(session_id(), max(1, avail - extras_w(extras)))
+    line_sid = R.DIM + " ⬡ " + R.RST + VAL + sid_shown + R.RST
+    for _p, styled in extras:
+        line_sid += SEP + styled
 
     # Row 1: message census — never blank; default to a 0 count when there's nothing.
     if not mparts:

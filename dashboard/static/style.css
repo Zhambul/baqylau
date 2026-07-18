@@ -310,6 +310,35 @@ body.attn-on .shead { top: 81px; }
 }
 .fcount { color: var(--dim2); font: 11px/1 var(--mono); flex: none; margin-left: auto; }
 
+/* ---- account usage strip (under the header) ----------------------------- */
+#accounts {
+  display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center;
+  padding: 7px 16px; background: var(--panel);
+  box-shadow: inset 0 -1px 0 var(--hair);
+}
+.acct { display: inline-flex; align-items: center; gap: 10px; min-width: 0; }
+.acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; }
+.acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
+.ubar { display: inline-flex; align-items: center; gap: 5px; }
+.ubar .ulabel { color: var(--dim); font: 10px/1 var(--mono); }
+.ubar .utrack {
+  width: 54px; height: 5px; border-radius: 3px; overflow: hidden;
+  background: color-mix(in srgb, var(--bg) 80%, black);
+}
+.ubar .ufill { display: block; height: 100%; background: var(--accent, #6b9bd1); }
+.ubar.warn .ufill { background: var(--amber, #d1a35a); }
+.ubar.hot .ufill { background: var(--red, #b5484d); }
+.ubar .upct { color: var(--text-soft); font: 10px/1 var(--mono); }
+
+/* which account a session runs under (in its header) */
+.acctchip {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  color: var(--dim); font: 11px/1 var(--mono);
+  box-shadow: var(--card); border-radius: var(--r); padding: 3px 9px;
+}
+.acctchip .ag { color: var(--accent, #6b9bd1); }
+.acctchip .ausage { color: var(--dim2); margin-left: 2px; }
+
 /* ---- the message composer (control plane) ------------------------------- */
 .composer {
   display: flex; align-items: flex-end; gap: 8px;

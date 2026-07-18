@@ -183,12 +183,13 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
+| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured 5h/7d usage (aggregated across sessions); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `claude [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); 400 bad cwd/model/effort/resume, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `/events` | global SSE: `sessions` snapshots on change + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`tab`/`errors`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
@@ -377,6 +378,55 @@ empty) and `web-stop` (`{win, ok}`). Failure paths (no window,
 no terminal, send/launch/close returned false) also write an `A.error` per the
 audit-before-swallow rule, so a "my message never arrived" report is answerable
 from the DB.
+
+## Accounts & usage
+
+The machine juggles several Claude subscriptions through the `claude-subscription`
+wrapper (github.com/leegunwoo98/claude-code-account-switcher; the user's `c1`/`c2`
+zsh aliases). Each `claude-subscription <slug>` exports `CLAUDE_SUBSCRIPTION_SLUG`
++ `CLAUDE_SUBSCRIPTION_LABEL` and injects that account's keychain token; the plain
+`claude` alias is the default account (empty slug). Three surfaces:
+
+**Launch under an account.** The new-session form's account select is
+`plugins.accounts()` (`plugins/claude_code/account.registry` — the default plus
+each `accounts.tsv` row). The chosen slug is resolved server-side to a
+registry-vetted command word (`plugins.account_alias`, `account.alias_for`) —
+`claude` for the default, the slug (which IS the `c1`/`c2` alias) otherwise — and
+that word replaces `claude` in `launch_argv`'s FIXED command string. Because it
+comes only from the registry (never raw client text), the injection story is
+unchanged; an unknown slug is a `400`. The account word rides the same
+`$SHELL -lic '<word> "$@"'` login shell, so the alias resolves exactly as typing
+it in a fresh tab.
+
+**Which account a chat runs under** is stamped into the session's state DB at
+SessionStart (`split.cmd_open` → `state.kv_set("account", account.current())`,
+read from the env contract — no token touched) and shown in the session header
+(`◈ c2 · claude-01`) and the terminal scoreboard's id row.
+
+**Usage limits (5h / 7d).** Claude Code exposes per-session rate-limit data to
+exactly ONE place — the **status-line command's stdin** JSON
+(`rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}`), after each API
+response. It is NOT in any hook payload, the transcript, or OTEL (all checked),
+and the API endpoint that would return it needs a `user:profile` scope the
+`setup-token`-minted account tokens lack (403). So the number is captured by
+**wrapping the status line**: `bin/claude-statusline.py`
+(`plugins/claude_code/statusline`) becomes `settings.json`'s
+`statusLine.command`, with the user's real status-line command (their HUD) as its
+argv. It reads the stdin once, stashes `usage` + `account` into the session state
+DB (guarded on the DB already existing — never creates it), then runs the HUD with
+that same stdin and forwards its output verbatim. **The capture is tokenless and
+per-account by construction** — the number came from that session's own token, no
+scope, no API call (this is exactly how the switcher's own usage cache is
+populated). The shim must never break the status line: every capture failure is
+swallowed and the HUD still runs; a delegate crash returns 0. The `settings.json`
+edit is one prepended path (backed up to `settings.json.bak-kitty-statusline`);
+to revert, drop the shim prefix.
+
+Usage shows in three places: the session header (next to the account chip), the
+terminal scoreboard (id row), and a **strip across the top of every dashboard
+page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (the
+freshest snapshot across that account's sessions), polled slowly and hidden until
+some account has usage. The `web-launch` audit row records the chosen `account`.
 
 ## Grouping and titles
 

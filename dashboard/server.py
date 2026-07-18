@@ -224,6 +224,34 @@ def sessions_payload():
     return out
 
 
+def accounts_payload():
+    """The launchable accounts + their latest known usage, for the new-session
+    picker AND the dashboard's top usage strip. Registry from
+    plugins.accounts(); usage aggregated by scanning the recent sessions and
+    keeping, per account slug, the freshest `usage` snapshot (newest `ts`).
+    Per-account by construction — each snapshot came from a session running
+    under that account's own token (docs/dashboard.md). No API call, no token."""
+    reg = plugins.accounts()
+    best = {}                                   # slug -> (ts, usage)
+    for row in API.sessions(SESSIONS_LIMIT):
+        sdb = P.state_db(row["log"])
+        if not os.path.isfile(sdb):
+            sdb = P.parked_db(row["log"])
+        acc = API.kv_at(sdb, "account") or {}
+        usage = API.kv_at(sdb, "usage")
+        if not usage:
+            continue
+        slug = acc.get("slug") or ""
+        ts = usage.get("ts") or 0
+        if slug not in best or ts > best[slug][0]:
+            best[slug] = (ts, usage)
+    out = []
+    for a in reg:
+        u = best.get(a["slug"])
+        out.append(dict(a, usage=u[1] if u else None))
+    return out
+
+
 def visible_agents(agents):
     """Drop HIDDEN-agent bookkeeping rows: a SubagentStop with no
     SubagentStart (Claude Code's hidden auxiliary agents — the subagent
@@ -510,19 +538,22 @@ _MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — o
                                                # clean argv word, nothing else
 
 
-def launch_argv(words):
-    """The argv a web new-session launches: `claude` through the user's
-    INTERACTIVE LOGIN shell. kitty execs launch argv with kitty's OWN env — a
-    GUI kitty has no user PATH (so a bare ["claude"] dies command-not-found and
-    the tab closes instantly, while `kitten @ launch` still exits 0) and no
-    shell aliases. `$SHELL -lic` reproduces exactly what typing `claude` in a
-    fresh tab does: profile PATH, rc aliases. The command string is FIXED; the
-    prompt rides as a positional arg via "$@" (after the $0 placeholder), so it
-    is never interpolated into the shell string."""
+def launch_argv(words, cmd="claude"):
+    """The argv a web new-session launches: `cmd` (the account's launch word —
+    `claude` for the default, or a switcher alias like `c1`/`c2`) through the
+    user's INTERACTIVE LOGIN shell. kitty execs launch argv with kitty's OWN
+    env — a GUI kitty has no user PATH (so a bare ["claude"] dies
+    command-not-found and the tab closes instantly, while `kitten @ launch`
+    still exits 0) and no shell aliases. `$SHELL -lic` reproduces exactly what
+    typing `cmd` in a fresh tab does: profile PATH, rc aliases (c1/c2 ARE zsh
+    aliases). `cmd` is placed in the FIXED command string, so it MUST be a
+    registry-vetted bareword (plugins.account_alias) — never raw client text;
+    the prompt/flags ride as positional args via "$@" (after the $0
+    placeholder), never interpolated."""
     sh = os.environ.get("SHELL") or "/bin/zsh"
     if os.path.basename(sh) not in LAUNCH_SHELLS:
         sh = "/bin/zsh"
-    return [sh, "-lic", 'claude "$@"', "claude", *words]
+    return [sh, "-lic", '%s "$@"' % cmd, cmd, *words]
 
 
 # --- the HTTP handler ------------------------------------------------------------------
@@ -626,6 +657,8 @@ class Handler(BaseHTTPRequestHandler):
         api = parts[1:]
         if api == ["sessions"]:
             return self._json(sessions_payload())
+        if api == ["accounts"]:
+            return self._json(accounts_payload())
         if api == ["commands"]:
             # the "/" menus (composer + new-session prompt): built-ins + the
             # given directory's discovered .claude commands/skills. cwd-keyed,
@@ -859,6 +892,15 @@ class Handler(BaseHTTPRequestHandler):
             A.error("", "dashboard new-session (resume+continue)",
                     {"resume": repr(resume)})
             return self._json({"error": "resume and continue are exclusive"}, 400)
+        # account: the switcher slug to launch under (default `claude` when
+        # absent). Resolved to a registry-vetted command word — never the raw
+        # value flows into the launch shell string.
+        acct = body.get("account")
+        cmd = plugins.account_alias(acct) if acct else "claude"
+        if cmd is None:
+            A.error("", "dashboard new-session (bad account)",
+                    {"account": repr(acct)})
+            return self._json({"error": "unknown account"}, 400)
         prompt = body.get("prompt")
         words = ((["--resume", resume] if resume else [])
                  + (["--continue"] if cont else [])
@@ -866,9 +908,10 @@ class Handler(BaseHTTPRequestHandler):
                  + (["--effort", effort] if effort else [])
                  + ([prompt] if isinstance(prompt, str) and prompt.strip()
                     else []))
-        argv = launch_argv(words)
+        argv = launch_argv(words, cmd)
         opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
-                "resume": resume or "", "cont": bool(cont)}
+                "resume": resume or "", "cont": bool(cont),
+                "account": acct or ""}
         fe = _frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})

@@ -340,9 +340,30 @@ def error_count(sid):
     return int(rows[0][0]) if rows else 0
 
 
+def account(sid):
+    """The subscription account a session runs under — {slug, label} stamped
+    into the state DB at SessionStart / refreshed by the status-line shim
+    (plugins.claude_code.account / statusline). {} when unknown (an old
+    session, or the plain default account with no slug). Reads the RESOLVED
+    path (live or parked), so a parked session keeps its label."""
+    sdb = state_db_for(sid)
+    return (S.kv_at(sdb, "account") or {}) if sdb else {}
+
+
+def usage(sid):
+    """The session's last-seen rate-limit snapshot — {five_hour, five_hour_reset,
+    seven_day, seven_day_reset, ts} — captured from the status-line stdin by the
+    shim (docs/dashboard.md). None when none has been captured (no shim, a fresh
+    account before its first API response, an old session). Per-account by
+    construction: the number came from THIS session's own token."""
+    sdb = state_db_for(sid)
+    return (S.kv_at(sdb, "usage") or None) if sdb else None
+
+
 def session(sid):
     """One session's overview: identity + fork chain + liveness + scoreboard
-    stats (live or parked) + agents + tab state + cost totals."""
+    stats (live or parked) + agents + tab state + cost totals + account +
+    usage."""
     row = session_row(sid) or {}
     chain = sid_chain(sid)
     log = row.get("log") or P.mirror_log(chain[-1])
@@ -358,4 +379,5 @@ def session(sid):
             "stats": S.stats_at(sdb) if sdb else {},
             "agents": agents(sid),
             "tab": tab_state(win) if win else "",
+            "account": account(sid), "usage": usage(sid),
             "costs": costs(sid)}

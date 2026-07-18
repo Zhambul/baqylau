@@ -116,6 +116,38 @@ def session_title(transcript_path):
     return ""
 
 
+def accounts():
+    """The launchable subscription accounts for the dashboard's new-session
+    picker (plugins.claude_code.account.registry): the plain default plus each
+    switcher account, [{slug, label, alias}, …]. Concatenated across plugins,
+    first slug wins (claude_code is the only provider). Same exception contract
+    as census()/activity(): the caller is the read-side dashboard, not a hook."""
+    out, seen = [], set()
+    for p in all_plugins():
+        fn = getattr(p, "accounts", None)
+        if fn is None:
+            continue
+        for a in fn() or []:
+            if a.get("slug") not in seen:
+                seen.add(a.get("slug"))
+                out.append(a)
+    return out
+
+
+def account_alias(slug):
+    """Validate a chosen account slug → its launch command word, or None when
+    unknown (the dashboard then 400s). First plugin that recognizes the slug
+    wins. See plugins.claude_code.account.alias_for."""
+    for p in all_plugins():
+        fn = getattr(p, "account_alias", None)
+        if fn is None:
+            continue
+        got = fn(slug)
+        if got is not None:
+            return got
+    return None
+
+
 def slash_commands(cwd):
     """Slash-command fan-out for the web composer's "/" menu (cwd-keyed like
     session_title is path-keyed — the caller already holds the session's cwd):

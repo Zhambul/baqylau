@@ -53,3 +53,18 @@ def slash_commands(cwd):
     composer's "/" menu. See slashcmds.py."""
     from plugins.claude_code import slashcmds
     return slashcmds.slash_commands(cwd)
+
+
+def accounts():
+    """The account-registry provider (plugins.accounts fan-out) — the plain
+    default plus the switcher's accounts.tsv rows. See account.registry."""
+    from plugins.claude_code import account
+    return account.registry()
+
+
+def account_alias(slug):
+    """The account-validation provider (plugins.account_alias fan-out) — a
+    chosen slug → its launch command word, or None if unknown. See
+    account.alias_for."""
+    from plugins.claude_code import account
+    return account.alias_for(slug)

@@ -993,6 +993,98 @@ def test_post_stop_no_window_is_409(dash, monkeypatch):
     assert fe.closed == []
 
 
+def test_account_registry_and_alias(tmp_path, monkeypatch):
+    from plugins.claude_code import account as ACC
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
+    reg = ACC.registry()
+    assert reg[0] == {"slug": "", "label": "default", "alias": "claude"}
+    assert {"slug": "c2", "label": "claude-01", "alias": "c2"} in reg
+    assert ACC.alias_for("c1") == "c1"
+    assert ACC.alias_for("") == "claude" and ACC.alias_for("claude") == "claude"
+    assert ACC.alias_for("nope") is None          # unknown → caller 400s
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "c2")
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_LABEL", "claude-01")
+    assert ACC.current() == {"slug": "c2", "label": "claude-01"}
+    monkeypatch.delenv("CLAUDE_SUBSCRIPTION_SLUG", raising=False)
+    monkeypatch.delenv("CLAUDE_SUBSCRIPTION_LABEL", raising=False)
+    assert ACC.current() == {"slug": "", "label": "default"}
+
+
+def test_statusline_shim_captures_and_delegates(tmp_path, monkeypatch):
+    # the shim stashes account + usage into an EXISTING state DB, normalizes a
+    # ms reset to seconds, and never creates the DB when it's absent
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    from core import hostpane as HP
+    from plugins.claude_code import statusline as SL
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "c2")
+    monkeypatch.setenv("CLAUDE_SUBSCRIPTION_LABEL", "claude-01")
+    payload = {"session_id": "slcap", "rate_limits": {
+        "five_hour": {"used_percentage": 10.6, "resets_at": 1784304000},
+        "seven_day": {"used_percentage": 23, "resets_at": 1784500000000}}}
+    raw = json.dumps(payload).encode()
+    log = P.mirror_log("slcap")
+    SL.capture(raw)                              # no DB yet → must be a no-op
+    assert not os.path.isfile(P.state_db(log))   # (kv_get would CREATE it — don't)
+    HP.ensure_db(log)
+    SL.capture(raw)
+    assert S.kv_get(log, "account") == {"slug": "c2", "label": "claude-01"}
+    u = S.kv_get(log, "usage")
+    assert u["five_hour"] == 11 and u["seven_day"] == 23        # rounded pct
+    assert u["seven_day_reset"] == 1784500000.0                 # ms → s
+    # a payload with no rate_limits leaves the last good usage in place
+    SL.capture(json.dumps({"session_id": "slcap"}).encode())
+    assert S.kv_get(log, "usage")["five_hour"] == 11
+    # delegate runs with the same stdin and its exit code is returned
+    assert SL.run(["sh", "-c", "cat >/dev/null; exit 3"], raw) == 3
+    assert SL.run([], raw) == 0                                 # bare shim → 0
+
+
+def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
+    # /api/accounts returns the registry + newest usage per account slug
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "", "label": "default", "alias": "claude"},
+        {"slug": "c2", "label": "claude-01", "alias": "c2"}])
+    A.session_start({"session_id": "accs1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("accs1")
+    S.kv_set(log, "account", {"slug": "c2", "label": "claude-01"})
+    S.kv_set(log, "usage", {"five_hour": 40, "seven_day": 55, "ts": 100})
+    rows = _get_json(dash + "/api/accounts")
+    by = {r["slug"]: r for r in rows}
+    assert by["c2"]["usage"]["five_hour"] == 40
+    assert by[""]["usage"] is None                 # default has no captured usage
+
+
+def test_post_new_session_account_picker(dash, monkeypatch, tmp_path):
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    # a known slug launches via its alias command word (c2 "$@")
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "account": "c2"})
+    argv = fe.launched[-1][1]
+    assert argv[2] == 'c2 "$@"' and argv[3] == "c2"
+    # default / absent → plain claude
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert fe.launched[-1][1][3] == "claude"
+    # an unknown account is 400, never launched
+    n = len(fe.launched)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "account": "evil; rm"})
+    assert e.value.code == 400
+    assert len(fe.launched) == n
+
+
+def test_session_payload_carries_account_and_usage(dash, monkeypatch):
+    monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+    A.session_start({"session_id": "acsess", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("acsess")
+    S.kv_set(log, "account", {"slug": "c1", "label": "oboard"})
+    S.kv_set(log, "usage", {"five_hour": 5, "seven_day": 9, "ts": 1})
+    ov = _get_json(dash + "/api/session/acsess")
+    assert ov["account"] == {"slug": "c1", "label": "oboard"}
+    assert ov["usage"]["seven_day"] == 9
+
+
 def test_post_new_session_resume_continue(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
