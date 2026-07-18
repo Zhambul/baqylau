@@ -1089,7 +1089,10 @@ function dropdown() {
     items.forEach((it, i) => {
       const row = el("div", "nsdropitem" + (i === hi ? " sel" : ""), it.txt);
       row.onmousedown = (e) => e.preventDefault();   // keep btn focus → no blur
-      row.onclick = () => choose(i);
+      // preventDefault: the .nsfield wrapper is a <label>, and a click's
+      // default action forwards label activation to the button — which would
+      // re-toggle the menu open right after choose() closed it
+      row.onclick = (e) => { e.preventDefault(); choose(i); };
       menu.append(row);
     });
   };
@@ -1103,6 +1106,9 @@ function dropdown() {
     paint();
     menu.hidden = false;
     nudge();
+    btn.focus();   // Safari doesn't focus a clicked <button> — without this a
+    //                mouse-open menu gets no keyboard nav and Escape falls
+    //                through to the document handler, closing the whole modal
   };
   const choose = (i) => {
     if (items[i]) { val = items[i].v; label(); }

@@ -353,7 +353,17 @@ confirm (first click arms for 4 s, second fires); a parked session shows a
 **resume** button there instead, which opens the new-session form preset to
 `--resume <sid>`.
 
-**Resume / continue.** The new-session form's "start from" select maps to the
+**The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
+app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with
+`appearance: none` and always opens the native white macOS popup for the
+option list, which clashes with the theme — the custom control renders both
+the closed state and the open list in the page's own cmenu language. It keeps
+the old call-site shape (`value` get/set, `fill()` rebuild-preserving-value)
+and native-ish keyboard handling (↑/↓/Enter/Space, Esc closes the menu without
+closing the modal via `stopPropagation`). The directory field's `<datalist>`
+completion stays native — it is freeform-with-suggestions, not a picker.
+
+**Resume / continue.** The new-session form's "start from" picker maps to the
 CLI's own conversation-pickup flags: `continue` → `claude --continue` (the
 directory's most recent conversation), `resume: <sid>` → `claude --resume
 <sid>` — the resume options are the chosen directory's known sessions from the
@@ -407,7 +417,7 @@ zsh aliases). Each `claude-subscription <slug>` exports `CLAUDE_SUBSCRIPTION_SLU
 + `CLAUDE_SUBSCRIPTION_LABEL` and injects that account's keychain token; the plain
 `claude` alias is the default account (empty slug). Three surfaces:
 
-**Launch under an account.** The new-session form's account select is
+**Launch under an account.** The new-session form's account picker is
 `plugins.accounts()` (`plugins/claude_code/account.registry` — one entry per
 `accounts.tsv` row). There is **no "default" option**: the plain-`claude` login
 resolves to whichever account is interactively signed in — a duplicate of one of
