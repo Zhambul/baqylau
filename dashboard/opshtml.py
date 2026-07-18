@@ -296,13 +296,21 @@ def op_items(ops, key=""):
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
     of a wall. `rule`/`blank` ops are dropped here — they are terminal-width
-    spacing, and the web's block cards separate themselves."""
+    spacing, and the web's block cards separate themselves. Ops carrying a
+    producer-source stamp (`src` — sub:/team:/codex:, core/ops.py owns the
+    vocabulary) are dropped too: the WEB mirror is main-agent-only — agent and
+    secondary-codex detail lives in the per-agent drill-down, while the
+    terminal mirror keeps painting everything. What survives of an agent here
+    is the main session's own record of it (the subagent_fmt launch header +
+    finish chip, emitted by the hook process, unstamped). Pre-stamp history
+    (parked DBs) has no `src`, so old sessions render as before — the client's
+    heuristic `agents` filter chip still covers those."""
     out = []
     for op in ops:
         if not isinstance(op, dict):
             continue
         t = op.get("t")
-        if t in ("rule", "blank"):
+        if t in ("rule", "blank") or op.get("src"):
             continue
         h = op_html(op, key)
         if h:

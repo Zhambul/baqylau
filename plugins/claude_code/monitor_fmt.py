@@ -40,9 +40,15 @@ def main():
     desc = " ".join((ti.get("description") or "").split())
     # If a subagent launched this monitor, note which one in the header (the stream
     # still uses the monitor palette + tailer — monitors-within-subagents are rare).
+    # Its ops also get the agent's producer-source stamp: this hook runs in the
+    # dispatcher process (no ambient set_src), so the header takes the explicit
+    # emit(src=) and the tailer inherits via $CLAUDE_OPS_SRC in its spawn env —
+    # the web mirror is main-agent-only and a subagent's monitor is its activity.
+    opsrc = None
     if d.get("agent_id"):
         atype = d.get("agent_type") or "agent"
         desc = (atype + " · " + desc) if desc else atype
+        opsrc = "sub:" + d["agent_id"]
     text = "◉ monitor · " + desc if desc else "◉ monitor"
 
     if H.is_failure(d) or not taskid:
@@ -53,7 +59,7 @@ def main():
         err = " ".join((d.get("error") or "").split())
         chip = "■ monitor failed" + ((" · " + err[:80]) if err else "")
         O.emit(LOG, O.blank(), O.rule(), O.label(text, CYAN_FAIL_HDR),
-               O.label(chip, O.RED), O.rule())
+               O.label(chip, O.RED), O.rule(), src=opsrc)
         A.hook_event(d, decision="monitor failed / no taskId: block closed inline")
         return
 
@@ -63,13 +69,15 @@ def main():
     slot, marker = claude_slots.claim("monitor", LOG)
     head_rgb = claude_slots.color("monitor", slot)
 
-    O.emit(LOG, O.blank(), O.rule(), O.label(text, head_rgb), O.rule())
+    O.emit(LOG, O.blank(), O.rule(), O.label(text, head_rgb), O.rule(), src=opsrc)
 
     # The FULL command rides along in env: find_proc prefers a whole-command argv
     # match over the single longest-token `sig`, which alone can also match an
     # unrelated long-lived process (see claude-stream.py find_proc).
     env = dict(os.environ)
     env["CLAUDE_MONITOR_CMD"] = ti.get("command") or ""
+    if opsrc:
+        env["CLAUDE_OPS_SRC"] = opsrc
     proc = H.spawn_streamer("claude-stream.py",
                             ["monitor", taskid, LOG, slot, sig], LOG, env=env,
                             purpose=f"stream:monitor task={taskid}",

@@ -85,6 +85,13 @@ def _init(argv):
     # and the header ("▶ general-purpose · <desc>") is untouched — this is the body only.
     LABEL = DESC if (ATYPE == "general-purpose" and DESC) else ATYPE
 
+    # Everything this streamer emits — and everything the tailers it spawns emit
+    # (set_src exports $CLAUDE_OPS_SRC; stream_env copies os.environ) — is THIS
+    # agent's activity, not the main session's: stamp the ops so the web
+    # dashboard's main-agent-only mirror can drop them (the terminal mirror
+    # paints everything; core/ops.py owns the src vocabulary).
+    O.set_src(("team" if PALETTE == "team" else "sub") + ":" + AGENT)
+
     SUB_RGB = claude_slots.color(PALETTE, SLOT)
     # Live-stream this subagent's FOREGROUND commands (tee'd by claude-cmd-pre.py's
     # PreToolUse), the same way its background/monitor jobs already stream. On by

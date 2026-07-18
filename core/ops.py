@@ -32,6 +32,16 @@
 # inline under the op while the id is in the `view-open` kv set (toggled by
 # claude-copy.py — the file-op expansion feature; see file_fmt.py).
 #
+# Any op may carry "src": the PRODUCER-SOURCE stamp — absent for the main
+# session's own activity, else who painted it: "sub:<agent_id>" /
+# "team:<agent_id>" (the substream + the tailers it spawns) or "codex:<label>"
+# (a secondary-source codex run; a STANDALONE codex host's own rollout is
+# unstamped — there codex IS the main agent). Stamped by emit() from the
+# ambient per-process source (set_src / $CLAUDE_OPS_SRC) or an explicit
+# src= kwarg. The terminal renderer ignores it (it paints everything); the web
+# dashboard's mirror is main-agent-only and drops stamped ops at render
+# (dashboard/opshtml.op_items — agent detail lives in the drill-down there).
+#
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
 # one activity block together (the Bash tool_use_id, the backgroundTaskId for a
 # background job, or any synthesised per-block id). A g-tagged label is painted with
@@ -151,13 +161,53 @@ def new_group(log):
     return ("b%d" % n) if n else None
 
 
-def emit(log, *ops):
+# --- producer-source stamp (the op "src" field) -------------------------------------
+# One ambient value per PROCESS: every detached streamer serves exactly one source
+# (a substream serves one agent, a codex stream one run), so the stamp is process
+# state, not per-call plumbing. set_src also EXPORTS $CLAUDE_OPS_SRC, and every
+# child-tailer launch copies os.environ (hookkit.stream_env, spawn_detached's
+# env=None default) — so a subagent's fg/bg/monitor tailers inherit the stamp with
+# no per-launcher wiring. Hook processes never see the var (Claude Code's env has
+# no reason to carry it), so main-session ops stay unstamped. The explicit
+# emit(src=) kwarg covers the one in-hook-process producer of agent ops
+# (monitor_fmt: a subagent's monitor header).
+_SRC = None
+_SRC_INIT = False   # lazy: $CLAUDE_OPS_SRC is read once, at first emit/op_src
+
+
+def set_src(src):
+    """Declare every op this process emits (and every process it spawns with an
+    inherited env) as coming from a non-main source. src vocabulary: see the
+    "src" op-field comment above. Falsy src clears the ambient stamp in-process
+    (the env export is left alone — tests aside, nothing clears a stamp)."""
+    global _SRC, _SRC_INIT
+    _SRC = str(src) if src else None
+    _SRC_INIT = True
+    if _SRC:
+        os.environ["CLAUDE_OPS_SRC"] = _SRC
+
+
+def op_src():
+    """The ambient producer-source stamp (None = the main session)."""
+    if not _SRC_INIT:
+        set_src(os.environ.get("CLAUDE_OPS_SRC"))
+    return _SRC
+
+
+def emit(log, *ops, src=None):
     """Append paint ops to the session's `ops` table (core.state, keyed by the
     mirror-log path). One transaction so a block of ops lands contiguously relative
     to other producers inserting concurrently — the atomicity the old single
-    O_APPEND write() to the JSONL log provided."""
+    O_APPEND write() to the JSONL log provided. Each op is stamped with the
+    producer source (explicit `src` kwarg, else the ambient set_src /
+    $CLAUDE_OPS_SRC value) BEFORE the append + audit, so both records carry it."""
     if not ops:
         return
+    s = src or op_src()
+    if s:
+        for o in ops:
+            if isinstance(o, dict):
+                o.setdefault("src", s)
     try:
         if not S.ops_append(log, list(ops)):
             A.error(log, "emit", {"ops": len(ops)})

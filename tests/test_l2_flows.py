@@ -524,6 +524,17 @@ def test_f5_subagent_lifecycle(run_hook, test_env, session):
                desc="subagent message rendered")
     wait_until(lambda: "grep -r bug ." in s.ops_text(),
                desc="subagent tool_use rendered")
+    # Producer-source stamping (core/ops.py "src"): every substream-rendered op
+    # carries this agent's stamp — the web mirror drops them — while the launch
+    # header the hook process emitted stays unstamped (main-session activity).
+    ops = s.ops()
+    stamped = [op for op in ops if op.get("src")]
+    assert stamped and all(op["src"] == "sub:" + agent for op in stamped)
+    assert any("scanning the tree now" in str(op) for op in stamped), \
+        "the substream's ops must carry the agent's src stamp"
+    hdr = next(op for op in ops
+               if op.get("t") == "label" and "hunt the bug" in op.get("s", ""))
+    assert "src" not in hdr, "the launch header is the lead's own op"
 
     run_hook("claude-subagent-fmt.py", P.subagent_stop(s, agent_id=agent),
              argv=("stop",))

@@ -107,6 +107,28 @@ and chip truncation are CSS facts in a browser (`pre-wrap`, `border-left`,
 block elements, `text-overflow`), so each op maps to a structured block and
 `codefmt.render` runs at an effectively-unwrapped width (`CODE_W`).
 
+**Main-agent-only (the op `src` stamp).** The web stream shows the MAIN
+agent's activity only, unlike the terminal mirror, which paints everything.
+`core/ops.py` stamps every op with its producer source (`src`:
+`sub:<agent_id>` / `team:<agent_id>` / `codex:<label>`; absent = the main
+session) — an ambient per-process value, because every detached streamer
+serves exactly one source: the substream calls `set_src` at init, which also
+exports `$CLAUDE_OPS_SRC` so the fg/bg/monitor tailers it spawns inherit the
+stamp through `stream_env`'s environ copy; the codex watcher sets the env on
+SECONDARY-source spawns only (a STANDALONE codex host's own rollout is the
+main agent — stamping it would blank that session's web mirror); the one
+in-hook-process producer of agent ops (a subagent's monitor header,
+`monitor_fmt`) passes the explicit `emit(src=)` kwarg. `op_items` drops
+stamped ops (and `server._cut_blocks` skips them when sizing the backlog
+window, so "newest N blocks" means N *visible* blocks). What survives of an
+agent is the lead's own record of it — the `subagent_fmt` launch header and
+finish chip — and the full detail lives in the per-agent drill-down
+(`plugins.activity()`), which reads transcripts, not ops. Why filter at
+render, not at write: the terminal mirror must keep painting everything
+(same ops table, two presenters), and the stamp doubles as provenance in the
+audit's op rows. Pre-stamp history (parked DBs) has no `src` and renders as
+before — the client's heuristic `agents` filter chip still covers those.
+
 **Security — the `neutralize()` analog.** Op text is raw command output
 (attacker-adjacent bytes; the `@kitty-cmd` replay incident is the terminal
 form of this bug class). Every character is `html.escape`d inside
@@ -1244,7 +1266,11 @@ nested job, or a block-opening chip that starts with a who-prefix rather than a
 main-session command glyph `▶▷◉■` — subagent/teammate/codex chips lead with
 their label/`codex`). Ungrouped items classify by item type: `msg` items are
 `messages`, file-op one-liners (they carry a `data-v` click-to-view id) are
-`files`, the rest `commands`.
+`files`, the rest `commands`. On a CURRENT session the `agents` chip mostly
+matches nothing: agent/codex stream ops are producer-source-stamped and never
+reach the page (the main-agent-only rule, *The web presenter* above). The
+chip and its heuristic survive deliberately for pre-stamp history — parked
+DBs written before the stamp existed still carry agent blocks.
 
 ## Notifications (the toaster)
 

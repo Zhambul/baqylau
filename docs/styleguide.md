@@ -84,6 +84,7 @@ backed by grep-style regression tests that will fail the build):
 | stats()/counters→dict shaping | `core/state._stats_from` — shared by `stats()` (live) and `stats_at()` (parked history); a third shaping is drift |
 | Paint-op → HTML rendering (SGR/OSC8→spans, `html.escape` as the neutralize analog, the `data-cc` copy/view scheme); conversation-text markdown→HTML (`md_html`, escape-first subset) | `dashboard/opshtml.py` — the WEB presenter of `core/ops.py`'s op vocabulary (the mirror's `_render` is the ANSI presenter; a third op renderer needs a reason) |
 | ⧉ copy-text extraction (which ops `cmd`/`out`/`all` collect) | `core/copy.collect` — the terminal click handler AND the dashboard `/copy` endpoint both call it |
+| Op producer-source stamp (the `src` field: `sub:`/`team:`/`codex:` vocabulary, the ambient `set_src`/`$CLAUDE_OPS_SRC` mechanics) | `core/ops.py` — `emit()` stamps; producers only declare identity (substream `set_src`, codex `watch.spawn` env, `monitor_fmt`'s explicit `src=`); `dashboard/opshtml.op_items` is the one filter (the web mirror is main-agent-only; the terminal mirror paints everything) |
 
 Adding a new shared fact? Give it one owner in the most-core module whose
 charter fits, document the owner here, and (if cheap) add a grep test.

@@ -89,6 +89,18 @@ def test_op_items_drop_spacing_and_carry_group():
         [("g9", "label"), (None, "line")]
 
 
+def test_op_items_drop_producer_source_stamped_ops():
+    # The web mirror is main-agent-only: any op carrying a producer-source
+    # stamp (core/ops.py "src" — sub:/team:/codex:) never becomes a stream
+    # item; unstamped (main-session / pre-stamp history) ops render as before.
+    items = opshtml.op_items(
+        [{"t": "label", "s": "agent hdr", "c": [1, 2, 3], "g": "s1", "src": "sub:a1"},
+         {"t": "gut", "s": "agent body", "c": [1, 2, 3], "src": "team:t1"},
+         {"t": "line", "s": "codex line", "src": "codex:review"},
+         {"t": "line", "s": "main line"}], "k")
+    assert [it["html"] for it in items] == ['<pre class="opl">main line</pre>']
+
+
 # ------------------------------------------------------------------ md_html
 # The conversation-text markdown subset. The load-bearing property is ESCAPING
 # (the neutralize() analog): <script> must survive as escaped text in EVERY
@@ -271,6 +283,37 @@ def test_http_sessions_and_ops(dash):
     # the overview composes without error even for a minimal session
     ov = _get_json(dash + "/api/session/dash1")
     assert ov["sid"] == "dash1" and ov["live"] is True
+
+
+def test_ops_endpoint_is_main_agent_only(dash, monkeypatch):
+    """core.ops.emit stamps the producer source (ambient set_src/$CLAUDE_OPS_SRC
+    or the explicit src= kwarg) and the dashboard's ops payload drops stamped
+    ops — while the raw stream (what the terminal mirror paints) keeps them."""
+    # Isolate the module-level ambient stamp; the env var itself is only
+    # touched via monkeypatch so nothing leaks into later subprocess spawns.
+    monkeypatch.setattr(O, "_SRC", None)
+    monkeypatch.setattr(O, "_SRC_INIT", True)
+    A.session_start({"session_id": "dashsrc", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("dashsrc")
+    O.emit(log, O.label("lead header", (1, 2, 3)))            # main: unstamped
+    O.emit(log, O.line("agent monitor line"), src="sub:a1")   # explicit kwarg
+    monkeypatch.setattr(O, "_SRC", "team:t1")                 # ambient (set_src)
+    O.emit(log, O.line("teammate line"))
+    monkeypatch.setattr(O, "_SRC", None)
+    # the lazy $CLAUDE_OPS_SRC read (what a spawned tailer relies on)
+    monkeypatch.setenv("CLAUDE_OPS_SRC", "codex:review")
+    monkeypatch.setattr(O, "_SRC_INIT", False)
+    O.emit(log, O.line("codex line"))
+    monkeypatch.setattr(O, "_SRC", None)
+    monkeypatch.setattr(O, "_SRC_INIT", True)
+
+    _last, raw = S.ops_after(log, 0)
+    assert [op.get("src") for op in raw] == \
+        [None, "sub:a1", "team:t1", "codex:review"]
+    d = _get_json(dash + "/api/session/dashsrc/ops?after=0")
+    assert d["last"] == 4, "stamped ops still advance the cursor"
+    assert len(d["items"]) == 1 and "lead header" in d["items"][0]["html"], \
+        "only the main session's op survives to the web stream"
 
 
 def _sse_event(url, want, timeout=10):

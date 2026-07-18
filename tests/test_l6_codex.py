@@ -109,6 +109,11 @@ def test_companion_job_discovered_streamed_and_completed(test_env, codex):
                desc="codex block header with the job label")
     wait_until(lambda: "echo codex-hi" in codex.s.ops_text(),
                desc="companion log command chip")
+    # A SECONDARY-source run's ops carry the codex producer-source stamp
+    # (watch.spawn's $CLAUDE_OPS_SRC → core.ops) — the web mirror drops them.
+    assert all(op.get("src") == "codex:Fix the thing"
+               for op in codex.s.ops() if "echo codex-hi" in str(op)), \
+        "secondary codex stream ops must be src-stamped"
     codex.log_event(logfile, "Assistant message", "all fixed now")
     codex.log_event(logfile, "Turn completed")     # flushes the message block
     wait_until(lambda: "all fixed now" in codex.s.ops_text(),
@@ -277,6 +282,10 @@ def test_standalone_watcher_streams_own_tui_rollout(test_env, codex, reaper):
                                           "message": "standalone hello"}}])
     wait_until(lambda: "standalone hello" in codex.s.ops_text(),
                desc="standalone codex streams its own codex-tui rollout")
+    # A standalone host's own rollout is the session's MAIN agent: its ops are
+    # NOT src-stamped (stamping would blank the session's web mirror).
+    assert not any(op.get("src") for op in codex.s.ops()), \
+        "a standalone codex host's own ops must stay unstamped"
     host.terminate()
 
 

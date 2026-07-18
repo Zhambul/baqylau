@@ -251,8 +251,16 @@ def spawn(srcfile, jsonfile, label):
     _n += 1
     # The detach mechanics + spawn/error audit live in core.spawn (the one
     # owner); audit_argv drops the rgb/jsonfile noise the spawns row never
-    # recorded here.
-    spawn_detached(STREAM, [LOG, rgb, srcfile, jsonfile, label], LOG,
+    # recorded here. A SECONDARY-source run gets the producer-source stamp in
+    # its env ($CLAUDE_OPS_SRC -> core.ops stamps every op) — it is not the
+    # host session's main agent, so the web dashboard's main-agent-only mirror
+    # drops its ops. A STANDALONE codex host's own rollout stays unstamped:
+    # there codex IS the main agent and stamping would blank its web mirror.
+    env = None
+    if not STANDALONE:
+        env = dict(os.environ)
+        env["CLAUDE_OPS_SRC"] = "codex:" + label
+    spawn_detached(STREAM, [LOG, rgb, srcfile, jsonfile, label], LOG, env=env,
                    purpose=f"stream:codex {label}", audit_argv=[srcfile, label])
 
 

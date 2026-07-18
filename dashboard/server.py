@@ -650,13 +650,16 @@ def _cut_blocks(entries, blocks):
     """Index into `entries` (oldest->newest) of the START of the newest-`blocks`
     stream blocks — 0 when they all fit. A block is a distinct non-null group
     `g` or a standalone item; `rule`/`blank` ops are spacing (dropped by
-    op_items) and count as nothing. Approximate by design (the window size is a
+    op_items) and count as nothing, as do producer-source-stamped ops (`src` —
+    dropped by op_items too: the web mirror is main-agent-only), so a window of
+    N blocks means N VISIBLE blocks even when agent streams dominate the tail.
+    Approximate by design (the window size is a
     soft limit) — cursor correctness rides slot ids, not this count."""
     seen, count = set(), 0
     for i in range(len(entries) - 1, -1, -1):
         _slot, kind, obj = entries[i]
         if kind == "op":
-            if obj.get("t") in ("rule", "blank"):
+            if obj.get("t") in ("rule", "blank") or obj.get("src"):
                 continue
             g = obj.get("g") or None
         else:
