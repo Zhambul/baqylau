@@ -489,12 +489,18 @@ header, so the card itself is titled by the SESSION's name. That name comes
 from `plugins.session_title(transcript_path)` — a path-keyed fan-out (the
 list view already holds every row's path; 50 sid-keyed `session_row()`
 resolutions per poll would be waste). The claude_code provider
-(`transcript.session_title`) returns the last `summary` record in the head
-window (Claude Code prepends them on resume) or, when none exists — this
-setup stores no summaries; `conversation_summaries` in `__store.db` is empty —
-the first line of the first REAL user prompt, which is effectively what the
-`claude --resume` picker shows (`history.jsonl` `display`). `isMeta` rows and
-`<command-*>`/`<local-command-*>` wrappers are plumbing, never titles. The
+(`transcript.session_title`) prefers the transcript's NAMING records
+(docs/session-naming-findings.md) — the last `agent-name` (a `/rename` custom
+name, never clobbered by auto titles), else the last `ai-title`, the
+auto-generated title Claude Code's OSC tab title mirrors — so the dashboard
+card matches the kitty tab. Those are re-emitted every few turns and sit
+within lines of EOF, so they're scanned from a bounded `TITLE_TAIL_B` tail
+window (the one accepted gap: a mid-file `agent-name` in a >64KB transcript
+with no later naming record). When neither exists it falls back to the last
+`summary` record in the head window (Claude Code prepends them on resume),
+else the first line of the first REAL user prompt, which is effectively what
+the `claude --resume` picker shows (`history.jsonl` `display`). `isMeta` rows
+and `<command-*>`/`<local-command-*>` wrappers are plumbing, never titles. The
 server caches titles by `(path, size)` — a title can only change when the
 transcript grows. Agent cards follow the same rule: the Task description
 (`desc` from the state DB's agents table) IS the agent's name; the raw

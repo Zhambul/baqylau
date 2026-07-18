@@ -532,6 +532,35 @@ def test_session_title_prefers_summary_then_first_real_prompt(tmp_path):
     assert TR.session_title(str(tmp_path / "absent.jsonl")) == ""
 
 
+def test_session_title_prefers_naming_records(tmp_path):
+    # The naming records (docs/session-naming-findings.md) are what the kitty
+    # tab shows — they beat summary/prompt, last-of-kind wins, and a custom
+    # agent-name beats the auto ai-title regardless of order.
+    from plugins.claude_code import transcript as TR
+    p = _tw(tmp_path, "n1.jsonl",
+            {"type": "summary", "summary": "a summary"},
+            {"type": "user", "message": {"content": "first prompt"}},
+            {"type": "ai-title", "aiTitle": "old auto title"},
+            {"type": "ai-title", "aiTitle": "new auto title"})
+    assert TR.session_title(p) == "new auto title"
+    q = _tw(tmp_path, "n2.jsonl",
+            {"type": "agent-name", "agentName": "my-renamed-session"},
+            {"type": "ai-title", "aiTitle": "auto title after rename"})
+    assert TR.session_title(q) == "my-renamed-session"
+
+
+def test_session_title_finds_ai_title_past_head_window(tmp_path):
+    # ai-title rows land near EOF — far beyond TITLE_SCAN in a long transcript.
+    from plugins.claude_code import transcript as TR
+    rows = [{"type": "user", "message": {"content": "the first prompt"}}]
+    rows += [{"type": "assistant", "message": {"content": [{"type": "text", "text": "x" * 400}]}}
+             for _ in range(TR.TITLE_SCAN + 20)]
+    rows.append({"type": "ai-title", "aiTitle": "title near eof"})
+    p = _tw(tmp_path, "n3.jsonl", *rows)
+    assert os.path.getsize(p) > TR.TITLE_TAIL_B     # tail seek path, torn first line
+    assert TR.session_title(p) == "title near eof"
+
+
 def test_conversation_anchors_and_cursor(tmp_path):
     from plugins.claude_code import transcript as TR
     p = _tw(tmp_path, "c1.jsonl",

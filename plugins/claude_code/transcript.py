@@ -159,13 +159,54 @@ TITLE_SCAN = 200        # head-window lines session_title inspects: summary reco
 #                         are PREPENDED on resume, so they precede the first prompt;
 #                         a title must never cost a full multi-MB transcript read
 
+TITLE_TAIL_B = 65536    # tail-window bytes session_title scans for the LAST naming
+#                         record: `ai-title` rows are re-emitted every few turns, so
+#                         the current one sits within lines of EOF — the bounded tail
+#                         keeps the no-full-read rule while a mid-file `agent-name`
+#                         in a >64KB transcript is the one accepted gap
+
+
+def _title_records(path):
+    """(agent_name, ai_title) — the LAST naming record of each kind in the tail
+    window (docs/session-naming-findings.md): `agent-name`/`agentName` is the
+    /rename custom name, `ai-title`/`aiTitle` the auto title Claude Code's OSC
+    tab title mirrors. '' / '' when absent or unreadable."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - TITLE_TAIL_B))
+            lines = fh.read().split(b"\n")
+    except OSError:
+        return "", ""
+    if size > TITLE_TAIL_B:
+        lines = lines[1:]                   # first line of a mid-file seek is torn
+    named, ai = "", ""
+    for raw in lines:
+        if b'"agent-name"' not in raw and b'"ai-title"' not in raw:
+            continue
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        if o.get("type") == "agent-name":
+            named = o.get("agentName") or named
+        elif o.get("type") == "ai-title":
+            ai = o.get("aiTitle") or ai
+    return named, ai
+
 
 def session_title(path):
-    """Best-effort display TITLE for a session transcript — effectively what
-    the `claude --resume` picker shows: the LAST `summary` record in the head
-    window when Claude Code wrote one, else the first line of the first REAL
-    user prompt (isMeta rows and `<command-*>`/`<local-command-*>` wrappers
-    are plumbing, not prompts). '' when unreadable / nothing found."""
+    """Best-effort display TITLE for a session transcript — what the kitty tab
+    (Claude Code's OSC title) and the `claude --resume` picker show: the last
+    `agent-name` (a /rename custom name — never clobbered by auto titles), else
+    the last `ai-title`, else the LAST `summary` record in the head window,
+    else the first line of the first REAL user prompt (isMeta rows and
+    `<command-*>`/`<local-command-*>` wrappers are plumbing, not prompts).
+    '' when unreadable / nothing found."""
+    named, ai = _title_records(path)
+    if named or ai:
+        return named or ai
     summary, prompt = "", ""
     try:
         with open(path, encoding="utf-8") as fh:
