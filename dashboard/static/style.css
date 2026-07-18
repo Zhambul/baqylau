@@ -219,9 +219,11 @@ code, pre, .mono { font-family: var(--mono); }
 /* when the attention bar is showing it takes the 47px slot; drop shead below it */
 body.attn-on .shead { top: 81px; }
 .shead .l1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-/* stop (live) / resume (parked) session actions, pushed to the right edge */
+/* session action buttons (stop/cancel/rewind/close, resume) — their own row
+   below the title line, so they never float with the title's width */
+.actrow { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
 .sstop, .sresume {
-  margin-left: auto; flex: none; border: none; cursor: pointer;
+  flex: none; border: none; cursor: pointer;
   background: transparent; color: var(--dim);
   box-shadow: var(--card); border-radius: var(--r);
   padding: 5px 12px; font: 600 11px/1 var(--sans);

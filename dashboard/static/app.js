@@ -2079,6 +2079,9 @@ function renderSessionChrome(tab) {
     }
     l1.append(chip);
   }
+  // the action buttons live on their OWN row (actrow) — inside l1 they
+  // floated to wherever the title/chips left room, moving with title width
+  const act = el("div", "actrow");
   if (meta.live && meta.kitty_window_id) {
     // stop: interrupt the agent in place — an Escape key press in the
     // session's window (the TUI's own interrupt; Esc here does the same).
@@ -2086,7 +2089,7 @@ function renderSessionChrome(tab) {
     const stop = el("button", "sstop", "■ stop");
     stop.title = "interrupt the agent (Esc)";
     stop.onclick = () => interruptSession();
-    l1.append(stop);
+    act.append(stop);
     // cancel: mid-turn double-Esc — cancel the running turn and restore your
     // message into the composer for editing. Enabled only while a turn runs.
     const cancel = el("button", "sstop", "⊘ cancel");
@@ -2094,7 +2097,7 @@ function renderSessionChrome(tab) {
     cancel.onclick = () => cancelEdit();
     ses.cancelMode = (tab) => { cancel.disabled = !CANCEL_TABS.includes(tab); };
     ses.cancelMode(liveTab());
-    l1.append(cancel);
+    act.append(cancel);
     // rewind: Claude Code's double-Esc — mid-turn it cancels for editing;
     // idle it enters picking mode: click a message below, choose what to
     // restore, and the server drives the TUI's own checkpoint menu
@@ -2105,7 +2108,7 @@ function renderSessionChrome(tab) {
     // picking mode as "leave" — without it the mode self-cancelled in the
     // same event (toast shown, buttons never revealed)
     rew.onclick = (e) => { e.stopPropagation(); rewindSession(); };
-    l1.append(rew);
+    act.append(rew);
     // close: closes the session's kitty tab — a graceful stop (Claude Code
     // exits on the HUP and SessionEnd runs the normal lifecycle).
     // Two-step confirm: first click arms for 4s, second click fires.
@@ -2140,7 +2143,7 @@ function renderSessionChrome(tab) {
           toast("ask", "close failed", (e && e.error) || "");
         });
     };
-    l1.append(cls);
+    act.append(cls);
   }
   // resume (parked, with a cwd): reopen the new-session form preset to
   // `claude --resume <this sid>` in this session's directory
@@ -2148,9 +2151,10 @@ function renderSessionChrome(tab) {
     const res = el("button", "sresume", "↻ resume");
     res.title = "start a new tab resuming this conversation";
     res.onclick = () => openNewSession(meta.cwd, S.cur);
-    l1.append(res);
+    act.append(res);
   }
   head.append(l1);
+  if (act.childElementCount) head.append(act);
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
   head.append(sr);
