@@ -779,6 +779,7 @@ class _FakeFE:
         self.sent = []
         self.launched = []
         self.closed = []
+        self.keyed = []
         self.send_ok = send_ok
         self.launch_ok = launch_ok
         self.wins = {}          # sid -> live window override (stale/missing tag)
@@ -797,6 +798,10 @@ class _FakeFE:
 
     def send_text(self, win, text):
         self.sent.append((win, text))
+        return self.send_ok
+
+    def send_key(self, win, *keys):
+        self.keyed.append((win, keys))
         return self.send_ok
 
     def close_tab(self, win):
@@ -1068,6 +1073,33 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     assert row["live"] is True
     ov = _get_json(dash + "/api/session/ghost")
     assert ov["live"] is True and ov["kitty_window_id"] == "11"
+
+
+def test_post_interrupt_sends_escape(dash, monkeypatch):
+    # interrupt = an Escape key EVENT into the session's window (send_key,
+    # never send_text bytes) — the turn stops, the session stays up
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "66")
+    A.session_start({"session_id": "intr1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/intr1/interrupt", {})
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": ""}
+    assert fe.keyed == [("66", ("escape",))]
+    assert fe.closed == []                    # never touches the tab
+
+
+def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):
+    # same live-tag discipline as stop/message: an Escape into a reused
+    # window id would interrupt an unrelated session
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "12")
+    A.session_start({"session_id": "intr2", "cwd": "/w", "transcript_path": ""})
+    fe.wins["intr2"] = None                   # the claude_session tag is gone
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/intr2/interrupt", {})
+    assert e.value.code == 409
+    assert fe.keyed == []
 
 
 def test_post_stop_no_window_is_409(dash, monkeypatch):

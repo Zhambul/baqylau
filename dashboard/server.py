@@ -760,7 +760,7 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"error": "not found"}, 404)
 
     # -- POST routing (the control plane) --
-    # The dashboard is READ-ONLY except these two writes, and they TYPE INTO a
+    # The dashboard is READ-ONLY except these control-plane writes, which TYPE INTO a
     # terminal — a drive-by RCE if a random website could fire them. Any page
     # can send a *simple* cross-origin POST at 127.0.0.1 (no preflight), so the
     # defense is to make these NON-simple: require a JSON content type AND a
@@ -791,6 +791,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "stop":
             return self.post_stop(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "interrupt":
+            return self.post_interrupt(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         return self._json({"error": "not found"}, 404)
@@ -908,6 +911,43 @@ class Handler(BaseHTTPRequestHandler):
                     {"sid": sid, "win": win})
             return self._json({"error": "close failed"}, 502)
         return self._json({"ok": True})
+
+    def post_interrupt(self, sid):
+        """Press Escape in a session's kitty window (Frontend.send_key) — the
+        TUI's own interrupt: stops the current turn in place, the session
+        stays up. Distinct from post_stop, which closes the whole tab. Key
+        EVENTS, not send_text bytes — a raw \\x1b never reaches a TUI in the
+        kitty keyboard protocol as Escape. 409 when the session has no window
+        (headless — nothing to interrupt); 503 when no terminal resolves.
+        Every attempt is a `web-interrupt` state_files row, failures also an
+        A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard interrupt (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-interrupt", {"win": "", "ok": False})
+            return self._json({"error": "no terminal available"}, 503)
+        # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
+        # NOT the audit row's stale start-time id (an Escape into a reused id
+        # would interrupt an unrelated session — see _live_window).
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, "web-interrupt", {"win": "", "ok": False})
+            return self._json({"error": "session has no live window"}, 409)
+        tab = API.tab_states().get(win) or ""
+        ok = bool(fe.send_key(win, "escape"))
+        A.state_file(log, sdb, "web-interrupt",
+                     {"win": win, "ok": ok, "tab": tab})
+        if not ok:
+            A.error(log, "dashboard interrupt (send failed)",
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True, "tab": tab})
 
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the

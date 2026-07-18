@@ -111,6 +111,16 @@ def kitten_send_text(kitten, listen, win, text):
         return False
 
 
+def kitten_send_key(kitten, listen, win, *keys):
+    """`kitten @ send-key --match id:<win> <keys…>` — real key EVENTS encoded
+    for the window's current keyboard mode (send-text's raw bytes bypass the
+    kitty keyboard protocol, so a TUI never sees \\x1b as Escape). Key names
+    are kitty's ("escape", "ctrl+c"). rc 0 only says the call was accepted —
+    kitty reports no per-window delivery errors for send-key."""
+    return kitten_run(kitten, listen, "send-key",
+                      "--match", f"id:{win}", *keys) == 0
+
+
 def kitten_launch_tab(kitten, listen, cwd, argv):
     """`kitten @ launch --type=tab --cwd <cwd> <argv…>` — a new tab running
     argv (a list, never a shell string, so no interpolation). True on rc 0."""
@@ -269,6 +279,9 @@ class KittyFrontend(Frontend):
     # --- control plane (writes) -------------------------------------------------
     def send_text(self, win, text):
         return kitten_send_text(self.kitten, self.listen, win, text)
+
+    def send_key(self, win, *keys):
+        return kitten_send_key(self.kitten, self.listen, win, *keys)
 
     def launch_tab(self, cwd, argv):
         return kitten_launch_tab(self.kitten, self.listen, cwd, argv)

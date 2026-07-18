@@ -7,7 +7,7 @@ agent's full activity timeline** and **toast/OS notifications across all
 sessions** when a session starts asking you something or finishes its turn.
 
 It is a CONSUMER, not a producer — read-only **except the control plane** (the
-two write endpoints below): everything it *shows* comes through
+write endpoints below): everything it *shows* comes through
 `core/sessionapi.py` (the one read-side door — [sessionapi.md](sessionapi.md))
 and `plugins.activity()`. It writes no session state directly; its only state
 writes are its own singleton pid-lock and audit rows. The control plane does
@@ -48,7 +48,7 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
 - **Read-only except the control plane, 127.0.0.1 only.** The page shows raw
   command output and transcripts; it must never sit on a routable interface. The
   GET surface is pure read (the ⧉ copy endpoint *returns* text; the browser owns
-  its clipboard). The only writes are the two control-plane POSTs (*Control plane
+  its clipboard). The only writes are the control-plane POSTs (*Control plane
   (web writes)* below), which type into / launch a terminal and are guarded
   against the browser cross-origin vector.
 - **`ThreadingHTTPServer` + per-request fresh `mode=ro` reads** — NOT the OTLP
@@ -203,9 +203,11 @@ global) pushed over a held response — no websockets dependency, and
 
 The dashboard was born read-only; these POST endpoints deliberately break
 that charter so you can drive a session from the browser: **message a running
-session**, **stop one** (close its tab), and **launch a new one** (fresh,
-`--continue`, or `--resume`). Neither writes session state — they reach
-the TERMINAL through the `Frontend` interface (`send_text` / `launch_tab`, over
+session**, **interrupt its turn** (an Escape key press), **close one** (its
+whole tab), and **launch a new one** (fresh, `--continue`, or `--resume`).
+None writes session state — they reach
+the TERMINAL through the `Frontend` interface (`send_text` / `send_key` /
+`launch_tab`, over
 the same silenced `kitten @` machinery the tab painter uses), and Claude Code's
 own hooks then produce whatever state results. The dashboard stays a consumer of
 session data; it is now also a driver of the terminal.
@@ -328,8 +330,8 @@ aliases). Injection safety is preserved: the command string is FIXED and the
 prompt rides as a positional `"$@"` arg, never interpolated. Non-POSIX `$SHELL`
 (fish) falls back to `/bin/zsh` (`LAUNCH_SHELLS`). The server may have no resolvable kitty
 socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
-is `False`, `_frontend()` returns `None`, and both endpoints return a clean
-`503`, never a 500 traceback.
+is `False`, `_frontend()` returns `None`, and every control-plane endpoint
+returns a clean `503`, never a 500 traceback.
 
 **Liveness = an OPEN tab, not a lingering state DB.** A session's `live` flag
 is *not* just "its `/tmp` state DB exists" — that only means the session was
@@ -361,10 +363,26 @@ cleanly on SIGHUP, firing SessionEnd — so the normal end-of-session lifecycle
 2026-07-18: launched a throwaway session, `close-tab`'d it, and confirmed the
 `ended_at`/`end_reason` audit row, the parked state DB, and the clean `/tmp`.
 Headless session (no window) is `409` — there is no tab to close. The page
-puts the button in the session head (live + windowed only) behind a two-step
-confirm (first click arms for 4 s, second fires); a parked session shows a
-**resume** button there instead, which opens the new-session form preset to
-`--resume <sid>`.
+puts a **close** button in the session head (live + windowed only) behind a
+two-step confirm (first click arms for 4 s, second fires); a parked session
+shows a **resume** button there instead, which opens the new-session form
+preset to `--resume <sid>`.
+
+`POST /api/session/<sid>/interrupt` presses **Escape** in the session's
+window (`Frontend.send_key(win, "escape")` → `kitten @ send-key`) — the TUI's
+own interrupt: the current turn stops in place and the session stays up,
+which is what a "stop whatever it's doing" button must mean (closing the tab
+is the separate close endpoint above). It must be a key EVENT, not
+`send_text` bytes: a TUI in the kitty keyboard protocol never sees a raw
+`\x1b` byte as the Escape key, and send-key encodes for the window's current
+keyboard mode. Same window discipline (live tag, `409` when none) and the
+same guard chain. Note `send-key` reports no per-window delivery errors —
+rc 0 means kitty accepted the call — so `ok` here is weaker evidence than
+send_text's. The page wires it as the **stop** button (■, live + windowed
+only, no confirm — it matches pressing Esc in the terminal) and as the
+**Esc key** on the session view itself: a document-level fallback that fires
+only when no overlay (modal, slash menu, filter, dropdown) claimed the
+Escape, so muscle memory from the terminal carries over to the browser.
 
 **The form's pickers are a custom dropdown, not `<select>`** (`dropdown()` in
 app.js, `.nsdrop*` styles): Safari ignores most `<select>` styling even with
@@ -437,10 +455,11 @@ minutes later.
 vanished" is answerable as "it queued mid-turn"; keyed to the session's
 state-DB path) and `web-launch`
 (`{cwd, model, effort, resume, cont, ok}`, no session yet so log/path are
-empty) and `web-stop` (`{win, ok}`). Failure paths (no window,
-no terminal, send/launch/close returned false) also write an `A.error` per the
-audit-before-swallow rule, so a "my message never arrived" report is answerable
-from the DB.
+empty), `web-stop` (`{win, ok}`) and `web-interrupt` (`{win, ok, tab}` —
+the tab state at press time says what the Escape landed on). Failure paths
+(no window, no terminal, send/launch/close/key returned false) also write an
+`A.error` per the audit-before-swallow rule, so a "my message never arrived"
+report is answerable from the DB.
 
 ## Accounts & usage
 

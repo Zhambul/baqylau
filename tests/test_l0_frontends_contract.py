@@ -62,6 +62,7 @@ CALLS = {
     "resize_pane":        ((("claude_mirror", "sid-1"), "horizontal", 4), 1),
     # control plane (writes)
     "send_text":          (("7", "hello"), False),
+    "send_key":           (("7", "escape"), False),
     "launch_tab":         (("/tmp", ["claude"]), False),
     "close_tab":          (("7",), False),
     # viewport scroll / read

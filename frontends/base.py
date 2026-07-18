@@ -144,6 +144,14 @@ class Frontend:
         terminal acknowledged the write, else False."""
         return False
 
+    def send_key(self, win, *keys):
+        """Press key(s) into window `win` as KEY EVENTS (e.g. "escape",
+        "ctrl+c") — encoded for the program's current keyboard mode, which
+        raw send_text bytes would bypass (a TUI in the kitty keyboard
+        protocol never sees a bare \\x1b as Escape). True when the terminal
+        accepted the call, else False."""
+        return False
+
     def launch_tab(self, cwd, argv):
         """Open a NEW tab whose window runs `argv` with working directory
         `cwd`. Truthy on success, False on failure."""
