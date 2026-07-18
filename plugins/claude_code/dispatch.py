@@ -117,6 +117,10 @@ _ROUTES = {
              matcher="Read|Edit|Write|MultiEdit|NotebookEdit"),
         _fmt("claude-monitor-fmt.py", "monitor_fmt", matcher="Monitor"),
         _ASK,
+        # the task-list kv snapshot (web tasks card): a TaskUpdate status flip
+        # (pending→in_progress, →completed, →deleted) fires NO dedicated hook —
+        # its PostToolUse(+Failure) is the only refresh signal (task_fmt.py)
+        _fmt("claude-task-fmt.py", "task_fmt", matcher="TaskCreate|TaskUpdate"),
     ],
     "Notification": [_tab("notify")],
     "Stop": [_tab("stop"), _STOP_FOLD, _ASK_TURN],

@@ -417,9 +417,12 @@ def test_oracle_sees_spooled_stream_end(test_env):
     assert rows == [(2.0, "state-db-parked (session end)")], rows
 
 
-def test_audit_disabled_still_works(run_hook, test_env, session):
+def test_audit_disabled_still_works(run_hook, test_env, session, seed):
     env = dict(test_env, CLAUDE_AUDIT="0")
     s = session.make()
+    # hosted-session precondition: task_fmt (correctly) refuses to create a
+    # state DB for an unhosted session — seed it like SessionStart would
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
     run_hook("claude-task-fmt.py", P.task_created(s), env=env)
     assert not os.path.exists(oracle.audit_db(test_env)), \
         "CLAUDE_AUDIT=0 must not create the audit DB"

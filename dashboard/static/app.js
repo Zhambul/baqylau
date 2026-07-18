@@ -632,6 +632,12 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.plan = d.plan || null;
     renderPlan();
   });
+  es.addEventListener("tasks", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    if (S.ses.meta) S.ses.meta.tasks = d.tasks || null;
+    renderTasks();
+  });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
@@ -1127,6 +1133,59 @@ function drainQueue(items) {
 // Answers POST /answer, where the server drives the REAL dialog with
 // screen-verified key events (dashboard/askdialog.py). The card clears via
 // the SSE `ask` event when the answer's PostToolUse drops the stash.
+
+// ---- the pinned tasks card (docs/dashboard.md, *Web tasks*) -----------------
+// The session's native task list (TaskCreate/TaskUpdate), pinned at the very
+// top of the mirror tab — fed by the `tasks` kv snapshot task_fmt.py re-reads
+// from Claude Code's on-disk task dir on every task-touching hook, so it works
+// live AND parked (the on-disk files are deleted at session end; the stash is
+// the only surviving record). Read-only: unlike ask/plan there is no dialog to
+// drive — the TUI has no modal to answer. Completed tasks render struck-through
+// and dimmed; the in_progress one carries the accent and shows its activeForm.
+
+function buildTasksCard() {
+  const wrap = el("div", "taskswrap");
+  S.ses.tasksEl = wrap;
+  renderTasks();
+  return wrap;
+}
+
+function renderTasks() {
+  const ses = S.ses;
+  if (!ses || !ses.tasksEl) return;
+  const wrap = ses.tasksEl;
+  wrap.textContent = "";
+  const tasks = (ses.meta && ses.meta.tasks) || null;
+  wrap.hidden = !tasks || !tasks.length;
+  if (wrap.hidden) return;
+  const done = tasks.filter(t => t.status === "completed").length;
+  const card = el("div", "taskscard");
+  const head = el("div", "taskshead");
+  head.append(el("span", "taskstitle", "tasks"));
+  head.append(el("span", "taskscount", done + "/" + tasks.length + " done"));
+  card.append(head);
+  const list = el("div", "tasklist");
+  tasks.forEach(t => {
+    const st = t.status === "completed" ? "done"
+             : t.status === "in_progress" ? "active" : "pend";
+    const row = el("div", "taskrow " + st);
+    row.append(el("span", "taskmark",
+                  st === "done" ? "✓" : st === "active" ? "▸" : "○"));
+    row.append(el("span", "taskid", "#" + (t.id || "?")));
+    const subj = el("span", "tasksubj", t.subject || "");
+    if (t.description) subj.title = t.description;
+    row.append(subj);
+    // the spinner label the TUI shows while a task runs
+    if (st === "active" && t.activeForm && t.activeForm !== t.subject)
+      row.append(el("span", "taskactive", t.activeForm + "…"));
+    if ((t.blockedBy || []).length)
+      row.append(el("span", "taskblocked",
+                    "⛓ " + t.blockedBy.map(b => "#" + b).join(" ")));
+    list.append(row);
+  });
+  card.append(list);
+  wrap.append(card);
+}
 
 function buildAskCard() {
   const wrap = el("div", "askwrap");
@@ -2569,6 +2628,7 @@ function renderSessionChrome(tab) {
   $view.append(body);
 
   if (tab === "mirror") {
+    body.append(buildTasksCard());          // the session's task list, pinned first
     body.append(buildPlanCard());           // pending plan approval …
     body.append(buildAskCard());            // … and question, above the composer
     body.append(buildComposer());

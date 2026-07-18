@@ -731,8 +731,10 @@ def test_f7d_monitor_process_never_found(run_hook, test_env, session, task_dir):
 
 # --------------------------------------------------------------------- F8
 
-def test_f8_task_rows(run_hook, test_env, session):
+def test_f8_task_rows(run_hook, test_env, session, seed):
     s = session.make()
+    # hosted-session precondition (task_fmt never creates the state DB itself)
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
     run_hook("claude-task-fmt.py", P.task_created(s, "3", "Refactor the seams"))
     run_hook("claude-task-fmt.py", P.task_completed(s, "3", "Refactor the seams"))
     text = s.ops_text()

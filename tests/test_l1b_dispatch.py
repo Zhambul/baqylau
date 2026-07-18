@@ -125,6 +125,10 @@ def test_plan_sequences_pinned():
         assert _names(ev, "Monitor") == [tab, "claude-monitor-fmt.py"]
         assert _names(ev, "AskUserQuestion") == [tab, ask]
         assert _names(ev, "ExitPlanMode") == [tab, ask]
+        # the task-list kv snapshot: a status flip fires no dedicated hook —
+        # the tool's own PostToolUse(+Failure) is its only refresh signal
+        assert _names(ev, "TaskCreate") == [tab, "claude-task-fmt.py"]
+        assert _names(ev, "TaskUpdate") == [tab, "claude-task-fmt.py"]
         assert _names(ev, "WebFetch") == [tab]
         assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
     assert _names("Notification") == [tab]

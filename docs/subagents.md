@@ -282,10 +282,14 @@ for the counters these streams feed).
     as `✉ to <recipient>` with the body (its `{success:true,…}` ack is suppressed).
   - **Tasks.** The shared task list is rendered straight from the `TaskCreated` /
     `TaskCompleted` hooks (`claude-task-fmt.py`) as a compact
-    `✚ task #N · <subject>` (amber) / `✓ task #N · <subject>` (green) line — there
-    is no readable per-task file on disk, so the hook payload is the source. (The
-    payload fields are `task_id` + `task_subject` + `task_description`, *not* the
-    `task_title`/`task_status` the docs list.)
+    `✚ task #N · <subject>` (amber) / `✓ task #N · <subject>` (green) line — the
+    hook payload is the source for the MIRROR line. (The payload fields are
+    `task_id` + `task_subject` + `task_description`, *not* the
+    `task_title`/`task_status` the docs list.) Task STATE does live on disk
+    (measured 2026-07-18 — `<config>/tasks/session-<first uuid segment>/<id>.json`,
+    wiped at session end); `task_fmt.py` snapshots it into the `tasks` state-DB kv
+    on every task-touching hook for the web dashboard's pinned tasks card
+    (dashboard.md › *Web tasks*).
   - Out of scope: **split-pane** teammate mode (tmux/iTerm2) runs each teammate as
     its own process/session rather than an in-process subagent, so it wouldn't flow
     through these hooks; the default in-process mode is what's supported here.

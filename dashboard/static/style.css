@@ -426,6 +426,44 @@ body.attn-on .shead { top: 81px; }
 .acctchip .ausage { color: var(--dim2); margin-left: 2px; }
 
 /* ---- the message composer (control plane) ------------------------------- */
+/* the pinned tasks card — the session's native task list (docs/dashboard.md,
+   *Web tasks*); --amber, the mirror's task-line accent. Completed rows are
+   struck-through + dimmed, the in_progress row carries the accent. */
+.taskswrap[hidden] { display: none; }
+.taskscard {
+  margin: 0 0 10px; padding: 8px 12px 9px;
+  background: var(--panel); border-radius: var(--r);
+  box-shadow: var(--card-hover);
+  border-left: 3px solid var(--amber);
+}
+.taskshead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 5px; }
+.taskstitle {
+  color: var(--amber); font: 650 11px/1.3 var(--sans);
+  text-transform: uppercase; letter-spacing: .1em;
+}
+.taskscount { margin-left: auto; color: var(--dim); font: 500 11px/1.3 var(--sans); }
+.tasklist {
+  display: flex; flex-direction: column; gap: 2px;
+  max-height: 28vh; overflow-y: auto;
+}
+.taskrow {
+  display: flex; align-items: baseline; gap: 7px;
+  font: 400 12.5px/1.5 var(--sans); color: var(--text);
+}
+.taskrow .taskmark { flex: none; width: 14px; text-align: center; }
+.taskrow .taskid { flex: none; color: var(--dim2); font-size: 11px; }
+.taskrow .tasksubj { min-width: 0; }
+.taskrow .taskactive {
+  color: var(--amber); font: italic 400 11.5px/1.5 var(--sans);
+}
+.taskrow .taskblocked { color: var(--dim); font-size: 11px; white-space: nowrap; }
+.taskrow.pend .taskmark { color: var(--dim); }
+.taskrow.active .taskmark { color: var(--amber); }
+.taskrow.active .tasksubj { color: var(--text); font-weight: 600; }
+.taskrow.done { color: var(--dim); }
+.taskrow.done .taskmark { color: var(--done); }
+.taskrow.done .tasksubj { text-decoration: line-through; opacity: .75; }
+
 /* the ask card — AskUserQuestion mirrored from the terminal dialog
    (docs/dashboard.md, *Web ask*); --ask red, the asking-you accent */
 .askwrap[hidden] { display: none; }

@@ -216,7 +216,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then `sessions` snapshots on change + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`plan`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`plan`/`tasks`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -1073,6 +1073,51 @@ plan (and the final output honored it), dismiss → rejected in place,
 approve by digit+label → PostToolUse + the plan executed; options parsed
 from the live dialog exactly; stash lifecycle audited write→remove with
 reasons (`answered` / `new prompt` / overwrite-by-revision).
+
+## Web tasks (the pinned tasks card)
+
+The session's native task list (Claude Code's TaskCreate/TaskUpdate
+tools) renders as a **tasks card pinned at the very top of the mirror
+tab** — above the plan/ask cards and the composer (`buildTasksCard`/
+`renderTasks` in app.js, `.taskscard`, amber accent — the mirror's own
+task-line colour). Each row is `mark #id subject`: pending `○` (dim
+mark), in_progress `▸` (amber mark, bold subject, plus the task's
+`activeForm` in amber italic — the same label the TUI spinner shows),
+completed `✓` (green mark, the whole row dimmed and the subject
+**struck through**). A `⛓ #n` chip marks a task blocked on open
+dependencies (`blockedBy`), the header counts `done/total`, and the
+full `description` rides each row's hover title. The card hides when
+the session has no tasks. Read-only — unlike ask/plan there is no
+modal to drive, so there is no POST endpoint.
+
+**Where the data comes from (and why a stash, again).** Task state
+DOES live on disk — `<CLAUDE_CONFIG_DIR|~/.claude>/tasks/session-<first
+uuid segment of sid>/<id>.json`, one `{id, subject, description,
+activeForm, status, blocks, blockedBy}` record per task (measured
+2026-07-18) — but Claude Code **deletes the files at session end**, so
+reading the dir directly would blank every parked session (and the
+dashboard would re-encode a Claude-internal path format). Instead
+`plugins/claude_code/task_fmt.py` re-reads the dir on every
+task-touching hook and snapshots the full id-sorted list into the state
+DB's `tasks` kv, audited as a `tasks` state_files write. The triggers:
+`TaskCreated`/`TaskCompleted` (the dedicated events, which also paint
+the mirror one-liners) **plus `PostToolUse(+Failure)` of
+`TaskCreate|TaskUpdate`** — a status flip (pending→in_progress,
+→completed, →deleted) fires NO dedicated hook (measured 2026-07-18), so
+the tool event is its only refresh signal. The dir at op time is
+authoritative; there is deliberately no clear-on-empty guard (no hook
+fires at session-end cleanup, so an empty read always means a truly
+empty list). The usual guards apply: `agent_id` events are ignored
+(main-session-only), and an unhosted session (no state DB) stashes
+nothing — kv_set would CREATE the DB whose existence is the
+session-alive signal (this previously bit: the old task_fmt's
+unconditional `O.emit` created ghost DBs for headless team sessions).
+
+`session_payload` carries the list as `data["tasks"]` — deliberately
+**NOT live-gated** (unlike `ask`/`plan`): the kv survives park, so a
+parked session still shows its final task list. The per-session SSE
+diff-emits a `tasks` event on the slow cadence (tasks change per-hook,
+not per-keystroke; nobody is blocked waiting on this card).
 
 ## Accounts & usage
 

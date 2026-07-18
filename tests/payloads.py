@@ -118,6 +118,20 @@ def task_completed(s, task_id="1", subject="Fix the thing"):
                 task_description=subject)
 
 
+def post_task_update(s, task_id="1", status="in_progress", tid="toolu_tu1",
+                     agent_id=None):
+    """PostToolUse(TaskUpdate) — shape per the live capture 2026-07-18: a
+    status flip fires NO dedicated hook, only this tool event (task_fmt's kv
+    snapshot trigger)."""
+    d = base(s, "PostToolUse", tool_name="TaskUpdate", tool_use_id=tid,
+             tool_input={"taskId": task_id, "status": status},
+             tool_response={"success": True, "taskId": task_id,
+                            "updatedFields": ["status"]})
+    if agent_id:
+        d["agent_id"] = agent_id
+    return d
+
+
 def notification(s, message="Claude needs your permission to use Bash"):
     return base(s, "Notification", message=message)
 

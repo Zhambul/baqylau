@@ -403,13 +403,83 @@ def test_subagent_stop_signals_streamer(run_hook, test_env, session):
 
 # ------------------------------------------------------------ claude-task-fmt
 
-def test_task_fmt_created_and_completed(run_hook, test_env, session):
+def _seed_task_dir(test_env, s, tasks):
+    """Claude Code's on-disk task dir — <config>/tasks/session-<first uuid
+    segment>/<id>.json, the format task_fmt.tasks_dir() reads. Re-stated here
+    to pin it (like the Session path arithmetic)."""
+    import os
+    d = os.path.join(test_env["CLAUDE_CONFIG_DIR"], "tasks",
+                     "session-" + s.sid.split("-")[0])
+    os.makedirs(d, exist_ok=True)
+    for t in tasks:
+        with open(os.path.join(d, "%s.json" % t["id"]), "w") as f:
+            json.dump(t, f)
+    return d
+
+
+def _tasks_kv(s):
+    rows = s.query_state("SELECT val FROM kv WHERE key='tasks'")
+    return json.loads(rows[0][0]) if rows else None
+
+
+_TASK = {"id": "1", "subject": "Ship it", "description": "ship the thing",
+         "activeForm": "Shipping it", "status": "pending",
+         "blocks": [], "blockedBy": []}
+
+
+def test_task_fmt_created_and_completed(run_hook, test_env, session, seed):
     s = session.make()
+    # a hosted session's state DB exists from SessionStart on (any product
+    # write creates it); task_fmt itself deliberately never does
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
     run_hook("claude-task-fmt.py", P.task_created(s, "7", "Ship it"))
     run_hook("claude-task-fmt.py", P.task_completed(s, "7", "Ship it"))
     text = s.ops_text()
     assert "Ship it" in text
     assert "7" in text
+
+
+def test_task_fmt_snapshots_tasks_kv(run_hook, test_env, session, seed):
+    # the web tasks card's source (docs/dashboard.md, *Web tasks*): every
+    # task-touching hook re-reads the on-disk dir into the `tasks` kv
+    s = session.make()
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
+    done = dict(_TASK, id="2", subject="Done thing", status="completed")
+    _seed_task_dir(test_env, s, [done, _TASK])
+    run_hook("claude-task-fmt.py", P.post_task_update(s, "1", "in_progress"))
+    got = _tasks_kv(s)
+    # id-sorted, full records, both statuses
+    assert [t["id"] for t in got["tasks"]] == ["1", "2"]
+    assert got["tasks"][0]["subject"] == "Ship it"
+    assert got["tasks"][1]["status"] == "completed"
+    assert any(a == "tasks" and '"write"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    # a PostToolUse snapshot paints NO mirror line (TaskCreated/Completed own those)
+    assert "Ship it" not in s.ops_text()
+    assert not oracle.errors(test_env, s.sid)
+    # the dedicated events snapshot too — after the dir changed
+    import os
+    d = _seed_task_dir(test_env, s, [dict(_TASK, status="completed")])
+    os.remove(os.path.join(d, "2.json"))
+    run_hook("claude-task-fmt.py", P.task_completed(s, "1", "Ship it"))
+    got = _tasks_kv(s)
+    assert [t["id"] for t in got["tasks"]] == ["1"]
+    assert got["tasks"][0]["status"] == "completed"
+
+
+def test_task_fmt_agent_and_unhosted_guards(run_hook, test_env, session):
+    import os
+    # a subagent's inner task event never touches the main session's kv …
+    s = session.make()
+    _seed_task_dir(test_env, s, [_TASK])
+    run_hook("claude-task-fmt.py",
+             P.post_task_update(s, "1", agent_id="agent-0001"))
+    # … and an UNHOSTED session (no state DB) must not have one created for it
+    # (the ghost-DB rule — the DB's existence is the session-alive signal)
+    run_hook("claude-task-fmt.py", P.post_task_update(s, "1"))
+    run_hook("claude-task-fmt.py", P.task_created(s, "1", "Ship it"))
+    assert not os.path.exists(s.state_db)
+    assert not oracle.errors(test_env, s.sid)
 
 
 # ------------------------------------------------------------ claude-stop-fmt

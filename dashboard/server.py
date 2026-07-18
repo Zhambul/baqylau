@@ -486,6 +486,10 @@ def session_payload(sid):
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
     data["ask"] = _ask_pending(sid) if data.get("live") else None
     data["plan"] = _plan_pending(sid) if data.get("live") else None
+    # deliberately NOT live-gated: the `tasks` kv survives park (Claude Code
+    # deletes the on-disk task files at session end — the stash is the only
+    # record left), so a parked session still shows its final task list
+    data["tasks"] = _session_tasks(sid)
     return data
 
 
@@ -504,6 +508,20 @@ def _dialog_pending(sid, key):
 
 def _ask_pending(sid):
     return _dialog_pending(sid, "ask-pending")
+
+
+def _session_tasks(sid):
+    """The session's task-list snapshot — the `tasks` kv task_fmt.py re-reads
+    from Claude Code's on-disk task dir on every task-touching hook (docs/
+    dashboard.md, *Web tasks*). A list of task records ({id, subject, status,
+    …}, id-sorted), or None when the session never had tasks / the list is
+    empty — None keeps the card hidden. Read-only (kv_at)."""
+    sdb = API.state_db_for(sid)
+    if not sdb:
+        return None
+    stash = API.kv_at(sdb, "tasks")
+    tasks = stash.get("tasks") if isinstance(stash, dict) else None
+    return tasks if isinstance(tasks, list) and tasks else None
 
 
 def _plan_pending(sid):
@@ -1971,7 +1989,8 @@ class Handler(BaseHTTPRequestHandler):
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
-                "ctx": None, "git": None, "title": None, "effort": None}
+                "ctx": None, "git": None, "title": None, "effort": None,
+                "tasks": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2061,6 +2080,15 @@ class Handler(BaseHTTPRequestHandler):
                 if ec != prev["errors"]:
                     prev["errors"] = ec
                     if not self._sse("errors", {"count": ec}):
+                        return
+                # the pinned tasks card, live — a task create / status flip
+                # re-stashes the `tasks` kv (task_fmt.py) and shows on the
+                # slow cadence (tasks change per-hook, not per-keystroke;
+                # nobody is blocked waiting on this card, unlike ask/plan)
+                tasks = _session_tasks(sid)
+                if tasks != prev["tasks"]:
+                    prev["tasks"] = tasks
+                    if not self._sse("tasks", {"tasks": tasks}):
                         return
             tab = (API.tab_states().get(win) or "") if win else ""
             if tab != prev["tab"]:

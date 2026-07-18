@@ -362,6 +362,27 @@ def test_error_badge_payload_and_sse(dash):
     assert data and json.loads(data)["count"] == 2
 
 
+def test_tasks_card_payload_and_sse(dash):
+    """session_payload carries the pinned tasks card's list (the `tasks` kv
+    task_fmt.py snapshots from the on-disk task dir — docs/dashboard.md, *Web
+    tasks*; NOT live-gated, a parked session keeps its final list), and the
+    per-session SSE announces it as a `tasks` event on the slow cadence."""
+    A.session_start({"session_id": "tsk1", "cwd": "/w", "transcript_path": ""})
+    tasks = [{"id": "1", "subject": "Ship it", "status": "completed",
+              "blocks": [], "blockedBy": []},
+             {"id": "2", "subject": "Test it", "status": "in_progress",
+              "activeForm": "Testing it", "blocks": [], "blockedBy": ["1"]}]
+    S.kv_set(P.mirror_log("tsk1"), "tasks", {"tasks": tasks})
+    ov = _get_json(dash + "/api/session/tsk1")
+    assert [t["id"] for t in ov["tasks"]] == ["1", "2"]
+    assert ov["tasks"][0]["status"] == "completed"
+    data = _sse_event(dash + "/events/session/tsk1?after=0&mpos=0", "tasks")
+    assert data and json.loads(data)["tasks"][1]["activeForm"] == "Testing it"
+    # an emptied list reads as None — the card hides
+    S.kv_set(P.mirror_log("tsk1"), "tasks", {"tasks": []})
+    assert _get_json(dash + "/api/session/tsk1")["tasks"] is None
+
+
 def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):
     """A resume moves the session to a NEW kitty window (the SessionStart
     upsert refreshes the sessions row) — a session SSE stream opened BEFORE
