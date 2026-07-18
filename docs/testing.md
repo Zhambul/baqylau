@@ -38,7 +38,15 @@ are global (no sid), so every live session's ⚠ warning light surfaced the
 suite's own deliberate error rows. The autouse `_fresh_audit_conn` fixture now
 points `CLAUDE_AUDIT_DIR` at a per-test sandbox for the in-process side as
 well (tests needing a specific dir monkeypatch over it), and
-`test_spawn_detached_missing_script_returns_none` pins the guarantee. The fake terminal
+`test_spawn_detached_missing_script_returns_none` pins the guarantee.
+The same fixture sandboxes **`CLAUDE_CONFIG_DIR`** in-process (2026-07-18):
+the pytest process inherits the launching shell's value, which under the
+claude-subscription switcher is `configs/<slug>` — whose `settings.json` is a
+SYMLINK to the real `~/.claude/settings.json`. A dashboard test that seeded
+"the hermetic config dir's settings.json" through the ambient
+`os.environ["CLAUDE_CONFIG_DIR"]` truncated the user's real settings file
+(hooks, env, statusLine — everything) to its one seeded key. In-process
+settings reads and writes now default to a per-test `config-inproc/` dir. The fake terminal
 side is injected via the pre-existing `KITTY_KITTEN_BIN` override (a recorder
 script standing in for `kitten`), so no product code special-cases tests.
 Calls that take the RAW `@kitty-cmd` socket path (`frontends/kitty.py

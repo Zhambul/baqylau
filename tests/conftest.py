@@ -71,10 +71,23 @@ def _fresh_audit_conn(tmp_path):
     the suite's own deliberate error rows (observed: '⚠ audit: global: -c:
     NoneType: None' in an unrelated session's mirror — '-c' is the xdist
     worker's argv[0]). Tests needing a specific dir still monkeypatch over
-    this default."""
+    this default.
+
+    ALSO sandbox CLAUDE_CONFIG_DIR the same way: test_env only builds the
+    SUBPROCESS env — the pytest process itself inherits the launching shell's
+    value, which under the claude-subscription switcher is configs/<slug>,
+    whose settings.json is a SYMLINK to the real ~/.claude/settings.json. An
+    in-process test that wrote 'the hermetic config dir's settings.json'
+    through that ambient value truncated the user's real settings (hooks,
+    env, statusLine — everything) to one key. In-process settings reads/
+    writes now land in a per-test dir by default."""
     import core.audit as A
     prev = os.environ.get("CLAUDE_AUDIT_DIR")
+    prev_cfg = os.environ.get("CLAUDE_CONFIG_DIR")
     os.environ["CLAUDE_AUDIT_DIR"] = str(tmp_path / "audit-inproc")
+    cfg_dir = tmp_path / "config-inproc"
+    cfg_dir.mkdir(exist_ok=True)
+    os.environ["CLAUDE_CONFIG_DIR"] = str(cfg_dir)
     A._CONN, A._FAILED = None, False
     yield
     try:
@@ -87,6 +100,10 @@ def _fresh_audit_conn(tmp_path):
         os.environ.pop("CLAUDE_AUDIT_DIR", None)
     else:
         os.environ["CLAUDE_AUDIT_DIR"] = prev
+    if prev_cfg is None:
+        os.environ.pop("CLAUDE_CONFIG_DIR", None)
+    else:
+        os.environ["CLAUDE_CONFIG_DIR"] = prev_cfg
 
 
 # ------------------------------------------------------------------ test env
