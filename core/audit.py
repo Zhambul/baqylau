@@ -1054,6 +1054,21 @@ ANOMALY_SECTIONS = [
     # the session (OTEL landed) yet the LIVE state DB has no tk_read/tokens counter.
     # core/state._connect now revalidates by st_ino, so a non-empty row here is that
     # regression (or the receiver holding an fd on a *.keep path — check `lsof`).
+    # A rate-limit migration (plugins/claude_code/relimit.py, docs/relimit.md)
+    # that didn't complete: the `relimit` stream's end_reason names which leg
+    # failed — 'close-failed'/'close-timeout' (the old tab wouldn't close or
+    # its SessionEnd never parked the state DB), 'window-gone' (tab vanished
+    # while the session stayed live), 'launch-failed' (kitten refused the
+    # resume tab). 'launched' is the ONLY healthy end, and even then the
+    # --resume must fire a SessionStart under this (old) sid within the launch
+    # window — a 'launched' row with no later SessionStart means the relaunch
+    # died in the shell (bad alias, keychain prompt, claude not on PATH).
+    ("rate-limit migration incomplete (relimit stream failed, or launched with no successor SessionStart)",
+     "SELECT s.id, s.end_reason, s.started_at, s.ended_at FROM streams s "
+     "WHERE s.session_id=? AND s.kind='relimit' AND s.ended_at IS NOT NULL "
+     "AND (COALESCE(s.end_reason,'') != 'launched' "
+     "OR NOT EXISTS (SELECT 1 FROM hook_events h WHERE h.session_id=s.session_id "
+     "AND h.hook='SessionStart' AND h.ts > s.ended_at))", 1),
     lambda conn, section, sid: _section_otel_stranded(conn, section, sid),
 ]
 

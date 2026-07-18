@@ -132,8 +132,12 @@ def test_plan_sequences_pinned():
         assert _names(ev, "WebFetch") == [tab]
         assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
     assert _names("Notification") == [tab]
-    for ev in ("Stop", "StopFailure"):
-        assert _names(ev) == [tab, "claude-stop-fmt.py", ask]
+    assert _names("Stop") == [tab, "claude-stop-fmt.py", ask]
+    # StopFailure = Stop's steps + the rate-limit migration, ordered LAST
+    # (stop_fmt's recovery and the tab dispatch see the session before the
+    # migrator can close its tab — docs/relimit.md)
+    assert _names("StopFailure") == [tab, "claude-stop-fmt.py", ask,
+                                     "claude-relimit.py"]
     # SessionEnd: the stop-fold step is ORDERED before split-close.
     assert _names("SessionEnd") == [tab, "claude-stop-fmt.py", "claude-split.py"]
     assert _names("SubagentStart") == ["claude-subagent-fmt.py"]

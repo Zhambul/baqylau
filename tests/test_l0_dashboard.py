@@ -12,6 +12,7 @@ import subprocess
 import sys
 import textwrap
 import threading
+import time
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1739,7 +1740,8 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     cwd, argv = fe.launched[0]
     assert cwd == str(tmp_path)
     sh, flags, script, dollar0 = argv[:4]
-    assert os.path.basename(sh) in DS.LAUNCH_SHELLS
+    from plugins.claude_code import account as ACCT
+    assert os.path.basename(sh) in ACCT.LAUNCH_SHELLS
     assert flags == "-lic" and script == 'claude "$@"' and dollar0 == "claude"
     assert argv[4:] == ["do the thing"]
     # no prompt → no positional args after the $0 placeholder
@@ -2983,6 +2985,31 @@ def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
     by = {r["slug"]: r for r in rows}
     assert by["c2"]["usage"]["five_hour"] == 40
     assert by[""]["usage"] is None                 # default has no captured usage
+    # server-computed effective 5h (sessionapi.effective_five_hour — ts=100 is
+    # ancient with no reset → rolled over → 0) and the limit-hit flag (none)
+    assert by["c2"]["five_hour_eff"] == 0
+    assert by["c2"]["limit_hit"] is None and by[""]["limit_hit"] is None
+
+
+def test_accounts_payload_serves_fresh_eff_and_limit_hit(dash, monkeypatch):
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c1", "label": "oboard", "alias": "c1"}])
+    A.session_start({"session_id": "accs2", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("accs2")
+    now = time.time()
+    S.kv_set(log, "account", {"slug": "c1", "label": "oboard"})
+    S.kv_set(log, "usage", {"five_hour": 95, "five_hour_reset": now + 8000,
+                            "ts": now})
+    S.kv_set(log, "limit-hit", {"slug": "c1", "ts": now,
+                                "resets_at": now + 8000, "msg": "limit"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c1"]["five_hour_eff"] == 95         # un-rolled → face value
+    assert by["c1"]["limit_hit"]["msg"] == "limit"  # active stamp is served
+    # an EXPIRED stamp is dropped from the payload (the pill must clear)
+    S.kv_set(log, "limit-hit", {"slug": "c1", "ts": now - 9000,
+                                "resets_at": now - 10, "msg": "old"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c1"]["limit_hit"] is None
 
 
 def test_post_new_session_account_picker(dash, monkeypatch, tmp_path):

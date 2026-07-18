@@ -33,6 +33,7 @@
 import json
 import os
 import sqlite3
+import time
 
 from core import paths as P
 from core import state as S
@@ -151,6 +152,116 @@ def sessions(limit=25):
                     "kitty_window_id": "",
                     "live": os.path.isfile(P.state_db(log)), "parked": True})
     return out
+
+
+# --- account usage read model --------------------------------------------------------
+# The per-ACCOUNT rate-limit picture, composed from what each session's status-
+# line capture stashed into its state DB (plugins/claude_code/statusline.py owns
+# the `usage`/`account` kv shapes; relimit.py owns `limit-hit`). Consumers: the
+# dashboard's accounts strip / new-session picker AND the rate-limit migration's
+# target picker (plugins/claude_code/relimit.py) — this module is the ONE owner
+# of both the freshest-per-slug aggregation and the effective-5h arithmetic
+# (docs/styleguide.md single-owner table); the dashboard's JS reads the served
+# number, never re-derives it.
+
+FIVE_HOUR_S = 5 * 3600      # the 5h window length — the rolled-over fallback
+                            # when a snapshot has no resets_at
+
+
+def db_sig(path):
+    """A change fingerprint for a sqlite state DB: (mtime_ns, size) of the DB
+    file plus its -wal sidecar when present (a live writer appends to the WAL
+    without touching the main file until checkpoint — the main file's stat
+    alone serves stale numbers for exactly the sessions that move). None when
+    the file is missing — callers delegate to the uncached read."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    try:
+        wal = os.stat(path + "-wal")
+        return (st.st_mtime_ns, st.st_size, wal.st_mtime_ns, wal.st_size)
+    except OSError:
+        return (st.st_mtime_ns, st.st_size)
+
+
+def db_cached(cache, path, read):
+    """(path, db_sig) memo over a state-DB read — a poller must not open 50
+    sqlite connections per tick when nearly all the DBs are parked. The sig is
+    taken BEFORE the read, so a write racing the read can only make the cached
+    value newer than its sig — the next poll re-reads; never the stale
+    direction. `cache` is the CALLER's dict (each poller keeps its own)."""
+    sig = db_sig(path)
+    if sig is None:
+        return read(path)
+    hit = cache.get(path)
+    if hit and hit[0] == sig:
+        return hit[1]
+    val = read(path)
+    cache[path] = (sig, val)
+    return val
+
+
+def _session_db(row):
+    """A sessions() row's state DB path — the live /tmp file when present,
+    else its durable park."""
+    sdb = P.state_db(row["log"])
+    return sdb if os.path.isfile(sdb) else P.parked_db(row["log"])
+
+
+def account_usage(limit=50, cache=None):
+    """{slug: {"usage": …, "limit_hit": …}} — per account, the FRESHEST
+    status-line usage snapshot and the freshest rate-limit-hit stamp across
+    the recent sessions (newest `ts` wins; each snapshot came from a session
+    running under that account's own token, so this is per-account by
+    construction — no API call, no token). Slugs are whatever the sessions
+    recorded ('' = the plain-claude default account); the caller joins its own
+    registry. `cache` is an optional db_cached() memo dict."""
+    def read(p):
+        return (S.kv_at(p, "account") or {}, S.kv_at(p, "usage"),
+                S.kv_at(p, "limit-hit"))
+    best = {}
+    for row in sessions(limit):
+        sdb = _session_db(row)
+        acc, usage, hit = (db_cached(cache, sdb, read) if cache is not None
+                           else read(sdb))
+        slug = acc.get("slug") or ""
+        ent = best.setdefault(slug, {"usage": None, "limit_hit": None})
+        for key, val in (("usage", usage), ("limit_hit", hit)):
+            if val and (ent[key] is None
+                        or (val.get("ts") or 0) > (ent[key].get("ts") or 0)):
+                ent[key] = val
+    return best
+
+
+def effective_five_hour(usage, now=None):
+    """The effective 5h-used percentage of a usage snapshot, for load
+    balancing: a snapshot whose reset time has passed (or, when resets_at is
+    unknown, one older than the 5h window itself) means the window rolled
+    over → 0 used; no snapshot at all means no recent traffic → also 0."""
+    if not usage:
+        return 0
+    pct = usage.get("five_hour")
+    if not isinstance(pct, (int, float)):
+        return 0
+    now = time.time() if now is None else now
+    reset = usage.get("five_hour_reset")
+    rolled = (reset <= now if isinstance(reset, (int, float)) and reset > 0
+              else (usage.get("ts") or 0) + FIVE_HOUR_S < now)
+    return 0 if rolled else int(pct)
+
+
+def limit_hit_active(hit, now=None):
+    """True while a `limit-hit` stamp still BLOCKS its account: its reset time
+    hasn't passed (or, with no reset known, it is younger than the 5h window).
+    The dashboard pill and the migration target-picker both gate on this."""
+    if not hit:
+        return False
+    now = time.time() if now is None else now
+    reset = hit.get("resets_at")
+    if isinstance(reset, (int, float)) and reset > 0:
+        return reset > now
+    return (hit.get("ts") or 0) + FIVE_HOUR_S > now
 
 
 def session_row(sid):

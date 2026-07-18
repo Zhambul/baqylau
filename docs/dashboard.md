@@ -584,7 +584,11 @@ and no shell aliases (`claude` here IS an alias). `launch_argv` therefore runs
 shell, i.e. exactly what typing `claude` in a fresh tab does (profile PATH, rc
 aliases). Injection safety is preserved: the command string is FIXED and the
 prompt rides as a positional `"$@"` arg, never interpolated. Non-POSIX `$SHELL`
-(fish) falls back to `/bin/zsh` (`LAUNCH_SHELLS`). The server may have no resolvable kitty
+(fish) falls back to `/bin/zsh` (`LAUNCH_SHELLS`). The wrapper is OWNED by
+`plugins/claude_code/account.launch_argv` (reached via the `plugins.launch_argv`
+registry fan-out) — the rate-limit migration (docs/relimit.md) composes the
+exact same launch, so the server's `launch_argv` is a thin delegation. The
+server may have no resolvable kitty
 socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
 is `False`, `_frontend()` returns `None`, and every control-plane endpoint
 returns a clean `503`, never a 500 traceback.
@@ -1321,17 +1325,20 @@ rides the same `$SHELL -lic '<word> "$@"'` login shell, so the alias resolves
 exactly as typing it in a fresh tab.
 
 The picker's **default selection load-balances across subscriptions**: the form
-preselects the account with the most 5-hour headroom (`fiveHourUsed` in app.js —
-lowest effective `five_hour` used %, computed from the usage snapshots
-`/api/accounts` already carries; ties keep registry order). "Effective" because a
-snapshot whose `five_hour_reset` has passed — or, when the reset time is unknown,
-one older than the 5h window itself — means the window rolled over and counts as
-0 used; an account with no snapshot at all has had no recent traffic and also
-counts as 0. The suggestion is recomputed when the fresh `/api/accounts` fetch
-supersedes the cached list, but a manual pick (the dropdown's `onpick` hook)
-always wins and is never overridden. Client-side deliberately: the client clock
-judges "reset has passed", and the data needed is already in the payload — no new
-endpoint or server ranking.
+preselects the account with the most 5-hour headroom (lowest effective
+`five_hour` used %; ties keep registry order). "Effective" because a snapshot
+whose `five_hour_reset` has passed — or, when the reset time is unknown, one
+older than the 5h window itself — means the window rolled over and counts as 0
+used; an account with no snapshot at all has had no recent traffic and also
+counts as 0. That arithmetic is SERVER-computed and served as each account's
+`five_hour_eff` (`core/sessionapi.effective_five_hour` — the single owner,
+because the rate-limit migration's target picker needs the SAME number,
+docs/relimit.md; app.js `fiveHourUsed` just reads the field). The suggestion is
+recomputed when the fresh `/api/accounts` fetch supersedes the cached list, but
+a manual pick (the dropdown's `onpick` hook) always wins and is never
+overridden. (Historically this lived client-side in app.js; the migration
+feature forced a Python owner, and two encodings of "effective" is exactly what
+the single-owner rule exists to prevent.)
 
 **Which account a chat runs under** is stamped into the session's state DB at
 SessionStart (`split.cmd_open` → `state.kv_set("account", account.current())`,
@@ -1360,8 +1367,23 @@ to revert, drop the shim prefix.
 Usage shows in three places: the session header (next to the account chip), the
 terminal scoreboard (id row), and a **strip across the top of every dashboard
 page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (the
-freshest snapshot across that account's sessions), polled slowly and hidden until
-some account has usage. The `web-launch` audit row records the chosen `account`.
+freshest snapshot across that account's sessions —
+`core/sessionapi.account_usage`, shared with the rate-limit migration's target
+picker), polled slowly and hidden until some account has usage. The `web-launch`
+audit row records the chosen `account`.
+
+**The "limit hit" pill.** The frozen usage bar UNDERSTATES a blocked account:
+Claude Code's status line reports `used_percentage` from the API's utilization
+headers, and once requests are REJECTED no update ever reaches 100 — the bar
+sits at ~95% at exactly the moment the account stops working (measured
+2026-07-19: the status line stamped 95% thirteen seconds AFTER the "You've hit
+your session limit" turn; the block signal travels in a separate
+`anthropic-ratelimit-unified-status` header the status-line JSON never carries).
+So the account pill keys the truth off the EVENT instead: the rate-limit
+StopFailure's `limit-hit` kv stamp (docs/relimit.md), served per account as
+`limit_hit` while still active (`sessionapi.limit_hit_active` — reset not yet
+passed, or younger than one 5h window when the reset is unknown) and rendered
+as a red `limit hit` chip + its reset countdown next to the usage bars.
 
 ## Context saturation (the ctx bars)
 

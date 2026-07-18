@@ -148,7 +148,13 @@ _ROUTES = {
     "PreCompact": [_tab("working")],
 }
 _ROUTES["PostToolUseFailure"] = _ROUTES["PostToolUse"]
-_ROUTES["StopFailure"] = _ROUTES["Stop"]
+# StopFailure = Stop's steps + the rate-limit migration (docs/relimit.md):
+# a main-session StopFailure carrying error="rate_limit" is the ONLY signal
+# that the account's limit blocked the turn — relimit stamps the account's
+# limit-hit kv and (when a fallback account has room) hands the session off
+# to a `--resume` relaunch under it. Runs LAST: stop_fmt's recovery and the
+# tab dispatch must see the session as-is before the migrator closes its tab.
+_ROUTES["StopFailure"] = _ROUTES["Stop"] + [_fmt("claude-relimit.py", "relimit")]
 _ROUTES["TaskCompleted"] = _ROUTES["TaskCreated"]
 
 

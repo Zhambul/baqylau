@@ -166,6 +166,23 @@ def account_alias(slug):
     return None
 
 
+def launch_argv(words, cmd="claude"):
+    """The argv that launches a session command in a fresh terminal tab, via
+    the user's interactive login shell (the dashboard's web launch — see
+    plugins.claude_code.account.launch_argv, the owner). First plugin that
+    provides one wins; the bare command as a last resort (a frontend exec'ing
+    it directly loses aliases/PATH, but nothing better exists without a
+    provider)."""
+    for p in all_plugins():
+        fn = getattr(p, "launch_argv", None)
+        if fn is None:
+            continue
+        got = fn(words, cmd)
+        if got is not None:
+            return got
+    return [cmd, *words]
+
+
 def slash_commands(cwd):
     """Slash-command fan-out for the web composer's "/" menu (cwd-keyed like
     session_title is path-keyed — the caller already holds the session's cwd):

@@ -100,3 +100,12 @@ def account_alias(slug):
     account.alias_for."""
     from plugins.claude_code import account
     return account.alias_for(slug)
+
+
+def launch_argv(words, cmd="claude"):
+    """The launch-shell provider (plugins.launch_argv fan-out) — the argv that
+    runs an account's launch word through the user's interactive login shell.
+    See account.launch_argv (the owner; the dashboard's web launch and the
+    rate-limit migration both compose their tab launches through it)."""
+    from plugins.claude_code import account
+    return account.launch_argv(words, cmd)

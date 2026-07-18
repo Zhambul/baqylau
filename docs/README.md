@@ -22,4 +22,5 @@ to already-rejected designs.
 | [sessionapi.md](sessionapi.md) | The read-side session-data API — presentation channel vs read model, the `streams`-table keystone, fork-aware `sid_chain`, the transcript parse/paint split + `plugins.activity()`, the fidelity ladder, why not an events table |
 | [dashboard.md](dashboard.md) | The web dashboard — the `dashboard/` consumer tier, the ops→HTML presenter (escape-as-neutralize), server/SSE design, the notification watcher, singleton lifecycle, the Hermes-derived theme system |
 | [remote.md](remote.md) | Remote access — cloudflared tunnel + Cloudflare Access in front of the dashboard, the `CLAUDE_DASH_ORIGINS`/`CLAUDE_DASH_READONLY` knobs, the threat model (the control plane is RCE), rejected exposure shapes |
+| [relimit.md](relimit.md) | Rate-limit account migration — the StopFailure `error="rate_limit"` trigger, the hook/migrator split, target picking over `sessionapi.account_usage`, why accounts share `~/.claude` (no file copying), the `limit hit` pill, rejected designs |
 | [testing.md](testing.md) | The hermetic e2e suite and its test-only env knobs |

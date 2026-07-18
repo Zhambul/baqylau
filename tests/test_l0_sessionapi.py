@@ -320,3 +320,48 @@ def test_activity_falls_back_to_layout_derivation(monkeypatch, tmp_path):
                                  "create_1h": 0}}
     # unknown pair -> no provider claims it
     assert plugins.activity("act1", "missing-agent") is None
+
+
+# ------------------------------------------- account usage read model (relimit)
+
+def test_effective_five_hour_arithmetic():
+    now = 10_000_000.0
+    live = {"five_hour": 95, "five_hour_reset": now + 100, "ts": now - 60}
+    assert API.effective_five_hour(live, now) == 95
+    # reset passed → the window rolled over → 0
+    assert API.effective_five_hour(dict(live, five_hour_reset=now - 1), now) == 0
+    # no reset known: older than the window itself → 0, younger → face value
+    assert API.effective_five_hour(
+        {"five_hour": 40, "ts": now - API.FIVE_HOUR_S - 1}, now) == 0
+    assert API.effective_five_hour({"five_hour": 40, "ts": now - 60}, now) == 40
+    # absent/garbage snapshots read as 0 (no recent traffic)
+    assert API.effective_five_hour(None, now) == 0
+    assert API.effective_five_hour({"five_hour": "n/a"}, now) == 0
+
+
+def test_limit_hit_active_window():
+    now = 10_000_000.0
+    assert API.limit_hit_active({"ts": now, "resets_at": now + 5}, now) is True
+    assert API.limit_hit_active({"ts": now, "resets_at": now - 5}, now) is False
+    # no reset known: active for the length of one 5h window
+    assert API.limit_hit_active({"ts": now - 60}, now) is True
+    assert API.limit_hit_active({"ts": now - API.FIVE_HOUR_S - 1}, now) is False
+    assert API.limit_hit_active(None, now) is False
+
+
+def test_account_usage_keeps_freshest_per_slug(monkeypatch, tmp_path):
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    for sid, ts, pct in (("au1", 100, 10), ("au2", 200, 20)):
+        A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+        log = P.mirror_log(sid)
+        S.kv_set(log, "account", {"slug": "c9", "label": "nine"})
+        S.kv_set(log, "usage", {"five_hour": pct, "ts": ts})
+    S.kv_set(P.mirror_log("au1"), "limit-hit", {"slug": "c9", "ts": 150})
+    per = API.account_usage()
+    assert per["c9"]["usage"]["five_hour"] == 20        # newest ts wins
+    assert per["c9"]["limit_hit"]["ts"] == 150          # tracked independently
+    # the db_cached memo path returns the same picture
+    cache = {}
+    assert API.account_usage(cache=cache)["c9"]["usage"]["five_hour"] == 20
+    assert API.account_usage(cache=cache)["c9"]["usage"]["five_hour"] == 20

@@ -262,17 +262,12 @@ function usagePct(u, key) {
   return typeof v === "number" ? v : null;
 }
 
-// Effective 5h-used % for the new-session form's load-balancing default: a
-// snapshot whose reset time has passed (or, when resets_at is unknown, one
-// older than the 5h window itself) means the window rolled over → 0 used;
-// an account with no snapshot at all has had no recent traffic → also 0.
+// Effective 5h-used % for the new-session form's load-balancing default —
+// SERVER-computed (core/sessionapi.effective_five_hour, the single owner of
+// the rolled-over→0 arithmetic; the rate-limit migration's target picker uses
+// the same function). An account with no snapshot has had no traffic → 0.
 function fiveHourUsed(a) {
-  const u = a.usage, pct = usagePct(u, "five_hour");
-  if (pct == null) return 0;
-  const now = Date.now() / 1000;
-  const rolled = u.five_hour_reset ? u.five_hour_reset <= now
-                                   : u.ts && now - u.ts > 5 * 3600;
-  return rolled ? 0 : pct;
+  return typeof a.five_hour_eff === "number" ? a.five_hour_eff : 0;
 }
 
 function acctPill(a) {
@@ -299,6 +294,18 @@ function acctPill(a) {
   };
   if (fh != null) pill.append(bar("5h", fh, "five_hour_reset"));
   if (sd != null) pill.append(bar("7d", sd, "seven_day_reset"));
+  // The account is BLOCKED right now (a session on it died on error=
+  // rate_limit — the `limit-hit` stamp, served only while still active):
+  // say so outright; the frozen usage bar alone reads ~95% at exactly the
+  // moment the account stops working (the status line never reports 100%
+  // once requests are rejected — docs/relimit.md).
+  if (a.limit_hit) {
+    const chip = el("span", "ulimit", "limit hit");
+    if (a.limit_hit.msg) chip.title = a.limit_hit.msg;
+    pill.append(chip);
+    if (a.limit_hit.resets_at)
+      pill.append(el("span", "ureset", "resets " + resetAgo(a.limit_hit.resets_at)));
+  }
   return pill;
 }
 

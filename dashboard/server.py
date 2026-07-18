@@ -414,34 +414,11 @@ _ACCT = {}        # state-db path -> (sig, (account kv, usage kv)): same
 #                   session DBs per fetch, nearly all parked.
 
 
-def _db_sig(path):
-    """A change fingerprint for a sqlite state DB: (mtime_ns, size) of the DB
-    file plus its -wal sidecar when present. None when the file is missing —
-    callers delegate to the uncached read (which handles absence itself)."""
-    try:
-        st = os.stat(path)
-    except OSError:
-        return None
-    try:
-        wal = os.stat(path + "-wal")
-        return (st.st_mtime_ns, st.st_size, wal.st_mtime_ns, wal.st_size)
-    except OSError:
-        return (st.st_mtime_ns, st.st_size)
-
-
-def _db_cached(cache, sdb, read):
-    """(path, _db_sig) memo over an sdb read. The sig is taken BEFORE the
-    read, so a write racing the read can only make the cached value newer
-    than its sig — the next poll re-reads; never the stale direction."""
-    sig = _db_sig(sdb)
-    if sig is None:
-        return read(sdb)
-    hit = cache.get(sdb)
-    if hit and hit[0] == sig:
-        return hit[1]
-    val = read(sdb)
-    cache[sdb] = (sig, val)
-    return val
+# The (path, sig) memo + fingerprint moved to core/sessionapi.py (db_sig/
+# db_cached — the accounts read model needed them too); these aliases keep the
+# call sites reading as before.
+_db_sig = API.db_sig
+_db_cached = API.db_cached
 
 
 def sessions_payload():
@@ -496,29 +473,23 @@ def _snap_key(snap):
 def accounts_payload():
     """The launchable accounts + their latest known usage, for the new-session
     picker AND the dashboard's top usage strip. Registry from
-    plugins.accounts(); usage aggregated by scanning the recent sessions and
-    keeping, per account slug, the freshest `usage` snapshot (newest `ts`).
-    Per-account by construction — each snapshot came from a session running
-    under that account's own token (docs/dashboard.md). No API call, no token."""
-    reg = plugins.accounts()
-    best = {}                                   # slug -> (ts, usage)
-    for row in API.sessions(SESSIONS_LIMIT):
-        sdb = P.state_db(row["log"])
-        if not os.path.isfile(sdb):
-            sdb = P.parked_db(row["log"])
-        acc, usage = _db_cached(
-            _ACCT, sdb,
-            lambda p: (API.kv_at(p, "account") or {}, API.kv_at(p, "usage")))
-        if not usage:
-            continue
-        slug = acc.get("slug") or ""
-        ts = usage.get("ts") or 0
-        if slug not in best or ts > best[slug][0]:
-            best[slug] = (ts, usage)
+    plugins.accounts(); the per-slug freshest `usage`/`limit-hit` aggregation
+    is core/sessionapi.account_usage (shared with the rate-limit migration's
+    target picker — docs/relimit.md). Per-account by construction — each
+    snapshot came from a session running under that account's own token
+    (docs/dashboard.md). No API call, no token. Adds the two server-computed
+    fields the page must not re-derive (single-owner rule): `five_hour_eff`
+    (rolled-over→0 effective usage, the new-session form's load-balancing
+    default) and `limit_hit` (the still-active limit stamp, else None)."""
+    per = API.account_usage(SESSIONS_LIMIT, cache=_ACCT)
     out = []
-    for a in reg:
-        u = best.get(a["slug"])
-        out.append(dict(a, usage=u[1] if u else None))
+    for a in plugins.accounts():
+        ent = per.get(a["slug"]) or {}
+        usage, hit = ent.get("usage"), ent.get("limit_hit")
+        out.append(dict(
+            a, usage=usage,
+            five_hour_eff=API.effective_five_hour(usage),
+            limit_hit=hit if API.limit_hit_active(hit) else None))
     return out
 
 
@@ -967,7 +938,6 @@ def _live_windows():
     return val
 
 
-LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
 EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort levels
 _MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
                                                # clean argv word, nothing else
@@ -985,21 +955,13 @@ _NAME_CTRL = re.compile(r"[\x00-\x1f\x7f]+")   # control bytes never enter a nam
 
 
 def launch_argv(words, cmd="claude"):
-    """The argv a web new-session launches: `cmd` (the account's launch word —
-    `claude` for the default, or a switcher alias like `c1`/`c2`) through the
-    user's INTERACTIVE LOGIN shell. kitty execs launch argv with kitty's OWN
-    env — a GUI kitty has no user PATH (so a bare ["claude"] dies
-    command-not-found and the tab closes instantly, while `kitten @ launch`
-    still exits 0) and no shell aliases. `$SHELL -lic` reproduces exactly what
-    typing `cmd` in a fresh tab does: profile PATH, rc aliases (c1/c2 ARE zsh
-    aliases). `cmd` is placed in the FIXED command string, so it MUST be a
-    registry-vetted bareword (plugins.account_alias) — never raw client text;
-    the prompt/flags ride as positional args via "$@" (after the $0
-    placeholder), never interpolated."""
-    sh = os.environ.get("SHELL") or "/bin/zsh"
-    if os.path.basename(sh) not in LAUNCH_SHELLS:
-        sh = "/bin/zsh"
-    return [sh, "-lic", '%s "$@"' % cmd, cmd, *words]
+    """The argv a web new-session launches — the interactive-login-shell
+    wrapper now owned by plugins.claude_code.account.launch_argv (the
+    rate-limit migration composes the SAME launch; the rationale — GUI kitty
+    has no user PATH/aliases, `cmd` must be a registry-vetted bareword, the
+    prompt/flags ride "$@" — lives with the owner). Reached through the
+    plugins registry root, the dashboard's one sanctioned plugin door."""
+    return plugins.launch_argv(words, cmd)
 
 
 # --- macOS focus steal watch (audit-only) -----------------------------------------------

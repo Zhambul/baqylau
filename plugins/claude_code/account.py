@@ -14,6 +14,8 @@
 import os
 import re
 
+from core import sessionapi as API
+
 # The switcher's registry: TSV rows `slug<TAB>label<TAB>keychain-service`.
 ACCOUNTS_TSV = os.path.expanduser(
     "~/.config/claude-subscriptions/accounts.tsv")
@@ -85,3 +87,51 @@ def alias_for(slug):
         if a["slug"] == slug:
             return a["alias"]
     return None
+
+
+LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
+
+
+def launch_argv(words, cmd="claude"):
+    """The argv that launches a session in a fresh terminal tab: `cmd` (the
+    account's launch word — `claude` for the default, or a switcher alias like
+    `c1`/`c2`) through the user's INTERACTIVE LOGIN shell. kitty execs launch
+    argv with kitty's OWN env — a GUI kitty has no user PATH (so a bare
+    ["claude"] dies command-not-found and the tab closes instantly, while
+    `kitten @ launch` still exits 0) and no shell aliases. `$SHELL -lic`
+    reproduces exactly what typing `cmd` in a fresh tab does: profile PATH, rc
+    aliases (c1/c2 ARE zsh aliases). `cmd` is placed in the FIXED command
+    string, so it MUST be a registry-vetted bareword (alias_for) — never raw
+    client text; the prompt/flags ride as positional args via "$@" (after the
+    $0 placeholder), never interpolated. Shared by the dashboard's web launch
+    (plugins.launch_argv) and the rate-limit migration (relimit.py)."""
+    sh = os.environ.get("SHELL") or "/bin/zsh"
+    if os.path.basename(sh) not in LAUNCH_SHELLS:
+        sh = "/bin/zsh"
+    return [sh, "-lic", '%s "$@"' % cmd, cmd, *words]
+
+
+TARGET_MAX_PCT = 90   # a candidate at/above this effective 5h usage is no
+                      # refuge — migrating there would hit the wall again
+
+
+def pick_target(cur_slug, now=None, cache=None):
+    """The migration target for a session whose account just hit its rate
+    limit (plugins/claude_code/relimit.py): the OTHER registry account with
+    the lowest effective 5h usage (core.sessionapi.effective_five_hour over
+    the freshest per-account snapshots), skipping any account still inside an
+    active limit-hit stamp. Returns {"slug", "alias", "eff"} or None when no
+    account sits under TARGET_MAX_PCT — then the caller must NOT migrate
+    (ping-ponging between two exhausted accounts helps nobody)."""
+    per = API.account_usage(cache=cache)
+    best = None
+    for a in registry():
+        if a["slug"] == cur_slug:
+            continue
+        ent = per.get(a["slug"]) or {}
+        if API.limit_hit_active(ent.get("limit_hit"), now):
+            continue
+        eff = API.effective_five_hour(ent.get("usage"), now)
+        if best is None or eff < best["eff"]:
+            best = {"slug": a["slug"], "alias": a["alias"], "eff": eff}
+    return best if best is not None and best["eff"] < TARGET_MAX_PCT else None

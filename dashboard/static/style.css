@@ -433,7 +433,14 @@ code, pre, .mono { font-family: var(--mono); }
 .ubar.warn .ufill { background: var(--amber, #d1a35a); }
 .ubar.hot .ufill { background: var(--red, #b5484d); }
 .ubar .upct { color: var(--text-soft); font: 10px/1 var(--mono); }
-.ubar .ureset { color: var(--dim2); font: 10px/1 var(--mono); white-space: nowrap; }
+.ubar .ureset, .acct > .ureset { color: var(--dim2); font: 10px/1 var(--mono); white-space: nowrap; }
+/* the account is BLOCKED right now (an active `limit-hit` stamp — the usage
+   bar alone freezes at ~95% at exactly the moment requests start bouncing) */
+.acct .ulimit {
+  color: var(--red, #b5484d); font: 600 10px/1 var(--mono);
+  border: 1px solid color-mix(in srgb, var(--red, #b5484d) 55%, transparent);
+  border-radius: 3px; padding: 2px 5px; white-space: nowrap;
+}
 
 /* which account a session runs under (in its header) */
 .acctchip {
