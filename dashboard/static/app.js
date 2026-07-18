@@ -3449,6 +3449,36 @@ function toggleView(anchor, key, gid) {
     });
 }
 
+/* ---------- viewport diagnostics (?vpdiag) ----------
+   A live readout of the numbers a remote device (an iPad) is actually
+   rendering with — layout vs visual viewport, scale, screen, dpr — for
+   debugging zoom/fit reports that headless WebKit can't reproduce. Doubles
+   as a staleness probe: the overlay only exists in THIS build of app.js,
+   so "no overlay" == the device is loading stale assets. */
+if (/[?&#]vpdiag/.test(location.search + location.hash)) {
+  const box = el("div");
+  box.style.cssText =
+    "position:fixed;left:8px;bottom:8px;z-index:9999;padding:8px 10px;" +
+    "background:#000c;color:#9f9;font:12px/1.5 monospace;border-radius:8px;" +
+    "pointer-events:none;white-space:pre;max-width:95vw;overflow:hidden";
+  const meta = document.querySelector("meta[name=viewport]");
+  const upd = () => {
+    const vv = window.visualViewport;
+    box.textContent =
+      `layout ${document.documentElement.clientWidth}×${document.documentElement.clientHeight}` +
+      ` inner ${innerWidth}×${innerHeight}\n` +
+      (vv ? `visual ${Math.round(vv.width)}×${Math.round(vv.height)} scale ${vv.scale.toFixed(3)}\n` : "") +
+      `screen ${screen.width}×${screen.height} dpr ${devicePixelRatio}` +
+      ` scrollW ${document.documentElement.scrollWidth}\n` +
+      `meta ${(meta && meta.content) || "MISSING"}\nIS_IPAD ${IS_IPAD}`;
+  };
+  upd();
+  addEventListener("resize", upd);
+  addEventListener("orientationchange", () => setTimeout(upd, 400));
+  if (window.visualViewport) window.visualViewport.addEventListener("resize", upd);
+  document.body.append(box);
+}
+
 /* ---------- boot ---------- */
 
 initNotifBtn();
