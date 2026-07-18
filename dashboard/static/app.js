@@ -609,8 +609,12 @@ function appendItems(items) {
   drainQueue(items);
   enforceWindow();
   while (st.childElementCount > 3000) {
-    const last = st.lastElementChild;
-    if (!last || last === S.ses.moreEl) break;   // the load-older affordance stays
+    let last = st.lastElementChild;
+    if (last === S.ses.moreEl) last = last.previousElementSibling;  // the load-older
+    if (!last) break;                          //   affordance stays pinned at the bottom
+    if (last.classList.contains("blk"))        // evict a trimmed block card, or later
+      for (const [g, b] of S.ses.blocks)       //   ops for its group would render into
+        if (b.root === last) { S.ses.blocks.delete(g); break; }   // a detached node
     last.remove();
   }
   updateFilterCount();
@@ -982,9 +986,13 @@ function drainQueue(items) {
 // While Claude's question dialog is up in the terminal, the session SSE
 // carries the pending ask (the PreToolUse stash — plugins/claude_code/
 // ask_fmt.py) and this card mirrors it above the composer: option buttons
-// (radio-style for single-select, toggles for multiSelect), a free-text
-// "type your own" per question (the dialog's "Type something" row), a
-// submit row, and "chat about this" (the dialog's own decline-and-discuss).
+// (radio marks + "pick one" for single-select, checkbox marks + "pick any"
+// for multiSelect — visually distinct so the mode is legible at a glance),
+// a free-text "type your own" per question (the dialog's "Type something"
+// row), a submit row (ALWAYS explicit — no auto-submit on a lone
+// single-select click; the web card favors review-before-send over the
+// TUI's one-keystroke feel), and "chat about this" (the dialog's own
+// decline-and-discuss).
 // Answers POST /answer, where the server drives the REAL dialog with
 // screen-verified key events (dashboard/askdialog.py). The card clears via
 // the SSE `ask` event when the answer's PostToolUse drops the stash.
@@ -1019,7 +1027,8 @@ function renderAsk() {
   chatB.onclick = () => submitAsk(ask, null, true);
   head.append(chatB);
   card.append(head);
-  const sub = el("button", "asksubmit", "submit answers");
+  const sub = el("button", "asksubmit",
+                 qs.length > 1 ? "submit answers" : "submit answer");
   const syncSubmit = () => {
     sub.disabled = !st.answers.every(a => a.selected.length || a.other.trim());
   };
@@ -1028,15 +1037,20 @@ function renderAsk() {
     const qhead = el("div", "askqhead");
     if (q.header) qhead.append(el("span", "askhdr", q.header));
     qhead.append(el("span", "askqtext", q.question || ""));
+    qhead.append(el("span", "askpick" + (q.multiSelect ? " multi" : ""),
+                    q.multiSelect ? "pick any" : "pick one"));
     qbox.append(qhead);
-    const opts = el("div", "askopts");
+    const opts = el("div", "askopts" + (q.multiSelect ? " multi" : ""));
     const paintAll = () => [...opts.children].forEach(c =>
       c.classList.toggle("on", st.answers[qi].selected.includes(c.dataset.label)));
     (q.options || []).forEach(o => {
       const b = el("button", "askopt");
       b.dataset.label = o.label || "";
-      b.append(el("span", "aol", o.label || ""));
-      if (o.description) b.append(el("span", "aod", o.description));
+      b.append(el("span", "amark"));
+      const txt = el("span", "aotxt");
+      txt.append(el("span", "aol", o.label || ""));
+      if (o.description) txt.append(el("span", "aod", o.description));
+      b.append(txt);
       b.onclick = () => {
         const a = st.answers[qi];
         if (q.multiSelect) {
@@ -1047,9 +1061,6 @@ function renderAsk() {
           a.selected = [o.label];
           a.other = "";
           if (other) other.value = "";
-          // one single-select question: a click answers AND submits, exactly
-          // like the TUI's digit press
-          if (qs.length === 1) { paintAll(); return submitAsk(ask, st.answers, false); }
         }
         paintAll();
         syncSubmit();

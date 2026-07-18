@@ -725,12 +725,18 @@ report is answerable from the DB.
 
 When Claude asks a question (the AskUserQuestion tool), the session view
 grows an **ask card** above the composer mirroring the TUI dialog: one
-block per question (the header chip + question text), option buttons
-(radio-style single-select, toggle multiSelect), a free-text "type your
-own" input per question (the dialog's "Type something" row), a submit
-row, and **chat about this** (the dialog's own decline-and-discuss). A
-lone single-select question submits on the option click itself — the
-same one-keystroke feel as the TUI's digit press.
+block per question (the header chip + question text + a dim
+"pick one"/"pick any" hint), option buttons whose leading mark makes the
+select mode legible at a glance (a radio circle for single-select, a
+checkbox square that fills with a ✓ for multiSelect), a free-text "type
+your own" input per question (the dialog's "Type something" row), a
+submit row, and **chat about this** (the dialog's own
+decline-and-discuss). Submission is ALWAYS the explicit submit button
+(or Enter in a free-text row) — a lone single-select question does NOT
+submit on the option click itself. That one-keystroke feel is right for
+the TUI's digit press but wrong for the web: a misclick would fire the
+answer with no chance to reconsider, so the card favors
+review-before-send (selections stay editable until submitted).
 
 **Detection** is a hook stash, because the dialog is otherwise just
 pixels: `plugins/claude_code/ask_fmt.py` (routed by the dispatcher on
@@ -1041,7 +1047,11 @@ the live `S.ses.blocks` map or the `KEEP_OPEN` window (they are history, not the
 live tail); a straddling group already in the live map has its older ops folded
 into that card's body at the end (older ops trail — acceptable). Filters apply to
 lazily loaded items (`appendOlder` runs the shared `applyFilterTo`). The button
-hides once `/history` reports `oldest == 0`.
+hides once `/history` reports `oldest == 0`. Past a 3000-child cap, each live
+arrival trims the feed's oldest DOM nodes off the bottom, skipping over the
+pinned `.loadmore` button (it must stay the last child) and evicting a trimmed
+block card from the live `S.ses.blocks` map so a straggler op for that group
+can't render into a detached node.
 
 ## Live agent timelines
 
