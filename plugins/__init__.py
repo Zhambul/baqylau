@@ -185,20 +185,21 @@ def slash_commands(cwd):
     return out
 
 
-def effort_default(cwd):
+def effort_default(cwd, slug=""):
     """Saved-effort fan-out (cwd-keyed like slash_commands — the caller
-    already holds the session's cwd): the first plugin that knows a saved
-    effort level for sessions under `cwd` returns it ("low"…"max"); "" when
-    none does. Backs the dashboard's effort quick-button label: per-session
-    effort is readable from no transcript, but every `/effort <level>` saves
-    itself as the settings default, so the saved value IS the last applied
-    one. Same exception contract as census()/activity(): the caller is the
-    read-side dashboard, not a hook."""
+    already holds the session's cwd; `slug` is the session's stashed
+    subscription-account slug, resolving WHICH user-level settings apply):
+    the first plugin that knows a saved effort level returns it
+    ("low"…"max"); "" when none does. Backs the dashboard's effort
+    quick-button label: per-session effort is readable from no transcript,
+    but every `/effort <level>` saves itself as the settings default, so the
+    saved value IS the last applied one. Same exception contract as
+    census()/activity(): the caller is the read-side dashboard, not a hook."""
     for p in all_plugins():
         fn = getattr(p, "effort_default", None)
         if fn is None:
             continue
-        got = fn(cwd)
+        got = fn(cwd, slug)
         if got:
             return got
     return ""

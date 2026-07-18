@@ -17,6 +17,9 @@ import re
 # The switcher's registry: TSV rows `slug<TAB>label<TAB>keychain-service`.
 ACCOUNTS_TSV = os.path.expanduser(
     "~/.config/claude-subscriptions/accounts.tsv")
+# The switcher's per-account config dirs (each exported as that account's
+# CLAUDE_CONFIG_DIR): configs/<slug> next to the registry.
+CONFIGS_DIR = os.path.expanduser("~/.config/claude-subscriptions/configs")
 
 _SLUG_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # a clean argv/keychain bareword
 DEFAULT_ALIAS = "claude"                       # the plain (default-account) launch word
@@ -56,6 +59,19 @@ def registry():
     except OSError:
         pass
     return out
+
+
+def config_dir_for(slug):
+    """The switcher's per-account config dir (configs/<slug> — what that
+    account's sessions see as $CLAUDE_CONFIG_DIR), or None when the slug is
+    empty/unknown/dirless — the caller then falls back to its own ambient
+    config dir (model.config_dir). Lets an out-of-process reader (the
+    dashboard) resolve ANOTHER session's user-level settings: each account
+    has its own settings.json, so reading the caller's would cross accounts."""
+    if not slug or not _SLUG_OK.match(slug):
+        return None
+    d = os.path.join(CONFIGS_DIR, slug)
+    return d if os.path.isdir(d) else None
 
 
 def alias_for(slug):

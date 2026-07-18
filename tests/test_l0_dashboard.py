@@ -1224,6 +1224,25 @@ def test_session_detail_effort_from_settings(dash, tmp_path):
     assert code == 200 and json.loads(body)["effort"] == "xhigh"
 
 
+def test_session_detail_effort_per_account_config(dash, tmp_path, monkeypatch):
+    # a session under a switcher account (statusline-stashed slug) resolves
+    # THAT account's config dir (configs/<slug>/settings.json), not the
+    # ambient one — each subscription account carries its own effortLevel
+    from plugins.claude_code import account as ACC
+    cfg = tmp_path / "configs" / "c9"
+    cfg.mkdir(parents=True)
+    (cfg / "settings.json").write_text(json.dumps({"effortLevel": "max"}))
+    monkeypatch.setattr(ACC, "CONFIGS_DIR", str(tmp_path / "configs"))
+    ambient = os.environ["CLAUDE_CONFIG_DIR"]
+    with open(os.path.join(ambient, "settings.json"), "w") as fh:
+        json.dump({"effortLevel": "low"}, fh)
+    A.session_start({"session_id": "eff2", "cwd": str(tmp_path),
+                     "transcript_path": ""})
+    S.kv_set(P.mirror_log("eff2"), "account", {"slug": "c9", "label": "c9"})
+    code, body = _get(dash + "/api/session/eff2")
+    assert code == 200 and json.loads(body)["effort"] == "max"
+
+
 def test_confirm_find_menu_shape_not_prose():
     # detection is by SHAPE: a ❯-cursored numbered list with Yes+No labels.
     # The bare composer prompt and scrollback prose that happens to enumerate

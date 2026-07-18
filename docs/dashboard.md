@@ -451,8 +451,13 @@ switch updates them optimistically (`applyQuickSwitch` — for model a
 `pendingModel` override that holds until the ctx probe's family confirms it
 on the next assistant turn; the probe's model is stale until then). The
 effort label (`⚡ high ▾`) shows the SAVED effort level — session meta
-`effort` + the SSE `effort` event, backed by the `plugins.effort_default(cwd)`
-fan-out over `model.settings_field("effortLevel", start=cwd)`: per-session
+`effort` + the SSE `effort` event, backed by the
+`plugins.effort_default(cwd, slug)` fan-out over
+`model.settings_field("effortLevel", start=cwd, config=…)`, where `slug` is
+the session's statusline-stashed account and `config` its
+`account.config_dir_for(slug)` — each subscription account has its OWN
+settings.json, so reading the server's ambient config dir would show one
+account's effort on another's session. Per-session
 effort is readable from no transcript (`plugins/claude_code/model.py`), but
 every applied `/effort <level>` — terminal or web — persists itself as the
 settings default, so the saved value IS the last applied one (a

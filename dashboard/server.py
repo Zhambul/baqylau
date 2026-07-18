@@ -446,6 +446,14 @@ def agents_ctx(agents):
     return agents
 
 
+def _session_slug(sid):
+    """The session's subscription-account slug from its statusline stash
+    ('' for the default account / no stash) — resolves WHICH user-level
+    settings the effort read consults."""
+    sdb = API.state_db_for(sid)
+    return ((API.kv_at(sdb, "account") or {}).get("slug") or "") if sdb else ""
+
+
 def session_payload(sid):
     """One session's overview — session() plus the error count the ⚠ badge
     shows (full rows stay behind /errors) and the display title."""
@@ -458,8 +466,11 @@ def session_payload(sid):
     # the effort quick-button's label (docs/dashboard.md, *Web quick
     # commands*): the SAVED effort level — every /effort persists itself
     # there, so it is the last applied value; per-session effort is readable
-    # from nowhere else
-    data["effort"] = plugins.effort_default(data.get("cwd") or "")
+    # from nowhere else. Resolved for the session's ACCOUNT (its statusline-
+    # stashed slug picks the config dir — accounts each carry their own
+    # settings.json)
+    data["effort"] = plugins.effort_default(data.get("cwd") or "",
+                                            _session_slug(sid))
     data["running"] = API.running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
@@ -2027,7 +2038,8 @@ class Handler(BaseHTTPRequestHandler):
                         return
                 # the effort quick-button, live — a terminal-side /effort
                 # saves to settings and shows here on the slow cadence
-                eff = plugins.effort_default(row.get("cwd") or "")
+                eff = plugins.effort_default(row.get("cwd") or "",
+                                             _session_slug(sid))
                 if eff != prev["effort"]:
                     prev["effort"] = eff
                     if not self._sse("effort", {"effort": eff}):

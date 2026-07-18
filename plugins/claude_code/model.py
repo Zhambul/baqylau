@@ -35,7 +35,7 @@ def config_dir():
     return os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
 
 
-def claude_dirs(start=None, nearest_only=False, env_pin=True):
+def claude_dirs(start=None, nearest_only=False, env_pin=True, config=None):
     """Every `.claude` directory to consult for project-level config (agents, settings),
     NEAREST-FIRST, always ending with the user config dir (config_dir()). Used instead
     of a bare os.getcwd() lookup, because a subagent/teammate frequently runs in a
@@ -61,7 +61,12 @@ def claude_dirs(start=None, nearest_only=False, env_pin=True):
     env_pin=False ignores $CLAUDE_PROJECT_DIR entirely: a caller resolving an
     ARBITRARY directory's config (the dashboard's slash-command discovery walks
     OTHER sessions' cwds) must not have every lookup pinned to whatever project
-    happened to spawn the calling process."""
+    happened to spawn the calling process.
+
+    `config` overrides the trailing user config dir for the same reason: an
+    out-of-process reader resolving ANOTHER session's config must end at THAT
+    session's account config dir (account.config_dir_for on its stashed
+    slug), not the calling process's $CLAUDE_CONFIG_DIR."""
     dirs = []
     env = (os.environ.get("CLAUDE_PROJECT_DIR") or "").strip() if env_pin else ""
     if env:
@@ -81,7 +86,7 @@ def claude_dirs(start=None, nearest_only=False, env_pin=True):
             if parent == d:
                 break
             d = parent
-    home_claude = config_dir()
+    home_claude = config or config_dir()
     if home_claude not in dirs:
         dirs.append(home_claude)
     return dirs
@@ -191,17 +196,17 @@ def def_field(def_file, field):
     return None if (not v or v == "inherit") else v
 
 
-def settings_field(field, start=None, env_pin=True):
+def settings_field(field, start=None, env_pin=True, config=None):
     """A field from the merged settings (project overriding global). Layered
     across ALL ancestor .claude dirs (claude_dirs, nearest-first) for the same
     subdir/worktree reason as agent_def_file — else a teammate in a subdirectory
     skips the project settings and falls straight through to ~/.claude. First
     non-empty wins; settings.local.json shadows settings.json per dir.
-    `start`/`env_pin` pass through to claude_dirs — an out-of-process reader
-    (the dashboard) resolves for a SESSION's cwd, not its own (same reason
-    slashcmds passes them)."""
+    `start`/`env_pin`/`config` pass through to claude_dirs — an out-of-process
+    reader (the dashboard) resolves for a SESSION's cwd and account config
+    dir, not its own (same reason slashcmds passes start/env_pin)."""
     paths = []
-    for c in claude_dirs(start=start, env_pin=env_pin):
+    for c in claude_dirs(start=start, env_pin=env_pin, config=config):
         paths += [os.path.join(c, "settings.local.json"),
                   os.path.join(c, "settings.json")]
     for p in paths:
