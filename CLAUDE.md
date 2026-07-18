@@ -103,6 +103,13 @@ The audit trail is only useful if it has no blind spots — a mechanism that lea
 
 The `docs/` directory (indexed by `docs/README.md`) is the authoritative, exhaustively-detailed record of how every mechanism works *and why the alternatives failed*. When changing behavior, update the corresponding docs/ file in the same commit — the "why not X" notes there are what prevents regressing to already-rejected designs. The repo-root README.md is a short GitHub-facing overview only; internals belong in docs/.
 
-## Always commit and push to main
+## Branch in an isolated worktree, merge to main, push
 
-This is a personal repo with a linear `main` history — there is no PR/review flow. When a change is complete and verified (code + its audit wiring + docs/ + skill docs, per the sections above, and `make test` green), commit it directly to `main` and `git push` — every time, without being asked again and without creating a branch. Do not open PRs or leave work sitting on a feature branch.
+This is a personal repo with a linear `main` history — there is no PR/review flow — but MULTIPLE agents often work here concurrently, and an agent that edits the shared checkout tramples (and gets confused by) the others' uncommitted changes. So:
+
+1. **Never work directly in the main checkout.** Before touching any file, create a fresh branch off the latest `main` in an **isolated git worktree** (a branch alone does NOT isolate you — everyone in the same directory shares the same working tree and sees each other's uncommitted files). Use the harness's worktree isolation (`EnterWorktree`, or `isolation: "worktree"` for subagents) when available; otherwise `git worktree add <dir> -b <branch> main` yourself.
+2. Do all work and commits on that branch, in that worktree.
+3. When the change is complete and verified (code + its audit wiring + docs/ + skill docs, per the sections above, and `make test` green), **merge it into `main` and `git push`** — every time, without being asked. Keep history linear: rebase the branch onto the latest `main` first, then fast-forward merge (`git merge --ff-only`). If `main` moved underneath you, rebase and re-verify before merging.
+4. Clean up: remove the worktree and delete the merged branch. Do not open PRs or leave work sitting on an unmerged branch.
+
+(This is about *using* worktrees — the `WorktreeCreate`/`WorktreeRemove` hooks must still stay unwired, per the wiring section above.)
