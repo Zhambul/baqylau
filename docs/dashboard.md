@@ -394,14 +394,20 @@ and native-ish keyboard handling (↑/↓/Enter/Space, Esc closes the menu witho
 closing the modal via `stopPropagation`). The directory field is freeform text
 with `suggest()` — the same menu language over the snapshot's distinct cwds —
 NOT a `<datalist>`: Safari renders that list in the system style too, and pops
-it open on focus, which made the prefilled field look already-clicked. Focus
-or click opens the menu — with the value blank or an exact known cwd it lists
-EVERYTHING (the picker look, current value highlighted), while typing filters
-by substring; Enter picks the highlighted row, but when that row already IS
-the value (or nothing is highlighted) it falls through to launch — so
-click-pick-Enter and type-path-Enter both behave. Opening the form focuses
-the *prompt* when the directory is already known (remembered or prefilled),
-the directory field only when it's blank. While the form is up the page
+it open on focus, which made the prefilled field look already-clicked. Only a
+pointer CLICK on the field (or typing / ArrowDown) opens the menu — never
+focus alone, which also fires on the form's own auto-focus — with the value
+blank or an exact known cwd it lists EVERYTHING (the picker look, current
+value highlighted), while typing filters by substring; Enter picks the
+highlighted row, but when that row already IS the value (or nothing is
+highlighted) it falls through to launch — so click-pick-Enter and
+type-path-Enter both behave. Every picker/input row is a `div`, not a
+`<label>` (only the prompt row keeps the label): label activation forwards
+any click on the row — its TITLE included — into the field, focusing the
+input or toggling the dropdown, and making it impossible to defocus by
+clicking beside the field. Opening the form focuses the *prompt* when the
+directory is already known (remembered or prefilled), the directory field
+only when it's blank. While the form is up the page
 behind it is scroll-locked (`body.modal-open` → `overflow: hidden`, set and
 released by open/closeNewSession); a panel taller than the viewport scrolls
 INSIDE the overlay (`.nsback` is `overflow-y: auto`), never the dashboard.

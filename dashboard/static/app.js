@@ -1172,7 +1172,7 @@ const nsRemember = (prefs) => {
 // Freeform text input + picker menu — replaces the directory field's
 // <datalist>, which Safari renders in the system style AND pops open on
 // focus (the "somehow already clicked" look). Same visual language as
-// dropdown() (.nsdropmenu/.nsdropitem). Focus/click opens the menu: with the
+// dropdown() (.nsdropmenu/.nsdropitem). A click opens the menu: with the
 // current value blank or an exact known entry it lists EVERYTHING (the
 // picker look, current value highlighted); while typing it filters by
 // substring. ↑/↓ move, Enter picks the highlighted row — unless that row IS
@@ -1212,8 +1212,10 @@ function suggest(input, all) {
     squelch = false;
     close();
   };
+  // deliberately NO focus→open: the form auto-focuses this field when blank,
+  // and a menu that pops without a pointer action reads as "already clicked".
+  // Open only on an actual click, typing, or ArrowDown.
   input.addEventListener("input", () => { if (!squelch) open(); });
-  input.addEventListener("focus", open);
   input.addEventListener("click", () => { if (menu.hidden) open(); });
   input.addEventListener("blur", close);
   const key = (e) => {
@@ -1244,7 +1246,12 @@ function openNewSession(prefillCwd, resumeSid) {
   const panel = el("div", "nspanel");
   panel.append(el("div", "nstitle", "new session"));
 
-  const dirRow = el("label", "nsfield");
+  // every picker/input row is a DIV, not a <label>: label activation forwards
+  // any click on the row (title included) into the field — focusing it (or
+  // toggling a dropdown) and making it impossible to defocus by clicking
+  // beside the field; only the prompt row keeps the <label> (focusing a
+  // textarea from its title is harmless and standard)
+  const dirRow = el("div", "nsfield");
   dirRow.append(el("span", "nslabel", "directory"));
   const dir = el("input", "nsinput");
   dir.type = "text";
@@ -1259,7 +1266,7 @@ function openNewSession(prefillCwd, resumeSid) {
   // resume options are this directory's known sessions from the snapshot,
   // rebuilt when the directory changes. A resumed conversation forks to a
   // new sid; the adopt machinery and the jump watch handle that on their own.
-  const startRow = el("label", "nsfield");
+  const startRow = el("div", "nsfield");
   startRow.append(el("span", "nslabel", "start from"));
   const start = dropdown();
   startRow.append(start.el);
@@ -1285,7 +1292,7 @@ function openNewSession(prefillCwd, resumeSid) {
   // (the user always launches with explicit flags; the remembered last-used
   // value is the preselection, with a fixed first-ever fallback)
   const pick = (label, opts) => {
-    const row = el("label", "nsfield");
+    const row = el("div", "nsfield");
     row.append(el("span", "nslabel", label));
     const sel = dropdown();
     sel.fill(opts);
