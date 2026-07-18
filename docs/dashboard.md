@@ -253,7 +253,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
-| `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then `sessions` snapshots on change (per `_snap_key`, the paused-blind diff — *The list renders once, then patches* below) + `notify` toasts |
+| `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`plan`/`tasks`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
@@ -1560,13 +1560,29 @@ state and burning layout for rows that hadn't changed.
 
 Both halves are fixed independently:
 
-- **Server — the paused-blind diff (`_snap_key`).** The change-detection key
-  for the global stream is the snapshot minus `stats.paused`. Only the DIFF
-  is blind: a pushed payload still carries the exact value. This is
+- **Server — the paused-blind diff, per row (`_row_key`).** Each wire row's
+  change-detection key is the row minus `stats.paused`. Only the DIFF is
+  blind: a pushed row still carries the exact value. This is
   behavior-preserving for the card's ⏱ chip because that shows elapsed
   MINUS paused — constant while paused accrues — so the frozen card a
   suppressed push leaves behind already displays the right number. An idle
   dashboard now receives zero `sessions` events.
+- **Server — wire deltas, not full resends.** Even with the paused-blind
+  diff, an ACTIVE dashboard legitimately changes every tick, and the full
+  snapshot re-sent each time measured 2.2MB/min per viewer — uncompressed,
+  because SSE frames can't ride `_send`'s gzip, so a remote/tunnel list page
+  paid all of it. The stream now sends the full `sessions` snapshot only on
+  connect and when the sid set OR ORDER changes (a new/parked session — a
+  delta can't express insertion), and a `sessions-delta`
+  `{rows: [changed wire rows]}` otherwise, which the client merges in place
+  by sid (`S.sessions[i] = row`) — safe precisely because membership/order
+  moves always arrive as full snapshots. During activity that's a few
+  hundred bytes per tick instead of ~77KB. Wire rows are also stripped of
+  `transcript_path` and `log` (`_wire_row`, both here and on
+  `/api/sessions`) — server-side paths the client never reads, ~20% of the
+  snapshot. An open page running PRE-delta JS ignores `sessions-delta` and
+  freezes until refresh — the `hello` BOOT_ID toast on reconnect covers the
+  redeploy, the same accepted staleness as every earlier protocol change.
 - **Client — shape-keyed patching.** `renderList()` computes `listShape()` —
   group order, which cards are VISIBLE (active + open folds), fold
   counts/open state — and while the shape matches the last full render (and

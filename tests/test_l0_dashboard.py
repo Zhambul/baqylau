@@ -459,20 +459,8 @@ def test_live_windows_memoized_by_ttl(monkeypatch):
     assert len(calls) == 2
 
 
-def test_global_sse_diff_is_paused_blind(dash, monkeypatch):
-    """The global stream's change detection (_snap_key) ignores
-    stats['paused'] — the scorebar's ~1/s awaiting-pause accumulator made the
-    snapshot differ on EVERY tick, forcing a full resend + client list
-    re-render per second on an idle dashboard. A paused-only bump must not
-    push a snapshot; a real change must — and its payload still carries the
-    exact paused value (only the DIFF is paused-blind)."""
-    import time
-    monkeypatch.setattr(DS, "GLOBAL_TICK_S", 0.05)
-    A.session_start({"session_id": "dashg", "cwd": "/w", "transcript_path": ""})
-    log = P.mirror_log("dashg")
-    S.incr(log, commands=1)
-    got = []
-    r = _req(dash + "/events")
+def _pump_global(r, got):
+    """Collect (event, data) frames from a global-SSE response into `got`."""
     def pump():
         pending = None
         try:
@@ -480,21 +468,90 @@ def test_global_sse_diff_is_paused_blind(dash, monkeypatch):
                 line = raw.decode("utf-8", "replace").rstrip("\n")
                 if line.startswith("event: "):
                     pending = line[len("event: "):]
-                elif line.startswith("data: ") and pending == "sessions":
-                    got.append(line[len("data: "):])
+                elif line.startswith("data: ") \
+                        and pending in ("sessions", "sessions-delta"):
+                    got.append((pending, line[len("data: "):]))
         except Exception:
             pass                               # stream torn down by r.close()
     threading.Thread(target=pump, daemon=True).start()
+
+
+def test_global_sse_diff_is_paused_blind(dash, monkeypatch):
+    """The global stream's per-row change detection (_row_key) ignores
+    stats['paused'] — the scorebar's ~1/s awaiting-pause accumulator made the
+    snapshot differ on EVERY tick, forcing a full resend + client list
+    re-render per second on an idle dashboard. A paused-only bump must push
+    NOTHING (no snapshot, no delta); a real change must — and its row still
+    carries the exact paused value (only the DIFF is paused-blind)."""
+    import time
+    monkeypatch.setattr(DS, "GLOBAL_TICK_S", 0.05)
+    A.session_start({"session_id": "dashg", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("dashg")
+    S.incr(log, commands=1)
+    got = []
+    r = _req(dash + "/events")
+    _pump_global(r, got)
     try:
         wait_until(lambda: len(got) == 1, desc="initial sessions snapshot")
+        assert got[0][0] == "sessions"
         S.incr(log, paused=1.25)               # the scorebar's awaiting bump
         time.sleep(0.5)                        # many ticks — must stay silent
         assert len(got) == 1
         S.incr(log, commands=1)                # a real change still pushes
-        wait_until(lambda: len(got) >= 2, desc="snapshot after a real change")
-        row = next(x for x in json.loads(got[-1]) if x["sid"] == "dashg")
+        wait_until(lambda: len(got) >= 2, desc="push after a real change")
+        ev, data = got[-1]
+        rows = json.loads(data)
+        rows = rows["rows"] if ev == "sessions-delta" else rows
+        row = next(x for x in rows if x["sid"] == "dashg")
         assert row["stats"].get("commands") == 2
         assert row["stats"].get("paused") == 1.25
+    finally:
+        r.close()
+
+
+def test_global_sse_delta_and_resync(dash, monkeypatch):
+    """The wire protocol (docs/dashboard.md, *The list renders once, then
+    patches*): a content-only change rides a `sessions-delta` carrying ONLY
+    the changed rows; a membership change (new session) forces a full
+    `sessions` resync — a delta can't express insertion. Wire rows are
+    stripped of the server-side paths (`transcript_path`, `log`) on both the
+    SSE and /api/sessions."""
+    monkeypatch.setattr(DS, "GLOBAL_TICK_S", 0.05)
+    A.session_start({"session_id": "dashd1", "cwd": "/w",
+                     "transcript_path": "/w/t1.jsonl"})
+    A.session_start({"session_id": "dashd2", "cwd": "/w",
+                     "transcript_path": "/w/t2.jsonl"})
+    for row in _get_json(dash + "/api/sessions"):
+        assert "transcript_path" not in row and "log" not in row
+    got = []
+    r = _req(dash + "/events")
+    _pump_global(r, got)
+    try:
+        wait_until(lambda: len(got) == 1, desc="initial snapshot")
+        S.incr(P.mirror_log("dashd1"), commands=1)     # content-only change
+        # the DB-file creation and the counter commit can land on different
+        # ticks (two deltas) — wait for the delta that carries the value
+        def delta_rows():
+            for ev, data in got[1:]:
+                if ev == "sessions-delta":
+                    rows = json.loads(data)["rows"]
+                    row = next((x for x in rows if x["sid"] == "dashd1"), None)
+                    if row and row["stats"].get("commands") == 1:
+                        return rows
+            return None
+        wait_until(lambda: delta_rows() is not None,
+                   desc="delta carrying the row change")
+        rows = delta_rows()
+        assert [x["sid"] for x in rows] == ["dashd1"]  # ONLY the changed row
+        assert "transcript_path" not in rows[0] and "log" not in rows[0]
+        assert all(ev == "sessions-delta" for ev, _ in got[1:])  # no resyncs
+        n = len(got)
+        A.session_start({"session_id": "dashd3", "cwd": "/w",
+                         "transcript_path": ""})       # membership change
+        wait_until(lambda: len(got) > n, desc="resync after a new session")
+        ev, data = got[-1]
+        assert ev == "sessions"                        # full snapshot, not delta
+        assert any(x["sid"] == "dashd3" for x in json.loads(data))
     finally:
         r.close()
 

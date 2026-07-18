@@ -454,20 +454,27 @@ def sessions_payload():
     return out
 
 
-def _snap_key(snap):
-    """The global stream's change-detection key: the snapshot minus
-    stats['paused']. The scorebar accrues that float ~once per second for
-    every session sitting at a prompt (its awaiting-pause accumulator), which
-    made consecutive snapshots differ on EVERY tick — an 84KB resend plus a
-    full client list re-render per second on an otherwise idle dashboard.
-    Only the diff is paused-blind: a pushed payload still carries the exact
-    value, and the card's ⏱ (elapsed MINUS paused) is constant while paused
-    accrues, so the frozen card a suppressed push leaves behind is already
-    showing the right number."""
+def _wire_row(r):
+    """A sessions row as the PAGE consumes it: minus `transcript_path` and
+    `log` — server-side paths the client never reads, ~20% of the snapshot's
+    bytes at 50 rows. sessions_payload keeps them internally (the notifier's
+    winmap and the title/ctx caches resolve through them); only the two wire
+    exits (`/api/sessions`, the global SSE) strip."""
+    return {k: v for k, v in r.items() if k not in ("transcript_path", "log")}
+
+
+def _row_key(wire_row):
+    """ONE wire row's change-detection key: the row minus stats['paused'].
+    The scorebar accrues that float ~once per second for every session
+    sitting at a prompt (its awaiting-pause accumulator), which would make
+    the row differ on EVERY tick. Only the diff is paused-blind: a pushed
+    row still carries the exact value, and the card's ⏱ (elapsed MINUS
+    paused) is constant while paused accrues, so the frozen card a
+    suppressed push leaves behind is already showing the right number."""
+    st = wire_row.get("stats") or {}
     return json.dumps(
-        [dict(r, stats={k: v for k, v in (r.get("stats") or {}).items()
-                        if k != "paused"}) for r in snap],
-        default=str)
+        dict(wire_row, stats={k: v for k, v in st.items() if k != "paused"}),
+        default=str, sort_keys=True)
 
 
 def accounts_payload():
@@ -1128,7 +1135,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         api = parts[1:]
         if api == ["sessions"]:
-            return self._json(sessions_payload())
+            return self._json([_wire_row(r) for r in sessions_payload()])
         if api == ["accounts"]:
             return self._json(accounts_payload())
         if api == ["dictate"]:
@@ -2119,18 +2126,24 @@ class Handler(BaseHTTPRequestHandler):
         changed boot id on reconnect is how an OPEN page learns its loaded JS
         may be stale; twice a redeploy shipped while a page sat open and its
         old handlers ran against the new server, audit-visibly), then a
-        `sessions` snapshot whenever the list changes (per _snap_key — the
-        paused-blind diff), plus every `notify` toast the watcher pushes."""
+        `sessions` snapshot on connect and whenever MEMBERSHIP or order
+        changes, a `sessions-delta` {rows: [changed wire rows]} when only row
+        contents moved (SSE frames are never gzipped, and the full 131-row
+        snapshot re-sent every active tick measured 2.2MB/min per remote
+        viewer — deltas are a few KB/min; the sid set + order pin the list
+        layout, so a delta can always merge in place by sid), plus every
+        `notify` toast the watcher pushes. Row diffs are paused-blind
+        (_row_key) and rows are wire-stripped (_wire_row)."""
         self._sse_start()
         q = NOTIFIER.register()
         try:
             if not self._sse("hello", {"boot": BOOT_ID}):
                 return
-            prev, beat = None, time.monotonic()
-            snap = sessions_payload()
-            if not self._sse("sessions", snap):
+            beat = time.monotonic()
+            wire = [_wire_row(r) for r in sessions_payload()]
+            if not self._sse("sessions", wire):
                 return
-            prev = _snap_key(snap)
+            keys = {r["sid"]: _row_key(r) for r in wire}
             while True:
                 drained = False
                 try:
@@ -2141,12 +2154,19 @@ class Handler(BaseHTTPRequestHandler):
                             return
                 except queue.Empty:
                     pass
-                snap = sessions_payload()
-                enc = _snap_key(snap)
-                if enc != prev:
-                    if not self._sse("sessions", snap):
+                wire = [_wire_row(r) for r in sessions_payload()]
+                cur = {r["sid"]: _row_key(r) for r in wire}
+                if list(cur) != list(keys):
+                    # a session appeared/vanished or the order moved — the
+                    # delta contract can't express that; full resync
+                    if not self._sse("sessions", wire):
                         return
-                    prev = enc
+                    keys = cur
+                elif cur != keys:
+                    changed = [r for r in wire if cur[r["sid"]] != keys[r["sid"]]]
+                    if not self._sse("sessions-delta", {"rows": changed}):
+                        return
+                    keys = cur
                 now = time.monotonic()
                 if drained or now - beat > HEARTBEAT_S:
                     beat = now

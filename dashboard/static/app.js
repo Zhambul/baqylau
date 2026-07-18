@@ -345,6 +345,22 @@ function connectGlobal() {
     renderAttention();
     checkJump();
   });
+  // Only changed rows (the server sends the full `sessions` snapshot for
+  // membership/order moves, so a delta always merges in place by sid) —
+  // during activity this replaces the full 131-row resend every tick
+  // (~2.2MB/min uncompressed over a tunnel) with a few hundred bytes.
+  es.addEventListener("sessions-delta", (e) => {
+    const rows = (JSON.parse(e.data) || {}).rows || [];
+    if (!rows.length) return;
+    const at = new Map(S.sessions.map((r, i) => [r.sid, i]));
+    for (const row of rows) {
+      const i = at.get(row.sid);
+      if (i !== undefined) S.sessions[i] = row;
+    }
+    if (!S.cur) renderList();
+    else updateHeadFromList();
+    renderAttention();
+  });
   es.addEventListener("notify", (e) => {
     const d = JSON.parse(e.data);
     const asking = d.kind === "asking";
