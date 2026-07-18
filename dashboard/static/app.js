@@ -268,6 +268,20 @@ function connectGlobal() {
     toast(asking ? "ask" : "done", t1, t2, () => { location.hash = "#/s/" + d.sid; });
     osNotify(t1, t2, d.sid);
   });
+  // hello carries the server's boot id: the EventSource reconnects on a
+  // server restart, and a CHANGED boot id means this open page's JS may be
+  // stale (a redeploy happened underneath) — twice a stale open page ran old
+  // handlers against a new server and the mismatch read as a product bug.
+  es.addEventListener("hello", (e) => {
+    const boot = (JSON.parse(e.data) || {}).boot;
+    if (!S.boot) { S.boot = boot; return; }
+    if (boot !== S.boot) {
+      S.boot = boot;
+      toast("ask", "dashboard updated",
+            "refresh the page to load the latest UI",
+            () => location.reload());
+    }
+  });
 }
 
 /* ---------- router ---------- */

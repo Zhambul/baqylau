@@ -485,6 +485,14 @@ def test_gzip_small_response_stays_plain(dash):
     assert json.loads(body)["items"] == []
 
 
+def test_sse_global_says_hello_with_boot_id(dash):
+    # the first /events frame is the server's boot id — the stale-open-page
+    # detector: a reconnecting EventSource that sees a different boot knows
+    # the server (and likely the JS it would serve) changed underneath it
+    data = json.loads(_sse_event(dash + "/events", "hello"))
+    assert data.get("boot") == DS.BOOT_ID
+
+
 def test_sse_is_never_gzipped(dash):
     # SSE holds the response open and writes incremental frames; buffering it
     # through gzip would break the stream, so it must stay identity-encoded

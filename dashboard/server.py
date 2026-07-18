@@ -109,6 +109,11 @@ QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 
 _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 
+# This process's identity, sent as the global SSE `hello` event. A page that
+# reconnects and sees a DIFFERENT boot id knows the server restarted under it
+# and its loaded JS may be stale (the client toasts "refresh").
+BOOT_ID = str(int(time.time() * 1000))
+
 
 # --- notification watcher -----------------------------------------------------------
 
@@ -1129,11 +1134,18 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- SSE loops --
     def sse_global(self):
-        """The all-sessions stream: a `sessions` snapshot whenever the list
-        changes, plus every `notify` toast the watcher pushes."""
+        """The all-sessions stream: a `hello` (the server's BOOT_ID — the
+        browser's EventSource auto-reconnects when the server restarts, and a
+        changed boot id on reconnect is how an OPEN page learns its loaded JS
+        may be stale; twice a redeploy shipped while a page sat open and its
+        old handlers ran against the new server, audit-visibly), then a
+        `sessions` snapshot whenever the list changes, plus every `notify`
+        toast the watcher pushes."""
         self._sse_start()
         q = NOTIFIER.register()
         try:
+            if not self._sse("hello", {"boot": BOOT_ID}):
+                return
             prev, beat = None, time.monotonic()
             snap = sessions_payload()
             if not self._sse("sessions", snap):
