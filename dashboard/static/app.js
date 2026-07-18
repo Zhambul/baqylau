@@ -2039,7 +2039,11 @@ function inRewindPick() {
 }
 
 function closeRewindMenu() {
-  document.querySelectorAll(".rwmenu").forEach(m => m.remove());
+  // :not(.qcmenu) — the quick-command pickers reuse the .rwmenu look but own
+  // their lifecycle (closeQuickMenu + the .qcwrap click-away); the feed
+  // delegation handler below calls this on ANY click, and without the
+  // exclusion it removed a quick-command menu in the same click that opened it
+  document.querySelectorAll(".rwmenu:not(.qcmenu)").forEach(m => m.remove());
 }
 
 // The per-message mode menu — Claude Code's own confirm options, minus the
