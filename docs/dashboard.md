@@ -373,8 +373,17 @@ option list, which clashes with the theme — the custom control renders both
 the closed state and the open list in the page's own cmenu language. It keeps
 the old call-site shape (`value` get/set, `fill()` rebuild-preserving-value)
 and native-ish keyboard handling (↑/↓/Enter/Space, Esc closes the menu without
-closing the modal via `stopPropagation`). The directory field's `<datalist>`
-completion stays native — it is freeform-with-suggestions, not a picker.
+closing the modal via `stopPropagation`). The directory field is freeform text
+with `suggest()` — the same menu language over the snapshot's distinct cwds —
+NOT a `<datalist>`: Safari renders that list in the system style too, and pops
+it open on focus, which made the prefilled field look already-clicked. Focus
+or click opens the menu — with the value blank or an exact known cwd it lists
+EVERYTHING (the picker look, current value highlighted), while typing filters
+by substring; Enter picks the highlighted row, but when that row already IS
+the value (or nothing is highlighted) it falls through to launch — so
+click-pick-Enter and type-path-Enter both behave. Opening the form focuses
+the *prompt* when the directory is already known (remembered or prefilled),
+the directory field only when it's blank.
 
 **The form remembers the last launch** (`claude-dash:ns-last` in
 localStorage, written only on a *successful* launch): the directory, model

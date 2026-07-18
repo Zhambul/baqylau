@@ -1322,8 +1322,21 @@ function openNewSession(prefillCwd, resumeSid) {
 }
 
 $newbtn.onclick = () => openNewSession("");
+// Esc in a live session view = interrupt the agent (the terminal's own Esc,
+// via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
+// slash menu, filter, dropdowns) either runs first here or stopPropagation()s
+// before the document level, so this is the fallback meaning of Esc.
+function interruptSession() {
+  const meta = (S.ses && S.ses.meta) || {};
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
+    .then(() => toast("done", "interrupted", "Esc sent to the session"))
+    .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
+}
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape" && !$modal.hidden) closeNewSession();
+  if (e.key !== "Escape") return;
+  if (!$modal.hidden) return closeNewSession();
+  interruptSession();
 });
 
 function setBadge(badge, tab) {
@@ -1368,36 +1381,43 @@ function renderSessionChrome(tab) {
     }
     l1.append(chip);
   }
-  // stop (live, windowed): closes the session's kitty tab — a graceful stop
-  // (Claude Code exits on the HUP and SessionEnd runs the normal lifecycle).
-  // Two-step confirm: first click arms for 4s, second click fires.
   if (meta.live && meta.kitty_window_id) {
+    // stop: interrupt the agent in place — an Escape key press in the
+    // session's window (the TUI's own interrupt; Esc here does the same).
+    // Immediate, no confirm: it matches pressing Esc in the terminal.
     const stop = el("button", "sstop", "■ stop");
-    stop.title = "close this session's terminal tab";
+    stop.title = "interrupt the agent (Esc)";
+    stop.onclick = () => interruptSession();
+    l1.append(stop);
+    // close: closes the session's kitty tab — a graceful stop (Claude Code
+    // exits on the HUP and SessionEnd runs the normal lifecycle).
+    // Two-step confirm: first click arms for 4s, second click fires.
+    const cls = el("button", "sstop", "✕ close");
+    cls.title = "close this session's terminal tab";
     let armed = null;
     const disarm = () => {
       armed = null;
-      stop.textContent = "■ stop";
-      stop.classList.remove("arm");
+      cls.textContent = "✕ close";
+      cls.classList.remove("arm");
     };
-    stop.onclick = () => {
+    cls.onclick = () => {
       if (!armed) {
-        stop.textContent = "close session?";
-        stop.classList.add("arm");
+        cls.textContent = "close session?";
+        cls.classList.add("arm");
         armed = setTimeout(disarm, 4000);
         return;
       }
       clearTimeout(armed);
       disarm();
-      stop.disabled = true;
+      cls.disabled = true;
       postJSON("/api/session/" + encodeURIComponent(S.cur) + "/stop", {})
-        .then(() => toast("done", "session stopped", "terminal tab closed"))
+        .then(() => toast("done", "session closed", "terminal tab closed"))
         .catch(e => {
-          stop.disabled = false;
-          toast("ask", "stop failed", (e && e.error) || "");
+          cls.disabled = false;
+          toast("ask", "close failed", (e && e.error) || "");
         });
     };
-    l1.append(stop);
+    l1.append(cls);
   }
   // resume (parked, with a cwd): reopen the new-session form preset to
   // `claude --resume <this sid>` in this session's directory
