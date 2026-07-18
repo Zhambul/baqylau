@@ -1183,6 +1183,18 @@ class Handler(BaseHTTPRequestHandler):
                 oldest, items = history(sid, key, _qint(url, "before"),
                                         _qint(url, "blocks") or HISTORY_BLOCKS)
                 return self._json({"oldest": oldest, "items": items})
+            if rest == ["backlog"]:
+                # The GET twin of the SSE fresh-connect backlog: same
+                # merged_backlog output, but through _send — which GZIPS it
+                # (8-9x on this HTML; SSE frames are never compressed), so a
+                # remote/tunnel page gets its first paint in one compressed
+                # round-trip. The page hands the returned cursors to the SSE,
+                # which then only streams increments (the reconnect contract).
+                row = API.session_row(sid)
+                key = P.sid_from_log(row["log"]) if row else sid
+                last, mpos, oldest, items = merged_backlog(sid, key)
+                return self._json({"last": last, "mpos": mpos,
+                                   "oldest": oldest, "items": items})
             if rest == ["activity"]:
                 return self._json(_mdify(plugins.activity(sid)) or {"entries": []})
             if len(rest) == 2 and rest[0] == "agent":

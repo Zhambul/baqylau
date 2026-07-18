@@ -418,6 +418,25 @@ def test_sessions_last_active_fallback_chain(dash, tmp_path):
     assert rows["dla4"]["last_active"] == rows["dla4"]["started_at"] > 0
 
 
+def test_http_backlog_endpoint(dash):
+    """/backlog is the gzip-able GET twin of the SSE fresh-connect payload —
+    the same merged_backlog output ({last, mpos, oldest, items}); the page
+    fetches it first and hands the cursors to the SSE, which then only
+    streams increments (SSE frames are never compressed — docs/dashboard.md,
+    *Lazy backlog*)."""
+    A.session_start({"session_id": "dashbl", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("dashbl")
+    O.emit(log, O.label("▶ one", (1, 2, 3), g="b1"),
+           O.code("echo hi", g="b1"), O.gut("hi", (1, 2, 3), g="b1"))
+    d = _get_json(dash + "/api/session/dashbl/backlog")
+    assert d["last"] >= 3 and d["oldest"] == 0
+    assert d["items"] and all("html" in it for it in d["items"])
+    # the cursor contract: an SSE connected with these cursors has nothing
+    # left to replay — the ops tail past `last` is empty
+    tail = _get_json(dash + "/api/session/dashbl/ops?after=%d" % d["last"])
+    assert tail["items"] == []
+
+
 def test_live_windows_memoized_by_ttl(monkeypatch):
     """_live_windows runs ONE `kitten @ ls` per _LIVE_TTL window and serves
     the memo in between (the ~21ms subprocess was the server's largest

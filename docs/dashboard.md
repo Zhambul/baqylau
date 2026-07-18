@@ -237,6 +237,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git`; agent rows carry their own `ctx` |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
+| `/api/session/<sid>/backlog` | the initial newest-`TAIL_BLOCKS` slice (`merged_backlog`): `{last, mpos, oldest, items}` — the gzip-able GET twin of the SSE fresh-connect backlog; the page fetches this first, then connects the session SSE with the cursors (*Lazy backlog* below) |
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
@@ -1539,6 +1540,19 @@ A long-running session's merged backlog is multi-MB of rendered HTML — sending
 it all in the first SSE `ops` event stalls the paint. So the initial event
 carries only the NEWEST `TAIL_BLOCKS` (80) stream **blocks**, and older history
 loads on demand.
+
+**The initial slice arrives over GET, not SSE.** Even the trimmed slice is
+100–400KB of HTML, and SSE frames are NEVER compressed (`_send`'s gzip is
+non-SSE only — compressing a held-open stream would buffer it), so a
+remote/tunnel page paid the full raw transfer before "waiting for activity…"
+cleared. `GET /api/session/<sid>/backlog` returns the identical
+`merged_backlog` payload (`{last, mpos, oldest, items}`) through `_send`,
+which gzips it 8–9× (391KB → 44KB measured). The page fetches it first, then
+connects the SSE WITH the returned cursors (`?after=<last>&mpos=<mpos>`), so
+the SSE fresh-connect backlog branch is skipped and the stream carries only
+increments — the exact no-gap resume contract a reconnect already uses. The
+zero-cursor SSE backlog stays as the fallback (the client falls back to it
+when the fetch fails, and direct SSE consumers still get a complete stream).
 
 **One merge core, two windows.** `_merge_order()` builds the full oldest→newest
 interleave once — as `(slot_id, kind, obj)` triples, deliberately UNRENDERED so

@@ -671,7 +671,24 @@ function showSession(sid, tab) {
         S.ses.running = d.running || {};
         renderSessionChrome(tab);
       });
-    connectSession(sid);
+    // Initial stream content over a plain GET, NOT the SSE fresh-connect
+    // backlog: _send gzips this HTML 8-9x, while SSE frames are never
+    // compressed — on a remote/tunnel connection that difference IS the
+    // "waiting for activity…" wait. The SSE then connects with the returned
+    // cursors and only streams increments (the same no-gap resume contract a
+    // reconnect uses); on any fetch failure it connects with zero cursors
+    // and the server-side SSE backlog covers us like before.
+    fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
+      .then(r => r.json())
+      .then(d => {
+        if (S.cur !== sid || !S.ses) return;
+        S.ses.lastId = Math.max(S.ses.lastId, d.last | 0);
+        S.ses.mpos = Math.max(S.ses.mpos, d.mpos | 0);
+        if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
+        if (d.items && d.items.length) appendItems(d.items);
+      })
+      .catch(() => {})
+      .finally(() => { if (S.cur === sid) connectSession(sid); });
   }
   closeAgentStream();                       // leaving any agent drill-down view
   S.ses.tab = tab;
