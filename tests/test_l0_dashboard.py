@@ -1190,7 +1190,7 @@ def test_post_stop_refuses_stale_window(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/stale2/message", {"text": "hi"})
     assert e.value.code == 409
-    assert fe.sent == []
+    assert fe.sent == [] and fe.pasted == []
 
 
 def test_closed_tab_not_marked_live(dash, monkeypatch):
@@ -1336,11 +1336,11 @@ def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     assert fe.keyed == [("71", ("ctrl+u",)), ("71", ("ctrl+k",))]
     assert fe.pasted == [("71", "edited message")]    # atomic paste, not send
     assert fe.sent == []
-    # a normal send uses send_text, no keys, no paste
+    # a normal send also pastes (atomic), but with NO kill keys first
     fe.keyed.clear(); fe.pasted.clear()
     _post(dash + "/api/session/cd1/message", {"text": "plain"})
-    assert fe.keyed == [] and fe.pasted == []
-    assert fe.sent == [("71", "plain")]
+    assert fe.keyed == []
+    assert fe.pasted == [("71", "plain")] and fe.sent == []
 
 
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):

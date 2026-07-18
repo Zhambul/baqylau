@@ -482,6 +482,7 @@ function connectSession(sid) {
     const d = JSON.parse(e.data);
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
     if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
+    if (S.ses && S.ses.cancelMode) S.ses.cancelMode(d.tab || "");
     // patch the open session's row so the attention bar reacts before the
     // next global snapshot lands (item 4: react to the per-session tab event)
     const row = S.sessions.find(r => r.sid === S.cur);
@@ -989,7 +990,11 @@ function buildComposer() {
     const text = ta.value.trim();
     if (!text || ta.disabled) return;
     ta.disabled = true; btn.disabled = true;
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", { text })
+    // after a mid-turn cancel-edit the TUI holds the restored draft, so this
+    // edited send must replace it (server: Ctrl+U/K then bracketed paste)
+    const msg = { text };
+    if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg)
       .then(d => {
         ta.value = ""; autoGrow(ta);
         if (d && d.queued) {
@@ -1499,7 +1504,7 @@ function rewindSession() {
     .then(r => {
       if (r && r.mode === "cancel-edit") {
         applyCancelEdit(r.restored || "");
-        toast("done", "cancelled", "message restored for editing in the kitty tab");
+        toast("done", "cancelled", "message restored below — edit and resend");
       } else {
         toast("done", "rewind",
               "/rewind sent — pick a checkpoint in the kitty tab");
@@ -1508,15 +1513,52 @@ function rewindSession() {
     .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
 }
 
-// Mirror Claude Code's mid-turn cancel-edit on the web, as far as the terminal
-// reliably allows: the cancelled prompt bubble is dropped from the feed (it's
-// abandoned — kitty un-renders it too). The EDIT itself happens in the kitty
-// tab, where Claude Code natively restored the message into the input: the web
-// can't reliably resend an edited copy, because the TUI mangles pasted text
-// after a cancel (drops leading bytes / inserts newlines, nondeterministically
-// — measured, not a timing bug), so a web-composer edit-and-resend would
-// corrupt the message. The restored text is shown as a dim hint under the
-// composer so you can see/copy what was cancelled while you edit in kitty.
+// The live tab state of the open session (the SSE `tab` event patches the
+// row; meta.tab is the initial fallback).
+function liveTab() {
+  return ((S.sessions.find(r => r.sid === S.cur) || {}).tab)
+      || ((S.ses && S.ses.meta && S.ses.meta.tab) || "");
+}
+
+// Tab states in which a turn is running, so Claude Code's mid-turn double-Esc
+// means CANCEL (not the rewind menu). Matches the server's BUSY_TABS — the
+// cancel button gates on this so an idle click never opens the rewind menu.
+const CANCEL_TABS = ["thinking", "working", "executing", "awaiting-bg",
+                     "awaiting-command"];
+
+// The Cancel button: Claude Code's mid-turn double-Esc — cancel the running
+// turn and restore your message into the composer for editing. Distinct from
+// ■ stop (a plain interrupt that keeps the partial work) and ↶ rewind (the
+// checkpoint menu). Only meaningful mid-turn; the button disables when idle,
+// and this guard is the belt-and-braces (an idle /rewind would type the
+// rewind command, not cancel).
+function cancelEdit() {
+  const meta = (S.ses && S.ses.meta) || {};
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  if (!CANCEL_TABS.includes(liveTab())) {
+    toast("done", "nothing to cancel", "no turn is running");
+    return;
+  }
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
+    .then(r => {
+      if (r && r.mode === "cancel-edit") {
+        applyCancelEdit(r.restored || "");
+        toast("done", "cancelled", "message restored below — edit and resend");
+      } else {
+        toast("done", "nothing to cancel", "no turn is running");
+      }
+    })
+    .catch(e => toast("ask", "cancel failed", (e && e.error) || ""));
+}
+
+// Mirror Claude Code's mid-turn cancel-edit fully on the web — no jumping to
+// the kitty tab: the restored message (the last user prompt) goes into the
+// composer for editing, the cancelled prompt bubble is dropped from the feed
+// (abandoned — kitty un-renders it too), and the NEXT composer send clears the
+// TUI's restored draft and resends as an atomic paste (clear_draft → the
+// server's Ctrl+U/K + bracketed paste, which is the ONLY reliable way to
+// replace the draft: a raw send drops leading bytes after a cancel). Prefill
+// only an EMPTY composer — never clobber text you were already typing.
 function applyCancelEdit(restored) {
   const ses = S.ses;
   if (!ses) return;
@@ -1527,26 +1569,15 @@ function applyCancelEdit(restored) {
   const feed = ses.stream;
   const bubble = feed && feed.querySelector(".msg.prompt");
   if (bubble) bubble.remove();
-  // show the restored text as a copyable hint (edit/resend happens in kitty)
-  if (ses.composer && restored) showCancelHint(ses, restored);
-}
-
-function showCancelHint(ses, text) {
-  const wrap = ses.composer.parentElement;   // the .composer flex row
-  if (!wrap || !wrap.parentElement) return;
-  let hint = ses.cancelHint;
-  if (!hint || !hint.isConnected) {
-    hint = el("div", "cancelhint");
-    wrap.before(hint);                       // a full-width row above the composer
-    ses.cancelHint = hint;
+  const ta = ses.composer;
+  if (ta && restored && !ta.value.trim()) {
+    ta.value = restored;
+    autoGrow(ta);
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
   }
-  hint.textContent = "";
-  hint.append(el("span", "chlabel", "cancelled — edit & resend in the kitty tab:"),
-              el("span", "chtext", text));
-  const x = el("button", "chx", "✕");
-  x.title = "dismiss";
-  x.onclick = () => hint.remove();
-  hint.append(x);
+  // the next send must REPLACE the TUI's restored draft, not append to it
+  ses.clearDraftNext = true;
 }
 
 // The Esc GESTURE is atomic — hold a lone press for ESC_DOUBLE_MS, then
@@ -1634,6 +1665,14 @@ function renderSessionChrome(tab) {
     stop.title = "interrupt the agent (Esc)";
     stop.onclick = () => interruptSession();
     l1.append(stop);
+    // cancel: mid-turn double-Esc — cancel the running turn and restore your
+    // message into the composer for editing. Enabled only while a turn runs.
+    const cancel = el("button", "sstop", "⊘ cancel");
+    cancel.title = "cancel this turn and edit your message (mid-turn double-Esc)";
+    cancel.onclick = () => cancelEdit();
+    ses.cancelMode = (tab) => { cancel.disabled = !CANCEL_TABS.includes(tab); };
+    ses.cancelMode(liveTab());
+    l1.append(cancel);
     // rewind: Claude Code's double-Esc — opens the checkpoint menu in the
     // kitty tab (the panel is the TUI's own; navigate it there)
     const rew = el("button", "sstop", "↶ rewind");

@@ -116,6 +116,9 @@ QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING,
              tabs.AWAITING_BG, tabs.AWAITING_COMMAND)
 
+DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
+#                                    (ctrl+u/k) and the bracketed paste of the
+#                                    edited resend (post_message clear_draft)
 DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 #                                    Escapes — measured 3/3 reliable mid-turn
 #                                    (the idle rewind-menu detection is flaky at
@@ -949,13 +952,23 @@ class Handler(BaseHTTPRequestHandler):
         """Type a message into a session's kitty window (the composer). 4xx when
         the session has no window (headless/daemon) or the text is empty; 503
         when no terminal resolves; else Frontend.send_text. Every attempt is a
-        `web-send` state_files row, failures also an A.error."""
+        `web-send` state_files row, failures also an A.error.
+
+        `clear_draft` (bool): the page sets it when resending an edited
+        message after a mid-turn cancel-edit — the TUI input still holds the
+        restored draft, so the send first kills the line (Ctrl+U to start +
+        Ctrl+K to end, so the cursor position doesn't matter) and then
+        delivers the text as a BRACKETED PASTE (paste_text): a raw send into
+        the just-cleared input drops leading bytes (measured — the mangle),
+        an atomic paste doesn't. This is what lets you edit AND resend from
+        the web without touching the kitty tab (docs/dashboard.md)."""
         body = self._post_guard()
         if body is None:
             return
         text = body.get("text")
         if not isinstance(text, str) or not text.strip():
             return self._json({"error": "empty text"}, 400)
+        clear_draft = bool(body.get("clear_draft"))
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
@@ -977,9 +990,22 @@ class Handler(BaseHTTPRequestHandler):
         # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
         # row too — "my message vanished" is answerable as "it queued mid-turn"
         tab = API.tab_states().get(win) or ""
-        ok = bool(fe.send_text(win, text))
+        if clear_draft:
+            # kill the restored draft (both directions), settle, then paste
+            fe.send_key(win, "ctrl+u")
+            fe.send_key(win, "ctrl+k")
+            time.sleep(DRAFT_CLEAR_GAP_S)
+        # ALWAYS a bracketed paste, not a raw send: a raw send is delivered as
+        # fast individual keystrokes and the TUI drops some depending on its
+        # input state (reported live: "test" arrived as "t"; measured 8/8
+        # clean for a bracketed paste, flaky for raw). The trailing CR is a
+        # separate keystroke OUTSIDE the paste, so it still submits — and a
+        # multi-line composer message pastes atomically instead of its internal
+        # newlines submitting it early.
+        ok = bool(fe.paste_text(win, text))
         A.state_file(log, sdb, "web-send",
-                     {"win": win, "chars": len(text), "ok": ok, "tab": tab})
+                     {"win": win, "chars": len(text), "ok": ok, "tab": tab,
+                      "clear_draft": clear_draft})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
