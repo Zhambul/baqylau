@@ -69,6 +69,21 @@
     on for its in-process transitions), so it stays off the turn's failure path. The
     two-row model (`subscriber` row **+** each handler's own decision row) that the
     audit queries expect (`handler != 'subscriber'`) is unchanged.
+  - **The sessions-row path refresh rides the same spot.** Right before the
+    subscriber row, the dispatcher calls `A.session_paths(d)`: Claude Code
+    RELOCATES a session's transcript when its cwd moves to another project dir
+    (measured 2026-07-18 via `EnterWorktree` — the file moves to the worktree
+    cwd's `projects/` slug dir and every later payload carries the new path), so
+    the start-time `sessions.cwd`/`project_slug`/`transcript_path` go stale and
+    every consumer of the row (the dashboard's title/ctx-probe/git chips, web
+    rename, `core/sessionapi.py`) points at a dead file. The refresh skips
+    `agent_id` events (an isolated subagent's payload carries the agent's OWN
+    worktree cwd — folding it in would flap the row; the main-session-only
+    invariant), no-ops when nothing changed, and audits an actual change as a
+    `session-paths` `state_files` row (old → new). Ordering matters: it runs
+    BEFORE the subscriber row lands, so the sessions row always agrees with the
+    latest recorded payload — the `anomalies` stale-transcript section compares
+    exactly those two.
   - **Isolation.** Each subsystem runs through `hookkit.run()` (audit-then-swallow),
     exactly the crash isolation separate processes gave it — one failing step never
     blocks the others or the turn.

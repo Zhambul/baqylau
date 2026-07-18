@@ -194,7 +194,14 @@ def route(d):
     # The universal subscriber row: records EVERY event's full payload (handler=
     # "subscriber"), alongside each functional handler's own decision row — the
     # two-row model claude_audit's queries already expect (handler != 'subscriber').
+    # session_paths runs FIRST: it refreshes the sessions row's cwd/transcript_path
+    # from this payload (Claude Code relocates the transcript when the session
+    # enters a worktree — the start-time row goes stale and the dashboard's
+    # title/ctx/git and web rename all break on the dead path), so by the time
+    # the subscriber row lands the sessions row already agrees with it (the
+    # stale-transcript anomaly compares exactly these two).
     try:
+        A.session_paths(d)
         A.hook_event(d, handler="subscriber")
     except Exception:
         pass

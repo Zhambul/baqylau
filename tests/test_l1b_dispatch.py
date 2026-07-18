@@ -333,3 +333,51 @@ def test_plan_posttool_clears_only_its_key(run_hook, test_env, session):
     assert _pending(s) is not None          # the ask stash survived
     run_hook(HOOK, P.stop(s))               # boundary clears the rest
     assert _pending(s) is None
+
+
+# ------------------------------------------------- sessions-row path refresh
+
+def test_relocated_transcript_refreshes_sessions_row(run_hook, test_env, session):
+    """Claude Code RELOCATES the transcript when the session's cwd moves to
+    another project dir (worktree entry — measured 2026-07-18): every later
+    payload carries the new path, and the dispatcher's A.session_paths must
+    fold it into the sessions row — the dashboard's title/ctx-probe/git chips
+    and web rename all read that row, and the stale start-time path broke them
+    all on a dead file (session e7192407)."""
+    s = session.make()
+    run_hook(HOOK, P.session_start(s))
+    new_cwd = os.path.join(s.cwd, ".claude", "worktrees", "wt")
+    new_t = s.transcript.replace(".jsonl", "-moved.jsonl")
+    run_hook(HOOK, P.base(s, "PostToolBatch", cwd=new_cwd, transcript_path=new_t))
+    row = oracle.q(test_env, "SELECT cwd, project_slug, transcript_path"
+                   " FROM sessions WHERE session_id=?", (s.sid,))
+    assert row == [(new_cwd, "wt", new_t)]
+    # The relocation moment itself is audited: ONE session-paths row, old -> new.
+    moves = [r for r in oracle.state_files(test_env, s.sid)
+             if r[1] == "session-paths"]
+    assert len(moves) == 1 and moves[0][0] == new_t
+    c = json.loads(moves[0][2])
+    assert (c["cwd"], c["transcript_path"]) == (new_cwd, new_t)
+    assert (c["cwd_old"], c["transcript_path_old"]) == (s.cwd, s.transcript)
+    # An unchanged later event is a no-op — no second row.
+    run_hook(HOOK, P.base(s, "PostToolBatch", cwd=new_cwd, transcript_path=new_t))
+    assert len([r for r in oracle.state_files(test_env, s.sid)
+                if r[1] == "session-paths"]) == 1
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_agent_events_never_refresh_sessions_row(run_hook, test_env, session):
+    """A subagent's inner events carry the MAIN transcript path but the AGENT'S
+    OWN cwd (worktree isolation) — folding those in would flap the session row
+    between the lead's cwd and each agent's, so agent_id events are skipped
+    (the main-session-only invariant)."""
+    s = session.make()
+    run_hook(HOOK, P.session_start(s))
+    run_hook(HOOK, P.base(s, "PostToolBatch", cwd="/agents/own/worktree",
+                          agent_id="agent-1"))
+    row = oracle.q(test_env, "SELECT cwd, transcript_path FROM sessions"
+                   " WHERE session_id=?", (s.sid,))
+    assert row == [(s.cwd, s.transcript)]
+    assert not [r for r in oracle.state_files(test_env, s.sid)
+                if r[1] == "session-paths"]
+    assert not oracle.errors(test_env, s.sid)

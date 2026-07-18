@@ -233,6 +233,16 @@ def _insert(conn, table, cols):
             "UPDATE sessions SET ended_at=?, end_reason=? WHERE session_id=?",
             (cols.get("ended_at") or time.time(), cols.get("end_reason"),
              cols.get("session_id")))
+    # "session_paths" refreshes the sessions row's location columns (see
+    # session_paths() below). Spool-safe like the two above: a locked DB at the
+    # relocation moment replays the UPDATE at ingest (idempotent — re-applying
+    # the same values is a no-op).
+    if table == "session_paths":
+        return conn.execute(
+            "UPDATE sessions SET cwd=?, project_slug=?, transcript_path=?"
+            " WHERE session_id=?",
+            (cols.get("cwd"), cols.get("project_slug"),
+             cols.get("transcript_path"), cols.get("session_id")))
     keys = list(cols.keys())
     # Interpolated identifiers only: `table`/`keys` come from this module's own
     # callers (the _SCHEMA vocabulary), never user input; values are bound.
@@ -473,7 +483,7 @@ def session_start(d):
                                 "CLAUDE_CODEX_", "CLAUDE_OTEL_"))
                or k in ("KITTY_WINDOW_ID",)}
     cols = dict(session_id=sid, cwd=d.get("cwd") or os.getcwd(),
-                project_slug=os.path.basename((d.get("cwd") or os.getcwd()).rstrip("/")),
+                project_slug=_project_slug(d.get("cwd") or os.getcwd()),
                 transcript_path=d.get("transcript_path") or "",
                 mirror_log=P.mirror_log(sid),
                 kitty_window_id=os.environ.get("KITTY_WINDOW_ID") or "",
@@ -502,6 +512,49 @@ def session_start(d):
         conn.commit()
     except Exception:
         _spool("sessions", cols)
+
+
+def _project_slug(cwd):
+    return os.path.basename((cwd or "").rstrip("/"))
+
+
+def session_paths(d):
+    """Keep the sessions row's location columns (cwd/project_slug/transcript_path)
+    in step with what the hooks report. Claude Code RELOCATES a session's
+    transcript when its cwd moves to another project directory — empirically
+    confirmed 2026-07-18 via EnterWorktree: the transcript moves to the worktree
+    cwd's projects/ slug dir and every later hook payload carries the new path —
+    so the start-time row goes stale and every consumer of it (the dashboard's
+    title/ctx-probe/git chips, web rename, sessionapi) points at a file that no
+    longer exists. Called by the dispatcher once per event; skips agent_id events
+    (an isolated subagent's cwd is its OWN worktree, not the session's — the
+    main-session-only invariant) and no-ops when nothing changed. On an actual
+    change it also leaves a `session-paths` state_files row (old -> new), so the
+    relocation moment is visible evidence, not just a silent UPDATE."""
+    if not enabled() or not isinstance(d, dict) or d.get("agent_id"):
+        return
+    sid, tpath, cwd = sid_of(d), d.get("transcript_path") or "", d.get("cwd") or ""
+    if not sid or not (tpath or cwd):
+        return
+    conn = _connect()
+    if conn is None:
+        return          # next event retries — the payload keeps carrying the paths
+    try:
+        row = conn.execute("SELECT cwd, transcript_path FROM sessions"
+                           " WHERE session_id=?", (sid,)).fetchone()
+    except Exception:
+        return          # no schema yet / unreadable — nothing to refresh
+    if row is None:     # pre-SessionStart event (or un-adopted fork): no row yet
+        return
+    old_cwd, old_tpath = row[0] or "", row[1] or ""
+    new_cwd, new_tpath = cwd or old_cwd, tpath or old_tpath
+    if (new_cwd, new_tpath) == (old_cwd, old_tpath):
+        return
+    event("session_paths", session_id=sid, cwd=new_cwd,
+          project_slug=_project_slug(new_cwd), transcript_path=new_tpath)
+    state_file(P.mirror_log(sid), new_tpath, "session-paths",
+               {"cwd": new_cwd, "cwd_old": old_cwd,
+                "transcript_path": new_tpath, "transcript_path_old": old_tpath})
 
 
 def session_end(d, reason=""):
@@ -903,6 +956,23 @@ ANOMALY_SECTIONS = [
      "SELECT MIN(ts), MAX(ts), COUNT(*) FROM hook_events WHERE session_id=? "
      "AND handler='subscriber' AND NOT EXISTS "
      "(SELECT 1 FROM sessions WHERE session_id=?) HAVING COUNT(*) > 0", 2),
+    # Claude Code RELOCATES the transcript when the session's cwd moves to another
+    # project dir (measured 2026-07-18 via EnterWorktree: the file moves to the
+    # worktree cwd's projects/ slug dir), and every later hook payload carries the
+    # new path. A.session_paths (run by the dispatcher on every event) keeps the
+    # sessions row in step; the row disagreeing with the LATEST subscriber
+    # payload means that refresh regressed — every consumer of the row (dashboard
+    # title/ctx-probe/git chips, web rename, sessionapi) points at a dead path.
+    # Pre-2026-07-18 sessions that entered a worktree flag here historically (the
+    # refresh didn't exist yet) — fix those rows by hand via sql-write.
+    ("sessions row transcript_path stale vs latest hook payload (relocation refresh regressed)",
+     "SELECT s.transcript_path, json_extract(h.payload,'$.transcript_path') "
+     "FROM sessions s JOIN hook_events h ON h.id = "
+     "(SELECT MAX(id) FROM hook_events WHERE session_id=s.session_id "
+     "AND handler='subscriber' "
+     "AND COALESCE(json_extract(payload,'$.transcript_path'),'') != '') "
+     "WHERE s.session_id=? "
+     "AND json_extract(h.payload,'$.transcript_path') != s.transcript_path", 1),
     # A genuine sid-fork NEVER gets its own SessionStart — that is the whole basis
     # for adoption. So a sid that ADOPTED a predecessor yet ALSO has its own
     # SessionStart is a MIS-adoption: an independent new session wrongly consumed a

@@ -1460,6 +1460,22 @@ follow the same rule: the Task description
 (`desc` from the state DB's agents table) IS the agent's name; the raw
 `agent_id` drops to the subtitle.
 
+**The `transcript_path` the title keys off must stay fresh.** Claude Code
+RELOCATES a session's transcript when its cwd moves to another project
+directory (measured 2026-07-18 via `EnterWorktree`: the file moves to the
+worktree cwd's `projects/` slug dir, and every later hook payload carries the
+new path). The audit `sessions` row is written at SessionStart, so without a
+refresh it points at a dead file for the rest of the session — `session_title`
+swallows the `getsize` OSError and the card/header silently show NO name (the
+e7192407 shape), and the ctx probe, git chips (cwd), web rename, and rewind's
+transcript checks break the same way. The fix lives at the WRITE side, not
+here: the hook dispatcher calls `A.session_paths(payload)` on every event
+(docs/wiring.md), which folds a changed cwd/`project_slug`/`transcript_path`
+back into the sessions row and audits the move as a `session-paths`
+`state_files` row. A read-time fallback in the dashboard was rejected: it
+would fix the title while leaving every other consumer of the row (sessionapi,
+the CLI, future tooling) stale.
+
 **The time chip is recency, not age.** Every time-flavored thing on the list
 — the card's "2m ago" chip, group order, the 3d archive boundary, the resume
 dropdown's "· 2m ago" — keys off `last_active` (`sessions_payload` →

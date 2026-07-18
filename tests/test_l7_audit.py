@@ -118,6 +118,16 @@ BUG_SHAPES = [
         ("INSERT INTO ops(ts,session_id,producer,pid,op) VALUES(2,?,'x.py',1,"
          "'{\"t\": \"gut\", \"s\": \"an identical long output line the tailer"
          " re-read and painted twice\", \"c\": [1,2,3]}')", (SID,))]),
+    ("transcript_path stale vs latest hook payload", [
+        # A sessions row still holding the start-time path while the latest
+        # subscriber payload carries the relocated one (worktree entry) = the
+        # dispatcher's A.session_paths refresh regressed.
+        ("INSERT INTO sessions(session_id,cwd,project_slug,transcript_path,"
+         "started_at) VALUES(?,'/w','w','/old.jsonl',1)", (SID,)),
+        ("INSERT INTO hook_events(ts,session_id,hook,tool_name,agent_id,"
+         "handler,decision,pid,payload)"
+         " VALUES(1,?,'PostToolUse','','','subscriber','',1,"
+         "'{\"transcript_path\": \"/new.jsonl\"}')", (SID,))]),
     ("SessionEnd transcript fallback fired despite OTEL data", [
         # A SessionEnd fallback fold decision AND a bump-otel row for the same
         # session = the otel_seen gate broke and cost was double-counted.
