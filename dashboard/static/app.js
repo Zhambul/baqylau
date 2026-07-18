@@ -222,9 +222,10 @@ function acctPill(a) {
 function resetAgo(epochS) {
   const s = epochS - Date.now() / 1000;
   if (s <= 0) return "now";
-  if (s < 3600) return "in " + (s / 60 | 0) + "m";
-  if (s < 86400) return "in " + (s / 3600 | 0) + "h" + String(s % 3600 / 60 | 0).padStart(2, "0") + "m";
-  return "in " + (s / 86400 | 0) + "d" + String(s % 86400 / 3600 | 0).padStart(2, "0") + "h";
+  if (s < 60) return "in <1m";
+  const d = s / 86400 | 0, h = s % 86400 / 3600 | 0, m = s % 3600 / 60 | 0;
+  const parts = d ? [d + "d", h + "h"] : h ? [h + "h", m + "m"] : [m + "m"];
+  return "in " + parts.filter(p => !p.startsWith("0")).join(" ");
 }
 
 function renderAccounts(list) {
@@ -1059,6 +1060,86 @@ function closeNewSession() {
   $modal.textContent = "";
 }
 
+// Custom dropdown replacing the form's native <select>s — Safari ignores most
+// select styling and always opens the native white macOS popup, which clashes
+// with the theme. This renders both the closed control and the open list in
+// the dashboard's own language (the cmenu pattern). API shaped for the call
+// sites: value get/set, fill() (rebuild, keep the current value if it
+// survives, else fall back to the first option), has()/add() for the
+// resumeSid injection.
+function dropdown() {
+  const root = el("div", "nsdrop");
+  const btn = el("button", "nsinput nsdropbtn");
+  btn.type = "button";
+  const lab = el("span", "nsdroplab");
+  btn.append(lab, el("span", "nsdropcaret", "▾"));
+  const menu = el("div", "nsdropmenu");
+  menu.hidden = true;
+  root.append(btn, menu);
+
+  let items = [];                      // [{v, txt}]
+  let val = "";
+  let hi = -1;                         // highlighted index while open
+  const label = () => {
+    const it = items.find(i => i.v === val);
+    lab.textContent = it ? it.txt : "";
+  };
+  const paint = () => {
+    menu.textContent = "";
+    items.forEach((it, i) => {
+      const row = el("div", "nsdropitem" + (i === hi ? " sel" : ""), it.txt);
+      row.onmousedown = (e) => e.preventDefault();   // keep btn focus → no blur
+      row.onclick = () => choose(i);
+      menu.append(row);
+    });
+  };
+  const nudge = () => {
+    const sel = menu.querySelector(".sel");
+    if (sel) sel.scrollIntoView({ block: "nearest" });
+  };
+  const close = () => { menu.hidden = true; };
+  const open = () => {
+    hi = Math.max(0, items.findIndex(i => i.v === val));
+    paint();
+    menu.hidden = false;
+    nudge();
+  };
+  const choose = (i) => {
+    if (items[i]) { val = items[i].v; label(); }
+    close();
+  };
+  btn.onclick = () => (menu.hidden ? open() : close());
+  btn.onblur = close;
+  btn.onkeydown = (e) => {
+    if (menu.hidden) {
+      if (["ArrowDown", "ArrowUp", "Enter", " "].includes(e.key)) {
+        e.preventDefault();
+        open();
+      }
+      return;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); hi = Math.min(items.length - 1, hi + 1); paint(); nudge(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); hi = Math.max(0, hi - 1); paint(); nudge(); }
+    else if (e.key === "Enter" || e.key === " ") { e.preventDefault(); choose(hi); }
+    // stopPropagation: the document-level Escape closes the whole modal
+    else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+  };
+
+  return {
+    el: root,
+    fill(pairs) {
+      items = pairs.map(([v, txt]) => ({ v, txt }));
+      if (!items.some(i => i.v === val)) val = items[0] ? items[0].v : "";
+      label();
+      if (!menu.hidden) { hi = Math.max(0, items.findIndex(i => i.v === val)); paint(); }
+    },
+    add(v, txt) { items.push({ v, txt }); },
+    has: (v) => items.some(i => i.v === v),
+    get value() { return val; },
+    set value(v) { val = v; label(); },
+  };
+}
+
 function openNewSession(prefillCwd, resumeSid) {
   $modal.textContent = "";
   const panel = el("div", "nspanel");
@@ -1088,27 +1169,23 @@ function openNewSession(prefillCwd, resumeSid) {
   // new sid; the adopt machinery and the jump watch handle that on their own.
   const startRow = el("label", "nsfield");
   startRow.append(el("span", "nslabel", "start from"));
-  const start = el("select", "nsinput");
-  startRow.append(start);
+  const start = dropdown();
+  startRow.append(start.el);
   const fillStart = () => {
     const cwd = dir.value.trim();
-    const prev = start.value;
-    start.textContent = "";
-    const add = (v, txt) => { const o = el("option", "", txt); o.value = v; start.append(o); };
-    add("", "a fresh conversation");
-    add("continue", "continue the most recent conversation");
+    const items = [["", "a fresh conversation"],
+                   ["continue", "continue the most recent conversation"]];
     for (const row of S.sessions.filter(r => r.cwd === cwd).slice(0, 15))
-      add("resume:" + row.sid,
-          "resume · " + (row.title || shortSid(row.sid))
-          + (row.started_at ? " · " + ago(row.started_at) : ""));
-    start.value = [...start.options].some(o => o.value === prev) ? prev : "";
+      items.push(["resume:" + row.sid,
+                  "resume · " + (row.title || shortSid(row.sid))
+                  + (row.started_at ? " · " + ago(row.started_at) : "")]);
+    start.fill(items);
   };
   fillStart();
   dir.oninput = fillStart;
   if (resumeSid) {
     const v = "resume:" + resumeSid;
-    if (![...start.options].some(o => o.value === v))
-      { const o = el("option", "", "resume · " + shortSid(resumeSid)); o.value = v; start.append(o); }
+    if (!start.has(v)) start.add(v, "resume · " + shortSid(resumeSid));
     start.value = v;
   }
 
@@ -1116,13 +1193,9 @@ function openNewSession(prefillCwd, resumeSid) {
   const pick = (label, opts) => {
     const row = el("label", "nsfield");
     row.append(el("span", "nslabel", label));
-    const sel = el("select", "nsinput");
-    for (const [v, txt] of opts) {
-      const o = el("option", "", txt);
-      o.value = v;
-      sel.append(o);
-    }
-    row.append(sel);
+    const sel = dropdown();
+    sel.fill(opts);
+    row.append(sel.el);
     return [row, sel];
   };
   // account picker — the subscription to launch under (a switcher alias like
@@ -1134,18 +1207,12 @@ function openNewSession(prefillCwd, resumeSid) {
   acctRow.style.display = "none";
   const fillAccts = (list) => {
     acctRow.style.display = list.length ? "" : "none";
-    const prev = acct.value;
-    acct.textContent = "";
-    for (const a of list) {
+    acct.fill(list.map(a => {
       const u = a.usage;
       const usage = u && (typeof u.five_hour === "number" || typeof u.seven_day === "number")
         ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
-      const o = el("option", "", a.slug + " · " + a.label + usage);
-      o.value = a.slug;
-      acct.append(o);
-    }
-    acct.value = [...acct.options].some(o => o.value === prev)
-      ? prev : (list[0] ? list[0].slug : "");
+      return [a.slug, a.slug + " · " + a.label + usage];
+    }));
   };
   if (S.accts) fillAccts(S.accts);
   fetch("/api/accounts").then(r => r.json())
