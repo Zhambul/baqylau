@@ -1198,9 +1198,10 @@ class Handler(BaseHTTPRequestHandler):
         A.state_file(log, sdb, "web-rewind-to",
                      {"win": win, "ok": True, "tab": tab, "mode": mode,
                       "ups": ups, "steps": res["steps"],
-                      "digit": res["digit"]})
+                      "digit": res["digit"], "degraded": res["degraded"]})
         restored = text if mode in ("conversation", "both") else ""
-        return self._json({"ok": True, "mode": mode, "restored": restored})
+        return self._json({"ok": True, "mode": mode, "restored": restored,
+                           "degraded": res["degraded"]})
 
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press

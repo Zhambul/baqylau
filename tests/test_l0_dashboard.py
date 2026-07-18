@@ -1376,8 +1376,13 @@ class _MenuFE(_FakeFE):
             rows.append("  Enter to continue · Esc to cancel")
             return "\n".join(rows)
         if self.state == "confirm":
+            # the real confirm screen states the code consequence — absent
+            # code options always pair with "The code will be unchanged."
+            has_code = any("code" in o.lower() for o in self.options)
             rows = ["", "  Rewind", "", "  Confirm you want to restore to the"
-                    " point before you sent this message:", ""]
+                    " point before you sent this message:", "",
+                    "  The code will be restored +1 -1 in f.txt." if has_code
+                    else "  The code will be unchanged.", ""]
             for i, o in enumerate(self.options):
                 rows.append(("  ❯ " if i == 0 else "    ")
                             + "%d. %s" % (i + 1, o))
@@ -1405,7 +1410,7 @@ def test_post_rewind_to_drives_the_menu(dash, monkeypatch):
                         "mode": "both", "ups": 1})
     assert code == 200
     assert json.loads(body) == {
-        "ok": True, "mode": "both",
+        "ok": True, "mode": "both", "degraded": False,
         "restored": "make beta\nsecond line the menu never shows"}
     assert fe.picked == (1, "Restore code and conversation")
     assert ("31", "/rewind") in fe.sent
@@ -1437,7 +1442,8 @@ def test_post_rewind_to_stale_hint_self_corrects(dash, monkeypatch):
     code, body = _post(dash + "/api/session/rwt3/rewind-to",
                        {"text": "p three", "mode": "code", "ups": 3})
     assert code == 200
-    assert json.loads(body) == {"ok": True, "mode": "code", "restored": ""}
+    assert json.loads(body) == {"ok": True, "mode": "code", "restored": "",
+                                "degraded": False}
     assert fe.picked == (2, "Restore code")
 
 
@@ -1468,6 +1474,24 @@ def test_post_rewind_to_not_found_bails_closed(dash, monkeypatch):
     assert fe.state == "idle" and fe.picked is None
 
 
+def test_post_rewind_to_both_degrades_when_code_unchanged(dash, monkeypatch):
+    # "restore code and conversation" at a checkpoint with NO code changes:
+    # the code is already in the target state, Claude Code omits the code
+    # options as no-ops — the driver degrades to "Restore conversation"
+    # (verified against the screen's "The code will be unchanged." line)
+    # instead of failing (reported live 2026-07-18)
+    fe = _MenuFE(prompts=["p"],
+                 options=("Restore conversation", "Summarize from here",
+                          "Summarize up to here", "Never mind"))
+    _rewind_env(monkeypatch, "rwt7", "37", fe)
+    code, body = _post(dash + "/api/session/rwt7/rewind-to",
+                       {"text": "p", "mode": "both", "ups": 1})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "mode": "both", "restored": "p",
+                                "degraded": True}
+    assert fe.picked == (0, "Restore conversation")
+
+
 def test_post_rewind_to_missing_option_bails_closed(dash, monkeypatch):
     # asking for a code restore at a checkpoint with no code changes: the
     # option isn't on the confirm menu — back out (both menus closed), 409
@@ -1479,7 +1503,11 @@ def test_post_rewind_to_missing_option_bails_closed(dash, monkeypatch):
         _post(dash + "/api/session/rwt6/rewind-to",
               {"text": "p", "mode": "code", "ups": 1})
     assert e.value.code == 409
-    assert json.loads(e.value.read())["step"] == "option"
+    err = json.loads(e.value.read())
+    assert err["step"] == "option"
+    # the bail explains WHY the option is absent (the screen said the code
+    # is unchanged) — "rewind failed" alone sent the user to the audit
+    assert "no code changes to revert" in err["error"]
     assert fe.state == "idle" and fe.picked is None
 
 

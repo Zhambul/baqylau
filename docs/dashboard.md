@@ -565,7 +565,14 @@ reading the screen back (`Frontend.get_text`), never pressing blind:
 - Enter, then pick the restore option **by parsed LABEL, never position**:
   the confirm menu's numbering SHIFTS with content (with code changes
   `Restore conversation` is `2.`, without them it is `1.`) — a digit key
-  selects immediately;
+  selects immediately. A `both` request at a checkpoint with NO code
+  changes **degrades to `Restore conversation`** rather than failing
+  (verified against the screen's own "The code will be unchanged." line):
+  the code is already in the target state, which is exactly why Claude
+  Code omits the code options there — the response and audit row carry
+  `degraded: true`, and the page's toast says so. A `code` request there
+  still bails (`option`), now with the no-code-changes reason in the
+  error;
 - poll until the menu is gone. ANY unverified step raises `MenuError`
   (its `.step` names the failing stage: `open`/`find`/`confirm`/`option`/
   `close`) after Escape-closing whatever was open — the session is never

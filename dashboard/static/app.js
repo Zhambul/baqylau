@@ -1679,7 +1679,11 @@ function doRewindTo(bubble, mode, menu) {
       rewindPickMode(false);
       if (r && r.restored) {
         applyRewind(bubble, r.restored);
-        toast("done", "rewound", mode === "both"
+        // degraded: "both" at a no-code-change checkpoint — the code was
+        // already in that state, so only the conversation had to move
+        toast("done", "rewound", r.degraded
+              ? "no code changes there — conversation restored, edit below"
+              : mode === "both"
               ? "code + conversation restored — edit and resend below"
               : "conversation restored — edit and resend below");
       } else {

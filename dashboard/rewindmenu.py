@@ -45,6 +45,9 @@ MODE_LABELS = {
 MENU_HEADER = "Rewind"                       # first-menu region anchor
 MENU_FOOT = "Enter to continue"              # first-menu open detector
 CONFIRM_HEADER = "Confirm you want to restore"   # second-menu open detector
+CODE_UNCHANGED = "The code will be unchanged."   # confirm-menu line when the
+#                  checkpoint has no code changes — the verifiable reason the
+#                  code-restoring options are absent (vs "will be restored…")
 
 POLL_S = 0.15          # screen re-read beat while waiting for a menu state
 OPEN_TIMEOUT_S = 4.0   # /rewind typed → menu visible (slash command latency)
@@ -212,14 +215,28 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
     if not ok:
         _bail(fe, win, sleep)
         raise MenuError("confirm", "confirm menu never appeared")
-    digit = confirm_options(screen).get(MODE_LABELS[mode])
+    opts = confirm_options(screen)
+    unchanged = CODE_UNCHANGED in menu_region(screen)
+    digit = opts.get(MODE_LABELS[mode])
+    degraded = False
+    if not digit and mode == "both" and unchanged:
+        # no code changes since that checkpoint ⇒ the code is ALREADY in the
+        # target state and Claude Code omits the code-restoring options as
+        # no-ops — a conversation restore IS "both" here, so degrade to it
+        # instead of failing the request (reported live: "restore code and
+        # conversation" on a no-change checkpoint bailed as an error)
+        digit = opts.get(MODE_LABELS["conversation"])
+        degraded = bool(digit)
     if not digit:
         _bail(fe, win, sleep)
-        raise MenuError("option", "%r not offered here" % MODE_LABELS[mode])
+        raise MenuError("option", "%r not offered here%s" % (
+            MODE_LABELS[mode],
+            " — no code changes to revert at that checkpoint"
+            if unchanged else ""))
     fe.send_key(win, digit)
     screen, ok = _wait(fe, win, lambda s: not menu_region(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:
         _bail(fe, win, sleep)
         raise MenuError("close", "menu still open after selecting")
-    return {"steps": steps, "digit": digit}
+    return {"steps": steps, "digit": digit, "degraded": degraded}
