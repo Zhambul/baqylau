@@ -13,6 +13,7 @@ import os
 import stat
 import subprocess
 import shutil
+import time
 
 from frontends.base import Frontend, INACTIVE_FG, TAB_COLOR_NONE
 
@@ -28,6 +29,12 @@ KITTEN_QUERY_TIMEOUT_S = 5
 # point of the raw path is sub-millisecond latency, so give up fast and let
 # the caller fall back to the kitten subprocess.
 RC_SOCKET_TIMEOUT_S = 0.5
+# Gap between send_text's message write and its Enter (CR) write. Delivered in
+# the SAME write, Claude Code's chunk-based paste detection sometimes read
+# text+CR as one pasted chunk, turning the CR into a draft newline instead of a
+# submit (timing-dependent → intermittent). The gap makes the CR arrive as its
+# own stdin read = an unambiguous Enter keypress.
+SEND_ENTER_GAP_S = 0.15
 # The remote-control protocol version stamped into every @kitty-cmd envelope
 # (what a current kitten client sends; kitty accepts any version <= its own).
 KITTY_RC_VERSION = [0, 26, 0]
@@ -81,14 +88,22 @@ def kitten_get_text(kitten, listen, win_id, extent="screen"):
 
 def kitten_send_text(kitten, listen, win, text):
     """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
-    (with a trailing CR = Enter) precisely so it is never a shell argument NOR a
-    kitten escape vector — `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b`
-    interpretation. True on rc 0. Bounded by KITTEN_TIMEOUT_S like every other
-    mutating call."""
+    precisely so it is never a shell argument NOR a kitten escape vector —
+    `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b` interpretation. The
+    Enter (CR) is a SEPARATE second call after SEND_ENTER_GAP_S (see its
+    comment: one write let paste detection swallow the CR into the draft).
+    True only when both writes rc 0. Bounded by KITTEN_TIMEOUT_S like every
+    other mutating call."""
     try:
-        r = subprocess.run([kitten, "@", "--to", listen, "send-text",
-                            "--match", f"id:{win}", "--stdin"],
-                           input=(text + "\r").encode("utf-8"),
+        argv = [kitten, "@", "--to", listen, "send-text",
+                "--match", f"id:{win}", "--stdin"]
+        r = subprocess.run(argv, input=text.encode("utf-8"),
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           timeout=KITTEN_TIMEOUT_S)
+        if r.returncode != 0:
+            return False
+        time.sleep(SEND_ENTER_GAP_S)
+        r = subprocess.run(argv, input=b"\r",
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            timeout=KITTEN_TIMEOUT_S)
         return r.returncode == 0

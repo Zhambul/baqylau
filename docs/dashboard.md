@@ -247,7 +247,15 @@ the browser must preflight, and we never let the preflight pass
 **Windowed sessions only:** a headless / `claude daemon run` session has no
 window (same scoping as tab colours and toasts), so it returns `409` — the
 composer is disabled with a hint for it. Empty text is `400`. The text rides
-kitten's `--stdin` verbatim (no shell, no escape interpretation).
+kitten's `--stdin` verbatim (no shell, no escape interpretation). **The Enter
+is a separate second `send-text` call** (`SEND_ENTER_GAP_S`, 150 ms, after the
+message write — `frontends/kitty.py kitten_send_text`): appended to the same
+write, Claude Code's chunk-based paste detection sometimes coalesced text+CR
+into one stdin read and treated the CR as a pasted *newline* — the message sat
+in the terminal's draft with a trailing blank line, never submitted, and only
+sometimes (whether the TUI's event loop picked the bytes up in one read or two
+is scheduling). A gap-separated CR always arrives as its own read = a real
+Enter keypress; both writes must succeed for the send to report `ok`.
 
 **Queued messages.** Claude Code natively queues a message typed while a turn
 is running and delivers it when the turn ends — a composer send rides exactly

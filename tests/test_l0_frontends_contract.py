@@ -300,25 +300,28 @@ def test_set_tab_color_socket_miss_falls_back_to_kitten(monkeypatch, tmp_path):
                       "inactive_bg=#7f0000", "inactive_fg=#c0c4cc"]]
 
 
-def test_send_text_uses_stdin_with_enter(monkeypatch):
+def test_send_text_uses_stdin_with_split_enter(monkeypatch):
     """The control-plane composer: text rides STDIN (verbatim, no escape
-    interpretation) with a trailing CR, never a shell/kitten-escape vector."""
-    calls = {}
+    interpretation), never a shell/kitten-escape vector — and the Enter (CR)
+    is a SEPARATE second write (one write let Claude Code's paste detection
+    read text+CR as a pasted chunk: the CR became a draft newline, no
+    submit)."""
+    calls = []
 
     class _R:
         returncode = 0
 
     def fake_run(argv, input=None, **kw):
-        calls["argv"] = argv
-        calls["input"] = input
+        calls.append((argv, input))
         return _R()
 
     monkeypatch.setattr(fk.subprocess, "run", fake_run)
+    monkeypatch.setattr(fk.time, "sleep", lambda s: None)
     fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
     assert fe.send_text("7", "hello world") is True
-    assert calls["argv"] == ["/k", "@", "--to", "unix:/tmp/x", "send-text",
-                             "--match", "id:7", "--stdin"]
-    assert calls["input"] == b"hello world\r"
+    argv = ["/k", "@", "--to", "unix:/tmp/x", "send-text",
+            "--match", "id:7", "--stdin"]
+    assert calls == [(argv, b"hello world"), (argv, b"\r")]
 
 
 def test_send_text_rc_nonzero_is_false(monkeypatch):
@@ -326,6 +329,22 @@ def test_send_text_rc_nonzero_is_false(monkeypatch):
         returncode = 1
 
     monkeypatch.setattr(fk.subprocess, "run", lambda *a, **k: _R())
+    assert _rc_fe("/tmp/x").send_text("7", "hi") is False
+
+
+def test_send_text_enter_write_failure_is_false(monkeypatch):
+    """A message write that lands but an Enter write that fails is a FAILED
+    send (the text sits in the draft, unsent) — the endpoint must see False
+    so it audits `send failed` instead of reporting ok."""
+    rcs = iter([0, 1])
+
+    def fake_run(argv, input=None, **kw):
+        class _R:
+            returncode = next(rcs)
+        return _R()
+
+    monkeypatch.setattr(fk.subprocess, "run", fake_run)
+    monkeypatch.setattr(fk.time, "sleep", lambda s: None)
     assert _rc_fe("/tmp/x").send_text("7", "hi") is False
 
 
