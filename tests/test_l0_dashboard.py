@@ -285,6 +285,31 @@ def test_http_sessions_and_ops(dash):
     assert ov["sid"] == "dash1" and ov["live"] is True
 
 
+def test_sessions_stats_cache_by_db_sig(dash, monkeypatch):
+    """The list poll memoizes stats_at by _db_sig (DB file + -wal stat):
+    repeat polls with no writes must not re-open the DB, and a product-API
+    write — which may land only in the WAL, never touching the main file's
+    stat — must invalidate on the next poll."""
+    A.session_start({"session_id": "dashc", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("dashc")
+    S.incr(log, commands=1)
+    calls = []
+    real = DS.API.stats_at
+    monkeypatch.setattr(DS.API, "stats_at",
+                        lambda p: calls.append(p) or real(p))
+    row = next(r for r in _get_json(dash + "/api/sessions")
+               if r["sid"] == "dashc")
+    assert row["stats"].get("commands") == 1
+    n = len(calls)
+    assert n >= 1
+    _get_json(dash + "/api/sessions")
+    assert len(calls) == n             # unchanged DB → served from the memo
+    S.incr(log, commands=1)            # a WAL-only write must still invalidate
+    row = next(r for r in _get_json(dash + "/api/sessions")
+               if r["sid"] == "dashc")
+    assert row["stats"].get("commands") == 2 and len(calls) > n
+
+
 def test_ops_endpoint_is_main_agent_only(dash, monkeypatch):
     """core.ops.emit stamps the producer source (ambient set_src/$CLAUDE_OPS_SRC
     or the explicit src= kwarg) and the dashboard's ops payload drops stamped

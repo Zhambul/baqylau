@@ -117,6 +117,10 @@ CREATE INDEX IF NOT EXISTS ix_ops_sid    ON ops(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_err_sid    ON errors(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_spawn_sid  ON spawns(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_state_sid  ON state_files(session_id, ts);
+-- sessionapi.sid_chain() resolves the adopt map on nearly every read; without
+-- this the WHERE action='adopt' scan walks the whole table (~19ms warm, ~700ms
+-- cold at 1GB) and the dashboard pays it ~16x per /api/session request.
+CREATE INDEX IF NOT EXISTS ix_state_act  ON state_files(action);
 CREATE INDEX IF NOT EXISTS ix_pane_sid   ON pane_events(session_id, ts);
 CREATE INDEX IF NOT EXISTS ix_otel_sid   ON otel(session_id, ts);
 """

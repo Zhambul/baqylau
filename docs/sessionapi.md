@@ -56,6 +56,14 @@ the new sid); `sid_chain()` walks those rows both directions and queries
 `session_id IN (<chain>)`. `state_db_for()` walks the chain newest→oldest
 because after adoption the unified DB lives under the newest sid.
 
+Because *every* audit-backed function resolves the chain first, the adopt
+lookup sits on every read path — the dashboard alone runs it ~16× per
+`/api/session` request and a few times per SSE tick. It is covered by a
+dedicated audit index (`ix_state_act` on `state_files(action)`); without it
+the `action='adopt'` predicate full-scans the audit's second-largest table
+(~19ms warm, ~700ms with a cold page cache at 1GB), which once put the
+session endpoint at 300–1000ms.
+
 ## The parse/paint split (`plugins/claude_code/transcript.py`)
 
 Drill-down fidelity lives in the transcripts, and the only code that

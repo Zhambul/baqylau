@@ -363,6 +363,49 @@ def session_ctx(tpath, main=False):
     return ctx
 
 
+_STATS = {}       # state-db path -> (sig, stats): the list poll must not open
+#                   50 sqlite connections per tick — parked DBs never change
+#                   and idle live ones change rarely. The sig is _db_sig (DB
+#                   file AND -wal stat), not (path, size): a live writer
+#                   appends to the WAL without touching the main file until
+#                   checkpoint, so the main file's stat alone would serve
+#                   stale numbers for exactly the sessions that move.
+
+_ACCT = {}        # state-db path -> (sig, (account kv, usage kv)): same
+#                   _db_sig idea — the accounts strip re-scans the same 50
+#                   session DBs per fetch, nearly all parked.
+
+
+def _db_sig(path):
+    """A change fingerprint for a sqlite state DB: (mtime_ns, size) of the DB
+    file plus its -wal sidecar when present. None when the file is missing —
+    callers delegate to the uncached read (which handles absence itself)."""
+    try:
+        st = os.stat(path)
+    except OSError:
+        return None
+    try:
+        wal = os.stat(path + "-wal")
+        return (st.st_mtime_ns, st.st_size, wal.st_mtime_ns, wal.st_size)
+    except OSError:
+        return (st.st_mtime_ns, st.st_size)
+
+
+def _db_cached(cache, sdb, read):
+    """(path, _db_sig) memo over an sdb read. The sig is taken BEFORE the
+    read, so a write racing the read can only make the cached value newer
+    than its sig — the next poll re-reads; never the stale direction."""
+    sig = _db_sig(sdb)
+    if sig is None:
+        return read(sdb)
+    hit = cache.get(sdb)
+    if hit and hit[0] == sig:
+        return hit[1]
+    val = read(sdb)
+    cache[sdb] = (sig, val)
+    return val
+
+
 def sessions_payload():
     """The sessions list, enriched with what the list view shows per row:
     scoreboard stats (read-only, live or parked), the tab state, and the
@@ -383,7 +426,7 @@ def sessions_payload():
         if (row.get("live") and live_wins is not None
                 and row.get("kitty_window_id") and row["sid"] not in live_wins):
             row["live"] = False
-        st = API.stats_at(sdb)
+        st = _db_cached(_STATS, sdb, API.stats_at)
         row["stats"] = st
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
         row["title"] = session_title(row.get("transcript_path") or "")
@@ -406,8 +449,9 @@ def accounts_payload():
         sdb = P.state_db(row["log"])
         if not os.path.isfile(sdb):
             sdb = P.parked_db(row["log"])
-        acc = API.kv_at(sdb, "account") or {}
-        usage = API.kv_at(sdb, "usage")
+        acc, usage = _db_cached(
+            _ACCT, sdb,
+            lambda p: (API.kv_at(p, "account") or {}, API.kv_at(p, "usage")))
         if not usage:
             continue
         slug = acc.get("slug") or ""

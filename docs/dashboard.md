@@ -89,6 +89,21 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   never compressed — it holds the response open and writes incremental frames
   through its own `_sse_*` writers, so buffering it through gzip would break the
   stream.
+- **Poll-path reads are memoized by change fingerprint.** The 1s global SSE
+  tick rebuilds `sessions_payload` (≤`SESSIONS_LIMIT` rows) and the accounts
+  strip re-scans the same DBs — uncached, that opened ~50 sqlite connections
+  per tick (~55ms) for data that almost never changes. Two memo dicts
+  (`_STATS`, `_ACCT`) key on `_db_sig`: the `(mtime_ns, size)` stat of the
+  state-DB file AND its `-wal` sidecar. The WAL half is load-bearing — a live
+  writer appends to the WAL without touching the main file until checkpoint,
+  so a `(path, size)` key (the `_TITLES` pattern, fine for append-only
+  transcripts) would serve stale numbers for exactly the sessions that are
+  moving. The sig is taken *before* the read, so a racing write can only make
+  a cached value newer than its sig (re-read next tick), never staler. The
+  other historical poll-path sink was `sessionapi.sid_chain()`'s adopt-map
+  scan on every audit-backed read — fixed at the source with the audit index
+  `ix_state_act` (docs/sessionapi.md, *Fork-aware queries*), which took
+  `/api/session` from 300–1000ms to ~25ms.
 - **Audit shape**: `start` spawns `serve` through `core/spawn.spawn_detached`
   (the `A.spawn` row), and `serve()` runs inside `core.tail.stream_lifecycle`
   (kind `dashboard`) — the server's lifetime is a `streams` row whose
