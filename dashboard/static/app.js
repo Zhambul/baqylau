@@ -106,10 +106,17 @@ function ago(ts) {
 }
 // the session's recency: last_active (server-computed — transcript mtime,
 // with ended_at / state-DB-mtime / started_at fallbacks) for everything
-// time-flavored on the list — the card chip, group order, the archive
-// boundary, the resume dropdown. started_at survives for rows pushed by a
+// time-flavored on the list — the card chip, the archive boundary, the
+// resume dropdown. started_at survives for rows pushed by a
 // not-yet-restarted server.
 function lastActive(row) { return row.last_active || row.started_at || 0; }
+// GROUP order sorts by this instead: started_at is fixed for the session's
+// whole life, so the order only moves when a session starts/resumes
+// somewhere — last_active is the transcript mtime, which grows on every
+// stream write, and sorting groups on it made two concurrently-live projects
+// leapfrog each other every SSE tick (order is part of listShape, so each
+// flip forced a full list rebuild — the page visibly jolted).
+function orderKey(row) { return row.started_at || lastActive(row); }
 function proj(row) {
   const c = row.cwd || "";
   return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
@@ -434,8 +441,8 @@ function groupSessions(rows) {
     groups.get(k).push(row);
   }
   const ordered = [...groups.entries()].sort((a, b) =>
-    Math.max(...b[1].map(lastActive))
-    - Math.max(...a[1].map(lastActive)));
+    Math.max(...b[1].map(orderKey))
+    - Math.max(...a[1].map(orderKey)));
   const now = Date.now() / 1000;
   // recency, not age: a week-old session touched yesterday isn't archived
   const old = r => !lastActive(r) || now - lastActive(r) > ARCHIVE_S;

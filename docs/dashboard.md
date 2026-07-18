@@ -1445,9 +1445,14 @@ stay ONE group (the per-card `⋔` chip is what tells them apart, and the group
 header's "+" launches new sessions at the main checkout). A parked session
 whose worktree was since REMOVED degrades to its own cwd-keyed group
 (`git_info` returns null once the `.git` file is gone — the branch chip drops
-the same way). Groups are ordered by their most recently ACTIVE session
-(`last_active`, the recency paragraph below); the directory name lives on the
-group header, so the card itself is titled by the SESSION's name. That name comes
+the same way). Groups are ordered by their newest session's `started_at`
+(app.js `orderKey`), NOT `last_active`: started_at is fixed for the session's
+whole life, so the order only moves when a session starts or resumes
+somewhere. Sorting groups on `last_active` (transcript mtime, which grows on
+every stream write) made two concurrently-live projects leapfrog each other
+every SSE tick — and group order is part of `listShape`, so each flip forced
+a full list rebuild and the page visibly jolted. The directory name lives on
+the group header, so the card itself is titled by the SESSION's name. That name comes
 from `plugins.session_title(transcript_path)` — a path-keyed fan-out (the
 list view already holds every row's path; 50 sid-keyed `session_row()`
 resolutions per poll would be waste). The claude_code provider
@@ -1489,9 +1494,10 @@ would fix the title while leaving every other consumer of the row (sessionapi,
 the CLI, future tooling) stale.
 
 **The time chip is recency, not age.** Every time-flavored thing on the list
-— the card's "2m ago" chip, group order, the 3d archive boundary, the resume
+— the card's "2m ago" chip, the 3d archive boundary, the resume
 dropdown's "· 2m ago" — keys off `last_active` (`sessions_payload` →
-`_last_active`), not `started_at`: the transcript's mtime (the file grows on
+`_last_active`), not `started_at` (GROUP order is the one deliberate
+exception — `started_at`, for stability; the grouping section above): the transcript's mtime (the file grows on
 every turn — the same activity signal interrupt-watch and escape-recheck
 trust), else the audit `ended_at`, else the state DB's mtime (the audit-less
 minimal parked rows carry no transcript path), else `started_at`. **Why not
