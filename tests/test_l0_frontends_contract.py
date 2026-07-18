@@ -63,6 +63,7 @@ CALLS = {
     "resize_pane":        ((("claude_mirror", "sid-1"), "horizontal", 4), 1),
     # control plane (writes)
     "send_text":          (("7", "hello"), False),
+    "paste_text":         (("7", "hello"), False),
     "send_key":           (("7", "escape"), False),
     "launch_tab":         (("/tmp", ["claude"]), False),
     "close_tab":          (("7",), False),
@@ -364,6 +365,38 @@ def test_launch_tab_argv(monkeypatch):
                       "--cwd", "/proj", "claude", "fix the bug"]]
     monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
     assert fe.launch_tab("/proj", ["claude"]) is False
+
+
+def test_launch_pane_keep_focus_only_when_app_focused(monkeypatch):
+    """launch_pane passes --keep-focus ONLY while some kitty OS window is
+    focused (kitty is the frontmost app): kitty's keep-focus focus-restore
+    raises the OS window whenever the app is in the background, which on
+    macOS ACTIVATES kitty over whatever the user is in — the web-launch
+    steal came from exactly these pane opens at SessionStart. Background →
+    plain launch (the pane holds inner focus; the app stays behind)."""
+    calls = []
+    monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
+
+    monkeypatch.setattr(fk, "kitten_ls",
+                        lambda k, listen: [{"is_focused": True, "tabs": []}])
+    fe.launch_pane(["mirror.py"], "vsplit")
+    assert "--keep-focus" in calls[-1]
+
+    monkeypatch.setattr(fk, "kitten_ls",
+                        lambda k, listen: [{"is_focused": False, "tabs": []}])
+    fe.launch_pane(["mirror.py"], "vsplit")
+    assert "--keep-focus" not in calls[-1]
+
+    monkeypatch.setattr(fk, "kitten_ls", lambda k, listen: [])  # ls failure
+    fe.launch_pane(["mirror.py"], "vsplit")                     # → don't steal
+    assert "--keep-focus" not in calls[-1]
+
+    # keep_focus=False callers never get the flag regardless of focus
+    monkeypatch.setattr(fk, "kitten_ls",
+                        lambda k, listen: [{"is_focused": True, "tabs": []}])
+    fe.launch_pane(["mirror.py"], "vsplit", keep_focus=False)
+    assert "--keep-focus" not in calls[-1]
 
 
 def test_app_id_is_the_kitty_bundle_id():

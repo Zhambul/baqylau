@@ -63,8 +63,8 @@ class Frontend:
         """The OS-level application identifier of the terminal APP (macOS
         bundle id — kitty: net.kovidgoyal.kitty), or "" when unknown. Lets a
         consumer recognise "the terminal just became the frontmost app"
-        without naming a specific terminal (the dashboard's focus-bounce
-        guard after a web launch)."""
+        without naming a specific terminal (the dashboard's passive
+        steal watch after a web launch — audit-only, never moves focus)."""
         return ""
 
     # --- tab colour ---------------------------------------------------------
@@ -152,6 +152,15 @@ class Frontend:
         terminal acknowledged the write, else False."""
         return False
 
+    def paste_text(self, win, text):
+        """Like send_text, but deliver `text` as an ATOMIC bracketed paste
+        (then Enter). A raw send_text is read as fast individual keystrokes
+        and a TUI whose input just changed state (e.g. right after a cancel
+        cleared its draft) drops the leading bytes; a bracketed paste is read
+        whole (measured — docs/dashboard.md, the cancel-edit resend). True on
+        success, else False."""
+        return False
+
     def send_key(self, win, *keys):
         """Press key(s) into window `win` as KEY EVENTS (e.g. "escape",
         "ctrl+c") — encoded for the program's current keyboard mode, which
@@ -162,10 +171,11 @@ class Frontend:
 
     def launch_tab(self, cwd, argv):
         """Open a NEW tab whose window runs `argv` with working directory
-        `cwd`. Truthy on success, False on failure. May focus the new tab
-        inside the terminal; callers who must keep the OS-level focus where
-        it is (the web dashboard — its user is in a browser) compensate
-        themselves (the dashboard's macOS focus-bounce guard)."""
+        `cwd`. Truthy on success, False on failure. May select the new tab
+        inside the terminal, but must NOT make the terminal APP take OS-level
+        focus when it is in the background (the web dashboard's caller — its
+        user is in a browser; kitty: a plain launch is safe, --keep-focus is
+        the thing that activates a background app)."""
         return False
 
     def close_tab(self, win):

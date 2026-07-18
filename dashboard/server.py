@@ -657,33 +657,26 @@ def launch_argv(words, cmd="claude"):
     return [sh, "-lic", '%s "$@"' % cmd, cmd, *words]
 
 
-# --- macOS focus bounce ----------------------------------------------------------------
-# Launching a tab can make macOS activate the terminal app over the browser
-# the user launched from (kitty raises itself in some window/Space
-# arrangements — and its --keep-focus flag makes this WORSE for a
-# background-app launch, see frontends/kitty.py kitten_launch_tab). There is
-# no launch flag that prevents it from outside the terminal, so the launch
-# endpoint compensates after the fact: remember the frontmost app at click
-# time, watch for the TERMINAL taking over, and hand focus straight back.
-# `lsappinfo` + `open -b` are plain LaunchServices calls — no Apple-events /
+# --- macOS focus steal watch (audit-only) -----------------------------------------------
+# A web launch used to make macOS activate kitty over the browser: the plain
+# tab launch is innocent, but the new session's SessionStart opened its
+# mirror/scorebar panes with kitty's `--keep-focus`, whose focus-restore
+# raises the OS window whenever the app is in the background — i.e. exactly
+# when launching from a browser (live-measured steals at 2.2s/3.0s/5.8s, one
+# per pane op). That is fixed at the SOURCE: frontends/kitty.py launch_pane
+# passes --keep-focus only while kitty is the frontmost app. This watch is
+# the PASSIVE regression evidence for that fix: it records when the terminal
+# app takes the frontmost spot during a launch's startup window and NEVER
+# touches focus itself. (An active bounce-back shipped on 2026-07-18 and was
+# reverted the same day: it cannot distinguish kitty stealing focus from the
+# user deliberately switching to kitty, so it yanked the user back to the
+# browser when they genuinely wanted the terminal. Do not re-add it.)
+# `lsappinfo` is a plain LaunchServices query — no Apple-events /
 # accessibility permission prompts, unlike System Events AppleScript.
-REFOCUS_POLL_S = 0.25              # frontmost-app poll cadence after a launch
-REFOCUS_POLLS = 120                # ~30s watch window: the launch steal lands
-                                   # within the first poll, but the session's
-                                   # OWN startup re-steals repeatedly —
-                                   # SessionStart opens the mirror/scorebar
-                                   # panes and sizes them (more kitty window
-                                   # creations; live-measured steals at 2.2s /
-                                   # 3.0s / 5.8s, with a straggler past 12s
-                                   # that outlived the first ~12s window) — so
-                                   # the watch must outlive the whole startup
-                                   # with margin
-REFOCUS_MAX = 8                    # bounce cap per launch (each pane open can
-                                   # steal again; a runaway fight is worse)
-REFOCUS_SETTLE_S = 0.5             # post-bounce grace before the next steal
-                                   # check — an activation that lands mid-Space-
-                                   # switch animation must not read as a fresh
-                                   # steal and double-count against the cap
+STEALWATCH_POLL_S = 0.5            # frontmost-app poll cadence after a launch
+STEALWATCH_POLLS = 60              # ~30s — outlives the whole session startup
+                                   # (claude boot + SessionStart pane opens,
+                                   # stragglers measured past 12s)
 
 
 def _front_app():
@@ -703,48 +696,29 @@ def _front_app():
         return ""
 
 
-def _activate_app(bundle_id):
-    """LaunchServices activation of an already-running app. True on rc 0."""
-    try:
-        return subprocess.run(["open", "-b", bundle_id], capture_output=True,
-                              timeout=5).returncode == 0
-    except Exception:
-        return False
-
-
-def _bounce_focus(before, terminal_app):
-    """The post-launch focus watch (runs on a daemon thread — the HTTP
-    response must never wait on it): whenever the terminal app becomes
-    frontmost inside the watch window, re-activate `before`. NOT
-    once-and-done: the launch steal is only the first — the new session's
-    SessionStart opens its mirror/scorebar panes seconds later and each pane
-    creation can steal again (live-verified: a single bounce got re-stolen by
-    the pane opens ~3s in), so the watch keeps bouncing (capped at
-    REFOCUS_MAX) until the window closes. ONLY the terminal triggers a bounce
-    — a deliberate user app-switch mid-window must not be yanked back. The
-    outcome is audited as a `web-launch-refocus` state_files row (`clean` =
-    the terminal never took over, `bounced xN to <app>`, `activate failed`)."""
+def _steal_watch(before, terminal_app):
+    """The post-launch focus watch (a daemon thread — the HTTP response never
+    waits on it): record each TRANSITION of the frontmost app onto the
+    terminal during the watch window, purely for the audit trail. Observes,
+    never intervenes — the fix for the steal lives in the terminal frontend
+    (launch_pane's conditional --keep-focus); a non-empty `steals` list on a
+    current build means some launch path still activates the terminal and
+    names the second it happened. One `web-launch-steal-watch` state_files
+    row per watch (`steals` = seconds-into-watch of each takeover; [] =
+    clean)."""
     t0 = time.time()
-    steals = []        # seconds-into-watch of each detected steal — the audit
-    #                    evidence for WHAT keeps stealing (a burst right after
-    #                    a bounce = the activation not sticking; spread points
-    #                    = the session startup's successive pane opens)
-    outcome = "clean"
-    for _ in range(REFOCUS_POLLS):
-        time.sleep(REFOCUS_POLL_S)
+    steals, prev = [], before
+    for _ in range(STEALWATCH_POLLS):
+        time.sleep(STEALWATCH_POLL_S)
         now = _front_app()
-        if now and now != before and now == terminal_app:
+        if not now:
+            continue
+        if now == terminal_app and prev != terminal_app:
             steals.append(round(time.time() - t0, 2))
-            if not _activate_app(before):
-                outcome = "activate failed"
-                break
-            outcome = "bounced x%d to %s" % (len(steals), before)
-            if len(steals) >= REFOCUS_MAX:
-                break
-            time.sleep(REFOCUS_SETTLE_S)
-    A.state_file("", "", "web-launch-refocus",
+        prev = now
+    A.state_file("", "", "web-launch-steal-watch",
                  {"before": before, "terminal": terminal_app,
-                  "outcome": outcome, "steals": steals})
+                  "steals": steals})
 
 
 # --- the HTTP handler ------------------------------------------------------------------
@@ -1268,11 +1242,11 @@ class Handler(BaseHTTPRequestHandler):
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
             A.state_file("", "", "web-launch", dict(opts, ok=False))
             return self._json({"error": "no terminal available"}, 503)
-        # the focus-bounce guard (see the block above launch_argv): the
-        # frontmost app must be captured BEFORE the launch — the steal can
+        # the passive steal watch (see the block above the Handler class):
+        # the frontmost app must be captured BEFORE the launch — a steal can
         # land before the kitten call returns. Skipped when the terminal was
-        # ALREADY frontmost at click time — a user launching from a
-        # terminal-front arrangement keeps what they had.
+        # ALREADY frontmost at click time (nothing to steal) or the frontend
+        # has no OS app identity (the inert stub, off-mac).
         term = fe.app_id()
         before = _front_app() if term else ""
         ok = bool(fe.launch_tab(cwd, argv))
@@ -1281,8 +1255,8 @@ class Handler(BaseHTTPRequestHandler):
             A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
             return self._json({"error": "launch failed"}, 502)
         if before and before != term:
-            threading.Thread(target=_bounce_focus, args=(before, term),
-                             daemon=True, name="web-launch-refocus").start()
+            threading.Thread(target=_steal_watch, args=(before, term),
+                             daemon=True, name="web-launch-steal-watch").start()
         return self._json({"ok": True})
 
     def static(self, name):

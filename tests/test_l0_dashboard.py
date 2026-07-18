@@ -821,6 +821,7 @@ class _FakeFE:
 
     def __init__(self, send_ok=True, launch_ok=True):
         self.sent = []
+        self.pasted = []
         self.launched = []
         self.closed = []
         self.keyed = []
@@ -842,6 +843,10 @@ class _FakeFE:
 
     def send_text(self, win, text):
         self.sent.append((win, text))
+        return self.send_ok
+
+    def paste_text(self, win, text):
+        self.pasted.append((win, text))
         return self.send_ok
 
     def send_key(self, win, *keys):
@@ -899,7 +904,10 @@ def test_post_message_success(dash, monkeypatch):
     # no tab state recorded → not mid-turn → queued False
     assert code == 200 and json.loads(body) == {"ok": True, "queued": False,
                                                 "tab": ""}
-    assert fe.sent == [("42", "hello claude")]
+    # composer sends go through a bracketed paste (atomic — a raw send drops
+    # bytes depending on TUI state), never send_text
+    assert fe.pasted == [("42", "hello claude")]
+    assert fe.sent == []
 
 
 def test_post_message_reports_queued_mid_turn(dash, monkeypatch):
@@ -1020,79 +1028,74 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     assert fe.launched[-1][1][4:] == [evil]
 
 
-def _bounce_rig(monkeypatch, fronts, bundle="app.term"):
-    """Wire the focus-bounce guard for a test: a _FakeFE with an OS app id, a
+class _WatchAudit:
+    """Wraps the server's audit handle: records web-launch-steal-watch rows
+    in-memory (the watch thread's audit write cross-thread would land in the
+    spool, invisible to a same-process DB read) and delegates everything else
+    to the real module."""
+
+    def __init__(self, real):
+        self.real, self.rows = real, []
+
+    def __getattr__(self, name):
+        return getattr(self.real, name)
+
+    def state_file(self, log, path, action, content=""):
+        if action == "web-launch-steal-watch":
+            self.rows.append(content)
+        return self.real.state_file(log, path, action, content)
+
+
+def _watch_rig(monkeypatch, fronts, bundle="app.term"):
+    """Wire the steal watch for a test: a _FakeFE with an OS app id, a
     scripted _front_app sequence (call 1 = the pre-launch capture, the rest =
-    the watch polls; the last value repeats), a recorded _activate_app, and a
-    fast poll cadence. Returns (fe, activated, front_calls) — front_calls
-    counts _front_app probes, the watch-progress observable."""
+    the watch polls; the last value repeats), a fast poll cadence, a recorded
+    audit. Returns (fe, rows) — rows collects the watch's audit content."""
     fe = _FakeFE()
     fe.bundle_id = bundle
-    seq, activated, front_calls = list(fronts), [], []
-
-    def front():
-        front_calls.append(1)
-        return seq.pop(0) if len(seq) > 1 else seq[0]
-
-    monkeypatch.setattr(DS, "_front_app", front)
-    monkeypatch.setattr(DS, "_activate_app",
-                        lambda b: activated.append(b) or True)
-    monkeypatch.setattr(DS, "REFOCUS_POLL_S", 0.01)
-    monkeypatch.setattr(DS, "REFOCUS_SETTLE_S", 0)
-    return fe, activated, front_calls
+    seq = list(fronts)
+    monkeypatch.setattr(DS, "_front_app",
+                        lambda: seq.pop(0) if len(seq) > 1 else seq[0])
+    monkeypatch.setattr(DS, "STEALWATCH_POLL_S", 0.005)
+    aud = _WatchAudit(DS.A)
+    monkeypatch.setattr(DS, "A", aud)
+    return fe, aud.rows
 
 
-def test_new_session_bounces_focus_when_terminal_steals(dash, monkeypatch,
-                                                        tmp_path):
-    # the terminal becomes frontmost after the launch → the guard hands focus
-    # back to the app that was frontmost at click time (the user's browser).
-    # A PERSISTENT steal (here: the terminal wins every poll) keeps getting
-    # bounced — the session's own startup re-steals after the launch steal
-    # (SessionStart's pane opens) — capped at REFOCUS_MAX, then the watch ends.
-    fe, activated, front_calls = _bounce_rig(monkeypatch,
-                                             ["com.browser", "app.term"])
+def test_new_session_steal_watch_records_takeovers(dash, monkeypatch,
+                                                   tmp_path):
+    # the watch records each TRANSITION onto the terminal (steal → back to the
+    # browser → steal again = 2 entries, not one per poll while stolen), and
+    # NEVER intervenes — there is deliberately no focus-changing code left in
+    # the dashboard (the 2026-07-18 bounce-back yanked users who genuinely
+    # switched to the terminal; the fix lives in launch_pane's conditional
+    # --keep-focus instead)
+    fe, rows = _watch_rig(
+        monkeypatch, ["com.browser", "app.term", "app.term", "com.browser",
+                      "app.term"])
     _inject_fe(monkeypatch, fe)
     code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
     assert code == 200 and fe.launched
-    wait_until(lambda: len(activated) == DS.REFOCUS_MAX,
-               desc="kept bouncing up to the cap")
-    assert activated == ["com.browser"] * DS.REFOCUS_MAX
-    # the watch ended AT the cap: one capture + one poll per bounce, no more
-    assert len(front_calls) == 1 + DS.REFOCUS_MAX
+    wait_until(lambda: rows, desc="steal watch wrote its audit row")
+    assert len(rows[0]["steals"]) == 2
+    assert rows[0]["before"] == "com.browser"
+    assert rows[0]["terminal"] == "app.term"
 
 
-def test_new_session_bounce_recovers_intermittent_resteal(dash, monkeypatch,
-                                                          tmp_path):
-    # steal → bounce → quiet → RE-steal (the pane open) → bounce again; the
-    # watch never stops at the first bounce
-    fe, activated, _ = _bounce_rig(
-        monkeypatch, ["com.browser", "app.term", "com.browser", "app.term",
-                      "com.browser"])
+def test_new_session_steal_watch_clean_run(dash, monkeypatch, tmp_path):
+    # frontmost never lands on the terminal (unchanged, or the user switching
+    # to some OTHER app) → an empty steals list
+    fe, rows = _watch_rig(monkeypatch, ["com.browser", "com.other"])
     _inject_fe(monkeypatch, fe)
     code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
     assert code == 200
-    wait_until(lambda: activated == ["com.browser", "com.browser"],
-               desc="both steals bounced")
+    wait_until(lambda: rows, desc="steal watch wrote its audit row")
+    assert rows[0]["steals"] == []
 
 
-def test_new_session_no_bounce_when_focus_unchanged_or_user_switch(
-        dash, monkeypatch, tmp_path):
-    # frontmost never changes → no bounce; and a change to some OTHER app (the
-    # user deliberately switching mid-window) must never be yanked back
-    for fronts in (["com.browser"], ["com.browser", "com.other"]):
-        fe, activated, front_calls = _bounce_rig(monkeypatch, fronts)
-        _inject_fe(monkeypatch, fe)
-        code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
-        assert code == 200
-        # the watch runs its full window (capture + every poll) and never fires
-        wait_until(lambda fc=front_calls: len(fc) >= 1 + DS.REFOCUS_POLLS,
-                   desc="watch ran to the end without bouncing")
-        assert activated == []
-
-
-def test_new_session_guard_off_without_app_id(dash, monkeypatch, tmp_path):
+def test_new_session_watch_off_without_app_id(dash, monkeypatch, tmp_path):
     # a frontend with no OS-level app identity (the inert stub, a future
-    # terminal that can't name itself) → the guard never probes the OS
+    # terminal that can't name itself) → the watch never probes the OS
     fe = _FakeFE()                                     # bundle_id stays ""
     _inject_fe(monkeypatch, fe)
     probed = []
@@ -1315,6 +1318,29 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     code, body = _post(dash + "/api/session/rew2/rewind", {})
     assert json.loads(body)["mode"] == "cancel-edit"
     assert len(spawned) == 1
+
+
+def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
+    # resending an edited message after a mid-turn cancel-edit: the TUI still
+    # holds the restored draft, so clear_draft kills the line (ctrl+u to
+    # start + ctrl+k to end) and delivers the text as a BRACKETED PASTE
+    # (paste_text) — a raw send here drops leading bytes (the measured mangle)
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS, "DRAFT_CLEAR_GAP_S", 0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "71")
+    A.session_start({"session_id": "cd1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/session/cd1/message",
+                       {"text": "edited message", "clear_draft": True})
+    assert code == 200 and json.loads(body)["ok"] is True
+    assert fe.keyed == [("71", ("ctrl+u",)), ("71", ("ctrl+k",))]
+    assert fe.pasted == [("71", "edited message")]    # atomic paste, not send
+    assert fe.sent == []
+    # a normal send uses send_text, no keys, no paste
+    fe.keyed.clear(); fe.pasted.clear()
+    _post(dash + "/api/session/cd1/message", {"text": "plain"})
+    assert fe.keyed == [] and fe.pasted == []
+    assert fe.sent == [("71", "plain")]
 
 
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):

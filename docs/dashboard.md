@@ -342,39 +342,42 @@ prompt?]))` opens a new tab — the flags are just more positional `"$@"` words
 ahead of the prompt, so the injection story is unchanged; the session then appears through its
 own `SessionStart` (no synthetic row).
 
-**The focus-bounce guard (macOS).** The user is *in the browser* — but a
-launch can make macOS activate kitty over it (arrangement-dependent: it
-reproduced solidly against a live long-running fullscreen instance, then
-stopped when the Space layout changed; fresh instances never reproduce it).
-kitty's `--keep-focus` flag is NOT the fix — it is measurably worse: on a
-background kitty its "restore focus to the previous window" path calls
-`focus_os_window(raise=True)` whenever no kitty OS window is focused (i.e.
-always, when you launch from a browser), which activates the app every time
+**Web launches must not steal macOS focus (and why there is no bounce-back).**
+The user is *in the browser* — but a web launch used to make macOS activate
+kitty over it. The mechanism, pinned by live measurement (steal transitions
+at 2.2s/3.0s/5.8s into the startup — after `claude` boots, never at the tab
+launch itself): the plain `--type=tab` launch is innocent; the thieves were
+the SessionStart **pane opens**, which passed kitty's `--keep-focus`. That
+flag's "restore focus to the previous window" path calls
+`focus_os_window(raise=True)` whenever *no kitty OS window is focused* —
+i.e. always, when the launch came from a browser — activating the app
 (verified against a plain-config kitty 0.45: plain launch leaves the browser
-frontmost, `--keep-focus` yanks kitty up — so `kitten_launch_tab` deliberately
-passes no focus flag). Since no launch flag prevents the steal from outside
-the terminal, the endpoint compensates after the fact: capture the frontmost
-app's bundle id *before* the launch (`lsappinfo` — plain LaunchServices, no
-TCC/automation prompts), then a daemon thread watches the frontmost app for
-`REFOCUS_POLLS × REFOCUS_POLL_S` (~30s); whenever the TERMINAL app
-(`Frontend.app_id()` — kitty: `net.kovidgoyal.kitty`) becomes frontmost,
-`open -b <before>` hands focus straight back. NOT once-and-done: the launch
-steal is only the first — the new session's SessionStart opens its
-mirror/scorebar panes seconds later (more kitty window creations) and each
-can steal AGAIN. Live-measured steal offsets: 2.2s/3.0s/5.8s on one launch,
-with a straggler past 12s on another — a single-bounce ~2s watch shipped
-first and was re-stolen by the pane opens, then a ~12s watch by the
-straggler, which is why the window is generous. Bounces are capped at
-`REFOCUS_MAX` (a runaway focus fight would be worse than the steal) with a
-`REFOCUS_SETTLE_S` grace after each so an activation still animating a
-Space switch can't read as a fresh steal and double-count. ONLY the terminal
-triggers a bounce — a deliberate user app-switch inside the window must
-never be yanked back — and the guard is skipped entirely when the terminal
-was already frontmost at click time, off-mac, or when the frontend has no
-`app_id()` (the inert stub). Every watch writes one `web-launch-refocus`
-state_files row (`before`/`terminal`/`outcome`/`steals`: `clean` = never
-stole, `bounced xN to <app>`, `activate failed`; `steals` = seconds-into-
-watch of each detection — the evidence for what keeps stealing). **The argv is NOT a bare `["claude"]`**
+frontmost, `--keep-focus` yanks kitty up). The fix is at the source:
+`frontends/kitty.py launch_pane` passes `--keep-focus` **only while kitty is
+the frontmost app** (`kitten_app_focused` — that's the case the flag exists
+for, keeping the user's cursor in the claude window; background cost: the
+pane holds inner focus until the user clicks back, strictly better than
+stealing app focus), and `kitten_launch_tab` never passes it. `kitten @
+focus-window` cannot substitute as a restore — it, too, raises the OS window
+of a background kitty (`set_active_window(switch_os_window_if_needed=True)`).
+
+Two rejected designs, do not re-add: (1) `--keep-focus` on the tab launch —
+see above, it *causes* the steal; (2) an **active bounce-back** (watch the
+frontmost app, `open -b` the browser back whenever kitty takes over) shipped
+2026-07-18 and was reverted the same day — it cannot distinguish kitty
+stealing focus from the user *deliberately* switching to kitty inside the
+watch window, so it yanked the user back to the browser when they genuinely
+wanted the terminal, and the bouncing itself was jarring. What survives is a
+**passive steal watch** (`_steal_watch`, a daemon thread; skipped off-mac,
+when the frontend has no `app_id()`, or when the terminal was already
+frontmost at click time): it captures the frontmost app's bundle id before
+the launch (`lsappinfo` — plain LaunchServices, no TCC/automation prompts),
+records each transition onto the terminal app for
+`STEALWATCH_POLLS × STEALWATCH_POLL_S` (~30s), touches nothing, and writes
+one `web-launch-steal-watch` state_files row (`before`/`terminal`/`steals`
+= seconds-into-watch offsets; `[]` = clean). A non-empty `steals` on a
+current build means some launch path still activates the terminal — that
+row names the second it happened. **The argv is NOT a bare `["claude"]`**
 — kitty execs launch argv with kitty's OWN environment, and a GUI-launched
 kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
 flashes and closes while `kitten @ launch` still exits 0; this shipped once)

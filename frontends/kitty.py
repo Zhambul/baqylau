@@ -89,18 +89,26 @@ def kitten_get_text(kitten, listen, win_id, extent="screen"):
         return None
 
 
-def kitten_send_text(kitten, listen, win, text):
+def kitten_send_text(kitten, listen, win, text, bracketed=False):
     """`kitten @ send-text --stdin` to window `win`: the text goes over STDIN
     precisely so it is never a shell argument NOR a kitten escape vector —
     `--stdin` sends the bytes verbatim, no `\\n`/`\\x1b` interpretation. The
     Enter (CR) is a SEPARATE second call after SEND_ENTER_GAP_S (see its
     comment: one write let paste detection swallow the CR into the draft).
     True only when both writes rc 0. Bounded by KITTEN_TIMEOUT_S like every
-    other mutating call."""
+    other mutating call.
+
+    `bracketed=True` wraps the text in bracketed-paste escapes
+    (`--bracketed-paste=enable`) so the TUI reads it as ONE atomic paste —
+    needed for the cancel-edit resend, where a raw send into an input whose
+    state just changed drops the leading bytes (measured; docs/dashboard.md).
+    The CR stays a separate keystroke, OUTSIDE the paste, so it still submits."""
     try:
         argv = [kitten, "@", "--to", listen, "send-text",
                 "--match", f"id:{win}", "--stdin"]
-        r = subprocess.run(argv, input=text.encode("utf-8"),
+        text_argv = argv[:-1] + ["--bracketed-paste=enable", "--stdin"] \
+            if bracketed else argv
+        r = subprocess.run(text_argv, input=text.encode("utf-8"),
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                            timeout=KITTEN_TIMEOUT_S)
         if r.returncode != 0:
@@ -132,11 +140,27 @@ def kitten_launch_tab(kitten, listen, cwd, argv):
     "restores" focus to the previous window via focus_os_window(raise=True),
     which ACTIVATES the kitty app over the browser (verified against a
     plain-config kitty 0.45: plain launch leaves the browser frontmost,
-    --keep-focus yanks kitty to the front). The dashboard compensates for
-    the arrangement-dependent cases where a plain launch still activates
-    kitty with its own macOS focus-bounce guard (dashboard/server.py)."""
+    --keep-focus yanks kitty to the front). The same reasoning gates
+    launch_pane's --keep-focus on kitten_app_focused; the dashboard keeps a
+    passive audit-only steal watch (dashboard/server.py _steal_watch) as the
+    regression evidence — it never touches focus itself."""
     return kitten_run(kitten, listen, "launch", "--type=tab",
                       "--cwd", cwd, *argv) == 0
+
+
+def kitten_app_focused(kitten, listen):
+    """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
+    app on this desktop right now. The gate for launch_pane's --keep-focus:
+    kitty's keep-focus "restore the previous window" path calls
+    focus_os_window(raise=True) whenever no kitty OS window is focused, which
+    on macOS ACTIVATES the kitty app over whatever the user is in (the
+    dashboard web-launch steal — the pane opens at SessionStart were the
+    thieves). False on an ls failure (degrade toward not stealing)."""
+    try:
+        return any(osw.get("is_focused")
+                   for osw in kitten_ls(kitten, listen))
+    except Exception:
+        return False
 
 
 def kitten_close_tab(kitten, listen, win):
@@ -294,6 +318,10 @@ class KittyFrontend(Frontend):
     def send_text(self, win, text):
         return kitten_send_text(self.kitten, self.listen, win, text)
 
+    def paste_text(self, win, text):
+        return kitten_send_text(self.kitten, self.listen, win, text,
+                                bracketed=True)
+
     def send_key(self, win, *keys):
         return kitten_send_key(self.kitten, self.listen, win, *keys)
 
@@ -337,7 +365,15 @@ class KittyFrontend(Frontend):
             args += ["--next-to", next_to]
         if bias is not None:
             args += ["--bias", str(bias)]
-        if keep_focus:
+        if keep_focus and kitten_app_focused(self.kitten, self.listen):
+            # --keep-focus only while kitty IS the frontmost app: that's the
+            # case it exists for (don't yank the user's cursor out of the
+            # claude window into the new pane) and the only case where it is
+            # safe — on a BACKGROUND kitty the flag's focus-restore raises the
+            # OS window and macOS activates kitty over the user's current app
+            # (the web-launch steal; see kitten_app_focused). Background cost:
+            # the pane holds inner focus until the user clicks back into the
+            # session window — strictly better than stealing app focus.
             args += ["--keep-focus"]
         args += ["--cwd", cwd]
         for k, v in (var or {}).items():
