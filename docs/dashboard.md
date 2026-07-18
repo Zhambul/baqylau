@@ -388,15 +388,19 @@ zsh aliases). Each `claude-subscription <slug>` exports `CLAUDE_SUBSCRIPTION_SLU
 `claude` alias is the default account (empty slug). Three surfaces:
 
 **Launch under an account.** The new-session form's account select is
-`plugins.accounts()` (`plugins/claude_code/account.registry` — the default plus
-each `accounts.tsv` row). The chosen slug is resolved server-side to a
-registry-vetted command word (`plugins.account_alias`, `account.alias_for`) —
-`claude` for the default, the slug (which IS the `c1`/`c2` alias) otherwise — and
-that word replaces `claude` in `launch_argv`'s FIXED command string. Because it
-comes only from the registry (never raw client text), the injection story is
-unchanged; an unknown slug is a `400`. The account word rides the same
-`$SHELL -lic '<word> "$@"'` login shell, so the alias resolves exactly as typing
-it in a fresh tab.
+`plugins.accounts()` (`plugins/claude_code/account.registry` — one entry per
+`accounts.tsv` row). There is **no "default" option**: the plain-`claude` login
+resolves to whichever account is interactively signed in — a duplicate of one of
+the listed accounts — so offering it just yields an unlabeled session that's
+really c1 or c2. The chosen slug is resolved server-side to a registry-vetted
+command word (`plugins.account_alias`, `account.alias_for`) — the slug, which IS
+the `c1`/`c2` alias — and that word replaces `claude` in `launch_argv`'s FIXED
+command string. Because it comes only from the registry (never raw client text),
+the injection story is unchanged; an unknown slug is a `400`. An *absent* account
+field still falls back to plain `claude` (so a machine with no switcher, whose
+registry is empty and whose picker row hides, still launches). The account word
+rides the same `$SHELL -lic '<word> "$@"'` login shell, so the alias resolves
+exactly as typing it in a fresh tab.
 
 **Which account a chat runs under** is stamped into the session's state DB at
 SessionStart (`split.cmd_open` → `state.kv_set("account", account.current())`,

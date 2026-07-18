@@ -999,9 +999,12 @@ def test_account_registry_and_alias(tmp_path, monkeypatch):
     tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
     monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
     reg = ACC.registry()
-    assert reg[0] == {"slug": "", "label": "default", "alias": "claude"}
+    # no synthetic "default" — the plain-claude login duplicates a real account
+    assert [a["slug"] for a in reg] == ["c1", "c2"]
     assert {"slug": "c2", "label": "claude-01", "alias": "c2"} in reg
     assert ACC.alias_for("c1") == "c1"
+    # empty/claude still resolve to plain claude (the server's absent-account
+    # fallback), even though the picker no longer offers them
     assert ACC.alias_for("") == "claude" and ACC.alias_for("claude") == "claude"
     assert ACC.alias_for("nope") is None          # unknown → caller 400s
     monkeypatch.setenv("CLAUDE_SUBSCRIPTION_SLUG", "c2")

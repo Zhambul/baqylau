@@ -118,8 +118,9 @@ def session_title(transcript_path):
 
 def accounts():
     """The launchable subscription accounts for the dashboard's new-session
-    picker (plugins.claude_code.account.registry): the plain default plus each
-    switcher account, [{slug, label, alias}, …]. Concatenated across plugins,
+    picker (plugins.claude_code.account.registry): one entry per switcher
+    account, [{slug, label, alias}, …] (no synthetic default — the plain-claude
+    login duplicates one of these). Concatenated across plugins,
     first slug wins (claude_code is the only provider). Same exception contract
     as census()/activity(): the caller is the read-side dashboard, not a hook."""
     out, seen = [], set()

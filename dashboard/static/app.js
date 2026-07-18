@@ -1125,22 +1125,27 @@ function openNewSession(prefillCwd, resumeSid) {
     row.append(sel);
     return [row, sel];
   };
-  // account picker — the subscription to launch under (default `claude`, or a
-  // switcher alias c1/c2). Populated from /api/accounts (cached in S.accts);
-  // each option shows the account's latest usage inline when known.
-  const [acctRow, acct] = pick("account", [["", "default"]]);
+  // account picker — the subscription to launch under (a switcher alias like
+  // c1/c2). Populated from /api/accounts (cached in S.accts); each option shows
+  // the account's latest usage inline when known. No "default" option: the
+  // plain-claude login duplicates one of these accounts. The row hides when
+  // there is no switcher (empty list → the launch just runs plain claude).
+  const [acctRow, acct] = pick("account", []);
+  acctRow.style.display = "none";
   const fillAccts = (list) => {
+    acctRow.style.display = list.length ? "" : "none";
     const prev = acct.value;
     acct.textContent = "";
     for (const a of list) {
       const u = a.usage;
       const usage = u && (typeof u.five_hour === "number" || typeof u.seven_day === "number")
         ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
-      const o = el("option", "", (a.slug ? a.slug + " · " + a.label : a.label) + usage);
+      const o = el("option", "", a.slug + " · " + a.label + usage);
       o.value = a.slug;
       acct.append(o);
     }
-    acct.value = [...acct.options].some(o => o.value === prev) ? prev : "";
+    acct.value = [...acct.options].some(o => o.value === prev)
+      ? prev : (list[0] ? list[0].slug : "");
   };
   if (S.accts) fillAccts(S.accts);
   fetch("/api/accounts").then(r => r.json())

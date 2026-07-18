@@ -34,14 +34,16 @@ def current():
 
 
 def registry():
-    """The launchable accounts for the new-session picker: the plain default
-    first, then each accounts.tsv row. `alias` is the shell command word that
-    launches it (`claude` for default; the slug — which IS the user's c1/c2
-    zsh alias — otherwise), validated as a clean bareword so it is safe to
-    place in the launch shell string. Unreadable/absent TSV ⇒ just the
-    default (a machine with no switcher still launches plain claude)."""
-    out = [{"slug": "", "label": "default", "alias": DEFAULT_ALIAS}]
-    seen = {""}
+    """The launchable accounts for the new-session picker: one entry per
+    switcher accounts.tsv row. The plain-`claude` default is deliberately NOT
+    listed — it resolves to whichever account is interactively logged in, i.e.
+    a duplicate of one of these, so surfacing it is confusing (an unlabeled
+    session that's really c1 or c2). `alias` is the shell command word that
+    launches the account (the slug, which IS the user's c1/c2 zsh alias),
+    validated as a clean bareword so it is safe in the launch shell string.
+    Unreadable/absent TSV ⇒ [] (a machine with no switcher only launches plain
+    claude, via the empty-account fallback in alias_for)."""
+    out, seen = [], set()
     try:
         with open(ACCOUNTS_TSV, encoding="utf-8") as fh:
             for line in fh:
