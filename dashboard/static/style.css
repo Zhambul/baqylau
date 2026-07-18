@@ -622,6 +622,27 @@ code, pre, .mono { font-family: var(--mono); }
 .csend:hover:not(:disabled) { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
 .csend:disabled { color: var(--dim2); cursor: default; }
 
+/* ---- dictation mic (composer + new-session prompt) ----------------------- */
+/* hidden until GET /api/dictate reports a configured key; .wait while the
+   token/mic pipeline spins up; .rec (pulsing --ask red) while listening */
+.micbtn {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--panel2); color: var(--text-soft); border: none;
+  cursor: pointer; box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r); padding: 7px 9px;
+}
+.micbtn svg { width: 15px; height: 15px; display: block; }
+.micbtn:hover { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
+.micbtn.wait { color: var(--dim); cursor: progress; }
+.micbtn.rec { color: var(--ask); animation: micpulse 1.6s ease-in-out infinite; }
+@keyframes micpulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 55%, transparent); }
+  50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 15%, transparent); }
+}
+/* the new-session prompt row: textarea + mic side by side inside the label */
+.nsdictrow { display: flex; align-items: flex-end; gap: 8px; }
+.nsdictrow .nsinput { flex: 1; }
+
 /* ---- queued-message chips (Claude Code's mid-turn queue) ----------------- */
 .cqueue { display: flex; flex-wrap: wrap; gap: 6px; margin: -4px 0 10px; }
 .qchip {

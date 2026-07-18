@@ -56,8 +56,8 @@ from core import state as ST
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard import askdialog, confirmdialog, opshtml, plandialog, \
-    rewindmenu
+from dashboard import askdialog, confirmdialog, dictate, opshtml, \
+    plandialog, rewindmenu
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -1128,6 +1128,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(sessions_payload())
         if api == ["accounts"]:
             return self._json(accounts_payload())
+        if api == ["dictate"]:
+            # feature probe: the page renders mic buttons iff a Deepgram key
+            # is configured (docs/dashboard.md *Web dictation*) — no key
+            # means the feature is invisible, never a dead button
+            return self._json({"available": dictate.available()})
         if api == ["commands"]:
             # the "/" menus (composer + new-session prompt): built-ins + the
             # given directory's discovered .claude commands/skills. cwd-keyed,
@@ -1228,6 +1233,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_plan_decision(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
+        if api == ["dictate", "token"]:
+            return self.post_dictate_token()
         return self._json({"error": "not found"}, 404)
 
     def _reject(self, code, err):
@@ -1986,6 +1993,49 @@ class Handler(BaseHTTPRequestHandler):
             threading.Thread(target=_steal_watch, args=(before, term),
                              daemon=True, name="web-launch-steal-watch").start()
         return self._json({"ok": True})
+
+    def post_dictate_token(self):
+        """Mint a short-lived Deepgram grant for the browser's DIRECT wss
+        connection (docs/dashboard.md *Web dictation* — the stdlib server
+        can't speak WebSocket and must never see audio, so its whole role is
+        this trade: on-disk API key → ~30s single-purpose JWT). The response
+        carries the token plus the fully-assembled listen URL (model +
+        keyterms server-side; the client contributes only its AudioContext
+        sample rate). Behind _post_guard like every control-plane POST — on
+        READONLY days dictation is off exactly like the composer it feeds.
+        Every attempt is a `web-dictate` state_files row (no sid — the
+        new-session form dictates too), failures also an A.error. The API
+        key never appears in a response or an audit row."""
+        body = self._post_guard()
+        if body is None:
+            return
+        rate = body.get("sample_rate")
+        if not isinstance(rate, int) or isinstance(rate, bool) \
+                or not (dictate.SAMPLE_RATE_MIN <= rate
+                        <= dictate.SAMPLE_RATE_MAX):
+            A.state_file("", "", "web-dictate",
+                         {"ok": False, "why": "bad-rate",
+                          "rate": repr(rate)[:40]})
+            return self._json({"error": "bad sample_rate"}, 400)
+        if not dictate.available():
+            # a race fallback only — the page hides the mic button when the
+            # /api/dictate probe says unavailable
+            A.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
+            return self._json({"error": "no deepgram key configured"}, 501)
+        try:
+            tok = dictate.grant()
+        except Exception as e:
+            A.error("", "dashboard dictate (grant failed)",
+                    {"err": ("%s: %s" % (type(e).__name__, e))[:200]})
+            A.state_file("", "", "web-dictate", {"ok": False, "why": "grant"})
+            return self._json({"error": "token grant failed"}, 502)
+        url = dictate.ws_url(rate)
+        A.state_file("", "", "web-dictate",
+                     {"ok": True, "rate": rate,
+                      "keyterms": len(dictate.keyterms())})
+        return self._json({"token": tok["access_token"],
+                           "expires_in": tok.get("expires_in"),
+                           "ws_url": url})
 
     def static(self, name):
         ctype = STATIC.get(name)

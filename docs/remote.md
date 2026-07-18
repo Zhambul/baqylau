@@ -100,6 +100,12 @@ local server; Universal SSL took ~9 min to issue after the zone went active
 - Read-only days: `CLAUDE_DASH_READONLY=1` in the environment kills the
   whole control plane (every POST is 403, reads/SSE untouched) — remote
   eyes, no remote hands.
+- Dictation (docs/dashboard.md *Web dictation*) works remotely as-is: the
+  HTTPS origin is a secure context (so `getUserMedia` is allowed — a
+  plain-http non-localhost origin would refuse the mic), and the audio
+  goes iPad → Deepgram directly over wss, never through the tunnel; only
+  the tiny token POST rides it (and READONLY days kill that POST exactly
+  like the composer it feeds).
 - The laptop must stay awake with kitty running: power + lid open +
   "prevent sleep on power" (or Amphetamine/`caffeinate -s`). The dashboard
   reads the live state DBs and the control plane needs the kitty socket.

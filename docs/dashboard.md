@@ -244,6 +244,8 @@ reflow for free and keeps the no-build rule.
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
+| `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
+| `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
@@ -1174,6 +1176,89 @@ unconditional `O.emit` created ghost DBs for headless team sessions).
 parked session still shows its final task list. The per-session SSE
 diff-emits a `tasks` event on the slow cadence (tasks change per-hook,
 not per-keystroke; nobody is blocked waiting on this card).
+
+## Web dictation (mic → Deepgram → the textarea, live)
+
+A mic button on the **composer** and on the **new-session form's first-prompt
+box** (`dictation(ta)` in app.js — one controller per textarea, the same
+helper both sites; `.micbtn`, pulsing `--ask` red while listening). Click,
+speak, and the transcript splices into the textarea **as you speak** —
+interim results land ~100ms behind the voice and are REPLACED in place as
+Deepgram firms them up, so the box always shows the current best guess and
+you visually validate before sending. Engine: **Deepgram Nova-3 streaming**
+(`interim_results=true`, `smart_format`), chosen over the free Web Speech API
+for accuracy and for **keyterm prompting** — repo jargon ("scorebar",
+"tailer") the generic engines mangle.
+
+**The token-grant architecture.** The server's whole role is one trade —
+it never sees audio:
+
+- `GET /api/dictate` → `{available}`: a bare key-file probe
+  (`dashboard/dictate.py`, the one owner of the dictation vocabulary —
+  file locations, grant call, listen-URL assembly). The page probes once
+  and renders mic buttons iff true: no key = feature invisible, never a
+  dead button.
+- `POST /api/dictate/token` (behind `_post_guard` like every control-plane
+  write, so `CLAUDE_DASH_READONLY` kills it exactly like the composer it
+  feeds) → reads `~/.config/deepgram/api-key`
+  (`CLAUDE_DICTATE_KEY_FILE` overrides), trades it via Deepgram's
+  `POST /v1/auth/grant` for a **~30s single-purpose JWT**, and returns
+  `{token, expires_in, ws_url}` — the listen URL fully assembled
+  server-side (model, formatting, one `keyterm=` per line of
+  `~/.config/deepgram/keyterms` — `#`-comments dropped, capped at
+  `KEYTERMS_MAX`). The client contributes ONLY its AudioContext sample
+  rate. The long-lived key never leaves the server process — not in a
+  response, an audit row, or an error detail.
+- The **browser then connects `wss://api.deepgram.com/v1/listen` directly**,
+  authenticating with the `['bearer', <jwt>]` WebSocket subprotocol (browsers
+  can't set WS headers; this is Deepgram's documented browser pattern). The
+  JWT only needs to outlive the handshake — an open session runs past its
+  expiry.
+
+Why direct-to-Deepgram instead of proxying: the stdlib
+`ThreadingHTTPServer` speaks no WebSocket in either direction — proxying
+means hand-rolling RFC 6455 both ways — and a server whose identity is
+"read-only over session state" has no business buffering live audio.
+Rejected: key-in-the-page (a localhost page is still a page; the key is
+long-lived), and Web Speech API (no vocabulary biasing at all, Chrome-only
+quality, nothing to keyterm).
+
+**Audio: AudioWorklet → linear16 PCM, not MediaRecorder.** MediaRecorder
+was rejected because **iPad Safari emits mp4/AAC, which Deepgram streaming
+refuses** — and the iPad (docs/remote.md) is a first-class client. Instead a
+~15-line worklet converts Float32→Int16 at the AudioContext's **native**
+rate (declared in `sample_rate=` — no resampling code), batched to
+4096-sample chunks (~85ms @48k) so the socket sees a sane message rate.
+Continuous PCM means silence is still data, so Deepgram's no-audio timeout
+never fires and there is no KeepAlive plumbing. Secure-context note: mic
+APIs work on `http://127.0.0.1` (localhost is a secure context) and on the
+HTTPS remote origin — a plain-http non-localhost origin would refuse
+`getUserMedia`, but none exists (the bind never leaves 127.0.0.1).
+
+**The splice (live visual validation).** At mic-start the textarea splits at
+the caret into `prefix`/`suffix`; dictated text grows between them as
+`committed` (finalized) + `interim` (volatile). Every partial repaints
+`prefix+committed+interim+suffix` with the caret pinned after the interim,
+and dispatches a real `input` event so `autoGrow` &co stay honest. Typing
+mid-dictation **re-anchors**: the shown interim becomes plain text where it
+stands, the next `is_final` (which would repeat it) is dropped, and dictation
+continues from the new caret. Stop paths: the button, Esc, send/launch (the
+visible — validated — text is what sends; a `lastPainted` guard stops the
+async close from resurrecting text into a box the post-send clear already
+emptied), and view/modal teardown (`leaveSession`/`closeNewSession` →
+`stopDictation()` — a mic must never outlive the box it feeds; one mic
+page-wide). Stopping sends Deepgram's `{"type":"CloseStream"}` so the last
+partial flushes as a final, with a 2s failsafe close, then releases the
+tracks (the tab's mic indicator must go off). Deliberately NO auto-stop on
+silence — an open mic costs $0.0077/min and auto-stop mid-thought is the
+annoying failure mode.
+
+**Audit.** Every mint attempt is a `web-dictate` `state_files` row (no sid —
+the new-session form dictates too), `{ok, rate, keyterms}` on success,
+`{ok: false, why: bad-rate|no-key|grant}` on failure, grant failures also an
+`A.error("dashboard dictate (grant failed)")`. "Mic button missing or dead"
+triages as: `/api/dictate` says available? → `web-dictate` rows → dictate
+errors (the audit-debug skill's bug shape).
 
 ## Accounts & usage
 

@@ -351,6 +351,7 @@ function route() {
 }
 
 function leaveSession() {
+  stopDictation();               // a mic must never outlive its composer
   if (S.ses) {
     if (S.ses.es) S.ses.es.close();
     closeAgentStream();
@@ -1510,6 +1511,239 @@ function submitPlan(plan, body, okTitle, okDetail) {
     });
 }
 
+/* ---------- dictation (mic → Deepgram → the textarea, live) ---------- */
+// docs/dashboard.md *Web dictation*. Mic buttons render only when the server
+// reports a configured Deepgram key (GET /api/dictate — probed once, cached).
+// Flow: POST /api/dictate/token → ~30s grant JWT + the fully-assembled listen
+// URL → the BROWSER opens wss straight to Deepgram (the stdlib server can't
+// speak WebSocket and must never see audio) → an AudioWorklet ships
+// Float32→Int16 PCM at the AudioContext's native rate (MediaRecorder is
+// rejected: iPad Safari emits mp4/AAC, which Deepgram streaming refuses) →
+// interim results splice into the textarea LIVE (visual validation is the
+// point) and firm up in place when Deepgram finalizes them. One mic at a
+// time, page-wide; view/modal teardown stops it (a mic must never outlive
+// the box it feeds).
+
+let dictProbe = null;              // the one /api/dictate probe (Promise<bool>)
+function dictAvailable() {
+  if (!dictProbe)
+    dictProbe = fetch("/api/dictate").then(r => r.json())
+      .then(d => !!(d && d.available)).catch(() => false);
+  return dictProbe;
+}
+
+// Float32 → Int16 in the audio thread, batched to 4096-sample (~85ms @48k)
+// chunks — bare 128-sample process() quanta would be ~375 tiny ws messages/s.
+const DICT_WORKLET = `
+class DictatePCM extends AudioWorkletProcessor {
+  constructor() { super(); this.buf = new Int16Array(4096); this.n = 0; }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (ch) for (let i = 0; i < ch.length; i++) {
+      const s = Math.max(-1, Math.min(1, ch[i]));
+      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+      if (this.n === this.buf.length) {
+        this.port.postMessage(this.buf.slice(0).buffer);
+        this.n = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("dictate-pcm", DictatePCM);`;
+let dictWorkletURL = null;
+
+function micIcon() {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("fill", "none");
+  svg.setAttribute("stroke", "currentColor");
+  svg.setAttribute("stroke-width", "2");
+  svg.setAttribute("stroke-linecap", "round");
+  svg.setAttribute("stroke-linejoin", "round");
+  [["M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"],
+   ["M19 10v2a7 7 0 0 1-14 0v-2"], ["M12 19v4"]].forEach(([d]) => {
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", d);
+    svg.append(p);
+  });
+  return svg;
+}
+
+let dictActive = null;             // the page-wide single live dictation
+function stopDictation() { if (dictActive) dictActive.stop(); }
+
+function dictation(ta) {
+  // Per-textarea controller — returns {btn, stop}; callers place the button.
+  const btn = el("button", "micbtn");
+  btn.type = "button";
+  btn.title = "dictate";
+  btn.hidden = true;               // shown only when the server has a key
+  btn.append(micIcon());
+  dictAvailable().then(ok => { btn.hidden = !ok; });
+  let live = null;
+
+  async function start() {
+    if (ta.disabled || live) return;
+    stopDictation();               // one mic page-wide
+    btn.classList.add("wait");
+    // AudioContext FIRST, synchronously in the click's gesture chain — iOS
+    // Safari creates gesture-less contexts suspended and keeps them so
+    const ctx = new AudioContext();
+    if (ctx.state === "suspended") ctx.resume();
+    let stream, tok;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(
+        { audio: { echoCancellation: true, noiseSuppression: true } });
+    } catch (e) {
+      ctx.close();
+      btn.classList.remove("wait");
+      toast("ask", "microphone blocked",
+            "allow mic access for this site and retry");
+      return;
+    }
+    try {
+      tok = await postJSON("/api/dictate/token",
+                           { sample_rate: Math.round(ctx.sampleRate) });
+    } catch (e) {
+      stream.getTracks().forEach(t => t.stop());
+      ctx.close();
+      btn.classList.remove("wait");
+      toast("ask", "dictation unavailable",
+            (e && e.error) || "token mint failed");
+      return;
+    }
+
+    // The splice: everything before/after the caret at mic-start stays put;
+    // dictated text grows between them as committed (finalized) + interim
+    // (still firming up — REPLACED on every partial, so the box always shows
+    // Deepgram's current best guess and corrections happen before your eyes).
+    const at = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+    const st = {
+      prefix: ta.value.slice(0, at), suffix: ta.value.slice(at),
+      committed: "", interim: "", skipFinal: false, painting: false,
+      stopping: false, closed: false, lastPainted: null,
+    };
+    const paint = () => {
+      const head = st.prefix + st.committed + st.interim;
+      st.painting = true;
+      ta.value = st.lastPainted = head + st.suffix;
+      ta.setSelectionRange(head.length, head.length);
+      ta.dispatchEvent(new Event("input", { bubbles: true }));  // autoGrow &co
+      st.painting = false;
+    };
+    // Typing mid-dictation re-anchors the splice to wherever the caret is:
+    // any shown interim becomes plain text (and the final that would repeat
+    // it is dropped), then dictation continues from the new anchor.
+    const onEdit = () => {
+      if (st.painting) return;
+      const p = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+      st.skipFinal = !!st.interim;
+      st.prefix = ta.value.slice(0, p);
+      st.suffix = ta.value.slice(p);
+      st.committed = ""; st.interim = "";
+    };
+    ta.addEventListener("input", onEdit);
+
+    const finish = () => {         // the ws is done, clean or not
+      if (st.closed) return;
+      st.closed = true;
+      stream.getTracks().forEach(t => t.stop());   // tab mic indicator OFF
+      if (ctx.state !== "closed") ctx.close();
+      // commit a dangling interim — but never resurrect text into a box
+      // something else (the composer's post-send clear) rewrote meanwhile
+      if (st.interim && ta.value === st.lastPainted) {
+        st.committed += st.interim; st.interim = "";
+        paint();
+      }
+      ta.removeEventListener("input", onEdit);
+      btn.classList.remove("rec", "wait");
+      if (dictActive === live) dictActive = null;
+      live = null;
+    };
+
+    let ws;
+    try {
+      ws = new WebSocket(tok.ws_url, ["bearer", tok.token]);
+    } catch (e) {
+      finish();
+      toast("ask", "dictation failed", "could not reach Deepgram");
+      return;
+    }
+    ws.onmessage = (ev) => {
+      let d;
+      try { d = JSON.parse(ev.data); } catch (e) { return; }
+      if (d.type !== "Results") return;
+      const alt = d.channel && d.channel.alternatives
+        && d.channel.alternatives[0];
+      const text = (alt && alt.transcript) || "";
+      if (d.is_final) {
+        if (st.skipFinal) st.skipFinal = false;
+        else if (text) st.committed += text + " ";
+        st.interim = "";
+      } else if (!st.skipFinal) {
+        st.interim = text;
+      }
+      paint();
+    };
+    ws.onclose = () => {
+      const dropped = !st.stopping && !st.closed;
+      finish();
+      if (dropped)
+        toast("ask", "dictation ended", "connection to Deepgram closed");
+    };
+    ws.onopen = async () => {
+      try {
+        if (!dictWorkletURL)
+          dictWorkletURL = URL.createObjectURL(
+            new Blob([DICT_WORKLET], { type: "text/javascript" }));
+        await ctx.audioWorklet.addModule(dictWorkletURL);
+        const src = ctx.createMediaStreamSource(stream);
+        const sink = new AudioWorkletNode(ctx, "dictate-pcm");
+        sink.port.onmessage = (e) => {
+          if (ws.readyState === 1 && !st.stopping) ws.send(e.data);
+        };
+        src.connect(sink);
+        sink.connect(ctx.destination);   // pull the graph; outputs are silence
+        btn.classList.remove("wait");
+        btn.classList.add("rec");
+      } catch (e) {
+        try { ws.close(); } catch (e2) { /* already closed */ }
+        finish();
+        toast("ask", "dictation failed", "audio pipeline error");
+      }
+    };
+
+    live = {
+      stop() {
+        if (st.stopping || st.closed) return;
+        st.stopping = true;
+        btn.classList.remove("rec");
+        if (ws.readyState === 1) {
+          // CloseStream makes Deepgram flush the last partial as a final
+          // (painted by onmessage) and close; the timer is the failsafe
+          try { ws.send('{"type":"CloseStream"}'); } catch (e) { finish(); }
+          setTimeout(() => {
+            try { ws.close(); } catch (e) { /* already closed */ }
+            finish();
+          }, 2000);
+        } else {
+          try { ws.close(); } catch (e) { /* never opened */ }
+          finish();
+        }
+      },
+    };
+    dictActive = live;
+  }
+
+  btn.onclick = () => { if (live) live.stop(); else start(); };
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && live) { e.stopPropagation(); live.stop(); }
+  });
+  return { btn, stop: () => { if (live) live.stop(); } };
+}
+
 /* ---------- control plane: the message composer ---------- */
 // A textarea above the mirror feed that types a message into the session's
 // kitty window (POST /message). Enter sends, Shift+Enter is a newline — except
@@ -1545,7 +1779,9 @@ function buildComposer() {
   const btn = el("button", "csend", "send");
   btn.disabled = !canSend;
   ses.composer = ta;
+  const dic = dictation(ta);
   const send = () => {
+    dic.stop();          // the visible (validated) text is what sends
     const text = ta.value.trim();
     if (!text || ta.disabled) return;
     ta.disabled = true; btn.disabled = true;
@@ -1586,7 +1822,7 @@ function buildComposer() {
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
-  wrap.append(ta, btn);
+  wrap.append(ta, dic.btn, btn);
   return wrap;
 }
 
@@ -1643,6 +1879,7 @@ function checkJump() {
 // prefills that cwd.
 
 function closeNewSession() {
+  stopDictation();               // the form's mic dies with the form
   $modal.hidden = true;
   $modal.textContent = "";
   document.body.classList.remove("modal-open");   // release the scroll lock
@@ -1929,7 +2166,10 @@ function openNewSession(prefillCwd, resumeSid) {
   prompt.placeholder = IS_IPAD
     ? "what should Claude start on?"
     : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
-  promptRow.append(prompt);
+  const pdic = dictation(prompt);
+  const promptBox = el("div", "nsdictrow");
+  promptBox.append(prompt, pdic.btn);
+  promptRow.append(promptBox);
   // "/" completion here too — cwd-keyed to whatever directory is currently
   // typed (cached per dir, so flipping between dirs doesn't refetch)
   const cmdCache = {};
@@ -1950,6 +2190,7 @@ function openNewSession(prefillCwd, resumeSid) {
   actions.append(cancel, submit);
 
   const go = () => {
+    pdic.stop();         // the visible (validated) prompt is what launches
     const cwd = dir.value.trim();
     if (!cwd) { dir.focus(); return; }
     submit.disabled = true;

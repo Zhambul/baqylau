@@ -14,7 +14,7 @@ import textwrap
 import threading
 import urllib.error
 import urllib.request
-from http.server import ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from conftest import REPO, wait_until
@@ -3069,3 +3069,92 @@ def test_notifier_ignores_windowless_transitions(monkeypatch):
     monkeypatch.setattr(DS.API, "tab_states", lambda: seq.pop(0))
     n.scan(); n.scan()
     assert q.empty()
+
+
+# ------------------------------------------------------------------ dictation
+# docs/dashboard.md *Web dictation* — the server's whole role is the feature
+# probe and the key→grant-JWT trade; audio never touches it. Generic guard
+# rejections (missing header / bad Origin / READONLY) are the shared
+# _post_guard, covered above.
+
+def test_http_dictate_probe_tracks_key_file(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "dg-key"))
+    assert _get_json(dash + "/api/dictate") == {"available": False}
+    (tmp_path / "dg-key").write_text("sekret\n")
+    assert _get_json(dash + "/api/dictate") == {"available": True}
+
+
+def test_post_dictate_token_no_key_is_501(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "absent"))
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/dictate/token", {"sample_rate": 48000})
+    assert e.value.code == 501
+
+
+def test_post_dictate_token_rejects_bogus_rates(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "dg-key"))
+    (tmp_path / "dg-key").write_text("sekret")
+    # missing, wrong-typed (incl. bool — a Python int subclass), out-of-range
+    for rate in (None, "48000", True, 7999, 500000):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/dictate/token", {"sample_rate": rate})
+        assert e.value.code == 400, rate
+
+
+def test_post_dictate_token_mints_and_builds_url(dash, tmp_path, monkeypatch):
+    # the grant call goes to a fake server (CLAUDE_DICTATE_GRANT_URL — the
+    # env-knob convention): assert the on-disk key arrives as Token auth and
+    # the response carries the JWT + a fully-assembled listen URL, key-free
+    seen = {}
+
+    class Grant(BaseHTTPRequestHandler):
+        def do_POST(self):
+            seen["auth"] = self.headers.get("Authorization")
+            body = json.dumps({"access_token": "jwt-abc",
+                               "expires_in": 30}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):          # keep pytest output clean
+            pass
+
+    gsrv = ThreadingHTTPServer(("127.0.0.1", 0), Grant)
+    threading.Thread(target=gsrv.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "dg-key"))
+        monkeypatch.setenv("CLAUDE_DICTATE_KEYTERMS_FILE",
+                           str(tmp_path / "terms"))
+        monkeypatch.setenv("CLAUDE_DICTATE_GRANT_URL",
+                           "http://127.0.0.1:%d/grant"
+                           % gsrv.server_address[1])
+        (tmp_path / "dg-key").write_text("sekret\n")
+        (tmp_path / "terms").write_text("scorebar\n# a comment\n\ntailer\n")
+        code, body = _post(dash + "/api/dictate/token", {"sample_rate": 48000})
+        assert code == 200
+        out = json.loads(body)
+        assert out["token"] == "jwt-abc" and out["expires_in"] == 30
+        assert seen["auth"] == "Token sekret"
+        url = out["ws_url"]
+        assert url.startswith("wss://api.deepgram.com/v1/listen?")
+        assert "model=nova-3" in url and "interim_results=true" in url
+        assert "encoding=linear16" in url and "sample_rate=48000" in url
+        assert "smart_format=true" in url and "channels=1" in url
+        assert url.count("keyterm=") == 2
+        assert "keyterm=scorebar" in url and "keyterm=tailer" in url
+        assert "sekret" not in body        # the key never reaches the page
+    finally:
+        gsrv.shutdown()
+        gsrv.server_close()
+
+
+def test_post_dictate_token_grant_failure_is_502(dash, tmp_path, monkeypatch):
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "dg-key"))
+    (tmp_path / "dg-key").write_text("sekret")
+    # nothing listens here — the grant call fails fast, the page gets a 502
+    monkeypatch.setenv("CLAUDE_DICTATE_GRANT_URL", "http://127.0.0.1:9/grant")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/dictate/token", {"sample_rate": 48000})
+    assert e.value.code == 502
