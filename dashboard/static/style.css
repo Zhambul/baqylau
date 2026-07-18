@@ -410,10 +410,14 @@ body.attn-on .shead { top: 81px; }
 .nsback {
   position: fixed; inset: 0; z-index: 40;
   display: flex; align-items: flex-start; justify-content: center;
-  padding-top: 12vh;
+  padding-top: 12vh; padding-bottom: 24px;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
   backdrop-filter: blur(2px);
+  overflow-y: auto;              /* a tall panel scrolls INSIDE the overlay */
 }
+/* scroll lock while the form is up — wheel over the overlay must not scroll
+   the dashboard behind it (body.modal-open set by open/closeNewSession) */
+body.modal-open { overflow: hidden; }
 .nspanel {
   width: min(520px, 92vw);
   background: var(--panel); box-shadow: var(--card); border-radius: var(--r);

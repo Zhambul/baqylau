@@ -401,7 +401,10 @@ by substring; Enter picks the highlighted row, but when that row already IS
 the value (or nothing is highlighted) it falls through to launch — so
 click-pick-Enter and type-path-Enter both behave. Opening the form focuses
 the *prompt* when the directory is already known (remembered or prefilled),
-the directory field only when it's blank.
+the directory field only when it's blank. While the form is up the page
+behind it is scroll-locked (`body.modal-open` → `overflow: hidden`, set and
+released by open/closeNewSession); a panel taller than the viewport scrolls
+INSIDE the overlay (`.nsback` is `overflow-y: auto`), never the dashboard.
 
 **The form remembers the last launch** (`claude-dash:ns-last` in
 localStorage, written only on a *successful* launch): the directory, model

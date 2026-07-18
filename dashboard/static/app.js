@@ -1059,7 +1059,7 @@ function checkJump() {
 /* ---------- control plane: the new-session form ---------- */
 // Lives in the persistent #modal host (outside #view) so a list re-render from
 // an SSE snapshot never blows away a half-typed form. Directory input backed by
-// a <datalist> of the distinct cwds in the current snapshot; optional first
+// suggest() over the distinct cwds in the current snapshot; optional first
 // prompt; submit POSTs /api/sessions/new and the session appears on its own via
 // SessionStart. The header "+ session" button opens it blank; a dir group's "+"
 // prefills that cwd.
@@ -1067,6 +1067,7 @@ function checkJump() {
 function closeNewSession() {
   $modal.hidden = true;
   $modal.textContent = "";
+  document.body.classList.remove("modal-open");   // release the scroll lock
 }
 
 // Custom dropdown replacing the form's native <select>s — Safari ignores most
@@ -1168,6 +1169,75 @@ const nsRemember = (prefs) => {
   try { localStorage.setItem(NS_LAST_KEY, JSON.stringify(prefs)); } catch {}
 };
 
+// Freeform text input + picker menu — replaces the directory field's
+// <datalist>, which Safari renders in the system style AND pops open on
+// focus (the "somehow already clicked" look). Same visual language as
+// dropdown() (.nsdropmenu/.nsdropitem). Focus/click opens the menu: with the
+// current value blank or an exact known entry it lists EVERYTHING (the
+// picker look, current value highlighted); while typing it filters by
+// substring. ↑/↓ move, Enter picks the highlighted row — unless that row IS
+// already the value, where it closes and falls through to the caller's
+// Enter = launch — Esc closes the menu only. Caller calls sug.key(e) FIRST
+// in onkeydown.
+function suggest(input, all) {
+  const menu = el("div", "nsdropmenu");
+  menu.hidden = true;
+  let items = [], hi = -1, squelch = false;
+  const close = () => { menu.hidden = true; hi = -1; };
+  const paint = () => {
+    menu.textContent = "";
+    items.forEach((v, i) => {
+      const row = el("div", "nsdropitem" + (i === hi ? " sel" : ""), v);
+      row.onmousedown = (e) => e.preventDefault();   // keep input focus
+      row.onclick = (e) => { e.preventDefault(); pickRow(i); };
+      menu.append(row);
+    });
+    const sel = menu.querySelector(".sel");
+    if (sel) sel.scrollIntoView({ block: "nearest" });
+  };
+  const open = () => {
+    const cur = input.value.trim();
+    const exact = !cur || all.includes(cur);
+    items = exact ? all.slice()
+                  : all.filter(v => v.toLowerCase().includes(cur.toLowerCase()));
+    if (!items.length) { close(); return; }
+    hi = items.indexOf(cur);            // -1 unless the value is a known entry
+    paint();
+    menu.hidden = false;
+  };
+  const pickRow = (i) => {
+    input.value = items[i];
+    squelch = true;                     // the input event below must not reopen
+    input.dispatchEvent(new Event("input"));
+    squelch = false;
+    close();
+  };
+  input.addEventListener("input", () => { if (!squelch) open(); });
+  input.addEventListener("focus", open);
+  input.addEventListener("click", () => { if (menu.hidden) open(); });
+  input.addEventListener("blur", close);
+  const key = (e) => {
+    if (menu.hidden) {
+      if (e.key === "ArrowDown") { e.preventDefault(); open(); return true; }
+      return false;
+    }
+    if (e.key === "ArrowDown") { e.preventDefault(); hi = Math.min(items.length - 1, hi + 1); paint(); return true; }
+    if (e.key === "ArrowUp") { e.preventDefault(); hi = Math.max(0, hi - 1); paint(); return true; }
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); return true; }
+    if (e.key === "Enter") {
+      if (hi >= 0 && items[hi] !== input.value.trim()) {
+        e.preventDefault();
+        pickRow(hi);
+        return true;
+      }
+      close();
+      return false;                     // fall through to the caller's launch
+    }
+    return false;
+  };
+  return { el: menu, key };
+}
+
 function openNewSession(prefillCwd, resumeSid) {
   $modal.textContent = "";
   const last = nsLast();
@@ -1181,15 +1251,8 @@ function openNewSession(prefillCwd, resumeSid) {
   dir.spellcheck = false;
   dir.placeholder = "/path/to/project";
   dir.value = prefillCwd || last.cwd || "";
-  dir.setAttribute("list", "ns-cwds");
-  const dl = el("datalist");
-  dl.id = "ns-cwds";
-  for (const cwd of [...new Set(S.sessions.map(r => r.cwd).filter(Boolean))]) {
-    const opt = el("option");
-    opt.value = cwd;
-    dl.append(opt);
-  }
-  dirRow.append(dir, dl);
+  const sug = suggest(dir, [...new Set(S.sessions.map(r => r.cwd).filter(Boolean))]);
+  dirRow.append(dir, sug.el);
 
   // start from: a fresh conversation (default), `claude --continue` (the
   // directory's most recent conversation), or `claude --resume <sid>` — the
@@ -1310,7 +1373,10 @@ function openNewSession(prefillCwd, resumeSid) {
   };
   submit.onclick = go;
   cancel.onclick = closeNewSession;
-  dir.onkeydown = (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } };
+  dir.onkeydown = (e) => {
+    if (sug.key(e)) return;
+    if (e.key === "Enter") { e.preventDefault(); go(); }
+  };
 
   panel.append(dirRow, startRow, split2, split, promptRow, actions);
   const back = el("div", "nsback");
@@ -1318,10 +1384,14 @@ function openNewSession(prefillCwd, resumeSid) {
   back.append(panel);
   $modal.append(back);
   $modal.hidden = false;
-  dir.focus();
+  document.body.classList.add("modal-open");      // scroll-lock the page behind
+  // a known directory (remembered/prefilled) means the next thing you type is
+  // the prompt — focusing the dir field there just pops its suggestion look
+  (dir.value.trim() ? prompt : dir).focus();
 }
 
 $newbtn.onclick = () => openNewSession("");
+
 // Esc in a live session view = interrupt the agent (the terminal's own Esc,
 // via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
 // slash menu, filter, dropdowns) either runs first here or stopPropagation()s
