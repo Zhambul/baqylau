@@ -197,6 +197,19 @@ function usagePct(u, key) {
   return typeof v === "number" ? v : null;
 }
 
+// Effective 5h-used % for the new-session form's load-balancing default: a
+// snapshot whose reset time has passed (or, when resets_at is unknown, one
+// older than the 5h window itself) means the window rolled over → 0 used;
+// an account with no snapshot at all has had no recent traffic → also 0.
+function fiveHourUsed(a) {
+  const u = a.usage, pct = usagePct(u, "five_hour");
+  if (pct == null) return 0;
+  const now = Date.now() / 1000;
+  const rolled = u.five_hour_reset ? u.five_hour_reset <= now
+                                   : u.ts && now - u.ts > 5 * 3600;
+  return rolled ? 0 : pct;
+}
+
 function acctPill(a) {
   const u = a.usage;
   const pill = el("div", "acct");
@@ -1140,7 +1153,7 @@ function dropdown() {
     //                through to the document handler, closing the whole modal
   };
   const choose = (i) => {
-    if (items[i]) { val = items[i].v; label(); }
+    if (items[i]) { val = items[i].v; label(); if (api.onpick) api.onpick(val); }
     close();
   };
   btn.onclick = () => (menu.hidden ? open() : close());
@@ -1160,8 +1173,9 @@ function dropdown() {
     else if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
   };
 
-  return {
+  const api = {
     el: root,
+    onpick: null,   // called with the value on a USER pick (not on fill/set)
     fill(pairs) {
       items = pairs.map(([v, txt]) => ({ v, txt }));
       if (!items.some(i => i.v === val)) val = items[0] ? items[0].v : "";
@@ -1173,6 +1187,7 @@ function dropdown() {
     get value() { return val; },
     set value(v) { val = v; label(); },
   };
+  return api;
 }
 
 // Last-used launch prefs (directory/model/effort) — preselected the next time
@@ -1323,8 +1338,13 @@ function openNewSession(prefillCwd, resumeSid) {
   // the account's latest usage inline when known. No "default" option: the
   // plain-claude login duplicates one of these accounts. The row hides when
   // there is no switcher (empty list → the launch just runs plain claude).
+  // The DEFAULT selection load-balances: the account with the most 5h headroom
+  // (fiveHourUsed; ties → registry order), refined again when the fresh
+  // /api/accounts fetch lands — unless the user already picked one by hand.
   const [acctRow, acct] = pick("account", []);
   acctRow.style.display = "none";
+  let acctPicked = false;
+  acct.onpick = () => { acctPicked = true; };
   const fillAccts = (list) => {
     acctRow.style.display = list.length ? "" : "none";
     acct.fill(list.map(a => {
@@ -1333,6 +1353,8 @@ function openNewSession(prefillCwd, resumeSid) {
         ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
       return [a.slug, a.slug + " · " + a.label + usage];
     }));
+    if (!acctPicked && list.length)
+      acct.value = list.reduce((b, a) => fiveHourUsed(a) < fiveHourUsed(b) ? a : b).slug;
   };
   if (S.accts) fillAccts(S.accts);
   fetch("/api/accounts").then(r => r.json())

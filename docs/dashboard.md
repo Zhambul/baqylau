@@ -647,6 +647,19 @@ registry is empty and whose picker row hides, still launches). The account word
 rides the same `$SHELL -lic '<word> "$@"'` login shell, so the alias resolves
 exactly as typing it in a fresh tab.
 
+The picker's **default selection load-balances across subscriptions**: the form
+preselects the account with the most 5-hour headroom (`fiveHourUsed` in app.js —
+lowest effective `five_hour` used %, computed from the usage snapshots
+`/api/accounts` already carries; ties keep registry order). "Effective" because a
+snapshot whose `five_hour_reset` has passed — or, when the reset time is unknown,
+one older than the 5h window itself — means the window rolled over and counts as
+0 used; an account with no snapshot at all has had no recent traffic and also
+counts as 0. The suggestion is recomputed when the fresh `/api/accounts` fetch
+supersedes the cached list, but a manual pick (the dropdown's `onpick` hook)
+always wins and is never overridden. Client-side deliberately: the client clock
+judges "reset has passed", and the data needed is already in the payload — no new
+endpoint or server ranking.
+
 **Which account a chat runs under** is stamped into the session's state DB at
 SessionStart (`split.cmd_open` → `state.kv_set("account", account.current())`,
 read from the env contract — no token touched) and shown in the session header
