@@ -885,7 +885,14 @@ def _frontend():
 
 
 _LIVE_WINS = {"ts": -1e9, "val": None}   # memo: {sid: win_id} tagged in a live pane
-_LIVE_TTL = 0.8                          # bound kitten-ls calls under the 1s tick
+_LIVE_TTL = 5.0   # every consumer of the map is READ-side (the live→parked
+#                   demotion + the stop-button display gate) — the control
+#                   plane never trusts it (each POST re-scans via
+#                   fe.window_for_session at action time) — so staleness only
+#                   delays noticing a crashed/killed tab by a few seconds.
+#                   That buys dropping the ~21ms `kitten @ ls` SUBPROCESS from
+#                   ~1.25/s (the old 0.8, chosen to bound it under the 1s
+#                   tick) to 0.2/s while any client keeps the payloads warm.
 
 
 def _live_windows():
@@ -917,12 +924,6 @@ def _live_windows():
             val = None
     _LIVE_WINS["ts"], _LIVE_WINS["val"] = now, val
     return val
-
-
-def _live_window(sid):
-    """The kitty window CURRENTLY tagged claude_session=<sid>, or '' — the ONLY
-    trustworthy handle for the control-plane display gate. See _live_windows."""
-    return (_live_windows() or {}).get(sid, "")
 
 
 LAUNCH_SHELLS = ("zsh", "bash")    # login shells the "$@" wrapper is valid for
@@ -1298,7 +1299,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "no terminal available"}, 503)
         # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
         # NOT the audit row's stale start-time id (typing into a reused id would
-        # land in an unrelated tab — see _live_window). '' ⇒ nothing to message.
+        # land in an unrelated tab — see _live_windows; a fresh scan, never the
+        # TTL memo). '' ⇒ nothing to message.
         win = fe.window_for_session(sid) or ""
         if not win:
             A.state_file(log, sdb, "web-send",
@@ -1842,7 +1844,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "no terminal available"}, 503)
         # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
         # NOT the audit row's stale start-time id (an Escape into a reused id
-        # would interrupt an unrelated session — see _live_window).
+        # would interrupt an unrelated session — see _live_windows; a fresh
+        # scan, never the TTL memo).
         win = fe.window_for_session(sid) or ""
         if not win:
             A.state_file(log, sdb, action, {"win": "", "ok": False})

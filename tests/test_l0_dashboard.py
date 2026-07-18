@@ -389,6 +389,27 @@ def test_sessions_stats_cache_by_db_sig(dash, monkeypatch):
     assert row["stats"].get("commands") == 2 and len(calls) > n
 
 
+def test_live_windows_memoized_by_ttl(monkeypatch):
+    """_live_windows runs ONE `kitten @ ls` per _LIVE_TTL window and serves
+    the memo in between (the ~21ms subprocess was the server's largest
+    recurring cost when the TTL sat under the 1s tick). Read-side only by
+    design — control-plane POSTs never touch this map, they re-scan via
+    fe.window_for_session at action time."""
+    calls = []
+    class FE:
+        def iter_windows(self):
+            calls.append(1)
+            yield None, None, {"id": 7, "user_vars": {"claude_session": "sX"}}
+    monkeypatch.setattr(DS, "_frontend", lambda: FE())
+    monkeypatch.setattr(DS, "_LIVE_WINS", {"ts": -1e9, "val": None})
+    assert DS._live_windows() == {"sX": "7"}
+    assert DS._live_windows() == {"sX": "7"}      # within TTL → memo, no scan
+    assert len(calls) == 1
+    DS._LIVE_WINS["ts"] -= DS._LIVE_TTL + 1       # age the memo past the TTL
+    assert DS._live_windows() == {"sX": "7"}
+    assert len(calls) == 2
+
+
 def test_global_sse_diff_is_paused_blind(dash, monkeypatch):
     """The global stream's change detection (_snap_key) ignores
     stats['paused'] — the scorebar's ~1/s awaiting-pause accumulator made the

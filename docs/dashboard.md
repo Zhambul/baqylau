@@ -566,8 +566,16 @@ never PARKED, and a tab closed WITHOUT a SessionEnd (crash / `kill -9`, or a
 leaked test DB) leaves the state DB intact, so the session would masquerade as
 running with a `kitty_window_id` that kitty has since REUSED for an unrelated
 tab. Both payloads therefore reconcile against `_live_windows()` — one
-`kitten @ ls` (memoized `_LIVE_TTL`) mapping each pane's `claude_session=<sid>`
-user-var → its window id, the authoritative "which sessions have an open tab".
+`kitten @ ls` (memoized `_LIVE_TTL`, 5s) mapping each pane's
+`claude_session=<sid>` user-var → its window id, the authoritative "which
+sessions have an open tab". The TTL can be that loose because every consumer
+of the MAP is read-side (demotion + the stop-button display gate) and
+staleness only delays noticing a crashed tab; the control-plane writes never
+trust it — each POST re-scans via `window_for_session` at action time. It
+started at 0.8s ("bound the calls under the 1s tick"), which made the ~21ms
+`kitten @ ls` subprocess the server's single largest recurring cost
+(~1.25 spawns/s while any client polled); 5s cuts that 6× for an
+imperceptible staleness window.
 A state-DB-live session that ever had a window but isn't in that map is demoted
 to not-live (and its control plane disabled). When no frontend resolves (map is
 `None`) the state-DB signal is kept as-is — we don't mark sessions dead we
