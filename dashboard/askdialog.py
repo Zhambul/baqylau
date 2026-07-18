@@ -108,11 +108,20 @@ def rows(screen):
 
 
 def current_question(screen, questions):
-    """Which of the ask's questions the dialog currently shows (its text is a
-    line of the region), or None (e.g. the review pane)."""
-    lines = {ln.strip() for ln in region(screen).splitlines()}
+    """Which of the ask's questions the dialog currently shows, or None.
+    Long question text WRAPS across screen lines (a 555-char question never
+    matched the old exact line-set lookup — the live `question 1 never
+    became current` bail, 2026-07-18), and a wrap can land mid-word (e.g.
+    at a hyphen in a path), so ALL whitespace is stripped from both sides
+    before the substring match. The review pane must answer None
+    explicitly: its answer recap repeats every question's text."""
+    reg = region(screen)
+    if REVIEW in reg:
+        return None
+    flat = "".join(reg.split())
     for i, q in enumerate(questions):
-        if (q.get("question") or "").strip() in lines:
+        text = "".join((q.get("question") or "").split())
+        if text and text in flat:
             return i
     return None
 

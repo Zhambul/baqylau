@@ -790,6 +790,14 @@ re-normalizes). The measured key model it encodes:
 - `left` at the first question is a no-op, so `left`×len(questions)
   deterministically normalizes to question 1 from any state (including
   the review pane, including a half-answered dialog);
+- each question is verified CURRENT by finding its text in the dialog
+  region — ALL whitespace stripped from both sides before the substring
+  match, because long question text wraps across screen lines and a
+  wrap can land mid-word (a hyphenated path); a real 555-char question
+  never matched the original exact line-set lookup (the live `question
+  1 never became current` bail, 2026-07-18). The review pane is
+  excluded explicitly (`current_question` → None on "Review your
+  answers") since its answer recap repeats every question's text;
 - the review pane ("Review your answers") follows the last question;
   digit `1` = "Submit answers". PostToolUse then fires with `answers`
   {question → label, ", "-joined labels (custom text joins as a label),

@@ -360,7 +360,16 @@ New always-audited swallow sites (previously silent — their absence used to ma
   answered or Esc'd in the terminal, SSE clear raced the click — benign);
   other steps name the navigation stage and pair `errors` func `dashboard
   answer (<step>)`; the dialog is left OPEN on every bail (never Escape —
-  that declines), so the user can retry or finish in the terminal. Answers
+  that declines), so the user can retry or finish in the terminal. A
+  `step: question` bail ("question N never became current") on a
+  pre-2026-07-18-fix build is the WRAPPED-QUESTION bug (session 412b980b: a
+  555-char question wraps across screen lines, and `current_question`'s
+  exact line-set match could never see it — fixed by stripping ALL
+  whitespace from both sides before a substring match, with the review pane
+  excluded explicitly because its recap repeats the question texts); on a
+  current build it means the question
+  text genuinely never appeared (dialog gone, or the payload's question
+  text diverged from what the TUI renders). Answers
   WRONG in the transcript → compare the PostToolUse `answers` against the
   `web-answer` row's intent; multiSelect digits TOGGLE, so a pre-toggled box
   the page didn't know about points at the screen-diff logic

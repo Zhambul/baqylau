@@ -8,6 +8,7 @@ import gzip
 import json
 import os
 import sys
+import textwrap
 import threading
 import urllib.error
 import urllib.request
@@ -1792,7 +1793,9 @@ class _AskFE(_FakeFE):
                               "Ready to submit your answers?", "",
                               "❯ 1. Submit answers", "  2. Cancel"])
         qi, q = self.tab, self.questions[self.tab]
-        lines = [bar, "", q.get("question") or "", ""]
+        # question text WRAPS like the real TUI's (the 555-char live ask)
+        lines = [bar, ""] \
+            + (textwrap.wrap(q.get("question") or "", 48) or [""]) + [""]
         for i, (digit, label) in enumerate(self._rows(qi)):
             cur = "❯ " if i == self.cursor else "  "
             if not digit:
@@ -1857,6 +1860,36 @@ def test_post_answer_two_questions_mixed(dash, monkeypatch):
     assert code == 200
     assert fe.submitted == {"Pick a planet": "Venus",
                             "Pick metals": "Iron, Zinc, titanium"}
+
+
+_ASK_LONGQ = [{"question": "Which rename mechanism should the dashboard "
+               "use? The research doc (docs/session-naming-findings.md) "
+               "found two channels: appending a record to the session's "
+               "transcript JSONL (works for live AND parked sessions, but "
+               "the live kitty tab title won't change until next resume), "
+               "or typing the command into the live TUI like the composer "
+               "does (fully native, but only works for live sessions).",
+               "header": "Mechanism",
+               "multiSelect": False,
+               "options": [{"label": "JSONL append"}, {"label": "TUI"}]},
+              {"question": "Where should the rename affordance live?",
+               "header": "Placement", "multiSelect": False,
+               "options": [{"label": "Header"}, {"label": "Cards"}]}]
+
+
+def test_post_answer_wrapped_long_question(dash, monkeypatch):
+    # the live 2026-07-18 bail: a 555-char question WRAPS across screen
+    # lines, and the old exact line-set match never saw it become current
+    # ("question 1 never became current" at step `question`)
+    fe = _AskFE(_ASK_LONGQ)
+    _ask_env(monkeypatch, "ask7", "47", fe, _ASK_LONGQ)
+    code, _ = _post(dash + "/api/session/ask7/answer",
+                    {"tool_use_id": "toolu_a1",
+                     "answers": [{"selected": ["JSONL append"], "other": ""},
+                                 {"selected": ["Header"], "other": ""}]})
+    assert code == 200
+    assert fe.submitted == {_ASK_LONGQ[0]["question"]: "JSONL append",
+                            _ASK_LONGQ[1]["question"]: "Header"}
 
 
 def test_post_answer_multi_diffs_against_screen(dash, monkeypatch):
@@ -1976,6 +2009,18 @@ def test_askdialog_parsers_pin_the_real_screens():
     assert [r["cursor"] for r in rs] == [True] + [False] * 6
     qs = [{"question": "Which toppings?"}, {"question": "Other thing?"}]
     assert AD.current_question(_ASK_MULTI_SCREEN, qs) == 0
+    # a long question WRAPS across screen lines — flattened match (the live
+    # "question 1 never became current" bail, 2026-07-18)
+    wrapped = _ASK_MULTI_SCREEN.replace(
+        "Which toppings?",
+        "Which toppings should the kitchen put on\nthe pizza tonight?")
+    long_qs = [{"question": "Which toppings should the kitchen put on the "
+                            "pizza tonight?"}]
+    assert AD.current_question(wrapped, long_qs) == 0
+    # the review pane's answer recap repeats the question texts — it must
+    # still read as "no current question"
+    review_qs = [{"question": "Cats or dogs?"}, {"question": "Tea or coffee?"}]
+    assert AD.current_question(_ASK_REVIEW_SCREEN, review_qs) is None
     # the column-0 scrollback echo is outside the chip-bar region
     assert "scrollback" not in AD.region(_ASK_MULTI_SCREEN)
     assert AD.review_open(_ASK_REVIEW_SCREEN)
