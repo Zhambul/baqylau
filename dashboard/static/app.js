@@ -1400,15 +1400,17 @@ function openNewSession(prefillCwd, resumeSid) {
 $newbtn.onclick = () => openNewSession("");
 
 /* ---------- readline-style editing keys (kitty-like) ---------- */
-// ⌥W deletes the word left of the cursor, ⌥A jumps to line start, ⌥E to line
+// ⌃W deletes the word left of the cursor, ⌃A jumps to line start, ⌃E to line
 // end — the kitty/shell editing keys, in every dashboard text box (composer,
 // first prompt, directory, filter). One delegated listener: element handlers
-// (slash menu, suggest, filter-Esc) run first and none of them claim ⌥-keys.
-// Match on e.code, not e.key — macOS Option produces "∑"/"å" and ⌥E is a
-// dead key, so e.key never reads as the letter. ⌥W dispatches an input event
-// so autoGrow / the suggest and filter oninput hooks see the edit.
+// (slash menu, suggest, filter-Esc) run first and none of them claim ⌃-keys.
+// Safe to preventDefault on macOS — the browser's own accelerators live on
+// ⌘, not ⌃ (and this beats the Cocoa text bindings only where behavior
+// differs anyway). Match on e.code so a non-QWERTY layout can't move the
+// keys. ⌃W dispatches an input event so autoGrow / the suggest and filter
+// oninput hooks see the edit.
 document.addEventListener("keydown", (e) => {
-  if (!e.altKey || e.ctrlKey || e.metaKey || e.shiftKey) return;
+  if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
   const t = e.target;
   if (!t || (t.tagName !== "TEXTAREA" &&
              !(t.tagName === "INPUT" && t.type === "text"))) return;
@@ -1443,10 +1445,39 @@ function interruptSession() {
     .then(() => toast("done", "interrupted", "Esc sent to the session"))
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }
+
+// Double Esc = Claude Code's rewind gesture (/rewind — the checkpoint menu,
+// which opens IN THE TERMINAL; the web only mirrors the presses). One POST
+// sends both Escapes — posting each press as its own /interrupt read as a
+// double interrupt.
+function rewindSession() {
+  const meta = (S.ses && S.ses.meta) || {};
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
+    .then(() => toast("done", "rewind",
+                      "double Esc sent — pick a checkpoint in the kitty tab"))
+    .catch(e => toast("ask", "rewind failed", (e && e.error) || ""));
+}
+
+// A single Esc is held for ESC_DOUBLE_MS before it becomes an interrupt; a
+// second Esc inside that window upgrades the gesture to rewind. The hold is
+// imperceptible for the interrupt case and buys exact TUI parity: one press
+// = interrupt, two = rewind.
+const ESC_DOUBLE_MS = 350;
+let escPending = null;
 document.addEventListener("keydown", (e) => {
   if (e.key !== "Escape") return;
   if (!$modal.hidden) return closeNewSession();
-  interruptSession();
+  if (escPending) {
+    clearTimeout(escPending);
+    escPending = null;
+    rewindSession();
+    return;
+  }
+  escPending = setTimeout(() => {
+    escPending = null;
+    interruptSession();
+  }, ESC_DOUBLE_MS);
 });
 
 function setBadge(badge, tab) {

@@ -312,12 +312,12 @@ at `GROW_CAP` = 40% of the viewport (mirrored as `max-height: 40vh` in CSS)
 so a long paste can't swallow the page. Every dashboard text box (the two
 message boxes plus the directory and filter fields — one delegated document
 listener over `textarea`/`input[type=text]`) also gets the kitty/shell
-readline editing keys: **⌥W** deletes the word left of the cursor (or the
-selection), **⌥A** jumps to the start of the current line, **⌥E** to its
-end. Matching is on `e.code` — on macOS, Option remaps `e.key` (`å`, `∑`)
-and ⌥E is a dead key, so the letter never appears there — and ⌥W dispatches
-an `input` event so `autoGrow` and the suggest/filter `oninput` hooks see
-the edit.
+readline editing keys: **⌃W** deletes the word left of the cursor (or the
+selection), **⌃A** jumps to the start of the current line, **⌃E** to its
+end. Ctrl is free real estate in a macOS browser (the browser's own
+accelerators live on ⌘), matching is on `e.code` so a non-QWERTY layout
+can't move the keys, and ⌃W dispatches an `input` event so `autoGrow` and
+the suggest/filter `oninput` hooks see the edit.
 
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
