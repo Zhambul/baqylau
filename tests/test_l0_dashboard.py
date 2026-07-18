@@ -2749,6 +2749,10 @@ def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
 
 
 def test_post_new_session_account_picker(dash, monkeypatch, tmp_path):
+    from plugins.claude_code import account as ACC
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     # a known slug launches via its alias command word (c2 "$@")
