@@ -243,21 +243,19 @@ code, pre, .mono { font-family: var(--mono); }
 .xclose:disabled { color: var(--dim2); cursor: default; }
 
 /* ---- session view ------------------------------------------------------ */
+/* Deliberately NOT sticky: the header scrolls away with the page — only the
+   top bar and attention bar stay pinned (the keyboard gestures are document-
+   level, so stop/rewind stay reachable without it). Opaque like .scard: it
+   never floats over content, so no translucency/backdrop blur. */
 .shead {
-  position: sticky; top: 47px; z-index: 40;
   background:
     linear-gradient(135deg,
       color-mix(in srgb, var(--state) 15%, transparent),
       color-mix(in srgb, var(--state) 4%, transparent) 55%, transparent),
-    linear-gradient(180deg,
-      color-mix(in srgb, var(--panel2) 92%, transparent),
-      color-mix(in srgb, var(--panel) 88%, transparent));
-  backdrop-filter: blur(10px);
+    linear-gradient(180deg, var(--panel2), var(--panel));
   box-shadow: var(--scard); border-radius: var(--r);
   padding: 11px 15px; margin-bottom: 12px;
 }
-/* when the attention bar is showing it takes the 47px slot; drop shead below it */
-body.attn-on .shead { top: 81px; }
 .shead .l1 { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 /* session action buttons (stop/cancel/rewind/close, resume) — their own row
    below the title line, so they never float with the title's width */
@@ -890,7 +888,10 @@ body.modal-open { overflow: hidden; }
 
 /* ---- agents rail -------------------------------------------------------- */
 .rail { display: flex; flex-direction: column; gap: 8px; align-self: start;
-  position: sticky; top: 132px; max-height: calc(100vh - 145px); overflow-y: auto; }
+  position: sticky; top: 59px; max-height: calc(100vh - 72px); overflow-y: auto; }
+/* when the attention bar is showing it takes the below-header slot; drop the
+   sticky rail below it (min-height 34px) so the two never overlap */
+body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 .acard {
   display: block; color: var(--text);
   background:

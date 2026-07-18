@@ -1570,8 +1570,8 @@ survives the router's re-renders) lists every LIVE session whose tab state is
 `awaiting-command` as a red pulsing pill (`--ask`, the badge's own dot
 animation) and every `awaiting-response` session as a quieter green pill
 (`--done`) after them; it is `hidden` entirely when nothing needs attention,
-and when it shows, `body.attn-on` drops the session view's sticky `.shead`
-below it so the two never overlap. It is fed by the same global `sessions` SSE
+and when it shows, `body.attn-on` drops the session view's sticky agents rail
+(`.rail`) below it so the two never overlap. It is fed by the same global `sessions` SSE
 snapshots the app already holds (`renderAttention()` reruns on every snapshot)
 plus the open session's per-session `tab` SSE event, which patches that row in
 place so the bar reacts before the next global snapshot lands. The count of
@@ -1664,6 +1664,17 @@ blue, done green, cancelled/crashed red, unknown amber) since a subagent has
 no tab of its own. The tint made the "live" chip redundant — it's gone from
 both the session cards and the header; only the inactive states still label
 themselves (`parked`/`gone`).
+
+**The header scrolls with the page.** The session header (the web scoreboard)
+is deliberately NOT sticky — it was once pinned under the top bar, but a
+tall header (title + two action rows + stats + ctx bar) hogged viewport over
+the conversation. Only the global chrome stays pinned: the top bar, the
+attention bar, and the agents rail (sticky beside the stream, yielding to the
+attention bar via `body.attn-on .rail`). Nothing becomes unreachable when the
+header scrolls away — the control gestures are document-level (Esc =
+interrupt, etc.) and the attention bar + toasts still surface state — so
+don't re-pin it as a "fix"; if the mouse path to ■ stop ever matters, the
+answer is a collapsing slim bar, not restoring the full sticky header.
 
 ## Testing
 
