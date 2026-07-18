@@ -174,6 +174,10 @@ class Notifier:
                 "kind": kind, "state": state, "sid": row.get("sid"),
                 "cwd": row.get("cwd") or "",
                 "project": os.path.basename(row.get("cwd") or "") or row.get("sid"),
+                # resolved at push time, not winmap-refresh time: the title is
+                # transcript-derived and the transcript just grew ((path, size)
+                # cache in session_title keeps this cheap)
+                "title": session_title(row.get("transcript_path") or ""),
             })
 
     def run(self):

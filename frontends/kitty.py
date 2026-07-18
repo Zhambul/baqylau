@@ -122,9 +122,12 @@ def kitten_send_key(kitten, listen, win, *keys):
 
 
 def kitten_launch_tab(kitten, listen, cwd, argv):
-    """`kitten @ launch --type=tab --cwd <cwd> <argv…>` — a new tab running
-    argv (a list, never a shell string, so no interpolation). True on rc 0."""
-    return kitten_run(kitten, listen, "launch", "--type=tab",
+    """`kitten @ launch --type=tab --keep-focus --cwd <cwd> <argv…>` — a new
+    tab running argv (a list, never a shell string, so no interpolation).
+    `--keep-focus` because the only caller is the web dashboard's new-session:
+    without it kitty focuses the new tab AND macOS activates the kitty app,
+    yanking the user out of the browser they launched from. True on rc 0."""
+    return kitten_run(kitten, listen, "launch", "--type=tab", "--keep-focus",
                       "--cwd", cwd, *argv) == 0
 
 

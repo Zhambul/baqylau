@@ -756,8 +756,13 @@ audit `sessions` rows' `kitty_window_id` (newest session wins the window — a
 kitty window outlives sessions). A transition INTO `awaiting-command` (red —
 Claude is asking you) or `awaiting-response` (green — done, your turn) pushes
 a `notify` event to every `/events` client; the app shows an in-page toast
-always and an OS `Notification` when the page is hidden. The first scan is a
-baseline, never news. Windowless sessions (headless/daemon) produce no
+always and an OS `Notification` when the page is hidden. The payload carries
+the session TITLE (`session_title` over the row's transcript, resolved at
+push time — the transcript just grew, so a winmap-refresh-time title would be
+stale) and the app shows it as the toast/notification body line, so
+"kitty is done" says *which* session is done; the generic
+"Claude is asking a question" / "finished — your turn" line survives only as
+the no-title fallback. The first scan is a baseline, never news. Windowless sessions (headless/daemon) produce no
 toasts, same as they have no tab colour — that's the tab system's own
 scoping, not a dashboard limitation.
 

@@ -752,7 +752,10 @@ def test_http_history_endpoint(dash):
 
 def test_notifier_transitions(monkeypatch):
     n = DS.Notifier()
-    n.winmap = {"7": {"sid": "s7", "cwd": "/w/proj"}}
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w/proj",
+                      "transcript_path": "/w/t.jsonl"}}
+    monkeypatch.setattr(DS, "session_title",
+                        lambda p: "fix the flaky test" if p else "")
     q = n.register()
     seq = [{"7": "working"}, {"7": "working"}, {"7": "awaiting-command"},
            {"7": "awaiting-command"}, {"7": "awaiting-response"}]
@@ -768,6 +771,7 @@ def test_notifier_transitions(monkeypatch):
     assert [(ev, p["kind"]) for ev, p in got] == \
         [("notify", "asking"), ("notify", "done")]
     assert got[0][1]["sid"] == "s7" and got[0][1]["project"] == "proj"
+    assert got[0][1]["title"] == "fix the flaky test"
     n.unregister(q)
 
 

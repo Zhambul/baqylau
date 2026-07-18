@@ -154,7 +154,10 @@ class Frontend:
 
     def launch_tab(self, cwd, argv):
         """Open a NEW tab whose window runs `argv` with working directory
-        `cwd`. Truthy on success, False on failure."""
+        `cwd`, WITHOUT stealing focus (the caller is the web dashboard — the
+        user is in a browser and must stay there; on macOS a focusing launch
+        also activates the terminal app). Truthy on success, False on
+        failure."""
         return False
 
     def close_tab(self, win):

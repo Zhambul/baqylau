@@ -350,14 +350,17 @@ def test_send_text_enter_write_failure_is_false(monkeypatch):
 
 
 def test_launch_tab_argv(monkeypatch):
-    """launch_tab → `kitten @ launch --type=tab --cwd <cwd> <argv…>`, argv a
-    list (never a shell string). Truthy on rc 0."""
+    """launch_tab → `kitten @ launch --type=tab --keep-focus --cwd <cwd>
+    <argv…>`, argv a list (never a shell string). --keep-focus: the caller is
+    the web dashboard — a focusing launch activates the terminal app on macOS
+    and yanks the user out of the browser. Truthy on rc 0."""
     calls = []
     monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
     fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
     assert fe.launch_tab("/proj", ["claude", "fix the bug"]) is True
     assert calls == [["/k", "unix:/tmp/x", "launch", "--type=tab",
-                      "--cwd", "/proj", "claude", "fix the bug"]]
+                      "--keep-focus", "--cwd", "/proj",
+                      "claude", "fix the bug"]]
     monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
     assert fe.launch_tab("/proj", ["claude"]) is False
 
