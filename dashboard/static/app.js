@@ -1837,6 +1837,31 @@ function openNewSession(prefillCwd, resumeSid) {
 
 $newbtn.onclick = () => openNewSession("");
 
+/* ---------- fullscreen toggle ---------- */
+// Header ⛶ button: browser Fullscreen API on the whole document, with the
+// WebKit-prefixed fallback (iPadOS Safari ships only webkitRequestFullscreen).
+// Hidden where neither exists (iPhone Safari). State syncs on the
+// fullscreenchange event, not in the click handler, so Esc / the browser's
+// own exit path keeps the button honest.
+{
+  const $fsbtn = document.getElementById("fsbtn");
+  const root = document.documentElement;
+  const req = root.requestFullscreen || root.webkitRequestFullscreen;
+  const exit = document.exitFullscreen || document.webkitExitFullscreen;
+  const cur = () => document.fullscreenElement || document.webkitFullscreenElement;
+  if (!req) {
+    $fsbtn.hidden = true;
+  } else {
+    $fsbtn.onclick = () => {
+      const p = cur() ? exit.call(document) : req.call(root);
+      if (p && p.catch) p.catch(() => {});   // e.g. permission denied — no-op
+    };
+    const sync = () => { $fsbtn.title = cur() ? "exit fullscreen" : "fullscreen"; };
+    document.addEventListener("fullscreenchange", sync);
+    document.addEventListener("webkitfullscreenchange", sync);
+  }
+}
+
 /* ---------- readline-style editing keys (kitty-like) ---------- */
 // ⌃W deletes the word left of the cursor, ⌃A jumps to line start, ⌃E to line
 // end — the kitty/shell editing keys, in every dashboard text box (composer,

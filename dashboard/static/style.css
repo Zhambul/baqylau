@@ -98,6 +98,7 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 4px 12px; cursor: pointer; font-size: 12px;
 }
 .ghost:hover { color: var(--text); box-shadow: var(--card-hover); }
+#fsbtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
 
 /* ---- global attention bar (persistent complement to toasts) ----------- */
 /* Slim hairline bar under the header, on every view; hidden when nothing
