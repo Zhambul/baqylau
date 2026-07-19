@@ -1024,6 +1024,7 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
   display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .acard .meta { color: var(--dim); font-size: 11px; margin-top: 5px; font-family: var(--mono);
   display: flex; gap: 10px; flex-wrap: wrap; }
+.acard .meta .amodel { color: var(--text-soft); }
 .acard.husk { opacity: .5; }
 .st-ok { color: var(--done); } .st-bad { color: var(--red); }
 .st-run { color: var(--exec); } .st-warn { color: var(--amber); }

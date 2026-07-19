@@ -939,8 +939,39 @@ def test_context_saturation_payloads_and_sse(dash, tmp_path):
     assert ov["ctx"]["pct"] == 50                   # the sidechain row didn't win
     ag = next(a for a in ov["agents"] if a["agent_id"] == "agC")
     assert ag["ctx"]["used"] == 60000 and ag["ctx"]["pct"] == 30
+    # the model·effort card chip rides free off the ctx probe's model id;
+    # haiku has no adaptive-reasoning default and no session effort here, so
+    # the card shows model-only
+    assert ag["model"] == "haiku-4.5" and "effort" not in ag
     data = _sse_event(dash + "/events/session/ctxS?after=0&mpos=0", "ctx")
     assert data and json.loads(data)["ctx"]["pct"] == 50
+
+
+def test_agent_card_model_effort(dash, tmp_path):
+    """An agent card carries its running model (shortened) + effort — the web
+    echo of the terminal mirror's op tag. An adaptive-reasoning model with no
+    session effort set falls to its own default (opus-4.8 -> high); the chip
+    also rides the live `agents` SSE event."""
+    tp = tmp_path / "meff-main.jsonl"
+    tp.write_text(json.dumps({"type": "assistant", "message": {
+        "id": "m1", "model": "claude-opus-4-8",
+        "usage": {"input_tokens": 1000, "output_tokens": 5}}}) + "\n")
+    A.session_start({"session_id": "meffS", "cwd": "/w",
+                     "transcript_path": str(tp)})
+    atp = tmp_path / "agent-agM.jsonl"
+    atp.write_text(json.dumps({"type": "assistant", "isSidechain": True,
+                               "message": {"id": "a1", "model": "claude-opus-4-8",
+                                           "usage": {"input_tokens": 40000,
+                                                     "output_tokens": 9}}}) + "\n")
+    A.stream_start(P.mirror_log("meffS"), "subagent", agent_id="agM",
+                   src_path=str(atp))
+    ov = _get_json(dash + "/api/session/meffS")
+    ag = next(a for a in ov["agents"] if a["agent_id"] == "agM")
+    assert ag["model"] == "opus-4.8" and ag["effort"] == "high"
+    sse = _sse_event(dash + "/events/session/meffS?after=0&mpos=0", "agents")
+    assert sse
+    agS = next(a for a in json.loads(sse) if a["agent_id"] == "agM")
+    assert agS["model"] == "opus-4.8" and agS["effort"] == "high"
 
 
 def test_git_chip_payloads(dash, tmp_path):

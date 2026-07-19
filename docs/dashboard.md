@@ -1703,6 +1703,29 @@ grouping (occupancy is a *last-request* fact, not a total), and the status-line
 stdin carries rate limits, not context. The transcript tail is live, survives
 parking (transcripts persist), and covers agents uniformly.
 
+## Agent model·effort (the card's op-tag echo)
+
+Every agent card's meta row carries a `opus-4.8·high` chip (`.amodel`, between
+the status chip and the `N events` count) — the web echo of the terminal
+mirror's per-op model tag (`substream.op_tag`), so a glance at the rail tells
+you *which* model (and reasoning effort) each subagent is burning.
+
+**Free off the ctx probe, no new store.** The model needs no extra read: the
+`context_probe` that `agents_ctx` already ran stamps each agent's raw model id
+onto `ctx["model"]` (the last assistant turn's `model`), so `agents_model_effort`
+just reads that back and shortens it (`model.short_model` — `claude-opus-4-8` →
+`opus-4.8`). Effort mirrors the substream's `EFFORT_CFG or model_default_effort()`
+resolution: the session's SAVED effort (the same `plugins.effort_default` value
+the quick-button shows, resolved once up front and reused for both), else the
+running model's default (`model.model_default_effort` — `high` for opus-4.8,
+`""` for a model without adaptive reasoning, which then shows model-only). The
+one divergence from the terminal tag: a per-agent frontmatter/env effort override
+(the substream's higher-precedence source) isn't readable out-of-process here, so
+an agent that overrides effort shows the session/default value. Agents with no
+ctx yet (husks, not-yet-started) carry no model chip — exactly as their ctx bar
+is absent. Rides the same `agents` SSE event, so it appears live and survives
+parking.
+
 ## Git chips (branch + worktree)
 
 Which checkout a session runs in — `⎇ branch` (accent, a trailing `*` when

@@ -3697,6 +3697,9 @@ function agentCard(a) {
   if (a.desc) card.append(el("div", "desc", a.agent_id));
   const m = el("div", "meta");
   m.append(el("span", stcls, sttxt));
+  // model·effort — the web echo of the terminal mirror's op tag (opus-4.8·high)
+  if (a.model) m.append(el("span", "amodel",
+    a.model + (a.effort ? "·" + a.effort : "")));
   if (a.tools != null) m.append(el("span", "", a.tools + " events"));
   if (a.started_at && a.ended_at)
     m.append(el("span", "", dur(a.ended_at - a.started_at)));

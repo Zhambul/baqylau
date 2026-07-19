@@ -546,6 +546,29 @@ def agents_ctx(agents):
     return agents
 
 
+def agents_model_effort(agents, effort):
+    """Stamp each agent row with the short model id + effort level it runs — the
+    web card's echo of the terminal mirror's `opus-4.8·high` op tag
+    (substream.op_tag). The model rides FREE on the ctx probe agents_ctx already
+    stamped (ctx["model"] is the raw id of the agent's last assistant turn, from
+    transcript.context_probe), so no extra file read; effort mirrors the
+    substream's `EFFORT_CFG or model_default_effort()` — the session's saved
+    effort, else the running model's default (a frontmatter/env per-agent effort
+    override, the substream's higher-precedence source, isn't readable here and
+    is the one divergence). Rows with no ctx (husks, not-yet-started agents) stay
+    unstamped, exactly as their ctx bar does."""
+    from plugins.claude_code import model as M
+    for a in agents:
+        raw = (a.get("ctx") or {}).get("model") or ""
+        if not raw:
+            continue
+        a["model"] = M.short_model(raw)
+        eff = effort or M.model_default_effort(raw)
+        if eff:
+            a["effort"] = eff
+    return agents
+
+
 def _session_slug(sid):
     """The session's subscription-account slug from its statusline stash
     ('' for the default account / no stash) — resolves WHICH user-level
@@ -572,6 +595,9 @@ def session_payload(sid):
     # settings.json)
     data["effort"] = plugins.effort_default(data.get("cwd") or "",
                                             _session_slug(sid))
+    # the agent cards' per-agent model·effort — reuses the ctx just stamped, so
+    # the session effort resolved above is its inherit-default
+    agents_model_effort(data["agents"], data["effort"])
     data["running"] = API.running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
@@ -2564,7 +2590,12 @@ class Handler(BaseHTTPRequestHandler):
                 # lingering tab state forever (green while kitty is magenta)
                 row = API.session_row(sid) or {}
                 win = str(row.get("kitty_window_id") or "") or win
-                agents = agents_ctx(visible_agents(API.agents(sid)))
+                # resolved up front so the agent cards' inherit-default effort
+                # matches the effort quick-button pushed below (one resolve)
+                eff = plugins.effort_default(row.get("cwd") or "",
+                                             _session_slug(sid))
+                agents = agents_model_effort(
+                    agents_ctx(visible_agents(API.agents(sid))), eff)
                 if agents != prev["agents"]:
                     prev["agents"] = agents
                     if not self._sse("agents", agents):
@@ -2594,8 +2625,7 @@ class Handler(BaseHTTPRequestHandler):
                         return
                 # the effort quick-button, live — a terminal-side /effort
                 # saves to settings and shows here on the slow cadence
-                eff = plugins.effort_default(row.get("cwd") or "",
-                                             _session_slug(sid))
+                # (eff resolved above, before the agent-card stamp)
                 if eff != prev["effort"]:
                     prev["effort"] = eff
                     if not self._sse("effort", {"effort": eff}):
