@@ -1,9 +1,9 @@
 __pycache__/
 *.pyc
 claude-tab-status.log
-# audit system artifacts — the DB lives in ~/.claude/kitty-audit by default, but
+# audit system artifacts — the DB lives in ~/.claude/baqylau-audit by default, but
 # keep it out of git even if CLAUDE_AUDIT_DIR is pointed into the repo
-kitty-audit/
+baqylau-audit/
 *.db
 *.db-wal
 *.db-shm

@@ -20,7 +20,7 @@ This module records everything durable enough to chase a bug after the fact:
 
 ON by default; set CLAUDE_AUDIT=0 to turn it off (every call becomes a no-op).
 The DB lives OUTSIDE /tmp (session artifacts there are deleted at SessionEnd) in
-$CLAUDE_AUDIT_DIR or ~/.claude/kitty-audit/audit.db — one global DB, all sessions,
+$CLAUDE_AUDIT_DIR or ~/.claude/baqylau-audit/audit.db — one global DB, all sessions,
 WAL mode so the many concurrent short-lived writers never block each other. Audit
 failures NEVER propagate to callers: a failed write degrades to an append-only
 spool (spool.jsonl) that is re-ingested on the next successful open, so auditing
@@ -61,7 +61,7 @@ def enabled():
 
 def audit_dir():
     d = (os.environ.get("CLAUDE_AUDIT_DIR") or "").strip()
-    return d or os.path.expanduser("~/.claude/kitty-audit")
+    return d or os.path.expanduser("~/.claude/baqylau-audit")
 
 
 def db_path():

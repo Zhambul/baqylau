@@ -344,7 +344,7 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   which detaches this session's codex watcher and returns immediately. `close`
   (SessionEnd) closes that session's mirror + bar and **parks** its state DB
   (`<log>.state.db*` — ops history, scoreboard, coordination state) by MOVING it
-  into the **durable** park dir `~/.claude/kitty-mirror-history/` (`core/paths.py`
+  into the **durable** park dir `~/.claude/baqylau-mirror-history/` (`core/paths.py`
   `HISTORY_DIR`/`parked_db`), and sweeps stale debris (parked/orphaned session
   files older than 7
   days, pre-migration leftovers). The `close` path runs **even when the frontend

@@ -33,7 +33,7 @@ Any session started with the timing knobs set is self-evident in the audit:
 **In-process audit writes are sandboxed too** (2026-07-16): subprocesses get
 their hermetic `CLAUDE_AUDIT_DIR` from `test_env`, but a unit test calling
 audit-writing product code *directly* (e.g. `spawn_detached`'s script-missing
-degrade row) used to hit the REAL `~/.claude/kitty-audit` DB — and such rows
+degrade row) used to hit the REAL `~/.claude/baqylau-audit` DB — and such rows
 are global (no sid), so every live session's ⚠ warning light surfaced the
 suite's own deliberate error rows. The autouse `_fresh_audit_conn` fixture now
 points `CLAUDE_AUDIT_DIR` at a per-test sandbox for the in-process side as

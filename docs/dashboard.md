@@ -1938,7 +1938,7 @@ snapshots the app already holds (`renderAttention()` reruns on every snapshot)
 plus the open session's per-session `tab` SSE event, which patches that row in
 place so the bar reacts before the next global snapshot lands. The count of
 asking sessions (only asking — busy/idle chats are ambient, not news) also
-prefixes the browser tab title (`(2) claude · dashboard`)
+prefixes the browser tab title (`(2) baqylau · dashboard`)
 and swaps the favicon to a red-dotted variant, so a backgrounded tab still
 shows the ask count. The currently-open session's own pill is de-emphasized
 (it's the one you're already looking at) but still shown, for consistency —

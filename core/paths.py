@@ -51,7 +51,7 @@ TAB_DB = _TMP + "/claude-kitty-tab.db"
 HISTORY_DIR = os.path.join(
     _TMP if os.environ.get("CLAUDE_MIRROR_TMPDIR")
     else os.path.expanduser("~/.claude"),
-    "kitty-mirror-history",
+    "baqylau-mirror-history",
 )
 
 # The GLOBAL (per-machine, not per-session) OTLP-receiver singleton lock DB. The
@@ -59,13 +59,13 @@ HISTORY_DIR = os.path.join(
 # process-global env var, so a single receiver serves every session. Its pid-lock
 # lives here (mirrors TAB_DB's convention); relocated by CLAUDE_MIRROR_TMPDIR so
 # the test suite stays hermetic.
-OTLP_DB = _TMP + "/claude-kitty-otlp.db"
+OTLP_DB = _TMP + "/claude-baqylau-otlp.db"
 
 # The GLOBAL web-dashboard singleton lock DB (dashboard/server.py). One dashboard
 # process per machine — it serves EVERY session (live and parked), so the lock is
 # per-machine like OTLP_DB, and lives in /tmp for the same self-clear-on-reboot
 # reason (the pid-lock is runtime state; the second guard is the port bind).
-DASH_DB = _TMP + "/claude-kitty-dash.db"
+DASH_DB = _TMP + "/claude-baqylau-dash.db"
 
 
 def sanitize_sid(sid):

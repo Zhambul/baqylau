@@ -1054,7 +1054,7 @@ def test_spawn_detached_missing_script_returns_none(tmp_path):
     """A renamed/deleted script must return None (audited), never raise.
     The degrade row must land in the per-test audit sandbox (conftest's
     _fresh_audit_conn redirects CLAUDE_AUDIT_DIR for in-process calls) — this
-    test once wrote a GLOBAL row into the REAL ~/.claude/kitty-audit DB, which
+    test once wrote a GLOBAL row into the REAL ~/.claude/baqylau-audit DB, which
     every live session's ⚠ warning light then surfaced."""
     import sqlite3
     from core import audit as A

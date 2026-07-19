@@ -66,7 +66,7 @@ def _fresh_audit_conn(tmp_path):
     ALSO sandbox CLAUDE_AUDIT_DIR for in-process product calls: subprocess
     seams get the hermetic dir from test_env, but a unit test calling
     audit-writing product code directly (spawn_detached's script-missing
-    degrade row) used to write to the REAL ~/.claude/kitty-audit DB — and such
+    degrade row) used to write to the REAL ~/.claude/baqylau-audit DB — and such
     rows are GLOBAL (no sid), so every LIVE session's ⚠ warning light surfaced
     the suite's own deliberate error rows (observed: '⚠ audit: global: -c:
     NoneType: None' in an unrelated session's mirror — '-c' is the xdist
@@ -440,7 +440,7 @@ class Session:
         # CLAUDE_MIRROR_TMPDIR seam relocates into the hermetic tmpdir. Re-stated
         # here (like the paths above) to pin the format.
         self.parked_db = (env["CLAUDE_MIRROR_TMPDIR"]
-                          + "/kitty-mirror-history/" + self.sid + ".state.db")
+                          + "/baqylau-mirror-history/" + self.sid + ".state.db")
 
     # ---- transcript writers (shapes per plugins/claude_code/accounting.py bump_transcript) ----
     def add_line(self, obj):

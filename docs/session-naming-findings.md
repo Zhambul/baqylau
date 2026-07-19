@@ -97,7 +97,7 @@ If never named, the picker shows the conversation summary / first prompt plus me
 ~/.claude/projects/<project-hash>/<session-id>.jsonl
 ```
 - `<project-hash>` = the absolute cwd with **both `/` and `.` replaced by `-`**
-  (e.g. `/Users/z.yermagambet/code/personal/kitty` → `-Users-z-yermagambet-code-personal-kitty`).
+  (e.g. `/Users/z.yermagambet/code/personal/baqylau` → `-Users-z-yermagambet-code-personal-baqylau`).
   The `.`→`-` rule matters for usernames/paths containing dots.
 - `<session-id>` = the session UUID (also the filename stem).
 

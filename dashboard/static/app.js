@@ -206,8 +206,13 @@ function initNotifBtn() {
 // bar re-renders every snapshot tick, and pills that shuffle under the cursor
 // are a misclick trap.
 
-const BASE_TITLE = "claude · dashboard";
-const FAV_GLYPH = "<text y='13' font-size='13'>⬡</text>";
+const BASE_TITLE = "baqylau · dashboard";
+// the baqylau eye — бақылау, "observation": eye outline, magenta (busy) iris
+const FAV_GLYPH =
+  "<path d='M1 8 Q8 1.5 15 8 Q8 14.5 1 8 Z' fill='none'"
+  + " stroke='#7d8590' stroke-width='1.6'/>"
+  + "<circle cx='8' cy='8' r='3.4' fill='#c678dd'/>"
+  + "<circle cx='8' cy='8' r='1.5' fill='#1a0620'/>";
 const favData = (extra) =>
   "data:image/svg+xml," + encodeURIComponent(
     "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>"

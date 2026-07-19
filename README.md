@@ -1,6 +1,11 @@
-# claude-kitty
+<p align="center"><img src="docs/assets/logo.svg" width="112" alt="baqylau"></p>
+
+# baqylau
 
 **A kitty-terminal cockpit for Claude Code — built entirely out of hooks.**
+
+*baqylau* (Kazakh *бақылау*) means observation — watching over every session.
+Formerly known as *claude-kitty*.
 
 Tab colors that track what Claude is doing, a live mirror pane streaming every
 command and agent, and an always-on SQLite audit trail. No daemon, no build
@@ -51,13 +56,13 @@ SQLite.
    the single dispatcher entry:
    ```json
    "hooks": { "PostToolUse": [ { "hooks": [
-       { "type": "command", "command": "/ABS/PATH/kitty/bin/claude-hook.py" } ] } ],
+       { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-hook.py" } ] } ],
        "…every other event…": [ "… same single entry …" ] }
    ```
 4. Wire the ⧉ copy links (`~/.config/kitty/open-actions.conf`):
    ```
    protocol claude-copy
-   action launch --type=background /ABS/PATH/kitty/bin/claude-copy.py ${URL}
+   action launch --type=background /ABS/PATH/baqylau/bin/claude-copy.py ${URL}
    ```
 5. Using pyenv? Run `./bin/retarget-python.py` once to skip the ~140ms/process
    shim tax.

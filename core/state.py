@@ -21,7 +21,7 @@
 # scorebar/codex-watcher exit when the path vanishes and a resumed session
 # replays its history. Living in /tmp keeps it self-clearing on reboot. This DB
 # is RUNTIME state — load-bearing for behavior — and is deliberately SEPARATE
-# from the audit DB (~/.claude/kitty-audit), which must stay fire-and-forget.
+# from the audit DB (~/.claude/baqylau-audit), which must stay fire-and-forget.
 #
 # Related DBs: window-keyed tab state + watcher pid locks live in the GLOBAL
 # /tmp/claude-kitty-tab.db (a window outlives any one session — see

@@ -7,7 +7,7 @@ failure used to be swallowed (`except Exception: pass`, `2>/dev/null`), so when 
 stuck blue or a block never closed, the evidence evaporated with the processes.
 **Every session is now audited into SQLite** so a bug can be chased after the fact.
 
-- **Where:** `~/.claude/kitty-audit/audit.db` (one global DB, all sessions; override
+- **Where:** `~/.claude/baqylau-audit/audit.db` (one global DB, all sessions; override
   the dir with `CLAUDE_AUDIT_DIR`). WAL mode, so the many concurrent short-lived
   writers never block each other. Deliberately *not* under `/tmp` — session artifacts
   there are deleted at SessionEnd, and the audit must survive the session.

@@ -19,7 +19,7 @@
 
   ```json
   "hooks": { "PostToolUse": [ { "hooks": [
-      { "type": "command", "command": "/ABS/PATH/kitty/bin/claude-hook.py" } ] } ],
+      { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-hook.py" } ] } ],
       "Stop": [ { "hooks": [ { "type": "command", "command": ".../bin/claude-hook.py" } ] } ],
       "…every other event…": [ … same single entry … ] }
   ```
@@ -161,7 +161,7 @@
   SessionStart from the switcher env) — only the 5h/7d usage numbers go dark.
   ```json
   "statusLine": { "type": "command",
-    "command": "/ABS/PATH/kitty/bin/claude-statusline.py <your real status-line command>" }
+    "command": "/ABS/PATH/baqylau/bin/claude-statusline.py <your real status-line command>" }
   ```
 
 - **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
@@ -177,7 +177,7 @@
   { "hooks": { "SessionStart": [ {
       "matcher": "startup|resume|clear",
       "hooks": [ { "type": "command",
-        "command": "/ABS/PATH/kitty/bin/claude-codex-session.py",
+        "command": "/ABS/PATH/baqylau/bin/claude-codex-session.py",
         "statusMessage": "kitty mirror" } ] } ] } }
   ```
   Codex hooks are Claude-compatible (stdin JSON: `session_id`/`cwd`/`source`/…),

@@ -1,7 +1,9 @@
-# Remote access — the dashboard over the internet (dash.zhambyl.top)
+# Remote access — the dashboard over the internet (baqylau.zhambyl.top)
 
 The workflow: laptop stays at home running kitty + the dashboard; you open
-`https://dash.zhambyl.top` in any browser (the iPad) and get the full
+`https://baqylau.zhambyl.top` (or the original hostname,
+`https://dash.zhambyl.top` — both route to the same tunnel) in any browser
+(the iPad) and get the full
 dashboard — live mirrors, drill-downs, toasts, and (when enabled) the control
 plane. This doc is the runbook and the reasoning; the server-side knobs live
 in `dashboard/server.py` (`extra_origins`/`READONLY`).
@@ -52,10 +54,17 @@ domain name, no client app".
    tunnel: claude-dash
    credentials-file: /Users/z.yermagambet/.cloudflared/<tunnel-id>.json
    ingress:
+     - hostname: baqylau.zhambyl.top
+       service: http://127.0.0.1:8377
      - hostname: dash.zhambyl.top
        service: http://127.0.0.1:8377
      - service: http_status:404
    ```
+
+   (Two hostnames since the 2026-07-19 baqylau rename — `baqylau.` is the
+   primary, `dash.` the original; each needs its own `tunnel route dns` AND
+   its own Access coverage. Never route DNS for a hostname before Access
+   covers it — see step 4.)
 
    Persistence (as deployed): a user LaunchAgent at
    `~/Library/LaunchAgents/top.zhambyl.dash-tunnel.plist` running
@@ -67,24 +76,27 @@ domain name, no client app".
    `sudo cloudflared service install` (a root LaunchDaemon) buys nothing
    here since the dashboard itself needs the user session anyway.
 4. **Cloudflare Access** (the non-negotiable part): Zero Trust dashboard →
-   Access → Applications → Add self-hosted app for `dash.zhambyl.top`,
-   policy = Allow, include = your email(s), one-time PIN (or Google) as the
-   login method, session ~30 days. Until this exists the tunnel serves the
-   dashboard to ANYONE with the URL — create the Access app before (or
-   immediately after) the first `cloudflared` run, never "later".
+   Access → Applications → Add self-hosted app covering BOTH hostnames
+   (`baqylau.zhambyl.top` + `dash.zhambyl.top` — one app with two public
+   hostnames, or two apps), policy = Allow, include = your email(s),
+   one-time PIN (or Google) as the login method, session ~30 days. Until
+   this exists the tunnel serves the dashboard to ANYONE with the URL —
+   create the Access app before (or immediately after) the first
+   `cloudflared` run, never "later".
 5. **The Origin knob**: the control-plane guard rejects any Origin that is
    not the local one, so through the proxy the composer/new-session would
    403. Add to `~/.zshenv` (the dashboard inherits the spawning shell's env;
    an autostarted dashboard inherits it via the hook chain the same way):
 
    ```sh
-   export CLAUDE_DASH_ORIGINS="https://dash.zhambyl.top"
+   export CLAUDE_DASH_ORIGINS="https://baqylau.zhambyl.top,https://dash.zhambyl.top"
    ```
 
    Restart the dashboard once after setting it.
 
-**Deployed 2026-07-17**: tunnel `claude-dash`
-(id `0d364fb6-12b7-4fe5-a611-f0a3b44d5f1b`), hostname `dash.zhambyl.top`,
+**Deployed 2026-07-17** (renamed 2026-07-19): tunnel `claude-dash`
+(id `0d364fb6-12b7-4fe5-a611-f0a3b44d5f1b`), hostnames `baqylau.zhambyl.top`
+(primary since the baqylau rename) + `dash.zhambyl.top` (original),
 Access team `fancy-sound-68a3`, one Allow policy (email OTP). Fail-closed
 verified from outside: `/`, `/api/sessions`, `/events`, and a POST with the
 app's own headers all 302 to the Access login with zero rows reaching the
@@ -93,7 +105,7 @@ local server; Universal SSL took ~9 min to issue after the zone went active
 
 ## Day-to-day
 
-- iPad: Safari → `https://dash.zhambyl.top` → Access login (first time per
+- iPad: Safari → `https://baqylau.zhambyl.top` → Access login (first time per
   ~30 days) → bookmark. **Add to Home Screen** to make OS notifications
   possible (iPadOS only grants the Notification API to installed web apps;
   in-page toasts work regardless).
