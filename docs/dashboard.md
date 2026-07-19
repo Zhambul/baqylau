@@ -2310,11 +2310,15 @@ Clicking a subagent (an agent card, or the `#/s/<sid>/a/<aid>` route) doesn't
 just open the drill-down timeline — it **swaps the top scoreboard to that agent's
 own numbers**. `showAgent` sets `ses.agentFocus = {aid, data}`
 and repaints the header; `updateStatsRow` branches on `agentFocus` and calls
-`renderAgentScoreboard` instead of the session totals — status, `model·effort`,
-event count, `⏱` duration, the `Σ` token rollup, and `≈` cost, with the ctx row
-showing the agent's own ctx bar and a leading **← session** link that restores
-the session view (it points at `#/s/<sid>`, the mirror = the main agent). The
-running ribbon hides while focused (it's session-scoped).
+`renderAgentScoreboard` instead of the session totals — the prominent header
+**name** (`ses.projEl`) becomes the subagent's (`◇ ‹desc›` / `👥` for a teammate),
+and the stats row shows status, `model·effort`, event count, `⏱` duration, the
+`Σ` token rollup, and `≈` cost, with the ctx row showing the agent's own ctx bar
+and a leading **← session** link that restores the session view (it points at
+`#/s/<sid>`, the mirror = the main agent). The session title returns when a full
+`renderSessionChrome` rebuilds the header on the way back (the name write is
+skipped mid-inline-rename). The running ribbon hides while focused (it's
+session-scoped).
 
 The fast-available fields (status/model/effort/events/ctx/duration) come straight
 off the enriched `ses.agents` row, so the swap is instant on click; the drill-down

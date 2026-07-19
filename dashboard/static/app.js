@@ -3642,12 +3642,19 @@ function updateStatsRow() {
    resolves the freshest agent row from ses.agents each render (so an `agents`
    SSE that finishes the agent updates the status here too) and reads tokens/cost
    from focus.data, the agent drill-down fetch (`/agent/<aid>` → usage + the
-   server-priced `cost`). Leads with a "← session" link that restores the
-   session view, and repaints the ctx row from the agent's own ctx bar. */
+   server-priced `cost`). The prominent header NAME becomes the subagent's; the
+   stats row leads with a "← session" link that restores the session view, and
+   the ctx row repaints from the agent's own ctx bar. */
 function renderAgentScoreboard(sr, focus) {
   const ses = S.ses;
   const rec = (ses.agents || []).find(a => a.agent_id === focus.aid) || {};
   const d = focus.data || {};
+  const [sttxt, stcls] = agentStatus(rec);
+  // the big header name updates to the subagent (the session title returns when
+  // renderSessionChrome rebuilds on the way back). Skip during an inline rename.
+  if (ses.projEl && !ses.projEl.querySelector("input"))
+    ses.projEl.textContent =
+      (rec.kind === "teammate" ? "👥 " : "◇ ") + (rec.desc || focus.aid);
   const back = el("a", "backses", "← session");
   back.href = "#/s/" + encodeURIComponent(S.cur);   // the mirror = the main agent
   sr.append(back);
@@ -3657,8 +3664,6 @@ function renderAgentScoreboard(sr, focus) {
     s.append(el("span", cls || "v", value));
     sr.append(s);
   };
-  const [sttxt, stcls] = agentStatus(rec);
-  add("◇", rec.desc || focus.aid);
   add("", sttxt, stcls);
   const model = rec.model || (d.model ? String(d.model) : "");
   if (model) add("", model + (rec.effort ? "·" + rec.effort : ""), "amodel");
