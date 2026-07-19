@@ -650,6 +650,7 @@ def session_payload(sid):
     # deliberately NOT live-gated: the composer stays usable on a PARKED
     # session (the resume-&-send door), so its draft must restore there too
     data["composer_draft"] = _composer_draft(sid)
+    data["composer_queue"] = _composer_queue(sid)
     return data
 
 
@@ -705,6 +706,23 @@ def _composer_draft(sid):
     if not isinstance(draft, dict) or not (draft.get("text") or "").strip():
         return None
     return draft
+
+
+def _composer_queue(sid):
+    """The still-PENDING queued messages (the `composer-queue` kv — the ⧗ chips
+    the composer shows for messages typed mid-turn that the TUI queued and has
+    not yet delivered). Browser memory alone lost these on a reload (the "gone
+    even from the queue after refresh" report, 2026-07-19), so the page mirrors
+    its chip list here; a delivered message is reconciled out client-side when
+    its prompt lands in the stream. Read-only (kv_at). {"items": [{text}, …],
+    "origin": …} or None when empty (docs/dashboard.md, *Web composer queue*)."""
+    sdb = API.state_db_for(sid)
+    if not sdb:
+        return None
+    q = API.kv_at(sdb, "composer-queue")
+    if not isinstance(q, dict) or not (q.get("items") or []):
+        return None
+    return q
 
 
 def _session_tasks(sid):
@@ -1438,6 +1456,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "composer-draft":
             return self.post_composer_draft(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "composer-queue":
+            return self.post_composer_queue(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "plan-options":
             return self.post_plan_options(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -1529,6 +1550,18 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, "web-send",
                          {"win": "", "chars": len(text), "ok": False})
             return self._json({"error": "session has no live window"}, 409)
+        # a message pasted while a MODAL dialog (AskUserQuestion / ExitPlanMode)
+        # is up goes INTO the dialog, not the TUI message queue — it perturbs
+        # the dialog and the text is lost (the "my queued message vanished mid
+        # ask" report, 2026-07-19). Refuse with a clear pointer to the card; the
+        # composer keeps its text (the page re-persists the draft on error).
+        if _ask_pending(sid) or _plan_pending(sid):
+            A.state_file(log, sdb, "web-send",
+                         {"win": win, "chars": len(text), "ok": False,
+                          "blocked": "modal"})
+            return self._json({"error": "this session has an open question — "
+                               "answer it in the card above (or dismiss it) "
+                               "before sending", "modal": True}, 409)
         # the tab state AT SEND TIME decides whether this send starts a turn
         # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
         # row too — "my message vanished" is answerable as "it queued mid-turn"
@@ -2015,23 +2048,74 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(text, str):
             return self._json({"error": "text must be a string"}, 400)
         origin = str(body.get("origin") or "")
+        seq = body.get("seq")
+        seq = seq if isinstance(seq, (int, float)) else 0
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
-        if text.strip():
-            draft = {"text": text, "origin": origin}
-            if not ST.kv_set_at(sdb, "composer-draft", draft):
-                A.error(log, "dashboard composer-draft (write failed)",
-                        {"sid": sid})
-                return self._json({"error": "draft not saved"}, 500)
+        # STALE-WRITE GUARD: a debounced save and the clear-on-send race over a
+        # slow tunnel and can arrive out of order — an old save landing after
+        # the clear would resurrect a just-sent draft (the "draft didn't clear"
+        # report, 2026-07-19). Each write carries a wall-clock `seq`; a write
+        # older than what's stored is dropped so the newest state stands. The
+        # CLEAR keeps an empty-text TOMBSTONE (not a delete) so its seq survives
+        # to reject a later straggler; _composer_draft reads a tombstone as None.
+        prev = API.kv_at(sdb, "composer-draft")
+        prev_seq = (prev.get("seq") if isinstance(prev, dict) else 0) or 0
+        if seq and prev_seq and seq < prev_seq:
             A.state_file(log, sdb, "composer-draft",
-                         {"action": "write", "chars": len(text),
+                         {"action": "stale", "seq": seq, "have": prev_seq,
                           "origin": origin})
+            return self._json({"ok": True, "stale": True})
+        # a whitespace-only box is a CLEAR: store a canonical empty-text
+        # tombstone (keeps the seq to reject a later straggler; reads as None)
+        draft = {"text": text if text.strip() else "", "origin": origin,
+                 "seq": seq}
+        if not ST.kv_set_at(sdb, "composer-draft", draft):
+            A.error(log, "dashboard composer-draft (write failed)", {"sid": sid})
+            return self._json({"error": "draft not saved"}, 500)
+        A.state_file(log, sdb, "composer-draft",
+                     {"action": "write" if text.strip() else "clear",
+                      "chars": len(text), "seq": seq, "origin": origin})
+        return self._json({"ok": True})
+
+    def post_composer_queue(self, sid):
+        """Persist the pending queued-message chips (the ⧗ list the composer
+        shows for mid-turn messages the TUI queued but hasn't delivered) to the
+        `composer-queue` kv, so a reload / another device restores them instead
+        of losing the chip (the 'gone even from the queue after refresh'
+        report, 2026-07-19; docs/dashboard.md, *Web composer queue*). Types
+        NOTHING into the terminal — a pure state write, like the draft
+        endpoints. The page sends the WHOLE current chip list on every change
+        (queued, delivered-drain, ✕-hide); the SSE re-broadcasts it as a
+        `composer-queue` event, the writer suppressing its own echo via
+        `origin`.
+
+        Body: `items` (a list of {text}; empty DELETES the stash), `origin`."""
+        body = self._post_guard()
+        if body is None:
+            return
+        items = body.get("items")
+        if not isinstance(items, list):
+            return self._json({"error": "items must be a list"}, 400)
+        clean = [{"text": str(it.get("text") or "")}
+                 for it in items if isinstance(it, dict)
+                 and (it.get("text") or "").strip()]
+        origin = str(body.get("origin") or "")
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        if clean:
+            if not ST.kv_set_at(sdb, "composer-queue",
+                                {"items": clean, "origin": origin}):
+                A.error(log, "dashboard composer-queue (write failed)",
+                        {"sid": sid})
+                return self._json({"error": "queue not saved"}, 500)
+            A.state_file(log, sdb, "composer-queue",
+                         {"action": "write", "n": len(clean), "origin": origin})
         else:
-            # an emptied box clears the stash everywhere (kv_del_at, not kv_del:
-            # this runs on a request-handler THREAD — see _heal_stash)
-            ST.kv_del_at(sdb, "composer-draft")
-            A.state_file(log, sdb, "composer-draft",
+            ST.kv_del_at(sdb, "composer-queue")
+            A.state_file(log, sdb, "composer-queue",
                          {"action": "remove", "origin": origin})
         return self._json({"ok": True})
 
@@ -2101,7 +2185,24 @@ class Handler(BaseHTTPRequestHandler):
         A.state_file(log, sdb, "web-answer",
                      {"win": win, "ok": True, "chat": chat,
                       "tool_use_id": pending.get("tool_use_id") or ""})
-        return self._json({"ok": True, "chat": chat})
+        # a PREVIEW-layout question has no typed-answer row (askdialog
+        # _require_type_row), so the card routes a TYPED answer through 'Chat
+        # about this' AND carries the typed text here as `message`: once the
+        # dialog is dismissed (drive waited for that), deliver it as the
+        # follow-up so the user's custom answer reaches the session as a
+        # normal message (docs/dashboard.md, *Web ask*). Only with chat.
+        msg = body.get("message")
+        resp = {"ok": True, "chat": chat}
+        if chat and isinstance(msg, str) and msg.strip():
+            sent = bool(fe.paste_text(win, msg))
+            A.state_file(log, sdb, "web-send",
+                         {"win": win, "chars": len(msg), "ok": sent,
+                          "via": "ask-chat"})
+            if not sent:
+                A.error(log, "dashboard answer-chat message (send failed)",
+                        {"sid": sid, "win": win})
+            resp["message_sent"] = sent
+        return self._json(resp)
 
     def _plan_guard(self, sid):
         """The shared head of the two plan endpoints: guard the POST, match
@@ -2587,7 +2688,8 @@ class Handler(BaseHTTPRequestHandler):
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
-                "tasks": None, "ask_draft": None, "composer_draft": None}
+                "tasks": None, "ask_draft": None, "composer_draft": None,
+                "composer_queue": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2700,6 +2802,14 @@ class Handler(BaseHTTPRequestHandler):
                 if cdraft != prev["composer_draft"]:
                     prev["composer_draft"] = cdraft
                     if not self._sse("composer-draft", {"draft": cdraft}):
+                        return
+                # the pending queued-message chips — so a reload / another
+                # device restores what the TUI still holds unqueued (slow
+                # cadence, convenience state like the draft above)
+                cqueue = _composer_queue(sid)
+                if cqueue != prev["composer_queue"]:
+                    prev["composer_queue"] = cqueue
+                    if not self._sse("composer-queue", {"queue": cqueue}):
                         return
             tab = (API.tab_states().get(win) or "") if win else ""
             if tab != prev["tab"]:

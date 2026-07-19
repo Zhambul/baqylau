@@ -187,6 +187,22 @@ def _by_digit(d):
     return lambda r: r["digit"] == d
 
 
+def _require_type_row(fe, win, type_digit):
+    """Guard the typed-answer ('other') path: the free-text 'Type something'
+    row is digit len(options)+1 in the PLAIN dialog, but the PREVIEW
+    side-by-side layout omits it entirely (measured — a single-select
+    question whose options carry `preview` renders options + 'Chat about
+    this' and no numbered Type row). A typed answer is then undeliverable, so
+    fail FAST with a clear reason instead of walking the cursor NAV_STEPS
+    times looking for a row that never appears (the observed 'cursor never
+    reached Type row' dead-walk, 2026-07-19). The web ask card routes typed
+    answers on preview questions through 'Chat about this' instead, so the
+    driver should not normally reach here (docs/dashboard.md, *Web ask*)."""
+    if not any(r["digit"] == type_digit for r in rows(fe.get_text(win) or "")):
+        raise AskError("type", "no typed-answer row (preview-layout dialog) — "
+                       "answer via 'Chat about this'")
+
+
 def _answer_question(fe, win, q, ans, sleep):
     """Apply one question's answer to the CURRENT pane. Leaves the dialog on
     the next tab: single-select Enter auto-advances; multiSelect toggles each
@@ -211,6 +227,7 @@ def _answer_question(fe, win, q, ans, sleep):
                 fe.send_key(win, "enter")        # toggle
                 sleep(KEY_GAP_S)
         if other:
+            _require_type_row(fe, win, type_digit)
             _cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
             if not fe.send_text(win, other):     # types inline + CR
                 raise AskError("type", "other text not delivered")
@@ -230,6 +247,7 @@ def _answer_question(fe, win, q, ans, sleep):
         fe.send_key(win, "right")                # non-edit → next tab
         return
     if other:
+        _require_type_row(fe, win, type_digit)
         _cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
         if not fe.send_text(win, other):         # type + CR selects + advances
             raise AskError("type", "other text not delivered")

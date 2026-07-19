@@ -739,12 +739,65 @@ def test_composer_draft_persist_payload_and_sse(dash, monkeypatch):
     data = _sse_event(dash + "/events/session/cdr1?after=0&mpos=0",
                       "composer-draft")
     assert data and json.loads(data)["draft"]["origin"] == "devA"
-    # an emptied / whitespace-only box deletes the stash → payload None
+    # an emptied / whitespace-only box clears the stash → payload None (the
+    # kv keeps an empty-text TOMBSTONE so a later stale seq can be rejected —
+    # _composer_draft reads a tombstone as None either way)
     code, _ = _post(dash + "/api/session/cdr1/composer-draft",
                     {"text": "   ", "origin": "devA"})
     assert code == 200
-    assert S.kv_get(log, "composer-draft") is None
+    assert ((S.kv_get(log, "composer-draft") or {}).get("text") or "") == ""
     assert _get_json(dash + "/api/session/cdr1")["composer_draft"] is None
+
+
+def test_composer_draft_stale_seq_ignored(dash, monkeypatch):
+    """The clear-on-send must win over a debounced save that races it over a
+    slow link (docs/dashboard.md, *Web composer draft*; the "draft didn't clear
+    after send" report, 2026-07-19). Each write carries a wall-clock `seq`; a
+    write OLDER than what's stored is dropped, and the clear keeps a seq'd
+    tombstone so a late straggler can't resurrect the just-sent draft."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "57")
+    A.session_start({"session_id": "cds1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cds1")
+    O.emit(log, O.label("hi", (1, 2, 3)))
+    # the clear (seq 100) lands first, then a stale save (seq 90) arrives late
+    _post(dash + "/api/session/cds1/composer-draft",
+          {"text": "", "origin": "d", "seq": 100})
+    code, resp = _post(dash + "/api/session/cds1/composer-draft",
+                       {"text": "resurrected!", "origin": "d", "seq": 90})
+    assert code == 200 and json.loads(resp).get("stale") is True
+    assert _get_json(dash + "/api/session/cds1")["composer_draft"] is None
+    # a genuinely newer save (seq 110) is honored
+    code, _ = _post(dash + "/api/session/cds1/composer-draft",
+                    {"text": "typed again", "origin": "d", "seq": 110})
+    assert _get_json(dash + "/api/session/cds1")["composer_draft"]["text"] \
+        == "typed again"
+
+
+def test_composer_queue_persist_payload_and_sse(dash, monkeypatch):
+    """The pending ⧗ queued-message chips survive a reload (docs/dashboard.md,
+    *Web composer queue*; the "gone even from the queue after refresh" report):
+    POST /composer-queue writes the `composer-queue` kv (a pure state write —
+    no terminal keys), the snapshot carries `composer_queue`, and the SSE
+    re-broadcasts it. An empty list deletes the stash."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "58")
+    A.session_start({"session_id": "cq1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cq1")
+    O.emit(log, O.label("hi", (1, 2, 3)))
+    assert _get_json(dash + "/api/session/cq1")["composer_queue"] is None
+    code, resp = _post(dash + "/api/session/cq1/composer-queue",
+                       {"items": [{"text": "do X"}, {"text": "then Y"}],
+                        "origin": "devA"})
+    assert code == 200 and json.loads(resp)["ok"]
+    q = _get_json(dash + "/api/session/cq1")["composer_queue"]
+    assert [it["text"] for it in q["items"]] == ["do X", "then Y"]
+    data = _sse_event(dash + "/events/session/cq1?after=0&mpos=0",
+                      "composer-queue")
+    assert data and json.loads(data)["queue"]["origin"] == "devA"
+    # an empty list (all delivered / hidden) deletes the stash → payload None
+    code, _ = _post(dash + "/api/session/cq1/composer-queue",
+                    {"items": [], "origin": "devA"})
+    assert code == 200
+    assert _get_json(dash + "/api/session/cq1")["composer_queue"] is None
 
 
 def test_ns_prefs_roundtrip(dash):
@@ -1256,6 +1309,36 @@ def test_conversation_anchors_and_cursor(tmp_path):
     assert [r["kind"] for r in recs2] == ["prompt"] and pos2 > pos
 
 
+def test_conversation_surfaces_ask_answer(tmp_path):
+    """An AskUserQuestion answer is a tool_result, not plain user text, so it
+    landed in `blocks` and never showed in the dashboard mirror (the "my answer
+    didn't appear in this session" report, 2026-07-19). It's surfaced as a
+    distinct `answer` record — keyed off the toolUseResult sidecar's `answers`,
+    so a Bash tool_result stays out (docs/dashboard.md, *Web ask*)."""
+    from plugins.claude_code import transcript as TR
+    p = _tw(tmp_path, "ans.jsonl",
+            {"type": "assistant", "message": {"id": "m1", "content": [
+                {"type": "tool_use", "id": "aq1", "name": "AskUserQuestion",
+                 "input": {"questions": []}}]}},
+            {"type": "user", "toolUseResult": {"answers": [{}], "questions": []},
+             "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "aq1",
+                 "content": 'Your questions have been answered: "Scope"='
+                            '"Fix all four now".'}]}},
+            # a plain Bash tool_result must NOT be surfaced (no `answers`)
+            {"type": "assistant", "message": {"id": "m2", "content": [
+                {"type": "tool_use", "id": "b1", "name": "Bash",
+                 "input": {"command": "ls"}}]}},
+            {"type": "user", "toolUseResult": {"stdout": "x"},
+             "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "b1", "content": "x"}]}})
+    recs, _ = TR.conversation(p, 0)
+    kinds = [r["kind"] for r in recs]
+    assert "answer" in kinds and kinds.count("answer") == 1
+    ans = next(r for r in recs if r["kind"] == "answer")
+    assert ans["text"].startswith("Your questions have been answered")
+
+
 def test_http_sessions_carry_titles(dash, tmp_path):
     tp = _tw(tmp_path, "titled.jsonl",
              {"type": "user", "message": {"content": "build the dashboard"}})
@@ -1605,6 +1688,29 @@ def test_post_message_empty_text_is_400(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/msg3/message", {"text": "   "})
     assert e.value.code == 400
+
+
+def test_post_message_blocked_while_dialog_open(dash, monkeypatch):
+    """A composer send while a modal dialog (AskUserQuestion/ExitPlanMode) is
+    up would paste INTO the dialog and be lost (the "my queued message vanished
+    mid ask" report, 2026-07-19) — it's refused with a 409 `modal` and NO
+    paste, pointing the user at the card. Cleared once the dialog is gone."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+    A.session_start({"session_id": "msgm", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("msgm"), "ask-pending",
+             {"tool_use_id": "tu9", "questions": [{"question": "?",
+              "options": [{"label": "A"}], "multiSelect": False}]})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/msgm/message", {"text": "into the void"})
+    assert e.value.code == 409
+    assert json.loads(e.value.read())["modal"] is True
+    assert fe.pasted == []                       # nothing typed into the dialog
+    # dialog answered/gone → the send goes through
+    S.kv_del(P.mirror_log("msgm"), "ask-pending")
+    code, body = _post(dash + "/api/session/msgm/message", {"text": "now ok"})
+    assert code == 200 and fe.pasted == [("88", "now ok")]
 
 
 class _NoTermFE:
@@ -2918,6 +3024,21 @@ def test_post_answer_chat_about_this(dash, monkeypatch):
     assert fe.chatted and fe.submitted is None
 
 
+def test_post_answer_chat_delivers_message(dash, monkeypatch):
+    """A TYPED answer on a preview-layout question is routed by the card through
+    'Chat about this' AND carries the typed text as `message` — the server
+    dismisses the dialog then delivers the text as a normal message so the
+    custom answer reaches the session (docs/dashboard.md, *Web ask*)."""
+    fe = _AskFE(_ASK_1S)
+    _ask_env(monkeypatch, "askc", "47", fe, _ASK_1S)
+    code, body = _post(dash + "/api/session/askc/answer",
+                       {"tool_use_id": "toolu_a1", "chat": True,
+                        "message": "figure out which ones are available"})
+    assert code == 200 and json.loads(body)["message_sent"] is True
+    assert fe.chatted
+    assert fe.pasted == [("47", "figure out which ones are available")]
+
+
 def test_post_answer_free_text_single(dash, monkeypatch):
     fe = _AskFE(_ASK_1S)
     _ask_env(monkeypatch, "ask5", "45", fe, _ASK_1S)
@@ -3064,6 +3185,22 @@ def test_askdialog_parsers_pin_the_real_screens():
              {"question": "How do you want to unhide a directory manually / "
                           "see what's hidden?"}]
     assert AD.current_question(_ASK_PREVIEW_SCREEN, pv_qs) == 1
+
+
+def test_askdialog_typed_answer_fails_fast_without_type_row():
+    """The preview layout has no numbered "Type something" row, so a typed
+    ('other') answer is undeliverable — the driver must fail FAST with step
+    "type" instead of walking the cursor forever ("cursor never reached Type
+    row", 2026-07-19). The web card routes typed answers via chat instead."""
+    AD = DS.askdialog
+    fe = _FakeFE()
+    fe.screens = [_ASK_PREVIEW_SCREEN]
+    # 2 options → the (absent) Type row would be digit 3
+    with pytest.raises(AD.AskError) as e:
+        AD._require_type_row(fe, "1", "3")
+    assert e.value.step == "type"
+    # a present option digit is fine (no raise)
+    AD._require_type_row(fe, "1", "2")
 
 
 class _PlanFE(_FakeFE):

@@ -932,6 +932,11 @@ function connectSession(sid) {
     if (!S.ses) return;
     applyComposerDraft(d.draft);
   });
+  es.addEventListener("composer-queue", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    applyComposerQueue(d.queue);
+  });
   es.addEventListener("plan", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -1390,8 +1395,40 @@ const QUEUE_TABS = ["thinking", "working", "executing"];
 function buildQueueBar() {
   const q = el("div", "cqueue");
   S.ses.queueEl = q;
+  // restore the pending ⧗ chips persisted server-side (composer-queue kv) so a
+  // reload / device switch keeps showing what the TUI still holds unqueued —
+  // seed only when the in-memory queue is empty (a live session already has
+  // its chips); drainQueue reconciles them out as their prompts arrive.
+  const cq = S.ses.meta && S.ses.meta.composer_queue;
+  if (cq && Array.isArray(cq.items) && !S.ses.queue.length)
+    S.ses.queue = cq.items.map(it => ({ text: (it && it.text) || "" }));
   renderQueue();
   return q;
+}
+
+// Persist the WHOLE current chip list to the server (composer-queue kv) so it
+// survives a reload; called on every queue mutation (queued-send, delivery
+// drain, ✕-hide). Best-effort — a failed write just retries on the next
+// change. meta is kept in sync so our own SSE echo is a no-op.
+function saveQueue(ses) {
+  ses = ses || S.ses;
+  if (!ses || !S.cur) return;
+  const items = ses.queue.map(m => ({ text: m.text }));
+  if (ses.meta)
+    ses.meta.composer_queue = items.length ? { items, origin: CLIENT_ID } : null;
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/composer-queue",
+           { items, origin: CLIENT_ID }).catch(() => {});
+}
+
+// A peer device's (or our own reload's) queue update arrived over SSE — adopt
+// it, ignoring our OWN echo (same origin) so a local drain isn't clobbered.
+function applyComposerQueue(q) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.composer_queue = q || null;
+  if (q && q.origin && q.origin === CLIENT_ID) return;   // our own write
+  ses.queue = ((q && q.items) || []).map(it => ({ text: (it && it.text) || "" }));
+  renderQueue();
 }
 
 function renderQueue() {
@@ -1407,7 +1444,7 @@ function renderQueue() {
       m.text.length > 70 ? m.text.slice(0, 70) + "…" : m.text));
     const x = el("button", "qx", "✕");
     x.title = "hide this chip (the message stays queued in the terminal)";
-    x.onclick = () => { ses.queue.splice(i, 1); renderQueue(); };
+    x.onclick = () => { ses.queue.splice(i, 1); renderQueue(); saveQueue(ses); };
     c.append(x);
     q.append(c);
   });
@@ -1422,7 +1459,7 @@ function drainQueue(items) {
     const i = ses.queue.findIndex(m => m.text === (it.text || "").trim());
     if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
   }
-  if (hit) renderQueue();
+  if (hit) { renderQueue(); saveQueue(ses); }
 }
 
 /* ---------- the ask card (AskUserQuestion from the web) ---------- */
@@ -1500,6 +1537,16 @@ function buildAskCard() {
   return wrap;
 }
 
+// A preview-layout question (any option carries a `preview`) renders the TUI's
+// side-by-side dialog, which OMITS the numbered "Type something" free-text row
+// — so a TYPED answer can't be driven (askdialog._require_type_row). The card
+// routes typed answers on such asks through "Chat about this" instead
+// (docs/dashboard.md, *Web ask*).
+function askHasPreview(ask) {
+  return (ask && ask.questions || []).some(
+    q => (q.options || []).some(o => o && o.preview));
+}
+
 function renderAsk() {
   const ses = S.ses;
   if (!ses || !ses.askEl) return;
@@ -1509,6 +1556,7 @@ function renderAsk() {
   wrap.hidden = !ask;
   if (!ask) return;
   const qs = ask.questions || [];
+  const preview = askHasPreview(ask);
   // per-ask draft state, keyed by tool_use_id so a NEW ask resets it —
   // SEEDED from the persisted `ask-draft` (ses.meta.ask_draft) so a device
   // switch / reopen restores whatever selections were made but not submitted
@@ -1571,8 +1619,10 @@ function renderAsk() {
     const other = el("input", "askother");
     other.type = "text";
     other.spellcheck = false;
-    other.placeholder = q.multiSelect
-      ? "add your own answer…" : "or type your own answer…";
+    other.placeholder = preview
+      ? "type a custom answer → sent via “chat about this”"
+      : q.multiSelect
+        ? "add your own answer…" : "or type your own answer…";
     other.value = st.answers[qi].other;
     other.oninput = () => {
       st.answers[qi].other = other.value;
@@ -1659,8 +1709,17 @@ function applyAskDraft(draft) {
 function submitAsk(ask, answers, chat) {
   const ses = S.ses;
   if (!ses || !S.cur) return;
+  // A TYPED answer on a preview-layout ask can't be driven (no Type row), so
+  // route it through "Chat about this" and ride the typed text as `message` —
+  // the server delivers it once the dialog is dismissed (docs/dashboard.md,
+  // *Web ask*). Explicit "chat about this" (answers == null) is untouched.
+  let message = "";
+  if (!chat && answers && askHasPreview(ask)) {
+    const typed = answers.map(a => (a.other || "").trim()).filter(Boolean);
+    if (typed.length) { chat = true; message = typed.join("\n"); }
+  }
   const body = { tool_use_id: ask.tool_use_id || "" };
-  if (chat) body.chat = true;
+  if (chat) { body.chat = true; if (message) body.message = message; }
   else body.answers = (answers || []).map(a =>
     ({ selected: a.selected, other: (a.other || "").trim() }));
   if (ses.askEl)
@@ -1668,9 +1727,13 @@ function submitAsk(ask, answers, chat) {
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body)
     .then(() => {
       if (chat) {
-        toast("done", "over to chat",
-              "questions dismissed — type your message below");
-        if (ses.composer) ses.composer.focus();
+        if (message)
+          toast("done", "answer sent via chat",
+                "your typed answer was delivered as a message");
+        else
+          toast("done", "over to chat",
+                "questions dismissed — type your message below");
+        if (!message && ses.composer) ses.composer.focus();
       } else {
         toast("done", "answered", "answers submitted to the session");
       }
@@ -2076,8 +2139,12 @@ function saveComposerDraft(ses, sid) {
     ses.meta.composer_draft = text.trim() ? { text, origin: CLIENT_ID } : null;
   clearTimeout(ses._composerDraftTimer);
   ses._composerDraftTimer = setTimeout(() => {
+    // seq (wall-clock at DISPATCH) orders concurrent writes: a debounced save
+    // in flight when send() fires its clear must NOT overwrite the clear if it
+    // arrives later over the tunnel (the "draft didn't clear after send"
+    // reorder, 2026-07-19). The server keeps only the highest seq.
     postJSON("/api/session/" + encodeURIComponent(sid) + "/composer-draft",
-             { text, origin: CLIENT_ID }).catch(() => {});
+             { text, origin: CLIENT_ID, seq: Date.now() }).catch(() => {});
   }, ASK_DRAFT_DEBOUNCE_MS);
 }
 
@@ -2087,8 +2154,10 @@ function saveComposerDraft(ses, sid) {
 function clearComposerDraft(ses, sid) {
   clearTimeout(ses._composerDraftTimer);
   if (ses.meta) ses.meta.composer_draft = null;
+  // a later seq than any in-flight save, so the clear always wins the race
+  // even if an earlier save's POST lands after it (see saveComposerDraft)
   postJSON("/api/session/" + encodeURIComponent(sid) + "/composer-draft",
-           { text: "", origin: CLIENT_ID }).catch(() => {});
+           { text: "", origin: CLIENT_ID, seq: Date.now() }).catch(() => {});
 }
 
 // A peer device's composer draft arrived over SSE. Adopt it into the box — but
@@ -2195,6 +2264,7 @@ function buildComposer() {
         if (d && d.queued) {
           ses.queue.push({ text });
           renderQueue();
+          saveQueue(ses);
           toast("done", "message queued", "delivers when this turn ends");
         } else {
           toast("done", "message sent", "");
@@ -3522,6 +3592,7 @@ function renderSessionChrome(tab) {
   if (act2.childElementCount) head.append(act2);
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
+  ses._statsSig = null;      // fresh (empty) row — force the next paint through
   head.append(sr);
   const cr = el("div", "ctxrow");     // the main thread's ctx bar, its own row
   ses.ctxRow = cr;
@@ -3589,9 +3660,38 @@ function renderSessionChrome(tab) {
   }
 }
 
+// A content signature of everything the stats row + ctx row RENDER, EXCLUDING
+// the live ⏱ elapsed (Date.now-derived) — so a tick that only advances the
+// clock, or a costs/ctx/running SSE that leaves the shown numbers unchanged,
+// does NOT tear down and rebuild the row. The teardown (sr.textContent = "")
+// reflows the header, which on iPad Safari drops an in-progress text selection
+// (the "selection vanishes after ~1s" report, 2026-07-19). The clock still
+// advances whenever any real datum changes (constant during active work).
+function statsSig(ses) {
+  const f = ses.agentFocus;
+  if (f) {
+    const d = f.data || {};
+    const rec = (ses.agents || []).find(a => a.agent_id === f.aid) || {};
+    return "A|" + [f.aid, rec.kind, rec.desc, rec.ended_at, rec.started_at,
+      rec.tools, rec.model, rec.effort, rec.end_reason, rec.done,
+      d.tools, d.cost, d.model].join(",")
+      + "|" + JSON.stringify(d.usage || {}) + "|" + JSON.stringify(rec.ctx || {});
+  }
+  const st = ses.stats || {};
+  const cost = (ses.costs && ses.costs.total_usd) || st.cost;
+  return "S|" + [st.commands, st.failed, st.start, st.paused, st.files,
+    st.added, st.removed, st.tk_in, st.tk_out, st.tk_read, st.tk_create, cost,
+    st.msg_delivered, st.msg_read, (ses.meta && ses.meta.error_count) || 0,
+    ses.meta && ses.meta.model].join(",")
+    + "|" + JSON.stringify(ses.ctx || {});
+}
+
 function updateStatsRow() {
   const ses = S.ses;
   if (!ses || !ses.statsRow) return;
+  const sig = statsSig(ses);
+  if (sig === ses._statsSig) return;   // nothing the row shows changed — skip
+  ses._statsSig = sig;                 // the teardown (preserves iPad selection)
   const sr = ses.statsRow;
   sr.textContent = "";
   // drilled into a subagent → the scoreboard shows THAT agent, not the session

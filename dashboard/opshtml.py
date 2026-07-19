@@ -589,11 +589,13 @@ def msg_html(kind, text, sender=""):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
-    interleaves them — docs/dashboard.md). kind: prompt | message | teammsg.
-    The body rides md_html (readable markdown), which is escape-first like
-    everything else here — the same neutralize() analog."""
-    who = {"prompt": "you", "message": "claude"}.get(kind) \
-        or ("✉ " + (sender or "team"))
+    interleaves them — docs/dashboard.md). kind: prompt | message | teammsg |
+    answer (an AskUserQuestion answer the user submitted — the "my answer
+    didn't appear" fix; a `you` bubble WITHOUT the rewind affordance, since it
+    is not a re-runnable prompt). The body rides md_html (readable markdown),
+    which is escape-first like everything else here — the neutralize() analog."""
+    who = {"prompt": "you", "message": "claude", "answer": "you ▸ answered"} \
+        .get(kind) or ("✉ " + (sender or "team"))
     extra = ""
     if kind == "prompt":
         # the web rewind picker needs the prompt's RAW text (the rendered

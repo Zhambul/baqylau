@@ -384,6 +384,21 @@ def conversation(path, pos=0):
             out.append({"kind": "teammsg", "text": rec["body"],
                         "sender": rec["sender"], "anchor": anchor, "ts": ts})
         elif kind == "results":
+            # an AskUserQuestion ANSWER is a tool_result, not plain user text,
+            # so it lands in `blocks` — which this stream otherwise drops (tool
+            # results are the terminal mirror's job, as ops). Surface it so a
+            # web-submitted answer actually shows in the dashboard mirror (the
+            # "my answer didn't appear" report, 2026-07-19). The toolUseResult
+            # sidecar is a dict carrying `answers` for exactly this tool; the
+            # tool_result content string is Claude Code's clean "Your questions
+            # have been answered: …" recap (docs/dashboard.md, *Web ask*).
+            tur = rec.get("tur")
+            if isinstance(tur, dict) and "answers" in tur:
+                for blk in rec["blocks"]:
+                    txt = result_text(blk.get("content")).strip()
+                    if txt:
+                        out.append({"kind": "answer", "text": txt,
+                                    "anchor": anchor, "ts": ts})
             for text in rec["texts"]:
                 k, a, b = classify_user_text(text)
                 if k == "teammsg":

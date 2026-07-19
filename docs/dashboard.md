@@ -264,9 +264,9 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`plan`/`tasks`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -491,11 +491,48 @@ for). `send()` clears it immediately (both the /message path and the parked
 *resume & send* path — `clearComposerDraft`, so the adopted resumed session
 doesn't re-show the just-sent text) and re-persists it on a send FAILURE (the
 box keeps its text, so a reload must not lose it). An emptied box POSTs empty
-text, which DELETES the stash (`kv_del_at`); `_composer_draft` also treats a
-blank stash as None so the card clears everywhere. Works for LIVE and PARKED
-sessions alike — `state_db_for` resolves the parked copy — since the composer
-itself is usable in both. Best-effort throughout: a failed save retries on the
-next edit and the local box keeps its text.
+text, which clears the stash; `_composer_draft` treats a blank stash as None so
+the card clears everywhere. Works for LIVE and PARKED sessions alike —
+`state_db_for` resolves the parked copy — since the composer itself is usable
+in both. Best-effort throughout: a failed save retries on the next edit and the
+local box keeps its text.
+
+**The clear must win a race with an in-flight save** (added 2026-07-19, from a
+"dictated a message, sent it, but the draft didn't clear" report). The rapid
+per-keystroke saves dictation produces and the `clearComposerDraft` on send are
+independent POSTs with no ordering guarantee over a tunnel — an old save
+landing *after* the clear would resurrect the just-sent draft. Each write now
+carries a wall-clock `seq` (`Date.now()` at dispatch); the server DROPS a write
+whose `seq` is older than what's stored (a `composer-draft` state_files row
+`action: stale`), and the clear keeps a seq'd **empty-text tombstone** (not a
+delete) so its `seq` survives to reject a later straggler. Writes without a
+`seq` (seq 0) skip the guard — last-writer-wins, as before.
+
+## Web composer queue (`POST /api/session/<sid>/composer-queue`)
+
+A message sent while a turn is running lands in Claude Code's OWN message queue
+and delivers at the turn boundary; the composer shows it as a ⧗ **queued chip**
+meanwhile (matched out by `drainQueue` when its prompt actually arrives in the
+stream — the only true delivery signal). That chip list used to be purely
+browser-memory, so a reload lost it (the "shown in the queue but gone even from
+the queue after refresh" report, 2026-07-19) — alarming, since you couldn't
+tell whether the message was still coming. The page now mirrors the whole chip
+list to the `composer-queue` kv on every mutation (a queued send, a delivery
+drain, a ✕-hide) via `POST /api/session/<sid>/composer-queue`
+(`{items:[{text}], origin}`; a pure state write, no terminal keys). The session
+snapshot carries `composer_queue`, the SSE emits a `composer-queue` event on
+change (slow cadence, convenience state like the draft), `buildQueueBar` seeds
+`ses.queue` from it on open (only when the in-memory queue is empty), and
+`applyComposerQueue` adopts a peer's update (own-`origin` echo ignored). An
+empty list deletes the stash. This is display persistence only — the message
+itself lives in the TUI's queue regardless; the chip just stops vanishing.
+
+**Sends into an open modal are refused.** A message pasted while an
+AskUserQuestion / ExitPlanMode dialog is up goes INTO the dialog, not the
+queue, and is lost (perturbing the dialog too). `post_message` now checks
+`_ask_pending`/`_plan_pending` and returns a 409 `modal` with no paste,
+pointing the user at the ask/plan card above; the composer keeps its text. Once
+the dialog resolves, the send goes through normally.
 
 ## New-session prefs (`GET`/`POST /api/ns-prefs`)
 
@@ -1310,6 +1347,23 @@ wait for the next question timed out. The measured v2.1.215 model:
   (`{"Pick a planet": "Venus", "Pick metals": "Iron, Zinc, titanium"}`),
   and chat-about-this.
 
+**Typed answers on a PREVIEW-layout question route through chat** (added
+2026-07-19, from a live failure: an ask whose options carry `preview`
+renders the side-by-side layout with **no numbered "Type something" row**,
+so the driver's cursor walk for the free-text row never found it and dead-
+looped — the audited `web-answer` bail `cursor: cursor never reached Type
+row`, retried 3×). Two guards: (1) `askdialog._require_type_row` fails FAST
+with `step: type` if the target Type-row digit isn't on screen, instead of
+walking `NAV_STEPS` times; (2) the card itself detects a preview question
+(`askHasPreview` — any option with a `preview`) and, when the user submits
+a TYPED answer for it, routes it through the dialog's **Chat about this**
+AND carries the typed text as `message` in the `/answer` body. The server
+presses chat, waits for the dialog to close, then delivers the text as a
+normal message (`fe.paste_text`, a `web-send` row `via: ask-chat`) so the
+custom answer reaches the session — the user's typed answer isn't lost just
+because the TUI layout omits a free-text row. Selecting an *option* on a
+preview question still drives normally (only the typed path reroutes).
+
 The dialog is live TUI pixels with no answer API, so this key model can
 only be verified by driving a real dialog and reading the screen back —
 which is why a Claude Code version bump can silently break it. The
@@ -2027,6 +2081,18 @@ interleaves the main-thread conversation (prompts / assistant messages /
 teammate mail) into the session stream — web-side only; no producer or
 terminal-renderer change.
 
+**AskUserQuestion answers surface too** (added 2026-07-19, from a "my answer
+didn't appear in this session" report). An answer is recorded as a *tool_result*
+(not plain user text), so `transcript.conversation` dropped it into `blocks` and
+it never rendered — the card cleared and the choice vanished from the feed.
+`conversation` now emits a distinct `answer` record for it, identified by the
+line's `toolUseResult` sidecar being a dict with an `answers` key (so a Bash/Read
+tool_result stays out); the text is Claude Code's own recap string ("Your
+questions have been answered: …"). `opshtml.msg_html` renders `answer` as a
+`you ▸ answered` bubble WITHOUT the rewind affordance (it is not a re-runnable
+prompt). This is the DASHBOARD's conversation view only — the terminal mirror
+never showed main-thread messages anyway.
+
 **Interleaving by timestamp, anchors as the fallback.** The ops table carries
 a `ts REAL` column (`core/state.py`, one wall-clock stamp per `ops_append`
 batch — additive migration, so older parked `*.keep` DBs keep working and their
@@ -2439,6 +2505,18 @@ keyboard resizes the layout instead of hiding the composer, and — below the
 1000px `.split` breakpoint — the agents rail flips from a sticky sidebar to a
 horizontally swipable card strip *above* the stream (`order: -1`; its DOM
 position would otherwise bury the agent cards below a long stream).
+
+**Don't rebuild DOM that didn't change** (added 2026-07-19, from a "text
+selection vanishes after ~1s on iPad" report). iOS Safari drops an in-progress
+selection when the layout reflows, and `updateStatsRow` tore the scoreboard
+down (`sr.textContent = ""`) and rebuilt it on every `stats`/`costs`/`ctx` SSE
+tick — several times a second during an active turn. It now gates on a content
+`statsSig` (all the shown numbers, EXCLUDING the live `⏱` elapsed, which is
+`Date.now()`-derived) and skips the teardown when nothing the row shows changed;
+a fresh (empty) row resets `_statsSig` so the first paint always runs. This
+kills the redundant rebuilds (a clock-only or no-op tick); genuine number
+changes still rebuild, so a selection during heavy token streaming can still be
+dropped — the deeper fix would be per-chip in-place text updates.
 
 ## Testing
 
