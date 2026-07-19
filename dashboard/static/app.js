@@ -1593,6 +1593,12 @@ function applyAskDraft(draft) {
   if (!draft || !ask || draft.tool_use_id !== ask.tool_use_id) return;
   if (draft.origin && draft.origin === CLIENT_ID) return;   // our own write
   if (!ses.askState || ses.askState.id !== ask.tool_use_id) return;
+  // don't yank the card out from under an ACTIVE local edit: renderAsk()
+  // rebuilds the DOM (wrap.textContent = ""), which would drop focus + caret
+  // mid-keystroke on the device that's typing. Skip while the card holds
+  // focus — ses.meta.ask_draft is already updated above, so the next remote
+  // change (or a manual rebuild) applies it once the field blurs.
+  if (ses.askEl && ses.askEl.contains(document.activeElement)) return;
   ses.askState.answers = (draft.answers || []).map(a =>
     ({ selected: Array.isArray(a && a.selected) ? a.selected.slice() : [],
        other: (a && a.other) || "" }));
