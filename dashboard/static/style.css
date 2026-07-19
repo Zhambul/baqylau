@@ -773,6 +773,36 @@ body.modal-open { overflow: hidden; }
 .nsbtn.primary:hover { color: var(--text); }
 .nsbtn:disabled { color: var(--dim2); cursor: default; }
 
+/* ---- the optimistic launch pending view (#/launching) ------------------- */
+.pendcard {
+  max-width: 520px; margin: 12vh auto 0;
+  display: flex; flex-direction: column; align-items: center; gap: 14px;
+  background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+  padding: 36px 32px; text-align: center;
+}
+.pendspin {
+  width: 26px; height: 26px; border-radius: 50%;
+  border: 2px solid var(--hair); border-top-color: var(--exec);
+  animation: pendspin 0.9s linear infinite;
+}
+@keyframes pendspin { to { transform: rotate(360deg); } }
+.pendcard.fail .pendtitle { color: var(--ask); }
+.pendtitle { font: 600 15px/1.3 var(--sans); color: var(--text); }
+.penddir { font: 12px/1.4 var(--mono); color: var(--dim); word-break: break-all; }
+.pendchips { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+.pendchip {
+  font: 11px/1 var(--mono); color: var(--text-soft);
+  box-shadow: var(--card); border-radius: calc(var(--r) / 2); padding: 4px 8px;
+}
+.pendprompt {
+  font: 12.5px/1.5 var(--mono); color: var(--text-soft); text-align: left;
+  background: color-mix(in srgb, var(--bg) 88%, black);
+  box-shadow: var(--card); border-radius: var(--r); padding: 10px 12px;
+  max-height: 30vh; overflow-y: auto; white-space: pre-wrap; word-break: break-word;
+  align-self: stretch;
+}
+.pendhint { font: 12px/1.5 var(--sans); color: var(--dim); }
+
 /* hidden by the filter; never removed (SSE keeps appending) */
 .fhide { display: none; }
 /* subtle emphasis on a text-match hit */

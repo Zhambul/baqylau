@@ -250,7 +250,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); 400 bad cwd/model/effort/resume/account, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
@@ -538,7 +538,11 @@ readable.
 `Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?,
 prompt?]))` opens a new tab — the flags are just more positional `"$@"` words
 ahead of the prompt, so the injection story is unchanged; the session then appears through its
-own `SessionStart` (no synthetic row).
+own `SessionStart` (no synthetic row). `kitten @ launch` prints the new
+window's id, which `kitten_launch_tab` captures (the ONE launch call whose
+stdout isn't silenced) and the response passes through as `win` — the page's
+exact match key for the session that boots there, where a cwd heuristic is
+ambiguous under two same-directory launches.
 
 **Web launches must not steal macOS focus (and why there is no bounce-back).**
 The user is *in the browser* — but a web launch used to make macOS activate
@@ -993,32 +997,76 @@ The adopt machinery handles the state hand-off as always; the jump watch must
 target the OLD sid (see below — "new sid in the cwd" alone shipped broken
 once).
 
-**Jump to the new session.** The launch response carries no session id — none
-exists yet (the session appears through its own `SessionStart`; the server
-deliberately returns no synthetic row, and inventing one would desync the
-list). So the *client* watches: on a successful launch `app.js` stashes the
-known sids, the currently-LIVE sids, and the launched cwd (`armJump`), and
-every following global `sessions` snapshot is checked (`checkJump`). What
-counts as a hit depends on the start mode — **fresh**: a never-seen live sid
-in that cwd; **resume**: *that* sid coming back to life (matched by sid, not
-cwd — you can resume into a different directory); **continue**: any
-already-known cwd-row flipping parked→live (which conversation `--continue`
-picks is the CLI's own history's business). The `liveAtArm` set is what makes
-the last two work — a plain "new sid" check misses them, because resume and
-continue re-animate an EXISTING sid at SessionStart and only fork to a new
-one at the first event after (this shipped broken once). The watch is
-cancelled when the user opens any session themselves (`route()` clears it on
-user navigation — `checkJump` disarms *before* setting the hash so its own
-jump doesn't read as one) and by a 120 s timeout, so a launch that never
-produces a session (claude failed to start) can't yank the browser somewhere
+**Jump to the new session — and the wait it rides on.** The launch response
+carries no session id — none exists yet (the session appears through its own
+`SessionStart`; the server deliberately returns no synthetic row, and
+inventing one would desync the list). Measured budget from click to
+appearance: `kitten @ launch` ~100–200 ms, then **claude's own boot 1.4–2.1 s**
+(audit `web-launch` rows joined against the following SessionStart — the
+irreducible chunk), then up to a full `GLOBAL_TICK_S` before the sessions
+poll notices. Three mechanisms cover it:
+
+*The pending view (`#/launching`).* A form launch navigates IMMEDIATELY to an
+optimistic "starting session…" page (spinner, launch dir, account/model/effort
+chips, the typed first prompt echoed) instead of idling on the list — the
+original design left ~2–3 s of dead air and then yanked the page when the
+snapshot landed ("late jumping"). The arrival becomes a swap-in-place
+(`jumpHit` uses `location.replace`, so the waiting room never enters history —
+back lands on the list). Past `PEND_HINT_MS` the hint escalates with an
+elapsed counter (counted from `armedAt`, so leaving/re-entering the room
+doesn't reset the clock); the watch's 120 s timeout renders an inline failure
+card ("claude may have failed to start") instead of a silent give-up. The
+composer's resume-&-send deliberately does NOT open the pending view — the
+user is already looking at the session being revived.
+
+*The `wake` fast path (server).* On a successful launch `_launch_wake` (a
+daemon thread, `LAUNCHWAKE_POLL_S`/`LAUNCHWAKE_MAX_S`) polls the sessions
+head for the launched session — by `kitty_window_id` when the launch reported
+one (exact across fresh/resume/continue: the audit's SessionStart upsert
+stamps a resumed row's new window too), else a fresh `started_at` in the
+launch cwd — and pushes a `wake` `{sid, win, cwd}` into `NOTIFIER`. That both
+delivers the sid to every page (the one whose armed watch matches — win,
+resumed sid, or cwd — jumps instantly) and unblocks the `sse_global` loops'
+queue wait, so the snapshot follows NOW instead of at the next tick. A
+timeout pushes nothing — there'd be nothing to jump to.
+
+*The snapshot watch (client fallback — stub terminals, a wake lost to a
+reconnect).* `armJump` stashes the known sids, the currently-LIVE sids, the
+launched cwd, and the response's `win`; every global `sessions` snapshot AND
+`sessions-delta` runs `checkJump` (delta too: a known row flipping
+parked→live moves no membership/order, so waiting for full snapshots alone
+could miss a resume). A hit is, in priority order: the `win` row (gated on
+`live` — a previous terminal RUN's ids restart from 1, so a stale row can
+collide), *that* resumed sid coming back to life (matched by sid, not cwd —
+you can resume into a different directory), or a cwd-row that is brand-new or
+freshly parked→live (`liveAtArm` — a plain "new sid" check misses resume and
+continue, which re-animate an EXISTING sid at SessionStart and only fork to a
+new one at the first event after; this shipped broken once).
+
+*Navigating away mid-wait must not break the wait.* A user-driven route
+change while the watch is armed flips it **quiet** (`route()` — jumpHit's own
+navigations never land there armed, it clears `S.jump` before touching the
+hash): the watch keeps running, but resolution becomes a clickable "session
+started" toast instead of a navigation — yanking the browser away from
+wherever the user went is the exact annoyance the pending view removes (this
+replaces the old cancel-outright, which orphaned the launch if you peeked at
+another session mid-wait). A quiet resolution also stashes `S.jumpDone`, so
+browser-back to `#/launching` forwards to the session that arrived meanwhile
+(consumed once); re-entering `#/launching` with the watch still armed
+un-quiets and re-mounts the pending view. The 120 s timeout still bounds
+every path — a launch that never produces a session can't toast or yank
 minutes later.
 
 **Audit.** Every attempt lands a `state_files` row: `web-send`
 (`{win, chars, ok, tab}` — `tab` is the state at send time, so "my message
 vanished" is answerable as "it queued mid-turn"; keyed to the session's
 state-DB path) and `web-launch`
-(`{cwd, model, effort, resume, cont, ok}`, no session yet so log/path are
-empty), `web-stop` (`{win, ok}`) and `web-interrupt` (`{win, ok, tab}` —
+(`{cwd, model, effort, resume, cont, account, ok, win}`, no session yet so
+log/path are empty) followed by its watcher's one `web-launch-wake`
+(`{sid, win, cwd, ok, waited_s}` — found: `waited_s` IS the launch→appearance
+latency, the dashboard's own share of "launching felt slow" reconstructible
+next to the `web-launch` row; timeout: `ok` false, sid empty),
+`web-stop` (`{win, ok}`) and `web-interrupt` (`{win, ok, tab}` —
 the tab state at press time says what the Escape landed on). Failure paths
 (no window, no terminal, send/launch/close/key returned false) also write an
 `A.error` per the audit-before-swallow rule, so a "my message never arrived"

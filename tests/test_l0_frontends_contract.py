@@ -354,18 +354,45 @@ def test_send_text_enter_write_failure_is_false(monkeypatch):
 
 def test_launch_tab_argv(monkeypatch):
     """launch_tab → `kitten @ launch --type=tab --cwd <cwd> <argv…>`, argv a
-    list (never a shell string). Truthy on rc 0. NO --keep-focus: on a
+    list (never a shell string). Returns the NEW window's id from kitty's
+    stdout (the dashboard's exact launched-session match key), bare True when
+    the terminal prints nothing, None on failure. NO --keep-focus: on a
     background kitty (the dashboard launch) kitty's keep-focus path raises
     the previous window's OS window, ACTIVATING kitty over the browser —
     the opposite of what it promises (see kitten_launch_tab)."""
     calls = []
-    monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
+
+    def run_rc0(argv, **kw):
+        calls.append(list(argv))
+
+        class _R:
+            returncode = 0
+            stdout = b"77\n"
+        return _R()
+
+    monkeypatch.setattr(fk.subprocess, "run", run_rc0)
     fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
-    assert fe.launch_tab("/proj", ["claude", "fix the bug"]) is True
-    assert calls == [["/k", "unix:/tmp/x", "launch", "--type=tab",
+    assert fe.launch_tab("/proj", ["claude", "fix the bug"]) == "77"
+    assert calls == [["/k", "@", "--to", "unix:/tmp/x", "launch", "--type=tab",
                       "--cwd", "/proj", "claude", "fix the bug"]]
-    monkeypatch.setattr(fk, "kitten_run", lambda *a: 1)
-    assert fe.launch_tab("/proj", ["claude"]) is False
+
+    def run_quiet(argv, **kw):
+        class _R:
+            returncode = 0
+            stdout = b""
+        return _R()
+
+    monkeypatch.setattr(fk.subprocess, "run", run_quiet)
+    assert fe.launch_tab("/proj", ["claude"]) is True
+
+    def run_fail(argv, **kw):
+        class _R:
+            returncode = 1
+            stdout = b"err"
+        return _R()
+
+    monkeypatch.setattr(fk.subprocess, "run", run_fail)
+    assert fe.launch_tab("/proj", ["claude"]) is None
 
 
 def test_launch_pane_keep_focus_only_when_app_focused(monkeypatch):

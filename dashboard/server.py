@@ -1038,6 +1038,55 @@ def _steal_watch(before, terminal_app):
                   "steals": steals})
 
 
+# --- post-launch SSE wake watch ------------------------------------------------------
+# A web launch's session doesn't exist anywhere until claude finishes booting
+# in the new tab and fires SessionStart (measured 1.4-2.1s across recent
+# launches — the audit `web-launch` rows joined against the following
+# SessionStart). Without a nudge the global SSE loop only notices the new
+# sessions row on its next GLOBAL_TICK_S poll, adding up to a full second of
+# dead air on top. This watch polls the sessions head at a fast cadence and,
+# the moment the launched session appears, pushes a `wake` into NOTIFIER —
+# the sse_global loops block on that queue, so every connected page both
+# receives the `wake` (the launching page jumps straight to the sid it
+# carries) and rebuilds/pushes the sessions snapshot NOW instead of at the
+# tick. Matching: by kitty_window_id when the launch reported the new
+# window's id (exact — covers fresh/resume/continue alike, since the audit's
+# session upsert stamps the resumed row's new window too), else a session in
+# the launch cwd whose started_at postdates the launch.
+LAUNCHWAKE_POLL_S = 0.15           # sessions-head poll cadence after a launch
+LAUNCHWAKE_MAX_S = 15.0            # claude boot measured ~2s; 15s covers a cold
+#                                    machine without leaving a zombie poller
+
+
+def _launch_wake(win, cwd, t0):
+    """The post-launch appearance watch (a daemon thread — the HTTP response
+    never waits on it). Ends with ONE `web-launch-wake` state_files row either
+    way: found (`sid`, `waited_s` = launch→appearance latency, the dashboard's
+    own share of it reconstructible next to the `web-launch` row) or timeout
+    (`sid` empty). The `wake` push happens only on found — a timeout has
+    nothing to hurry the loops for."""
+    deadline = t0 + LAUNCHWAKE_MAX_S
+    sid = ""
+    while not sid and time.time() < deadline:
+        try:
+            for row in API.sessions(10):
+                if ((win and str(row.get("kitty_window_id") or "") == win)
+                        or (not win and row.get("cwd") == cwd
+                            and (row.get("started_at") or 0) >= t0)):
+                    sid = row["sid"]
+                    break
+        except Exception:
+            A.error("", "dashboard launch wake")
+            break
+        if not sid:
+            time.sleep(LAUNCHWAKE_POLL_S)
+    if sid:
+        NOTIFIER.push("wake", {"sid": sid, "win": win, "cwd": cwd})
+    A.state_file("", "", "web-launch-wake",
+                 {"sid": sid, "win": win, "cwd": cwd, "ok": bool(sid),
+                  "waited_s": round(time.time() - t0, 3)})
+
+
 # --- the HTTP handler ------------------------------------------------------------------
 
 class Handler(BaseHTTPRequestHandler):
@@ -1995,8 +2044,11 @@ class Handler(BaseHTTPRequestHandler):
         resume: a clean session id, exclusive with continue); 503 when no
         terminal resolves; else the launch, with `--resume <sid>`/`--continue`
         and `--model`/`--effort` riding as positional "$@" words ahead of the
-        prompt. Audited as a `web-launch` state_files row (no session db
-        exists yet, so its log/path are empty)."""
+        prompt. The response carries the new tab's window id when the terminal
+        reports one, and a _launch_wake watcher thread hurries the session's
+        SSE appearance (see its block). Audited as a `web-launch` state_files
+        row (no session db exists yet, so its log/path are empty; `win` = the
+        launched window)."""
         body = self._post_guard()
         if body is None:
             return
@@ -2068,15 +2120,26 @@ class Handler(BaseHTTPRequestHandler):
         # has no OS app identity (the inert stub, off-mac).
         term = fe.app_id()
         before = _front_app() if term else ""
-        ok = bool(fe.launch_tab(cwd, argv))
-        A.state_file("", "", "web-launch", dict(opts, ok=ok))
-        if not ok:
+        # launch_tab: the new window's id on success when the terminal reports
+        # one (kitty prints it), bare True when it doesn't, falsy on failure.
+        got = fe.launch_tab(cwd, argv)
+        win = got if isinstance(got, str) else ""
+        A.state_file("", "", "web-launch", dict(opts, ok=bool(got), win=win))
+        if not got:
             A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
             return self._json({"error": "launch failed"}, 502)
+        # the SSE wake watch (see the block above the Handler class): hurry
+        # the launched session's appearance to every connected page — and hand
+        # the launching page its sid — the moment SessionStart lands.
+        threading.Thread(target=_launch_wake, args=(win, cwd, time.time()),
+                         daemon=True, name="web-launch-wake").start()
         if before and before != term:
             threading.Thread(target=_steal_watch, args=(before, term),
                              daemon=True, name="web-launch-steal-watch").start()
-        return self._json({"ok": True})
+        # `win` lets the page match the launched session exactly (its jump
+        # watch compares kitty_window_id); "" when the terminal didn't report
+        # an id — the page falls back to its cwd heuristic.
+        return self._json({"ok": True, "win": win})
 
     def post_dictate_token(self):
         """Mint a short-lived Deepgram grant for the browser's DIRECT wss

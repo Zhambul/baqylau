@@ -134,7 +134,13 @@ def kitten_send_key(kitten, listen, win, *keys):
 
 def kitten_launch_tab(kitten, listen, cwd, argv):
     """`kitten @ launch --type=tab --cwd <cwd> <argv…>` — a new tab running
-    argv (a list, never a shell string, so no interpolation). True on rc 0.
+    argv (a list, never a shell string, so no interpolation). Returns the NEW
+    WINDOW's id (kitty prints it on stdout — the one launch call whose stdout
+    is captured, not silenced: the dashboard's new-session flow matches the
+    session that boots in that window by `kitty_window_id`, which is exact
+    where a cwd heuristic is ambiguous), truthy-on-success like the old bool
+    (window ids start at 1; a rc-0 launch that prints nothing degrades to
+    True); None on failure.
     Deliberately NOT `--keep-focus`: when kitty is a background app (the web
     dashboard's launch — the user is in a browser), kitty's keep-focus path
     "restores" focus to the previous window via focus_os_window(raise=True),
@@ -144,8 +150,15 @@ def kitten_launch_tab(kitten, listen, cwd, argv):
     launch_pane's --keep-focus on kitten_app_focused; the dashboard keeps a
     passive audit-only steal watch (dashboard/server.py _steal_watch) as the
     regression evidence — it never touches focus itself."""
-    return kitten_run(kitten, listen, "launch", "--type=tab",
-                      "--cwd", cwd, *argv) == 0
+    try:
+        r = subprocess.run([kitten, "@", "--to", listen, "launch",
+                            "--type=tab", "--cwd", cwd, *argv],
+                           capture_output=True, timeout=KITTEN_TIMEOUT_S)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    return r.stdout.decode("utf-8", "replace").strip() or True
 
 
 def kitten_app_focused(kitten, listen):

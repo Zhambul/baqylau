@@ -1790,7 +1790,7 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     _inject_fe(monkeypatch, fe)
     code, body = _post(dash + "/api/sessions/new",
                        {"cwd": str(tmp_path), "prompt": "do the thing"})
-    assert code == 200 and json.loads(body) == {"ok": True}
+    assert code == 200 and json.loads(body) == {"ok": True, "win": ""}
     # claude runs through the user's interactive login shell (kitty's own env
     # has no user PATH / aliases); the prompt is a POSITIONAL arg, never
     # interpolated into the fixed command string.
@@ -1811,21 +1811,31 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
 
 
 class _WatchAudit:
-    """Wraps the server's audit handle: records web-launch-steal-watch rows
-    in-memory (the watch thread's audit write cross-thread would land in the
+    """Wraps the server's audit handle: records one action's state_file rows
+    in-memory (a watch thread's audit write cross-thread would land in the
     spool, invisible to a same-process DB read) and delegates everything else
     to the real module."""
 
-    def __init__(self, real):
-        self.real, self.rows = real, []
+    def __init__(self, real, action="web-launch-steal-watch"):
+        self.real, self.action, self.rows = real, action, []
 
     def __getattr__(self, name):
         return getattr(self.real, name)
 
     def state_file(self, log, path, action, content=""):
-        if action == "web-launch-steal-watch":
+        if action == self.action:
             self.rows.append(content)
         return self.real.state_file(log, path, action, content)
+
+
+@pytest.fixture(autouse=True)
+def _fast_launch_wake(monkeypatch):
+    """Every successful /api/sessions/new spawns a _launch_wake poller thread;
+    at the product's 15s budget one would outlive its test and keep polling the
+    shared audit DB while later tests run. Clamp the budget module-wide; the
+    wake tests below re-raise it themselves."""
+    monkeypatch.setattr(DS, "LAUNCHWAKE_MAX_S", 0.2)
+    monkeypatch.setattr(DS, "LAUNCHWAKE_POLL_S", 0.01)
 
 
 def _watch_rig(monkeypatch, fronts, bundle="app.term"):
@@ -1886,6 +1896,62 @@ def test_new_session_watch_off_without_app_id(dash, monkeypatch, tmp_path):
     assert code == 200 and probed == []
 
 
+def test_launch_wake_pushes_and_audits(dash, monkeypatch, tmp_path):
+    # the post-launch wake watch: the launched session's SessionStart appears
+    # → ONE NOTIFIER `wake` naming the sid (the page's fast jump, matched by
+    # the window id kitty printed at launch) + one web-launch-wake audit row
+    # carrying the measured launch→appearance latency
+    fe = _FakeFE()
+    fe.launch_ok = "88"                     # kitty printed the new window's id
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS, "LAUNCHWAKE_MAX_S", 5.0)
+    aud = _WatchAudit(DS.A, "web-launch-wake")
+    monkeypatch.setattr(DS, "A", aud)
+    # prime core.audit's process-wide sqlite conn from THIS thread: the first
+    # audit write binds the conn to its creating thread, and if the POST
+    # handler's thread claims it, the session_start below silently degrades
+    # to the spool — a DB the watcher's read never sees (same per-process
+    # caching story as conftest._fresh_audit_conn)
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+    A.session_start({"session_id": "prime0", "cwd": "/elsewhere",
+                     "transcript_path": ""})
+    q = DS.NOTIFIER.register()
+    try:
+        code, body = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+        assert code == 200 and json.loads(body) == {"ok": True, "win": "88"}
+        # SessionStart lands while the watcher is polling
+        monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+        A.session_start({"session_id": "wake1", "cwd": str(tmp_path),
+                         "transcript_path": ""})
+        ev, payload = q.get(timeout=5)
+        assert ev == "wake"
+        assert payload["sid"] == "wake1" and payload["win"] == "88"
+        wait_until(lambda: aud.rows, desc="wake audit row")
+        assert aud.rows[0]["ok"] is True and aud.rows[0]["sid"] == "wake1"
+        assert aud.rows[0]["waited_s"] >= 0
+    finally:
+        DS.NOTIFIER.unregister(q)
+
+
+def test_launch_wake_timeout_audits_without_push(dash, monkeypatch, tmp_path):
+    # no session ever appears → the watcher gives up at its budget, audits the
+    # timeout (sid empty, ok False) and pushes NOTHING — a wake with no sid
+    # would have nothing for the page to jump to
+    fe = _FakeFE()                          # launch_ok True → no window id
+    _inject_fe(monkeypatch, fe)
+    aud = _WatchAudit(DS.A, "web-launch-wake")
+    monkeypatch.setattr(DS, "A", aud)
+    q = DS.NOTIFIER.register()
+    try:
+        code, body = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+        assert code == 200 and json.loads(body) == {"ok": True, "win": ""}
+        wait_until(lambda: aud.rows, desc="wake timeout audit row")
+        assert aud.rows[0]["ok"] is False and aud.rows[0]["sid"] == ""
+        assert q.empty()
+    finally:
+        DS.NOTIFIER.unregister(q)
+
+
 def test_extra_origins_parse():
     assert DS.extra_origins("https://dash.zhambyl.top, https://a.b ,,") == \
         {"https://dash.zhambyl.top", "https://a.b"}
@@ -1902,7 +1968,7 @@ def test_proxied_origin_allowed(dash, monkeypatch, tmp_path):
     monkeypatch.setattr(DS, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {ext})
     code, body = _post(dash + "/api/sessions/new",
                        {"cwd": str(tmp_path)}, origin=ext)
-    assert code == 200 and json.loads(body) == {"ok": True}
+    assert code == 200 and json.loads(body) == {"ok": True, "win": ""}
 
 
 def test_readonly_kills_control_plane(dash, monkeypatch, tmp_path):

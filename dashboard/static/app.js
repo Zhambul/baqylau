@@ -23,7 +23,16 @@ const S = {
   esGlobal: null,
   folds: new Set(),      // open parked/archived subdivisions ("<cwd>|parked") —
                          // survives the list re-renders SSE snapshots trigger
-  jump: null,            // pending jump-to-new-session watch ({cwd, known, until})
+  jump: null,            // pending jump-to-new-session watch ({cwd, resumeSid,
+                         // win, show, quiet, armedAt, known, liveAtArm, until}
+                         // — armJump; quiet = user navigated away mid-wait, so
+                         // resolution toasts instead of yanking)
+  jumpDone: null,        // "#/s/<sid>" of a QUIETLY resolved launch — lets a
+                         // return to #/launching forward to the session that
+                         // arrived while the user was away (consumed once)
+  pendingUI: false,      // the #/launching "starting session…" view is mounted
+                         // (renderList must not clobber it — same role as
+                         // S.cur for the session view)
   cards: new Map(),      // sid -> mounted list-card element (the patch targets)
   rowPrev: new Map(),    // sid -> JSON of the row the mounted card shows
   listKey: null,         // listShape() of the last full list render
@@ -369,6 +378,25 @@ function connectGlobal() {
     if (!S.cur) renderList();
     else updateHeadFromList();
     renderAttention();
+    // a delta can carry the armed jump's hit too (e.g. a known row flipping
+    // parked→live without an order move) — the watch must not depend on the
+    // full-snapshot path alone
+    checkJump();
+  });
+  // the launch-wake fast path: the server's _launch_wake watcher spotted the
+  // session a web launch produced and named its sid — the page that armed the
+  // matching jump navigates NOW, without waiting for the row to ride a
+  // snapshot. Every open page receives every wake, so ownership is checked:
+  // the launch's window id when both sides know it (exact), the resumed sid,
+  // else the armed cwd (same heuristic the snapshot path uses).
+  es.addEventListener("wake", (e) => {
+    const d = JSON.parse(e.data) || {};
+    const j = S.jump;
+    if (!j || !d.sid) return;
+    const mine = (j.win && d.win && j.win === d.win)
+      || (j.resumeSid && j.resumeSid === d.sid)
+      || (!j.win && !d.win && j.cwd === d.cwd);
+    if (mine) jumpHit(d.sid, "");
   });
   es.addEventListener("notify", (e) => {
     const d = JSON.parse(e.data);
@@ -400,14 +428,35 @@ window.addEventListener("hashchange", route);
 
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  // A user-driven navigation while a launch watch is armed flips it QUIET:
+  // the watch keeps running, but resolution becomes a clickable toast instead
+  // of a navigation — yanking the browser away from wherever the user went is
+  // the exact annoyance the pending view exists to remove. (This replaces the
+  // old cancel-outright: peeking at another session mid-wait must not orphan
+  // the launch.) jumpHit's own navigations never land here armed — it clears
+  // S.jump BEFORE touching the hash. Re-entering #/launching un-quiets.
+  if (S.jump && parts[0] !== "launching") S.jump.quiet = true;
   if (parts[0] === "s" && parts[1]) {
-    S.jump = null;      // the user picked a session themselves — the pending
-    //                     auto-jump is stale (checkJump clears BEFORE navigating,
-    //                     so its own hash change never lands here armed)
+    S.pendingUI = false;
     const sid = decodeURIComponent(parts[1]);
     if (parts[2] === "a" && parts[3]) return showAgent(sid, decodeURIComponent(parts[3]));
     return showSession(sid, parts[2] || "mirror");
   }
+  if (parts[0] === "launching") {
+    // the optimistic post-launch view — back in the waiting room, so auto-jump
+    // again on arrival
+    if (S.jump) { S.jump.quiet = false; return showPending(); }
+    // the launch resolved quietly while the user was away — forward them to
+    // the session that arrived (consumed once; a later visit hits the list)
+    if (S.jumpDone) {
+      const to = S.jumpDone;
+      S.jumpDone = null;
+      return location.replace(to);
+    }
+    // a reload / stale bookmark has nothing to wait for
+    return location.replace("#/");
+  }
+  S.pendingUI = false;
   showList();
 }
 
@@ -434,7 +483,7 @@ function showList() {
 }
 
 function renderList(force) {
-  if (S.cur) return;
+  if (S.cur || S.pendingUI) return;
   if (!S.sessions.length) {
     S.listKey = null;
     $view.textContent = "";
@@ -1980,8 +2029,19 @@ function buildComposer() {
 // must not yank the browser somewhere minutes later.
 const JUMP_TIMEOUT_MS = 120000;
 
-function armJump(cwd, resumeSid) {
+function armJump(cwd, resumeSid, o) {
+  o = o || {};
+  S.jumpDone = null;               // a new launch supersedes a stale forward
   S.jump = { cwd, resumeSid: resumeSid || "",
+             win: o.win || "",     // the launched tab's window id when the
+             //                       terminal reported one — the exact match
+             show: o.show || null, // what the #/launching pending view displays
+             //                       ({mode, model, effort, account, prompt});
+             //                       null = no pending view (composer resume)
+             quiet: false,         // route() flips this on user navigation —
+             //                       resolution toasts instead of navigating
+             armedAt: Date.now(),  // the pending view's elapsed counter — must
+             //                       survive the view unmounting/remounting
              known: new Set(S.sessions.map(r => r.sid)),
              liveAtArm: new Set(S.sessions.filter(r => r.live).map(r => r.sid)),
              until: Date.now() + JUMP_TIMEOUT_MS };
@@ -1990,18 +2050,105 @@ function armJump(cwd, resumeSid) {
 function checkJump() {
   const j = S.jump;
   if (!j) return;
-  if (Date.now() > j.until) { S.jump = null; return; }
-  // the resumed sid itself wins (its cwd may differ from the launch dir);
-  // otherwise any cwd-row that is brand-new or freshly parked→live
-  const row = (j.resumeSid
-               && S.sessions.find(r => r.live && r.sid === j.resumeSid))
+  if (Date.now() > j.until) { jumpFail(); return; }
+  // the launch's window id wins when known (r.live gates out a row from a
+  // previous terminal run whose window ids restarted from 1); then the
+  // resumed sid itself (its cwd may differ from the launch dir); otherwise
+  // any cwd-row that is brand-new or freshly parked→live
+  const row = (j.win && S.sessions.find(
+    r => r.live && String(r.kitty_window_id || "") === j.win))
+    || (j.resumeSid && S.sessions.find(r => r.live && r.sid === j.resumeSid))
     || S.sessions.find(r => r.live && r.cwd === j.cwd
                        && (!j.known.has(r.sid) || !j.liveAtArm.has(r.sid)));
   if (!row) return;
-  S.jump = null;                       // clear FIRST — route() treats an armed
-  //                                      watch on a session hash as user intent
-  location.hash = "#/s/" + encodeURIComponent(row.sid);
-  toast("done", "session started", row.title || proj(row));
+  jumpHit(row.sid, row.title || proj(row));
+}
+
+function jumpHit(sid, title) {
+  const quiet = !!(S.jump && S.jump.quiet);
+  S.jump = null;                       // clear FIRST — route() must never see
+  //                                      this function's own hash change armed
+  const to = "#/s/" + encodeURIComponent(sid);
+  if (quiet) {
+    // the user navigated away mid-wait — never yank them; a clickable toast
+    // announces the arrival, and #/launching (browser back) forwards there
+    S.jumpDone = to;
+    if (S.cur === sid) return;         // they already found it themselves
+    toast("done", "session started", title || "click to open",
+          () => { location.hash = to; });
+    return;
+  }
+  // from the pending view, replace: #/launching is a waiting room, not a
+  // history entry worth returning to (back should land on the list)
+  if (S.pendingUI) location.replace(to);
+  else location.hash = to;
+  toast("done", "session started", title || "");
+}
+
+function jumpFail() {
+  S.jump = null;
+  if (S.pendingUI) showPendingFail();
+}
+
+/* ---------- the optimistic pending view (#/launching) ---------- */
+// Mounted the instant a form launch POSTs ok, BEFORE the session exists
+// anywhere (claude takes ~2s to boot before its SessionStart) — the wait gets
+// a visible page instead of dead air on the list, and the arrival becomes a
+// swap-in-place (jumpHit's location.replace) instead of a surprise yank.
+// Torn down by whatever route() runs next; its ticker dies with the DOM.
+
+const PEND_HINT_MS = 8000;             // "still waiting…" past this — claude
+//                                        boot measured ~2s, so 8s is abnormal
+const PEND_TICK_MS = 500;              // ticker cadence (hint + timeout watch)
+
+function showPending() {
+  leaveSession();
+  S.pendingUI = true;
+  const j = S.jump;
+  const show = j.show || {};
+  $view.textContent = "";
+  const card = el("div", "pendcard");
+  card.append(el("div", "pendspin"));
+  const verb = show.mode === "resume" ? "resuming session"
+    : show.mode === "continue" ? "continuing session" : "starting session";
+  card.append(el("div", "pendtitle", verb));
+  card.append(el("div", "penddir", j.cwd));
+  const chips = el("div", "pendchips");
+  [show.account, show.model, show.effort].filter(Boolean)
+    .forEach(t => chips.append(el("span", "pendchip", t)));
+  if (chips.childNodes.length) card.append(chips);
+  if (show.prompt) card.append(el("div", "pendprompt", show.prompt));
+  const hint = el("div", "pendhint",
+                  "claude is booting in a new terminal tab — usually a couple of seconds");
+  card.append(hint);
+  $view.append(card);
+  // the ticker only escalates the hint and fires the timeout during total
+  // silence — the jump itself arrives via the SSE wake / snapshot watches.
+  // Elapsed counts from armedAt (the launch), not the mount: leaving and
+  // re-entering the waiting room must not reset the clock.
+  const tick = setInterval(() => {
+    if (!card.isConnected) { clearInterval(tick); return; }
+    const jj = S.jump;
+    if (!jj) { clearInterval(tick); return; }        // jumpHit navigated
+    if (Date.now() > jj.until) { clearInterval(tick); jumpFail(); return; }
+    const waited = Date.now() - jj.armedAt;
+    if (waited > PEND_HINT_MS)
+      hint.textContent = "still waiting… (" + Math.round(waited / 1000)
+        + "s) — check the terminal tab if this goes on";
+  }, PEND_TICK_MS);
+}
+
+function showPendingFail() {
+  if (!S.pendingUI) return;
+  $view.textContent = "";
+  const card = el("div", "pendcard fail");
+  card.append(el("div", "pendtitle", "✗ the session never appeared"));
+  card.append(el("div", "pendhint",
+                 "claude may have failed to start — check the terminal tab"));
+  const back = el("button", "nsbtn", "back to sessions");
+  back.onclick = () => { location.hash = "#/"; };
+  card.append(back);
+  $view.append(card);
 }
 
 /* ---------- control plane: the new-session form ---------- */
@@ -2352,9 +2499,21 @@ function openNewSession(prefillCwd, resumeSid) {
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
     postJSON("/api/sessions/new", body)
-      .then(() => {
+      .then((d) => {
         nsRemember({ cwd, model: model.value, effort: effort.value });
-        armJump(cwd, body.resume); closeNewSession(); toast("done", "launching…", cwd);
+        armJump(cwd, body.resume, {
+          win: (d && d.win) || "",
+          show: { mode: body.continue ? "continue" : body.resume ? "resume" : "new",
+                  model: model.value, effort: effort.value,
+                  account: acct.value, prompt: body.prompt || "" },
+        });
+        closeNewSession();
+        // the optimistic pending view — the jump swaps it for the session in
+        // place. Explicit route() when the hash already IS #/launching (a
+        // second launch from the header + while waiting): no hashchange fires,
+        // but the view must rebuild around the new watch.
+        if (location.hash === "#/launching") route();
+        else location.hash = "#/launching";
       })
       .catch(e => { submit.disabled = false; toast("ask", "launch failed", (e && e.error) || ""); });
   };

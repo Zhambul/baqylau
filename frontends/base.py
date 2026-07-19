@@ -171,11 +171,14 @@ class Frontend:
 
     def launch_tab(self, cwd, argv):
         """Open a NEW tab whose window runs `argv` with working directory
-        `cwd`. Truthy on success, False on failure. May select the new tab
-        inside the terminal, but must NOT make the terminal APP take OS-level
-        focus when it is in the background (the web dashboard's caller — its
-        user is in a browser; kitty: a plain launch is safe, --keep-focus is
-        the thing that activates a background app)."""
+        `cwd`. Truthy on success — the new window's id when the terminal
+        reports one (kitty prints it; the dashboard matches the launched
+        session by `kitty_window_id`), else bare True — and falsy (False/None)
+        on failure. May select the new tab inside the terminal, but must NOT
+        make the terminal APP take OS-level focus when it is in the background
+        (the web dashboard's caller — its user is in a browser; kitty: a plain
+        launch is safe, --keep-focus is the thing that activates a background
+        app)."""
         return False
 
     def close_tab(self, win):
