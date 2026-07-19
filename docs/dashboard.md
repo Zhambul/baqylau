@@ -251,7 +251,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
-| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair + any model-scoped window the CLI reports, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset); backs the new-session picker and the top usage strip |
+| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
@@ -1611,14 +1611,14 @@ response. The capture is GENERIC over windows (`statusline.parse_usage`):
 every `rate_limits` entry with a parseable used-% lands in the `usage` kv as
 `<window>` + `<window>_reset` — the account-wide `five_hour`/`seven_day` pair
 always first, then any model-scoped window sorted by key. As of CLI 2.1.215
-only the account-wide pair exists (verified against live payloads
+only the account-wide pair exists here (verified against live payloads
 2026-07-19: the `/usage` screen's per-model weekly bar — e.g. the Fable
-cap — has NO statusline counterpart yet); the moment Claude Code starts
-reporting one (say `seven_day_fable`), it flows through the kv, the
-aggregation, and the strip's bars with no code change. Rate-limit data is NOT
-in any hook payload, the transcript, or OTEL (all checked),
-and the API endpoint that would return it needs a `user:profile` scope the
-`setup-token`-minted account tokens lack (403). So the number is captured by
+cap — has NO statusline counterpart); if Claude Code ever starts
+reporting one in the status line (say `seven_day_fable`), it flows through the
+kv, the aggregation, and the strip's bars with no code change — but until then
+the per-model bars come from the OAuth endpoint instead (*Per-model usage
+bars* below). Rate-limit data is NOT in any hook payload, the transcript, or
+OTEL (all checked). So the account-wide number is captured by
 **wrapping the status line**: `bin/claude-statusline.py`
 (`plugins/claude_code/statusline`) becomes `settings.json`'s
 `statusLine.command`, with the user's real status-line command (their HUD) as its
@@ -1653,6 +1653,54 @@ as `resets now` — a pill that read "5h 29% · resets now" for hours was the
 symptom (the client must not fix this itself: the rolled-over arithmetic is
 single-owner, server-side). The `web-launch` audit row records the chosen
 `account`.
+
+**Per-model usage bars (the OAuth `/usage` fetch).** The `/usage` screen's
+third bar — a **weekly per-MODEL cap** (e.g. "Fable") — is exposed by no
+tokenless channel; it lives only behind the undocumented OAuth endpoint
+`GET https://api.anthropic.com/api/oauth/usage`, which requires a
+`user:profile`-scoped token. The switcher's `setup-token`-minted account tokens
+are **inference-only** (no `user:profile` → 403; documented limitation of
+github `leegunwoo98/claude-code-account-switcher`), so this is the ONE number
+baqylau cannot get tokenlessly. `plugins/claude_code/model_usage.py`
+(`plugins.model_windows`) PIGGYBACKS on the full-scope OAuth logins Claude Code
+stores in the macOS keychain (`Claude Code-credentials[-<hash>]`): read the
+access token, refresh it when expired, call the endpoint, and shape each
+`weekly_scoped` limit into the SAME `seven_day_<model>` window kv the strip
+already paints — so no renderer change, the fable-ready generic pipeline just
+lights up. The dashboard's `accounts_payload` MERGES these windows into each
+account's `usage` before `effective_usage`; `five_hour_eff`/`limit_hit` stay on
+the tokenless snapshot, and a missing/failed fetch simply omits the extra bars.
+Design details (docs/relimit.md borrows the same account vocabulary):
+
+- **Account → slug mapping.** The endpoint identifies its account only by
+  email, but the switcher slugs carry no email (setup-tokens can't read the
+  profile). So the fetched account is matched to a slug by its account-wide
+  **5h AND 7d reset epochs** against each slug's freshest captured usage
+  (`account_usage`). BOTH must match — the 5h epoch disambiguates accounts that
+  share a 7d boundary (a single-signal match mis-mapped personal↔work once,
+  2026-07-19). No match ⇒ the bar just doesn't attach.
+- **Refresh ownership** (avoids two writers fighting over one rotating refresh
+  token). The actively-used login (plain `claude` — e.g. the personal account)
+  is kept fresh by Claude Code itself, so baqylau only READS its keychain token.
+  A **switcher-only** account's OAuth login is never exercised by Claude Code
+  (it runs on the setup-token), so its access token expires in ~8h with nobody
+  to refresh it — baqylau becomes its SOLE refresher (`grant_type=refresh_token`
+  at `platform.claude.com/v1/oauth/token`), persisting the rotation in its OWN
+  keychain entry (`baqylau-model-usage: <service>`), never overwriting Claude
+  Code's copy. The per-cycle pick is just "whichever copy is fresher", so the
+  personal path never self-refreshes and the work path does. **Coverage is
+  therefore limited to accounts with a scoped keychain login** — a
+  switcher-only account gets a bar only after one interactive
+  `claude auth login` (its refresh token then lets baqylau keep it alive).
+- **Tokenless-departure discipline.** This is the sole API call in a
+  tokenless-by-design tool, so it is gated (`CLAUDE_MODEL_USAGE=0` disables),
+  macOS-only, TTL-cached (60s — the keychain/network work runs at most once a
+  minute however often the page polls), and **fail-silent + audited-once**: a
+  failure degrades to "no model windows", and its `errors` row is written at
+  most once per process (a 60s poll against a down endpoint would otherwise
+  trickle a row a minute, which errwatch surfaces as a `⚠` in every session's
+  mirror). The number is live from an undocumented endpoint — not
+  reconstructible from the DB, unlike the tokenless snapshot.
 
 **The "limit hit" pill.** The frozen usage bar UNDERSTATES a blocked account:
 Claude Code's status line reports `used_percentage` from the API's utilization

@@ -508,15 +508,27 @@ def accounts_payload():
     its reset dropped, so a stale snapshot can't render 'resets now'
     forever), `five_hour_eff` the load-balancing 5h figure the new-session
     form preselects by, and `limit_hit` the still-active limit stamp
-    (else None)."""
+    (else None).
+
+    The one exception to 'no API call': per-MODEL weekly windows (e.g.
+    `seven_day_fable`) exist in NO tokenless channel, so plugins.model_windows
+    fetches them from the OAuth /usage endpoint (piggybacking Claude Code's
+    keychain login — docs/dashboard.md 'Per-model usage bars') and they are
+    MERGED into `usage`, after which the generic renderer paints them like any
+    other window. five_hour_eff/limit_hit stay on the tokenless snapshot; the
+    merge only ADDS windows, so a missing/failed fetch simply omits them."""
     per = API.account_usage(SESSIONS_LIMIT, cache=_ACCT)
+    model_win = plugins.model_windows(cache=_ACCT)
     out = []
     for a in plugins.accounts():
         ent = per.get(a["slug"]) or {}
         usage, hit = ent.get("usage"), ent.get("limit_hit")
+        mw = model_win.get(a["slug"])
+        if mw:                                   # per-model windows the tokenless
+            usage = dict(usage or {}, **mw)      # snapshot can't carry
         out.append(dict(
             a, usage=API.effective_usage(usage),
-            five_hour_eff=API.effective_five_hour(usage),
+            five_hour_eff=API.effective_five_hour(ent.get("usage")),
             limit_hit=hit if API.limit_hit_active(hit) else None))
     return out
 

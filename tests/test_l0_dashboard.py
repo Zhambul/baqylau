@@ -3435,6 +3435,32 @@ def test_accounts_payload_files_limit_hit_under_its_own_slug(dash, monkeypatch):
     assert by["c1"]["usage"]["five_hour"] == 10    # usage stays with the session
 
 
+def test_accounts_payload_merges_model_windows(dash, monkeypatch):
+    # The per-model weekly windows (plugins.model_windows — the OAuth /usage
+    # fetch) are MERGED into each account's usage alongside the tokenless 5h/7d
+    # snapshot, so the generic bar renderer paints a third bar. five_hour_eff
+    # keeps keying off the tokenless snapshot, never the merged-in window.
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c1", "label": "oboard", "alias": "c1"},
+        {"slug": "c2", "label": "claude-01", "alias": "c2"}])
+    monkeypatch.setattr(DS.plugins, "model_windows", lambda cache=None: {
+        "c1": {"seven_day_fable": 91, "seven_day_fable_reset": time.time() + 8000},
+        "c2": {"seven_day_fable": 100, "seven_day_fable_reset": time.time() + 8000}})
+    A.session_start({"session_id": "accs4", "cwd": "/w", "transcript_path": ""})
+    now = time.time()
+    S.kv_set(P.mirror_log("accs4"), "account", {"slug": "c1", "label": "oboard"})
+    S.kv_set(P.mirror_log("accs4"), "usage",
+             {"five_hour": 14, "five_hour_reset": now + 8000,
+              "seven_day": 62, "seven_day_reset": now + 8000, "ts": now})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    # c1 has a captured snapshot → third bar rides alongside the account-wide pair
+    assert by["c1"]["usage"]["seven_day_fable"] == 91
+    assert by["c1"]["usage"]["five_hour"] == 14
+    assert by["c1"]["five_hour_eff"] == 14         # from the tokenless snapshot
+    # c2 has NO captured snapshot, only the fetched model window → still shown
+    assert by["c2"]["usage"]["seven_day_fable"] == 100
+
+
 def test_post_new_session_account_picker(dash, monkeypatch, tmp_path):
     from plugins.claude_code import account as ACC
     tsv = tmp_path / "accounts.tsv"

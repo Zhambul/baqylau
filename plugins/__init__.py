@@ -152,6 +152,26 @@ def accounts():
     return out
 
 
+def model_windows(cache=None):
+    """Per-account, per-MODEL weekly usage windows for the dashboard's usage
+    strip: {slug: {seven_day_<model>: used%, …_reset: epoch}}, merged across
+    plugins (a slug's dicts combine; first value wins on a key clash). These are
+    the caps the tokenless status-line can't see (the /usage OAuth endpoint —
+    plugins.claude_code.model_usage.windows_by_slug); the dashboard layers them
+    onto account_usage's tokenless snapshot. Same read-side exception contract
+    as accounts(); {} when no plugin provides them / the feature is off."""
+    out = {}
+    for p in all_plugins():
+        fn = getattr(p, "model_windows", None)
+        if fn is None:
+            continue
+        for slug, wins in (fn(cache=cache) or {}).items():
+            dst = out.setdefault(slug, {})
+            for k, v in (wins or {}).items():
+                dst.setdefault(k, v)
+    return out
+
+
 def account_alias(slug):
     """Validate a chosen account slug → its launch command word, or None when
     unknown (the dashboard then 400s). First plugin that recognizes the slug

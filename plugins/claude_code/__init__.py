@@ -113,6 +113,15 @@ def account_alias(slug):
     return account.alias_for(slug)
 
 
+def model_windows(cache=None):
+    """The per-model weekly-usage provider (plugins.model_windows fan-out) —
+    {slug: {seven_day_<model>: used%, …_reset: epoch}} from the OAuth /usage
+    endpoint (the caps the tokenless status-line can't see). See
+    model_usage.windows_by_slug."""
+    from plugins.claude_code import model_usage
+    return model_usage.windows_by_slug(cache=cache)
+
+
 def launch_argv(words, cmd="claude"):
     """The launch-shell provider (plugins.launch_argv fan-out) — the argv that
     runs an account's launch word through the user's interactive login shell.

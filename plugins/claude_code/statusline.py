@@ -66,7 +66,10 @@ def parse_usage(data):
     screen's per-model weekly bar has NO statusline counterpart — verified
     against live payloads 2026-07-19); when Claude Code starts reporting a
     model-scoped window (e.g. `seven_day_fable`), it flows through here, the
-    kv, and the dashboard's per-window bars with no code change."""
+    kv, and the dashboard's per-window bars with no code change. Until it does,
+    the per-model bars are sourced out-of-band from the OAuth /usage endpoint
+    (plugins/claude_code/model_usage.py) — the ONE number no tokenless channel
+    carries."""
     rl = (data or {}).get("rate_limits") or {}
     known = [k for k in KNOWN_WINDOWS if k in rl]
     extra = sorted(k for k in rl if isinstance(k, str) and k not in KNOWN_WINDOWS)

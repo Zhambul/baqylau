@@ -84,10 +84,16 @@ def _fresh_audit_conn(tmp_path):
     import core.audit as A
     prev = os.environ.get("CLAUDE_AUDIT_DIR")
     prev_cfg = os.environ.get("CLAUDE_CONFIG_DIR")
+    prev_mu = os.environ.get("CLAUDE_MODEL_USAGE")
     os.environ["CLAUDE_AUDIT_DIR"] = str(tmp_path / "audit-inproc")
     cfg_dir = tmp_path / "config-inproc"
     cfg_dir.mkdir(exist_ok=True)
     os.environ["CLAUDE_CONFIG_DIR"] = str(cfg_dir)
+    # Never let the per-model usage fetch (plugins.model_windows → keychain +
+    # OAuth endpoint) fire from a test: accounts_payload calls it unconditionally,
+    # and on a dev macOS box that would read the real keychain / hit the network.
+    # Tests that exercise it monkeypatch the I/O seams and re-enable explicitly.
+    os.environ["CLAUDE_MODEL_USAGE"] = "0"
     A._CONN, A._FAILED = None, False
     yield
     try:
@@ -104,6 +110,10 @@ def _fresh_audit_conn(tmp_path):
         os.environ.pop("CLAUDE_CONFIG_DIR", None)
     else:
         os.environ["CLAUDE_CONFIG_DIR"] = prev_cfg
+    if prev_mu is None:
+        os.environ.pop("CLAUDE_MODEL_USAGE", None)
+    else:
+        os.environ["CLAUDE_MODEL_USAGE"] = prev_mu
 
 
 # ------------------------------------------------------------------ test env
