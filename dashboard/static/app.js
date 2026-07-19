@@ -1910,6 +1910,15 @@ function dictation(ta, getCwd) {
       stopping: false, closed: false, lastPainted: null,
     };
     const paint = () => {
+      // Once we're STOPPING, never RESURRECT text into a box that something
+      // else rewrote after our last paint: `dic.stop()` sends CloseStream and
+      // Deepgram flushes its final transcript ASYNC (~1s later, over the wire),
+      // which lands after the composer's send already cleared the box — a bare
+      // paint would refill the just-sent box AND (via the input event below)
+      // re-persist the draft. Same guard finish() uses; scoped to stopping so
+      // live-dictation edits (handled by onEdit) still paint normally.
+      if (st.stopping && st.lastPainted != null && ta.value !== st.lastPainted)
+        return;
       const head = st.prefix + st.committed + st.interim;
       st.painting = true;
       ta.value = st.lastPainted = head + st.suffix;
@@ -2054,6 +2063,12 @@ function autoGrow(ta) {
 function saveComposerDraft(ses, sid) {
   const ta = ses.composer;
   if (!ta) return;
+  // never save while the box is disabled — that is the send-in-flight window
+  // (send() disables it, then clearComposerDraft removes the stash): a trailing
+  // dictation-final input event landing here would re-persist the just-sent
+  // text before `.then` clears the box (the pre-clear half of the resurrection
+  // race the paint() guard covers on the box side)
+  if (ta.disabled) return;
   const text = ta.value;
   // keep meta in sync so a tab-switch rebuild seeds from what we just typed,
   // and so our own SSE echo (same origin) is a no-op against current state
