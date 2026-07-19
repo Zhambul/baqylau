@@ -221,6 +221,25 @@ def slash_commands(cwd):
     return out
 
 
+def config_dirs(cwd):
+    """Config-dir fan-out (cwd-keyed like slash_commands): every plugin's
+    "directories holding project-level config for this cwd", nearest-first,
+    order preserved across plugins, dedup. Consumers layer their own files
+    over these — the dashboard's per-project dictation keyterms rides it
+    (docs/dashboard.md *Web dictation*). Same exception contract as
+    census()/activity(): the caller is the read-side dashboard, not a hook."""
+    out, seen = [], set()
+    for p in all_plugins():
+        fn = getattr(p, "config_dirs", None)
+        if fn is None:
+            continue
+        for d in fn(cwd) or []:
+            if d not in seen:
+                seen.add(d)
+                out.append(d)
+    return out
+
+
 def effort_default(cwd, slug=""):
     """Saved-effort fan-out (cwd-keyed like slash_commands — the caller
     already holds the session's cwd; `slug` is the session's stashed

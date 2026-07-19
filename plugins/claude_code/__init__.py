@@ -73,6 +73,17 @@ def slash_commands(cwd):
     return slashcmds.slash_commands(cwd)
 
 
+def config_dirs(cwd):
+    """The config-dir provider (plugins.config_dirs fan-out): every `.claude`
+    directory that applies to `cwd`, nearest-first, ending at the user config
+    dir — model.claude_dirs with env_pin=False, because the caller resolves
+    ARBITRARY sessions' cwds (same reasoning as slash_commands). Consumers
+    layer their own per-project files over these dirs; the walk itself stays
+    owned by model.py."""
+    from plugins.claude_code import model
+    return model.claude_dirs(cwd, env_pin=False)
+
+
 def effort_default(cwd, slug=""):
     """The saved-effort provider (plugins.effort_default fan-out) — the merged
     settings' `effortLevel` resolved for the session's cwd AND account (`slug`

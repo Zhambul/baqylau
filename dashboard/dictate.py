@@ -21,8 +21,11 @@ import os
 import urllib.request
 from urllib.parse import quote
 
+import plugins
+
 DEFAULT_KEY_FILE = "~/.config/deepgram/api-key"
 DEFAULT_KEYTERMS_FILE = "~/.config/deepgram/keyterms"
+PROJECT_KEYTERMS_NAME = "deepgram-keyterms"   # inside each applicable .claude/
 DEEPGRAM_GRANT_URL = "https://api.deepgram.com/v1/auth/grant"
 DEEPGRAM_LISTEN_URL = "wss://api.deepgram.com/v1/listen"
 
@@ -56,22 +59,39 @@ def _read(path):
         return f.read().strip()
 
 
-def keyterms():
-    """The user's dictation vocabulary (~/.config/deepgram/keyterms, one term
-    per line, #-comments and blanks dropped) — jargon Nova-3 should bias
-    toward ("scorebar", "tailer", …). Missing file = no keyterms, never an
-    error; capped at KEYTERMS_MAX to keep the listen URL bounded."""
-    try:
-        raw = _read(os.path.expanduser(
-            os.environ.get("CLAUDE_DICTATE_KEYTERMS_FILE")
-            or DEFAULT_KEYTERMS_FILE))
-    except OSError:
-        return []
-    terms = []
-    for line in raw.splitlines():
-        line = line.strip()
-        if line and not line.startswith("#"):
-            terms.append(line)
+def keyterms(cwd=""):
+    """The dictation vocabulary for a session in `cwd`, PROJECT-FIRST: each
+    applicable `.claude/` dir's `deepgram-keyterms` (nearest-first — the same
+    `plugins.config_dirs` walk the "/" menu's discovery rides, so a nested
+    worktree inherits its project's vocabulary and a project file can be
+    COMMITTED and shared), then the user-global file (CLAUDE_DICTATE_
+    KEYTERMS_FILE / ~/.config/deepgram/keyterms). Every file parses the same:
+    one term per line, #-comments and blanks dropped. First occurrence wins
+    the dedup, and the KEYTERMS_MAX cap — biasing degrades with bloat, so
+    when something must fall off it is the FARTHEST vocabulary. Missing
+    files are silence, never errors; cwd="" (or a failed walk — audited by
+    the route, never raised) = global-only."""
+    files = []
+    if cwd:
+        try:
+            files += [os.path.join(d, PROJECT_KEYTERMS_NAME)
+                      for d in plugins.config_dirs(cwd) or []]
+        except Exception:
+            files = []          # discovery must never break the mint
+    files.append(os.path.expanduser(
+        os.environ.get("CLAUDE_DICTATE_KEYTERMS_FILE")
+        or DEFAULT_KEYTERMS_FILE))
+    terms, seen = [], set()
+    for path in files:
+        try:
+            raw = _read(path)
+        except OSError:
+            continue
+        for line in raw.splitlines():
+            line = line.strip()
+            if line and not line.startswith("#") and line not in seen:
+                seen.add(line)
+                terms.append(line)
     return terms[:KEYTERMS_MAX]
 
 
@@ -94,13 +114,15 @@ def grant(ttl_s=None):
     return out
 
 
-def ws_url(sample_rate):
+def ws_url(sample_rate, terms=()):
     """The full live-listen URL the browser connects to, every parameter
     server-decided: nova-3 + interim results (the whole point — text lands in
     the textarea as you speak), smart_format for punctuation, raw linear16
     PCM at the client's native rate (AudioWorklet output — MediaRecorder is
     rejected in docs/dashboard.md: iPad Safari emits mp4/AAC, which Deepgram
-    streaming refuses), one keyterm= per vocabulary line."""
+    streaming refuses), one keyterm= per vocabulary term — the caller passes
+    the keyterms() result so the merged list is read once and the audit
+    count matches what actually rode the URL."""
     base = os.environ.get("CLAUDE_DICTATE_LISTEN_URL") or DEEPGRAM_LISTEN_URL
     params = [
         ("model", MODEL),
@@ -110,6 +132,6 @@ def ws_url(sample_rate):
         ("encoding", "linear16"),
         ("sample_rate", str(int(sample_rate))),
         ("channels", "1"),
-    ] + [("keyterm", t) for t in keyterms()]
+    ] + [("keyterm", t) for t in terms]
     return base + "?" + "&".join(
         "%s=%s" % (k, quote(v, safe="")) for k, v in params)

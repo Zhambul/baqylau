@@ -2106,6 +2106,14 @@ class Handler(BaseHTTPRequestHandler):
             # /api/dictate probe says unavailable
             A.state_file("", "", "web-dictate", {"ok": False, "why": "no-key"})
             return self._json({"error": "no deepgram key configured"}, 501)
+        # optional cwd — keys the PROJECT vocabulary layer (the composer sends
+        # its session's cwd, the new-session form its typed dir). A non-string
+        # or non-directory degrades to global-only, never an error — the same
+        # contract as /api/commands, and for the same reason (arbitrary
+        # sessions' dirs come and go).
+        cwd = body.get("cwd")
+        if not isinstance(cwd, str) or not os.path.isdir(cwd):
+            cwd = ""
         try:
             tok = dictate.grant()
         except Exception as e:
@@ -2113,10 +2121,11 @@ class Handler(BaseHTTPRequestHandler):
                     {"err": ("%s: %s" % (type(e).__name__, e))[:200]})
             A.state_file("", "", "web-dictate", {"ok": False, "why": "grant"})
             return self._json({"error": "token grant failed"}, 502)
-        url = dictate.ws_url(rate)
+        terms = dictate.keyterms(cwd)
+        url = dictate.ws_url(rate, terms)
         A.state_file("", "", "web-dictate",
-                     {"ok": True, "rate": rate,
-                      "keyterms": len(dictate.keyterms())})
+                     {"ok": True, "rate": rate, "cwd": cwd,
+                      "keyterms": len(terms)})
         return self._json({"token": tok["access_token"],
                            "expires_in": tok.get("expires_in"),
                            "ws_url": url})

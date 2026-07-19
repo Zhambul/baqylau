@@ -3349,6 +3349,91 @@ def test_post_dictate_token_mints_and_builds_url(dash, tmp_path, monkeypatch):
         gsrv.server_close()
 
 
+def test_dictate_keyterms_project_layering(tmp_path, monkeypatch):
+    # The merge structure (no vocabulary policy here): nearest project file →
+    # outer project file → the user-global file; every file parses the same
+    # (#-comments, blanks); first occurrence wins the dedup; empty cwd (and
+    # the endpoint's degraded bad-cwd) = global only.
+    from dashboard import dictate
+    outer = tmp_path / "proj"
+    inner = outer / "sub"
+    (outer / ".claude").mkdir(parents=True)
+    (inner / ".claude").mkdir(parents=True)
+    (outer / ".claude" / "deepgram-keyterms").write_text("alpha\nshared\n")
+    (inner / ".claude" / "deepgram-keyterms").write_text(
+        "# comment\n\nnearest\nshared\n")
+    g = tmp_path / "global-terms"
+    g.write_text("shared\nglobaly\n")
+    monkeypatch.setenv("CLAUDE_DICTATE_KEYTERMS_FILE", str(g))
+    # pin the user config dir (the walk's tail) into the tmp tree — a real
+    # ~/.claude/deepgram-keyterms on the dev machine must not leak in
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "usercfg"))
+    terms = dictate.keyterms(str(inner))
+    assert terms == ["nearest", "shared", "alpha", "globaly"]
+    assert dictate.keyterms("") == ["shared", "globaly"]
+
+
+def test_dictate_keyterms_cap_prefers_nearest(tmp_path, monkeypatch):
+    from dashboard import dictate
+    proj = tmp_path / "p"
+    (proj / ".claude").mkdir(parents=True)
+    (proj / ".claude" / "deepgram-keyterms").write_text(
+        "\n".join("near%d" % i for i in range(dictate.KEYTERMS_MAX)))
+    g = tmp_path / "g"
+    g.write_text("evicted-global")
+    monkeypatch.setenv("CLAUDE_DICTATE_KEYTERMS_FILE", str(g))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "usercfg"))
+    terms = dictate.keyterms(str(proj))
+    assert len(terms) == dictate.KEYTERMS_MAX
+    assert "evicted-global" not in terms      # the FARTHEST layer falls off
+
+
+def test_post_dictate_token_cwd_keys_project_vocab(dash, tmp_path, monkeypatch):
+    # the endpoint contract: a valid cwd layers project terms ahead of global
+    # in the minted ws_url; a bogus/missing cwd degrades to global-only, 200
+    class Grant(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.dumps({"access_token": "jwt-x",
+                               "expires_in": 30}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    gsrv = ThreadingHTTPServer(("127.0.0.1", 0), Grant)
+    threading.Thread(target=gsrv.serve_forever, daemon=True).start()
+    try:
+        proj = tmp_path / "proj"
+        (proj / ".claude").mkdir(parents=True)
+        (proj / ".claude" / "deepgram-keyterms").write_text("projterm\n")
+        g = tmp_path / "g"
+        g.write_text("globalterm\n")
+        monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "k"))
+        (tmp_path / "k").write_text("sekret")
+        monkeypatch.setenv("CLAUDE_DICTATE_KEYTERMS_FILE", str(g))
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "usercfg"))
+        monkeypatch.setenv("CLAUDE_DICTATE_GRANT_URL",
+                           "http://127.0.0.1:%d/" % gsrv.server_address[1])
+        code, body = _post(dash + "/api/dictate/token",
+                           {"sample_rate": 48000, "cwd": str(proj)})
+        url = json.loads(body)["ws_url"]
+        assert code == 200
+        assert url.index("keyterm=projterm") < url.index("keyterm=globalterm")
+        for bad in (str(tmp_path / "nope"), 123, None):
+            code, body = _post(dash + "/api/dictate/token",
+                               {"sample_rate": 48000, "cwd": bad})
+            url = json.loads(body)["ws_url"]
+            assert code == 200 and "projterm" not in url \
+                and "keyterm=globalterm" in url, bad
+    finally:
+        gsrv.shutdown()
+        gsrv.server_close()
+
+
 def test_post_dictate_token_grant_failure_is_502(dash, tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "dg-key"))
     (tmp_path / "dg-key").write_text("sekret")

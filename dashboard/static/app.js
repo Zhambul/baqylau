@@ -1650,8 +1650,11 @@ function micIcon() {
 let dictActive = null;             // the page-wide single live dictation
 function stopDictation() { if (dictActive) dictActive.stop(); }
 
-function dictation(ta) {
+function dictation(ta, getCwd) {
   // Per-textarea controller — returns {btn, stop}; callers place the button.
+  // getCwd (optional, zero-arg): the directory that keys the PROJECT
+  // vocabulary layer — read at mic-press time, so the new-session form's
+  // typed dir is honored as-typed and a keyterms edit lands next press.
   const btn = el("button", "micbtn");
   btn.type = "button";
   btn.title = "dictate";
@@ -1675,11 +1678,13 @@ function dictation(ta) {
     // must be released or the tab's mic indicator sticks on. (First-ever use
     // can sit >30s in the permission prompt and outlive the JWT — the ws
     // then fails its handshake and toasts; the retry has a warm permission.)
+    const tokBody = { sample_rate: Math.round(ctx.sampleRate) };
+    const cwd = getCwd && getCwd();
+    if (cwd) tokBody.cwd = cwd;    // keys the project keyterms layer
     const [ms, mt] = await Promise.allSettled([
       navigator.mediaDevices.getUserMedia(
         { audio: { echoCancellation: true, noiseSuppression: true } }),
-      postJSON("/api/dictate/token",
-               { sample_rate: Math.round(ctx.sampleRate) }),
+      postJSON("/api/dictate/token", tokBody),
     ]);
     if (ms.status === "rejected" || mt.status === "rejected") {
       if (ms.status === "fulfilled")
@@ -1874,7 +1879,7 @@ function buildComposer() {
   const btn = el("button", "csend", canResume ? "resume & send" : "send");
   btn.disabled = !usable;
   ses.composer = ta;
-  const dic = dictation(ta);
+  const dic = dictation(ta, () => meta.cwd || "");
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
   const send = () => {
     dic.stop();          // the visible (validated) text is what sends
@@ -2286,7 +2291,7 @@ function openNewSession(prefillCwd, resumeSid) {
   prompt.placeholder = IS_IPAD
     ? "what should Claude start on?"
     : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
-  const pdic = dictation(prompt);
+  const pdic = dictation(prompt, () => dir.value.trim());
   const promptBox = el("div", "nsdictrow");
   promptBox.append(prompt, pdic.btn);
   promptRow.append(promptBox);

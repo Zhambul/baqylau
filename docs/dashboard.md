@@ -1258,11 +1258,28 @@ it never sees audio:
   (`CLAUDE_DICTATE_KEY_FILE` overrides), trades it via Deepgram's
   `POST /v1/auth/grant` for a **~30s single-purpose JWT**, and returns
   `{token, expires_in, ws_url}` — the listen URL fully assembled
-  server-side (model, formatting, one `keyterm=` per line of
-  `~/.config/deepgram/keyterms` — `#`-comments dropped, capped at
-  `KEYTERMS_MAX`). The client contributes ONLY its AudioContext sample
-  rate. The long-lived key never leaves the server process — not in a
-  response, an audit row, or an error detail.
+  server-side (model, formatting, one `keyterm=` per vocabulary term).
+  The client contributes ONLY its AudioContext sample rate plus an
+  optional `cwd` (the composer sends its session's, the new-session form
+  its typed dir) that keys the project vocabulary layer. The long-lived
+  key never leaves the server process — not in a response, an audit row,
+  or an error detail.
+
+**The vocabulary is LAYERED, project-first** (`dictate.keyterms(cwd)`):
+each applicable `.claude/` dir's **`deepgram-keyterms`** file —
+nearest-first via the same `plugins.config_dirs` walk the "/" menu's
+command discovery rides (`model.claude_dirs(env_pin=False)`, the walk's
+one owner behind a registry-root door), so a nested worktree inherits its
+project's vocabulary and a project file can be COMMITTED and shared —
+then the user-global `~/.config/deepgram/keyterms`
+(`CLAUDE_DICTATE_KEYTERMS_FILE` overrides). Every file parses the same
+(one term per line, `#`-comments and blanks dropped), first occurrence
+wins the dedup, and the `KEYTERMS_MAX` cap evicts the FARTHEST layer
+first — keyterm biasing degrades with bloat, so when something must fall
+off it is never the nearest project's terms. A bogus/missing `cwd`
+degrades to global-only (the `/api/commands` contract — arbitrary
+sessions' dirs come and go, never an error), and every file is re-read at
+mint time, so a vocabulary edit lands on the next mic press.
 - The **browser then connects `wss://api.deepgram.com/v1/listen` directly**,
   authenticating with the `['bearer', <jwt>]` WebSocket subprotocol (browsers
   can't set WS headers; this is Deepgram's documented browser pattern). The
@@ -1308,7 +1325,9 @@ silence — an open mic costs $0.0077/min and auto-stop mid-thought is the
 annoying failure mode.
 
 **Audit.** Every mint attempt is a `web-dictate` `state_files` row (no sid —
-the new-session form dictates too), `{ok, rate, keyterms}` on success,
+the new-session form dictates too), `{ok, rate, cwd, keyterms}` on success
+(`cwd` + the term count answer "why didn't my project word bias" — an empty
+`cwd` there means the sent directory failed the isdir guard),
 `{ok: false, why: bad-rate|no-key|grant}` on failure, grant failures also an
 `A.error("dashboard dictate (grant failed)")`. "Mic button missing or dead"
 triages as: `/api/dictate` says available? → `web-dictate` rows → dictate

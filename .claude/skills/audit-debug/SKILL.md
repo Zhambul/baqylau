@@ -443,8 +443,12 @@ New always-audited swallow sites (previously silent — their absence used to ma
   (`~/.config/deepgram/api-key` / `CLAUDE_DICTATE_KEY_FILE`), so "missing"
   usually = no/empty key file, not a bug. "Dead" triages from the
   `web-dictate` `state_files` rows (GLOBAL — `session_id=''`, like
-  `web-launch`): every token mint attempt leaves one — `{ok:1, rate,
-  keyterms}` on success, `why: bad-rate` (client sent a bogus sample_rate),
+  `web-launch`): every token mint attempt leaves one — `{ok:1, rate, cwd,
+  keyterms}` on success ("my project word didn't bias" reads from here: an
+  empty `cwd` means the sent directory failed the isdir guard, and
+  `keyterms` counts the MERGED project-first list — nearest
+  `.claude/deepgram-keyterms` → outer → global, `dictate.keyterms`),
+  `why: bad-rate` (client sent a bogus sample_rate),
   `why: no-key` (key vanished between probe and mint), `why: grant` (the
   Deepgram grant call failed — pairs with an `errors` row func `dashboard
   dictate (grant failed)` carrying the exception). NO row at all = the POST
