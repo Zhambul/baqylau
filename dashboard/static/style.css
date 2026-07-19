@@ -310,6 +310,10 @@ code, pre, .mono { font-family: var(--mono); }
 .statsrow .pos { color: var(--green); }
 .statsrow .cost { color: var(--orange); }
 .statsrow .warn { color: var(--amber); }
+.statsrow .amodel { color: var(--text-soft); }
+/* "← session" restore in the subagent scoreboard (renderAgentScoreboard) */
+.statsrow .backses { color: var(--dim); text-decoration: none; margin-right: 2px; }
+.statsrow a.backses:hover { color: var(--text); text-decoration: underline; }
 
 /* git chip (app.js gitChip/setGitChip) — "⎇ branch" + "⋔ worktree" on the
    session cards and the session header's title line */
@@ -380,6 +384,10 @@ code, pre, .mono { font-family: var(--mono); }
 /* finished agents recede so a live one stands out; hover restores full weight */
 .achip[data-st="st-ok"], .achip[data-st="st-bad"], .achip[data-st="st-warn"] { opacity: .72; }
 .achip:hover { background: color-mix(in srgb, var(--astate) 16%, transparent); opacity: 1; }
+/* the chip whose scoreboard is currently showing (the drilled-into agent) */
+.achip.active { opacity: 1;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--astate) 70%, transparent),
+              0 0 0 1px color-mix(in srgb, var(--astate) 40%, transparent); }
 .achip .an { color: var(--text); max-width: 24ch;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .achip .am { color: var(--dim); }

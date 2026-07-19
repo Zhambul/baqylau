@@ -3322,6 +3322,7 @@ function startRenameHeader() {
 function renderSessionChrome(tab) {
   const ses = S.ses;
   if (!ses) return;
+  ses.agentFocus = null;      // a full session/tab render is never agent-focused
   const meta = ses.meta || {};
   $view.textContent = "";
 
@@ -3595,9 +3596,13 @@ function renderSessionChrome(tab) {
 function updateStatsRow() {
   const ses = S.ses;
   if (!ses || !ses.statsRow) return;
-  const st = ses.stats || {};
   const sr = ses.statsRow;
   sr.textContent = "";
+  // drilled into a subagent → the scoreboard shows THAT agent, not the session
+  // (the "swap scoreboard on click" behaviour). SSE stats/costs/ctx events still
+  // land here, but this branch keeps them from clobbering the agent view.
+  if (ses.agentFocus) { renderAgentScoreboard(sr, ses.agentFocus); return; }
+  const st = ses.stats || {};
   const add = (label, value, cls) => {
     const s = el("span");
     if (label) s.append(document.createTextNode(label + " "));
@@ -3631,6 +3636,50 @@ function updateStatsRow() {
   if (ses.ctxRow) {
     ses.ctxRow.textContent = "";
     const cx = ses.ctx;
+    if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
+    ses.ctxRow.style.display = cx && cx.used ? "" : "none";
+  }
+}
+
+/* The scoreboard for a drilled-into subagent — replaces the session totals with
+   THAT agent's own numbers (docs/dashboard.md, *Subagent scoreboard swap*). It
+   resolves the freshest agent row from ses.agents each render (so an `agents`
+   SSE that finishes the agent updates the status here too) and reads tokens/cost
+   from focus.data, the agent drill-down fetch (`/agent/<aid>` → usage + the
+   server-priced `cost`). Leads with a "← session" link that restores the
+   session view, and repaints the ctx row from the agent's own ctx bar. */
+function renderAgentScoreboard(sr, focus) {
+  const ses = S.ses;
+  const rec = (ses.agents || []).find(a => a.agent_id === focus.aid) || {};
+  const d = focus.data || {};
+  const back = el("a", "backses", "← session");
+  back.href = "#/s/" + encodeURIComponent(S.cur);   // the mirror = the main agent
+  sr.append(back);
+  const add = (label, value, cls) => {
+    const s = el("span");
+    if (label) s.append(document.createTextNode(label + " "));
+    s.append(el("span", cls || "v", value));
+    sr.append(s);
+  };
+  const [sttxt, stcls] = agentStatus(rec);
+  add("◇", rec.desc || focus.aid);
+  add("", sttxt, stcls);
+  const model = rec.model || (d.model ? String(d.model) : "");
+  if (model) add("", model + (rec.effort ? "·" + rec.effort : ""), "amodel");
+  const ev = d.tools != null ? d.tools : rec.tools;
+  if (ev != null) add("", ev + " events");
+  if (rec.started_at)
+    add("⏱", rec.ended_at ? dur(rec.ended_at - rec.started_at) : ago(rec.started_at));
+  const u = d.usage || {};
+  const tin = u.in | 0, tout = u.out | 0, tread = u.cache | 0, tcre = u.create | 0;
+  const tot = tin + tout + tread + tcre;
+  if (tot)
+    add("Σ", kfmt(tot) + " (" + kfmt(tin) + " in · " + kfmt(tout) + " out · "
+        + kfmt(tread) + " cache · " + kfmt(tcre) + " write)");
+  if (d.cost) add("≈", usd(d.cost), "cost");
+  if (ses.ctxRow) {
+    ses.ctxRow.textContent = "";
+    const cx = rec.ctx;
     if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
     ses.ctxRow.style.display = cx && cx.used ? "" : "none";
   }
@@ -3671,6 +3720,9 @@ function updateRunning() {
   const run = ses.running || {};
   const rr = ses.runRibbon;
   rr.textContent = "";
+  // the running ribbon is session-scoped; hide it while a subagent scoreboard
+  // is showing (the header is about that one agent then, not the session)
+  if (ses.agentFocus) { rr.style.display = "none"; return; }
   const kinds = RUN_ORDER.concat(
     Object.keys(run).filter(k => !RUN_ORDER.includes(k)));
   let any = false;
@@ -3759,6 +3811,8 @@ function updateAgentStrip() {
     const [sttxt, stcls] = agentStatus(a);
     const chip = el("a", "achip");
     chip.dataset.st = stcls;                 // tint by status (run/ok/bad/warn)
+    // mark the chip whose scoreboard is currently showing (drilled-into agent)
+    if (ses.agentFocus && ses.agentFocus.aid === a.agent_id) chip.classList.add("active");
     chip.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
     const name = a.desc || a.agent_id;      // the Task description IS the name
     chip.append(el("span", "an", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
@@ -3802,6 +3856,13 @@ function showAgent(sid, aid) {
   // breadcrumb also carries (previously every tab went dark here).
   $view.querySelectorAll(".tabs a").forEach(a =>
     a.classList.toggle("on", /\/agents$/.test(a.getAttribute("href") || "")));
+  // swap the top scoreboard to this agent — first from the enriched agents row
+  // we already have (status/model/events/ctx/duration), then the fetch below
+  // fills in tokens + cost. updateAgents re-marks the active strip chip.
+  ses.agentFocus = { aid: aid, data: null };
+  updateStatsRow();
+  updateRunning();
+  updateAgentStrip();
   if (ses.body) {
     ses.body.textContent = "";
     const rec = (ses.agents || []).find(a => a.agent_id === aid);
@@ -3816,7 +3877,10 @@ function showAgent(sid, aid) {
     renderTimelineInto(tlWrap,
                        "/api/session/" + encodeURIComponent(sid) + "/agent/" + encodeURIComponent(aid),
                        (rec && rec.desc) || aid,
-                       live ? { sid: sid, aid: aid } : null, true);
+                       live ? { sid: sid, aid: aid } : null, true,
+                       // feed the agent's tokens/cost rollup up into the scoreboard
+                       (d) => { if (ses.agentFocus && ses.agentFocus.aid === aid) {
+                                  ses.agentFocus.data = d; updateStatsRow(); } });
   }
 }
 
@@ -3840,9 +3904,10 @@ function agentCrumbs(sid, aid, rec) {
   return nav;
 }
 
-function renderTimelineInto(container, apiUrl, title, live, newestFirst) {
+function renderTimelineInto(container, apiUrl, title, live, newestFirst, onData) {
   container.append(el("div", "empty", "loading " + title + "…"));
   fetch(apiUrl).then(r => r.json()).then(d => {
+    if (onData) onData(d);            // hand the payload (usage/cost) to the caller
     if (!container.isConnected) return;
     container.textContent = "";
     container.append(timelineHead(d, title));

@@ -2327,6 +2327,32 @@ shows on every tab — and it names each active agent. It is kept live by the sa
 unconditionally, so it refreshes on every tab, not just where the rail/grid is
 mounted).
 
+## Subagent scoreboard swap (drill in → the scoreboard becomes the agent's)
+
+Clicking a subagent (a strip chip, an agent card, or the `#/s/<sid>/a/<aid>`
+route) doesn't just open the drill-down timeline — it **swaps the top scoreboard
+to that agent's own numbers**. `showAgent` sets `ses.agentFocus = {aid, data}`
+and repaints the header; `updateStatsRow` branches on `agentFocus` and calls
+`renderAgentScoreboard` instead of the session totals — status, `model·effort`,
+event count, `⏱` duration, the `Σ` token rollup, and `≈` cost, with the ctx row
+showing the agent's own ctx bar and a leading **← session** link that restores
+the session view (it points at `#/s/<sid>`, the mirror = the main agent). The
+running ribbon hides while focused (it's session-scoped), and the strip marks the
+active agent's chip (`.achip.active`).
+
+The fast-available fields (status/model/effort/events/ctx/duration) come straight
+off the enriched `ses.agents` row, so the swap is instant on click; the drill-down
+fetch (`/api/session/<sid>/agent/<aid>`) then feeds its `usage` **and** the
+server-priced `cost` back up through `renderTimelineInto`'s `onData` callback,
+and the scoreboard repaints with tokens + cost. Per-agent **cost** is stamped
+server-side by `_stamp_agent_cost` (`accounting.cost_usd` over the agent's usage +
+last model) — the ONLY per-agent cost figure there is, since OTEL `costs()` is
+aggregate by `query_source` (main/subagent/auxiliary), never attributable to a
+single `agent_id`. `agentFocus` is cleared by any full `renderSessionChrome` (a
+tab switch or a return to the list), and the SSE `stats`/`costs`/`ctx` events that
+keep flowing are absorbed by the `updateStatsRow` branch — they repaint the agent
+view, never clobber it back to the session.
+
 ## The live ⚠ error badge
 
 The stats-row ⚠ chip and the errors-tab count are the web sibling of the

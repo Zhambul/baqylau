@@ -581,6 +581,23 @@ def agents_model_effort(agents, effort):
     return agents
 
 
+def _stamp_agent_cost(tl):
+    """Stamp a subagent drill-down payload with `cost` — approximate USD for its
+    OWN token rollup, priced from `usage` + the run's last model via the shared
+    accountant (the web per-agent scoreboard's ≈cost, docs/dashboard.md *Subagent
+    scoreboard swap*). None for an unknown/empty model (codex runs, husk reads) —
+    the client just omits the ≈cost chip. This transcript pricing is the ONLY
+    per-agent cost figure: OTEL `costs()` is aggregate by query_source
+    (main/subagent/auxiliary), never attributable to a single agent_id."""
+    from plugins.claude_code import accounting as ACC
+    u = tl.get("usage") or {}
+    if not u:
+        return
+    tl["cost"] = ACC.cost_usd(tl.get("model"), u.get("in", 0), u.get("out", 0),
+                              u.get("cache", 0), u.get("create", 0),
+                              u.get("create_1h", 0))
+
+
 def _session_slug(sid):
     """The session's subscription-account slug from its statusline stash
     ('' for the default account / no stash) — resolves WHICH user-level
@@ -1344,6 +1361,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(_mdify(plugins.activity(sid)) or {"entries": []})
             if len(rest) == 2 and rest[0] == "agent":
                 tl = _mdify(plugins.activity(sid, rest[1]))
+                if tl is not None:
+                    _stamp_agent_cost(tl)
                 return self._json(tl if tl is not None else {"entries": []})
             if rest == ["errors"]:
                 return self._json(API.errors(sid))
