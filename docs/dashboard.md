@@ -2397,6 +2397,18 @@ and a leading **← session** link that restores the session view (it points at
 skipped mid-inline-rename). The running ribbon hides while focused (it's
 session-scoped).
 
+The header **action buttons** are pruned to what applies to a subagent
+(`applyAgentActionVis`): the session-only actions — rename, migrate, cancel,
+rewind, close, resume, and the compact/model/effort quick commands (all marked
+`.actses`) — hide while focused, since none of them act on an individual
+subagent (Claude Code has no per-subagent rename/rewind/compact/…). The lone
+exception is **■ stop** (`.actstop`): interrupting the session is the one way to
+stop a *running* subagent, so it stays visible while the focused subagent is
+running and hides once it's done (re-evaluated on the `agents` SSE via
+`updateAgents`). An action row left with nothing visible collapses so it leaves
+no gap. The full `renderSessionChrome` rebuild on the way back restores every
+button.
+
 The fast-available fields (status/model/effort/events/ctx/duration) come straight
 off the enriched `ses.agents` row, so the swap is instant on click; the drill-down
 fetch (`/api/session/<sid>/agent/<aid>`) then feeds its `usage` **and** the

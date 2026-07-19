@@ -3454,7 +3454,7 @@ function renderSessionChrome(tab) {
   // sessions (the server appends the agent-name naming record to the
   // transcript; a live kitty tab also retitles in place — docs/dashboard.md
   // "Web rename")
-  const ren = el("button", "sstop", "✎ rename");
+  const ren = el("button", "sstop actses", "✎ rename");
   ren.title = "rename this session (resume picker + tab)";
   ren.onclick = () => startRenameHeader();
   act.append(ren);
@@ -3463,7 +3463,7 @@ function renderSessionChrome(tab) {
   // *Manual migrate*): live → the tab swaps (close, park, resume under the
   // other alias); parked → it just relaunches there. Immediate, no confirm
   // (like ■ stop), and like rename it works live AND parked.
-  const mig = el("button", "sstop", "⇆ migrate");
+  const mig = el("button", "sstop actses", "⇆ migrate");
   mig.title = "migrate this session to another account";
   mig.onclick = () => lockDuring(mig, migrateSession);
   act.append(mig);
@@ -3471,13 +3471,13 @@ function renderSessionChrome(tab) {
     // stop: interrupt the agent in place — an Escape key press in the
     // session's window (the TUI's own interrupt; Esc here does the same).
     // Immediate, no confirm: it matches pressing Esc in the terminal.
-    const stop = el("button", "sstop", "■ stop");
+    const stop = el("button", "sstop actstop", "■ stop");
     stop.title = "interrupt the agent (Esc)";
     stop.onclick = () => lockDuring(stop, interruptSession);
     act.append(stop);
     // cancel: mid-turn double-Esc — cancel the running turn and restore your
     // message into the composer for editing. Enabled only while a turn runs.
-    const cancel = el("button", "sstop", "⊘ cancel");
+    const cancel = el("button", "sstop actses", "⊘ cancel");
     cancel.title = "cancel this turn and edit your message (mid-turn double-Esc)";
     // resting state re-derives from the tab (idle → stays disabled) rather
     // than a blind re-enable, matching ses.cancelMode's own gate
@@ -3489,7 +3489,7 @@ function renderSessionChrome(tab) {
     // rewind: Claude Code's double-Esc — mid-turn it cancels for editing;
     // idle it enters picking mode: click a message below, choose what to
     // restore, and the server drives the TUI's own checkpoint menu
-    const rew = el("button", "sstop", "↶ rewind");
+    const rew = el("button", "sstop actses", "↶ rewind");
     rew.title = "rewind: pick a message to restore to (mid-turn: cancel + edit)";
     // stopPropagation is load-bearing: the ENABLING click must not bubble to
     // the document click-away handler, which reads any non-bubble click in
@@ -3500,7 +3500,7 @@ function renderSessionChrome(tab) {
     // close: closes the session's kitty tab — a graceful stop (Claude Code
     // exits on the HUP and SessionEnd runs the normal lifecycle).
     // Two-step confirm: first click arms for 4s, second click fires.
-    const cls = el("button", "sstop", "✕ close");
+    const cls = el("button", "sstop actses", "✕ close");
     cls.title = "close this session's terminal tab";
     let armed = null;
     const disarm = () => {
@@ -3536,7 +3536,7 @@ function renderSessionChrome(tab) {
   // resume (parked, with a cwd): reopen the new-session form preset to
   // `claude --resume <this sid>` in this session's directory
   if (!meta.live && meta.cwd) {
-    const res = el("button", "sresume", "↻ resume");
+    const res = el("button", "sresume actses", "↻ resume");
     res.title = "start a new tab resuming this conversation";
     res.onclick = () => openNewSession(meta.cwd, S.cur);
     act.append(res);
@@ -3549,7 +3549,7 @@ function renderSessionChrome(tab) {
   if (meta.live && meta.kitty_window_id) {
     // compact: two-step confirm like close — a misclick summarizes the whole
     // conversation out from under you, so it arms first
-    const cpt = el("button", "sstop", "⊜ compact");
+    const cpt = el("button", "sstop actses", "⊜ compact");
     cpt.title = "compact the conversation (/compact)";
     let cptArmed = null;
     const cptDisarm = () => {
@@ -3571,7 +3571,7 @@ function renderSessionChrome(tab) {
     act2.append(cpt);
     // model: dropdown picker; the label shows the ctx probe's current model
     // (live via the `ctx` SSE event → updateStatsRow)
-    const mwrap = el("span", "qcwrap");
+    const mwrap = el("span", "qcwrap actses");
     const mdl = el("button", "sstop");
     ses.modelBtn = mdl;
     setModelBtn(mdl);
@@ -3582,7 +3582,7 @@ function renderSessionChrome(tab) {
     act2.append(mwrap);
     // effort: dropdown picker (current effort is config-only — not readable
     // from any transcript, see plugins/claude_code/model.py — so no label)
-    const ewrap = el("span", "qcwrap");
+    const ewrap = el("span", "qcwrap actses");
     const eff = el("button", "sstop");
     ses.effortBtn = eff;
     setEffortBtn(eff);
@@ -3750,6 +3750,34 @@ function updateStatsRow() {
   }
 }
 
+/* Header-action visibility for the agent-focus state (docs/dashboard.md,
+   *Subagent scoreboard swap*). While a subagent scoreboard is showing, the
+   session-only actions (`.actses` — rename / migrate / cancel / rewind / close /
+   resume / compact / model / effort) don't apply to a subagent, so they hide;
+   ■ stop (`.actstop`) stays ONLY while the focused subagent is still running
+   (interrupting the session is the one way to stop it). An action row left with
+   nothing visible collapses so it leaves no gap. A full renderSessionChrome
+   rebuild (going back) restores everything, agentFocus already cleared. */
+function applyAgentActionVis() {
+  const ses = S.ses;
+  if (!ses) return;
+  const focused = !!ses.agentFocus;
+  $view.querySelectorAll(".actses").forEach(b => { b.style.display = focused ? "none" : ""; });
+  const stop = $view.querySelector(".actstop");
+  if (stop) {
+    let show = true;
+    if (focused) {
+      const rec = (ses.agents || []).find(a => a.agent_id === ses.agentFocus.aid);
+      show = !!(rec && agentStatus(rec)[1] === "st-run");
+    }
+    stop.style.display = show ? "" : "none";
+  }
+  $view.querySelectorAll(".shead .actrow").forEach(row => {
+    const any = [...row.children].some(c => c.style.display !== "none");
+    row.style.display = any ? "" : "none";
+  });
+}
+
 /* The scoreboard for a drilled-into subagent — replaces the session totals with
    THAT agent's own numbers (docs/dashboard.md, *Subagent scoreboard swap*). It
    resolves the freshest agent row from ses.agents each render (so an `agents`
@@ -3901,6 +3929,8 @@ function agentCard(a) {
 function updateAgents() {
   const ses = S.ses;
   if (!ses) return;
+  // a focused subagent finishing (running → done) must drop the ■ stop button
+  if (ses.agentFocus) applyAgentActionVis();
   const agents = sortedAgents(ses.agents || []);
   if (ses.tab === "mirror" && ses.rail && ses.rail.isConnected) {
     ses.rail.textContent = "";
@@ -3932,6 +3962,7 @@ function showAgent(sid, aid) {
   ses.agentFocus = { aid: aid, data: null };
   updateStatsRow();
   updateRunning();
+  applyAgentActionVis();     // the session-only header actions don't apply here
   if (ses.body) {
     ses.body.textContent = "";
     const rec = (ses.agents || []).find(a => a.agent_id === aid);
