@@ -311,17 +311,23 @@ def effective_usage(usage, now=None):
 
 def limit_hit_active(hit, now=None):
     """True while a `limit-hit` stamp still BLOCKS its account: its reset time
-    hasn't passed (or, with no reset known, it is younger than the 5h window).
-    The dashboard pill gates purely on this (a limited account is flagged
-    regardless of which model was capped); the migration target-picker layers
-    model scope on top via limit_hit_blocks."""
+    hasn't passed (or, with no reset known, it is younger than the limit's OWN
+    window — a model-scoped stamp caps a WEEKLY per-model quota, so its fallback
+    span is one week, not the 5h of an account-wide session limit). Without the
+    scope-aware span a Fable ('model'-scoped) stamp inherited the 5h fallback
+    (its snapshot carries no per-model reset — statusline.parse_usage), so the
+    chip vanished ~5h in while the weekly limit was still in force (reported
+    2026-07-19). The dashboard pill gates purely on this (a limited account is
+    flagged regardless of which model was capped); the migration target-picker
+    layers model scope on top via limit_hit_blocks."""
     if not hit:
         return False
     now = time.time() if now is None else now
     reset = hit.get("resets_at")
     if isinstance(reset, (int, float)) and reset > 0:
         return reset > now
-    return (hit.get("ts") or 0) + FIVE_HOUR_S > now
+    span = SEVEN_DAY_S if hit.get("model") else FIVE_HOUR_S
+    return (hit.get("ts") or 0) + span > now
 
 
 def limit_hit_blocks(hit, now=None, model_scoped_ok=False):

@@ -389,10 +389,20 @@ def test_limit_hit_active_window():
     now = 10_000_000.0
     assert API.limit_hit_active({"ts": now, "resets_at": now + 5}, now) is True
     assert API.limit_hit_active({"ts": now, "resets_at": now - 5}, now) is False
-    # no reset known: active for the length of one 5h window
+    # no reset known, account-wide: active for the length of one 5h window
     assert API.limit_hit_active({"ts": now - 60}, now) is True
     assert API.limit_hit_active({"ts": now - API.FIVE_HOUR_S - 1}, now) is False
     assert API.limit_hit_active(None, now) is False
+    # no reset known, MODEL-scoped: a weekly per-model cap, so the fallback span
+    # is a week — a Fable stamp stays active well past 5h (the reported bug: it
+    # cleared at 5h while the weekly limit still bit).
+    fable = {"ts": now - API.FIVE_HOUR_S - 1, "model": "fable"}
+    assert API.limit_hit_active(fable, now) is True
+    assert API.limit_hit_active({"ts": now - API.SEVEN_DAY_S - 1,
+                                 "model": "fable"}, now) is False
+    # an explicit resets_at still wins over the scope-derived span
+    assert API.limit_hit_active({"ts": now, "model": "fable",
+                                 "resets_at": now - 5}, now) is False
 
 
 def test_account_usage_keeps_freshest_per_slug(monkeypatch, tmp_path):

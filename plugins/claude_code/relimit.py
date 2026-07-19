@@ -31,6 +31,8 @@
 import os
 import re
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import frontends
 from core import ops as O
@@ -91,6 +93,50 @@ def limit_model(msg):
     return words[0] if words else None
 
 
+# The account-wide limit message names the reset as a WALL-CLOCK time in an
+# explicit tz — "resets 2:40am (Asia/Makassar)" (observed 2026-07-19). The
+# status-line snapshot's `five_hour_reset` epoch is the preferred source, but it
+# is often absent for a "session limit" (the reported bug: a null resets_at fell
+# back to a fixed ts+5h window, so the dashboard pill stayed lit for hours after
+# the account had already reset). Parsing the message recovers the true epoch.
+# Require minutes OR am/pm so "resets 5 messages" can't false-match an hour.
+_RESET_RE = re.compile(
+    r"resets?\s+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*([ap]m)?"
+    r"(?:\s*\(([^)]+)\))?", re.I)
+
+
+def limit_reset(msg, now):
+    """The absolute reset epoch a limit message names ('resets 2:40am
+    (Asia/Makassar)' → epoch), anchored so it is the next occurrence of that
+    wall-clock time at/after `now` (a limit resets within the 5h window, so
+    rolling one day forward when the time already passed today is enough).
+    None when the message carries no parseable reset time (e.g. the model-scoped
+    '/model to switch' message) or its timezone can't be resolved — the caller
+    then keeps the conservative window fallback. The ONE parser of the limit
+    message's reset time (docs/styleguide.md single-owner table)."""
+    m = _RESET_RE.search(msg or "")
+    if not m or not (m.group(2) or m.group(3)):
+        return None
+    hour, minute = int(m.group(1)), int(m.group(2) or 0)
+    ap = (m.group(3) or "").lower()
+    if ap == "pm" and hour != 12:
+        hour += 12
+    elif ap == "am" and hour == 12:
+        hour = 0
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    tzname = (m.group(4) or "").strip()
+    try:
+        tz = ZoneInfo(tzname) if tzname else datetime.now().astimezone().tzinfo
+        cand = datetime.fromtimestamp(now, tz).replace(
+            hour=hour, minute=minute, second=0, microsecond=0)
+    except Exception:
+        return None
+    if cand.timestamp() <= now:
+        cand += timedelta(days=1)
+    return cand.timestamp()
+
+
 # --------------------------------------------------------------- hook half
 
 def main():
@@ -118,13 +164,25 @@ def main():
     acc = ACC.current()
     # The limit-hit stamp FIRST, unconditionally: the dashboard's account pill
     # keys on it (sessionapi.limit_hit_active), and the target picker skips
-    # accounts still inside one. resets_at comes from the status-line capture's
-    # freshest snapshot — the 5h reset epoch the blocked account reported.
+    # accounts still inside one. resets_at's SOURCE must match the limit's own
+    # window: an account-wide "session limit" resets on the 5h window
+    # (`five_hour_reset`), a MODEL-scoped limit is a WEEKLY per-model quota whose
+    # reset is NOT the 5h window (that rolls in ~hours and would expire the stamp
+    # while the weekly cap still bites — the reported false-clear). The
+    # statusline reports no per-model window today (statusline.parse_usage), so a
+    # model-scoped reset stays unknown and limit_hit_active's weekly fallback
+    # carries it; the `seven_day_<model>_reset` read is future-proofing for when
+    # it appears. Either way limit_reset fills in from the message text (the
+    # account-wide "resets 2:40am" naming), so an account-wide pill never falls
+    # back to the coarse window while the message knew the real reset.
     usage = St.kv_get(LOG, "usage") or {}
     msg = (d.get("last_assistant_message") or "")[:200]
-    hit = {"slug": acc.get("slug") or "", "ts": time.time(),
-           "resets_at": usage.get("five_hour_reset"),
-           "model": limit_model(msg), "msg": msg}
+    now = time.time()
+    model = limit_model(msg)
+    reset = (usage.get("seven_day_%s_reset" % model) if model
+             else usage.get("five_hour_reset")) or limit_reset(msg, now)
+    hit = {"slug": acc.get("slug") or "", "ts": now,
+           "resets_at": reset, "model": model, "msg": msg}
     St.kv_set(LOG, "limit-hit", hit)
     A.state_file(LOG, "", "limit-hit", hit)
     if not enabled():

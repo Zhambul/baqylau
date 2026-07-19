@@ -76,11 +76,27 @@ Ordered guards, every skip audited as a decision row:
 2. **No live state DB** → skip ("unhosted session"). The kv writes below would
    otherwise CREATE the DB — whose file-existence is the session-alive signal —
    for a headless/daemon session (same guard as `statusline.capture`).
-3. **Stamp `limit-hit`** into the state DB kv (slug, ts, `resets_at` from the
-   freshest usage snapshot's `five_hour_reset`, the limit message, and the
-   message's model scope — see *Limit scope* below) + an audit `state_files`
-   row (`action='limit-hit'`). Unconditional from here on — the dashboard
-   pill must flag the account even when migration is off.
+3. **Stamp `limit-hit`** into the state DB kv (slug, ts, `resets_at`, the limit
+   message, and the message's model scope — see *Limit scope* below) + an audit
+   `state_files` row (`action='limit-hit'`). Unconditional from here on — the
+   dashboard pill must flag the account even when migration is off.
+   `resets_at`'s SOURCE matches the limit's own window: an account-wide
+   "session limit" resets on the 5h window (`five_hour_reset`), while a
+   MODEL-scoped limit is a WEEKLY per-model quota whose reset is emphatically
+   NOT the 5h window (`seven_day_<model>_reset`, currently never present — the
+   statusline reports no per-model window, statusline.parse_usage — so it reads
+   as unknown). Taking the model-scoped reset from `five_hour_reset` was the
+   reported FALSE-CLEAR: the 5h epoch passes in ~hours, so `limit_hit_active`
+   declared a still-biting Fable weekly cap expired and the chip vanished until
+   a fresh chat re-hit the limit (2026-07-19).
+   For the account-wide case the reset wall-clock time named in the message
+   itself fills a missing epoch (`limit_reset()` — *"resets 2:40am
+   (Asia/Makassar)"* → the next occurrence of that instant, the ONE parser of
+   the message's reset time, docs/styleguide.md); without it a null `resets_at`
+   sent `limit_hit_active` to its coarse fallback window while the message knew
+   the real reset. A model-scoped message ("/model to switch") names no reset,
+   so its `resets_at` stays null and `limit_hit_active` uses the WEEKLY fallback
+   span (not 5h) — matching the cap's real cadence.
 4. **Kill switch** `CLAUDE_RELIMIT=0` → stamped, not migrated.
 5. **Cooldown** (`relimit-attempt` kv younger than `COOLDOWN_S`, 600s) → skip.
    A relaunch that instantly re-hits a limit must not ping-pong tabs forever.

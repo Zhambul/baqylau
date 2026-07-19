@@ -1527,8 +1527,18 @@ your session limit" turn; the block signal travels in a separate
 So the account pill keys the truth off the EVENT instead: the rate-limit
 StopFailure's `limit-hit` kv stamp (docs/relimit.md), served per account as
 `limit_hit` while still active (`sessionapi.limit_hit_active` — reset not yet
-passed, or younger than one 5h window when the reset is unknown) and rendered
-as a red `limit hit` chip + its reset countdown next to the usage bars. A
+passed, or, when the reset is unknown, younger than the limit's OWN window: 5h
+for an account-wide session limit, one WEEK for a model-scoped cap, which is a
+weekly per-model quota) and rendered as a red `limit hit` chip + its reset
+countdown next to the usage bars. The stamp's `resets_at` is the real reset
+epoch whenever it can be known — the usage snapshot's `five_hour_reset` for an
+account-wide limit (or the wall-clock reset named in the message itself,
+`relimit.limit_reset`), and a per-model reset for a model-scoped one — but the
+snapshot carries NO per-model window today (statusline.parse_usage), so a Fable
+cap's reset is unknown and rides the weekly fallback. Sourcing that reset from
+`five_hour_reset` (which rolls in hours) was the reported bug where the Fable
+chip cleared ~5h in while the weekly limit still bit, reappearing only when a
+new chat re-hit it (docs/relimit.md). A
 MODEL-scoped stamp (`limit_hit.model`, parsed at stamp time by
 `relimit.limit_model` — "You've reached your Fable 5 limit" → `fable`,
 docs/relimit.md *Limit scope*) renders as `fable limit hit` (app.js

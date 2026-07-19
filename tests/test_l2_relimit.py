@@ -172,6 +172,11 @@ def test_model_scoped_limit_stamps_its_model(run_hook, rl_env, hosted,
              env=env)
     hit = kv(s, "limit-hit")
     assert hit["model"] == "fable" and hit["msg"] == FABLE_MSG
+    # a model-scoped limit must NOT inherit the account-wide 5h reset (that
+    # rolls in ~hours and would clear the weekly cap early — the reported bug);
+    # with no per-model window in the snapshot the reset stays unknown and the
+    # weekly fallback in limit_hit_active carries it.
+    assert hit["resets_at"] is None
 
 
 def test_limit_model_parses_scope():
@@ -181,6 +186,42 @@ def test_limit_model_parses_scope():
     assert relimit.limit_model(LIMIT_MSG) is None    # account-wide
     assert relimit.limit_model("") is None
     assert relimit.limit_model(None) is None
+
+
+def test_limit_reset_parses_message_epoch():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from plugins.claude_code import relimit
+    tz = ZoneInfo("Asia/Makassar")
+    now = datetime(2026, 7, 19, 12, 14, tzinfo=tz).timestamp()
+    # named wall-clock time later today → that instant, same day
+    got = relimit.limit_reset("resets 1:20pm (Asia/Makassar)", now)
+    assert datetime.fromtimestamp(got, tz) == datetime(2026, 7, 19, 13, 20, tzinfo=tz)
+    # a time already past today rolls forward one day (limits reset within 5h)
+    late = datetime(2026, 7, 18, 23, 0, tzinfo=tz).timestamp()
+    got2 = relimit.limit_reset(LIMIT_MSG, late)              # resets 2:40am
+    assert datetime.fromtimestamp(got2, tz) == datetime(2026, 7, 19, 2, 40, tzinfo=tz)
+    # no reset time, empty, false-match, and unknown tz all decline
+    assert relimit.limit_reset(FABLE_MSG, now) is None       # "/model to switch"
+    assert relimit.limit_reset("", now) is None
+    assert relimit.limit_reset(None, now) is None
+    assert relimit.limit_reset("resets 5 messages later", now) is None
+    assert relimit.limit_reset("resets 1:20pm (Not/AZone)", now) is None
+
+
+def test_resets_at_falls_back_to_message_when_snapshot_lacks_it(
+        run_hook, rl_env, hosted, fake_kitten):
+    """No `five_hour_reset` in the usage snapshot (the reported bug) → the stamp
+    recovers the reset epoch from the message text instead of leaving a null
+    that lights the pill for a fixed ts+5h window."""
+    from plugins.claude_code import relimit as RLM
+    s = hosted(usage=False)                          # no usage kv → no reset epoch
+    fake_kitten.set_ls_for_session(s.sid)
+    env = dict(rl_env, CLAUDE_RELIMIT="0")           # stamp only — no tab churn
+    run_hook(RL, rate_limit_payload(s), env=env)     # LIMIT_MSG = "resets 2:40am …"
+    hit = kv(s, "limit-hit")
+    assert hit["resets_at"] == pytest.approx(RLM.limit_reset(LIMIT_MSG, time.time()))
+    assert hit["resets_at"] is not None
 
 
 def test_cooldown_blocks_a_second_attempt(run_hook, rl_env, hosted, seed,
