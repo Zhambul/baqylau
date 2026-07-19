@@ -370,8 +370,9 @@ especially from `executing`, where not even the escape-recheck spawns (it only
 covers magenta `thinking`/`working`). The composer then kept reading "queue"
 even though the turn had ended and a plain send is what would happen. So
 `interruptSession`, on a successful interrupt of a `BUSY_TABS` tab,
-optimistically drives `composerMode`/`cancelMode`/`quickMode` to the your-turn
-state (`awaiting-response`) — the button reads "send" at once. This is only a
+optimistically drives `composerMode`/`cancelMode`/`stopMode`/`quickMode` to the
+your-turn state (`awaiting-response`) — the button reads "send" at once (and
+■ stop / ⊘ cancel grey out, since the turn just ended). This is only a
 client-side hint: the escape-recheck's green (or the next prompt's tab event)
 is what reconciles the real state, and if the turn actually kept going that
 next `tab` event flips the button right back to "queue". Terminal-side Esc

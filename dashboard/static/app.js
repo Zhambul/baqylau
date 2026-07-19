@@ -954,6 +954,7 @@ function connectSession(sid) {
     if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
     if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
     if (S.ses && S.ses.cancelMode) S.ses.cancelMode(d.tab || "");
+    if (S.ses && S.ses.stopMode) S.ses.stopMode(d.tab || "");
     if (S.ses && S.ses.quickMode) S.ses.quickMode(d.tab || "");
     // patch the open session's row so the session strip reacts before the
     // next global snapshot lands (item 4: react to the per-session tab event)
@@ -2998,6 +2999,7 @@ function interruptSession() {
         const yourTurn = "awaiting-response";   // green, not a QUEUE_TAB
         if (ses.composerMode) ses.composerMode(yourTurn);
         if (ses.cancelMode) ses.cancelMode(yourTurn);
+        if (ses.stopMode) ses.stopMode(yourTurn);
         if (ses.quickMode) ses.quickMode(yourTurn);
       }
     })
@@ -3487,7 +3489,15 @@ function renderSessionChrome(tab) {
     // Immediate, no confirm: it matches pressing Esc in the terminal.
     const stop = el("button", "sstop actstop", "■ stop");
     stop.title = "interrupt the agent (Esc)";
-    stop.onclick = () => lockDuring(stop, interruptSession);
+    stop.onclick = () => lockDuring(stop, interruptSession,
+                                    () => ses.stopMode(liveTab()));
+    // gated to the working states like ⊘ cancel — an interrupt only applies
+    // while a turn is running, and an Esc when idle can clear queued input, so
+    // it greys out otherwise (the resting state re-derives from the tab, never
+    // a blind re-enable). Same CANCEL_TABS set (thinking/working/executing/
+    // awaiting-bg/awaiting-command).
+    ses.stopMode = (tab) => { stop.disabled = !CANCEL_TABS.includes(tab); };
+    ses.stopMode(liveTab());
     act.append(stop);
     // cancel: mid-turn double-Esc — cancel the running turn and restore your
     // message into the composer for editing. Enabled only while a turn runs.
