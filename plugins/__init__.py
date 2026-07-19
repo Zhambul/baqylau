@@ -171,8 +171,10 @@ def migration_target(cur_slug, manual=False):
     (plugins.claude_code.account.pick_target, docs/relimit.md): the other
     account with the lowest effective 5h usage, or None when nothing
     qualifies. manual=True is the dashboard's ⇆ migrate button — it drops the
-    90% refuge ceiling (an explicit click outranks it; an ACTIVE limit-hit
-    still disqualifies). First plugin that recognizes the request wins. Same
+    90% refuge ceiling AND lets a MODEL-scoped limit-hit through (the account's
+    other models still work; the user picks the model on the resumed prompt).
+    An ACCOUNT-WIDE limit-hit still disqualifies. First plugin that recognizes
+    the request wins. Same
     exception contract as census()/activity(): the caller is the dashboard's
     control plane, not a hook."""
     for p in all_plugins():

@@ -346,3 +346,43 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
     # rolled-over snapshots count as 0 → eligible again
     fresh["c3"]["usage"]["five_hour_reset"] = now - 10
     assert ACC.pick_target("c1") == {"slug": "c3", "alias": "c3", "eff": 0}
+
+
+def test_manual_migrate_allows_model_scoped_limit(monkeypatch, tmp_path):
+    """A MODEL-scoped limit-hit (e.g. Fable-only) bars an account from the
+    AUTOMATIC picker but NOT from the manual ⇆ migrate — the account's other
+    models are still a refuge and the user picks the model on the resumed
+    prompt (the reported bug: c2 had a Fable stamp but Opus quota, and migrate
+    said 'no target'). An ACCOUNT-WIDE stamp still blocks BOTH."""
+    from core import sessionapi as API
+    from plugins.claude_code import account as ACC
+    import plugins
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
+    now = time.time()
+    fresh = {"c2": {"usage": {"five_hour": 30, "five_hour_reset": now + 1000,
+                              "ts": now},
+                    "limit_hit": {"ts": now, "resets_at": now + 500,
+                                  "model": "fable"}}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    # automatic: a model-scoped stamp still disqualifies (conservative — the
+    # resumed turn keeps the limited model)
+    assert ACC.pick_target("c1") is None
+    assert plugins.migration_target("c1") is None
+    # manual: the Fable-only stamp is no bar — c2 is the target
+    assert ACC.pick_target("c1", ceiling=None, model_scoped_ok=True)["slug"] == "c2"
+    assert plugins.migration_target("c1", manual=True)["slug"] == "c2"
+    # ...but an ACCOUNT-WIDE stamp (model=None) blocks the manual migrate too
+    fresh["c2"]["limit_hit"]["model"] = None
+    assert plugins.migration_target("c1", manual=True) is None
+    assert ACC.pick_target("c1", ceiling=None, model_scoped_ok=True) is None
+    # limit_hit_blocks is the single owner of the rule
+    scoped = {"ts": now, "resets_at": now + 500, "model": "fable"}
+    wide = {"ts": now, "resets_at": now + 500, "model": None}
+    expired = {"ts": now - 9000, "resets_at": now - 10, "model": "fable"}
+    assert API.limit_hit_blocks(scoped) is True             # conservative default
+    assert API.limit_hit_blocks(scoped, model_scoped_ok=True) is False
+    assert API.limit_hit_blocks(wide, model_scoped_ok=True) is True
+    assert API.limit_hit_blocks(expired, model_scoped_ok=True) is False
+    assert API.limit_hit_blocks(None, model_scoped_ok=True) is False

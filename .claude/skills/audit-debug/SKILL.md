@@ -1026,7 +1026,15 @@ New always-audited swallow sites (previously silent — their absence used to ma
   deliberately dropped). A MANUAL migrate (the header's ⇆ button) leaves NO
   relimit decision row — its trail starts at the `web-migrate` state_files row
   (ok/from/to, or the `no target`/`no terminal` reject) and continues in the
-  same `relimit` stream (ctx/`relimit-launch` carry `mode: manual`). The chip
+  same `relimit` stream (ctx/`relimit-launch` carry `mode: manual`). A manual
+  `no target` where the other account clearly has quota: it drops the 90%
+  ceiling AND lets a MODEL-scoped `limit-hit` through (`sessionapi.
+  limit_hit_blocks(model_scoped_ok=True)`), so a lingering `no target` means
+  the other account's stamp is ACCOUNT-WIDE (`limit-hit` content `model:
+  null`) or it too is inside a stamp — check the `state_files` `limit-hit`
+  content's `model` field for each account (the pre-2026-07-19 bug refused a
+  Fable-only-limited account with Opus quota; automatic `pick_target` still
+  refuses it by design — it keeps the limited model). The chip
   on the WRONG account = the stamp's own `slug` field vs the session's
   `account` kv (after a migration the adopted session's DB carries the OLD
   account's stamp under the NEW account — `account_usage` must file by the

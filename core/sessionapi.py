@@ -312,7 +312,9 @@ def effective_usage(usage, now=None):
 def limit_hit_active(hit, now=None):
     """True while a `limit-hit` stamp still BLOCKS its account: its reset time
     hasn't passed (or, with no reset known, it is younger than the 5h window).
-    The dashboard pill and the migration target-picker both gate on this."""
+    The dashboard pill gates purely on this (a limited account is flagged
+    regardless of which model was capped); the migration target-picker layers
+    model scope on top via limit_hit_blocks."""
     if not hit:
         return False
     now = time.time() if now is None else now
@@ -320,6 +322,25 @@ def limit_hit_active(hit, now=None):
     if isinstance(reset, (int, float)) and reset > 0:
         return reset > now
     return (hit.get("ts") or 0) + FIVE_HOUR_S > now
+
+
+def limit_hit_blocks(hit, now=None, model_scoped_ok=False):
+    """Whether an active `limit-hit` stamp should DISQUALIFY an account as a
+    migration target. An ACCOUNT-WIDE stamp (no `model` scope — nothing on the
+    account works) always blocks. A MODEL-scoped stamp (e.g. Fable-only, other
+    models still run) blocks UNLESS `model_scoped_ok`: the manual ⇆ migrate
+    sets it True (an explicit click can pick a model the account still has —
+    the resumed session opens at the prompt, so the user chooses; the dashboard
+    pill still shows the scoped chip), mirroring the new-session picker's
+    model-awareness. The automatic path leaves it False — that migration keeps
+    the limited model (bare `--resume`, no model change), so a same-scope
+    account is no refuge and conservative wins. The ONE owner of 'does this
+    stamp bar a migration target' (docs/styleguide.md single-owner table)."""
+    if not limit_hit_active(hit, now):
+        return False
+    if model_scoped_ok and (hit or {}).get("model"):
+        return False
+    return True
 
 
 def session_row(sid):

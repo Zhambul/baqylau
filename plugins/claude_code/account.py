@@ -115,24 +115,28 @@ TARGET_MAX_PCT = 90   # a candidate at/above this effective 5h usage is no
                       # refuge — migrating there would hit the wall again
 
 
-def pick_target(cur_slug, now=None, cache=None, ceiling=TARGET_MAX_PCT):
+def pick_target(cur_slug, now=None, cache=None, ceiling=TARGET_MAX_PCT,
+                model_scoped_ok=False):
     """The migration target for a session leaving its current account
     (plugins/claude_code/relimit.py): the OTHER registry account with the
     lowest effective 5h usage (core.sessionapi.effective_five_hour over the
-    freshest per-account snapshots), skipping any account still inside an
-    active limit-hit stamp. Returns {"slug", "alias", "eff"} or None when no
-    account sits under `ceiling` — then the caller must NOT migrate
-    (ping-ponging between two exhausted accounts helps nobody). ceiling=None
-    drops the % bar for a MANUAL migrate (an explicit click outranks the
-    refuge rule; an active limit-hit still disqualifies — a blocked account
-    is useless however deliberate the click)."""
+    freshest per-account snapshots), skipping any account whose active limit-hit
+    stamp bars it (core.sessionapi.limit_hit_blocks). Returns {"slug", "alias",
+    "eff"} or None when no account qualifies — then the caller must NOT migrate
+    (ping-ponging between two exhausted accounts helps nobody). Two knobs relax
+    the bar for a MANUAL migrate (an explicit click outranks the automatic
+    refuge rules): ceiling=None drops the % headroom bar, and model_scoped_ok
+    lets a MODEL-scoped stamp (e.g. Fable-only) through — the account's other
+    models are still a refuge, and the resumed session opens at the prompt so
+    the user picks the model. An ACCOUNT-WIDE stamp still disqualifies either
+    way — a fully blocked account is useless however deliberate the click."""
     per = API.account_usage(cache=cache)
     best = None
     for a in registry():
         if a["slug"] == cur_slug:
             continue
         ent = per.get(a["slug"]) or {}
-        if API.limit_hit_active(ent.get("limit_hit"), now):
+        if API.limit_hit_blocks(ent.get("limit_hit"), now, model_scoped_ok):
             continue
         eff = API.effective_five_hour(ent.get("usage"), now)
         if best is None or eff < best["eff"]:

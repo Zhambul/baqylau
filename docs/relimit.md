@@ -52,10 +52,19 @@ ONE parser of the message's scope, docs/styleguide.md). Consumers:
   `limit hit` (docs/dashboard.md *The "limit hit" pill*);
 - the new-session auto-picker skips the account only when the limited model
   is the one being launched (docs/dashboard.md);
-- **`pick_target` deliberately still treats ANY active stamp as
-  disqualifying**: the migrating session was running the limited model and
-  will continue on it, so a target with that model blocked is no refuge —
-  and the picker doesn't know the session's model, so conservative wins.
+- **`pick_target` treats a model-scoped stamp as disqualifying for the
+  AUTOMATIC path but not the manual one** (`model_scoped_ok`, defaulting
+  False → `core.sessionapi.limit_hit_blocks`, the single owner of the rule).
+  The automatic migration keeps the limited model (bare `--resume`, no model
+  change), so a target with that same model blocked is no refuge and
+  conservative wins. The MANUAL ⇆ migrate passes `model_scoped_ok=True`: the
+  account's other models still run and the resumed session opens at the
+  prompt, so the user picks a model the account still has — the same
+  model-awareness the new-session picker already has, and the fix for the
+  reported bug where a Fable-only-limited account with Opus quota was refused
+  as a manual target (2026-07-19). An ACCOUNT-WIDE stamp (no `model` scope)
+  still disqualifies both paths — a fully blocked account is useless however
+  deliberate the click.
 
 ## The hook half (relimit.main) — decide and hand off
 
@@ -120,11 +129,14 @@ The session header's action row carries **`⇆ migrate`** right after `✎ renam
 **`mode=manual`**, which differs from the automatic hand-off in exactly the
 ways manual intent implies:
 
-- **No % ceiling on the target** (`plugins.migration_target(manual=True)` →
-  `account.pick_target(ceiling=None)`): an explicit click outranks the 90%
-  refuge rule. An ACTIVE `limit-hit` stamp still disqualifies — a blocked
-  account is useless however deliberate the click. No qualifying account →
-  `409`.
+- **Both automatic refuge rules relaxed** (`plugins.migration_target(
+  manual=True)` → `account.pick_target(ceiling=None, model_scoped_ok=True)`):
+  an explicit click outranks them. `ceiling=None` drops the 90% headroom bar;
+  `model_scoped_ok=True` lets a MODEL-scoped limit-hit through (see *Limit
+  scope* — the account's other models are still a refuge, and the resumed
+  session opens at the prompt so the user picks one). An ACCOUNT-WIDE
+  `limit-hit` stamp still disqualifies — a fully blocked account is useless
+  however deliberate the click. No qualifying account → `409`.
 - **No auto-continue nudge**: nothing was cut off, so the relaunch is a bare
   `--resume <sid>` and the session opens at the prompt.
 - **The announce line moves into the migrator** (`⇆ migrating to <slug>

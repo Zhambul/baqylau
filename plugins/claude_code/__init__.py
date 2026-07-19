@@ -125,8 +125,11 @@ def launch_argv(words, cmd="claude"):
 def migration_target(cur_slug, manual=False):
     """The migration-target provider (plugins.migration_target fan-out) — see
     account.pick_target, the owner of the ranking (docs/relimit.md). A manual
-    (web-button) migrate drops the % ceiling; the automatic rate-limit path
-    keeps it."""
+    (web-button) migrate relaxes both automatic refuge rules: it drops the %
+    ceiling AND lets a MODEL-scoped limit-hit through (the account's other
+    models are still a refuge; the user picks the model on the resumed prompt).
+    The automatic rate-limit path keeps both bars."""
     from plugins.claude_code import account
     return account.pick_target(
-        cur_slug, ceiling=None if manual else account.TARGET_MAX_PCT)
+        cur_slug, ceiling=None if manual else account.TARGET_MAX_PCT,
+        model_scoped_ok=manual)
