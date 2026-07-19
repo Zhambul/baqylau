@@ -153,6 +153,13 @@ gains a copy step; today one would be dead code.
   passed; or younger than one 5h window when the reset is unknown) — rendered
   as a red `limit hit` chip + reset countdown. The frozen ~95% usage bar alone
   is misleading at exactly the moment it matters (see The trigger above).
+- **The stamp survives the migration in the SUCCESSOR's state DB** (the adopt
+  renames the DB), whose `account` kv now names the NEW account. So
+  `sessionapi.account_usage` files each `limit-hit` under the stamp's own
+  `slug` field, never the session's account — grouping by the session pinned
+  the blocked account's chip on the healthy one and hid the block from
+  `pick_target` (which could then migrate a later limit-hit straight back
+  onto the still-blocked account).
 
 ## Audit trail & triage
 

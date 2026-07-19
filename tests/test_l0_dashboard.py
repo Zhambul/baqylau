@@ -3040,10 +3040,13 @@ def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
     S.kv_set(log, "usage", {"five_hour": 40, "seven_day": 55, "ts": 100})
     rows = _get_json(dash + "/api/accounts")
     by = {r["slug"]: r for r in rows}
-    assert by["c2"]["usage"]["five_hour"] == 40
+    # the served usage is EFFECTIVE (sessionapi.effective_usage): ts=100 is
+    # ancient with no resets → both windows rolled over → zeroed, so a stale
+    # snapshot can never render its old % with a 'resets now' countdown
+    assert by["c2"]["usage"]["five_hour"] == 0
+    assert by["c2"]["usage"]["seven_day"] == 0
     assert by[""]["usage"] is None                 # default has no captured usage
-    # server-computed effective 5h (sessionapi.effective_five_hour — ts=100 is
-    # ancient with no reset → rolled over → 0) and the limit-hit flag (none)
+    # server-computed effective 5h and the limit-hit flag (none)
     assert by["c2"]["five_hour_eff"] == 0
     assert by["c2"]["limit_hit"] is None and by[""]["limit_hit"] is None
 
@@ -3067,6 +3070,29 @@ def test_accounts_payload_serves_fresh_eff_and_limit_hit(dash, monkeypatch):
                                 "resets_at": now - 10, "msg": "old"})
     by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
     assert by["c1"]["limit_hit"] is None
+
+
+def test_accounts_payload_files_limit_hit_under_its_own_slug(dash, monkeypatch):
+    # After a rate-limit migration the adopted session runs under the NEW
+    # account (its `account` kv), but the limit-hit stamp in the same state DB
+    # still describes the OLD one — it must surface on the blocked account's
+    # pill, not the healthy one's (and the migration target picker keys off
+    # the same aggregation).
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c1", "label": "oboard", "alias": "c1"},
+        {"slug": "c2", "label": "claude-01", "alias": "c2"}])
+    A.session_start({"session_id": "accs3", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("accs3")
+    now = time.time()
+    S.kv_set(log, "account", {"slug": "c1", "label": "oboard"})
+    S.kv_set(log, "usage", {"five_hour": 10, "five_hour_reset": now + 8000,
+                            "ts": now})
+    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now,
+                                "resets_at": now + 8000, "msg": "limit"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c1"]["limit_hit"] is None           # the healthy account is clean
+    assert by["c2"]["limit_hit"]["msg"] == "limit"  # the blocked one shows it
+    assert by["c1"]["usage"]["five_hour"] == 10    # usage stays with the session
 
 
 def test_post_new_session_account_picker(dash, monkeypatch, tmp_path):

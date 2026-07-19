@@ -166,6 +166,7 @@ def sessions(limit=25):
 
 FIVE_HOUR_S = 5 * 3600      # the 5h window length — the rolled-over fallback
                             # when a snapshot has no resets_at
+SEVEN_DAY_S = 7 * 86400     # the 7d window length — same fallback role
 
 
 def db_sig(path):
@@ -220,35 +221,69 @@ def account_usage(limit=50, cache=None):
     def read(p):
         return (S.kv_at(p, "account") or {}, S.kv_at(p, "usage"),
                 S.kv_at(p, "limit-hit"))
+    def file_under(best, slug, key, val):
+        ent = best.setdefault(slug, {"usage": None, "limit_hit": None})
+        if val and (ent[key] is None
+                    or (val.get("ts") or 0) > (ent[key].get("ts") or 0)):
+            ent[key] = val
     best = {}
     for row in sessions(limit):
         sdb = _session_db(row)
         acc, usage, hit = (db_cached(cache, sdb, read) if cache is not None
                            else read(sdb))
         slug = acc.get("slug") or ""
-        ent = best.setdefault(slug, {"usage": None, "limit_hit": None})
-        for key, val in (("usage", usage), ("limit_hit", hit)):
-            if val and (ent[key] is None
-                        or (val.get("ts") or 0) > (ent[key].get("ts") or 0)):
-                ent[key] = val
+        file_under(best, slug, "usage", usage)
+        # The hit is filed under ITS OWN slug (relimit stamps it), not the
+        # session's: after a rate-limit migration the adopted session's
+        # `account` kv is the NEW account while the stamp in the same state DB
+        # still describes the OLD one — grouping by the session's account
+        # pinned the blocked account's chip on the healthy one AND hid the
+        # block from the target picker (which could then migrate BACK onto it).
+        file_under(best, hit.get("slug", slug) if hit else slug,
+                   "limit_hit", hit)
     return best
+
+
+def _window_rolled(usage, key, span, now):
+    """True when a snapshot's `key` rate-limit window has rolled over: its
+    reset time has passed, or, when the reset is unknown, the snapshot is
+    older than the window itself."""
+    reset = usage.get(key + "_reset")
+    return (reset <= now if isinstance(reset, (int, float)) and reset > 0
+            else (usage.get("ts") or 0) + span < now)
 
 
 def effective_five_hour(usage, now=None):
     """The effective 5h-used percentage of a usage snapshot, for load
-    balancing: a snapshot whose reset time has passed (or, when resets_at is
-    unknown, one older than the 5h window itself) means the window rolled
-    over → 0 used; no snapshot at all means no recent traffic → also 0."""
+    balancing: a rolled-over window (_window_rolled) counts as 0 used; no
+    snapshot at all means no recent traffic → also 0."""
     if not usage:
         return 0
     pct = usage.get("five_hour")
     if not isinstance(pct, (int, float)):
         return 0
     now = time.time() if now is None else now
-    reset = usage.get("five_hour_reset")
-    rolled = (reset <= now if isinstance(reset, (int, float)) and reset > 0
-              else (usage.get("ts") or 0) + FIVE_HOUR_S < now)
-    return 0 if rolled else int(pct)
+    return 0 if _window_rolled(usage, "five_hour", FIVE_HOUR_S, now) else int(pct)
+
+
+def effective_usage(usage, now=None):
+    """A display-ready copy of a usage snapshot: each window (5h / 7d) that
+    rolled over (_window_rolled) has its used% zeroed and its reset dropped.
+    Without this, an account with no recent session serves its last-known
+    percentages with an already-past reset epoch, which the dashboard pill
+    renders as 'resets now' — forever. Same single-owner arithmetic as
+    effective_five_hour; the page reads the served values, never re-derives
+    (docs/styleguide.md single-owner table)."""
+    if not usage:
+        return usage
+    now = time.time() if now is None else now
+    out = dict(usage)
+    for key, span in (("five_hour", FIVE_HOUR_S), ("seven_day", SEVEN_DAY_S)):
+        if (isinstance(out.get(key), (int, float))
+                and _window_rolled(out, key, span, now)):
+            out[key] = 0
+            out.pop(key + "_reset", None)
+    return out
 
 
 def limit_hit_active(hit, now=None):

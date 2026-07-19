@@ -339,6 +339,29 @@ def test_effective_five_hour_arithmetic():
     assert API.effective_five_hour({"five_hour": "n/a"}, now) == 0
 
 
+def test_effective_usage_rolls_stale_windows():
+    now = 10_000_000.0
+    live = {"five_hour": 29, "five_hour_reset": now + 100,
+            "seven_day": 55, "seven_day_reset": now + 3 * 86400, "ts": now - 60}
+    # nothing rolled → served as-is
+    assert API.effective_usage(live, now) == live
+    # 5h reset passed → that window zeroed and its reset DROPPED (the pill
+    # rendered a past epoch as 'resets now' forever); 7d untouched
+    stale = dict(live, five_hour_reset=now - 10)
+    eff = API.effective_usage(stale, now)
+    assert eff["five_hour"] == 0 and "five_hour_reset" not in eff
+    assert eff["seven_day"] == 55 and eff["seven_day_reset"] == now + 3 * 86400
+    # both rolled (no resets known, snapshot older than each window)
+    old = {"five_hour": 40, "seven_day": 60,
+           "ts": now - API.SEVEN_DAY_S - 1}
+    assert API.effective_usage(old, now) == {
+        "five_hour": 0, "seven_day": 0, "ts": now - API.SEVEN_DAY_S - 1}
+    # non-numeric pct stays untouched; absent snapshot passes through
+    assert API.effective_usage({"five_hour": "n/a", "ts": 0}, now) == {
+        "five_hour": "n/a", "ts": 0}
+    assert API.effective_usage(None, now) is None
+
+
 def test_limit_hit_active_window():
     now = 10_000_000.0
     assert API.limit_hit_active({"ts": now, "resets_at": now + 5}, now) is True

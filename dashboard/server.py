@@ -484,17 +484,20 @@ def accounts_payload():
     is core/sessionapi.account_usage (shared with the rate-limit migration's
     target picker — docs/relimit.md). Per-account by construction — each
     snapshot came from a session running under that account's own token
-    (docs/dashboard.md). No API call, no token. Adds the two server-computed
-    fields the page must not re-derive (single-owner rule): `five_hour_eff`
-    (rolled-over→0 effective usage, the new-session form's load-balancing
-    default) and `limit_hit` (the still-active limit stamp, else None)."""
+    (docs/dashboard.md). No API call, no token. Everything the page shows is
+    server-computed (single-owner rule): `usage` is the EFFECTIVE snapshot
+    (sessionapi.effective_usage — a rolled-over 5h/7d window is zeroed and
+    its reset dropped, so a stale snapshot can't render 'resets now'
+    forever), `five_hour_eff` the load-balancing 5h figure the new-session
+    form preselects by, and `limit_hit` the still-active limit stamp
+    (else None)."""
     per = API.account_usage(SESSIONS_LIMIT, cache=_ACCT)
     out = []
     for a in plugins.accounts():
         ent = per.get(a["slug"]) or {}
         usage, hit = ent.get("usage"), ent.get("limit_hit")
         out.append(dict(
-            a, usage=usage,
+            a, usage=API.effective_usage(usage),
             five_hour_eff=API.effective_five_hour(usage),
             limit_hit=hit if API.limit_hit_active(hit) else None))
     return out

@@ -1003,7 +1003,15 @@ New always-audited swallow sites (previously silent — their absence used to ma
   deliberately dropped). A MANUAL migrate (the header's ⇆ button) leaves NO
   relimit decision row — its trail starts at the `web-migrate` state_files row
   (ok/from/to, or the `no target`/`no terminal` reject) and continues in the
-  same `relimit` stream (ctx/`relimit-launch` carry `mode: manual`).
+  same `relimit` stream (ctx/`relimit-launch` carry `mode: manual`). The chip
+  on the WRONG account = the stamp's own `slug` field vs the session's
+  `account` kv (after a migration the adopted session's DB carries the OLD
+  account's stamp under the NEW account — `account_usage` must file by the
+  stamp's slug; compare the `state_files` `limit-hit` content's slug with the
+  pill showing it). A usage bar stuck at `resets now` = a stale snapshot
+  served raw — `/api/accounts` serves `sessionapi.effective_usage` (a 5h/7d
+  window whose reset passed is zeroed, reset dropped); the raw stash is still
+  readable in the session's state-DB `usage` kv for comparison.
 - **Migration started but the session never came back** — the `streams` row
   kind `relimit` names the failed leg via `end_reason`: `close-failed` /
   `close-timeout` (the tab wouldn't close or SessionEnd never parked the state
