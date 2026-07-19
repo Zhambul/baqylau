@@ -643,11 +643,30 @@ i.e. always, when the launch came from a browser — activating the app
 frontmost, `--keep-focus` yanks kitty up). The fix is at the source:
 `frontends/kitty.py launch_pane` passes `--keep-focus` **only while kitty is
 the frontmost app** (`kitten_app_focused` — that's the case the flag exists
-for, keeping the user's cursor in the claude window; background cost: the
-pane holds inner focus until the user clicks back, strictly better than
-stealing app focus), and `kitten_launch_tab` never passes it. `kitten @
-focus-window` cannot substitute as a restore — it, too, raises the OS window
-of a background kitty (`set_active_window(switch_os_window_if_needed=True)`).
+for, keeping the user's cursor in the claude window), and `kitten_launch_tab`
+never passes it. `kitten @ focus-window` cannot substitute as a restore — it,
+too, raises the OS window of a background kitty
+(`set_active_window(switch_os_window_if_needed=True)`).
+
+**Inner focus (which pane), separately from OS focus (which app).** Skipping
+`--keep-focus` on a background launch had a cost: the LAST pane split in (the
+scoreboard bar) held *inner-tab* focus, so a web-launched tab showed "▪ session"
+as its tab title instead of the host's ai-generated summary until the user
+manually clicked the host pane. This is fixed WITHOUT re-introducing the app
+steal: after opening the panes, `core/hostpane.py open_mirror` hands inner focus
+back to the host via `frontends.Frontend.focus_first_pane(anchor)` →
+`kitten @ action --match window_id:<host> first_window`. That is an INNER-tab
+move (`Tab.nth_window(0)`; `boss.combine` dispatches a tab action to the
+*matched* window's tab, never the active one) and it never calls
+`focus_os_window`, so a background kitty is **not** raised — the crucial
+difference from `focus-window`, whose rc hardcodes
+`switch_os_window_if_needed=True`. Group 0 is the host: the tab's first-created
+window, before its mirror/scoreboard splits. It runs only when `open_mirror`
+actually created a pane (a resume/toggle-while-open where the panes already
+exist must not yank a mirror the user is reading) and only with a host `anchor`
+to target; the result is audited as a `pane_events` `focus-host` row (`win=`
+the anchor). A foreground open is unaffected — `--keep-focus` already kept the
+host focused, so the correction is a no-op there.
 
 Two rejected designs, do not re-add: (1) `--keep-focus` on the tab launch —
 see above, it *causes* the steal; (2) an **active bounce-back** (watch the

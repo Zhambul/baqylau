@@ -210,6 +210,79 @@ def test_close_stale_records_real_close_result(tmp_path, monkeypatch):
     assert all("closed sid=old-sid win=7" in d for _, d in got), got
 
 
+# ---- core.hostpane.open_mirror — hand inner focus back to the host pane ------
+# The mirror/scorebar panes take focus when they're split in (a plain launch
+# does, and a background/web launch deliberately can't --keep-focus), so the tab
+# ends up titled "▪ session" instead of the host's ai-generated title. open_mirror
+# corrects the inner focus to the host — but only when it ACTUALLY opened a pane
+# (else a resume/toggle-while-open would yank a mirror the user is reading).
+
+class _OpenFE:
+    """Records the terminal ops open_mirror issues. `present` = the user-var
+    names of panes ALREADY in the tab (so open_mirror skips creating them)."""
+
+    def __init__(self, present=(), focus_rc=0):
+        self.present = set(present)
+        self.focus_rc = focus_rc
+        self.focused = []
+        self.launched = []
+
+    def find_window(self, var, value, tree=None):
+        # a present pane reports 5 rows so size_bar's delta is 0 (no resize)
+        return {"id": 9, "lines": 5} if var in self.present else None
+
+    def goto_splits_layout(self, win=None):
+        return 0
+
+    def launch_pane(self, *a, **k):
+        self.launched.append(k.get("var"))
+        return 0
+
+    def resize_pane(self, *a, **k):
+        return 0
+
+    def focus_first_pane(self, win_id):
+        self.focused.append(win_id)
+        return self.focus_rc
+
+
+def test_open_mirror_focuses_host_after_opening(tmp_path, monkeypatch):
+    from core import hostpane as HP
+    rows = _audit_env(tmp_path, monkeypatch)
+    fe = _OpenFE()                                   # nothing exists yet
+    HP.open_mirror(fe, "/bin", "sid-1", str(tmp_path / "m.log"), 25, anchor="7")
+    assert fe.launched and fe.focused == ["7"]       # both panes + focus to host
+    got = rows("SELECT ok, detail FROM pane_events WHERE action='focus-host'")
+    assert got == [(1, "win=7")], got
+
+
+def test_open_mirror_records_failed_focus(tmp_path, monkeypatch):
+    from core import hostpane as HP
+    rows = _audit_env(tmp_path, monkeypatch)
+    HP.open_mirror(_OpenFE(focus_rc=1), "/bin", "sid-1",
+                   str(tmp_path / "m.log"), 25, anchor="7")
+    got = rows("SELECT ok FROM pane_events WHERE action='focus-host'")
+    assert got == [(0,)], got                        # the audited ok is the REAL rc
+
+
+def test_open_mirror_no_focus_when_nothing_opened(tmp_path, monkeypatch):
+    from core import hostpane as HP
+    rows = _audit_env(tmp_path, monkeypatch)
+    fe = _OpenFE(present={"claude_mirror", "claude_scorebar"})
+    HP.open_mirror(fe, "/bin", "sid-1", str(tmp_path / "m.log"), 25, anchor="7")
+    assert fe.focused == [] and fe.launched == []    # both existed → don't yank
+    assert rows("SELECT 1 FROM pane_events WHERE action='focus-host'") == []
+
+
+def test_open_mirror_no_focus_without_anchor(tmp_path, monkeypatch):
+    from core import hostpane as HP
+    rows = _audit_env(tmp_path, monkeypatch)
+    fe = _OpenFE()
+    HP.open_mirror(fe, "/bin", "sid-1", str(tmp_path / "m.log"), 25, anchor=None)
+    assert fe.launched and fe.focused == []          # opened, but no host to target
+    assert rows("SELECT 1 FROM pane_events WHERE action='focus-host'") == []
+
+
 # ---- core.slots.pid_set — a displaced live pid must get its release-pid -----
 # The upsert silently REPLACES a live pid (a resumed agent's new tailer taking
 # over from the old one) with only a claim-pid row; without the paired

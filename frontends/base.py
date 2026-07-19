@@ -140,6 +140,19 @@ class Frontend:
         "horizontal"/"vertical" by `increment` cells (negative shrinks)."""
         return 1
 
+    def focus_first_pane(self, win_id):
+        """Make the FIRST window of the tab CONTAINING `win_id` the active
+        window, using an INNER-tab focus move that must NOT raise or activate
+        the terminal's OS window (unlike a plain focus-window, which activates a
+        BACKGROUND app — the web-launch focus steal). The host pane is always
+        its tab's first-created window (its mirror/scorebar are split in after
+        it), so this hands inner focus back to the host after those panes took
+        it — restoring the host's window title as the visible tab title. A
+        frontend that cannot focus a window without raising the app must keep
+        this inert (the tab title just tracks whichever pane holds focus).
+        Exit code."""
+        return 1
+
     # --- control plane (writes) ---------------------------------------------
     # Slice consumers: dashboard/server.py only (the web control plane —
     # docs/dashboard.md). These are the only Frontend methods that TYPE INTO or

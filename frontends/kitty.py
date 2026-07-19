@@ -411,6 +411,20 @@ class KittyFrontend(Frontend):
         m = f"var:{var[0]}={var[1]}" if var else f"id:{win_id}"
         return self._run("close-window", "--match", m)
 
+    def focus_first_pane(self, win_id):
+        # `action first_window` is an INNER-tab focus move: it maps to
+        # Tab.nth_window(0), and boss.combine dispatches a Tab action to the
+        # MATCHED window's tab (window.tabref()), so it never touches the active
+        # tab and never calls focus_os_window — a BACKGROUND kitty is not
+        # raised. A plain `focus-window` cannot substitute: its rc hardcodes
+        # set_active_window(switch_os_window_if_needed=True), which activates the
+        # app whenever no kitty OS window is focused (the web-launch steal —
+        # docs/dashboard.md). Group 0 is the host: the tab's first-created
+        # window, before its mirror/scorebar splits (open_mirror passes the host
+        # anchor). --match window_id: selects the tab even when it isn't active.
+        return self._run("action", "--match", f"window_id:{win_id}",
+                         "first_window")
+
     def set_user_vars(self, win_id, uv):
         args = [f"{k}={v}" for k, v in uv.items()]
         return self._run("set-user-vars", "--match", f"id:{win_id}", *args)

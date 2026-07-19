@@ -121,6 +121,22 @@ def test_f1_minimal_session(run_hook, test_env, session, fake_kitten):
     oracle.assert_clean(test_env, s.sid)
 
 
+def test_f1b_open_hands_focus_back_to_host(run_hook, test_env, session,
+                                            fake_kitten):
+    """SessionStart's mirror+scorebar panes take focus as they're split in;
+    open_mirror hands inner focus back to the host pane via an INNER-tab
+    `action first_window` (no OS-window raise — never the app-focus steal) so
+    the tab shows the host's ai-title, not "▪ session"."""
+    s = session.make()
+    run_hook("claude-split.py", P.session_start(s), argv=("open",))
+    acts = [c for c in fake_kitten.calls("action") if "first_window" in c]
+    assert acts, "no focus-to-host action call recorded"
+    assert "window_id:%s" % fake_kitten.window_id in acts[-1]   # the host anchor
+    rows = oracle.q(test_env, "SELECT ok FROM pane_events "
+                    "WHERE session_id=? AND action='focus-host'", (s.sid,))
+    assert rows == [(1,)], rows
+
+
 # --------------------------------------------------------------------- F2
 
 def test_f2_fg_lifecycle_streams_live_and_takes_real_outcome(

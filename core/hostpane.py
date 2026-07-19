@@ -83,6 +83,7 @@ def open_mirror(fe, here, sid, log, bias, default_bias=DEFAULT_BIAS, anchor=None
     the host pane's window id: the vsplit lands next to IT, not next to
     whatever window happens to be focused — a hook can fire while the user is
     looking at a different tab (daemon-origin SessionStart, keybinding)."""
+    opened = False
     if not mirror_exists(fe, sid):
         # vsplit sizing only works in the splits layout; switch the anchor's
         # tab (or, unanchored, the active tab) to it. `in_tab_of` is
@@ -95,12 +96,34 @@ def open_mirror(fe, here, sid, log, bias, default_bias=DEFAULT_BIAS, anchor=None
                        next_to=(f"id:{anchor}" if anchor else None),
                        in_tab_of=anchor,
                        var={"claude_mirror": sid}, title="◧ cmd mirror")
+        opened = True
     if not window_exists(fe, "claude_scorebar", sid):   # checked separately so a
         fe.launch_pane([os.path.join(here, "claude-scorebar.py"), log],  # crashed/
                        "hsplit", bias=BAR_ROWS, next_to=f"var:claude_mirror={sid}",
                        in_tab_of=anchor,
                        var={"claude_scorebar": sid}, title="▪ session")
         size_bar(fe, sid)                          # closed bar comes back on toggle
+        opened = True
+    # Hand inner focus back to the host pane. A plain pane launch takes focus,
+    # so the mirror/scorebar we just split in became the active window — and on
+    # a BACKGROUND launch (the web dashboard: kitty isn't frontmost, so
+    # launch_pane deliberately SKIPPED --keep-focus to avoid activating the app
+    # over the user's browser) that leaves the scorebar focused. The tab then
+    # shows "▪ session" instead of the host's ai-generated title until the user
+    # manually clicks the host pane. focus_first_pane is inner-tab only — it
+    # never raises the OS window, so it corrects the inner focus WITHOUT
+    # re-introducing the app-focus steal (a plain focus-window would). A no-op
+    # when the host already holds focus (a foreground open kept it via
+    # --keep-focus). Gated on `opened`: if both panes already existed nothing
+    # was split in, so nothing stole focus and we must not yank it (a resume /
+    # toggle-while-open where the user may be reading the mirror). Needs the
+    # host `anchor` to target its tab and be the group-0 window it focuses.
+    if opened and anchor:
+        rc = fe.focus_first_pane(anchor)
+        try:
+            A.pane(sid, "focus-host", rc == 0, f"win={anchor}")
+        except Exception:
+            pass
 
 
 def close_mirror(fe, sid):

@@ -61,6 +61,7 @@ CALLS = {
     "close_pane":         ((), 1),
     "set_user_vars":      (("7", {"claude_session": "sid-1"}), 1),
     "resize_pane":        ((("claude_mirror", "sid-1"), "horizontal", 4), 1),
+    "focus_first_pane":   (("7",), 1),
     # control plane (writes)
     "send_text":          (("7", "hello"), False),
     "paste_text":         (("7", "hello"), False),
@@ -425,6 +426,21 @@ def test_launch_pane_keep_focus_only_when_app_focused(monkeypatch):
                         lambda k, listen: [{"is_focused": True, "tabs": []}])
     fe.launch_pane(["mirror.py"], "vsplit", keep_focus=False)
     assert "--keep-focus" not in calls[-1]
+
+
+def test_focus_first_pane_is_inner_tab_no_raise(monkeypatch):
+    """focus_first_pane → `kitten @ action --match window_id:<win> first_window`
+    — an INNER-tab focus move (Tab.nth_window(0)) that never calls
+    focus_os_window, so a background kitty is NOT activated. It must NOT use
+    `focus-window` (whose rc forces switch_os_window_if_needed=True — the
+    web-launch app-focus steal). rc 0 → 0."""
+    calls = []
+    monkeypatch.setattr(fk, "kitten_run", lambda *a: calls.append(list(a)) or 0)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/k")
+    assert fe.focus_first_pane("42") == 0
+    assert calls == [["/k", "unix:/tmp/x", "action",
+                      "--match", "window_id:42", "first_window"]]
+    assert not any("focus-window" in c for c in calls)
 
 
 def test_app_id_is_the_kitty_bundle_id():
