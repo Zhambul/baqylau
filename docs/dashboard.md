@@ -2141,13 +2141,23 @@ without reloading. The client opens the SSE only when the agent looks live (its
 no gap, no overlap (the same race-free hand-off the per-session stream's
 `after`/`mpos` cursors use).
 
+**Ordering: newest-first.** The drill-down renders the transcript's chronological
+entries **reversed** (`renderTimelineInto`'s `newestFirst`), so a subagent's most
+recent message reads at the TOP — matching the main agent's mirror stream, which
+prepends (`appendItems`, `st.prepend`). The timeline head stays pinned above. The
+live SSE then *prepends* each new increment (in chronological order, so its newest
+lands topmost and the whole increment sits above older entries) — the mirror of
+the oldest-first append path. The main-thread **activity** tab is unaffected: it
+renders the same component without `newestFirst`, so it stays oldest-first.
+
 Server-side the SSE polls `plugins.activity_since(sid, aid, pos)` at `TICK_S` —
 the incremental companion to `activity()`, sharing timeline()'s per-record entry
 builder (`transcript._fold_record`, the single owner of the record→entry
 mapping). It returns `(entries, resolutions, new_pos)` and the SSE pushes two
 event kinds: `entries` (the new increment's entries, server-enriched by the same
-`_enrich_entries` the REST endpoints run — markdown/rich-tool HTML) appended at
-the bottom (the timeline reads chronological top-down), and `resolve`
+`_enrich_entries` the REST endpoints run — markdown/rich-tool HTML) added to the
+list in the render's order (prepended newest-first, per the ordering note above),
+and `resolve`
 (`[(tool_use_id, output, failed), …]`). A `resolve` exists because a tool_use in
 one increment can have its tool_result land in a LATER one — the entry was
 already serialized and sent, so it can't be patched in place; the client finds
@@ -2297,14 +2307,19 @@ session's rows are all dead, so its ribbon is empty (hidden).
 ## The subagent strip (per-agent stats near the scoreboard)
 
 Under the "running now" ribbon the session header carries a **subagent strip**
-(`updateAgentStrip`) — one compact clickable chip per **running** subagent, so
-the scoreboard region reflects what your subagents are *doing* without drilling
-in. Each chip shows the agent's identity (`◇ ‹desc›`, `👥` for a teammate) plus
-its live stats — `model·effort`, event count, `ctx N%`, and its running age —
-and links to that agent's drill-down (`#/s/<sid>/a/<aid>`). It reads straight
-off the `ses.agents` rows `session_payload` already enriches (`agents_ctx` /
-`agents_model_effort` — no new fetch or backend field), filtered to the ones
-`agentStatus` calls `st-run`; hidden when none is active. Unlike the ribbon
+(`updateAgentStrip`) — one compact clickable chip per subagent, **running and
+finished alike**, so the scoreboard region reflects the whole subagent roster
+without drilling in. Each chip shows the agent's identity (`◇ ‹desc›`, `👥` for
+a teammate) plus its stats — status word, `model·effort`, event count, `ctx N%`,
+and its age (running elapsed, or final duration once done) — and links to that
+agent's drill-down (`#/s/<sid>/a/<aid>`). A finished chip is tinted by its final
+status (`data-st` → the same `st-ok`/`st-bad`/`st-warn` palette the agent cards
+use) and dimmed so a live agent stands out; running agents sort first, then
+most-recently-started, so a fast subagent that already completed still shows
+here rather than flashing and vanishing. It reads straight off the `ses.agents`
+rows `session_payload` already enriches (`agents_ctx` / `agents_model_effort` —
+no new fetch or backend field), husk auxiliary rows dropped; hidden only when
+the session has no real subagents. Unlike the ribbon
 (which is one generic chip per live *slot*, identity-less) and the mirror rail's
 agent cards (mirror tab only, all agents), the strip is on the HEADER — so it
 shows on every tab — and it names each active agent. It is kept live by the same

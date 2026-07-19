@@ -369,11 +369,17 @@ code, pre, .mono { font-family: var(--mono); }
 .achip {
   display: inline-flex; align-items: baseline; gap: 8px;
   padding: 2px 9px; border-radius: 999px; font-size: 11px;
-  color: var(--text-soft);
-  background: color-mix(in srgb, var(--exec) 8%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 34%, transparent);
+  color: var(--text-soft); --astate: var(--exec);
+  background: color-mix(in srgb, var(--astate) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--astate) 32%, transparent);
 }
-.achip:hover { background: color-mix(in srgb, var(--exec) 16%, transparent); }
+.achip[data-st="st-run"] { --astate: var(--exec); }
+.achip[data-st="st-ok"]  { --astate: var(--done); }
+.achip[data-st="st-bad"] { --astate: var(--red); }
+.achip[data-st="st-warn"] { --astate: var(--amber); }
+/* finished agents recede so a live one stands out; hover restores full weight */
+.achip[data-st="st-ok"], .achip[data-st="st-bad"], .achip[data-st="st-warn"] { opacity: .72; }
+.achip:hover { background: color-mix(in srgb, var(--astate) 16%, transparent); opacity: 1; }
 .achip .an { color: var(--text); max-width: 24ch;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .achip .am { color: var(--dim); }

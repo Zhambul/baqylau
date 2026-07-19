@@ -3733,32 +3733,42 @@ function agentCard(a) {
 }
 
 /* The per-subagent stats strip in the session header — one compact clickable
-   chip per RUNNING subagent, so the scoreboard region reflects what the
-   subagents are doing WITHOUT drilling in (docs/dashboard.md, *Subagent strip*).
-   Clicking a chip opens that agent's drill-down. Lives on the header, so it
-   shows on every tab (not just the mirror rail); hidden when nothing is active.
-   Kept live by updateAgents() (the `agents` SSE event). */
+   chip per subagent, RUNNING and finished alike, so the scoreboard region
+   reflects the whole subagent roster WITHOUT drilling in (docs/dashboard.md,
+   *Subagent strip*). A finished chip is tinted by its final status (via
+   data-st, like the agent cards) and dimmed so live agents stand out; a fast
+   subagent that already completed still shows here. Running agents sort first,
+   then most-recently-started. Clicking a chip opens that agent's drill-down.
+   Lives on the header, so it shows on every tab (not just the mirror rail);
+   hidden only when the session has no real subagents. Kept live by
+   updateAgents() (the `agents` SSE event). */
 function updateAgentStrip() {
   const ses = S.ses;
   if (!ses || !ses.agentStrip) return;
   const strip = ses.agentStrip;
   strip.textContent = "";
-  const live = (ses.agents || []).filter(a => agentStatus(a)[1] === "st-run");
-  if (!live.length) { strip.style.display = "none"; return; }
+  // all real subagents (drop husk auxiliary rows), running first then newest
+  const agents = (ses.agents || []).filter(a => !isHusk(a)).sort((x, y) => {
+    const rx = agentStatus(x)[1] === "st-run", ry = agentStatus(y)[1] === "st-run";
+    return (ry - rx) || ((y.started_at || 0) - (x.started_at || 0));
+  });
+  if (!agents.length) { strip.style.display = "none"; return; }
   strip.style.display = "";
   strip.append(el("span", "aslabel", "subagents"));
-  for (const a of live) {
+  for (const a of agents) {
+    const [sttxt, stcls] = agentStatus(a);
     const chip = el("a", "achip");
+    chip.dataset.st = stcls;                 // tint by status (run/ok/bad/warn)
     chip.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
     const name = a.desc || a.agent_id;      // the Task description IS the name
     chip.append(el("span", "an", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
-    const bits = [];
+    const bits = [sttxt];                    // status word leads the meta
     if (a.model) bits.push(a.model + (a.effort ? "·" + a.effort : ""));
     if (a.tools != null) bits.push(a.tools + " ev");
     const cx = a.ctx;
     if (cx && cx.pct != null) bits.push("ctx " + cx.pct + "%");
     if (a.started_at) bits.push(a.ended_at ? dur(a.ended_at - a.started_at) : ago(a.started_at));
-    if (bits.length) chip.append(el("span", "am", bits.join(" · ")));
+    chip.append(el("span", "am", bits.join(" · ")));
     strip.append(chip);
   }
 }
@@ -3801,10 +3811,12 @@ function showAgent(sid, aid) {
     // a running agent's page grows live; a parked one (ended_at set) is
     // fetch-once — its transcript won't grow, so don't open a stream.
     const live = !!rec && rec.ended_at == null;
+    // newest-first, matching the main agent's mirror stream (which prepends —
+    // appendItems), so a subagent's most recent message reads at the top
     renderTimelineInto(tlWrap,
                        "/api/session/" + encodeURIComponent(sid) + "/agent/" + encodeURIComponent(aid),
                        (rec && rec.desc) || aid,
-                       live ? { sid: sid, aid: aid } : null);
+                       live ? { sid: sid, aid: aid } : null, true);
   }
 }
 
@@ -3828,7 +3840,7 @@ function agentCrumbs(sid, aid, rec) {
   return nav;
 }
 
-function renderTimelineInto(container, apiUrl, title, live) {
+function renderTimelineInto(container, apiUrl, title, live, newestFirst) {
   container.append(el("div", "empty", "loading " + title + "…"));
   fetch(apiUrl).then(r => r.json()).then(d => {
     if (!container.isConnected) return;
@@ -3837,12 +3849,16 @@ function renderTimelineInto(container, apiUrl, title, live) {
     const list = el("div", "tl");
     const entries = d.entries || [];
     if (!entries.length) list.append(el("div", "empty", "no recorded activity"));
-    for (const ent of entries) list.append(timelineEntry(ent));
+    // newestFirst reverses the chronological entries so the most recent reads at
+    // the top (the subagent drill-down, matching the main mirror); the head stays
+    // above regardless. The live SSE below then prepends new increments to match.
+    const ordered = newestFirst ? entries.slice().reverse() : entries;
+    for (const ent of ordered) list.append(timelineEntry(ent));
     container.append(list);
     // LIVE agents: resume the SSE at the byte cursor the REST read stopped at
     // (d.pos — additive; absent for a provider with no incremental support,
     // e.g. codex, so the drill-down simply stays fetch-once).
-    if (live && d.pos != null) connectAgentStream(live.sid, live.aid, d.pos, list);
+    if (live && d.pos != null) connectAgentStream(live.sid, live.aid, d.pos, list, newestFirst);
   }).catch(() => {
     if (!container.isConnected) return;
     container.textContent = "";
@@ -3850,13 +3866,13 @@ function renderTimelineInto(container, apiUrl, title, live) {
   });
 }
 
-/* The live agent timeline stream: appends new increment `entries` at the
-   bottom (the timeline reads chronological top-down) and applies `resolve`
-   events — a tool_result that arrived in a later increment than its tool_use —
-   by finding the tool entry via its data-tool-id and filling in the result.
-   Reconnects (like the per-session stream) resume at the latest byte cursor so
-   nothing repeats. */
-function connectAgentStream(sid, aid, pos, list) {
+/* The live agent timeline stream: adds new increment `entries` (at the bottom
+   for oldest-first, or the TOP when newestFirst — matching the initial render's
+   order) and applies `resolve` events — a tool_result that arrived in a later
+   increment than its tool_use — by finding the tool entry via its data-tool-id
+   and filling in the result. Reconnects (like the per-session stream) resume at
+   the latest byte cursor so nothing repeats. */
+function connectAgentStream(sid, aid, pos, list, newestFirst) {
   let cur = pos;
   const es = new EventSource("/events/agent/" + encodeURIComponent(sid)
                              + "/" + encodeURIComponent(aid) + "?pos=" + cur);
@@ -3866,7 +3882,13 @@ function connectAgentStream(sid, aid, pos, list) {
     if (d.pos != null) cur = d.pos;
     const empty = list.querySelector(".empty");
     if (empty) empty.remove();
-    for (const ent of d.entries || []) list.append(timelineEntry(ent));
+    // newestFirst: prepend each increment entry in chronological order, so the
+    // increment's newest ends topmost and the whole increment sits above older
+    // ones (the reverse of the append path).
+    for (const ent of d.entries || []) {
+      const node = timelineEntry(ent);
+      if (newestFirst) list.prepend(node); else list.append(node);
+    }
   });
   es.addEventListener("resolve", (e) => {
     const d = JSON.parse(e.data);
@@ -3879,7 +3901,7 @@ function connectAgentStream(sid, aid, pos, list) {
     S.ses.agentEs = null;
     setTimeout(() => {
       if (S.ses && S.ses.tab === "agent:" + aid && list.isConnected)
-        connectAgentStream(sid, aid, cur, list);
+        connectAgentStream(sid, aid, cur, list, newestFirst);
     }, 1500);
   };
 }
