@@ -2986,6 +2986,20 @@ function interruptSession() {
         toast("done", "interrupted", "Esc sent to the session");
       else
         toast("done", "Esc sent", "double-press Esc for rewind");
+      // an interrupt ENDS the turn → it's your turn now. But Claude Code fires
+      // NO hook on interrupt, so the tab can sit stale-busy (from EXECUTING not
+      // even the escape-recheck spawns), leaving the composer button stuck on
+      // "queue" when a plain "send" is what actually happens. Flip send/cancel/
+      // quick out of the busy state NOW; a real tab change — the escape-recheck's
+      // green, or the next prompt — reconciles, and if the turn somehow kept
+      // going that next tab event flips it right back to "queue".
+      const ses = S.ses;
+      if (ses && BUSY_TABS.includes(r && r.tab)) {
+        const yourTurn = "awaiting-response";   // green, not a QUEUE_TAB
+        if (ses.composerMode) ses.composerMode(yourTurn);
+        if (ses.cancelMode) ses.cancelMode(yourTurn);
+        if (ses.quickMode) ses.quickMode(yourTurn);
+      }
     })
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }

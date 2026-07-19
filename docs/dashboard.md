@@ -364,6 +364,20 @@ deliberately NOT in `QUEUE_TABS`: a dialog is up and typed text goes to the
 DIALOG, not the input box — a send then is neither immediate nor queued, and
 claiming "queued" would be a lie.
 
+**Interrupt flips the button out of "queue" immediately** (2026-07-20). Claude
+Code fires NO hook on interrupt, so after an Esc the tab can sit stale-busy —
+especially from `executing`, where not even the escape-recheck spawns (it only
+covers magenta `thinking`/`working`). The composer then kept reading "queue"
+even though the turn had ended and a plain send is what would happen. So
+`interruptSession`, on a successful interrupt of a `BUSY_TABS` tab,
+optimistically drives `composerMode`/`cancelMode`/`quickMode` to the your-turn
+state (`awaiting-response`) — the button reads "send" at once. This is only a
+client-side hint: the escape-recheck's green (or the next prompt's tab event)
+is what reconciles the real state, and if the turn actually kept going that
+next `tab` event flips the button right back to "queue". Terminal-side Esc
+still has no signal at all (the known no-hook gap), so its stale-busy label
+only clears on the next real hook.
+
 **Resume & send (a parked session's composer).** A parked session's composer
 is NOT disabled — everything passive works exactly like live (typing, the
 "/" menu, dictation; all free drafts), and the one send button, relabeled
