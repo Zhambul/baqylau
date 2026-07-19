@@ -191,7 +191,12 @@ def compose(w, mparts, st, nerr=0):
             else acc.get("label", ""))
     extras = []                                       # (plain, styled), drop-order
     if accs:
-        extras.append((accs, R.DIM + "◈ " + R.RST + SLATE + accs + R.RST))
+        # the plain half MUST include the "◈ " glyph the styled half shows, or
+        # extras_w undercounts this chip by 2 cols and row 0 overflows a narrow
+        # pane by that much — it then WRAPS, and the 6-physical-row frame in a
+        # 5-row pane scrolls the ⬡ id line off the top (the "scoreboard shows no
+        # session id, just a stray %" bug at a 75-col pane).
+        extras.append(("◈ " + accs, R.DIM + "◈ " + R.RST + SLATE + accs + R.RST))
     uparts = []
     if isinstance(usage.get("five_hour"), int):
         uparts.append("5h %d%%" % usage["five_hour"])

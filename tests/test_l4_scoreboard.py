@@ -415,3 +415,32 @@ def test_warning_light_never_creates_the_audit_db(seed, session, test_env):
     assert not os.path.exists(db)
     assert _poll(seed, s.log) == "None"
     assert not os.path.exists(db)
+
+
+def test_scorebar_id_row_fits_narrow_pane(session):
+    """Row 0 (⬡ id + account chip + 5h/7d usage) must never exceed the pane
+    width. It once did at a 75-col pane: the account chip's '◈ ' glyph is in the
+    styled half but was omitted from the plain half `extras_w` measures, so the
+    row landed at dwidth 76 in a 75-col pane, WRAPPED, and the 6-physical-row
+    frame in a 5-row window scrolled the ⬡ id line off the top (visible symptom:
+    the scoreboard shows a stray '%' where the session id should be)."""
+    import importlib.util
+    import re
+    import sys
+    from core import state as S
+
+    s = session.make()
+    S.kv_set(s.log, "account", {"slug": "c2", "label": "claude-01"})
+    S.kv_set(s.log, "usage", {"five_hour": 23, "seven_day": 61})
+    scb_path = os.path.join(os.path.dirname(os.path.dirname(__file__)),
+                            "bin", "claude-scorebar.py")
+    for w in (60, 70, 75, 80):
+        sys.argv = ["claude-scorebar.py", s.log, str(w)]
+        spec = importlib.util.spec_from_file_location("scb_widthtest", scb_path)
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        row0 = m.compose(w, [], m.St.stats(s.log), 0)[0]
+        plain = re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", row0)
+        assert m.R.dwidth(plain) <= w, "w=%d row0=%r (dwidth %d)" % (
+            w, plain, m.R.dwidth(plain))
+        assert "⬡" in plain, "id row dropped at w=%d: %r" % (w, plain)
