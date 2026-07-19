@@ -206,7 +206,7 @@ function initNotifBtn() {
 // bar re-renders every snapshot tick, and pills that shuffle under the cursor
 // are a misclick trap.
 
-const BASE_TITLE = "baqylau · dashboard";
+const BASE_TITLE = "baqylau";
 // the baqylau eye — бақылау, "observation": eye outline, magenta (busy) iris
 const FAV_GLYPH =
   "<path d='M1 8 Q8 1.5 15 8 Q8 14.5 1 8 Z' fill='none'"
