@@ -1139,14 +1139,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
 - **"I couldn't submit my answer to the web ask card"** — look at the
   `web-answer` `state_files` rows (+ paired `errors` func `dashboard answer
   (<step>)`). `ok: false, step: cursor, detail: "cursor never reached Type
-  row"` (retried repeatedly) is the classic 2026-07-19 failure: the user typed
-  a CUSTOM answer on a PREVIEW-layout ask (options carry `preview`), whose TUI
-  dialog has no numbered "Type something" row — undeliverable. Fixed by the
-  card routing typed preview answers through "chat about this" (a follow-up
-  `web-answer chat:true` + a `web-send via: ask-chat`) and by
-  `askdialog._require_type_row` failing fast (`step: type`, no dead-walk). A
-  `step: type` today = a preview-typed answer that slipped past the card guard;
-  `step: open` = the dialog was already answered/declined in the terminal.
+  row"` OR `"...never reached Chat row"` on a PREVIEW-layout ask (options carry
+  `preview`) is the 2026-07-19/20 finding: that layout has NO free-text row AND
+  its "Chat about this" is not keyboard-reachable (the cursor only walks the
+  numbered options), so a typed OR chat answer is undeliverable from the web —
+  only OPTION selection works. The card now DISABLES free-text on preview
+  questions and steers custom answers to the terminal; `askdialog.
+  _require_type_row` fails fast (`step: type`, no dead-walk). So a `step: cursor
+  (Chat row)` / `step: type` today = the user tried the chat button / a typed
+  answer on a preview dialog anyway (tell them: pick an option or use the
+  terminal); `step: open` = the dialog was already answered/declined in the
+  terminal. `ok: true` = a normal option select or a chat on a layout that DOES
+  expose it.
 - **"my message / answer never appeared in the session"** — three distinct
   causes, tell them apart by the rows: (a) a `web-send blocked: modal, ok:
   false` = the send was REFUSED because an ask/plan dialog was up (answer the

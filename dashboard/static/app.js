@@ -1619,8 +1619,14 @@ function renderAsk() {
     const other = el("input", "askother");
     other.type = "text";
     other.spellcheck = false;
+    // A PREVIEW-layout question's TUI dialog has no free-text row AND its "Chat
+    // about this" isn't keyboard-reachable (verified 2026-07-20: the cursor
+    // only moves among the numbered options), so the web can ONLY select an
+    // option here — a typed answer is genuinely undeliverable. Disable the
+    // field and point custom answers at the terminal instead of failing.
+    other.disabled = preview;
     other.placeholder = preview
-      ? "type a custom answer → sent via “chat about this”"
+      ? "custom answer? type it in the terminal — no web text field here"
       : q.multiSelect
         ? "add your own answer…" : "or type your own answer…";
     other.value = st.answers[qi].other;
@@ -1709,17 +1715,8 @@ function applyAskDraft(draft) {
 function submitAsk(ask, answers, chat) {
   const ses = S.ses;
   if (!ses || !S.cur) return;
-  // A TYPED answer on a preview-layout ask can't be driven (no Type row), so
-  // route it through "Chat about this" and ride the typed text as `message` —
-  // the server delivers it once the dialog is dismissed (docs/dashboard.md,
-  // *Web ask*). Explicit "chat about this" (answers == null) is untouched.
-  let message = "";
-  if (!chat && answers && askHasPreview(ask)) {
-    const typed = answers.map(a => (a.other || "").trim()).filter(Boolean);
-    if (typed.length) { chat = true; message = typed.join("\n"); }
-  }
   const body = { tool_use_id: ask.tool_use_id || "" };
-  if (chat) { body.chat = true; if (message) body.message = message; }
+  if (chat) body.chat = true;
   else body.answers = (answers || []).map(a =>
     ({ selected: a.selected, other: (a.other || "").trim() }));
   if (ses.askEl)
@@ -1727,13 +1724,9 @@ function submitAsk(ask, answers, chat) {
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body)
     .then(() => {
       if (chat) {
-        if (message)
-          toast("done", "answer sent via chat",
-                "your typed answer was delivered as a message");
-        else
-          toast("done", "over to chat",
-                "questions dismissed — type your message below");
-        if (!message && ses.composer) ses.composer.focus();
+        toast("done", "over to chat",
+              "questions dismissed — type your message below");
+        if (ses.composer) ses.composer.focus();
       } else {
         toast("done", "answered", "answers submitted to the session");
       }
@@ -1743,7 +1736,15 @@ function submitAsk(ask, answers, chat) {
       renderAsk();
     })
     .catch(e => {
-      toast("ask", "answer failed", (e && e.error) || "");
+      // a preview-layout dialog can't be driven for chat / free-text from the
+      // web (the cursor only reaches the numbered options) — say so instead of
+      // a bare "failed", so the user reaches for the terminal or an option
+      const step = e && e.step;
+      const hint = (step === "cursor" || step === "type")
+        ? "this question can't take a typed/chat answer from the web — "
+          + "pick an option, or answer in the terminal"
+        : (e && e.error) || "";
+      toast("ask", "answer failed", hint);
       renderAsk();                           // re-enable for a retry
     });
 }
