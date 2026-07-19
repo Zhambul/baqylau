@@ -109,3 +109,13 @@ def launch_argv(words, cmd="claude"):
     rate-limit migration both compose their tab launches through it)."""
     from plugins.claude_code import account
     return account.launch_argv(words, cmd)
+
+
+def migration_target(cur_slug, manual=False):
+    """The migration-target provider (plugins.migration_target fan-out) — see
+    account.pick_target, the owner of the ranking (docs/relimit.md). A manual
+    (web-button) migrate drops the % ceiling; the automatic rate-limit path
+    keeps it."""
+    from plugins.claude_code import account
+    return account.pick_target(
+        cur_slug, ceiling=None if manual else account.TARGET_MAX_PCT)

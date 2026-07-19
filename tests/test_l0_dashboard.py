@@ -3045,6 +3045,36 @@ def test_session_payload_carries_account_and_usage(dash, monkeypatch):
     assert ov["usage"]["seven_day"] == 9
 
 
+def test_post_migrate_spawns_the_manual_migrator(dash, monkeypatch, tmp_path):
+    """The header's ⇆ migrate button: POST /api/session/<sid>/migrate picks
+    the other account (manual → no % ceiling) and spawns the relimit migrator
+    in mode=manual. 409 when the registry holds no other account."""
+    from plugins.claude_code import account as ACC
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
+    A.session_start({"session_id": "migs1", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("migs1"), "account", {"slug": "c1", "label": "oboard"})
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    spawned = []
+    monkeypatch.setattr(
+        DS.SP, "spawn_detached",
+        lambda path, argv, log, **kw: spawned.append((path, list(argv), kw))
+        or object())
+    code, body = _post(dash + "/api/session/migs1/migrate", {})
+    assert code == 200 and json.loads(body) == {"ok": True, "to": "c2"}
+    path, argv, kw = spawned[0]
+    assert path.endswith("claude-relimit.py")
+    assert argv[1:] == ["migs1", "c2", "c2", "/w", "manual"]
+    assert kw["purpose"] == "relimit:c2 (web)"
+    # no other account in the registry → 409, nothing spawned
+    tsv.write_text("c1\toboard\tsvc-1\n")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/migs1/migrate", {})
+    assert e.value.code == 409 and len(spawned) == 1
+
+
 def test_post_new_session_resume_continue(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)

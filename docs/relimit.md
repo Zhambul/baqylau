@@ -91,6 +91,34 @@ every exit path is a distinct `end_reason` (the anomalies query keys on them):
    (`launch-failed` / `launched`, plus a `relimit-launch` state_files row
    recording sid/slug/cwd/ok).
 
+## Manual migrate (the dashboard's ⇆ button)
+
+The session header's action row carries **`⇆ migrate`** right after `✎ rename`
+(same style, and like rename it works live AND parked). `POST
+/api/session/<sid>/migrate` spawns the SAME detached migrator in
+**`mode=manual`**, which differs from the automatic hand-off in exactly the
+ways manual intent implies:
+
+- **No % ceiling on the target** (`plugins.migration_target(manual=True)` →
+  `account.pick_target(ceiling=None)`): an explicit click outranks the 90%
+  refuge rule. An ACTIVE `limit-hit` stamp still disqualifies — a blocked
+  account is useless however deliberate the click. No qualifying account →
+  `409`.
+- **No auto-continue nudge**: nothing was cut off, so the relaunch is a bare
+  `--resume <sid>` and the session opens at the prompt.
+- **The announce line moves into the migrator** (`⇆ migrating to <slug>
+  (web)`, emitted just before the tab close): the hook half never ran for a
+  web migrate. Emitted only on the live-window path — a parked session's DB
+  must not be recreated by a paint op.
+- **Immediate, no confirmation** (user decision — like `■ stop`): the click
+  IS the intent, and the worst case is a tab swap you watch happen.
+
+Everything else is shared: same close→park-wait→launch legs, same `relimit`
+stream end_reasons (the `relimit-launch` row carries `mode`), same adopt/
+status-line continuity. The endpoint audits every attempt as a `web-migrate`
+state_files row (`from`/`to`/`eff`/`ok`, or the `no target`/`no terminal`
+reject), and the migrator spawn carries purpose `relimit:<slug> (web)`.
+
 ## Why there is no file-migration step
 
 Every switcher account's `configs/<slug>` is a SYMLINK FARM over the shared

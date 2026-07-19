@@ -201,7 +201,7 @@ def test_migrator_times_out_when_park_never_comes(run_hook, rl_env, hosted,
     s = hosted()
     fake_kitten.set_ls_for_session(s.sid)
     env = dict(rl_env, CLAUDE_RELIMIT_TIMEOUT_S="0.3")
-    run_hook(RL, rate_limit_payload(s), argv=(s.log, s.sid, "c2", "c2", s.cwd),
+    run_hook(RL, rate_limit_payload(s), argv=(s.log, s.sid, "c2", "c2", s.cwd, "auto"),
              env=env)
     assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["close-timeout"]
     assert all("--type=tab" not in c for c in fake_kitten.calls("launch"))
@@ -210,7 +210,7 @@ def test_migrator_times_out_when_park_never_comes(run_hook, rl_env, hosted,
 def test_migrator_bails_when_window_gone_but_session_live(run_hook, rl_env,
                                                           hosted):
     s = hosted()                                     # live DB, no tab in ls
-    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd), env=rl_env)
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "auto"), env=rl_env)
     assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["window-gone"]
 
 
@@ -222,7 +222,7 @@ def test_migrator_launches_straight_from_a_parked_session(run_hook, rl_env,
     s = hosted()
     run_hook("claude-split.py", P.session_end(s), argv=("close",), env=rl_env)
     assert os.path.exists(s.parked_db)
-    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd), env=rl_env)
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "auto"), env=rl_env)
     assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["launched"]
     assert any("--type=tab" in c for c in fake_kitten.calls("launch"))
 
@@ -231,11 +231,49 @@ def test_migrator_records_launch_failure(run_hook, rl_env, hosted, fake_kitten):
     s = hosted()
     run_hook("claude-split.py", P.session_end(s), argv=("close",), env=rl_env)
     fake_kitten.set_rc("launch", 1)
-    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd), env=rl_env)
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "auto"), env=rl_env)
     assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["launch-failed"]
     launch_rows = [r for r in oracle.state_files(rl_env, s.sid)
                    if r[1] == "relimit-launch"]
     assert launch_rows and json.loads(launch_rows[-1][2])["ok"] is False
+
+
+# ----------------------------------------------------- manual (web) migrate
+
+def test_manual_migrate_launches_without_nudge(run_hook, rl_env, hosted,
+                                               fake_kitten):
+    """mode=manual (the dashboard's ⇆ button): nothing was cut off, so the
+    resume rides NO positional nudge — the session opens at the prompt."""
+    s = hosted()
+    run_hook("claude-split.py", P.session_end(s), argv=("close",), env=rl_env)
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "manual"),
+             env=rl_env)
+    assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["launched"]
+    argv = next(c for c in fake_kitten.calls("launch") if "--type=tab" in c)
+    assert argv[-1] == s.sid and argv[-2] == "--resume"  # no trailing nudge
+    launch_rows = [r for r in oracle.state_files(rl_env, s.sid)
+                   if r[1] == "relimit-launch"]
+    assert json.loads(launch_rows[-1][2])["mode"] == "manual"
+
+
+def test_manual_migrate_announces_in_the_live_mirror(run_hook, rl_env, hosted,
+                                                     fake_kitten):
+    """A manual migrate of a LIVE session paints its own announce line (the
+    hook half never ran) before closing the tab — it parks with the DB and
+    replays in the successor's mirror."""
+    s = hosted()
+    fake_kitten.set_ls_for_session(s.sid)
+    env = dict(rl_env, CLAUDE_RELIMIT_TIMEOUT_S="0.3")   # park never comes
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "manual"), env=env)
+    assert "migrating to c2 (web)" in s.ops_text()
+    assert fake_kitten.calls("close-tab")
+
+
+def test_migrator_rejects_a_bad_mode(run_hook, rl_env, hosted):
+    s = hosted()
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "yolo"), env=rl_env)
+    assert relimit_streams(rl_env, s.sid) == []          # never started
+    assert any("bad argv" in r[2] for r in oracle.errors(rl_env, s.sid))
 
 
 # ------------------------------------------------------------ target picking
@@ -268,6 +306,16 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
     fresh["c2"]["usage"]["five_hour"] = 95
     fresh["c3"]["usage"]["five_hour"] = 92
     assert ACC.pick_target("c1") is None
+    # ...but a MANUAL migrate drops the ceiling (an explicit click outranks
+    # the refuge rule) — the limit-hit skip still applies
+    assert ACC.pick_target("c1", ceiling=None)["slug"] == "c3"
+    fresh["c3"]["limit_hit"] = {"ts": now, "resets_at": now + 500}
+    assert ACC.pick_target("c1", ceiling=None)["slug"] == "c2"
+    fresh["c3"]["limit_hit"] = None
+    # the plugins registry fan-out routes manual through the same owner
+    import plugins
+    assert plugins.migration_target("c1") is None
+    assert plugins.migration_target("c1", manual=True)["slug"] == "c3"
     # rolled-over snapshots count as 0 → eligible again
     fresh["c3"]["usage"]["five_hour_reset"] = now - 10
     assert ACC.pick_target("c1") == {"slug": "c3", "alias": "c3", "eff": 0}

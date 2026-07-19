@@ -131,7 +131,7 @@ def main():
                         O.AMBER))
     proc = H.spawn_streamer(
         "claude-relimit.py",
-        [LOG, sid, target["slug"], target["alias"], d.get("cwd") or ""],
+        [LOG, sid, target["slug"], target["alias"], d.get("cwd") or "", "auto"],
         LOG, purpose="relimit:" + target["slug"])
     if proc is None:
         return A.hook_event(d, decision="rate_limit: migrator spawn FAILED")
@@ -146,17 +146,31 @@ def entry():
 
 # ------------------------------------------------------------ migrator half
 
-def migrate(log, sid, slug, alias, cwd):
+def migrate(log, sid, slug, alias, cwd, mode="auto"):
     """The detached migrator: close the session's tab, wait for its SessionEnd
-    to park the state DB, then launch `<alias> claude --resume <sid> <NUDGE>`
-    in a new tab. Every exit path closes the audit streams row with a distinct
+    to park the state DB, then launch `<alias> claude --resume <sid>` in a new
+    tab. Every exit path closes the audit streams row with a distinct
     end_reason — a `relimit` stream that isn't 'launched' IS the triage signal
-    (see the anomalies query)."""
+    (see the anomalies query). Two modes:
+      auto   — the rate-limit hook's hand-off: the failed turn's prompt is in
+               the transcript, so the relaunch rides the NUDGE auto-continue
+               (the hook half already emitted the announce line).
+      manual — the dashboard's ⇆ migrate button (docs/relimit.md *Manual
+               migrate*): nothing was cut off, so NO nudge — the resumed
+               session opens at the prompt; the announce line is emitted here
+               (the hook half never ran), only while the DB is still live —
+               a parked session must not be recreated by a paint op."""
     fe = frontends.get()
     with stream_lifecycle(log, "relimit", task_id=slug,
-                          ctx={"sid": sid, "to": slug}) as run:
+                          ctx={"sid": sid, "to": slug, "mode": mode}) as run:
         win = fe.window_for_session(sid)
         if win:
+            if mode == "manual":
+                # The hook half never ran for a web migrate — announce here,
+                # just before the close so the line parks and replays in the
+                # successor's mirror. (A parked session skips this branch and
+                # must: a paint op would recreate the live DB.)
+                O.emit(log, O.label("⇆ migrating to %s (web)" % slug, O.AMBER))
             if not fe.close_tab(win):
                 A.error(log, "relimit close_tab", {"win": win})
                 run.end("close-failed")
@@ -177,10 +191,12 @@ def migrate(log, sid, slug, alias, cwd):
             A.error(log, "relimit window gone but session live", {"sid": sid})
             run.end("window-gone")
             return
-        argv = ACC.launch_argv(["--resume", sid, NUDGE], alias)
+        words = ["--resume", sid] + ([NUDGE] if mode == "auto" else [])
+        argv = ACC.launch_argv(words, alias)
         ok = bool(fe.launch_tab(cwd or os.path.expanduser("~"), argv))
         A.state_file(log, "", "relimit-launch",
-                     {"sid": sid, "to": slug, "cwd": cwd, "ok": ok})
+                     {"sid": sid, "to": slug, "cwd": cwd, "mode": mode,
+                      "ok": ok})
         if not ok:
             A.error(log, "relimit launch_tab", {"to": slug, "cwd": cwd})
             run.end("launch-failed")
@@ -189,8 +205,9 @@ def migrate(log, sid, slug, alias, cwd):
 
 
 def migrate_entry(argv):
-    """bin/claude-relimit.py's argv mode: LOG SID SLUG ALIAS CWD."""
-    if len(argv) != 5:
+    """bin/claude-relimit.py's argv mode: LOG SID SLUG ALIAS CWD MODE
+    (mode: auto = the rate-limit hand-off, manual = the web button)."""
+    if len(argv) != 6 or argv[5] not in ("auto", "manual"):
         A.error(argv[0] if argv else "", "relimit migrate (bad argv)",
                 {"argv": list(argv)})
         return

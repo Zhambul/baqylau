@@ -682,6 +682,17 @@ interrupt is itself an event, so the recheck flips the dead magenta green
 unless any real signal (tab-state movement, or a new `"type":"user"`
 transcript record past the press-time size) appears within its 2s grace.
 
+`POST /api/session/<sid>/migrate` — the header's **⇆ migrate** button (right
+after ✎ rename; like rename it works live AND parked, and like ■ stop it
+fires immediately with no confirm) hands the session to the other
+subscription account: the server picks the target
+(`plugins.migration_target(manual=True)` — least effective-5h used, active
+limit-hit excluded, NO 90% ceiling for a manual click) and spawns the same
+detached migrator the automatic rate-limit path uses, in `mode=manual` (bare
+`--resume`, no auto-continue nudge). Audited as a `web-migrate` state_files
+row; `409` when no other account qualifies. Full mechanics + the
+manual/auto differences: docs/relimit.md *Manual migrate*.
+
 `POST /api/session/<sid>/rewind` mirrors Claude Code's double-Esc, whose
 MEANING depends on session state — and the endpoint splits on the tab
 state at gesture time:

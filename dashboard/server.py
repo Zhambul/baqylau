@@ -1232,6 +1232,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "rename":
             return self.post_rename(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "migrate":
+            return self.post_migrate(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "rewind":
             return self.post_rewind(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -1542,6 +1545,53 @@ class Handler(BaseHTTPRequestHandler):
                       "tab_retitled": tab_retitled})
         return self._json({"ok": True, "title": name,
                            "tab_retitled": tab_retitled})
+
+    def post_migrate(self, sid):
+        """Manually migrate a session to another subscription account — the
+        header's ⇆ migrate button (docs/relimit.md *Manual migrate*). Spawns
+        the SAME detached migrator the automatic rate-limit path uses
+        (bin/claude-relimit.py: close the tab → wait for the SessionEnd park
+        → `<alias> claude --resume <sid>` in a new tab; the adopt machinery
+        carries the mirror history and the status-line capture flips the
+        account chip), with two manual-intent differences baked into `mode=
+        manual`: no auto-continue nudge (nothing was cut off — the resumed
+        session opens at the prompt) and no 90% usage ceiling on the target
+        (plugins.migration_target(manual=True) — an explicit click outranks
+        the refuge rule; an ACTIVE limit-hit still disqualifies). Immediate,
+        no confirm (user request — like ■ stop). Works live AND parked: a
+        parked session skips the close leg and just relaunches. 409 when no
+        other account qualifies; 503 when no terminal resolves. Every attempt
+        is a `web-migrate` state_files row, failures also an A.error."""
+        body = self._post_guard()
+        if body is None:
+            return
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        fe = _frontend()
+        if fe is None:
+            A.error(log, "dashboard migrate (no terminal)", {"sid": sid})
+            A.state_file(log, sdb, "web-migrate",
+                         {"ok": False, "reason": "no terminal"})
+            return self._json({"error": "no terminal available"}, 503)
+        cur = (API.kv_at(sdb, "account") or {}).get("slug") or ""
+        target = plugins.migration_target(cur, manual=True)
+        if target is None:
+            A.state_file(log, sdb, "web-migrate",
+                         {"ok": False, "reason": "no target", "from": cur})
+            return self._json({"error": "no other account available"}, 409)
+        proc = SP.spawn_detached(
+            os.path.join(P.BIN, "claude-relimit.py"),
+            [log, sid, target["slug"], target["alias"],
+             row.get("cwd") or "", "manual"],
+            log, purpose="relimit:%s (web)" % target["slug"])
+        ok = proc is not None
+        A.state_file(log, sdb, "web-migrate",
+                     {"ok": ok, "from": cur, "to": target["slug"],
+                      "eff": target["eff"], "cwd": row.get("cwd") or ""})
+        if not ok:                       # spawn failure already audited by SP
+            return self._json({"error": "migrator spawn failed"}, 502)
+        return self._json({"ok": True, "to": target["slug"]})
 
     def post_rewind(self, sid):
         """The double-Esc GESTURE, whose meaning in Claude Code depends on

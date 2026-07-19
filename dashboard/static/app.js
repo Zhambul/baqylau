@@ -2421,6 +2421,19 @@ document.addEventListener("keydown", (e) => {
 // via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
 // slash menu, filter, dropdowns) either runs first here or stopPropagation()s
 // before the document level, so this is the fallback meaning of Esc.
+// The header's ⇆ migrate button: resume this session under the other
+// subscription account (the server picks it — least used, active limit-hit
+// excluded, no % ceiling for a manual click; docs/relimit.md *Manual
+// migrate*). The old tab closes and a new one opens; the sid forks on
+// resume and the adopt machinery + jump watch carry the page over.
+function migrateSession() {
+  if (!S.cur) return;
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/migrate", {})
+    .then(r => toast("done", "migrating",
+                     "resuming on " + ((r && r.to) || "another account")))
+    .catch(e => toast("ask", "migrate failed", (e && e.error) || ""));
+}
+
 function interruptSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
@@ -2901,6 +2914,15 @@ function renderSessionChrome(tab) {
   ren.title = "rename this session (resume picker + tab)";
   ren.onclick = () => startRenameHeader();
   act.append(ren);
+  // migrate: hand this session to the other subscription account — the same
+  // detached migrator as the automatic rate-limit path (docs/relimit.md
+  // *Manual migrate*): live → the tab swaps (close, park, resume under the
+  // other alias); parked → it just relaunches there. Immediate, no confirm
+  // (like ■ stop), and like rename it works live AND parked.
+  const mig = el("button", "sstop", "⇆ migrate");
+  mig.title = "migrate this session to another account";
+  mig.onclick = () => migrateSession();
+  act.append(mig);
   if (meta.live && meta.kitty_window_id) {
     // stop: interrupt the agent in place — an Escape key press in the
     // session's window (the TUI's own interrupt; Esc here does the same).

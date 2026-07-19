@@ -166,6 +166,25 @@ def account_alias(slug):
     return None
 
 
+def migration_target(cur_slug, manual=False):
+    """The account-migration target for a session leaving `cur_slug`
+    (plugins.claude_code.account.pick_target, docs/relimit.md): the other
+    account with the lowest effective 5h usage, or None when nothing
+    qualifies. manual=True is the dashboard's ⇆ migrate button — it drops the
+    90% refuge ceiling (an explicit click outranks it; an ACTIVE limit-hit
+    still disqualifies). First plugin that recognizes the request wins. Same
+    exception contract as census()/activity(): the caller is the dashboard's
+    control plane, not a hook."""
+    for p in all_plugins():
+        fn = getattr(p, "migration_target", None)
+        if fn is None:
+            continue
+        got = fn(cur_slug, manual)
+        if got is not None:
+            return got
+    return None
+
+
 def launch_argv(words, cmd="claude"):
     """The argv that launches a session command in a fresh terminal tab, via
     the user's interactive login shell (the dashboard's web launch — see

@@ -115,14 +115,17 @@ TARGET_MAX_PCT = 90   # a candidate at/above this effective 5h usage is no
                       # refuge — migrating there would hit the wall again
 
 
-def pick_target(cur_slug, now=None, cache=None):
-    """The migration target for a session whose account just hit its rate
-    limit (plugins/claude_code/relimit.py): the OTHER registry account with
-    the lowest effective 5h usage (core.sessionapi.effective_five_hour over
-    the freshest per-account snapshots), skipping any account still inside an
+def pick_target(cur_slug, now=None, cache=None, ceiling=TARGET_MAX_PCT):
+    """The migration target for a session leaving its current account
+    (plugins/claude_code/relimit.py): the OTHER registry account with the
+    lowest effective 5h usage (core.sessionapi.effective_five_hour over the
+    freshest per-account snapshots), skipping any account still inside an
     active limit-hit stamp. Returns {"slug", "alias", "eff"} or None when no
-    account sits under TARGET_MAX_PCT — then the caller must NOT migrate
-    (ping-ponging between two exhausted accounts helps nobody)."""
+    account sits under `ceiling` — then the caller must NOT migrate
+    (ping-ponging between two exhausted accounts helps nobody). ceiling=None
+    drops the % bar for a MANUAL migrate (an explicit click outranks the
+    refuge rule; an active limit-hit still disqualifies — a blocked account
+    is useless however deliberate the click)."""
     per = API.account_usage(cache=cache)
     best = None
     for a in registry():
@@ -134,4 +137,6 @@ def pick_target(cur_slug, now=None, cache=None):
         eff = API.effective_five_hour(ent.get("usage"), now)
         if best is None or eff < best["eff"]:
             best = {"slug": a["slug"], "alias": a["alias"], "eff": eff}
-    return best if best is not None and best["eff"] < TARGET_MAX_PCT else None
+    if best is None or (ceiling is not None and best["eff"] >= ceiling):
+        return None
+    return best
