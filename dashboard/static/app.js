@@ -84,6 +84,12 @@ function postJSON(url, body) {
     d => r.ok ? d : Promise.reject(d || { error: "request failed" })));
 }
 
+// This page's opaque identity — stamped on every ask-draft write so the SSE
+// echo of our OWN change is ignored (a peer device's change has a different
+// origin and IS applied). Per-load: two tabs are two peers, which is correct.
+const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
+const ASK_DRAFT_DEBOUNCE_MS = 350;      // coalesce typing before persisting
+
 function kfmt(n) {
   n = +n || 0;
   if (n >= 999500) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
@@ -870,6 +876,11 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.ask = d.ask || null;
     renderAsk();
   });
+  es.addEventListener("ask-draft", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    applyAskDraft(d.draft);
+  });
   es.addEventListener("plan", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -1447,10 +1458,13 @@ function renderAsk() {
   wrap.hidden = !ask;
   if (!ask) return;
   const qs = ask.questions || [];
-  // per-ask draft state, keyed by tool_use_id so a NEW ask resets it
+  // per-ask draft state, keyed by tool_use_id so a NEW ask resets it —
+  // SEEDED from the persisted `ask-draft` (ses.meta.ask_draft) so a device
+  // switch / reopen restores whatever selections were made but not submitted
   if (!ses.askState || ses.askState.id !== ask.tool_use_id)
     ses.askState = { id: ask.tool_use_id,
-                     answers: qs.map(() => ({ selected: [], other: "" })) };
+                     answers: seedAskAnswers(qs, ses.meta && ses.meta.ask_draft,
+                                             ask.tool_use_id) };
   const st = ses.askState;
   const card = el("div", "askcard");
   const head = el("div", "askhead");
@@ -1498,6 +1512,7 @@ function renderAsk() {
         }
         paintAll();
         syncSubmit();
+        saveAskDraft(ask, st);
       };
       opts.append(b);
     });
@@ -1515,6 +1530,7 @@ function renderAsk() {
         paintAll();
       }
       syncSubmit();
+      saveAskDraft(ask, st);
     };
     other.onkeydown = (e) => {
       e.stopPropagation();                  // keep Esc/gestures out of typing
@@ -1531,6 +1547,56 @@ function renderAsk() {
   card.append(foot);
   syncSubmit();
   wrap.append(card);
+}
+
+// Build the per-question answer array, seeding from a persisted draft when it
+// belongs to THIS ask (tool_use_id + question count match) — otherwise fresh.
+function seedAskAnswers(qs, draft, tuid) {
+  const blank = () => qs.map(() => ({ selected: [], other: "" }));
+  if (!draft || draft.tool_use_id !== tuid
+      || !Array.isArray(draft.answers) || draft.answers.length !== qs.length)
+    return blank();
+  return draft.answers.map(a => ({
+    selected: Array.isArray(a && a.selected) ? a.selected.slice() : [],
+    other: (a && a.other) || "",
+  }));
+}
+
+// Persist the unsubmitted selections to the server (debounced) so a reopen on
+// any device restores them. Best-effort — a failed save just retries on the
+// next edit; the local card keeps its state regardless.
+function saveAskDraft(ask, st) {
+  const ses = S.ses;
+  if (!ses || !S.cur || !ask || !ask.tool_use_id) return;
+  const answers = st.answers.map(a =>
+    ({ selected: a.selected.slice(), other: a.other || "" }));
+  // keep meta in sync so a tab-switch rebuild seeds from what we just typed,
+  // and so our own SSE echo (same origin) is a no-op against current state
+  if (ses.meta)
+    ses.meta.ask_draft = { tool_use_id: ask.tool_use_id, origin: CLIENT_ID,
+                           answers };
+  clearTimeout(ses._askDraftTimer);
+  ses._askDraftTimer = setTimeout(() => {
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/ask-draft",
+             { tool_use_id: ask.tool_use_id, origin: CLIENT_ID, answers })
+      .catch(() => {});                       // draft save is best-effort
+  }, ASK_DRAFT_DEBOUNCE_MS);
+}
+
+// A peer device's draft update arrived over SSE. Adopt it and repaint the card
+// — but ignore our OWN echo (same origin), and stale drafts (wrong ask).
+function applyAskDraft(draft) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.ask_draft = draft || null;   // for a later rebuild
+  const ask = ses.meta && ses.meta.ask;
+  if (!draft || !ask || draft.tool_use_id !== ask.tool_use_id) return;
+  if (draft.origin && draft.origin === CLIENT_ID) return;   // our own write
+  if (!ses.askState || ses.askState.id !== ask.tool_use_id) return;
+  ses.askState.answers = (draft.answers || []).map(a =>
+    ({ selected: Array.isArray(a && a.selected) ? a.selected.slice() : [],
+       other: (a && a.other) || "" }));
+  renderAsk();
 }
 
 function submitAsk(ask, answers, chat) {

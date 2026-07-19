@@ -654,6 +654,41 @@ def test_tasks_card_payload_and_sse(dash):
     assert _get_json(dash + "/api/session/tsk1")["tasks"] is None
 
 
+def test_ask_draft_persist_payload_and_sse(dash, monkeypatch):
+    """The web ask card's UNSUBMITTED selections survive a device switch (docs/
+    dashboard.md, *Web ask*): POST /ask-draft writes the `ask-draft` kv (a pure
+    state write — no terminal keys), the session snapshot carries `ask_draft`,
+    and the per-session SSE re-broadcasts it as an `ask-draft` event so a peer
+    card tracks the edits. A stale tool_use_id is refused."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "55")
+    A.session_start({"session_id": "adr1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("adr1")
+    qs = [{"question": "Which fruit?", "header": "Fruit",
+           "options": [{"label": "Apple"}, {"label": "Banana"}],
+           "multiSelect": False}]
+    S.kv_set(log, "ask-pending", {"tool_use_id": "tu1", "questions": qs})
+    ov = _get_json(dash + "/api/session/adr1")
+    assert ov["ask"]["tool_use_id"] == "tu1" and ov["ask_draft"] is None
+    # persist a selection — no terminal write, so no frontend needed
+    body = {"tool_use_id": "tu1", "origin": "devA",
+            "answers": [{"selected": ["Banana"], "other": ""}]}
+    code, resp = _post(dash + "/api/session/adr1/ask-draft", body)
+    assert code == 200 and json.loads(resp)["ok"]
+    draft = S.kv_get(log, "ask-draft")
+    assert draft["answers"][0]["selected"] == ["Banana"] and draft["origin"] == "devA"
+    assert _get_json(dash + "/api/session/adr1")["ask_draft"]["answers"][0][
+        "selected"] == ["Banana"]
+    data = _sse_event(dash + "/events/session/adr1?after=0&mpos=0", "ask-draft")
+    assert data and json.loads(data)["draft"]["origin"] == "devA"
+    # a draft for a REPLACED/gone question is refused (409), draft untouched
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/adr1/ask-draft",
+              {"tool_use_id": "OLD", "origin": "devA",
+               "answers": [{"selected": [], "other": ""}]})
+    assert e.value.code == 409
+    assert S.kv_get(log, "ask-draft")["answers"][0]["selected"] == ["Banana"]
+
+
 def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):
     """A resume moves the session to a NEW kitty window (the SessionStart
     upsert refreshes the sessions row) — a session SSE stream opened BEFORE

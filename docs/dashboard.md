@@ -252,7 +252,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`plan`/`tasks`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
@@ -1108,6 +1108,26 @@ the session-alive signal). Reads are `kv_at` (ro). The session snapshot
 carries `ask`, and the session SSE emits an `ask` event on every change
 (fast cadence) — the card appears the moment the dialog does and
 disappears when ANY answer path resolves it, web or terminal.
+
+**Draft selections survive a device switch.** The in-progress answers
+(options clicked, free text typed, nothing submitted yet) are NOT purely
+browser-local — that lost them the moment you jumped to another device or
+reloaded. On every edit the card debounce-POSTs them to
+`POST /api/session/<sid>/ask-draft`, which writes the `ask-draft` kv
+(`{tool_use_id, answers:[{selected, other}], origin}`; a pure state write
+via `ST.kv_set_at`, guarded to the OPEN ask's `tool_use_id`, types nothing
+into the terminal). The session snapshot carries `ask_draft` and the SSE
+emits an `ask-draft` event on change, so `renderAsk` SEEDS the card from
+it on open (`seedAskAnswers`) and an already-open card on another device
+tracks the edits live (`applyAskDraft`). Each page stamps its writes with
+a per-load `origin` (`CLIENT_ID`) and ignores the SSE echo of its OWN
+`origin`, so a device never clobbers its own typing; a peer's `origin`
+differs and IS applied (last-writer-wins, which is right for a shared
+draft). `_ask_draft` only returns the draft while it still matches the
+open ask — a stale one is ignored — and `ask_fmt.py` clears `ask-draft`
+on the SAME boundary as `ask-pending` (its PostToolUse, or the turn
+boundary), so it never outlives its question. Best-effort throughout: a
+failed save retries on the next edit and the local card keeps its state.
 
 **Answering** drives the TUI's own dialog — `dashboard/askdialog.py`,
 the rewindmenu philosophy (screen-verified key events, never a blind

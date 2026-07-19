@@ -567,6 +567,7 @@ def session_payload(sid):
         data["live"] = False
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
     data["ask"] = _ask_pending(sid) if data.get("live") else None
+    data["ask_draft"] = _ask_draft(sid, data["ask"]) if data.get("ask") else None
     data["plan"] = _plan_pending(sid) if data.get("live") else None
     # deliberately NOT live-gated: the `tasks` kv survives park (Claude Code
     # deletes the on-disk task files at session end — the stash is the only
@@ -590,6 +591,27 @@ def _dialog_pending(sid, key):
 
 def _ask_pending(sid):
     return _dialog_pending(sid, "ask-pending")
+
+
+def _ask_draft(sid, ask=None):
+    """The unsubmitted ask answers (the `ask-draft` kv — written by the web
+    ask card so a device switch / reopen restores in-progress selections),
+    but ONLY when it still matches the OPEN ask: a draft left over from a
+    replaced/answered question is ignored (ask_fmt.py clears it on the turn
+    boundary anyway). Read-only (kv_at). None when there's no ask, no draft,
+    or a tool_use_id mismatch."""
+    ask = ask if ask is not None else _ask_pending(sid)
+    if not ask:
+        return None
+    sdb = API.state_db_for(sid)
+    if not sdb:
+        return None
+    draft = API.kv_at(sdb, "ask-draft")
+    if not isinstance(draft, dict):
+        return None
+    if (draft.get("tool_use_id") or "") != (ask.get("tool_use_id") or ""):
+        return None
+    return draft
 
 
 def _session_tasks(sid):
@@ -1303,6 +1325,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "answer":
             return self.post_answer(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "ask-draft":
+            return self.post_ask_draft(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "plan-options":
             return self.post_plan_options(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -1802,6 +1827,56 @@ class Handler(BaseHTTPRequestHandler):
         return self._json({"ok": True, "mode": mode, "restored": restored,
                            "degraded": res["degraded"]})
 
+    def post_ask_draft(self, sid):
+        """Persist the UNSUBMITTED ask selections (the ask card's in-progress
+        answers) to the `ask-draft` kv so another device — or the same one
+        after a reload — restores them when it reopens the session (docs/
+        dashboard.md, *Web ask*). This types NOTHING into the terminal: it is
+        a pure state write, distinct from post_answer (which drives the real
+        dialog). The session SSE re-broadcasts the draft as an `ask-draft`
+        event so an already-open card on another device updates live; the
+        writer suppresses its own echo via `origin`.
+
+        Body: `tool_use_id` (must match the open `ask-pending` stash — a
+        draft for a gone/replaced question is refused, 409), `answers` (a
+        list aligned with the questions: {selected, other} per question),
+        `origin` (an opaque per-page id, echoed back over SSE). ask_fmt.py
+        clears the draft on the same boundary as `ask-pending`, so it never
+        outlives its question. Best-effort: a write failure is a 500 but the
+        card keeps its local state and retries on the next change."""
+        body = self._post_guard()
+        if body is None:
+            return
+        pending = _ask_pending(sid)
+        if not pending:
+            return self._json({"error": "no pending question"}, 409)
+        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id") or ""):
+            return self._json({"error": "ask expired"}, 409)
+        answers = body.get("answers")
+        questions = pending.get("questions") or []
+        if not isinstance(answers, list) or len(answers) != len(questions):
+            return self._json({"error": "answers must match the %d question%s"
+                               % (len(questions),
+                                  "" if len(questions) == 1 else "s")}, 400)
+        clean = [{"selected": [str(s) for s in (a.get("selected") or [])
+                               if isinstance(a, dict)],
+                  "other": str((a.get("other") or "") if isinstance(a, dict)
+                               else "")}
+                 for a in answers]
+        draft = {"tool_use_id": pending.get("tool_use_id") or "",
+                 "answers": clean,
+                 "origin": str(body.get("origin") or "")}
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        if not ST.kv_set_at(sdb, "ask-draft", draft):
+            A.error(log, "dashboard ask-draft (write failed)", {"sid": sid})
+            return self._json({"error": "draft not saved"}, 500)
+        A.state_file(log, sdb, "ask-draft",
+                     {"action": "write", "tool_use_id": draft["tool_use_id"],
+                      "origin": draft["origin"]})
+        return self._json({"ok": True})
+
     def post_answer(self, sid):
         """Answer the session's OPEN AskUserQuestion dialog from the web (the
         ask card — docs/dashboard.md, *Web ask*): drives the TUI's own dialog
@@ -2272,7 +2347,7 @@ class Handler(BaseHTTPRequestHandler):
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
-                "tasks": None}
+                "tasks": None, "ask_draft": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2383,6 +2458,15 @@ class Handler(BaseHTTPRequestHandler):
             if ask != prev["ask"]:
                 prev["ask"] = ask
                 if not self._sse("ask", {"ask": ask}):
+                    return
+            # the unsubmitted-selections draft — so a card open on ANOTHER
+            # device tracks this one's edits (the writer suppresses its own
+            # echo by `origin`). Only meaningful while an ask is open;
+            # _ask_draft returns None once it's gone, clearing the peer.
+            draft = _ask_draft(sid, ask) if ask else None
+            if draft != prev["ask_draft"]:
+                prev["ask_draft"] = draft
+                if not self._sse("ask-draft", {"draft": draft}):
                     return
             plan = _plan_pending(sid)
             if plan != prev["plan"]:

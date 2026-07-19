@@ -254,6 +254,38 @@ def test_ask_posttool_clears_answered(run_hook, test_env, session):
     assert not oracle.errors(test_env, s.sid)
 
 
+def _draft(s):
+    rows = s.query_state("SELECT val FROM kv WHERE key='ask-draft'")
+    return json.loads(rows[0][0]) if rows else None
+
+
+def test_ask_clear_also_clears_the_draft(run_hook, test_env, session, seed):
+    # the web ask card persists UNSUBMITTED selections in the `ask-draft` kv
+    # (docs/dashboard.md, *Web ask*); it must die with its question — cleared
+    # on the SAME boundary as ask-pending (answer's PostToolUse, and the turn
+    # boundary). ask_fmt never WRITES it (the browser does) — only clears.
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.pre_ask(s, ASK_QS))
+    seed.py("from core import state as ST; ST.kv_set(%r, 'ask-draft', "
+            "{'tool_use_id': 'toolu_ask1', 'answers': [{'selected': ['Apple'], "
+            "'other': ''}], 'origin': 'dev'})" % s.log)
+    assert _draft(s) is not None
+    run_hook(HOOK, P.post_ask(s, ASK_QS, {"Which fruit?": "Apple"}))
+    assert _pending(s) is None and _draft(s) is None
+    assert any(a == "ask-draft" and "answered" in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    # and the turn boundary (a decline fires no closing hook) clears it too
+    run_hook(HOOK, P.pre_ask(s, ASK_QS, tid="toolu_ask2"))
+    seed.py("from core import state as ST; ST.kv_set(%r, 'ask-draft', "
+            "{'tool_use_id': 'toolu_ask2', 'answers': [], 'origin': 'dev'})"
+            % s.log)
+    assert _draft(s) is not None
+    run_hook(HOOK, P.stop(s))
+    assert _pending(s) is None and _draft(s) is None
+    assert not oracle.errors(test_env, s.sid)
+
+
 def test_ask_turn_boundaries_clear_the_decline(run_hook, test_env, session):
     # Esc / "Chat about this" fire NO hook — the Stop at turn end (or the next
     # UserPromptSubmit) is what drops the stale stash

@@ -32,6 +32,12 @@ A = H.A
 
 KEY = "ask-pending"
 PLAN_KEY = "plan-pending"
+# The unsubmitted web-ask selections (the dashboard's ask card writes it so a
+# device switch / reopen restores in-progress answers — docs/dashboard.md,
+# *Web ask*). NOT stashed here (the browser owns the write, via
+# ST.kv_set_at); this module only CLEARS it, on every boundary that clears
+# `ask-pending` — the draft is meaningless once the question is gone.
+DRAFT_KEY = "ask-draft"
 # tool → its kv key; also the PostToolUse(+Failure)-clear scoping
 KEYS = {"AskUserQuestion": KEY, "ExitPlanMode": PLAN_KEY}
 
@@ -94,6 +100,10 @@ def main():
     # Only audit when there was something to clear (Stop fires every turn —
     # an empty clear is noise).
     keys = [KEYS[tool]] if tool in KEYS else list(KEYS.values())
+    # the ask draft dies with its question: clear it whenever `ask-pending`
+    # clears (its own PostToolUse, or a turn boundary that clears both keys)
+    if KEY in keys:
+        keys.append(DRAFT_KEY)
     reason = {"PostToolUse": "answered",
               "PostToolUseFailure": "failed",
               "Stop": "turn ended", "StopFailure": "turn ended",
