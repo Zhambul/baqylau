@@ -40,6 +40,11 @@ const S = {
                          // DEADLINE held here (not in the button) so it
                          // survives the per-tick card rebuilds (patchCards)
   closing: new Set(),    // sids with a close POST in flight (card ✕ disabled)
+  hidden: {},            // {group_key: hidden_at_epoch} — directories the ✕
+                         // hid from the list (server prefs, /api/dirs/hidden).
+                         // A group stays hidden only while it has no session
+                         // started AFTER hidden_at, so a new session there
+                         // re-shows it (groupSessions filters, dirHidden)
   nsPrefs: {},           // the new-session form's last-used {cwd, model, effort}
                          // — the backend prefs cache (GET/POST /api/ns-prefs;
                          // fetched at boot), so nsLast() reads it synchronously
@@ -553,12 +558,42 @@ function groupSessions(rows) {
   const now = Date.now() / 1000;
   // recency, not age: a week-old session touched yesterday isn't archived
   const old = r => !lastActive(r) || now - lastActive(r) > ARCHIVE_S;
-  return ordered.map(([cwd, grows]) => ({
-    cwd, count: grows.length,
-    active: grows.filter(r => r.live),
-    parked: grows.filter(r => !r.live && !old(r)),
-    archived: grows.filter(r => !r.live && old(r)),
-  }));
+  return ordered
+    .filter(([k, grows]) => !dirHidden(k, grows))
+    .map(([cwd, grows]) => ({
+      cwd, count: grows.length,
+      active: grows.filter(r => r.live),
+      parked: grows.filter(r => !r.live && !old(r)),
+      archived: grows.filter(r => !r.live && old(r)),
+    }));
+}
+
+// A directory the ✕ hid (S.hidden holds its hide time) stays hidden only while
+// NONE of its sessions started after that time — the moment a newer session
+// appears (a fresh launch, terminal or dashboard, or a resume that re-stamps
+// started_at) it re-shows. Purely client-side over the wire rows' started_at;
+// the server only stores the {key: hidden_at} stamp.
+function dirHidden(key, rows) {
+  const t = S.hidden[key];
+  if (t == null) return false;
+  return !rows.some(r => (r.started_at || 0) > t);
+}
+
+// The ✕ on a dir header: hide it from the list. Optimistic (stamp now, re-render
+// so it vanishes immediately), then POST — the server stamps its OWN time.time()
+// and returns the full map, which we adopt as truth. On failure the optimistic
+// stamp is dropped and the group returns. Non-destructive: nothing is closed or
+// removed; the group re-appears on the next session started there.
+function hideDir(key) {
+  S.hidden[key] = Date.now() / 1000;
+  renderList(true);
+  postJSON("/api/dirs/hide", { cwd: key })
+    .then(d => { if (d && d.hidden) { S.hidden = d.hidden; renderList(true); } })
+    .catch(err => {
+      delete S.hidden[key];
+      renderList(true);
+      toast("ask", "hide failed", (err && err.error) || "");
+    });
 }
 
 // What makes the list's SHAPE: group order, which cards are VISIBLE (active +
@@ -587,6 +622,11 @@ function renderDirGroups(groups) {
       add.title = "new session in " + g.cwd;
       add.onclick = () => openNewSession(g.cwd);
       hd.append(add);
+      const hide = el("button", "dirhide", "✕");
+      hide.title = "hide this directory from the list "
+        + "(re-appears when a new session starts here)";
+      hide.onclick = () => hideDir(g.cwd);
+      hd.append(hide);
     }
     $view.append(hd);
     if (g.active.length) {
@@ -3972,6 +4012,12 @@ initNotifBtn();
 // — prime the cache so the first form open reads them synchronously
 fetch("/api/ns-prefs").then(r => r.json())
   .then(p => { S.nsPrefs = p || {}; }).catch(() => {});
+// seed the hidden-directory set before the first list paint (the SSE snapshot
+// carries the session rows, not this pref) — a failed fetch just leaves nothing
+// hidden, never a broken list
+fetch("/api/dirs/hidden").then(r => r.json())
+  .then(d => { if (d && typeof d === "object") { S.hidden = d; if (!S.cur) renderList(true); } })
+  .catch(() => {});
 connectGlobal();
 route();
 renderAttention();

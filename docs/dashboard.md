@@ -257,6 +257,8 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
+| `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |
+| `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `git.root\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 empty/non-string key |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
@@ -1766,6 +1768,53 @@ arrives alongside stats changes anyway. Known wrinkle, accepted: a web
 rename appends a naming record, so it bumps recency — it *is* user activity.
 Agent cards keep `ago(started_at)` deliberately — a *running* agent's age is
 the meaningful number, and it becomes a `dur()` once it ends.
+
+## Hidden directories (declutter the list)
+
+The `✕` on a group header hides that directory from the list — for when a
+crowded main page has projects you're not looking at. It is **non-destructive**:
+nothing is closed or removed, the sessions keep running, their tab colours and
+red/green toasts still fire (the notify watcher is independent of what the list
+renders); the group just disappears from view. It **re-appears on its own the
+moment a NEW session starts there** — no manual "unhide" — whether that session
+is launched from the dashboard's new-session prompt or from a terminal.
+
+The mechanism is a single stored timestamp per directory. `POST /api/dirs/hide
+{cwd}` stamps `time.time()` into `{group_key: hidden_at}` (`prefs.hide_dir`,
+under the `hidden-dirs` key of the durable global prefs store — the same
+`dashboard/prefs.py` kv DB that holds the new-session prefs, so a hide survives a
+reboot and is shared across every browser pointing at this dashboard). `GET
+/api/dirs/hidden` serves the map, which the page seeds `S.hidden` from on load
+(the SSE `sessions` snapshot carries the session ROWS, not this pref — and only
+the browser that clicks `✕` mutates it, so no SSE push is needed). The re-appear
+rule is **client-side** (`app.js` `dirHidden`): a group stays hidden only while
+NONE of its sessions has `started_at > hidden_at`. Because every wire row already
+carries `started_at` (audit `time.time()` epoch, same clock as the hide stamp),
+the filter needs no server round-trip — a fresh launch (or a resume, which
+re-stamps `started_at`) whose row rides the next snapshot simply stops matching
+the hide predicate, and the group returns. Re-hiding a re-appeared group just
+overwrites the stamp with a newer `time.time()`, which is what re-hides it.
+
+**Why a timestamp and not a boolean.** A plain "hidden" flag would either be
+cleared by any activity (so a directory with a *live* session could never be
+hidden — its `last_active` keeps advancing) or need an explicit unhide step the
+feature deliberately omits. Comparing against `started_at` specifically (not
+`last_active`) is the point: it lets you hide a directory that has a busy live
+session, and brings it back only for a genuinely *new* session, not for the
+existing one continuing to stream.
+
+The **key is the list's group key** (`git.root || cwd`) — the page posts the
+group header's own `g.cwd`, which already holds that key, so the server stores it
+verbatim (validated as a non-empty string under a length cap; it is only ever a
+kv key and a client-side compare, never a filesystem path). The **new-session
+picker is deliberately NOT filtered** by `S.hidden` (its candidate list is the
+raw `S.sessions` cwds): a hidden directory must stay reachable to launch into —
+and doing so is exactly what un-hides it.
+
+Like every control-plane write the POST sits behind `_post_guard` (so
+`CLAUDE_DASH_READONLY=1` disables it) and audits each hide as a `hide-dir`
+`state_files` row (empty session log/path — it is dashboard-global, not
+per-session, exactly like the `ns-prefs` write).
 
 ## The list renders once, then patches
 

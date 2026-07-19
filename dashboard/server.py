@@ -1271,6 +1271,12 @@ class Handler(BaseHTTPRequestHandler):
             # launch on one device pre-selects on the next (docs/dashboard.md,
             # *New-session prefs*). {} when nothing launched yet.
             return self._json(prefs.get("new-session", {}))
+        if api == ["dirs", "hidden"]:
+            # the {group_key: hidden_at_epoch} map the ✕ built (docs/dashboard.md
+            # *Hidden directories*); the page seeds S.hidden from this on load —
+            # the SSE snapshot carries the session ROWS, not this pref, and only
+            # the browser that clicks ✕ mutates it, so no SSE push is needed.
+            return self._json(prefs.hidden_dirs())
         if len(api) >= 2 and api[0] == "session" and _sid(api[1]):
             sid, rest = api[1], api[2:]
             if not rest:
@@ -1384,6 +1390,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_new_session()
         if api == ["ns-prefs"]:
             return self.post_ns_prefs()
+        if api == ["dirs", "hide"]:
+            return self.post_hide_dir()
         if api == ["dictate", "token"]:
             return self.post_dictate_token()
         return self._json({"error": "not found"}, 404)
@@ -2358,6 +2366,35 @@ class Handler(BaseHTTPRequestHandler):
         # global (no session) — audited with an empty log/path like web-launch
         A.state_file("", "", "ns-prefs", dict(rec, action="write"))
         return self._json({"ok": True})
+
+    def post_hide_dir(self):
+        """Hide a directory group from the list page (docs/dashboard.md *Hidden
+        directories*). Non-destructive: the sessions keep running, their tabs and
+        toasts still fire — the group just vanishes from the crowded list until a
+        session STARTED after this moment shows up in it (the client compares each
+        row's started_at against the stored hide time, so 'start a new session
+        there' un-hides it, terminal- or dashboard-launched). Stores {key:
+        time.time()} in the durable global prefs store (dashboard/prefs.py),
+        keyed by the list's group key (git.root||cwd — the page posts g.cwd,
+        already that key). Behind _post_guard like every control-plane POST,
+        though it writes only the dashboard's OWN prefs, never a session/terminal.
+        Audited as a `hide-dir` state_files row (global — empty log/path like
+        ns-prefs). Returns the updated map so the page reconciles S.hidden with
+        the server truth."""
+        body = self._post_guard()
+        if body is None:
+            return
+        key = body.get("cwd")
+        # repr() in the audit: a validation reject must keep the EXACT received
+        # bytes (same rule as new-session's bad cwd). len cap: a group key is a
+        # path — no legitimate one runs long, and the store is not a bucket.
+        if not isinstance(key, str) or not key or len(key) > 4096:
+            A.error("", "dashboard hide-dir (bad key)", {"cwd": repr(key)})
+            return self._json({"error": "cwd must be a non-empty string"}, 400)
+        ts = time.time()
+        m = prefs.hide_dir(key, ts)
+        A.state_file("", "", "hide-dir", {"key": key, "hidden_at": ts})
+        return self._json({"ok": True, "hidden": m})
 
     def post_dictate_token(self):
         """Mint a short-lived Deepgram grant for the browser's DIRECT wss

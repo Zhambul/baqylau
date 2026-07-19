@@ -704,6 +704,15 @@ code, pre, .mono { font-family: var(--mono); }
   padding: 2px 9px; font: 600 13px/1 var(--sans);
 }
 .dirnew:hover { color: var(--text); box-shadow: var(--card-hover); }
+/* ✕ hide-this-directory — same footprint as +, dimmer at rest (a hide is
+   non-destructive and secondary to launching), red only on hover to signal the
+   group is about to leave the list */
+.dirhide {
+  flex: none; background: transparent; color: var(--dim2); border: none;
+  cursor: pointer; box-shadow: var(--card); border-radius: var(--r);
+  padding: 2px 8px; font: 600 11px/1.4 var(--sans);
+}
+.dirhide:hover { color: var(--red, #b5484d); box-shadow: var(--card-hover); }
 .nsback {
   position: fixed; inset: 0; z-index: 40;
   display: flex; align-items: flex-start; justify-content: center;
@@ -1145,7 +1154,7 @@ html { touch-action: manipulation; }
   }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
-  .ghost, .fchip, .fclear, .xclose, .sstop, .sresume, .nsbtn, .dirnew,
+  .ghost, .fchip, .fclear, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
   .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn {
     min-height: 36px;
   }

@@ -766,6 +766,48 @@ def test_ns_prefs_roundtrip(dash):
                                                  "model": "sonnet"}
 
 
+def test_hide_dir_prefs_roundtrip_and_validation(dash):
+    """Hiding a directory from the list page (docs/dashboard.md *Hidden
+    directories*): POST /api/dirs/hide stamps time.time() into the durable global
+    prefs store (dashboard/prefs.py — not a session or terminal write) keyed by
+    the list's group key, and returns the full {group_key: hidden_at} map; GET
+    /api/dirs/hidden reads it back (durable across requests). The re-appear rule
+    (a session started after hidden_at un-hides the group) is client-side over
+    the wire rows' started_at, so the server contract is just: stamp stored,
+    served, and a bad key refused."""
+    assert _get_json(dash + "/api/dirs/hidden") == {}
+    t0 = time.time()
+    code, body = _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"})
+    d = json.loads(body)
+    assert code == 200 and d["ok"] is True
+    assert d["hidden"]["/w/proj"] >= t0
+    # served back over GET, durable through the store
+    assert _get_json(dash + "/api/dirs/hidden")["/w/proj"] == d["hidden"]["/w/proj"]
+    # a re-hide (a re-appeared group hidden again) overwrites with a NEWER stamp
+    time.sleep(0.01)
+    code2, body2 = _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"})
+    assert code2 == 200
+    assert json.loads(body2)["hidden"]["/w/proj"] > d["hidden"]["/w/proj"]
+    # an empty / non-string key is refused (400), the store untouched
+    for bad in ("", 5):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/dirs/hide", {"cwd": bad})
+        assert e.value.code == 400
+    assert list(_get_json(dash + "/api/dirs/hidden")) == ["/w/proj"]
+
+
+def test_hide_dir_behind_post_guard(dash, monkeypatch):
+    """The hide POST is a control-plane write like every other — a missing
+    X-Claude-Dash header is rejected (403) and READONLY disables it (403)."""
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"}, header=None)
+    assert e.value.code == 403
+    monkeypatch.setattr(DS, "READONLY", True)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"})
+    assert e.value.code == 403
+
+
 def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):
     """A resume moves the session to a NEW kitty window (the SessionStart
     upsert refreshes the sessions row) — a session SSE stream opened BEFORE
