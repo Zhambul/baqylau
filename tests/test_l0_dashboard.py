@@ -3308,6 +3308,27 @@ def test_post_new_session_resume_continue(dash, monkeypatch, tmp_path):
     assert len(fe.launched) == n
 
 
+def test_post_new_session_refuses_resume_of_live_session(dash, monkeypatch,
+                                                         tmp_path):
+    """A resume-launch for a sid that ALREADY has a live tab is refused (409),
+    not launched a second time — the duplicate-tab / two-processes-on-one-
+    transcript guard. A stale page can resume-launch a live session; the
+    server backstops it. The refusal lands a web-launch ok:False row carrying
+    the live window so the page can focus/message it instead."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    sid = "16fdc14a-b64f-4243-8885-8888aaaa0e03a"
+    fe.wins[sid] = "413"                       # simulate a live claude_session tag
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new",
+              {"cwd": str(tmp_path), "resume": sid, "prompt": "hi"})
+    assert e.value.code == 409
+    assert fe.launched == []                   # nothing was launched
+    # a fresh (non-resume) launch in the same dir is unaffected
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "prompt": "new"})
+    assert fe.launched and fe.launched[-1][1][-1] == "new"
+
+
 def test_launch_argv_falls_back_to_zsh(monkeypatch):
     monkeypatch.setenv("SHELL", "/opt/homebrew/bin/fish")   # no POSIX "$@"
     assert DS.launch_argv([])[0] == "/bin/zsh"

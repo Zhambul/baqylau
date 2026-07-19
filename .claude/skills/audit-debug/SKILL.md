@@ -535,6 +535,27 @@ New always-audited swallow sites (previously silent — their absence used to ma
   at all next to a `web-launch ok: true` = a pre-fix server is still running
   (restart `claude-dashboard.py`), or the watcher thread died — check `errors`
   func `dashboard launch wake`.
+- **One session shows up in TWO kitty tabs / messaging it opens a duplicate
+  tab each time / sends land in the "wrong" (older) tab** *(duplicate
+  resume-launch, guard added 2026-07-19)* — the page resume-launches a
+  session it believes is PARKED, but the session already had a LIVE tab, so a
+  second `claude --resume <sid>` runs against the SAME transcript (both panes
+  tagged `claude_session=<sid>`; `kitten @ ls` shows the sid on two windows,
+  and `_live_windows`/`window_for_session` keep the FIRST-iterated one, so
+  web-sends land in whichever tab that is). Tell: two `web-launch` rows for
+  one cwd seconds apart — a fresh `resume: ""` then a `resume: <that new
+  sid>` — with NO `adopt` row between (this is NOT a sid-fork). Root trigger
+  is a STALE browser page (its live/parked snapshot froze — classically after
+  the dashboard server restarted and the SSE dropped; check the `dashboard`
+  `streams` rows for a restart just before the episode). On a current build
+  `post_new_session` REFUSES a resume of an already-live sid: a 409 + a
+  `web-launch` `ok: false` row carrying the live `win`. So a
+  `web-launch ok:false` with a `resume` set and a `win` filled = the guard
+  FIRED (healthy — the duplicate was prevented); a duplicate-tab episode with
+  the guard NOT firing (two `ok:true` resume launches) on a current build = the
+  guard regressed or a pre-fix server is still running (restart
+  `claude-dashboard.py`). Recover a live duplicate by closing the extra tab
+  (`kitten @ close-tab --match id:<tabid>`).
 - **Clicking a Read/Update/Write line doesn't expand (or won't collapse)** — the
   click-to-view chain is stash → toggle → reflow; check it in that order. (1) Stash:
   a `state_files` `view-stash` row (content: gid = the op's tool_use_id, tool, ops

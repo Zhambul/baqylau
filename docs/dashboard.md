@@ -372,7 +372,18 @@ stays deliberate by wording alone: from the iPad, "resume & send" opens a
 real kitty tab on the laptop — the label is the consent. Reused, not new:
 the launch is the form's own audited `web-launch` path (the row carries
 `resume` + `account` + `ok`), so there is no new server surface and no new
-audit row kind. Headless-live sessions (live, no window) stay disabled —
+audit row kind. **Live-session guard:** `post_new_session` REFUSES a
+`resume: <sid>` whose sid already has a live tab (`fe.window_for_session`, a
+fresh kitten scan) — a second `claude --resume <sid>` would run a duplicate
+process against the SAME transcript (two tabs, interleaved writes). It's a
+409 (`{error, sid, win}` — the page can focus/message the existing tab) with
+a `web-launch` `ok: false` row carrying the live `win`. The page only issues
+a resume-launch when it thinks a session is parked, but a STALE page — e.g.
+after the dashboard restarts and the browser's SSE drops, so its live/parked
+snapshot freezes — can misjudge a live session; this is the server-side
+backstop (the observed bug: a restart mid-session, then messaging spawned a
+duplicate tab per send). Fresh and `--continue` launches are unaffected.
+Headless-live sessions (live, no window) stay disabled —
 they aren't asleep, resume is the wrong medicine — and their mic button is
 now honestly `disabled` (dim, inert) instead of a live-looking button that
 swallowed clicks (`ta.disabled` guard in `dictation.start`).

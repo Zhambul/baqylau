@@ -2188,6 +2188,23 @@ class Handler(BaseHTTPRequestHandler):
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
             A.state_file("", "", "web-launch", dict(opts, ok=False))
             return self._json({"error": "no terminal available"}, 503)
+        # Guard: never resume-launch a session that ALREADY has a live tab. A
+        # second `claude --resume <sid>` would run a duplicate process against
+        # the SAME transcript (two tabs, interleaved writes). The page issues a
+        # resume-launch only when it believes the session is PARKED, but a
+        # stale page (e.g. after the dashboard restarts and its SSE drops)
+        # can misjudge a live session — this is the server-side backstop.
+        # window_for_session is a fresh live kitten scan (authoritative over
+        # any cached/page state); fresh and --continue launches are unaffected.
+        # The page gets the live window back so it can focus/message it instead.
+        if resume:
+            live_win = fe.window_for_session(resume) or ""
+            if live_win:
+                A.state_file("", "", "web-launch",
+                             dict(opts, ok=False, win=live_win))
+                return self._json(
+                    {"error": "session already live", "sid": resume,
+                     "win": live_win}, 409)
         # the passive steal watch (see the block above the Handler class):
         # the frontmost app must be captured BEFORE the launch — a steal can
         # land before the kitten call returns. Skipped when the terminal was
