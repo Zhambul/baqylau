@@ -3529,13 +3529,9 @@ function renderSessionChrome(tab) {
   const rr = el("div", "runrow");
   ses.runRibbon = rr;
   head.append(rr);
-  const as = el("div", "agentstrip");   // per-subagent stats, near the scoreboard
-  ses.agentStrip = as;
-  head.append(as);
   $view.append(head);
   updateStatsRow();
   updateRunning();
-  updateAgentStrip();
 
   const tabs = el("div", "tabs");
   const mk = (key, label, count) => {
@@ -3784,53 +3780,9 @@ function agentCard(a) {
   return card;
 }
 
-/* The per-subagent stats strip in the session header — one compact clickable
-   chip per subagent, RUNNING and finished alike, so the scoreboard region
-   reflects the whole subagent roster WITHOUT drilling in (docs/dashboard.md,
-   *Subagent strip*). A finished chip is tinted by its final status (via
-   data-st, like the agent cards) and dimmed so live agents stand out; a fast
-   subagent that already completed still shows here. Running agents sort first,
-   then most-recently-started. Clicking a chip opens that agent's drill-down.
-   Lives on the header, so it shows on every tab (not just the mirror rail);
-   hidden only when the session has no real subagents. Kept live by
-   updateAgents() (the `agents` SSE event). */
-function updateAgentStrip() {
-  const ses = S.ses;
-  if (!ses || !ses.agentStrip) return;
-  const strip = ses.agentStrip;
-  strip.textContent = "";
-  // all real subagents (drop husk auxiliary rows), running first then newest
-  const agents = (ses.agents || []).filter(a => !isHusk(a)).sort((x, y) => {
-    const rx = agentStatus(x)[1] === "st-run", ry = agentStatus(y)[1] === "st-run";
-    return (ry - rx) || ((y.started_at || 0) - (x.started_at || 0));
-  });
-  if (!agents.length) { strip.style.display = "none"; return; }
-  strip.style.display = "";
-  strip.append(el("span", "aslabel", "subagents"));
-  for (const a of agents) {
-    const [sttxt, stcls] = agentStatus(a);
-    const chip = el("a", "achip");
-    chip.dataset.st = stcls;                 // tint by status (run/ok/bad/warn)
-    // mark the chip whose scoreboard is currently showing (drilled-into agent)
-    if (ses.agentFocus && ses.agentFocus.aid === a.agent_id) chip.classList.add("active");
-    chip.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
-    const name = a.desc || a.agent_id;      // the Task description IS the name
-    chip.append(el("span", "an", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
-    const bits = [sttxt];                    // status word leads the meta
-    if (a.model) bits.push(a.model + (a.effort ? "·" + a.effort : ""));
-    if (a.tools != null) bits.push(a.tools + " ev");
-    const cx = a.ctx;
-    if (cx && cx.pct != null) bits.push("ctx " + cx.pct + "%");
-    if (a.started_at) bits.push(a.ended_at ? dur(a.ended_at - a.started_at) : ago(a.started_at));
-    chip.append(el("span", "am", bits.join(" · ")));
-    strip.append(chip);
-  }
-}
-
 function updateAgents() {
   const ses = S.ses;
   if (!ses) return;
-  updateAgentStrip();                   // header strip — every tab, not just the rail/grid
   const agents = sortedAgents(ses.agents || []);
   if (ses.tab === "mirror" && ses.rail && ses.rail.isConnected) {
     ses.rail.textContent = "";
@@ -3858,11 +3810,10 @@ function showAgent(sid, aid) {
     a.classList.toggle("on", /\/agents$/.test(a.getAttribute("href") || "")));
   // swap the top scoreboard to this agent — first from the enriched agents row
   // we already have (status/model/events/ctx/duration), then the fetch below
-  // fills in tokens + cost. updateAgents re-marks the active strip chip.
+  // fills in tokens + cost.
   ses.agentFocus = { aid: aid, data: null };
   updateStatsRow();
   updateRunning();
-  updateAgentStrip();
   if (ses.body) {
     ses.body.textContent = "";
     const rec = (ses.agents || []).find(a => a.agent_id === aid);
@@ -3884,23 +3835,24 @@ function showAgent(sid, aid) {
   }
 }
 
-/* Breadcrumb trail for a subagent drill-down — sessions › ‹session› › agents ›
-   ‹subagent› — each rung a hash link UP the hierarchy; the ‹session› rung is
-   the jump back to the main agent (docs/dashboard.md, *Breadcrumbs*). The agent
-   hierarchy is one level deep (a session's flat agent list), so the trail is a
-   fixed four rungs. */
+/* The agent-hierarchy breadcrumb on a subagent drill-down — the MAIN agent →
+   this subagent (docs/dashboard.md, *Breadcrumbs*). Just the two agent nodes
+   (the hierarchy is one level deep — a session's flat agent list): the main
+   agent is a link back to its mirror (#/s/<sid>), labelled by the session's
+   title; the current subagent is the highlighted end node. Icons: ◆ the main
+   agent, ◇/👥 the subagent. Clicking the main node is how you go back. */
 function agentCrumbs(sid, aid, rec) {
   const nav = el("div", "crumbs");
-  const link = (text, hash) => { const a = el("a", "crumb", text); a.href = hash; return a; };
   const meta = (S.ses && S.ses.meta) || {};
   const sesName = meta.title || (meta.cwd ? proj(meta) : shortSid(sid));
-  const sep = () => el("span", "csep", "›");
-  nav.append(link("sessions", "#/"), sep(),
-             link(sesName, "#/s/" + encodeURIComponent(sid)), sep(),
-             link("agents", "#/s/" + encodeURIComponent(sid) + "/agents"), sep());
-  const name = (rec && rec.desc) || aid;
-  nav.append(el("span", "crumb cur",
-              (rec && rec.kind === "teammate" ? "👥 " : "◇ ") + name));
+  const main = el("a", "crumb");
+  main.href = "#/s/" + encodeURIComponent(sid);       // the mirror = the main agent
+  main.title = "back to the main agent";
+  main.append(el("span", "cg", "◆"), document.createTextNode(" " + sesName));
+  const cur = el("span", "crumb cur");
+  cur.append(el("span", "cg", rec && rec.kind === "teammate" ? "👥" : "◇"),
+             document.createTextNode(" " + ((rec && rec.desc) || aid)));
+  nav.append(main, el("span", "csep", "›"), cur);
   return nav;
 }
 

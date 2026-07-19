@@ -2173,21 +2173,21 @@ and the SSE idles as a heartbeat keep-alive.
 
 ### Breadcrumbs (back up the hierarchy)
 
-A subagent drill-down (`showAgent`) prepends a breadcrumb trail above the
-timeline — **sessions › ‹session› › agents › ‹subagent›** (`agentCrumbs`). Each
-of the first three rungs is a hash link UP the hierarchy: `#/` (the list),
-`#/s/<sid>` (the session's mirror — i.e. **back to the main agent**), and
-`#/s/<sid>/agents` (the agents grid); the last rung is the current agent, not a
-link. The agent hierarchy is one level deep (a session's flat agent list — an
-agent launching a sub-subagent is not modeled anywhere), so the trail is a fixed
-four rungs. It replaces the browser-back-only navigation the drill-down had
-before, and it renders into `ses.body` alongside a child wrapper that
-`renderTimelineInto` clears — the breadcrumb sits outside that wrapper so the
-post-fetch rebuild doesn't wipe it. A drill-down also now lights the **agents**
-tab (`showAgent` toggles `.on` onto the `…/agents` tab link): the `agent:<id>`
-pseudo-tab has no tab-bar entry of its own, so without this every tab went dark
-and there was no "you are here" cue — the breadcrumb and the lit agents tab now
-both carry it.
+A subagent drill-down (`showAgent`) prepends an **agent-hierarchy breadcrumb**
+above the timeline — **◆ ‹main agent› › ◇ ‹subagent›** (`agentCrumbs`) — showing
+just the two agent nodes, because the hierarchy is one level deep (a session's
+flat agent list; an agent launching a sub-subagent is not modeled anywhere). The
+**main agent** node is a link to the session's mirror (`#/s/<sid>`) labelled by
+the session title — clicking it is how you go back to the main agent; the current
+**subagent** is the highlighted end pill. Rendered as a boxed bar (`.crumbs`), it
+sits in `ses.body` alongside a child wrapper that `renderTimelineInto` clears —
+the breadcrumb is outside that wrapper so the post-fetch rebuild doesn't wipe it.
+A drill-down also lights the **agents** tab (`showAgent` toggles `.on` onto the
+`…/agents` tab link): the `agent:<id>` pseudo-tab has no tab-bar entry of its
+own, so without this every tab went dark and there was no "you are here" cue —
+the breadcrumb and the lit agents tab now both carry it. (It deliberately does
+NOT re-surface the session/list rungs — those live on the brand link and the tab
+bar; the breadcrumb is purely the main→sub agent relationship.)
 
 ## Stream search + kind filters
 
@@ -2304,41 +2304,17 @@ a stale slot the way `slots.claim` does), grouped by kind. It rides
 (the same only-on-change, slow-tick cadence as `agents`/`costs`). A parked
 session's rows are all dead, so its ribbon is empty (hidden).
 
-## The subagent strip (per-agent stats near the scoreboard)
-
-Under the "running now" ribbon the session header carries a **subagent strip**
-(`updateAgentStrip`) — one compact clickable chip per subagent, **running and
-finished alike**, so the scoreboard region reflects the whole subagent roster
-without drilling in. Each chip shows the agent's identity (`◇ ‹desc›`, `👥` for
-a teammate) plus its stats — status word, `model·effort`, event count, `ctx N%`,
-and its age (running elapsed, or final duration once done) — and links to that
-agent's drill-down (`#/s/<sid>/a/<aid>`). A finished chip is tinted by its final
-status (`data-st` → the same `st-ok`/`st-bad`/`st-warn` palette the agent cards
-use) and dimmed so a live agent stands out; running agents sort first, then
-most-recently-started, so a fast subagent that already completed still shows
-here rather than flashing and vanishing. It reads straight off the `ses.agents`
-rows `session_payload` already enriches (`agents_ctx` / `agents_model_effort` —
-no new fetch or backend field), husk auxiliary rows dropped; hidden only when
-the session has no real subagents. Unlike the ribbon
-(which is one generic chip per live *slot*, identity-less) and the mirror rail's
-agent cards (mirror tab only, all agents), the strip is on the HEADER — so it
-shows on every tab — and it names each active agent. It is kept live by the same
-`agents` SSE event as the cards (`updateAgents` calls `updateAgentStrip` first,
-unconditionally, so it refreshes on every tab, not just where the rail/grid is
-mounted).
-
 ## Subagent scoreboard swap (drill in → the scoreboard becomes the agent's)
 
-Clicking a subagent (a strip chip, an agent card, or the `#/s/<sid>/a/<aid>`
-route) doesn't just open the drill-down timeline — it **swaps the top scoreboard
-to that agent's own numbers**. `showAgent` sets `ses.agentFocus = {aid, data}`
+Clicking a subagent (an agent card, or the `#/s/<sid>/a/<aid>` route) doesn't
+just open the drill-down timeline — it **swaps the top scoreboard to that agent's
+own numbers**. `showAgent` sets `ses.agentFocus = {aid, data}`
 and repaints the header; `updateStatsRow` branches on `agentFocus` and calls
 `renderAgentScoreboard` instead of the session totals — status, `model·effort`,
 event count, `⏱` duration, the `Σ` token rollup, and `≈` cost, with the ctx row
 showing the agent's own ctx bar and a leading **← session** link that restores
 the session view (it points at `#/s/<sid>`, the mirror = the main agent). The
-running ribbon hides while focused (it's session-scoped), and the strip marks the
-active agent's chip (`.achip.active`).
+running ribbon hides while focused (it's session-scoped).
 
 The fast-available fields (status/model/effort/events/ctx/duration) come straight
 off the enriched `ses.agents` row, so the swap is instant on click; the drill-down
