@@ -1015,7 +1015,12 @@ New always-audited swallow sites (previously silent — their absence used to ma
   pill showing it). A usage bar stuck at `resets now` = a stale snapshot
   served raw — `/api/accounts` serves `sessionapi.effective_usage` (a 5h/7d
   window whose reset passed is zeroed, reset dropped); the raw stash is still
-  readable in the session's state-DB `usage` kv for comparison.
+  readable in the session's state-DB `usage` kv for comparison. The stamp also
+  carries `model` (`relimit.limit_model` — `fable` for a model-scoped limit,
+  null for account-wide): chip says `fable limit hit`, and the new-session
+  auto-picker skips the account only for that model — a wrong/missing scope
+  traces to the stamp's `msg` field vs the parse (the `state_files`
+  `limit-hit` row has both).
 - **Migration started but the session never came back** — the `streams` row
   kind `relimit` names the failed leg via `end_reason`: `close-failed` /
   `close-timeout` (the tab wouldn't close or SessionEnd never parked the state

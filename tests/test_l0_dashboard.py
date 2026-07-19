@@ -3087,11 +3087,12 @@ def test_accounts_payload_files_limit_hit_under_its_own_slug(dash, monkeypatch):
     S.kv_set(log, "account", {"slug": "c1", "label": "oboard"})
     S.kv_set(log, "usage", {"five_hour": 10, "five_hour_reset": now + 8000,
                             "ts": now})
-    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now,
+    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now, "model": "fable",
                                 "resets_at": now + 8000, "msg": "limit"})
     by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
     assert by["c1"]["limit_hit"] is None           # the healthy account is clean
     assert by["c2"]["limit_hit"]["msg"] == "limit"  # the blocked one shows it
+    assert by["c2"]["limit_hit"]["model"] == "fable"  # scope rides through
     assert by["c1"]["usage"]["five_hour"] == 10    # usage stays with the session
 
 

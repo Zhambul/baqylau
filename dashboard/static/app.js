@@ -270,6 +270,13 @@ function fiveHourUsed(a) {
   return typeof a.five_hour_eff === "number" ? a.five_hour_eff : 0;
 }
 
+// The limit-hit chip/marker text: "fable limit hit" for a model-scoped stamp
+// (limit_hit.model, parsed server-side by relimit.limit_model), "limit hit"
+// for an account-wide one.
+function limitLabel(hit) {
+  return (hit.model ? hit.model + " " : "") + "limit hit";
+}
+
 function acctPill(a) {
   const u = a.usage;
   const pill = el("div", "acct");
@@ -300,7 +307,9 @@ function acctPill(a) {
   // moment the account stops working (the status line never reports 100%
   // once requests are rejected — docs/relimit.md).
   if (a.limit_hit) {
-    const chip = el("span", "ulimit", "limit hit");
+    // model-scoped stamps ("fable limit hit" — only that model is blocked,
+    // relimit.limit_model) name the model; account-wide ones stay bare
+    const chip = el("span", "ulimit", limitLabel(a.limit_hit));
     if (a.limit_hit.msg) chip.title = a.limit_hit.msg;
     pill.append(chip);
     if (a.limit_hit.resets_at)
@@ -2241,33 +2250,6 @@ function openNewSession(prefillCwd, resumeSid) {
     row.append(sel.el);
     return [row, sel];
   };
-  // account picker — the subscription to launch under (a switcher alias like
-  // c1/c2). Populated from /api/accounts (cached in S.accts); each option shows
-  // the account's latest usage inline when known. No "default" option: the
-  // plain-claude login duplicates one of these accounts. The row hides when
-  // there is no switcher (empty list → the launch just runs plain claude).
-  // The DEFAULT selection load-balances: the account with the most 5h headroom
-  // (fiveHourUsed; ties → registry order), refined again when the fresh
-  // /api/accounts fetch lands — unless the user already picked one by hand.
-  const [acctRow, acct] = pick("account", []);
-  acctRow.style.display = "none";
-  let acctPicked = false;
-  acct.onpick = () => { acctPicked = true; };
-  const fillAccts = (list) => {
-    acctRow.style.display = list.length ? "" : "none";
-    acct.fill(list.map(a => {
-      const u = a.usage;
-      const usage = u && (typeof u.five_hour === "number" || typeof u.seven_day === "number")
-        ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
-      return [a.slug, a.slug + " · " + a.label + usage];
-    }));
-    if (!acctPicked && list.length)
-      acct.value = list.reduce((b, a) => fiveHourUsed(a) < fiveHourUsed(b) ? a : b).slug;
-  };
-  if (S.accts) fillAccts(S.accts);
-  fetch("/api/accounts").then(r => r.json())
-    .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
-
   const [modelRow, model] = pick("model", [
     ["fable", "fable"], ["opus", "opus"],
     ["sonnet", "sonnet"], ["haiku", "haiku"],
@@ -2278,6 +2260,49 @@ function openNewSession(prefillCwd, resumeSid) {
     ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
   ]);
   effort.value = effort.has(last.effort) ? last.effort : "high";
+
+  // account picker — the subscription to launch under (a switcher alias like
+  // c1/c2). Populated from /api/accounts (cached in S.accts); each option shows
+  // the account's latest usage inline when known, plus its active limit-hit
+  // marker. No "default" option: the plain-claude login duplicates one of
+  // these accounts. The row hides when there is no switcher (empty list → the
+  // launch just runs plain claude).
+  // The DEFAULT selection load-balances: the account with the most 5h headroom
+  // (fiveHourUsed; ties → registry order), SKIPPING any account whose active
+  // limit-hit applies to the launch — an account-wide stamp always does, a
+  // model-scoped one (limit_hit.model, e.g. a fable-only limit) only when
+  // that model is the one selected, so flipping the model picker re-runs the
+  // choice (that's why the model picker is built above this block). All
+  // accounts blocked → plain lowest-usage fallback. Refined again when the
+  // fresh /api/accounts fetch lands — unless the user already picked by hand.
+  const [acctRow, acct] = pick("account", []);
+  acctRow.style.display = "none";
+  let acctPicked = false, acctList = [];
+  acct.onpick = () => { acctPicked = true; };
+  const limitBlocks = (a) =>
+    a.limit_hit && (!a.limit_hit.model || a.limit_hit.model === model.value);
+  const autoAcct = () => {
+    if (acctPicked || !acctList.length) return;
+    const open = acctList.filter(a => !limitBlocks(a));
+    const pool = open.length ? open : acctList;
+    acct.value = pool.reduce((b, a) => fiveHourUsed(a) < fiveHourUsed(b) ? a : b).slug;
+  };
+  model.onpick = autoAcct;
+  const fillAccts = (list) => {
+    acctList = list;
+    acctRow.style.display = list.length ? "" : "none";
+    acct.fill(list.map(a => {
+      const u = a.usage;
+      const usage = u && (typeof u.five_hour === "number" || typeof u.seven_day === "number")
+        ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
+      const lim = a.limit_hit ? "  · " + limitLabel(a.limit_hit) : "";
+      return [a.slug, a.slug + " · " + a.label + usage + lim];
+    }));
+    autoAcct();
+  };
+  if (S.accts) fillAccts(S.accts);
+  fetch("/api/accounts").then(r => r.json())
+    .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
   const split = el("div", "nssplit");
   split.append(modelRow, effortRow);
   const split2 = el("div", "nssplit");

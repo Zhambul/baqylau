@@ -1370,7 +1370,18 @@ recomputed when the fresh `/api/accounts` fetch supersedes the cached list, but
 a manual pick (the dropdown's `onpick` hook) always wins and is never
 overridden. (Historically this lived client-side in app.js; the migration
 feature forced a Python owner, and two encodings of "effective" is exactly what
-the single-owner rule exists to prevent.)
+the single-owner rule exists to prevent.) On top of the headroom rank, the
+auto-pick **skips any account whose active `limit_hit` applies to the launch**:
+an account-wide stamp always applies; a model-scoped one (`limit_hit.model` —
+e.g. a Fable-only limit, docs/relimit.md *Limit scope*) only when that model
+is the one selected in the form, which is why flipping the model picker
+re-runs the account choice (`model.onpick → autoAcct`; the model picker is
+built before the account block for exactly this). The scope match lives
+client-side deliberately — the chosen model exists only in the form; the
+stamp's `model` field itself is server-parsed (`relimit.limit_model`), never
+re-derived from the message. Every account blocked → plain lowest-usage
+fallback, and each blocked option carries a `· <model> limit hit` marker in
+its dropdown label.
 
 **Which account a chat runs under** is stamped into the session's state DB at
 SessionStart (`split.cmd_open` → `state.kv_set("account", account.current())`,
@@ -1423,8 +1434,13 @@ So the account pill keys the truth off the EVENT instead: the rate-limit
 StopFailure's `limit-hit` kv stamp (docs/relimit.md), served per account as
 `limit_hit` while still active (`sessionapi.limit_hit_active` — reset not yet
 passed, or younger than one 5h window when the reset is unknown) and rendered
-as a red `limit hit` chip + its reset countdown next to the usage bars. The
-stamp is filed under **its own `slug` field**, not the session's `account` kv:
+as a red `limit hit` chip + its reset countdown next to the usage bars. A
+MODEL-scoped stamp (`limit_hit.model`, parsed at stamp time by
+`relimit.limit_model` — "You've reached your Fable 5 limit" → `fable`,
+docs/relimit.md *Limit scope*) renders as `fable limit hit` (app.js
+`limitLabel`): only that model is blocked on the account, and the bare label
+overstated it. The stamp is filed under **its own `slug` field**, not the
+session's `account` kv:
 after a rate-limit migration the adopted session runs under the NEW account
 while the stamp in the same (renamed) state DB still describes the old one —
 grouping by the session's account put c2's `limit hit` chip on c1's pill and

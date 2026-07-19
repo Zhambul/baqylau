@@ -37,6 +37,26 @@ The dispatcher routes `StopFailure` to Stop's steps + `claude-relimit.py`
 LAST — the tab dispatch and stop_fmt's subagent recovery see the session
 before the migrator can close its tab.
 
+## Limit scope — account-wide vs model-scoped
+
+The limit message comes in two scopes, and the same `error="rate_limit"`
+StopFailure carries both (observed 2026-07-19): account-wide (*"You've hit
+your session limit · resets …"* — nothing on the account works) and
+MODEL-scoped (*"You've reached your Fable 5 limit. /model to switch
+models."* — only that model is blocked; others still run). The stamp records
+which as `model` (`limit_model()` — *"Fable 5"* → the family word `fable`,
+matching the dashboard's model-picker vocabulary; `None` = account-wide; the
+ONE parser of the message's scope, docs/styleguide.md). Consumers:
+
+- the dashboard chip says `fable limit hit` instead of the overstated bare
+  `limit hit` (docs/dashboard.md *The "limit hit" pill*);
+- the new-session auto-picker skips the account only when the limited model
+  is the one being launched (docs/dashboard.md);
+- **`pick_target` deliberately still treats ANY active stamp as
+  disqualifying**: the migrating session was running the limited model and
+  will continue on it, so a target with that model blocked is no refuge —
+  and the picker doesn't know the session's model, so conservative wins.
+
 ## The hook half (relimit.main) — decide and hand off
 
 Ordered guards, every skip audited as a decision row:
@@ -48,9 +68,10 @@ Ordered guards, every skip audited as a decision row:
    otherwise CREATE the DB — whose file-existence is the session-alive signal —
    for a headless/daemon session (same guard as `statusline.capture`).
 3. **Stamp `limit-hit`** into the state DB kv (slug, ts, `resets_at` from the
-   freshest usage snapshot's `five_hour_reset`, the limit message) + an audit
-   `state_files` row (`action='limit-hit'`). Unconditional from here on —
-   the dashboard pill must flag the account even when migration is off.
+   freshest usage snapshot's `five_hour_reset`, the limit message, and the
+   message's model scope — see *Limit scope* below) + an audit `state_files`
+   row (`action='limit-hit'`). Unconditional from here on — the dashboard
+   pill must flag the account even when migration is off.
 4. **Kill switch** `CLAUDE_RELIMIT=0` → stamped, not migrated.
 5. **Cooldown** (`relimit-attempt` kv younger than `COOLDOWN_S`, 600s) → skip.
    A relaunch that instantly re-hits a limit must not ping-pong tabs forever.

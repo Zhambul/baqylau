@@ -29,6 +29,7 @@
 # must exit immediately — closing the tab from inside the dying session's own
 # hook would race Claude Code's shutdown against the hook's exit.
 import os
+import re
 import time
 
 import frontends
@@ -69,6 +70,27 @@ def enabled():
     return (os.environ.get("CLAUDE_RELIMIT") or "1").strip() != "0"
 
 
+# Claude Code's limit messages come in two scopes: account-wide ("You've hit
+# your session limit · resets …") and MODEL-scoped ("You've reached your
+# Fable 5 limit. /model to switch models." — other models still work, observed
+# 2026-07-19). The stamp records which, so the dashboard chip can say "fable
+# limit hit" and the new-session auto-picker can skip the account only when
+# the limited model is actually the one being launched.
+_MODEL_LIMIT_RE = re.compile(r"you've reached your (.+?) limit", re.I)
+
+
+def limit_model(msg):
+    """The model FAMILY a limit message is scoped to ('Fable 5' → 'fable',
+    matching the model-picker vocabulary), or None for an account-wide limit.
+    The ONE parser of the limit message's scope (docs/styleguide.md
+    single-owner table)."""
+    m = _MODEL_LIMIT_RE.search(msg or "")
+    if not m:
+        return None
+    words = [w for w in m.group(1).lower().split() if w != "claude"]
+    return words[0] if words else None
+
+
 # --------------------------------------------------------------- hook half
 
 def main():
@@ -99,9 +121,10 @@ def main():
     # accounts still inside one. resets_at comes from the status-line capture's
     # freshest snapshot — the 5h reset epoch the blocked account reported.
     usage = St.kv_get(LOG, "usage") or {}
+    msg = (d.get("last_assistant_message") or "")[:200]
     hit = {"slug": acc.get("slug") or "", "ts": time.time(),
            "resets_at": usage.get("five_hour_reset"),
-           "msg": (d.get("last_assistant_message") or "")[:200]}
+           "model": limit_model(msg), "msg": msg}
     St.kv_set(LOG, "limit-hit", hit)
     A.state_file(LOG, "", "limit-hit", hit)
     if not enabled():

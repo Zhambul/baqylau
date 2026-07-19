@@ -84,6 +84,7 @@ def test_rate_limit_migrates_to_fallback_account(run_hook, rl_env, hosted,
 
     hit = kv(s, "limit-hit")
     assert hit["slug"] == "c1" and hit["msg"] == LIMIT_MSG
+    assert hit["model"] is None                      # account-wide, not model-scoped
     assert hit["resets_at"] == pytest.approx(time.time() + 8000, abs=60)
     assert kv(s, "relimit-attempt")["to"] == "c2"
     assert "resuming on c2" in s.ops_text()          # replayed after adoption
@@ -154,6 +155,32 @@ def test_kill_switch_stamps_but_never_migrates(run_hook, rl_env, hosted,
                for d in oracle.decisions(rl_env, s.sid, handler=RL))
     assert oracle.spawns(rl_env, s.sid) == []
     assert fake_kitten.calls("close-tab") == []
+
+
+FABLE_MSG = "You've reached your Fable 5 limit. /model to switch models."
+
+
+def test_model_scoped_limit_stamps_its_model(run_hook, rl_env, hosted,
+                                             fake_kitten):
+    """A model-scoped limit message stamps model='fable' — the dashboard chip
+    reads "fable limit hit" and the new-session auto-picker skips the account
+    only when launching that model (account-wide stamps carry model=None)."""
+    s = hosted()
+    fake_kitten.set_ls_for_session(s.sid)
+    env = dict(rl_env, CLAUDE_RELIMIT="0")           # stamp only — no tab churn
+    run_hook(RL, dict(rate_limit_payload(s), last_assistant_message=FABLE_MSG),
+             env=env)
+    hit = kv(s, "limit-hit")
+    assert hit["model"] == "fable" and hit["msg"] == FABLE_MSG
+
+
+def test_limit_model_parses_scope():
+    from plugins.claude_code import relimit
+    assert relimit.limit_model(FABLE_MSG) == "fable"
+    assert relimit.limit_model("You've reached your Claude Opus 4.8 limit.") == "opus"
+    assert relimit.limit_model(LIMIT_MSG) is None    # account-wide
+    assert relimit.limit_model("") is None
+    assert relimit.limit_model(None) is None
 
 
 def test_cooldown_blocks_a_second_attempt(run_hook, rl_env, hosted, seed,
