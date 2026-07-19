@@ -341,13 +341,17 @@ def test_plan_posttool_clears_only_its_key(run_hook, test_env, session):
 
 # ------------------------------------------------- sessions-row path refresh
 
-def test_relocated_transcript_refreshes_sessions_row(run_hook, test_env, session):
+def test_relocated_transcript_refreshes_sessions_row(run_hook, test_env, session,
+                                                     fake_kitten):
     """Claude Code RELOCATES the transcript when the session's cwd moves to
     another project dir (worktree entry — measured 2026-07-18): every later
     payload carries the new path, and the dispatcher's A.session_paths must
     fold it into the sessions row — the dashboard's title/ctx-probe/git chips
     and web rename all read that row, and the stale start-time path broke them
-    all on a dead file (session e7192407)."""
+    all on a dead file (session e7192407). fake_kitten is load-bearing: the
+    sessions row is written by split.cmd_open, which main() gates behind
+    FE.usable() — without a resolvable kitten there is no row to refresh
+    (green locally where kitty is on PATH, red on kitten-less CI)."""
     s = session.make()
     run_hook(HOOK, P.session_start(s))
     new_cwd = os.path.join(s.cwd, ".claude", "worktrees", "wt")
@@ -370,11 +374,12 @@ def test_relocated_transcript_refreshes_sessions_row(run_hook, test_env, session
     assert not oracle.errors(test_env, s.sid)
 
 
-def test_agent_events_never_refresh_sessions_row(run_hook, test_env, session):
+def test_agent_events_never_refresh_sessions_row(run_hook, test_env, session,
+                                                 fake_kitten):
     """A subagent's inner events carry the MAIN transcript path but the AGENT'S
     OWN cwd (worktree isolation) — folding those in would flap the session row
     between the lead's cwd and each agent's, so agent_id events are skipped
-    (the main-session-only invariant)."""
+    (the main-session-only invariant). fake_kitten: see the previous test."""
     s = session.make()
     run_hook(HOOK, P.session_start(s))
     run_hook(HOOK, P.base(s, "PostToolBatch", cwd="/agents/own/worktree",
