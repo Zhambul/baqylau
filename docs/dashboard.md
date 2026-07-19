@@ -690,8 +690,10 @@ subscription account: the server picks the target
 limit-hit excluded, NO 90% ceiling for a manual click) and spawns the same
 detached migrator the automatic rate-limit path uses, in `mode=manual` (bare
 `--resume`, no auto-continue nudge). Audited as a `web-migrate` state_files
-row; `409` when no other account qualifies. Full mechanics + the
-manual/auto differences: docs/relimit.md *Manual migrate*.
+row; `409` when no other account qualifies, `404` for a sid this machine has
+never seen (the migrator's park check can't tell "parked" from "never
+existed"). Full mechanics + the manual/auto differences: docs/relimit.md
+*Manual migrate*.
 
 `POST /api/session/<sid>/rewind` mirrors Claude Code's double-Esc, whose
 MEANING depends on session state — and the endpoint splits on the tab

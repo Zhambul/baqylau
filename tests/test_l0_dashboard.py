@@ -3130,6 +3130,14 @@ def test_post_migrate_spawns_the_manual_migrator(dash, monkeypatch, tmp_path):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/migs1/migrate", {})
     assert e.value.code == 409 and len(spawned) == 1
+    # a sid this machine has never seen → 404, nothing spawned (the migrator
+    # can't tell "parked" from "never existed" — an unknown sid would launch
+    # a doomed --resume tab)
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/00000000-0000-0000-0000-000000000000"
+                     "/migrate", {})
+    assert e.value.code == 404 and len(spawned) == 1
 
 
 def test_post_new_session_resume_continue(dash, monkeypatch, tmp_path):

@@ -1566,14 +1566,23 @@ class Handler(BaseHTTPRequestHandler):
         (plugins.migration_target(manual=True) — an explicit click outranks
         the refuge rule; an ACTIVE limit-hit still disqualifies). Immediate,
         no confirm (user request — like ■ stop). Works live AND parked: a
-        parked session skips the close leg and just relaunches. 409 when no
-        other account qualifies; 503 when no terminal resolves. Every attempt
-        is a `web-migrate` state_files row, failures also an A.error."""
+        parked session skips the close leg and just relaunches. 404 for a sid
+        this machine has never seen (no audit row, no live/parked state DB —
+        the migrator can't tell "parked" from "never existed", so an unknown
+        sid would sail through its park check and launch a doomed --resume
+        tab; caught live 2026-07-19); 409 when no other account qualifies;
+        503 when no terminal resolves. Every attempt is a `web-migrate`
+        state_files row, failures also an A.error."""
         body = self._post_guard()
         if body is None:
             return
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
+        if not (row or os.path.isfile(P.state_db(log))
+                or os.path.isfile(P.parked_db(log))):
+            A.state_file(log, "", "web-migrate",
+                         {"ok": False, "reason": "unknown sid"})
+            return self._json({"error": "unknown session"}, 404)
         sdb = API.state_db_for(sid) or P.state_db(log)
         fe = _frontend()
         if fe is None:

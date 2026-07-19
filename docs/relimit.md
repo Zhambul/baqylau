@@ -116,8 +116,18 @@ ways manual intent implies:
 Everything else is shared: same close→park-wait→launch legs, same `relimit`
 stream end_reasons (the `relimit-launch` row carries `mode`), same adopt/
 status-line continuity. The endpoint audits every attempt as a `web-migrate`
-state_files row (`from`/`to`/`eff`/`ok`, or the `no target`/`no terminal`
-reject), and the migrator spawn carries purpose `relimit:<slug> (web)`.
+state_files row (`from`/`to`/`eff`/`ok`, or the `no target`/`no terminal`/
+`unknown sid` reject), and the migrator spawn carries purpose
+`relimit:<slug> (web)`.
+
+One guard the endpoint owns: a sid this machine has never seen (no audit
+sessions row, no live/parked state DB) is a `404`, never a spawn. The
+migrator's park check is a bare "state DB absent" (`state.parked`), which
+cannot tell *parked* from *never existed* — an unknown sid sailed through it
+and launched a doomed `--resume` tab (caught live 2026-07-19, the probe's
+tab error-exited and self-closed). Validation is the CALLER's job; the
+migrator stays trusting because its two callers (the hook, this endpoint)
+both verify existence first.
 
 ## Why there is no file-migration step
 
