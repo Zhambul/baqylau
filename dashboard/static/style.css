@@ -360,6 +360,24 @@ code, pre, .mono { font-family: var(--mono); }
 .rchip.rk-codex { color: var(--done);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 34%, transparent); }
 
+/* per-subagent stats strip — one clickable chip per RUNNING subagent
+   (app.js updateAgentStrip), in the session header near the scoreboard */
+.agentstrip { display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+  margin-top: 8px; font-family: var(--mono); }
+.agentstrip .aslabel { color: var(--dim); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .08em; margin-right: 2px; }
+.achip {
+  display: inline-flex; align-items: baseline; gap: 8px;
+  padding: 2px 9px; border-radius: 999px; font-size: 11px;
+  color: var(--text-soft);
+  background: color-mix(in srgb, var(--exec) 8%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 34%, transparent);
+}
+.achip:hover { background: color-mix(in srgb, var(--exec) 16%, transparent); }
+.achip .an { color: var(--text); max-width: 24ch;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.achip .am { color: var(--dim); }
+
 .tabs { display: flex; gap: 2px; margin: 16px 0 12px;
   box-shadow: inset 0 -1px 0 var(--hair); }
 .tabs a {
@@ -1030,6 +1048,13 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 .st-run { color: var(--exec); } .st-warn { color: var(--amber); }
 
 /* ---- timeline (activity drill-down) -------------------------------------- */
+/* breadcrumb trail on a subagent drill-down (app.js agentCrumbs) */
+.crumbs { display: flex; flex-wrap: wrap; align-items: center; gap: 7px;
+  margin-bottom: 10px; font: 12px/1.4 var(--mono); }
+.crumbs .crumb { color: var(--dim); }
+.crumbs a.crumb:hover { color: var(--text); text-decoration: underline; }
+.crumbs .crumb.cur { color: var(--text); }
+.crumbs .csep { color: var(--dim2); }
 .tl { display: flex; flex-direction: column; gap: 7px; }
 .tlhead {
   display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline;

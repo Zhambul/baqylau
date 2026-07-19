@@ -2161,6 +2161,24 @@ incremental provider** (its rollout renderer lacks the parse split), so a codex
 run's drill-down stays fetch-once — the `activity_since` fan-out finds no provider
 and the SSE idles as a heartbeat keep-alive.
 
+### Breadcrumbs (back up the hierarchy)
+
+A subagent drill-down (`showAgent`) prepends a breadcrumb trail above the
+timeline — **sessions › ‹session› › agents › ‹subagent›** (`agentCrumbs`). Each
+of the first three rungs is a hash link UP the hierarchy: `#/` (the list),
+`#/s/<sid>` (the session's mirror — i.e. **back to the main agent**), and
+`#/s/<sid>/agents` (the agents grid); the last rung is the current agent, not a
+link. The agent hierarchy is one level deep (a session's flat agent list — an
+agent launching a sub-subagent is not modeled anywhere), so the trail is a fixed
+four rungs. It replaces the browser-back-only navigation the drill-down had
+before, and it renders into `ses.body` alongside a child wrapper that
+`renderTimelineInto` clears — the breadcrumb sits outside that wrapper so the
+post-fetch rebuild doesn't wipe it. A drill-down also now lights the **agents**
+tab (`showAgent` toggles `.on` onto the `…/agents` tab link): the `agent:<id>`
+pseudo-tab has no tab-bar entry of its own, so without this every tab went dark
+and there was no "you are here" cue — the breadcrumb and the lit agents tab now
+both carry it.
+
 ## Stream search + kind filters
 
 The session view's mirror tab carries a filter bar directly above the stream: a
@@ -2275,6 +2293,24 @@ a stale slot the way `slots.claim` does), grouped by kind. It rides
 `session_payload` as `running` and is pushed as a `running` SSE event on change
 (the same only-on-change, slow-tick cadence as `agents`/`costs`). A parked
 session's rows are all dead, so its ribbon is empty (hidden).
+
+## The subagent strip (per-agent stats near the scoreboard)
+
+Under the "running now" ribbon the session header carries a **subagent strip**
+(`updateAgentStrip`) — one compact clickable chip per **running** subagent, so
+the scoreboard region reflects what your subagents are *doing* without drilling
+in. Each chip shows the agent's identity (`◇ ‹desc›`, `👥` for a teammate) plus
+its live stats — `model·effort`, event count, `ctx N%`, and its running age —
+and links to that agent's drill-down (`#/s/<sid>/a/<aid>`). It reads straight
+off the `ses.agents` rows `session_payload` already enriches (`agents_ctx` /
+`agents_model_effort` — no new fetch or backend field), filtered to the ones
+`agentStatus` calls `st-run`; hidden when none is active. Unlike the ribbon
+(which is one generic chip per live *slot*, identity-less) and the mirror rail's
+agent cards (mirror tab only, all agents), the strip is on the HEADER — so it
+shows on every tab — and it names each active agent. It is kept live by the same
+`agents` SSE event as the cards (`updateAgents` calls `updateAgentStrip` first,
+unconditionally, so it refreshes on every tab, not just where the rail/grid is
+mounted).
 
 ## The live ⚠ error badge
 

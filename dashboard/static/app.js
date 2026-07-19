@@ -3528,9 +3528,13 @@ function renderSessionChrome(tab) {
   const rr = el("div", "runrow");
   ses.runRibbon = rr;
   head.append(rr);
+  const as = el("div", "agentstrip");   // per-subagent stats, near the scoreboard
+  ses.agentStrip = as;
+  head.append(as);
   $view.append(head);
   updateStatsRow();
   updateRunning();
+  updateAgentStrip();
 
   const tabs = el("div", "tabs");
   const mk = (key, label, count) => {
@@ -3728,9 +3732,41 @@ function agentCard(a) {
   return card;
 }
 
+/* The per-subagent stats strip in the session header — one compact clickable
+   chip per RUNNING subagent, so the scoreboard region reflects what the
+   subagents are doing WITHOUT drilling in (docs/dashboard.md, *Subagent strip*).
+   Clicking a chip opens that agent's drill-down. Lives on the header, so it
+   shows on every tab (not just the mirror rail); hidden when nothing is active.
+   Kept live by updateAgents() (the `agents` SSE event). */
+function updateAgentStrip() {
+  const ses = S.ses;
+  if (!ses || !ses.agentStrip) return;
+  const strip = ses.agentStrip;
+  strip.textContent = "";
+  const live = (ses.agents || []).filter(a => agentStatus(a)[1] === "st-run");
+  if (!live.length) { strip.style.display = "none"; return; }
+  strip.style.display = "";
+  strip.append(el("span", "aslabel", "subagents"));
+  for (const a of live) {
+    const chip = el("a", "achip");
+    chip.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
+    const name = a.desc || a.agent_id;      // the Task description IS the name
+    chip.append(el("span", "an", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
+    const bits = [];
+    if (a.model) bits.push(a.model + (a.effort ? "·" + a.effort : ""));
+    if (a.tools != null) bits.push(a.tools + " ev");
+    const cx = a.ctx;
+    if (cx && cx.pct != null) bits.push("ctx " + cx.pct + "%");
+    if (a.started_at) bits.push(a.ended_at ? dur(a.ended_at - a.started_at) : ago(a.started_at));
+    if (bits.length) chip.append(el("span", "am", bits.join(" · ")));
+    strip.append(chip);
+  }
+}
+
 function updateAgents() {
   const ses = S.ses;
   if (!ses) return;
+  updateAgentStrip();                   // header strip — every tab, not just the rail/grid
   const agents = sortedAgents(ses.agents || []);
   if (ses.tab === "mirror" && ses.rail && ses.rail.isConnected) {
     ses.rail.textContent = "";
@@ -3751,18 +3787,45 @@ function showAgent(sid, aid) {
   closeAgentStream();                       // switching agents / re-entering
   S.ses.tab = "agent:" + aid;
   const ses = S.ses;
-  $view.querySelectorAll(".tabs a").forEach(a => a.classList.remove("on"));
+  // no tab-bar entry is "agent:<id>", so light the `agents` tab — a drill-down
+  // is a descent INTO agents, and this restores the "you are here" cue the
+  // breadcrumb also carries (previously every tab went dark here).
+  $view.querySelectorAll(".tabs a").forEach(a =>
+    a.classList.toggle("on", /\/agents$/.test(a.getAttribute("href") || "")));
   if (ses.body) {
     ses.body.textContent = "";
     const rec = (ses.agents || []).find(a => a.agent_id === aid);
+    ses.body.append(agentCrumbs(sid, aid, rec));   // back-up-the-hierarchy trail
+    const tlWrap = el("div");                       // renderTimelineInto clears its
+    ses.body.append(tlWrap);                        // container, so keep it off the crumbs
     // a running agent's page grows live; a parked one (ended_at set) is
     // fetch-once — its transcript won't grow, so don't open a stream.
     const live = !!rec && rec.ended_at == null;
-    renderTimelineInto(ses.body,
+    renderTimelineInto(tlWrap,
                        "/api/session/" + encodeURIComponent(sid) + "/agent/" + encodeURIComponent(aid),
                        (rec && rec.desc) || aid,
                        live ? { sid: sid, aid: aid } : null);
   }
+}
+
+/* Breadcrumb trail for a subagent drill-down — sessions › ‹session› › agents ›
+   ‹subagent› — each rung a hash link UP the hierarchy; the ‹session› rung is
+   the jump back to the main agent (docs/dashboard.md, *Breadcrumbs*). The agent
+   hierarchy is one level deep (a session's flat agent list), so the trail is a
+   fixed four rungs. */
+function agentCrumbs(sid, aid, rec) {
+  const nav = el("div", "crumbs");
+  const link = (text, hash) => { const a = el("a", "crumb", text); a.href = hash; return a; };
+  const meta = (S.ses && S.ses.meta) || {};
+  const sesName = meta.title || (meta.cwd ? proj(meta) : shortSid(sid));
+  const sep = () => el("span", "csep", "›");
+  nav.append(link("sessions", "#/"), sep(),
+             link(sesName, "#/s/" + encodeURIComponent(sid)), sep(),
+             link("agents", "#/s/" + encodeURIComponent(sid) + "/agents"), sep());
+  const name = (rec && rec.desc) || aid;
+  nav.append(el("span", "crumb cur",
+              (rec && rec.kind === "teammate" ? "👥 " : "◇ ") + name));
+  return nav;
 }
 
 function renderTimelineInto(container, apiUrl, title, live) {
