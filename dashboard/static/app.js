@@ -40,6 +40,9 @@ const S = {
                          // DEADLINE held here (not in the button) so it
                          // survives the per-tick card rebuilds (patchCards)
   closing: new Set(),    // sids with a close POST in flight (card ✕ disabled)
+  nsPrefs: {},           // the new-session form's last-used {cwd, model, effort}
+                         // — the backend prefs cache (GET/POST /api/ns-prefs;
+                         // fetched at boot), so nsLast() reads it synchronously
 };
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
@@ -880,6 +883,11 @@ function connectSession(sid) {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
     applyAskDraft(d.draft);
+  });
+  es.addEventListener("composer-draft", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    applyComposerDraft(d.draft);
   });
   es.addEventListener("plan", (e) => {
     const d = JSON.parse(e.data);
@@ -1995,9 +2003,57 @@ function autoGrow(ta) {
   ta.style.height = Math.min(ta.scrollHeight, Math.round(innerHeight * GROW_CAP)) + "px";
 }
 
+// Persist the unsent composer text to the server (debounced) so a reopen on any
+// device — or a return to this session from another — restores it. Best-effort:
+// a failed save just retries on the next edit. `ses`/`sid` are captured by the
+// composer so a debounce that fires after a view switch still targets the right
+// session (S.cur may have moved on). An empty box deletes the stash server-side.
+function saveComposerDraft(ses, sid) {
+  const ta = ses.composer;
+  if (!ta) return;
+  const text = ta.value;
+  // keep meta in sync so a tab-switch rebuild seeds from what we just typed,
+  // and so our own SSE echo (same origin) is a no-op against current state
+  if (ses.meta)
+    ses.meta.composer_draft = text.trim() ? { text, origin: CLIENT_ID } : null;
+  clearTimeout(ses._composerDraftTimer);
+  ses._composerDraftTimer = setTimeout(() => {
+    postJSON("/api/session/" + encodeURIComponent(sid) + "/composer-draft",
+             { text, origin: CLIENT_ID }).catch(() => {});
+  }, ASK_DRAFT_DEBOUNCE_MS);
+}
+
+// Sending consumes the draft — clear it immediately (not debounced), both the
+// cache and the server stash, so it never reappears after the message is on its
+// way (and, on the resume path, so the adopted session doesn't re-show it).
+function clearComposerDraft(ses, sid) {
+  clearTimeout(ses._composerDraftTimer);
+  if (ses.meta) ses.meta.composer_draft = null;
+  postJSON("/api/session/" + encodeURIComponent(sid) + "/composer-draft",
+           { text: "", origin: CLIENT_ID }).catch(() => {});
+}
+
+// A peer device's composer draft arrived over SSE. Adopt it into the box — but
+// ignore our OWN echo (same origin), and never yank text out from under an
+// ACTIVE local edit (the box holding focus is being typed into; ses.meta is
+// still updated so the next remote change applies once it blurs).
+function applyComposerDraft(draft) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.composer_draft = draft || null;   // for a later rebuild
+  if (draft && draft.origin && draft.origin === CLIENT_ID) return;   // our write
+  const ta = ses.composer;
+  if (!ta || ta === document.activeElement) return;
+  const text = (draft && draft.text) || "";
+  if (ta.value === text) return;
+  ta.value = text;
+  autoGrow(ta);
+}
+
 function buildComposer() {
   const ses = S.ses;
   const meta = ses.meta || {};
+  const sid = S.cur;   // the session this composer is bound to (draft target)
   const wrap = el("div", "composer");
   const ta = el("textarea", "cinput");
   ta.rows = 1;
@@ -2026,6 +2082,13 @@ function buildComposer() {
   const btn = el("button", "csend", canResume ? "resume & send" : "send");
   btn.disabled = !usable;
   ses.composer = ta;
+  // restore the persisted draft (a device switch / reopen / return-to-session
+  // brings back the half-typed message) — only into a usable box. rAF the grow:
+  // scrollHeight needs the textarea mounted, which the caller does after this.
+  if (usable && meta.composer_draft && meta.composer_draft.text) {
+    ta.value = meta.composer_draft.text;
+    requestAnimationFrame(() => { if (ses.composer === ta) autoGrow(ta); });
+  }
   const dic = dictation(ta, () => meta.cwd || "");
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
   const send = () => {
@@ -2033,6 +2096,7 @@ function buildComposer() {
     const text = ta.value.trim();
     if (!text || ta.disabled) return;
     ta.disabled = true; btn.disabled = true;
+    clearComposerDraft(ses, sid);   // sending consumes the draft (both paths)
     if (canResume) {
       const body = { cwd: meta.cwd, resume: S.cur, prompt: text };
       const slug = meta.account && meta.account.slug;
@@ -2046,8 +2110,10 @@ function buildComposer() {
         })
         .catch(e => {
           // the draft survives in the box — nothing is lost on a failed wake
+          // (re-persist it: send-start cleared the stash optimistically)
           toast("ask", "resume failed", (e && e.error) || "");
           ta.disabled = false; btn.disabled = false; ta.focus();
+          saveComposerDraft(ses, sid);
         });
       return;
     }
@@ -2066,7 +2132,12 @@ function buildComposer() {
           toast("done", "message sent", "");
         }
       })
-      .catch(e => toast("ask", "send failed", (e && e.error) || ""))
+      .catch(e => {
+        // send-start cleared the stash optimistically; the box keeps its text,
+        // so re-persist it — a reload mustn't lose an unsent message
+        toast("ask", "send failed", (e && e.error) || "");
+        saveComposerDraft(ses, sid);
+      })
       .finally(() => {
         // refocus for the next message — except on an iPad, where it would
         // yank the on-screen keyboard back up after a button-tap send
@@ -2088,7 +2159,7 @@ function buildComposer() {
   const sm = slashMenu(ta, wrap,
     () => cmdsFor(meta.cwd, ses, "cmds"),
     { enterSends: !IS_IPAD });
-  ta.oninput = () => autoGrow(ta);
+  ta.oninput = () => { autoGrow(ta); saveComposerDraft(ses, sid); };
   ta.onkeydown = (e) => {
     if (sm.key(e)) return;
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
@@ -2345,15 +2416,16 @@ function dropdown() {
 
 // Last-used launch prefs (directory/model/effort) — preselected the next time
 // the form opens (launches are usually the same project on the same settings).
-// Written only on a successful launch; an explicit prefill (a dir group's "+",
+// STORED ON THE BACKEND now (the durable global prefs DB, GET/POST /api/ns-prefs)
+// instead of per-browser localStorage, so a launch on one device pre-selects on
+// the next — S.nsPrefs is the in-memory cache (fetched once at boot, refreshed
+// on every write) that keeps this read synchronous. The BEHAVIOUR is unchanged:
+// written only on a successful launch; an explicit prefill (a dir group's "+",
 // a resume button) still wins over the remembered directory.
-const NS_LAST_KEY = "claude-dash:ns-last";
-const nsLast = () => {
-  try { return JSON.parse(localStorage.getItem(NS_LAST_KEY)) || {}; }
-  catch { return {}; }
-};
-const nsRemember = (prefs) => {
-  try { localStorage.setItem(NS_LAST_KEY, JSON.stringify(prefs)); } catch {}
+const nsLast = () => S.nsPrefs || {};
+const nsRemember = (p) => {
+  S.nsPrefs = p;                                   // cache first, form is sync
+  postJSON("/api/ns-prefs", p).catch(() => {});    // best-effort backend write
 };
 
 // Freeform text input + picker menu — replaces the directory field's
@@ -3896,6 +3968,10 @@ if (/[?&#]vpdiag/.test(location.search + location.hash)) {
 /* ---------- boot ---------- */
 
 initNotifBtn();
+// the new-session form's last-used prefs live on the backend now (cross-device)
+// — prime the cache so the first form open reads them synchronously
+fetch("/api/ns-prefs").then(r => r.json())
+  .then(p => { S.nsPrefs = p || {}; }).catch(() => {});
 connectGlobal();
 route();
 renderAttention();

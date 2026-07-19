@@ -67,6 +67,20 @@ OTLP_DB = _TMP + "/claude-baqylau-otlp.db"
 # reason (the pid-lock is runtime state; the second guard is the port bind).
 DASH_DB = _TMP + "/claude-baqylau-dash.db"
 
+# The GLOBAL, cross-session web-dashboard PREFERENCES DB (dashboard/prefs.py).
+# Unlike a per-session state DB, and unlike DASH_DB (a /tmp runtime lock), this
+# is durable UI state shared across every browser/device pointing at this one
+# dashboard: the new-session form's last-used directory/model/effort. Durable
+# ~/.claude like HISTORY_DIR (same reboot-survival reason — a preference that
+# vanished on reboot would be no better than the per-browser localStorage it
+# replaced), relocated under the hermetic tmpdir when the test seam is set so
+# the suite never touches real ~/.claude.
+DASH_PREFS_DB = os.path.join(
+    _TMP if os.environ.get("CLAUDE_MIRROR_TMPDIR")
+    else os.path.expanduser("~/.claude"),
+    "baqylau-dash-prefs.db",
+)
+
 
 def sanitize_sid(sid):
     """A session id as it appears in the mirror-log key."""

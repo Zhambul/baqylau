@@ -454,6 +454,61 @@ including a text box — macOS claims ⌃←/→ for Spaces but nothing claims
 ⌃⇧←/→, so the only thing shadowed is a selection gesture that already
 lives on ⌥⇧/⌘⇧.
 
+## Web composer draft (`POST /api/session/<sid>/composer-draft`)
+
+**The unsent message survives a device switch, a reload, or leaving and
+coming back.** The composer text used to be purely browser-local — the moment
+you jumped to another device, reloaded, or navigated to a different session
+and back, a half-typed message was gone. Now every edit debounce-POSTs the box
+to `POST /api/session/<sid>/composer-draft`, which writes the `composer-draft`
+kv (`{text, origin}`; a pure state write via `ST.kv_set_at`, types NOTHING
+into the terminal — distinct from `/message`, which sends). The session
+snapshot carries `composer_draft` and the SSE emits a `composer-draft` event
+on change (slow cadence — a draft is convenience state, nobody is blocked on
+it, unlike the ask/plan dialogs), so `buildComposer` SEEDS the box from it on
+open and an already-open composer on another device tracks the edits live
+(`applyComposerDraft`). It reuses the *Web ask* draft machinery verbatim: each
+page stamps its writes with the per-load `origin` (`CLIENT_ID`) and ignores
+the SSE echo of its OWN `origin`, and `applyComposerDraft` never yanks text
+out from under an ACTIVE local edit (the box holding focus is skipped, its
+`ses.meta.composer_draft` still updated so the next remote change applies once
+it blurs) — last-writer-wins, right for a shared draft.
+
+Unlike the ask draft there is **no `tool_use_id` / turn-boundary lifecycle** —
+a message draft has no natural expiry, so it lives until **sent or
+overwritten** (that IS the "come back and it's still there" the feature is
+for). `send()` clears it immediately (both the /message path and the parked
+*resume & send* path — `clearComposerDraft`, so the adopted resumed session
+doesn't re-show the just-sent text) and re-persists it on a send FAILURE (the
+box keeps its text, so a reload must not lose it). An emptied box POSTs empty
+text, which DELETES the stash (`kv_del_at`); `_composer_draft` also treats a
+blank stash as None so the card clears everywhere. Works for LIVE and PARKED
+sessions alike — `state_db_for` resolves the parked copy — since the composer
+itself is usable in both. Best-effort throughout: a failed save retries on the
+next edit and the local box keeps its text.
+
+## New-session prefs (`GET`/`POST /api/ns-prefs`)
+
+The new-session form pre-selects the **last-used directory, model, and
+effort** (launches are usually the same project on the same settings). This
+used to be per-browser `localStorage`, which meant a laptop and an iPad
+disagreed and a fresh browser started blank. It now lives on the backend in
+the durable **global** prefs store (`dashboard/prefs.py` — a tiny kv table at
+`core.paths.DASH_PREFS_DB`, `~/.claude`, shared across every browser/device
+pointing at this one dashboard and surviving a reboot). `GET /api/ns-prefs`
+returns `{cwd, model, effort}` (`{}` until the first launch); the page primes
+`S.nsPrefs` from it at boot so `nsLast()` stays synchronous, and `nsRemember`
+POSTs to `/api/ns-prefs` on a successful launch — **exactly where and when it
+wrote `localStorage` before; only the storage moved.** `post_ns_prefs`
+re-validates `model`/`effort` against the same allowlists `post_new_session`
+uses (a bad value is dropped, never stored, so a corrupt pref can't later feed
+the launch path). This is the ONE piece of dashboard state that is global
+rather than per-session — `dashboard/prefs.py` is its single owner, unlike the
+per-session `core/state.py` kv (and unlike the `/tmp` `DASH_DB` lock, it is
+durable), and it CREATES its DB on demand (a global prefs DB has no
+session-alive meaning, so a reader making it is fine — the opposite of the
+per-session rule).
+
 ## Web quick commands (`POST /api/session/<sid>/command`)
 
 The scoreboard's SECOND action row (its own line under

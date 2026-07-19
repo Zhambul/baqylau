@@ -337,6 +337,9 @@ def test_tool_output_html_only_bash():
 def dash(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    # the durable global prefs DB (dashboard/prefs.py reads P.DASH_PREFS_DB
+    # fresh each call) — relocate so the suite never touches real ~/.claude
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "dash-prefs.db"))
     # Hermetic default: never enumerate the REAL kitty windows from the read
     # path (that would demote test sessions to not-live when the suite runs
     # inside a live kitty session). None = "can't enumerate → keep the state-DB
@@ -711,6 +714,56 @@ def test_ask_draft_persist_payload_and_sse(dash, monkeypatch):
                "answers": [{"selected": [], "other": ""}]})
     assert e.value.code == 409
     assert S.kv_get(log, "ask-draft")["answers"][0]["selected"] == ["Banana"]
+
+
+def test_composer_draft_persist_payload_and_sse(dash, monkeypatch):
+    """The web composer's UNSENT message survives a device switch / reopen /
+    return-to-session (docs/dashboard.md, *Web composer draft*): POST
+    /composer-draft writes the `composer-draft` kv (a pure state write — no
+    terminal keys), the session snapshot carries `composer_draft`, and the
+    per-session SSE re-broadcasts it as a `composer-draft` event so a peer box
+    tracks the edits. An emptied box deletes the stash (the card clears)."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "56")
+    A.session_start({"session_id": "cdr1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cdr1")
+    O.emit(log, O.label("hi", (1, 2, 3)))    # a live session has a state DB
+    assert _get_json(dash + "/api/session/cdr1")["composer_draft"] is None
+    # persist a half-typed message — no terminal write, so no frontend needed
+    code, resp = _post(dash + "/api/session/cdr1/composer-draft",
+                       {"text": "half a thought", "origin": "devA"})
+    assert code == 200 and json.loads(resp)["ok"]
+    draft = S.kv_get(log, "composer-draft")
+    assert draft["text"] == "half a thought" and draft["origin"] == "devA"
+    assert _get_json(dash + "/api/session/cdr1")["composer_draft"]["text"] \
+        == "half a thought"
+    data = _sse_event(dash + "/events/session/cdr1?after=0&mpos=0",
+                      "composer-draft")
+    assert data and json.loads(data)["draft"]["origin"] == "devA"
+    # an emptied / whitespace-only box deletes the stash → payload None
+    code, _ = _post(dash + "/api/session/cdr1/composer-draft",
+                    {"text": "   ", "origin": "devA"})
+    assert code == 200
+    assert S.kv_get(log, "composer-draft") is None
+    assert _get_json(dash + "/api/session/cdr1")["composer_draft"] is None
+
+
+def test_ns_prefs_roundtrip(dash):
+    """The new-session form's last-used {cwd, model, effort} live on the backend
+    now (docs/dashboard.md, *New-session prefs*) so a launch on one device
+    pre-selects on the next: GET /api/ns-prefs is {} until a POST remembers a
+    launch, then reads it back. model/effort are validated against the launch
+    allowlists — a bad value is dropped, never stored."""
+    assert _get_json(dash + "/api/ns-prefs") == {}
+    code, resp = _post(dash + "/api/ns-prefs",
+                       {"cwd": "/proj", "model": "opus", "effort": "high"})
+    assert code == 200 and json.loads(resp)["ok"]
+    assert _get_json(dash + "/api/ns-prefs") == {
+        "cwd": "/proj", "model": "opus", "effort": "high"}
+    # a bad effort is dropped, the good fields still persist
+    _post(dash + "/api/ns-prefs",
+          {"cwd": "/proj2", "model": "sonnet", "effort": "bogus"})
+    assert _get_json(dash + "/api/ns-prefs") == {"cwd": "/proj2",
+                                                 "model": "sonnet"}
 
 
 def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):

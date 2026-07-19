@@ -57,7 +57,7 @@ from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
 from dashboard import askdialog, confirmdialog, dictate, opshtml, \
-    plandialog, rewindmenu
+    plandialog, prefs, rewindmenu
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -592,6 +592,9 @@ def session_payload(sid):
     # deletes the on-disk task files at session end — the stash is the only
     # record left), so a parked session still shows its final task list
     data["tasks"] = _session_tasks(sid)
+    # deliberately NOT live-gated: the composer stays usable on a PARKED
+    # session (the resume-&-send door), so its draft must restore there too
+    data["composer_draft"] = _composer_draft(sid)
     return data
 
 
@@ -629,6 +632,22 @@ def _ask_draft(sid, ask=None):
     if not isinstance(draft, dict):
         return None
     if (draft.get("tool_use_id") or "") != (ask.get("tool_use_id") or ""):
+        return None
+    return draft
+
+
+def _composer_draft(sid):
+    """The UNSENT composer text (the `composer-draft` kv — written by the web
+    composer so a device switch / reopen / return-to-session restores the
+    half-typed message, docs/dashboard.md, *Web composer draft*). Read-only
+    (kv_at — never creates the state DB; resolves the parked copy for a parked
+    session, so a resume-&-send draft survives too). None when there's no draft
+    or the stored text is empty — None keeps the composer blank."""
+    sdb = API.state_db_for(sid)
+    if not sdb:
+        return None
+    draft = API.kv_at(sdb, "composer-draft")
+    if not isinstance(draft, dict) or not (draft.get("text") or "").strip():
         return None
     return draft
 
@@ -1246,6 +1265,12 @@ class Handler(BaseHTTPRequestHandler):
             if not os.path.isdir(cwd):
                 cwd = ""
             return self._json(plugins.slash_commands(cwd))
+        if api == ["ns-prefs"]:
+            # the new-session form's last-used {cwd, model, effort} — moved off
+            # per-browser localStorage into the durable global prefs store so a
+            # launch on one device pre-selects on the next (docs/dashboard.md,
+            # *New-session prefs*). {} when nothing launched yet.
+            return self._json(prefs.get("new-session", {}))
         if len(api) >= 2 and api[0] == "session" and _sid(api[1]):
             sid, rest = api[1], api[2:]
             if not rest:
@@ -1347,6 +1372,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "ask-draft":
             return self.post_ask_draft(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "composer-draft":
+            return self.post_composer_draft(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "plan-options":
             return self.post_plan_options(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -1354,6 +1382,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_plan_decision(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
+        if api == ["ns-prefs"]:
+            return self.post_ns_prefs()
         if api == ["dictate", "token"]:
             return self.post_dictate_token()
         return self._json({"error": "not found"}, 404)
@@ -1896,6 +1926,50 @@ class Handler(BaseHTTPRequestHandler):
                       "origin": draft["origin"]})
         return self._json({"ok": True})
 
+    def post_composer_draft(self, sid):
+        """Persist the UNSENT composer text (the message box's in-progress
+        draft) to the `composer-draft` kv so another device — or the same one
+        after a reload / a return to this session from another — restores it
+        (docs/dashboard.md, *Web composer draft*). Like post_ask_draft this
+        types NOTHING into the terminal: a pure state write, distinct from
+        post_message (which sends). The session SSE re-broadcasts the draft as
+        a `composer-draft` event so an already-open composer on another device
+        updates live; the writer suppresses its own echo via `origin`.
+
+        Body: `text` (the current draft — empty/blank DELETES the stash so the
+        box clears everywhere), `origin` (an opaque per-page id, echoed back
+        over SSE). Best-effort: a write failure is a 500 but the box keeps its
+        local text and retries on the next change. Unlike the ask draft there
+        is no tool_use_id / turn-boundary lifecycle — a message draft has no
+        natural expiry, so it lives until sent or overwritten (that IS the
+        'come back and it's still there' the user asked for)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        text = body.get("text")
+        if not isinstance(text, str):
+            return self._json({"error": "text must be a string"}, 400)
+        origin = str(body.get("origin") or "")
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        if text.strip():
+            draft = {"text": text, "origin": origin}
+            if not ST.kv_set_at(sdb, "composer-draft", draft):
+                A.error(log, "dashboard composer-draft (write failed)",
+                        {"sid": sid})
+                return self._json({"error": "draft not saved"}, 500)
+            A.state_file(log, sdb, "composer-draft",
+                         {"action": "write", "chars": len(text),
+                          "origin": origin})
+        else:
+            # an emptied box clears the stash everywhere (kv_del_at, not kv_del:
+            # this runs on a request-handler THREAD — see _heal_stash)
+            ST.kv_del_at(sdb, "composer-draft")
+            A.state_file(log, sdb, "composer-draft",
+                         {"action": "remove", "origin": origin})
+        return self._json({"ok": True})
+
     def post_answer(self, sid):
         """Answer the session's OPEN AskUserQuestion dialog from the web (the
         ask card — docs/dashboard.md, *Web ask*): drives the TUI's own dialog
@@ -2252,6 +2326,39 @@ class Handler(BaseHTTPRequestHandler):
         # an id — the page falls back to its cwd heuristic.
         return self._json({"ok": True, "win": win})
 
+    def post_ns_prefs(self):
+        """Remember the new-session form's last-used {cwd, model, effort} in the
+        durable GLOBAL prefs store (dashboard/prefs.py) so the next launch — on
+        this device or any other pointing at this dashboard — pre-selects them
+        (docs/dashboard.md, *New-session prefs*). The page calls this on a
+        successful launch, exactly where it used to write localStorage; the
+        BEHAVIOUR is unchanged, only the storage moved to the backend.
+
+        Body: `cwd` (string), `model`/`effort` (validated against the same
+        allowlists post_new_session uses — a bad value is dropped, never
+        stored, so a corrupt pref can't later feed the launch path). Missing
+        fields are simply omitted from the stored record. Best-effort: a write
+        failure is a 500 but the launch itself already succeeded."""
+        body = self._post_guard()
+        if body is None:
+            return
+        rec = {}
+        cwd = body.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            rec["cwd"] = cwd
+        model = body.get("model")
+        if isinstance(model, str) and _MODEL_OK.match(model):
+            rec["model"] = model
+        effort = body.get("effort")
+        if effort in EFFORTS:
+            rec["effort"] = effort
+        if not prefs.set("new-session", rec):
+            A.error("", "dashboard ns-prefs (write failed)", {"rec": rec})
+            return self._json({"error": "prefs not saved"}, 500)
+        # global (no session) — audited with an empty log/path like web-launch
+        A.state_file("", "", "ns-prefs", dict(rec, action="write"))
+        return self._json({"ok": True})
+
     def post_dictate_token(self):
         """Mint a short-lived Deepgram grant for the browser's DIRECT wss
         connection (docs/dashboard.md *Web dictation* — the stdlib server
@@ -2383,7 +2490,7 @@ class Handler(BaseHTTPRequestHandler):
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
-                "tasks": None, "ask_draft": None}
+                "tasks": None, "ask_draft": None, "composer_draft": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2482,6 +2589,16 @@ class Handler(BaseHTTPRequestHandler):
                 if tasks != prev["tasks"]:
                     prev["tasks"] = tasks
                     if not self._sse("tasks", {"tasks": tasks}):
+                        return
+                # the unsent composer draft — so a composer open on ANOTHER
+                # device tracks this one's edits (the writer suppresses its own
+                # echo by `origin`; the page skips the repaint while its own
+                # box has focus). Slow cadence: a draft is convenience state, no
+                # one is blocked on it (unlike the ask/plan dialogs below).
+                cdraft = _composer_draft(sid)
+                if cdraft != prev["composer_draft"]:
+                    prev["composer_draft"] = cdraft
+                    if not self._sse("composer-draft", {"draft": cdraft}):
                         return
             tab = (API.tab_states().get(win) or "") if win else ""
             if tab != prev["tab"]:
