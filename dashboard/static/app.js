@@ -2144,8 +2144,18 @@ function buildComposer() {
       postJSON("/api/sessions/new", body)
         .then(() => {
           // the revived session appears via its own SessionStart (then forks
-          // sids — adopt); the armed jump follows it, same as a form resume
-          armJump(meta.cwd, S.cur);
+          // sids — adopt); the armed jump follows it, same as a form resume.
+          // But the launch POST succeeding is not the session arriving — if it
+          // never boots, the composer stays disabled forever (the success path
+          // has no finally). onfail revives it when the watch times out so the
+          // typed message isn't trapped behind a dead box.
+          armJump(meta.cwd, S.cur, { onfail: () => {
+            if (S.ses !== ses || ses.composer !== ta) return;   // moved on
+            ta.disabled = false; btn.disabled = false;
+            saveComposerDraft(ses, sid);   // re-stash (send-start cleared it)
+            toast("ask", "resume timed out",
+                  "the session never came back — your message is kept; try again");
+          } });
           toast("done", "resuming session", "your message starts the revived turn");
         })
         .catch(e => {
@@ -2242,6 +2252,9 @@ function armJump(cwd, resumeSid, o) {
              //                       resolution toasts instead of navigating
              armedAt: Date.now(),  // the pending view's elapsed counter — must
              //                       survive the view unmounting/remounting
+             onfail: o.onfail || null,  // called if the watch times out with no
+             //                       pending view (a composer "resume & send",
+             //                       whose disabled composer needs re-enabling)
              known: new Set(S.sessions.map(r => r.sid)),
              liveAtArm: new Set(S.sessions.filter(r => r.live).map(r => r.sid)),
              until: Date.now() + JUMP_TIMEOUT_MS };
@@ -2286,7 +2299,9 @@ function jumpHit(sid, title) {
 }
 
 function jumpFail() {
+  const onfail = S.jump && S.jump.onfail;
   S.jump = null;
+  if (onfail) onfail();          // a composer resume: revive its dead composer
   if (S.pendingUI) showPendingFail();
 }
 
@@ -2835,18 +2850,36 @@ document.addEventListener("keydown", (e) => {
 // excluded, no % ceiling for a manual click; docs/relimit.md *Manual
 // migrate*). The old tab closes and a new one opens; the sid forks on
 // resume and the adopt machinery + jump watch carry the page over.
+// Lock an immediate (no-confirm) control-plane action button for the duration
+// of its POST so a double-tap can't fire the terminal write twice — ⇆ migrate
+// would spawn two racing migrators, ■ stop/⊘ cancel would double-send Escape.
+// `run` returns the POST promise; `rest` restores the button's resting state
+// once it settles (default: re-enable; cancel re-derives from the tab). This
+// lives on the buttons, not the functions, because the Esc-key gesture has its
+// own escHold debounce and the functions are shared by both entry points.
+function lockDuring(btn, run, rest) {
+  btn.disabled = true;
+  run().finally(rest || (() => { btn.disabled = false; }));
+}
+
+// Returns the POST promise so the button wiring can disable itself for the
+// round-trip — a double-click on ⇆ migrate would otherwise spawn two racing
+// migrators (each closing the tab, each picking a target). The guard path
+// resolves so a caller's `.finally` re-enable still runs.
 function migrateSession() {
-  if (!S.cur) return;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/migrate", {})
+  if (!S.cur) return Promise.resolve();
+  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/migrate", {})
     .then(r => toast("done", "migrating",
                      "resuming on " + ((r && r.to) || "another account")))
     .catch(e => toast("ask", "migrate failed", (e && e.error) || ""));
 }
 
+// Returns the POST promise for the same in-flight button lock (a double-tap
+// mid round-trip would send Escape to the terminal twice).
 function interruptSession() {
   const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return Promise.resolve();
+  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
     .then(r => {
       if (BUSY_TABS.includes(r && r.tab))
         toast("done", "interrupted", "Esc sent to the session");
@@ -2889,12 +2922,12 @@ const CANCEL_TABS = ["thinking", "working", "executing", "awaiting-bg",
 // rewind command, not cancel).
 function cancelEdit() {
   const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  if (!S.cur || !meta.live || !meta.kitty_window_id) return Promise.resolve();
   if (!CANCEL_TABS.includes(liveTab())) {
     toast("done", "nothing to cancel", "no turn is running");
-    return;
+    return Promise.resolve();
   }
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
+  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
     .then(r => {
       if (r && r.mode === "cancel-edit") {
         applyCancelEdit(r.restored || "");
@@ -3330,7 +3363,7 @@ function renderSessionChrome(tab) {
   // (like ■ stop), and like rename it works live AND parked.
   const mig = el("button", "sstop", "⇆ migrate");
   mig.title = "migrate this session to another account";
-  mig.onclick = () => migrateSession();
+  mig.onclick = () => lockDuring(mig, migrateSession);
   act.append(mig);
   if (meta.live && meta.kitty_window_id) {
     // stop: interrupt the agent in place — an Escape key press in the
@@ -3338,13 +3371,16 @@ function renderSessionChrome(tab) {
     // Immediate, no confirm: it matches pressing Esc in the terminal.
     const stop = el("button", "sstop", "■ stop");
     stop.title = "interrupt the agent (Esc)";
-    stop.onclick = () => interruptSession();
+    stop.onclick = () => lockDuring(stop, interruptSession);
     act.append(stop);
     // cancel: mid-turn double-Esc — cancel the running turn and restore your
     // message into the composer for editing. Enabled only while a turn runs.
     const cancel = el("button", "sstop", "⊘ cancel");
     cancel.title = "cancel this turn and edit your message (mid-turn double-Esc)";
-    cancel.onclick = () => cancelEdit();
+    // resting state re-derives from the tab (idle → stays disabled) rather
+    // than a blind re-enable, matching ses.cancelMode's own gate
+    cancel.onclick = () => lockDuring(cancel, cancelEdit,
+                                      () => ses.cancelMode(liveTab()));
     ses.cancelMode = (tab) => { cancel.disabled = !CANCEL_TABS.includes(tab); };
     ses.cancelMode(liveTab());
     act.append(cancel);

@@ -379,7 +379,15 @@ has no readiness window at all. The armed `armJump(cwd, sid)` watch then
 follows the revived session (SessionStart under the OLD sid, adopt-fork
 after — the *jump* section's resume case), the toast says "resuming
 session", and on ANY failure (dead cwd → 400, no terminal → 503) the draft
-stays in the box — nothing is lost on a failed wake. The heavyweight action
+stays in the box — nothing is lost on a failed wake. A launch that POSTs OK
+but never produces a session (claude fails to boot after the command returned,
+so no SessionStart, so the watch never hits) is the one case the success path
+can't see: the composer disables on send and would stay dead forever (the
+success branch has no `finally`). The watch's `onfail` closes it — fired by
+`jumpFail` when the 120 s `JUMP_TIMEOUT_MS` elapses with no arrival, it
+re-enables the composer, re-stashes the draft, and toasts *resume timed out*
+(guarded on still being that session's composer, so a user who navigated away
+mid-wait is never yanked). The heavyweight action
 stays deliberate by wording alone: from the iPad, "resume & send" opens a
 real kitty tab on the laptop — the label is the consent. Reused, not new:
 the launch is the form's own audited `web-launch` path (the row carries
@@ -775,7 +783,18 @@ detached migrator the automatic rate-limit path uses, in `mode=manual` (bare
 row; `409` when no other account qualifies, `404` for a sid this machine has
 never seen (the migrator's park check can't tell "parked" from "never
 existed"). Full mechanics + the manual/auto differences: docs/relimit.md
-*Manual migrate*.
+*Manual migrate*. No-confirm stays (the click IS the intent — docs/relimit.md
+*Manual migrate*), but the button DISABLES for the round-trip (`lockDuring` in
+app.js): "no confirm" means one deliberate click is enough, not that a
+double-tap during the ~1s POST should spawn TWO racing migrators (each closing
+the tab and picking a target). The same closure-local in-flight lock guards the
+other immediate no-confirm header actions — ■ stop and ⊘ cancel would otherwise
+double-send Escape mid-flight; it re-enables on settle (cancel re-derives from
+the tab, so an idle turn keeps it disabled). This is button-closure state, not
+`S` like the card ✕ (above): nothing tears the detail view's action row down
+mid-action, and the Esc-KEY gesture path has its own `escHold` debounce, so the
+lock lives on the buttons rather than the shared `interruptSession`/`cancelEdit`
+/`migrateSession` functions (which just return their POST promise for it).
 
 `POST /api/session/<sid>/rewind` mirrors Claude Code's double-Esc, whose
 MEANING depends on session state — and the endpoint splits on the tab
