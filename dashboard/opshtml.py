@@ -302,15 +302,19 @@ def op_items(ops, key=""):
     secondary-codex detail lives in the per-agent drill-down, while the
     terminal mirror keeps painting everything. What survives of an agent here
     is the main session's own record of it (the subagent_fmt launch header +
-    finish chip, emitted by the hook process, unstamped). Pre-stamp history
-    (parked DBs) has no `src`, so old sessions render as before — the client's
-    heuristic `agents` filter chip still covers those."""
+    finish chip, emitted by the hook process, unstamped) PLUS the two endpoints
+    of the subagent's own contribution — its ⇢ prompt and ⇠ result blocks, which
+    the substream stamps `web` to override the drop (core/ops.py's "web" field);
+    everything in between stays drill-down only. Pre-stamp history (parked DBs)
+    has no `src`, so old sessions render as before — the client's heuristic
+    `agents` filter chip still covers those (a prompt/result chip opens with the
+    agent label, not a command glyph, so it classifies as `agents`)."""
     out = []
     for op in ops:
         if not isinstance(op, dict):
             continue
         t = op.get("t")
-        if t in ("rule", "blank") or op.get("src"):
+        if t in ("rule", "blank") or (op.get("src") and not op.get("web")):
             continue
         h = op_html(op, key)
         if h:

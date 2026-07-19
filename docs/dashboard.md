@@ -137,12 +137,22 @@ in-hook-process producer of agent ops (a subagent's monitor header,
 stamped ops (and `server._cut_blocks` skips them when sizing the backlog
 window, so "newest N blocks" means N *visible* blocks). What survives of an
 agent is the lead's own record of it — the `subagent_fmt` launch header and
-finish chip — and the full detail lives in the per-agent drill-down
-(`plugins.activity()`), which reads transcripts, not ops. Why filter at
-render, not at write: the terminal mirror must keep painting everything
-(same ops table, two presenters), and the stamp doubles as provenance in the
-audit's op rows. Pre-stamp history (parked DBs) has no `src` and renders as
-before — the client's heuristic `agents` filter chip still covers those.
+finish chip — PLUS the two endpoints of the subagent's own contribution: its
+`⇢ prompt` and `⇠ result` blocks. Those are the one exception to the
+main-agent-only rule: the substream stamps them `web=1` (a keep-on-the-web
+override, `core/ops.py`'s "web" field) so `op_items` keeps them despite the
+`src` stamp, while everything in between (its messages, commands, file ops)
+stays drill-down only. The full detail lives in the per-agent drill-down
+(`plugins.activity()`), which reads transcripts, not ops. Why surface just
+those two: a subagent reads on the dashboard as "here's what I asked it, here's
+what it gave back," without the wall of intermediate work the terminal pane
+shows inline. A surfaced prompt/result chip opens with the agent's label (not a
+`▶▷◉■` command glyph), so the client's heuristic classifier files it under the
+`agents` filter, same as before. Why filter at render, not at write: the
+terminal mirror must keep painting everything (same ops table, two presenters),
+and the stamp doubles as provenance in the audit's op rows. Pre-stamp history
+(parked DBs) has no `src` and renders as before — the client's heuristic
+`agents` filter chip still covers those.
 
 **Security — the `neutralize()` analog.** Op text is raw command output
 (attacker-adjacent bytes; the `@kitty-cmd` replay incident is the terminal

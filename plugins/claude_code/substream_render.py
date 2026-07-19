@@ -118,7 +118,7 @@ class Renderer:
 
     # --- small line/block builders ------------------------------------------
 
-    def chip(self, glyph, kind, ctx="", g=None, lk=None):
+    def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False):
         # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
         # turn, rather than on its own gutter line below it. g ties a block's header + its
         # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
@@ -127,14 +127,14 @@ class Renderer:
         # blocks (core/copy.py), just double-guttered here. Shape shared with the codex
         # stream via core/streamfmt.py; the model tag + ctx ride as trailing tags.
         return SF.chip(self.label, glyph, kind, self.rgb,
-                       tags=(self._op_tag(), ctx), g=g, lk=lk)
+                       tags=(self._op_tag(), ctx), g=g, lk=lk, web=web)
 
-    def gutter(self, text, g=None):
-        return SF.gutter(text, self.rgb, g=g)
+    def gutter(self, text, g=None, web=False):
+        return SF.gutter(text, self.rgb, g=g, web=web)
 
-    def msg_gutter(self, text, g=None):
+    def msg_gutter(self, text, g=None, web=False):
         # Assistant text is markdown -> render the subset (bold/italic/code/headings/bullets).
-        return O.gut(R.markdown(R.unescape(text)), self.rgb, g=g)
+        return O.gut(R.markdown(R.unescape(text)), self.rgb, g=g, web=web)
 
     # --- transcript blocks ----------------------------------------------------
 
@@ -146,9 +146,13 @@ class Renderer:
         if self.pending_msg is None:
             return
         glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
+        # The final result is one of the two subagent blocks the web dashboard's
+        # main mirror surfaces (web=True); intermediate ✎ messages stay drill-down
+        # only — see core/ops.py's "web" field and dashboard/opshtml.op_items.
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL),
-               self.msg_gutter(cap(self.pending_msg, CAP_MSG), g=g))
+        O.emit(self.log,
+               self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL, web=is_result),
+               self.msg_gutter(cap(self.pending_msg, CAP_MSG), g=g, web=is_result))
         self.pending_msg = None
         self.pending_tag = ""
 
@@ -165,10 +169,12 @@ class Renderer:
         O.emit(self.log, O.gut(AMBER + txt + RST, self.rgb))
 
     def render_prompt(self, text):
+        # The spawn prompt is the other subagent block the web dashboard's main
+        # mirror surfaces (web=True) — see flush_msg above and core/ops.py's "web".
         self.flush_msg()
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip("⇢", "prompt", g=g, lk=O.COPY_ALL),
-               self.gutter(cap(text.strip(), CAP_PROMPT), g=g))
+        O.emit(self.log, self.chip("⇢", "prompt", g=g, lk=O.COPY_ALL, web=True),
+               self.gutter(cap(text.strip(), CAP_PROMPT), g=g, web=True))
 
     def render_teammsg(self, sender, body):
         # An incoming agent-team message (mail from another teammate or the lead).

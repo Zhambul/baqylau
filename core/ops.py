@@ -42,6 +42,14 @@
 # dashboard's mirror is main-agent-only and drops stamped ops at render
 # (dashboard/opshtml.op_items — agent detail lives in the drill-down there).
 #
+# Any op may ALSO carry "web": a keep-on-the-web-mirror override. The web
+# dashboard drops src-stamped ops (above), but a handful of a subagent's ops
+# are worth surfacing in the MAIN mirror alongside its unstamped launch header:
+# its ⇢ prompt and ⇠ result blocks (substream_render.render_prompt / flush_msg)
+# — the two endpoints of a subagent's contribution. Those ops set web=1 so
+# op_items keeps them despite the stamp; everything in between stays drill-down
+# only. Inert everywhere else (the terminal renderer and op_html ignore it).
+#
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
 # one activity block together (the Bash tool_use_id, the backgroundTaskId for a
 # background job, or any synthesised per-block id). A g-tagged label is painted with
@@ -72,8 +80,10 @@ def rule():
     return {"t": "rule"}
 
 
-def label(s, c, outer=None, g=None, lk=None):
+def label(s, c, outer=None, g=None, lk=None, web=False):
     o = {"t": "label", "s": s, "c": _rgb(c)}
+    if web:
+        o["web"] = 1
     if outer is not None:
         o["outer"] = _rgb(outer)
     if g:
@@ -107,8 +117,11 @@ def code(s, ind="  ", g=None):
     return o
 
 
-def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None):
+def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
+        web=False):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
+    if web:
+        o["web"] = 1
     if view:
         # Click-to-view id (see line()) — a subagent's file-op one-liner is a
         # gut op, so gut carries the same expansion tag.

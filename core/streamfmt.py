@@ -25,21 +25,25 @@ def cap(text, n):
     return "\n".join(lines[:n]) + f"\n… ({more} more line{'s' if more != 1 else ''})"
 
 
-def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None):
+def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False):
     """The block-header label op: '<who> <glyph> <kind>[  tag]…' in the stream's
     colour. `tags` are optional trailing chips (model/effort tag, ctx %) — empty
     ones are skipped, each joins with a double space. g/lk are the ⧉ copy-group
-    wiring (core/copy.py), passed straight through to O.label."""
+    wiring (core/copy.py), passed straight through to O.label. web=True keeps this
+    stamped op in the web dashboard's main mirror (a subagent prompt/result
+    header — see core/ops.py's "web" field)."""
     s = f"{who} {glyph} {kind}"
     for t in tags:
         if t:
             s += f"  {t}"
-    return O.label(s, rgb, g=g, lk=lk)
+    return O.label(s, rgb, g=g, lk=lk, web=web)
 
 
-def gutter(text, rgb, g=None):
-    """Body text behind the stream-coloured gutter bar (escapes neutralised)."""
-    return O.gut(R.unescape(text), rgb, g=g)
+def gutter(text, rgb, g=None, web=False):
+    """Body text behind the stream-coloured gutter bar (escapes neutralised).
+    web=True keeps this stamped op in the web dashboard's main mirror (a subagent
+    prompt/result body — see core/ops.py's "web" field)."""
+    return O.gut(R.unescape(text), rgb, g=g, web=web)
 
 
 def dim_gut(text, rgb, g=None):

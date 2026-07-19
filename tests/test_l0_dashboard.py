@@ -102,6 +102,30 @@ def test_op_items_drop_producer_source_stamped_ops():
     assert [it["html"] for it in items] == ['<pre class="opl">main line</pre>']
 
 
+def test_op_items_keep_web_flagged_stamped_ops():
+    # A subagent's ⇢ prompt / ⇠ result blocks carry BOTH src and web=1
+    # (core/ops.py "web"): the stamp says agent, web says surface it in the
+    # main mirror anyway. They survive; the agent's other stamped ops don't.
+    items = opshtml.op_items(
+        [{"t": "label", "s": "a ⇢ prompt", "c": [1, 2, 3], "g": "s1",
+          "src": "sub:a1", "web": 1},
+         {"t": "gut", "s": "do the thing", "c": [1, 2, 3], "g": "s1",
+          "src": "sub:a1", "web": 1},
+         {"t": "gut", "s": "intermediate work", "c": [1, 2, 3], "src": "sub:a1"},
+         {"t": "label", "s": "a ⇠ result", "c": [1, 2, 3], "g": "s2",
+          "src": "sub:a1", "web": 1}], "k")
+    assert [(it["g"], it["t"]) for it in items] == \
+        [("s1", "label"), ("s1", "gut"), ("s2", "label")]
+
+
+def test_ops_label_gut_web_field():
+    # core/ops.py sets the web override only when asked; default off.
+    assert O.label("h", (1, 2, 3), web=True).get("web") == 1
+    assert O.gut("b", (1, 2, 3), web=True).get("web") == 1
+    assert "web" not in O.label("h", (1, 2, 3))
+    assert "web" not in O.gut("b", (1, 2, 3))
+
+
 # ------------------------------------------------------------------ md_html
 # The conversation-text markdown subset. The load-bearing property is ESCAPING
 # (the neutralize() analog): <script> must survive as escaped text in EVERY
