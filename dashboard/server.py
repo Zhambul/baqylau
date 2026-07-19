@@ -2411,12 +2411,15 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         key = body.get("cwd")
-        # repr() in the audit: a validation reject must keep the EXACT received
+        # The EMPTY string is a valid key — it is the list's "no project"
+        # aggregate group (sessions with no cwd / git root), which the user can
+        # hide like any other. Only a MISSING/non-string cwd (None etc.) is a bad
+        # request. repr() in the audit: a reject must keep the EXACT received
         # bytes (same rule as new-session's bad cwd). len cap: a group key is a
         # path — no legitimate one runs long, and the store is not a bucket.
-        if not isinstance(key, str) or not key or len(key) > 4096:
+        if not isinstance(key, str) or len(key) > 4096:
             A.error("", "dashboard hide-dir (bad key)", {"cwd": repr(key)})
-            return self._json({"error": "cwd must be a non-empty string"}, 400)
+            return self._json({"error": "cwd must be a string"}, 400)
         ts = time.time()
         m = prefs.hide_dir(key, ts)
         A.state_file("", "", "hide-dir", {"key": key, "hidden_at": ts})

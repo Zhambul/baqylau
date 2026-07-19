@@ -617,17 +617,20 @@ function renderDirGroups(groups) {
     hd.append(el("span", "dirname", g.cwd ? g.cwd.split("/").filter(Boolean).pop() : "no project"));
     if (g.cwd) hd.append(el("span", "dirpath", g.cwd));
     hd.append(el("span", "dircount", g.count + (g.count === 1 ? " session" : " sessions")));
-    if (g.cwd) {
+    if (g.cwd) {                        // "+" only where a launch has a cwd
       const add = el("button", "dirnew", "+");
       add.title = "new session in " + g.cwd;
       add.onclick = () => openNewSession(g.cwd);
       hd.append(add);
-      const hide = el("button", "dirhide", "✕");
-      hide.title = "hide this directory from the list "
-        + "(re-appears when a new session starts here)";
-      hide.onclick = () => hideDir(g.cwd);
-      hd.append(hide);
     }
+    // ✕ hides ANY group, including the projectless aggregate (g.cwd === "") —
+    // its group key is the empty string, which hideDir/the server accept
+    const hide = el("button", "dirhide", "✕");
+    hide.title = g.cwd
+      ? "hide this directory from the list (re-appears when a new session starts here)"
+      : "hide the projectless sessions from the list (re-appears when a new one starts)";
+    hide.onclick = () => hideDir(g.cwd);
+    hd.append(hide);
     $view.append(hd);
     if (g.active.length) {
       const grid = el("div", "sgrid");

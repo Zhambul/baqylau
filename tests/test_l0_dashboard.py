@@ -774,7 +774,8 @@ def test_hide_dir_prefs_roundtrip_and_validation(dash):
     /api/dirs/hidden reads it back (durable across requests). The re-appear rule
     (a session started after hidden_at un-hides the group) is client-side over
     the wire rows' started_at, so the server contract is just: stamp stored,
-    served, and a bad key refused."""
+    served, and a non-string key refused. The EMPTY string is a VALID key — the
+    'no project' aggregate group — not a bad request."""
     assert _get_json(dash + "/api/dirs/hidden") == {}
     t0 = time.time()
     code, body = _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"})
@@ -788,12 +789,16 @@ def test_hide_dir_prefs_roundtrip_and_validation(dash):
     code2, body2 = _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"})
     assert code2 == 200
     assert json.loads(body2)["hidden"]["/w/proj"] > d["hidden"]["/w/proj"]
-    # an empty / non-string key is refused (400), the store untouched
-    for bad in ("", 5):
+    # the "" key (the projectless aggregate group) is ACCEPTED and stored
+    code3, body3 = _post(dash + "/api/dirs/hide", {"cwd": ""})
+    assert code3 == 200 and "" in json.loads(body3)["hidden"]
+    assert "" in _get_json(dash + "/api/dirs/hidden")
+    # a non-string / missing cwd IS refused (400), the store untouched
+    for bad in (5, None):
         with pytest.raises(urllib.error.HTTPError) as e:
-            _post(dash + "/api/dirs/hide", {"cwd": bad})
+            _post(dash + "/api/dirs/hide", {"cwd": bad} if bad is not None else {})
         assert e.value.code == 400
-    assert list(_get_json(dash + "/api/dirs/hidden")) == ["/w/proj"]
+    assert set(_get_json(dash + "/api/dirs/hidden")) == {"/w/proj", ""}
 
 
 def test_hide_dir_behind_post_guard(dash, monkeypatch):

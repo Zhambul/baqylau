@@ -1879,11 +1879,15 @@ existing one continuing to stream.
 
 The **key is the list's group key** (`git.root || cwd`) — the page posts the
 group header's own `g.cwd`, which already holds that key, so the server stores it
-verbatim (validated as a non-empty string under a length cap; it is only ever a
-kv key and a client-side compare, never a filesystem path). The **new-session
-picker is deliberately NOT filtered** by `S.hidden` (its candidate list is the
-raw `S.sessions` cwds): a hidden directory must stay reachable to launch into —
-and doing so is exactly what un-hides it.
+verbatim (validated as a string under a length cap; it is only ever a kv key and
+a client-side compare, never a filesystem path). The **`✕` hides ANY group,
+including the projectless "no project" aggregate** (sessions with no cwd / git
+root): its group key is the empty string, which `hideDir` and the server accept
+as a first-class key — only a *missing / non-string* `cwd` is a bad request. The
+one thing that group lacks is the `+` new-session button (there is no directory
+to launch into). The **new-session picker is deliberately NOT filtered** by
+`S.hidden` (its candidate list is the raw `S.sessions` cwds): a hidden directory
+must stay reachable to launch into — and doing so is exactly what un-hides it.
 
 Like every control-plane write the POST sits behind `_post_guard` (so
 `CLAUDE_DASH_READONLY=1` disables it) and audits each hide as a `hide-dir`
