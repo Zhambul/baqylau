@@ -1032,9 +1032,16 @@ New always-audited swallow sites (previously silent — their absence used to ma
   account's stamp under the NEW account — `account_usage` must file by the
   stamp's slug; compare the `state_files` `limit-hit` content's slug with the
   pill showing it). A usage bar stuck at `resets now` = a stale snapshot
-  served raw — `/api/accounts` serves `sessionapi.effective_usage` (a 5h/7d
-  window whose reset passed is zeroed, reset dropped); the raw stash is still
-  readable in the session's state-DB `usage` kv for comparison. The stamp also
+  served raw — `/api/accounts` serves `sessionapi.effective_usage` (ANY
+  window — the 5h/7d pair or a model-scoped one like `seven_day_fable` —
+  whose reset passed is zeroed, reset dropped); the raw stash is still
+  readable in the session's state-DB `usage` kv for comparison. A MISSING
+  per-model bar (e.g. no "7d fable" despite the CLI's /usage screen showing
+  a Fable cap) is usually NOT a bug here: the capture is generic
+  (`statusline.parse_usage` takes every `rate_limits` window), but as of CLI
+  2.1.215 the statusline JSON carries only `five_hour`/`seven_day` — check
+  the raw `usage` kv: if the window key isn't there, Claude Code never sent
+  it and there is nothing downstream to fix. The stamp also
   carries `model` (`relimit.limit_model` — `fable` for a model-scoped limit,
   null for account-wide): chip says `fable limit hit`, and the new-session
   auto-picker skips the account only for that model — a wrong/missing scope

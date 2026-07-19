@@ -18,6 +18,7 @@
 
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -45,17 +46,45 @@ def _pct(v):
     return max(0, min(100, int(round(v))))
 
 
+# Window-key hygiene for parse_usage: `rate_limits` is external input riding
+# straight into a kv the dashboard renders — keys must look like window names
+# (never `ts`, the snapshot's own stamp), and a garbage payload must not bloat
+# the kv (MAX_WINDOWS caps it; the account-wide pair is always kept first).
+_KEY_OK = re.compile(r"^[a-z0-9_]{1,40}$")
+KNOWN_WINDOWS = ("five_hour", "seven_day")
+MAX_WINDOWS = 8
+
+
 def parse_usage(data):
-    """The stdin JSON → the `usage` kv shape, or None when no rate-limit block
-    is present (a fresh account before its first API response — leave the last
-    good value in place rather than overwrite it with nulls)."""
+    """The stdin JSON → the `usage` kv shape, or None when no rate-limit
+    window parses (a fresh account before its first API response — leave the
+    last good value in place rather than overwrite it with nulls). GENERIC
+    over windows: every `rate_limits.<key>.{used_percentage, resets_at}`
+    entry becomes `<key>`: pct + `<key>_reset`: epoch — the account-wide
+    five_hour/seven_day pair always first, then any OTHER window sorted by
+    key. As of CLI 2.1.215 only the account-wide pair exists (the /usage
+    screen's per-model weekly bar has NO statusline counterpart — verified
+    against live payloads 2026-07-19); when Claude Code starts reporting a
+    model-scoped window (e.g. `seven_day_fable`), it flows through here, the
+    kv, and the dashboard's per-window bars with no code change."""
     rl = (data or {}).get("rate_limits") or {}
-    fh, sd = rl.get("five_hour") or {}, rl.get("seven_day") or {}
-    fh_pct, sd_pct = _pct(fh.get("used_percentage")), _pct(sd.get("used_percentage"))
-    if fh_pct is None and sd_pct is None:
-        return None
-    return {"five_hour": fh_pct, "five_hour_reset": _epoch_s(fh.get("resets_at")),
-            "seven_day": sd_pct, "seven_day_reset": _epoch_s(sd.get("resets_at"))}
+    known = [k for k in KNOWN_WINDOWS if k in rl]
+    extra = sorted(k for k in rl if isinstance(k, str) and k not in KNOWN_WINDOWS)
+    out, nwin = {}, 0
+    for key in known + extra:
+        if nwin >= MAX_WINDOWS:
+            break
+        w = rl.get(key)
+        if not _KEY_OK.match(key) or key == "ts" or not isinstance(w, dict):
+            continue
+        pct = _pct(w.get("used_percentage"))
+        if pct is None:
+            continue
+        out[key], nwin = pct, nwin + 1
+        reset = _epoch_s(w.get("resets_at"))
+        if reset is not None:
+            out[key + "_reset"] = reset
+    return out or None
 
 
 def capture(raw):

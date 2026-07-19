@@ -241,7 +241,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
-| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured 5h/7d usage (aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset); backs the new-session picker and the top usage strip |
+| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair + any model-scoped window the CLI reports, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
@@ -1438,8 +1438,17 @@ read from the env contract — no token touched) and shown in the session header
 
 **Usage limits (5h / 7d).** Claude Code exposes per-session rate-limit data to
 exactly ONE place — the **status-line command's stdin** JSON
-(`rate_limits.{five_hour,seven_day}.{used_percentage,resets_at}`), after each API
-response. It is NOT in any hook payload, the transcript, or OTEL (all checked),
+(`rate_limits.<window>.{used_percentage,resets_at}`), after each API
+response. The capture is GENERIC over windows (`statusline.parse_usage`):
+every `rate_limits` entry with a parseable used-% lands in the `usage` kv as
+`<window>` + `<window>_reset` — the account-wide `five_hour`/`seven_day` pair
+always first, then any model-scoped window sorted by key. As of CLI 2.1.215
+only the account-wide pair exists (verified against live payloads
+2026-07-19: the `/usage` screen's per-model weekly bar — e.g. the Fable
+cap — has NO statusline counterpart yet); the moment Claude Code starts
+reporting one (say `seven_day_fable`), it flows through the kv, the
+aggregation, and the strip's bars with no code change. Rate-limit data is NOT
+in any hook payload, the transcript, or OTEL (all checked),
 and the API endpoint that would return it needs a `user:profile` scope the
 `setup-token`-minted account tokens lack (403). So the number is captured by
 **wrapping the status line**: `bin/claude-statusline.py`
@@ -1460,9 +1469,15 @@ terminal scoreboard (id row), and a **strip across the top of every dashboard
 page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (the
 freshest snapshot across that account's sessions —
 `core/sessionapi.account_usage`, shared with the rate-limit migration's target
-picker), polled slowly and hidden until some account has usage. The served
-`usage` is the **effective** snapshot (`sessionapi.effective_usage`): a 5h or
-7d window whose reset time has passed (or, reset unknown, whose snapshot is
+picker), polled slowly and hidden until some account has usage. The pill
+renders **one bar per captured window** (app.js `usageWindows`/`windowLabel`
+— `five_hour` → "5h", `seven_day` → "7d", a future `seven_day_fable` → "7d
+fable"), in the served order; the new-session picker's option text joins the
+same windows. The served
+`usage` is the **effective** snapshot (`sessionapi.effective_usage`): any
+window — the 5h/7d pair or a model-scoped one (`sessionapi.usage_windows`,
+span fallback `window_span`) — whose reset time has passed (or, reset
+unknown, whose snapshot is
 older than the window) rolled over — its used% is zeroed and its reset
 DROPPED before serving. Without that, an account with no recent session keeps
 its last snapshot forever, and app.js's `resetAgo()` renders any past epoch

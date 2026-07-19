@@ -266,10 +266,34 @@ def effective_five_hour(usage, now=None):
     return 0 if _window_rolled(usage, "five_hour", FIVE_HOUR_S, now) else int(pct)
 
 
+def usage_windows(usage):
+    """The window keys present in a usage snapshot, in display order: the
+    account-wide pair first (five_hour, seven_day), then any model-scoped
+    window (e.g. `seven_day_fable`) sorted by key. A window is a numeric
+    used-% that isn't the `ts` stamp or a `*_reset` sibling. The dict itself
+    is already built in this order (statusline.parse_usage) and json/JS
+    preserve it, but consumers that ENUMERATE go through here — the one owner
+    of what counts as a window (docs/styleguide.md single-owner table)."""
+    keys = [k for k, v in (usage or {}).items()
+            if isinstance(v, (int, float)) and k != "ts"
+            and not k.endswith("_reset")]
+    known = [k for k in ("five_hour", "seven_day") if k in keys]
+    return known + sorted(k for k in keys if k not in ("five_hour", "seven_day"))
+
+
+def window_span(key):
+    """A window key's length in seconds: 5h for the five_hour* family, 7d for
+    everything else — model-scoped windows are weekly, like the seven_day pair
+    they extend. Only the rolled-over fallback arithmetic uses this (a
+    snapshot with a resets_at never needs it)."""
+    return FIVE_HOUR_S if key.startswith("five_hour") else SEVEN_DAY_S
+
+
 def effective_usage(usage, now=None):
-    """A display-ready copy of a usage snapshot: each window (5h / 7d) that
-    rolled over (_window_rolled) has its used% zeroed and its reset dropped.
-    Without this, an account with no recent session serves its last-known
+    """A display-ready copy of a usage snapshot: each window (the 5h/7d pair
+    AND any model-scoped window — usage_windows) that rolled over
+    (_window_rolled) has its used% zeroed and its reset dropped. Without
+    this, an account with no recent session serves its last-known
     percentages with an already-past reset epoch, which the dashboard pill
     renders as 'resets now' — forever. Same single-owner arithmetic as
     effective_five_hour; the page reads the served values, never re-derives
@@ -278,9 +302,8 @@ def effective_usage(usage, now=None):
         return usage
     now = time.time() if now is None else now
     out = dict(usage)
-    for key, span in (("five_hour", FIVE_HOUR_S), ("seven_day", SEVEN_DAY_S)):
-        if (isinstance(out.get(key), (int, float))
-                and _window_rolled(out, key, span, now)):
+    for key in usage_windows(out):
+        if _window_rolled(out, key, window_span(key), now):
             out[key] = 0
             out.pop(key + "_reset", None)
     return out

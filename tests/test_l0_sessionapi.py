@@ -360,6 +360,29 @@ def test_effective_usage_rolls_stale_windows():
     assert API.effective_usage({"five_hour": "n/a", "ts": 0}, now) == {
         "five_hour": "n/a", "ts": 0}
     assert API.effective_usage(None, now) is None
+    # a MODEL-SCOPED window (generic capture — e.g. seven_day_fable) rolls
+    # exactly like the account-wide pair: live reset → as-is, passed reset →
+    # zeroed + reset dropped, no reset → the 7d span fallback (window_span)
+    fable = dict(live, seven_day_fable=80, seven_day_fable_reset=now + 100)
+    assert API.effective_usage(fable, now) == fable
+    eff = API.effective_usage(dict(fable, seven_day_fable_reset=now - 10), now)
+    assert eff["seven_day_fable"] == 0 and "seven_day_fable_reset" not in eff
+    assert eff["five_hour"] == 29                     # others untouched
+    assert API.effective_usage(
+        {"seven_day_fable": 80, "ts": now - API.SEVEN_DAY_S - 1},
+        now)["seven_day_fable"] == 0
+
+
+def test_usage_windows_order_and_span():
+    # windows enumerate account-wide pair first, then model windows by key;
+    # ts and *_reset siblings and non-numerics are never windows
+    u = {"seven_day_fable": 80, "five_hour": 10, "seven_day": 20,
+         "five_hour_reset": 1.0, "ts": 5.0, "junk": "x"}
+    assert API.usage_windows(u) == ["five_hour", "seven_day", "seven_day_fable"]
+    assert API.usage_windows(None) == []
+    assert API.window_span("five_hour") == API.FIVE_HOUR_S
+    assert API.window_span("seven_day") == API.SEVEN_DAY_S
+    assert API.window_span("seven_day_fable") == API.SEVEN_DAY_S
 
 
 def test_limit_hit_active_window():

@@ -266,9 +266,20 @@ function renderAttention() {
 
 const ACCOUNTS_POLL_MS = 60000;
 
-function usagePct(u, key) {
-  const v = u && u[key];
-  return typeof v === "number" ? v : null;
+// The window keys of a usage snapshot, in the server's serve order (the
+// account-wide 5h/7d pair first, then model-scoped windows like
+// seven_day_fable — core/sessionapi.usage_windows is the owner of this rule;
+// the served dict is already built in that order and JSON preserves it):
+// numeric used-%, never the ts stamp or a *_reset sibling.
+function usageWindows(u) {
+  return Object.keys(u || {}).filter(k =>
+    typeof u[k] === "number" && k !== "ts" && !k.endsWith("_reset"));
+}
+
+// "five_hour" → "5h", "seven_day" → "7d", "seven_day_fable" → "7d fable"
+function windowLabel(k) {
+  return k.replace(/^five_hour/, "5h").replace(/^seven_day/, "7d")
+    .replace(/_/g, " ").trim();
 }
 
 // Effective 5h-used % for the new-session form's load-balancing default —
@@ -291,8 +302,8 @@ function acctPill(a) {
   const pill = el("div", "acct");
   const name = a.slug ? a.slug + " · " + a.label : a.label;
   pill.append(el("span", "aname", name));
-  const fh = usagePct(u, "five_hour"), sd = usagePct(u, "seven_day");
-  if (fh == null && sd == null) {
+  const wins = usageWindows(u);
+  if (!wins.length) {
     pill.append(el("span", "adim", "no usage yet"));
     return pill;
   }
@@ -308,8 +319,9 @@ function acctPill(a) {
     if (reset) seg.append(el("span", "ureset", "resets " + resetAgo(reset)));
     return seg;
   };
-  if (fh != null) pill.append(bar("5h", fh, "five_hour_reset"));
-  if (sd != null) pill.append(bar("7d", sd, "seven_day_reset"));
+  // one bar per captured window — the 5h/7d pair plus any model-scoped
+  // window the CLI reports (e.g. "7d fable"), same order as served
+  wins.forEach(k => pill.append(bar(windowLabel(k), u[k], k + "_reset")));
   // The account is BLOCKED right now (a session on it died on error=
   // rate_limit — the `limit-hit` stamp, served only while still active):
   // say so outright; the frozen usage bar alone reads ~95% at exactly the
@@ -2439,9 +2451,12 @@ function openNewSession(prefillCwd, resumeSid) {
     acctList = list;
     acctRow.style.display = list.length ? "" : "none";
     acct.fill(list.map(a => {
-      const u = a.usage;
-      const usage = u && (typeof u.five_hour === "number" || typeof u.seven_day === "number")
-        ? "  (5h " + (u.five_hour ?? "–") + "% · 7d " + (u.seven_day ?? "–") + "%)" : "";
+      // every captured window rides into the option text ("5h 40% · 7d 55%
+      // · 7d fable 80%") — same enumeration as the usage strip's bars
+      const wins = usageWindows(a.usage);
+      const usage = wins.length
+        ? "  (" + wins.map(k => windowLabel(k) + " " + a.usage[k] + "%").join(" · ") + ")"
+        : "";
       const lim = a.limit_hit ? "  · " + limitLabel(a.limit_hit) : "";
       return [a.slug, a.slug + " · " + a.label + usage + lim];
     }));

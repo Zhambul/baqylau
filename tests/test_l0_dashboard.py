@@ -3076,7 +3076,13 @@ def test_statusline_shim_captures_and_delegates(tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_SUBSCRIPTION_LABEL", "claude-01")
     payload = {"session_id": "slcap", "rate_limits": {
         "five_hour": {"used_percentage": 10.6, "resets_at": 1784304000},
-        "seven_day": {"used_percentage": 23, "resets_at": 1784500000000}}}
+        "seven_day": {"used_percentage": 23, "resets_at": 1784500000000},
+        # a model-scoped window (none exist as of CLI 2.1.215 — this is the
+        # forward contract) is captured generically; garbage entries are not
+        "seven_day_fable": {"used_percentage": 81, "resets_at": 1784500000},
+        "Bad Key!": {"used_percentage": 50},
+        "no_pct": {"resets_at": 1784500000},
+        "not_a_dict": 7}}
     raw = json.dumps(payload).encode()
     log = P.mirror_log("slcap")
     SL.capture(raw)                              # no DB yet → must be a no-op
@@ -3087,6 +3093,14 @@ def test_statusline_shim_captures_and_delegates(tmp_path, monkeypatch):
     u = S.kv_get(log, "usage")
     assert u["five_hour"] == 11 and u["seven_day"] == 23        # rounded pct
     assert u["seven_day_reset"] == 1784500000.0                 # ms → s
+    # the model window rode along; the garbage entries did not
+    assert u["seven_day_fable"] == 81
+    assert u["seven_day_fable_reset"] == 1784500000.0
+    assert "Bad Key!" not in u and "no_pct" not in u and "not_a_dict" not in u
+    # account-wide pair first, then model windows (the bar display order —
+    # dict order survives the kv's json round-trip)
+    wins = [k for k in u if isinstance(u[k], int)]
+    assert wins == ["five_hour", "seven_day", "seven_day_fable"]
     # a payload with no rate_limits leaves the last good usage in place
     SL.capture(json.dumps({"session_id": "slcap"}).encode())
     assert S.kv_get(log, "usage")["five_hour"] == 11
@@ -3103,14 +3117,17 @@ def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
     A.session_start({"session_id": "accs1", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("accs1")
     S.kv_set(log, "account", {"slug": "c2", "label": "claude-01"})
-    S.kv_set(log, "usage", {"five_hour": 40, "seven_day": 55, "ts": 100})
+    S.kv_set(log, "usage", {"five_hour": 40, "seven_day": 55,
+                            "seven_day_fable": 80, "ts": 100})
     rows = _get_json(dash + "/api/accounts")
     by = {r["slug"]: r for r in rows}
     # the served usage is EFFECTIVE (sessionapi.effective_usage): ts=100 is
-    # ancient with no resets → both windows rolled over → zeroed, so a stale
-    # snapshot can never render its old % with a 'resets now' countdown
+    # ancient with no resets → every window rolled over → zeroed (the
+    # model-scoped fable window exactly like the account-wide pair), so a
+    # stale snapshot can never render its old % with a 'resets now' countdown
     assert by["c2"]["usage"]["five_hour"] == 0
     assert by["c2"]["usage"]["seven_day"] == 0
+    assert by["c2"]["usage"]["seven_day_fable"] == 0
     assert by[""]["usage"] is None                 # default has no captured usage
     # server-computed effective 5h and the limit-hit flag (none)
     assert by["c2"]["five_hour_eff"] == 0
