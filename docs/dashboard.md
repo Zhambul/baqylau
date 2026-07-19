@@ -1347,35 +1347,33 @@ wait for the next question timed out. The measured v2.1.215 model:
   (`{"Pick a planet": "Venus", "Pick metals": "Iron, Zinc, titanium"}`),
   and chat-about-this.
 
-**A PREVIEW-layout question is OPTION-SELECT-ONLY from the web** (2026-07-19,
-refined 2026-07-20 after a live re-test). An ask whose options carry a
-`preview` renders the side-by-side layout, and that layout is doubly hostile
-to a custom answer: it has **no numbered "Type something" row**, AND its
-"Chat about this" is **not keyboard-reachable** — verified by probing the live
-dialog (arrows only): the cursor moves only among the numbered options, `down`
-at the last option and `up` at the first are both no-ops, and the `❯` that
-flickers onto "Chat about this" is a transient render artifact, not a cursor
-stop. So neither the free-text path (`cursor never reached Type row`) nor the
-chat path (`cursor never reached Chat row`) can be driven — both were observed
-failing in the audit. The honest handling:
+**A typed answer on a PREVIEW-layout question is delivered via "Chat about
+this"** (2026-07-19, corrected 2026-07-20 after a live re-test). An ask whose
+options carry a `preview` renders the side-by-side layout, which has **no
+numbered "Type something" row** — a typed answer can't be entered as an option.
+But "Chat about this" IS reachable; the driver just couldn't recognize it. The
+subtlety (verified by probing the live dialog, arrows only): "Chat about this"
+is the row BELOW the last option, reached by `down` from it — and when the
+cursor lands there, the preview layout renders `❯` on **both** the last option
+AND the Chat row (a highlight bleed). `_cursor_to` read only the FIRST cursor
+mark (the option) and so never recognized it had reached Chat, dead-looping
+(`cursor never reached Chat row`). The fixes:
 
-- `askdialog._require_type_row` fails FAST (`step: type`) instead of walking
-  `NAV_STEPS` for a Type row that isn't there;
+- `_cursor_to` now treats a row as reached if **any** cursored row matches the
+  target, not just the first — so it recognizes Chat in the two-`❯` state.
+  Option targeting is unaffected: the down-from-top walk stops at the clean
+  single-`❯` option row before it ever descends into the two-`❯` state (pinned
+  by `test_cursor_to_reaches_chat_in_two_cursor_preview_layout`);
 - the card detects a preview question (`askHasPreview` — any option with a
-  `preview`) and **disables its free-text field**, with a placeholder pointing
-  custom answers at the terminal — the web can only SELECT an option there;
-- a `/answer` that still bails with `step: cursor`/`type` surfaces a toast
-  telling the user to pick an option or answer in the terminal, not a bare
-  "failed".
-
-Selecting an *option* on a preview question drives normally (the cursor reaches
-the numbered rows fine). The server's `post_answer` still accepts a `chat` +
-`message` body (it presses "Chat about this", waits for the dialog to close,
-then delivers the text — a `web-send` row `via: ask-chat`) for layouts where
-chat IS reachable; the card just no longer auto-routes to it on the preview
-layout, where it can't work. (If a future Claude Code version makes the
-preview dialog's chat/free-text keyboard-reachable, re-enable the field and
-route typed answers through that `message` path.)
+  `preview`) and, on a TYPED answer, routes it through "Chat about this" AND
+  carries the typed text as `message` in the `/answer` body. `post_answer`
+  presses chat, waits for the dialog to close, then delivers the text as a
+  normal message (`fe.paste_text`, a `web-send` row `via: ask-chat`) — so the
+  custom answer reaches the session. Selecting an *option* still drives
+  normally;
+- `askdialog._require_type_row` remains a fast-fail belt-and-suspenders
+  (`step: type`) for the free-text path, which the card no longer takes on a
+  preview question (it routes to chat instead).
 
 The dialog is live TUI pixels with no answer API, so this key model can
 only be verified by driving a real dialog and reading the screen back —

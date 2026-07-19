@@ -1138,19 +1138,20 @@ New always-audited swallow sites (previously silent — their absence used to ma
   outside the audit's sight (check the new tab's shell by hand).
 - **"I couldn't submit my answer to the web ask card"** — look at the
   `web-answer` `state_files` rows (+ paired `errors` func `dashboard answer
-  (<step>)`). `ok: false, step: cursor, detail: "cursor never reached Type
-  row"` OR `"...never reached Chat row"` on a PREVIEW-layout ask (options carry
-  `preview`) is the 2026-07-19/20 finding: that layout has NO free-text row AND
-  its "Chat about this" is not keyboard-reachable (the cursor only walks the
-  numbered options), so a typed OR chat answer is undeliverable from the web —
-  only OPTION selection works. The card now DISABLES free-text on preview
-  questions and steers custom answers to the terminal; `askdialog.
-  _require_type_row` fails fast (`step: type`, no dead-walk). So a `step: cursor
-  (Chat row)` / `step: type` today = the user tried the chat button / a typed
-  answer on a preview dialog anyway (tell them: pick an option or use the
-  terminal); `step: open` = the dialog was already answered/declined in the
-  terminal. `ok: true` = a normal option select or a chat on a layout that DOES
-  expose it.
+  (<step>)`). `ok: false, step: cursor, detail: "cursor never reached Chat
+  row"` on a PREVIEW-layout ask (options carry `preview`) was the 2026-07-20
+  bug: "Chat about this" is the row BELOW the last option, and when the cursor
+  reaches it the preview layout renders `❯` on BOTH the last option AND Chat (a
+  highlight bleed) — `_cursor_to` read only the FIRST mark (the option) and
+  dead-looped. FIXED: `_cursor_to` now matches the target against ANY cursored
+  row. A preview question's TYPED answer is routed through "Chat about this"
+  (a `web-answer chat:true` + a `web-send via: ask-chat` delivering the text);
+  `_require_type_row` stays a fast-fail (`step: type`) for the free-text path
+  the card no longer takes on preview. So a fresh `step: cursor (Chat row)`
+  today = a genuinely NEW layout drift (Claude Code changed the dialog again —
+  re-probe it live, arrows only, and re-check the two-`❯` assumption);
+  `step: open` = answered/declined in the terminal first. `ok: true` = a normal
+  option select, or a chat/typed-via-chat answer that drove cleanly.
 - **"my message / answer never appeared in the session"** — three distinct
   causes, tell them apart by the rows: (a) a `web-send blocked: modal, ok:
   false` = the send was REFUSED because an ask/plan dialog was up (answer the

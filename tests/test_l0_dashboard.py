@@ -3203,6 +3203,55 @@ def test_askdialog_typed_answer_fails_fast_without_type_row():
     AD._require_type_row(fe, "1", "2")
 
 
+def test_cursor_to_reaches_chat_in_two_cursor_preview_layout():
+    """The preview layout bleeds the last option's ❯ onto the "Chat about this"
+    row below it, so with the cursor genuinely ON Chat, BOTH rows render ❯
+    (verified live 2026-07-20 — down from the last option lands on Chat). The
+    old _cursor_to read only the FIRST cursor row (the option) and dead-looped
+    ("cursor never reached Chat row"); checking EVERY cursored row fixes it
+    without breaking option targeting (the down-from-top walk stops at the clean
+    single-❯ option before descending into the two-❯ state)."""
+    AD = DS.askdialog
+
+    class _PreviewNavFE:
+        # rows: options 1..3 then an unnumbered "Chat about this"; idx 3 = Chat.
+        # On Chat, the LAST option (idx-2 row) ALSO shows ❯ — the render bleed.
+        def __init__(self):
+            self.idx = 2                       # start on the last option
+
+        def send_key(self, win, *keys):
+            for k in keys:
+                if k == "down":
+                    self.idx = min(3, self.idx + 1)
+                elif k == "up":
+                    self.idx = max(0, self.idx - 1)
+            return True
+
+        def get_text(self, win, extent="screen"):
+            labels = ["Hide all", "Keep", "Keep stop"]
+            lines = [" ☐ Q ", ""]
+            for i, lb in enumerate(labels):
+                on = self.idx == i or (self.idx == 3 and i == 2)   # bleed
+                lines.append(("❯ " if on else "  ") + "%d. %s" % (i + 1, lb))
+            lines += ["────",
+                      ("❯ " if self.idx == 3 else "  ") + "Chat about this",
+                      "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+            return "\n".join(lines)
+
+    def nul(*_a, **_k):
+        return None
+    fe = _PreviewNavFE()
+    screen = AD._cursor_to(fe, "1", lambda r: r["label"] == AD.CHAT_LABEL,
+                           nul, "Chat row")
+    assert fe.idx == 3                                     # landed on Chat
+    assert any(r["label"] == "Chat about this" and r["cursor"]
+               for r in AD.rows(screen))
+    # option targeting still stops at the clean option row, NOT over into Chat
+    fe2 = _PreviewNavFE()
+    AD._cursor_to(fe2, "1", AD._by_digit("3"), nul, "opt 3")
+    assert fe2.idx == 2                                    # option 3, not Chat
+
+
 class _PlanFE(_FakeFE):
     """_FakeFE plus a reactive simulation of the ExitPlanMode approval dialog
     (live captures 2026-07-18): "Would you like to proceed?" + numbered rows,

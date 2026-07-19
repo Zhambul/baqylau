@@ -167,7 +167,17 @@ def _cursor_to(fe, win, pred, sleep, what):
     Deliberately walk-based, NOT index arithmetic: the v2.1.215 dialog has rows
     the parser skips (indented descriptions, the "Notes: press n" hint, preview
     box lines), and if the cursor ever parks on one, `rows()` reports no cursor
-    row — the walk just steps past it, where index math would desync."""
+    row — the walk just steps past it, where index math would desync.
+
+    A row is "reached" when ANY cursored row matches `pred`, not just the first
+    (`_cursor_row`). The preview layout bleeds the last option's ❯ onto the
+    "Chat about this" row below it: with the cursor genuinely ON Chat, BOTH the
+    last option AND Chat render ❯ (verified live 2026-07-20 — down from the last
+    option lands on Chat, showing two ❯). `_cursor_row` returned the FIRST mark
+    (the option), so the walk never recognized it reached Chat and dead-looped
+    (`cursor never reached Chat row`). Checking every cursored row fixes it
+    WITHOUT breaking option targeting: the down-from-top walk stops at option N
+    (clean, single ❯) before it ever descends into the ambiguous two-❯ state."""
     for _ in range(NAV_STEPS):               # normalize to the first row
         fe.send_key(win, "up")
         sleep(POLL_S)
@@ -175,8 +185,7 @@ def _cursor_to(fe, win, pred, sleep, what):
             break
     for _ in range(NAV_STEPS):
         screen = fe.get_text(win) or ""
-        cur = _cursor_row(screen)
-        if cur is not None and pred(cur):
+        if any(r["cursor"] and pred(r) for r in rows(screen)):
             return screen
         fe.send_key(win, "down")
         sleep(POLL_S)
