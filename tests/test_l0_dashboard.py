@@ -3582,3 +3582,19 @@ def test_post_dictate_token_grant_failure_is_502(dash, tmp_path, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/dictate/token", {"sample_rate": 48000})
     assert e.value.code == 502
+
+
+def test_canon_cwd_collapses_symlinked_repo(tmp_path):
+    """canon_cwd resolves a symlinked repo path so the list groups one project
+    under one entry (the baqylau rename left ~/code/personal/kitty as a symlink
+    to .../baqylau; pre-move sessions record the /kitty spelling). Empty stays
+    empty — realpath('') would be the dashboard's OWN cwd."""
+    real = tmp_path / "baqylau"
+    real.mkdir()
+    link = tmp_path / "kitty"
+    link.symlink_to(real, target_is_directory=True)
+    assert DS.canon_cwd(str(link)) == str(real)
+    assert DS.canon_cwd(str(link / ".claude" / "worktrees" / "x")) \
+        == str(real / ".claude" / "worktrees" / "x")   # nested under the symlink
+    assert DS.canon_cwd(str(real)) == str(real)         # already-canonical unchanged
+    assert DS.canon_cwd("") == ""                       # never the process cwd

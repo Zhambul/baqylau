@@ -190,7 +190,7 @@ class Notifier:
             # a worktree session's toast names the PROJECT (the owning main
             # checkout), not the worktree dir — same root||cwd resolution the
             # list page groups by (git_info is cached, cheap here)
-            cwd = row.get("cwd") or ""
+            cwd = canon_cwd(row.get("cwd") or "")
             home = (git_info(cwd) or {}).get("root") or cwd
             self.push("notify", {
                 "kind": kind, "state": state, "sid": row.get("sid"),
@@ -316,6 +316,23 @@ def _git_resolve(cwd):
             return None
         d = parent
     return None
+
+
+def canon_cwd(cwd):
+    """Resolve a session cwd's symlinks, so the list groups one PROJECT under
+    one entry. The 2026-07-19 baqylau rename left ~/code/personal/kitty as a
+    symlink to .../baqylau; sessions started before the move (or through the
+    old path) record the /kitty spelling — Claude Code reports the logical path
+    and a live session re-stamps it on every event — so without canonicalising,
+    the list splits one repo into a stale 'kitty' group and a 'baqylau' group.
+    realpath collapses them. '' is returned as-is: realpath('') would be the
+    dashboard process's OWN cwd, which is never a session's."""
+    if not cwd:
+        return cwd
+    try:
+        return os.path.realpath(cwd)
+    except OSError:
+        return cwd
 
 
 def git_info(cwd):
@@ -448,7 +465,8 @@ def sessions_payload():
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
         row["title"] = session_title(row.get("transcript_path") or "")
         row["ctx"] = session_ctx(row.get("transcript_path") or "", main=True)
-        row["git"] = git_info(row.get("cwd") or "")
+        row["cwd"] = canon_cwd(row.get("cwd") or "")   # collapse the /kitty symlink
+        row["git"] = git_info(row["cwd"])
         row["last_active"] = _last_active(row, sdb)
         out.append(row)
     return out
@@ -544,7 +562,8 @@ def session_payload(sid):
     data["error_count"] = API.error_count(sid)
     data["title"] = session_title(data.get("transcript_path") or "")
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
-    data["git"] = git_info(data.get("cwd") or "")
+    data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
+    data["git"] = git_info(data["cwd"])
     # the effort quick-button's label (docs/dashboard.md, *Web quick
     # commands*): the SAVED effort level — every /effort persists itself
     # there, so it is the last applied value; per-session effort is readable
