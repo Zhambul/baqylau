@@ -473,18 +473,28 @@ New always-audited swallow sites (previously silent — their absence used to ma
   other steps name the navigation stage and pair `errors` func `dashboard
   answer (<step>)`; the dialog is left OPEN on every bail (never Escape —
   that declines), so the user can retry or finish in the terminal. A
-  `step: question` bail ("question N never became current") on a
-  pre-2026-07-18-fix build is the WRAPPED-QUESTION bug (session 412b980b: a
-  555-char question wraps across screen lines, and `current_question`'s
-  exact line-set match could never see it — fixed by stripping ALL
-  whitespace from both sides before a substring match, with the review pane
-  excluded explicitly because its recap repeats the question texts); on a
-  current build it means the question
-  text genuinely never appeared (dialog gone, or the payload's question
-  text diverged from what the TUI renders). Answers
-  WRONG in the transcript → compare the PostToolUse `answers` against the
-  `web-answer` row's intent; multiSelect digits TOGGLE, so a pre-toggled box
-  the page didn't know about points at the screen-diff logic
+  `step: question` bail ("question N never became current") has TWO
+  known causes. (1) The WRAPPED-QUESTION bug (session 412b980b, pre-2026-07-18
+  fix): a 555-char question wraps across screen lines and `current_question`'s
+  exact line-set match could never see it — fixed by stripping ALL whitespace
+  from both sides before a substring match, with the review pane excluded
+  because its recap repeats the question texts. (2) **A Claude Code VERSION
+  DRIFT that changed the dialog key model** — the v2.1.215 overhaul (fixed
+  2026-07-19, session f43b2137) made digits inert (selection became cursor +
+  Enter) and stopped single-select auto-advancing on a digit, so the driver
+  answered question 1 with a no-op digit and question 2 never became current;
+  the tell is a `step: question` bail on a MULTI-question ask right after a
+  Claude Code upgrade, with the FIRST question's answer never landing. The
+  fix re-measured the dialog and rewrote `askdialog.py` to cursor + Enter
+  (docs/dashboard.md *Web ask*). This class of bug can ONLY be caught by
+  driving a live dialog — so on any `step: question`/`step: cursor`/`step:
+  options` bail, first confirm the running `claude --version` still matches
+  what `askdialog.py`'s header comment was measured against. Otherwise the
+  question text genuinely never appeared (dialog gone, or the payload's
+  question text diverged from what the TUI renders). Answers WRONG in the
+  transcript → compare the PostToolUse `answers` against the `web-answer`
+  row's intent; multiSelect Enter TOGGLES the cursored box, so a pre-toggled
+  box the page didn't know about points at the screen-diff logic
   (`askdialog._answer_question`). Unsubmitted selections LOST on a device
   switch / reload → the `ask-draft` `state_files` rows: a `write` action
   (path key `ask-draft`) records each debounced persist (`tool_use_id` +

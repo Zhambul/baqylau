@@ -1182,7 +1182,7 @@ submit row, and **chat about this** (the dialog's own
 decline-and-discuss). Submission is ALWAYS the explicit submit button
 (or Enter in a free-text row) — a lone single-select question does NOT
 submit on the option click itself. That one-keystroke feel is right for
-the TUI's digit press but wrong for the web: a misclick would fire the
+the TUI's one-key select but wrong for the web: a misclick would fire the
 answer with no chance to reconsider, so the card favors
 review-before-send (selections stay editable until submitted).
 
@@ -1232,24 +1232,49 @@ press) but deliberately NOT unified with it: different anatomy, and
 OPPOSITE bail semantics — rewindmenu bails by pressing Escape, while
 here **Escape declines the whole question set**, so a failed step leaves
 the dialog exactly as it was (AskError → 409 with `step`; a retry
-re-normalizes). The measured key model it encodes:
+re-normalizes).
 
-- single-select: a digit answers and auto-advances; the sole question of
-  a one-question ask submits the tool outright (no review pane);
-- multiSelect: a digit TOGGLES its checkbox — so the driver DIFFS the
-  desired selection against the checkboxes the screen actually shows
-  (boxes the user pre-toggled in the terminal are reconciled, not
-  re-pressed); `right` from a non-edit row moves to the next tab;
-- free text: arrow onto the "Type something" row (navigated by its ROW
-  NUMBER, `len(options)+1` — the label mutates to whatever was last
-  typed), type (the text replaces the label inline), then Enter:
-  single-select selects+advances, multiSelect toggles the custom row
-  checked (measured: the typed CR alone commits but does NOT check);
-  then leave the edit row with `up` before any tab navigation (on the
-  edit row left/right move the TEXT cursor);
-- `left` at the first question is a no-op, so `left`×len(questions)
-  deterministically normalizes to question 1 from any state (including
-  the review pane, including a half-answered dialog);
+**The key model was overhauled in v2.1.215 (re-measured 2026-07-19).**
+The original v2.1.214 model was *digit-driven* — a digit selected a
+single-select option, toggled a multiSelect box, and numbered the "Type
+something"/"Chat about this" rows. v2.1.215 rebuilt the dialog: **digits
+are now inert**, selection is cursor-driven (move the `❯` with up/down,
+press Enter), an option `preview` switches the whole dialog to a
+side-by-side layout, and there is a new "Notes: press n" affordance. The
+symptom was every web answer to a *multi-question* ask failing with
+`question 2 never became current`: the driver pressed the option's digit
+(a no-op in v2.1.215), the single-select never auto-advanced, and the
+wait for the next question timed out. The measured v2.1.215 model:
+
+- **selection is cursor + Enter, never a digit** — digits do nothing.
+  `_cursor_to` walks the `❯` to a target row (normalize to the top, then
+  down, screen-verified each step; deliberately walk-based, not index
+  arithmetic, because the dialog now has non-cursor rows the parser skips
+  — indented descriptions, the "Notes" hint, preview-box lines);
+- single-select: Enter on the cursored option selects AND auto-advances;
+  the sole question of a one-question ask submits the tool outright (no
+  review pane);
+- multiSelect: Enter on the cursored option TOGGLES its checkbox — so the
+  driver DIFFS the desired selection against the checkboxes the screen
+  actually shows (boxes the user pre-toggled in the terminal are
+  reconciled, not re-flipped), then `right` moves to the next tab;
+- TWO layouts: with no `preview` on any option, options carry an indented
+  description line and "Chat about this" is NUMBERED; when ANY option has
+  a `preview`, the dialog draws a box to the RIGHT of the option rows
+  (its text bleeds onto the option lines — `rows()` strips a `\s{2,}` +
+  box-drawing-char run off each label), adds a "Notes: press n" hint row,
+  and renders "Chat about this" UNNUMBERED. The driver is layout-agnostic
+  because it never reads a digit — it cursors + Enters and finds the chat
+  row by its label;
+- free text: cursor onto the "Type something" row (navigated by its ROW
+  NUMBER `len(options)+1`, since the label mutates to the typed text),
+  then `send_text` (types the text + a CR): single-select commits it and
+  auto-advances; multiSelect commits + checks the custom row — with a
+  screen-verified fallback Enter, since whether the CR alone checks it was
+  not nailed down;
+- `left`/`right`/Tab switch questions; `left` at the first is a no-op, so
+  `left`×len(questions) deterministically normalizes to question 1 from
+  any state (including the review pane, including a half-answered dialog);
 - each question is verified CURRENT by finding its text in the dialog
   region — ALL whitespace stripped from both sides before the substring
   match, because long question text wraps across screen lines and a
@@ -1259,12 +1284,19 @@ re-normalizes). The measured key model it encodes:
   excluded explicitly (`current_question` → None on "Review your
   answers") since its answer recap repeats every question's text;
 - the review pane ("Review your answers") follows the last question;
-  digit `1` = "Submit answers". PostToolUse then fires with `answers`
-  {question → label, ", "-joined labels (custom text joins as a label),
-  or the free text} — verified live for every shape: single label,
-  free-text-only, two-question mixed with custom multi text
+  cursor onto the "Submit answers" row + Enter submits. PostToolUse then
+  fires with `answers` {question → label, ", "-joined labels (custom text
+  joins as a label), or the free text} — verified live for every shape:
+  single label, free-text-only, two-question mixed with custom multi text
   (`{"Pick a planet": "Venus", "Pick metals": "Iron, Zinc, titanium"}`),
   and chat-about-this.
+
+The dialog is live TUI pixels with no answer API, so this key model can
+only be verified by driving a real dialog and reading the screen back —
+which is why a Claude Code version bump can silently break it. The
+parsers are pinned against real captures of BOTH layouts in
+`test_askdialog_parsers_pin_the_real_screens`; the reactive `_AskFE` fake
+models the v2.1.215 key semantics for the end-to-end `post_answer` tests.
 
 The endpoint guards before any key: the body's `tool_use_id` must match
 the stash (a STALE card — a newer ask replaced it — is a clean 409

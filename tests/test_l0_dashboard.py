@@ -2596,15 +2596,20 @@ def test_rewindmenu_entry_match_is_truncation_aware():
 
 
 class _AskFE(_FakeFE):
-    """_FakeFE plus a reactive simulation of the AskUserQuestion dialog, per
-    the live captures (2026-07-18): a header-chip bar, one pane per question
-    (numbered options; multiSelect checkboxes; a "Type something" row whose
-    label mutates to the typed text; multiSelect's unnumbered Submit row),
+    """_FakeFE plus a reactive simulation of the v2.1.215 AskUserQuestion
+    dialog (re-measured live 2026-07-19): a header-chip bar, one pane per
+    question (numbered options; multiSelect checkboxes; a numbered "Type
+    something" row; multiSelect an unnumbered "Next"/"Submit" advance row),
     "Chat about this" below a rule, and the review pane. Key semantics as
-    measured: single-select digits answer+advance (a sole single-select
-    question submits outright), multiSelect digits toggle, typing goes into
-    the focused Type row, Enter there selects (single) / toggles (multi),
-    left/right move tabs (left no-ops at the first), review digit 1 submits."""
+    measured: DIGITS ARE INERT — selection is up/down to a row + Enter; Enter
+    on a single-select option selects+advances (a sole single-select question
+    submits outright), Enter on a multiSelect option toggles, Enter on the
+    multiSelect advance row moves to the next tab; typing goes into the focused
+    Type row (send_text's CR commits it); left/right/Tab move tabs (left
+    no-ops at the first); the review's "Submit answers" row + Enter submits.
+    This renders the classic (no-preview) layout; the parser's handling of the
+    side-by-side preview layout is pinned against real captures in
+    test_askdialog_parsers_pin_the_real_screens."""
 
     def __init__(self, questions):
         super().__init__()
@@ -2619,8 +2624,6 @@ class _AskFE(_FakeFE):
         self.submitted = None           # final {question: answer} on submit
         self.chatted = False
 
-    # pane rows, mirroring the real numbering: options 1..k, Type row k+1,
-    # then (multi only) the unnumbered Submit row; Chat is the next digit
     def _labels(self, qi):
         q = self.questions[qi]
         return [o["label"] for o in q.get("options") or []]
@@ -2630,22 +2633,23 @@ class _AskFE(_FakeFE):
                                   + ("" if self.questions[qi].get("multiSelect")
                                      else "."))
 
-    def _rows(self, qi):
-        q = self.questions[qi]
-        labels = self._labels(qi)
-        rows = [(str(i + 1), lb) for i, lb in enumerate(labels)]
-        rows.append((str(len(labels) + 1), self._type_label(qi)))
-        if q.get("multiSelect"):
-            rows.append(("", "Submit"))
-        return rows                     # Chat row rendered separately
+    # cursor-navigable rows of a pane, as ("kind", payload) in screen order:
+    # options, the Type row, (multi) the unnumbered advance row, then Chat
+    def _kinds(self, qi):
+        ks = [("opt", i) for i in range(len(self._labels(qi)))]
+        ks.append(("type", None))
+        if self.questions[qi].get("multiSelect"):
+            ks.append(("advance", None))
+        ks.append(("chat", None))
+        return ks
 
     def _advance(self):
         self.tab += 1
         self.cursor = 0
-        if self.tab >= len(self.questions):
-            if len(self.questions) == 1 \
-                    and not self.questions[0].get("multiSelect"):
-                self._finish()          # sole single-select: no review pane
+        if self.tab >= len(self.questions) \
+                and len(self.questions) == 1 \
+                and not self.questions[0].get("multiSelect"):
+            self._finish()              # sole single-select: no review pane
 
     def _finish(self):
         out = {}
@@ -2665,11 +2669,14 @@ class _AskFE(_FakeFE):
         ok = super().send_text(win, text)
         if not self.open or self.tab >= len(self.questions):
             return ok
-        qi, q = self.tab, self.questions[self.tab]
-        if self.cursor == len(self._labels(qi)):     # the Type row
-            self.typed[qi] = text
-            if not q.get("multiSelect"):             # the CR selects+advances
-                self.single[qi] = text
+        qi = self.tab
+        kinds = self._kinds(qi)
+        if self.cursor < len(kinds) and kinds[self.cursor][0] == "type":
+            self.typed[qi] = text                    # types inline
+            if self.questions[qi].get("multiSelect"):
+                self.checks[qi].add("__typed__")     # the CR checks it
+            else:
+                self.single[qi] = text               # the CR selects+advances
                 self._advance()
         return ok
 
@@ -2679,40 +2686,51 @@ class _AskFE(_FakeFE):
             if not self.open:
                 continue
             if self.tab >= len(self.questions):      # review pane
-                if k == "1":
-                    self._finish()
+                if k == "up":
+                    self.cursor = max(0, self.cursor - 1)
+                elif k == "down":
+                    self.cursor = min(1, self.cursor + 1)
+                elif k == "enter" and self.cursor == 0:
+                    self._finish()                   # "Submit answers"
                 elif k == "left":
                     self.tab = len(self.questions) - 1
                     self.cursor = 0
-                continue
-            qi, q = self.tab, self.questions[self.tab]
-            labels = self._labels(qi)
-            nrows = len(self._rows(qi)) + 1          # + the Chat row
+                continue                             # digits inert
+            qi = self.tab
+            q = self.questions[qi]
+            kinds = self._kinds(qi)
             if k == "left":
                 if self.tab > 0:
                     self.tab -= 1
                     self.cursor = 0
-            elif k == "right":
+            elif k in ("right", "tab"):
                 self.tab += 1
                 self.cursor = 0
             elif k == "up":
                 self.cursor = max(0, self.cursor - 1)
             elif k == "down":
-                self.cursor = min(nrows - 1, self.cursor + 1)
-            elif k == "enter" and self.cursor == len(labels):
-                if q.get("multiSelect"):             # toggle the custom row
-                    self.checks[qi] ^= {"__typed__"}
-            elif k.isdigit():
-                d = int(k)
-                if d == len(labels) + (3 if q.get("multiSelect") else 2):
-                    self.chatted = True              # "Chat about this"
-                    self.open = False
-                elif 1 <= d <= len(labels):
+                self.cursor = min(len(kinds) - 1, self.cursor + 1)
+            elif k == "enter":
+                kind, payload = kinds[self.cursor]
+                if kind == "opt":
+                    label = self._labels(qi)[payload]
                     if q.get("multiSelect"):
-                        self.checks[qi] ^= {labels[d - 1]}
+                        self.checks[qi] ^= {label}   # toggle
                     else:
-                        self.single[qi] = labels[d - 1]
+                        self.single[qi] = label
                         self._advance()
+                elif kind == "type":
+                    if q.get("multiSelect"):
+                        self.checks[qi] ^= {"__typed__"}
+                    elif self.typed[qi]:
+                        self.single[qi] = self.typed[qi]
+                        self._advance()
+                elif kind == "advance":
+                    self._advance()                  # "Next"/"Submit"
+                elif kind == "chat":
+                    self.chatted = True
+                    self.open = False
+            # digits inert
         return ok
 
     def get_text(self, win, extent="screen"):
@@ -2726,26 +2744,38 @@ class _AskFE(_FakeFE):
         if self.tab >= len(self.questions):
             return "\n".join([bar, "", "Review your answers", "",
                               "Ready to submit your answers?", "",
-                              "❯ 1. Submit answers", "  2. Cancel"])
+                              ("❯ " if self.cursor == 0 else "  ")
+                              + "1. Submit answers",
+                              ("❯ " if self.cursor == 1 else "  ")
+                              + "2. Cancel"])
         qi, q = self.tab, self.questions[self.tab]
+        labels = self._labels(qi)
+        multi = q.get("multiSelect")
         # question text WRAPS like the real TUI's (the 555-char live ask)
         lines = [bar, ""] \
             + (textwrap.wrap(q.get("question") or "", 48) or [""]) + [""]
-        for i, (digit, label) in enumerate(self._rows(qi)):
-            cur = "❯ " if i == self.cursor else "  "
-            if not digit:
-                lines.append(cur + "   Submit")
-                continue
-            check = ""
-            if q.get("multiSelect"):
-                on = (label in self.checks[qi]
-                      or (i == len(self._labels(qi))
-                          and "__typed__" in self.checks[qi]))
-                check = "[✔] " if on else "[ ] "
-            lines.append("%s%s. %s%s" % (cur, digit, check, label))
-        chat_digit = len(self._rows(qi)) + 1
-        lines += ["────────", "  %d. Chat about this" % chat_digit, "",
-                  "Enter to select · ↑/↓ to navigate · Esc to cancel"]
+        for idx, (kind, payload) in enumerate(self._kinds(qi)):
+            cur = "❯ " if idx == self.cursor else "  "
+            if kind == "opt":
+                lb = labels[payload]
+                chk = ("[✔] " if lb in self.checks[qi] else "[ ] ") \
+                    if multi else ""
+                lines.append("%s%d. %s%s" % (cur, payload + 1, chk, lb))
+            elif kind == "type":
+                chk = ("[✔] " if "__typed__" in self.checks[qi] else "[ ] ") \
+                    if multi else ""
+                lines.append("%s%d. %s%s"
+                             % (cur, len(labels) + 1, chk,
+                                self._type_label(qi)))
+            elif kind == "advance":
+                lines.append("%s   %s"
+                             % (cur, "Submit" if len(self.questions) == 1
+                                else "Next"))
+            elif kind == "chat":
+                lines += ["────────",
+                          "%s%d. Chat about this" % (cur, len(labels) + 2)]
+        lines += ["", "Enter to select · ↑/↓ to navigate · "
+                  "Tab to switch questions · Esc to cancel"]
         return "\n".join(lines)
 
 
@@ -2772,7 +2802,7 @@ _ASK_2Q = [{"question": "Pick a planet", "header": "Planet",
 
 
 def test_post_answer_single_label(dash, monkeypatch):
-    # one single-select question: the digit answers AND submits (no review)
+    # one single-select question: cursor+Enter selects AND submits (no review)
     fe = _AskFE(_ASK_1S)
     _ask_env(monkeypatch, "ask1", "41", fe, _ASK_1S)
     code, body = _post(dash + "/api/session/ask1/answer",
@@ -2828,8 +2858,8 @@ def test_post_answer_wrapped_long_question(dash, monkeypatch):
 
 
 def test_post_answer_multi_diffs_against_screen(dash, monkeypatch):
-    # digits TOGGLE — boxes the user pre-checked in the terminal must be
-    # reconciled (unwanted ones toggled OFF), never blindly re-pressed
+    # Enter TOGGLES the cursored box — boxes the user pre-checked in the
+    # terminal must be reconciled (unwanted ones toggled OFF), never re-flipped
     fe = _AskFE(_ASK_2Q)
     fe.single[0] = "Mars"          # Q1 already answered in the TUI
     fe.tab = 1                     # dialog sitting on Q2
@@ -2930,6 +2960,29 @@ Ready to submit your answers?
 ❯ 1. Submit answers
   2. Cancel"""
 
+# real v2.1.215 capture (2026-07-19): the SIDE-BY-SIDE preview layout an ask
+# with option `preview`s renders — a box bleeds onto the option lines (rows()
+# must strip it), a "Notes: press n" hint row is NOT a cursor stop, and "Chat
+# about this" is UNNUMBERED (it carried a digit in the classic layout)
+_ASK_PREVIEW_SCREEN = """\
+────
+←  ☒ Reappear trigger  ☐ Unhide UI  ✔ Submit  →
+
+How do you want to unhide a directory manually / see what's hidden?
+
+❯ 1. Collapsed 'Hidden (N)'       ┌──────────────────────────────────────────┐
+    strip                         │ ───────────────                          │
+  2. No manual UI needed          │ Hidden (2)                               │
+                                  │   baqylau        ↩                       │
+                                  └──────────────────────────────────────────┘
+
+                                  Notes: press n to add notes
+
+────
+  Chat about this
+
+Enter to select · ↑/↓ to navigate · n to add notes · Tab to switch questions · Esc to cancel"""
+
 
 def test_askdialog_parsers_pin_the_real_screens():
     AD = DS.askdialog
@@ -2962,6 +3015,19 @@ def test_askdialog_parsers_pin_the_real_screens():
     assert not AD.dialog_open(_ASK_REVIEW_SCREEN)
     assert AD.current_question(_ASK_REVIEW_SCREEN, qs) is None
     assert not AD.dialog_open("❯ composer\n  -- INSERT --")
+    # the side-by-side preview layout: labels stripped of the bled-in box, the
+    # "Notes" hint dropped, and an UNNUMBERED "Chat about this" row surfaced
+    assert AD.dialog_open(_ASK_PREVIEW_SCREEN)
+    prs = AD.rows(_ASK_PREVIEW_SCREEN)
+    assert [(r["digit"], r["label"]) for r in prs] == [
+        ("1", "Collapsed 'Hidden (N)'"), ("2", "No manual UI needed"),
+        ("", "Chat about this")]
+    assert [r["cursor"] for r in prs] == [True, False, False]
+    pv_qs = [{"question": "When should a hidden directory reappear on the "
+                          "main page?"},
+             {"question": "How do you want to unhide a directory manually / "
+                          "see what's hidden?"}]
+    assert AD.current_question(_ASK_PREVIEW_SCREEN, pv_qs) == 1
 
 
 class _PlanFE(_FakeFE):

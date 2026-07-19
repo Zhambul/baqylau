@@ -9,31 +9,39 @@
 # semantics (rewind bails by pressing Escape; here Escape DECLINES the whole
 # question set, so a failed step must leave the dialog exactly as it is).
 #
-# Empirical dialog facts this encodes (all measured live, 2026-07-18,
-# v2.1.214 — the full experiment log is in docs/dashboard.md):
-#   - anatomy: a header-chip bar (`←  ☐ Pets  ☒ Drink  ✔ Submit  →`; a lone
-#     ` ☐ Fruit ` for one question), the current question's text, numbered
-#     option rows (`❯ 1. Apple` + indented description; multiSelect adds
-#     `[ ]`/`[✔]` checkboxes), a "Type something" free-text row, multiSelect
-#     also an unnumbered "Submit" row, then "N. Chat about this" below a
-#     rule, and the footer "Enter to select · ↑/↓ to navigate · Esc to
-#     cancel";
-#   - single-select: a DIGIT answers and auto-advances (the sole question of
-#     a one-question ask submits the tool outright — no review pane);
-#   - multiSelect: a digit TOGGLES its checkbox (cursor stays put); `right`
-#     from a non-edit row moves to the next tab (next question, or Submit);
-#   - free text: arrow ONTO the "Type something" row (never its digit in
-#     multiSelect — it toggles), type — the text replaces the label inline —
-#     then Enter: single-select submits/advances, multiSelect toggles the
-#     custom row checked. On the EDIT row arrow left/right move the text
-#     cursor, so leave it with up/down before any tab navigation;
+# Empirical dialog facts this encodes. The KEY MODEL was re-measured live for
+# v2.1.215 (2026-07-19) — Claude Code overhauled the dialog and the old
+# digit-driven model (v2.1.214) broke every web answer with "question N never
+# became current"; the full before/after experiment log is in docs/dashboard.md:
+#   - anatomy: a header-chip bar (`←  ☐ Pets  ☒ Drink  ✔ Submit  →`, one chip
+#     per question keyed off the `header` field; ☒ once answered), the current
+#     question's text, numbered option rows (`❯ 1. Apple`; multiSelect adds a
+#     `[ ]`/`[✔]` checkbox), a numbered "Type something" free-text row,
+#     multiSelect adds an UNNUMBERED advance row labelled "Next" (or "Submit"
+#     on the last/only question), then a "Chat about this" row below a rule,
+#     and a footer containing "Enter to select";
+#   - TWO layouts: with no option `preview`, options carry an indented
+#     description line and "Chat about this" is NUMBERED; when ANY option has a
+#     `preview`, the dialog switches to a side-by-side layout — a box drawn to
+#     the RIGHT of the option rows (its text bleeds onto the option lines, so
+#     `rows()` strips it), a "Notes: press n" hint row, and an UNNUMBERED
+#     "Chat about this". Both keep "Enter to select"; the driver is
+#     layout-agnostic because it navigates by cursor + Enter, never by digit;
+#   - SELECTION IS CURSOR + ENTER, NOT digits (digits are inert now): move the
+#     ❯ cursor with up/down onto a row and press Enter. single-select Enter
+#     SELECTS and auto-advances (the sole question of a one-question ask
+#     submits outright — no review pane); multiSelect Enter TOGGLES the
+#     cursored checkbox (cursor stays), and `right` then moves to the next tab;
+#   - free text: cursor ONTO the "Type something" row, then send_text (types
+#     the text + a CR): single-select commits it and auto-advances; multiSelect
+#     commits + checks the custom row (verified, with a fallback Enter);
 #   - the review pane ("Review your answers" · `1. Submit answers/2. Cancel`)
 #     appears after the last question unless the ask was a single
-#     single-select question; digit `1` submits;
-#   - `left` at the first question is a NO-OP — `left`×len(questions) is a
-#     deterministic normalize-to-start whatever tab the dialog sits on;
-#   - Esc ANYWHERE (and Enter on an EMPTY "Type something") declines the
-#     whole question set — which is why this driver never presses Escape.
+#     single-select question; cursor onto "Submit answers" + Enter submits;
+#   - `left`/`right`/Tab switch questions; `left` at the first is a NO-OP, so
+#     `left`×len(questions) is a deterministic normalize-to-start from any tab;
+#   - Esc ANYWHERE (and Enter on an EMPTY "Type something") declines the whole
+#     question set — which is why this driver never presses Escape.
 import re
 import time
 
@@ -41,16 +49,25 @@ POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
 KEY_GAP_S = 0.12       # beat between successive blind key presses
 SUBMIT_TIMEOUT_S = 4.0  # final submit → dialog gone (the tool round-trips)
+NAV_STEPS = 24         # max up/down presses to walk the cursor to a target row
 
 FOOT = "Enter to select"                 # question-pane open detector
 REVIEW = "Review your answers"           # review-pane detector
 CHAT_LABEL = "Chat about this"
 TYPE_LABEL = "Type something"
+SUBMIT_LABEL = "Submit answers"          # the review pane's submit row
 
-# option row: cursor mark? · digit. · multiSelect checkbox? · label
+# option row: cursor mark? · digit. · multiSelect checkbox? · label. The label
+# capture stops before a preview side-box (2+ spaces then a box-drawing char,
+# U+2500–U+257F) that the side-by-side layout bleeds onto the option line.
 _ROW = re.compile(r"^\s*(?P<cur>❯\s+)?(?P<digit>\d+)\.\s+"
-                  r"(?:\[(?P<check>[ ✔x])\]\s*)?(?P<label>.+?)\s*$")
-_SUBMIT_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?Submit\s*$")
+                  r"(?:\[(?P<check>[ ✔x])\]\s*)?"
+                  r"(?P<label>.+?)"
+                  r"(?:\s{2,}[─-╿].*)?\s*$")
+# an UNNUMBERED action row: the multiSelect "Next"/"Submit" advance row and the
+# side-by-side layout's un-numbered "Chat about this"
+_ACTION_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?"
+                         r"(?P<label>Next|Submit|Chat about this)\s*$")
 
 
 class AskError(Exception):
@@ -86,10 +103,13 @@ def review_open(screen):
 
 
 def rows(screen):
-    """The numbered rows of the question pane, in screen order:
-    [{digit, label, cursor, check(None|bool)}] + the unnumbered multiSelect
-    Submit row as {digit: "", label: "Submit", …}. Indented description lines
-    don't match _ROW (no `N.`), so they drop out."""
+    """Every CURSOR-NAVIGABLE row of the question pane, in screen order:
+    [{digit, label, cursor, check(None|bool)}]. Numbered option/Type/Chat rows
+    (their preview side-box, if any, is stripped from the label) plus the
+    UNNUMBERED action rows — the multiSelect "Next"/"Submit" advance row and the
+    side-by-side layout's un-numbered "Chat about this" — carry digit "".
+    Indented description lines and the "Notes: press n" hint don't match, so
+    they drop out (they are not cursor stops)."""
     out = []
     for ln in region(screen).splitlines():
         m = _ROW.match(ln)
@@ -100,9 +120,9 @@ def rows(screen):
                         "check": (None if m.group("check") is None
                                   else m.group("check") != " ")})
             continue
-        m = _SUBMIT_ROW.match(ln)
+        m = _ACTION_ROW.match(ln)
         if m:
-            out.append({"digit": "", "label": "Submit",
+            out.append({"digit": "", "label": m.group("label"),
                         "cursor": bool(m.group("cur")), "check": None})
     return out
 
@@ -137,72 +157,89 @@ def _wait(fe, win, pred, timeout, sleep):
     return screen, True
 
 
-def _cursor_to(fe, win, digit, sleep):
-    """Move the ❯ cursor to the row NUMBERED `digit` with up/down presses,
-    screen-verified each step. By number, not label: the Type row is always
-    len(options)+1 but its label mutates to whatever was last typed into it,
-    so a retry after a half-driven attempt still finds it."""
-    for _ in range(24):                     # options ≤ ~6 rows; generous
-        screen = fe.get_text(win) or ""
-        rs = rows(screen)
-        at = next((i for i, r in enumerate(rs) if r["cursor"]), None)
-        to = next((i for i, r in enumerate(rs) if r["digit"] == digit), None)
-        if at is None or to is None:
-            raise AskError("cursor", "row %s not on screen" % digit)
-        if at == to:
-            return
-        fe.send_key(win, "down" if to > at else "up")
+def _cursor_row(screen):
+    return next((r for r in rows(screen) if r["cursor"]), None)
+
+
+def _cursor_to(fe, win, pred, sleep, what):
+    """Move the ❯ cursor onto the row matching `pred(row_dict)`. Normalizes to
+    the top (up is a no-op there) then walks DOWN, screen-verified each step.
+    Deliberately walk-based, NOT index arithmetic: the v2.1.215 dialog has rows
+    the parser skips (indented descriptions, the "Notes: press n" hint, preview
+    box lines), and if the cursor ever parks on one, `rows()` reports no cursor
+    row — the walk just steps past it, where index math would desync."""
+    for _ in range(NAV_STEPS):               # normalize to the first row
+        fe.send_key(win, "up")
         sleep(POLL_S)
-    raise AskError("cursor", "cursor never reached row %s" % digit)
+        if (_cursor_row(fe.get_text(win) or "") or {}).get("digit") == "1":
+            break
+    for _ in range(NAV_STEPS):
+        screen = fe.get_text(win) or ""
+        cur = _cursor_row(screen)
+        if cur is not None and pred(cur):
+            return screen
+        fe.send_key(win, "down")
+        sleep(POLL_S)
+    raise AskError("cursor", "cursor never reached %s" % what)
+
+
+def _by_digit(d):
+    return lambda r: r["digit"] == d
 
 
 def _answer_question(fe, win, q, ans, sleep):
     """Apply one question's answer to the CURRENT pane. Leaves the dialog on
-    the next tab (single-select auto-advances; multiSelect is advanced with
-    `right` from a non-edit row)."""
-    screen = fe.get_text(win) or ""
-    rs = rows(screen)
+    the next tab: single-select Enter auto-advances; multiSelect toggles each
+    box (Enter) then `right` advances. Digits are inert in v2.1.215 — every
+    selection is cursor-to-the-row + Enter."""
     labels = [o.get("label") or "" for o in (q.get("options") or [])]
     selected = [s for s in (ans.get("selected") or []) if s in labels]
     other = (ans.get("other") or "").strip()
+    type_digit = str(len(labels) + 1)
     if q.get("multiSelect"):
-        # digits TOGGLE — diff each option's desired state against the
-        # checkbox the screen actually shows (the user may have pre-toggled
-        # some in the terminal)
+        # Enter TOGGLES the cursored box — diff each option's desired state
+        # against the checkbox the screen actually shows (the user may have
+        # pre-toggled some in the terminal), and only flip the ones that differ
         for i, label in enumerate(labels):
-            row = next((r for r in rs if r["digit"] == str(i + 1)), None)
+            row = next((r for r in rows(fe.get_text(win) or "")
+                        if r["digit"] == str(i + 1)), None)
             if row is None:
                 raise AskError("options", "row %d not on screen" % (i + 1))
             if bool(row["check"]) != (label in selected):
-                fe.send_key(win, str(i + 1))
+                _cursor_to(fe, win, _by_digit(str(i + 1)), sleep,
+                           "option %d" % (i + 1))
+                fe.send_key(win, "enter")        # toggle
                 sleep(KEY_GAP_S)
         if other:
-            _cursor_to(fe, win, str(len(labels) + 1), sleep)
-            if not fe.send_text(win, other):     # types inline + CR commits
+            _cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
+            if not fe.send_text(win, other):     # types inline + CR
                 raise AskError("type", "other text not delivered")
             sleep(POLL_S)
-            fe.send_key(win, "enter")            # check the custom row
-            sleep(POLL_S)
-            screen, ok = _wait(
+            # the CR may or may not have checked the custom row; ensure it is
+            checked = any(r["check"] for r in rows(fe.get_text(win) or "")
+                          if r["label"].startswith(other[:24]))
+            if not checked:
+                fe.send_key(win, "enter")
+            _, ok = _wait(
                 fe, win,
                 lambda s: any(r["check"] for r in rows(s)
                               if r["label"].startswith(other[:24])),
                 STEP_TIMEOUT_S, sleep)
             if not ok:
                 raise AskError("type", "custom option never checked")
-            fe.send_key(win, "up")               # leave the edit row (left/
-            sleep(POLL_S)                        # right would move the text
-        fe.send_key(win, "right")                # cursor there) → next tab
+        fe.send_key(win, "right")                # non-edit → next tab
         return
     if other:
-        _cursor_to(fe, win, str(len(labels) + 1), sleep)
-        if not fe.send_text(win, other):         # CR selects + advances
+        _cursor_to(fe, win, _by_digit(type_digit), sleep, "Type row")
+        if not fe.send_text(win, other):         # type + CR selects + advances
             raise AskError("type", "other text not delivered")
         return
     if not selected:
         raise AskError("options", "no answer for %r"
                        % (q.get("question") or "")[:60])
-    fe.send_key(win, str(1 + labels.index(selected[0])))
+    tgt = str(1 + labels.index(selected[0]))
+    _cursor_to(fe, win, _by_digit(tgt), sleep, "option " + tgt)
+    fe.send_key(win, "enter")                    # select + auto-advance
 
 
 def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
@@ -217,11 +254,11 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     if not dialog_open(screen) and not review_open(screen):
         raise AskError("open", "no question dialog on screen")
     if chat:
-        rs = rows(screen)
-        row = next((r for r in rs if r["label"] == CHAT_LABEL), None)
-        if row is None:
+        if not any(r["label"] == CHAT_LABEL for r in rows(screen)):
             raise AskError("chat", "no 'Chat about this' row on screen")
-        fe.send_key(win, row["digit"])
+        _cursor_to(fe, win, lambda r: r["label"] == CHAT_LABEL, sleep,
+                   "Chat row")
+        fe.send_key(win, "enter")
         _, ok = _wait(fe, win,
                       lambda s: not dialog_open(s) and not review_open(s),
                       STEP_TIMEOUT_S, sleep)
@@ -245,7 +282,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
                            % (i + 1, (q.get("question") or "")[:60]))
         _answer_question(fe, win, q, ans, sleep)
     # a single single-select question submits outright; everything else lands
-    # on the review pane, where digit 1 = "Submit answers"
+    # on the review pane, where "Submit answers" is the cursored top row
     screen, ok = _wait(fe, win,
                        lambda s: review_open(s)
                        or (not dialog_open(s) and not review_open(s)),
@@ -253,7 +290,9 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     if not ok:
         raise AskError("review", "neither review pane nor submit happened")
     if review_open(screen):
-        fe.send_key(win, "1")
+        _cursor_to(fe, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
+                   "Submit answers")
+        fe.send_key(win, "enter")
         _, ok = _wait(fe, win,
                       lambda s: not dialog_open(s) and not review_open(s),
                       SUBMIT_TIMEOUT_S, sleep)
