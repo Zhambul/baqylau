@@ -1660,11 +1660,8 @@ class Handler(BaseHTTPRequestHandler):
         elif cmd == "effort" and arg in EFFORTS:
             text = "/effort " + arg
         else:
-            # repr(): same rule as new-session validation — a reject must
-            # leave the exact received bytes in the audit
-            A.error("", "dashboard command (bad cmd)",
-                    {"sid": sid, "cmd": repr(cmd), "arg": repr(arg)})
-            return self._json({"error": "unknown command"}, 400)
+            return self._reject_input("web-command", "bad cmd", "unknown command",
+                                {"sid": sid, "cmd": cmd, "arg": arg})
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
@@ -2414,6 +2411,28 @@ class Handler(BaseHTTPRequestHandler):
             A.error(log, "dashboard interrupt (escape-recheck spawn)",
                     {"win": win})
 
+    def _reject_input(self, action, why, message, detail, code=400):
+        """A control-plane INPUT-validation reject (the client sent a bad
+        field). Audited as an `ok:False` state_files row under the handler's own
+        `action` vocabulary, carrying the reason (`why`) and the EXACT received
+        bytes (repr — a remote client's "but I picked it from the dropdown" is
+        undebuggable otherwise, invisible characters included). Deliberately NOT
+        an `errors` row: these are expected 4xx from client input (an
+        abandoned/partial cwd, a typo'd model, a bad quick-command), not
+        swallowed exceptions — their traceback would be a bare `NoneType: None`
+        — and must not light the errwatch warning chip, which surfaces every
+        session_id='' `errors` row as a `⚠ global:` in EVERY session's
+        scorebar. This is the shape `post_dictate_token` already used inline for
+        its bad-rate reject; the reject sites that mis-used A.error now share it.
+        Distinct from `_reject` (the low-level guard rejection that closes the
+        connection because it hasn't read the body — the input body is already
+        consumed by `_post_guard` here, so no desync to guard against). Returns
+        the response so callers stay `return self._reject_input(...)`."""
+        A.state_file("", "", action,
+                     dict({"ok": False, "why": why},
+                          **{k: repr(v) for k, v in detail.items()}))
+        return self._json({"error": message}, code)
+
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the
         cwd isn't an existing directory or model/effort/resume/continue don't
@@ -2431,21 +2450,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         cwd = body.get("cwd")
         if not isinstance(cwd, str) or not cwd or not os.path.isdir(cwd):
-            # repr(): a validation reject must leave the EXACT received bytes
-            # in the audit (invisible characters included) — a remote client's
-            # "but I picked it from the dropdown" is undebuggable otherwise
-            A.error("", "dashboard new-session (bad cwd)", {"cwd": repr(cwd)})
-            return self._json({"error": "cwd is not an existing directory"}, 400)
+            return self._reject_input("web-launch", "bad cwd",
+                                "cwd is not an existing directory",
+                                {"cwd": cwd})
         model, effort = body.get("model"), body.get("effort")
         if model is not None and (
                 not isinstance(model, str) or not _MODEL_OK.match(model)):
-            A.error("", "dashboard new-session (bad model)",
-                    {"model": repr(model)})
-            return self._json({"error": "invalid model"}, 400)
+            return self._reject_input("web-launch", "bad model", "invalid model",
+                                {"model": model})
         if effort is not None and effort not in EFFORTS:
-            A.error("", "dashboard new-session (bad effort)",
-                    {"effort": repr(effort)})
-            return self._json({"error": "invalid effort"}, 400)
+            return self._reject_input("web-launch", "bad effort", "invalid effort",
+                                {"effort": effort})
         # resume / continue — the CLI's own conversation-pickup flags. resume
         # carries a session id (one clean argv word, same alphabet as our sid
         # routing); continue is a bare flag. Mutually exclusive, like the CLI.
@@ -2454,26 +2469,23 @@ class Handler(BaseHTTPRequestHandler):
         resume, cont = body.get("resume"), body.get("continue")
         if resume is not None and (
                 not isinstance(resume, str) or not _SID_OK.match(resume)):
-            A.error("", "dashboard new-session (bad resume)",
-                    {"resume": repr(resume)})
-            return self._json({"error": "invalid resume id"}, 400)
+            return self._reject_input("web-launch", "bad resume", "invalid resume id",
+                                {"resume": resume})
         if cont not in (None, False, True):
-            A.error("", "dashboard new-session (bad continue)",
-                    {"continue": repr(cont)})
-            return self._json({"error": "invalid continue"}, 400)
+            return self._reject_input("web-launch", "bad continue",
+                                "invalid continue", {"continue": cont})
         if resume and cont:
-            A.error("", "dashboard new-session (resume+continue)",
-                    {"resume": repr(resume)})
-            return self._json({"error": "resume and continue are exclusive"}, 400)
+            return self._reject_input("web-launch", "resume+continue",
+                                "resume and continue are exclusive",
+                                {"resume": resume})
         # account: the switcher slug to launch under (default `claude` when
         # absent). Resolved to a registry-vetted command word — never the raw
         # value flows into the launch shell string.
         acct = body.get("account")
         cmd = plugins.account_alias(acct) if acct else "claude"
         if cmd is None:
-            A.error("", "dashboard new-session (bad account)",
-                    {"account": repr(acct)})
-            return self._json({"error": "unknown account"}, 400)
+            return self._reject_input("web-launch", "bad account", "unknown account",
+                                {"account": acct})
         prompt = body.get("prompt")
         words = ((["--resume", resume] if resume else [])
                  + (["--continue"] if cont else [])
@@ -2593,8 +2605,8 @@ class Handler(BaseHTTPRequestHandler):
         # bytes (same rule as new-session's bad cwd). len cap: a group key is a
         # path — no legitimate one runs long, and the store is not a bucket.
         if not isinstance(key, str) or len(key) > 4096:
-            A.error("", "dashboard hide-dir (bad key)", {"cwd": repr(key)})
-            return self._json({"error": "cwd must be a string"}, 400)
+            return self._reject_input("hide-dir", "bad key", "cwd must be a string",
+                                {"cwd": key})
         ts = time.time()
         m = prefs.hide_dir(key, ts)
         A.state_file("", "", "hide-dir", {"key": key, "hidden_at": ts})

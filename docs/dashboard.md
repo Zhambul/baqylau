@@ -1279,6 +1279,21 @@ the tab state at press time says what the Escape landed on). Failure paths
 `A.error` per the audit-before-swallow rule, so a "my message never arrived"
 report is answerable from the DB.
 
+**Input-validation rejects are NOT `A.error`s.** A client that sends a bad
+field (a partial/non-existent `cwd`, a typo'd `model`/`effort`, a malformed
+`resume`, an unknown `account`, a bad quick-`command`, a bad `hide-dir` key)
+gets a 400/4xx and an `ok:False` `state_files` row under the handler's own
+action (`web-launch` / `web-command` / `hide-dir`) carrying `why:"<reason>"`
+plus the offending field `repr()`'d — the same shape `web-dictate` already
+used for its `bad-rate` reject, driven by the shared `Handler._reject` helper.
+Deliberately NOT an `errors` row: these are expected client-input 4xx, not
+swallowed exceptions (their traceback would be a bare `NoneType: None`), and
+`errwatch` surfaces every `session_id=''` `errors` row as a `⚠ global:` chip in
+EVERY session's scorebar — so a stray "ba" typed into the new-session form must
+not light a warning light that never clears. Genuine server-side failures (no
+terminal, launch/grant returned false) stay `A.error` — those ARE bugs worth
+the light.
+
 ## Web ask (`POST /api/session/<sid>/answer`) — AskUserQuestion from the browser
 
 When Claude asks a question (the AskUserQuestion tool), the session view
