@@ -97,6 +97,52 @@ def test_unknown_type_is_none():
     assert TR.parse_line(_l({"type": "summary", "summary": "x"})) is None
 
 
+def test_queued_command_attachment_is_a_prompt():
+    # A message queued mid-turn is delivered ONLY as this attachment (never a
+    # plain user string) — surface it as a prompt so the dashboard mirror shows
+    # it AND the composer's ⧗ chip drains (the "stuck queued message" report).
+    rec = TR.parse_line(_l({"type": "attachment", "attachment": {
+        "type": "queued_command", "commandMode": "prompt",
+        "origin": {"kind": "human"}, "prompt": "ship it\nnow"}}))
+    assert rec == {"kind": "prompt", "text": "ship it\nnow"}
+
+
+def test_task_notification_queued_command_is_none():
+    # The harness re-injects task notifications as queued_command too, but they
+    # are commandMode=="task-notification" — not user turns, so kept out.
+    rec = TR.parse_line(_l({"type": "attachment", "attachment": {
+        "type": "queued_command", "commandMode": "task-notification",
+        "prompt": "<task-notification>\n<task-id>x</task-id>"}}))
+    assert rec is None
+
+
+def test_non_queued_attachment_is_none():
+    assert TR.parse_line(_l({"type": "attachment", "attachment": {
+        "type": "skill_listing", "content": "..."}})) is None
+
+
+def test_conversation_surfaces_delivered_queued_message(tmp_path):
+    # End-to-end at the conversation() layer (the dashboard's provider): the
+    # typed prompt AND the mid-turn queued one both land as prompt records; the
+    # task-notification re-injection does not.
+    p = tmp_path / "c.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "message": {"content": "first prompt"},
+         "timestamp": "2026-07-20T00:46:56.000Z"},
+        {"type": "attachment", "attachment": {
+            "type": "queued_command", "commandMode": "prompt",
+            "origin": {"kind": "human"}, "prompt": "queued while busy"},
+         "timestamp": "2026-07-20T00:47:41.000Z"},
+        {"type": "attachment", "attachment": {
+            "type": "queued_command", "commandMode": "task-notification",
+            "prompt": "<task-notification>\n<task-id>x</task-id>"},
+         "timestamp": "2026-07-20T00:47:42.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    prompts = [r["text"] for r in recs if r["kind"] == "prompt"]
+    assert prompts == ["first prompt", "queued while busy"]
+
+
 # ------------------------------------------------------------------ agent_paths
 
 def test_agent_paths_layout():

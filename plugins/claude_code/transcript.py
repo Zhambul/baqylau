@@ -22,7 +22,9 @@
 # parse_line(s) returns one record per JSONL line (None = nothing renderable):
 #   {"kind": "bad", "raw": s}                       unparseable JSON
 #   {"kind": "compact", "meta": {...}}              a compact_boundary system record
-#   {"kind": "prompt", "text": str}                 a plain user prompt (unstripped)
+#   {"kind": "prompt", "text": str}                 a user prompt (unstripped) —
+#       a plain `user` string OR a `queued_command` attachment (the delivered
+#       form of a message queued mid-turn; commandMode=="prompt" only)
 #   {"kind": "teammsg", "sender": str, "body": str} an incoming teammate message
 #   {"kind": "results", "blocks": [...], "tur": …, "texts": [str, ...]}
 #       a user record carrying tool_result blocks (in order) — `tur` is the
@@ -142,6 +144,23 @@ def parse_line(s):
         u = msg.get("usage")
         return {"kind": "assistant", "usage": u if isinstance(u, dict) else None,
                 "model": msg.get("model"), "id": msg.get("id"), "blocks": blocks}
+    if t == "attachment":
+        # A message typed while a turn is running is QUEUED by Claude Code and,
+        # when the turn boundary delivers it, recorded ONLY as this
+        # `queued_command` attachment — never as a plain `user` string (verified
+        # across the transcript corpus). So a mid-turn queued message is the one
+        # user prompt that never reaches conversation()/timeline() as a prompt:
+        # the dashboard mirror silently drops it AND the composer's ⧗ chip never
+        # drains (drainQueue matches a delivered prompt by text) — the "queued
+        # message stuck / missing from the transcript" report. Surface it as a
+        # prompt so both work. `commandMode` separates real prompts (human +
+        # auto-continuation) from the `task-notification` re-injections (which
+        # are harness noise, not user turns); conversation()'s own `<`-wrapper
+        # filter still drops any command/caveat wrapper, same as a typed prompt.
+        att = o.get("attachment") or {}
+        if att.get("type") == "queued_command" and att.get("commandMode") == "prompt":
+            return {"kind": "prompt", "text": att.get("prompt") or ""}
+        return None
     return None
 
 

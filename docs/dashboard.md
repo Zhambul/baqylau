@@ -359,7 +359,18 @@ record actually arrives in the stream — `_conv_items` items additively carry
 text — because the transcript is the ONE delivery signal: tab transitions are
 useless (green flips busy again the instant a queued prompt starts
 processing), and the chip's ✕ only hides it (the message is already in the
-TUI's queue; the web cannot unqueue it). `awaiting-command` (red) is
+TUI's queue; the web cannot unqueue it). The subtlety that made this silently
+break (2026-07-20): a queued message, when delivered, is written to the
+transcript ONLY as a `queued_command` **attachment** record (`{"type":
+"attachment", "attachment": {"type": "queued_command", "commandMode":
+"prompt", "prompt": …}}`), NEVER as the plain `user` string an idle-typed
+prompt produces — so `transcript.parse_line` dropped it, the mirror never
+showed the delivered message, AND the chip never drained (the "stuck queued
+message, missing from the transcript" report). The fix surfaces that
+attachment as a `{"kind": "prompt"}` record (only `commandMode == "prompt"` —
+the harness's `task-notification` re-injections use the same attachment but
+are not user turns), so both the bubble and the drain work.
+`awaiting-command` (red) is
 deliberately NOT in `QUEUE_TABS`: a dialog is up and typed text goes to the
 DIALOG, not the input box — a send then is neither immediate nor queued, and
 claiming "queued" would be a lie.
