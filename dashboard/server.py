@@ -131,6 +131,12 @@ NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
 NOTIFY_CMD = os.path.expanduser(
     os.environ.get("CLAUDE_DASH_NOTIFY_CMD")
     or "~/.claude/skills/notify/scripts/notify.py")
+# The base URL the alert's deep link points at — the PUBLIC (proxied) origin,
+# not the bind: a Telegram alert lands on your phone, where http://127.0.0.1 is
+# useless. Defaults to the cloudflared/tailscale front (docs/remote.md);
+# CLAUDE_DASH_PUBLIC_URL overrides (trailing slash tolerated).
+NOTIFY_URL_BASE = (os.environ.get("CLAUDE_DASH_PUBLIC_URL")
+                   or "https://baqylau.zhambyl.top").rstrip("/")
 
 # Tab states during which a composer send lands in Claude Code's own message
 # QUEUE (a turn is in progress — the TUI queues typed input and delivers it
@@ -273,7 +279,7 @@ class Notifier:
         head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
         title = entry.get("title") or (
             "Claude is asking a question" if asking else "finished — your turn")
-        url = "http://%s:%d/#/s/%s" % (HOST, PORT, entry.get("sid") or "")
+        url = "%s/#/s/%s" % (NOTIFY_URL_BASE, entry.get("sid") or "")
         msg = "%s — %s\n%s" % (head, title, url)
         try:
             subprocess.Popen(

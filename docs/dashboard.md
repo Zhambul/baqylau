@@ -2601,7 +2601,9 @@ The send is a **detached** `subprocess.Popen` of the notify script
 round-trip can't stall the 1 s watcher; it's best-effort and audited as a
 `telegram-notify` `state_files` row (an `A.error` on a launch failure). The
 message is `🔴 <project> needs you` / `🟢 <project> is done`, the session title,
-and the `#/s/<sid>` deep link.
+and a `<public-url>/#/s/<sid>` deep link — pointed at the PUBLIC proxied origin
+(`CLAUDE_DASH_PUBLIC_URL`, default `https://baqylau.zhambyl.top`), never the
+`127.0.0.1` bind: the alert lands on a phone, where localhost is useless.
 
 **Per-session opt-out.** The header's **🔔 alerts / 🔕 muted** button
 (`renderSessionChrome`, beside ✎ rename / ⇆ migrate) toggles
@@ -2619,7 +2621,9 @@ so muting during the grace window still suppresses the alert.
 negative → default), `CLAUDE_DASH_NOTIFY_TELEGRAM` (`0` disables arming +
 sending entirely, the in-page toast is unaffected; default on), and
 `CLAUDE_DASH_NOTIFY_CMD` (the notify script path — `~` expanded, overridable for
-a different transport or the hermetic test's recorder).
+a different transport or the hermetic test's recorder), and
+`CLAUDE_DASH_PUBLIC_URL` (the deep-link base — the proxied origin the alert
+opens, default `https://baqylau.zhambyl.top`; trailing slash tolerated).
 
 **The session strip is the persistent complement to the toasts.** Toasts are
 transient (a 7s slide-in on the transition); the strip is the standing view of

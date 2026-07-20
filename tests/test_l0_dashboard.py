@@ -1704,11 +1704,14 @@ def test_telegram_send_invokes_notify_cmd(monkeypatch, tmp_path):
         "pathlib.Path(%r).write_text(sys.argv[1] if len(sys.argv) > 1 else '')\n"
         % str(rec))
     monkeypatch.setattr(DS, "NOTIFY_CMD", str(script))
+    # the deep link points at the PUBLIC proxied origin, not the 127.0.0.1 bind
+    monkeypatch.setattr(DS, "NOTIFY_URL_BASE", "https://dash.example")
     n = DS.Notifier()
     n._telegram({"kind": "done", "sid": "s9", "project": "proj", "title": "all green"})
     wait_until(rec.exists, desc="recorder ran")
     msg = rec.read_text()
-    assert "proj is done" in msg and "all green" in msg and "#/s/s9" in msg
+    assert "proj is done" in msg and "all green" in msg
+    assert "https://dash.example/#/s/s9" in msg
 
 
 def test_notify_mute_endpoint_roundtrip_and_validation(dash):
