@@ -281,7 +281,12 @@ codex streams in [codex.md](codex.md); the scoreboard window in [scoreboard.md](
   parked as `*.keep` at SessionEnd — a `--resume`/`--continue` restores it, so the
   mirror replays the prior session; see `claude-split.py` below), and while off
   there is no process at all. It keeps at most `MAX_OPS` (8000) ops in memory so a
-  long session can't grow unbounded. One process — no file-switching,
+  long session can't grow unbounded. The click-to-view expansion cache
+(`_VIEW_OPS` — a view id → its pre-rendered body, highlighted content / ±
+diff) is likewise bounded: an entry is dropped the moment its view **collapses**
+(the `view-open` poll), not just on a DB-inode reset, so a session that expanded
+many large Reads no longer pins all their content for its life (the durable
+`view:<id>` kv re-feeds a re-expand). One process — no file-switching,
   byte-offsets, `lsof`, or orphaned tails. An **idle** tick (0.2s) costs one
   `ops` SELECT and nothing else: the empty-path `MAX(id)` recreated-DB probe
   is skipped (`ops_after(..., check_reset=False)` — the per-iteration inode

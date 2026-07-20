@@ -1020,6 +1020,13 @@ function createBlock() {
   return b;
 }
 
+// A single copy-group's body is capped: a long-lived group (a bg stream, a
+// monitor, `tail -f`, a subagent) keeps emitting line/code/gut ops that all
+// share ONE block id, and the `.stream` child cap in appendItems() only counts
+// top-level cards — never the ops nested inside one — so without this a
+// continuous stream grows the DOM without bound (one node per op, forever).
+const MAX_BLOCK_BODY = 800;
+
 // Add one grouped item to a block: label ops become summary chips, everything
 // else appends to the body (and seeds the one-line summary). Body always reads
 // oldest->newest (top-down), matching arrival order.
@@ -1028,6 +1035,8 @@ function fillBlock(b, it) {
     b.chips.insertAdjacentHTML("beforeend", it.html);
   } else {
     b.body.insertAdjacentHTML("beforeend", it.html);
+    while (b.body.childElementCount > MAX_BLOCK_BODY)
+      b.body.firstElementChild.remove();       // trim oldest (top) — arrival order
     if (!b.sum.textContent && b.body.lastElementChild) {
       const line = (b.body.lastElementChild.textContent || "")
         .trim().split("\n").find(l => l.trim());

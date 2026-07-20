@@ -221,9 +221,18 @@ NOTIFIER = Notifier()
 
 # --- payload builders ----------------------------------------------------------------
 
-_TITLES = {}      # transcript_path -> (size, title): a title only changes when
-#                   the file grows, so (path, size) is the natural cache key —
-#                   the list poll must not re-scan 50 transcript heads per tick
+# Every path-keyed memo below is a process-lifetime cache in a days-long
+# singleton — bounded with API.BoundedLRU so the KEY set (transcript/state-DB
+# paths, cwds — one per session ever seen) can't grow without limit. The cap is
+# far above the live working set (SESSIONS_LIMIT sessions + their agents), so an
+# active session never thrashes; only paths that scrolled out of discovery age
+# out, and their re-derivable values just re-read once if seen again.
+MEMO_CAP = 8192
+
+_TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, title): a title
+#                   only changes when the file grows, so (path, size) is the
+#                   natural cache key — the list poll must not re-scan 50
+#                   transcript heads per tick
 
 
 def session_title(tpath):
@@ -241,13 +250,15 @@ def session_title(tpath):
     return title
 
 
-_GIT = {}         # cwd -> the _git_resolve result (None = not a checkout). The
-#                   ancestor walk + gitdir indirection is stable for a cwd, so it
-#                   caches forever; HEAD itself is re-read on every call (one tiny
-#                   file) so a branch switch shows on the next poll.
+_GIT = API.BoundedLRU(MEMO_CAP)   # cwd -> the _git_resolve result (None = not a
+#                   checkout). The ancestor walk + gitdir indirection is stable
+#                   for a cwd, so it caches until LRU-evicted; HEAD itself is
+#                   re-read on every call (one tiny file) so a branch switch
+#                   shows on the next poll.
 
-_DIRTY = {}       # cwd -> (monotonic expiry, True|False|None). The dirty probe
-#                   is the ONE sanctioned `git` subprocess here — worktree/index
+_DIRTY = API.BoundedLRU(MEMO_CAP)  # cwd -> (monotonic expiry, True|False|None).
+#                   The dirty probe is the ONE sanctioned `git` subprocess
+#                   here — worktree/index
 #                   dirtiness is not derivable from .git metadata (detecting it
 #                   IS `git status`'s stat-cache job), so it can't be a file
 #                   read like the rest of git_info. The TTL cache bounds it to
@@ -369,7 +380,8 @@ def git_info(cwd):
             "dirty": _git_dirty(cwd)}
 
 
-_CTX = {}         # transcript_path -> (size, ctx): same (path, size) cache key
+_CTX = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, ctx): same
+#                   (path, size) cache key
 #                   as _TITLES — saturation only changes when the file grows, and
 #                   the list/agents polls must not re-read every transcript tail
 #                   per tick. The main= flag is per-path-constant (a path is
@@ -418,7 +430,8 @@ def _last_active(row, sdb):
         return row.get("started_at")
 
 
-_STATS = {}       # state-db path -> (sig, stats): the list poll must not open
+_STATS = API.BoundedLRU(MEMO_CAP)  # state-db path -> (sig, stats): the list poll
+#                   must not open
 #                   50 sqlite connections per tick — parked DBs never change
 #                   and idle live ones change rarely. The sig is _db_sig (DB
 #                   file AND -wal stat), not (path, size): a live writer
@@ -426,7 +439,8 @@ _STATS = {}       # state-db path -> (sig, stats): the list poll must not open
 #                   checkpoint, so the main file's stat alone would serve
 #                   stale numbers for exactly the sessions that move.
 
-_ACCT = {}        # state-db path -> (sig, (account kv, usage kv)): same
+_ACCT = API.BoundedLRU(MEMO_CAP)  # state-db path -> (sig, (account kv, usage
+#                   kv)): same
 #                   _db_sig idea — the accounts strip re-scans the same 50
 #                   session DBs per fetch, nearly all parked.
 

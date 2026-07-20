@@ -248,7 +248,8 @@ def _render(op, w):
 # each tick and schedules a FULL repaint on any change — expansion/collapse is
 # a reflow, exactly like a resize.
 VIEW_OPEN = set()      # ids currently expanded (mirror of the `view-open` kv row)
-_VIEW_OPS = {}         # id -> stashed op list (immutable once written; cached)
+_VIEW_OPS = {}         # id -> stashed op list (cached; dropped when the view
+#                        collapses (poll_toggles) or the DB inode changes)
 
 
 def view_block(gid):
@@ -889,6 +890,14 @@ def poll_toggles(L, new):
                         and L.anchor >= L.loc_rows + 1 - h - 1):
                     L.follow = True
         VIEW_OPEN.clear(); VIEW_OPEN.update(cur_open)
+        # Drop the rendered body of every view that just COLLAPSED: _VIEW_OPS
+        # caches the full expansion (highlighted content / ± diff) per view id
+        # and was previously cleared only on a DB inode change, so a long
+        # session that expanded many large Reads pinned all their content for
+        # its life. The `view:<id>` kv is the durable source, so a re-expand
+        # re-reads it once (view_block) — eviction here is free.
+        for gid in [g for g in _VIEW_OPS if g not in VIEW_OPEN]:
+            del _VIEW_OPS[gid]
         L.resized = True
 
 

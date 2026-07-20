@@ -34,6 +34,7 @@ import json
 import os
 import sqlite3
 import time
+from collections import OrderedDict
 
 from core import paths as P
 from core import state as S
@@ -184,6 +185,34 @@ def db_sig(path):
         return (st.st_mtime_ns, st.st_size, wal.st_mtime_ns, wal.st_size)
     except OSError:
         return (st.st_mtime_ns, st.st_size)
+
+
+class BoundedLRU(OrderedDict):
+    """An insertion-order LRU that evicts its OLDEST entry once it exceeds
+    `cap` — the fix for the process-lifetime memo leak. A long-lived singleton
+    (the dashboard server, a receiver) that memoizes per session/transcript/cwd
+    path grows without bound otherwise: the value side is freshness-checked
+    (db_sig / file size / TTL), but the KEY set only ever grows as new sessions
+    are seen over a days-long life. Every value cached this way is re-derivable,
+    so an evicted key just re-reads once — eviction is always safe. Size `cap`
+    well ABOVE the live working set (the top-N discovery window plus its agents)
+    so active sessions never thrash; only paths that scrolled out of discovery
+    (and so aren't read anymore) age out. Recency is refreshed on WRITE, not
+    read (db_cached returns a fresh-sig hit without re-storing), which is enough
+    because a still-in-window path is re-read — and re-stored — the moment its
+    sig changes; a parked path whose sig is frozen is exactly the one safe to
+    evict. A plain dict everywhere it's used, so no call site changes."""
+
+    def __init__(self, cap, *a, **k):
+        self._cap = cap
+        super().__init__(*a, **k)
+
+    def __setitem__(self, key, value):
+        if key in self:
+            super().__delitem__(key)       # move existing key to the newest end
+        super().__setitem__(key, value)
+        while len(self) > self._cap:
+            self.popitem(last=False)       # drop the oldest
 
 
 def db_cached(cache, path, read):

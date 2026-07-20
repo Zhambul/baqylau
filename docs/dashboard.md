@@ -99,8 +99,16 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   so a `(path, size)` key (the `_TITLES` pattern, fine for append-only
   transcripts) would serve stale numbers for exactly the sessions that are
   moving. The sig is taken *before* the read, so a racing write can only make
-  a cached value newer than its sig (re-read next tick), never staler. The
-  other historical poll-path sink was `sessionapi.sid_chain()`'s adopt-map
+  a cached value newer than its sig (re-read next tick), never staler. Each of
+  these memos (and the `(path, size)` ones — `_TITLES`, `_CTX`, `_GIT`,
+  `_DIRTY`) is a `sessionapi.BoundedLRU(MEMO_CAP)`, not a bare `dict`: the value
+  side is freshness-checked but the KEY set is one entry per session/transcript/
+  cwd ever seen, so an unbounded `dict` grew for the whole life of the days-long
+  singleton server. The LRU caps it well above the live working set
+  (`SESSIONS_LIMIT` sessions + their agents), so active sessions never thrash
+  and only paths that scrolled out of discovery age out — re-derivable, so a
+  re-seen path just re-reads once.
+  The other historical poll-path sink was `sessionapi.sid_chain()`'s adopt-map
   scan on every audit-backed read — fixed at the source with the audit index
   `ix_state_act` (docs/sessionapi.md, *Fork-aware queries*), which took
   `/api/session` from 300–1000ms to ~25ms.
@@ -1901,7 +1909,9 @@ page's grouping key (*Grouping and titles* below) and the toast `project`
 name, so a worktree session files under its project. HEAD at the resolved
 gitdir gives the
 branch (`ref: refs/heads/<b>`, or a 7-char sha when detached). The ancestor
-walk + gitdir indirection is cached per cwd forever; HEAD itself is re-read on
+walk + gitdir indirection is cached per cwd (in the `_GIT` `BoundedLRU`, so a
+days-long server can't accumulate one entry per cwd ever seen — see *Poll-path
+reads are memoized*); HEAD itself is re-read on
 every call (one tiny file), so a branch switch shows on the next poll and a
 removed worktree drops the chip. A cwd outside any checkout carries
 `git: null` and no chip renders.
@@ -2230,7 +2240,13 @@ hides once `/history` reports `oldest == 0`. Past a 3000-child cap, each live
 arrival trims the feed's oldest DOM nodes off the bottom, skipping over the
 pinned `.loadmore` button (it must stay the last child) and evicting a trimmed
 block card from the live `S.ses.blocks` map so a straggler op for that group
-can't render into a detached node.
+can't render into a detached node. That cap counts only DIRECT children of
+`.stream` — a block card is one child no matter how many ops nest inside its
+body — so a long-lived copy-group (a bg stream, a `monitor`, `tail -f`, a
+subagent) that keeps emitting ops into ONE block would grow the DOM without
+bound, invisibly to the child cap, and its live-tail card never reaches the
+bottom to be evicted. So `fillBlock` also caps each block **body** at
+`MAX_BLOCK_BODY` (800), trimming its oldest (top) op nodes as new ones append.
 
 ## Live agent timelines
 
