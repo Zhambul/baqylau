@@ -2340,6 +2340,21 @@ incremental provider** (its rollout renderer lacks the parse split), so a codex
 run's drill-down stays fetch-once — the `activity_since` fan-out finds no provider
 and the SSE idles as a heartbeat keep-alive.
 
+### Monitor events in the drill-down
+
+A `Monitor` tool launch shows in the timeline as an ordinary `tool` entry (name
+`Monitor`, its command/description in the input). Its **events** — which Claude
+Code writes to the transcript as `queue-operation` `<task-notification>` records
+(docs/streaming.md, *Monitor events in the transcript*) — become their own
+`{"t": "monitor"}` entries (`◉ monitor event` / `◉ monitor completed` pill, the
+event line in the body, cyan `.k-monitor` chip), interleaved in transcript order
+right after the launch. So the drill-down carries a monitor's *whole* story —
+launch, every event, and the stream-ended marker — including for a parked session
+viewed long after (the transcript is durable). These are **not** re-emitted into
+the mirror stream (`conversation()` drops them): the mirror already streams a
+monitor's events live as ops via `claude-stream.py`, so surfacing them from the
+transcript too would double them.
+
 ### Breadcrumbs (back up the hierarchy)
 
 A subagent drill-down (`showAgent`) prepends an **agent-hierarchy breadcrumb**

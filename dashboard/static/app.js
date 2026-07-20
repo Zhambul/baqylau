@@ -4245,6 +4245,14 @@ function timelineEntry(ent) {
     kcls = "k-compact"; ktxt = "compact";
     sum = "context compacted"; open = false;
     bd.append(pre(JSON.stringify(ent.meta || {}, null, 2)));
+  } else if (ent.t === "monitor") {
+    // A Monitor tool event (or its stream-ended `status`). The launch itself is
+    // a separate `tool` entry (name "Monitor"); these are the events it fired.
+    kcls = "k-monitor";
+    ktxt = ent.status ? ("◉ monitor " + ent.status) : "◉ monitor event";
+    const body = ent.event || ent.summary || "";
+    sum = firstLine(body); open = false;
+    if (body) bd.append(pre(body));
   } else if (ent.t === "tool") {
     kcls = ent.failed ? "k-toolfail" : "k-tool";
     ktxt = ent.tool || "tool";

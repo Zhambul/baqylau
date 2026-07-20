@@ -1089,6 +1089,7 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 .k-tool { background: var(--blue); }
 .k-toolfail { background: var(--red); }
 .k-teammsg { background: var(--busy); }
+.k-monitor { background: #56b6c2; }               /* Monitor events — One Dark cyan */
 .k-compact, .k-orphan { background: var(--dim2); color: var(--text); }
 .ent .sum { color: var(--text-soft); font-size: 12px; font-family: var(--mono);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }

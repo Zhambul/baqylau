@@ -644,8 +644,12 @@ def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
         f.write("monitor event 1\n")
     run_hook("claude-monitor-fmt.py",
              P.post_monitor(s, description="watching", command=cmd,
-                            task_id=taskid))
+                            task_id=taskid, persistent=True))
     assert "◉ monitor" in s.ops_text()
+    # the watched COMMAND is painted under the header (not just the description)
+    assert "sleep 300" in s.ops_text(), "monitor command not shown in the block"
+    # a persistent monitor's lifetime shows in the header
+    assert "persistent" in s.ops_text()
     wait_until(lambda: "monitor event 1" in s.ops_text(),
                desc="monitor output streams")
     wait_until(lambda: mon_proc_latched(test_env, s.sid),

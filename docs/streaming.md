@@ -303,6 +303,28 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   - Escape hatch: `CLAUDE_MIRROR_LIVE_FG=0` disables the command rewrite entirely
     if it ever misbehaves on some pathological command's quoting.
 - **`claude-monitor-fmt.py`** (the `PostToolUse` hook
-  for the `Monitor` tool) write a cyan `◉ monitor · <description>` header and
-  spawn `claude-stream.py` for the monitor's event stream — so Monitor output
-  shows in the split too, even though Monitor bypasses the Bash tool.
+  for the `Monitor` tool) writes a cyan `◉ monitor · <description>` header, then
+  the **watched command** as a highlighted `code` op right underneath (a
+  WebSocket monitor — `ws.url`, no command — shows a `⇄ ws · <url>` line
+  instead), then spawns `claude-stream.py` for the monitor's event stream — so
+  Monitor output shows in the split too, even though Monitor bypasses the Bash
+  tool. The header suffix records the monitor's lifetime (`· persistent`, or
+  `· ≤<dur>` for a timeout). Header, command, streamed events, and the finish
+  chip all share the `taskId` **copy-group** (`CLAUDE_STREAM_GROUP`), so the
+  block carries `⧉cmd`/`⧉out` links exactly like a background command block.
+
+### Monitor events in the transcript
+
+A Monitor's events are delivered to the model mid-turn, and Claude Code records
+each one in the session transcript as a **`type: "queue-operation"`** record
+(`operation: "enqueue"`) whose `content` is a small `<task-notification>` XML
+block — `<task-id>`, `<summary>`, and either `<event>` (a per-event line) or
+`<status>completed</status>` (the one final record when the monitor's stream
+ends). This is **empirically confirmed, undocumented** Claude Code behavior (like
+`updatedInput` command-rewriting and the Ctrl+B payload — check here before
+assuming the shape). `transcript.parse_line` turns these into `monitor_event`
+records, and the drill-down `timeline()` surfaces them as `{"t": "monitor"}`
+entries (the dashboard's per-session activity view — docs/dashboard.md). They
+are deliberately **NOT** added to `conversation()` / the dashboard mirror: the
+monitor's events already ride the ops stream (the `claude-stream.py` tailer
+above), so re-emitting them from the transcript would double them.

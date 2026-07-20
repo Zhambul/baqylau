@@ -121,6 +121,44 @@ def test_non_queued_attachment_is_none():
         "type": "skill_listing", "content": "..."}})) is None
 
 
+def _mon_note(*, task="b6c8b6c9r", summary="Monitor event: \"watch\"",
+              event=None, status=None):
+    parts = ["<task-notification>", "<task-id>%s</task-id>" % task,
+             "<summary>%s</summary>" % summary]
+    if event is not None:
+        parts.append("<event>%s</event>" % event)
+    if status is not None:
+        parts.append("<status>%s</status>" % status)
+    parts.append("</task-notification>")
+    return "\n".join(parts)
+
+
+def test_monitor_event_queue_operation_is_a_monitor_event():
+    # A Monitor tool EVENT is delivered mid-turn as a queue-operation record
+    # whose content is a <task-notification> block — surfaced for the drill-down.
+    rec = TR.parse_line(_l({"type": "queue-operation", "operation": "enqueue",
+                            "content": _mon_note(event="event 1: something")}))
+    assert rec == {"kind": "monitor_event", "task": "b6c8b6c9r",
+                   "summary": 'Monitor event: "watch"',
+                   "event": "event 1: something", "status": None}
+
+
+def test_monitor_stream_ended_notification_carries_status_not_event():
+    rec = TR.parse_line(_l({"type": "queue-operation",
+                            "content": _mon_note(summary="stream ended",
+                                                 status="completed")}))
+    assert rec["kind"] == "monitor_event"
+    assert rec["status"] == "completed"
+    assert rec["event"] is None
+
+
+def test_non_task_notification_queue_operation_is_none():
+    # queue-operation carries other harness traffic too — only task-notifications
+    # are monitor events.
+    assert TR.parse_line(_l({"type": "queue-operation",
+                             "content": "some other queue payload"})) is None
+
+
 def test_conversation_surfaces_delivered_queued_message(tmp_path):
     # End-to-end at the conversation() layer (the dashboard's provider): the
     # typed prompt AND the mid-turn queued one both land as prompt records; the
@@ -226,6 +264,34 @@ def test_timeline_counts_bad_lines(tmp_path):
                  encoding="utf-8")
     tl = TR.timeline(str(p))
     assert tl["bad_lines"] == 1 and tl["entries"][0]["t"] == "prompt"
+
+
+def test_timeline_surfaces_monitor_launch_and_events(tmp_path):
+    # The Monitor launch is a `tool` entry (name "Monitor"); its EVENTS follow as
+    # `monitor` entries — the full drill-down story of a monitor. The mirror shows
+    # events via ops, so they must NOT also appear in conversation() (dupe).
+    path = _write(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Monitor",
+             "input": {"command": "tail -f log", "description": "watch"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "Monitor started"}]}},
+        {"type": "queue-operation", "content": _mon_note(event="line A")},
+        {"type": "queue-operation", "content": _mon_note(event="line B")},
+        {"type": "queue-operation", "content": _mon_note(summary="ended",
+                                                         status="completed")},
+    ])
+    tl = TR.timeline(path)
+    kinds = [e["t"] for e in tl["entries"]]
+    assert kinds == ["tool", "monitor", "monitor", "monitor"]
+    assert tl["entries"][0]["tool"] == "Monitor"
+    assert [e.get("event") for e in tl["entries"][1:]] == ["line A", "line B", None]
+    assert tl["entries"][3]["status"] == "completed"
+    # conversation() (the dashboard mirror provider) must drop monitor events —
+    # they already ride the ops stream, so surfacing here would double them.
+    recs, _ = TR.conversation(path, 0)
+    assert not any(r["kind"] == "monitor" for r in recs)
 
 
 # ------------------------------------------------------------ timeline_since

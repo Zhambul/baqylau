@@ -37,6 +37,15 @@
 #       one assistant message line — blocks preserve the content order; the
 #       record is returned even with no content list (usage/turn tracking must
 #       still run)
+#   {"kind": "monitor_event", "task": str, "summary": str,
+#    "event": str|None, "status": str|None}
+#       a Monitor tool's EVENT — Claude Code delivers each one mid-turn as a
+#       `queue-operation` record whose `content` is a <task-notification> XML
+#       block (one per event; a final <status>completed</status> when the
+#       monitor's stream ends). Empirically confirmed (docs/streaming.md). The
+#       drill-down timeline surfaces these; conversation()/the mirror do NOT —
+#       the events already ride the ops stream via claude-stream.py, so
+#       re-emitting there would DOUBLE them.
 import json
 import os
 import re
@@ -47,6 +56,33 @@ from datetime import datetime
 # </teammate-message> (the very first one is the lead's spawn prompt).
 TEAMMSG = re.compile(r'^\s*<teammate-message\b([^>]*)>\s*(.*?)\s*</teammate-message>\s*$', re.S)
 _TM_ID  = re.compile(r'teammate_id="([^"]*)"')
+
+# A Monitor EVENT is delivered as a `queue-operation` record whose `content` is
+# a <task-notification> XML block (docs/streaming.md, *Monitor events in the
+# transcript*). We read it with plain tag scans rather than an XML parser: the
+# blocks are small, fixed-shape, and produced by Claude Code (not user input).
+_TASK_NOTE = re.compile(r'<task-notification>(.*?)</task-notification>', re.S)
+
+
+def _note_tag(xml, name):
+    m = re.search(r'<%s>(.*?)</%s>' % (name, name), xml, re.S)
+    return m.group(1).strip() if m else None
+
+
+def _monitor_note(content):
+    """A queue-operation's `content` -> a monitor_event record, or None when it
+    isn't a <task-notification> (queue-operation carries other harness traffic
+    too). `event` is the per-event line; `status` (e.g. "completed") marks the
+    stream-ended notification, which carries no `event`."""
+    if not isinstance(content, str) or "<task-notification>" not in content:
+        return None
+    m = _TASK_NOTE.search(content)
+    xml = m.group(1) if m else content
+    return {"kind": "monitor_event",
+            "task": _note_tag(xml, "task-id") or "",
+            "summary": _note_tag(xml, "summary") or "",
+            "event": _note_tag(xml, "event"),
+            "status": _note_tag(xml, "status")}
 
 
 def result_text(content):
@@ -161,6 +197,10 @@ def parse_line(s):
         if att.get("type") == "queued_command" and att.get("commandMode") == "prompt":
             return {"kind": "prompt", "text": att.get("prompt") or ""}
         return None
+    if t == "queue-operation":
+        # A Monitor tool's events land here (see _monitor_note / the module
+        # header). None for any other queue-operation (harness noise).
+        return _monitor_note(o.get("content"))
     return None
 
 
@@ -477,6 +517,10 @@ def _fold_record(rec, entries, pend, acc, on_unresolved, ACC):
     elif kind == "teammsg":
         entries.append({"t": "teammsg", "sender": rec["sender"],
                         "body": rec["body"]})
+    elif kind == "monitor_event":
+        entries.append({"t": "monitor", "task": rec["task"],
+                        "summary": rec["summary"], "event": rec.get("event"),
+                        "status": rec.get("status")})
     elif kind == "results":
         for blk in rec["blocks"]:
             out = result_text(blk.get("content"))
@@ -567,6 +611,10 @@ def timeline(path):
                                                 the returned result, mirroring
                                                 the substream's flush semantics)
       {"t": "compact", "meta"}                  a compaction boundary
+      {"t": "monitor", "task", "summary", "event", "status"}
+                                                a Monitor tool event (or its
+                                                stream-ended `status`) — see
+                                                parse_line's monitor_event record
       {"t": "tool", "tool", "input", "id"[, "output", "failed"]}
                                                 a tool call; output/failed fill
                                                 in from its tool_result

@@ -29,7 +29,7 @@ apart at a glance:
 |------|------|--------------|
 | **▶ foreground** | a normal blocking command — full output, `■ finished` | by status: slate ok / red failed / orange interrupted |
 | **▷ background** | a `run_in_background` command — output streams live, `■ background finished` | the job's slot from a **5-colour palette** |
-| **◉ monitor** | a Monitor tool stream — events stream live, `■ monitor ended` | the monitor's slot from a **separate 5-colour palette** |
+| **◉ monitor** | a Monitor tool stream — header `◉ monitor · <desc> · persistent`, the watched **command** underneath (a `ws.url` for a WebSocket monitor), events stream live, `■ monitor ended`; header/command/events/chip share a `⧉` copy-group | the monitor's slot from a **separate 5-colour palette** |
 | **▶ \<agent-type\>** | a **subagent** (Task/Agent tool) — its prompt, messages, commands, file ops & result stream in, framed by `▶ <type> · <description>` … `■ <type> ended` | the subagent's slot from a **third 5-colour palette** |
 | **▶ \<name\> · teammate** | an **agent-team teammate** — same streaming as a subagent, plus its messages (`✉ from` / `✉ to`), framed by `▶ <name> · teammate · <desc>` … `■ <name> ended` | a **fourth, lighter (pastel) palette** so a teammate reads apart from a subagent |
 | **codex ▶ \<label\>** | **any codex run** — a companion job (`Review` / `Adversarial Review` / `Task` / `Stop Gate Review`) or a raw `codex`/`codex exec` (`cli`) — its commands (`▶ cmd`), reasoning (`⋯ reasoning`), messages (`✎ message`), prompt (`⇢ prompt`) & review/result (`⇠ review` / `⇠ result`) stream in, framed by `codex ▶ <label>` … `■ codex <label> ended` | a **fifth palette** (jade · sky · orchid · gold) so a codex stream never reads as one of our own agents |
@@ -562,12 +562,16 @@ Behaviour & limits:
   command, then `claude-stream.py` appends each output line (`│ ` gutter in the
   job's palette colour) as it arrives, and a matching-colour `■ background
   finished · Ns` line when the job ends — all one block, command printed once.
-- **Monitor streams** show too — a `◉ monitor · <description>` header, the events
-  as they fire (`│ ` gutter in the monitor's palette colour), and a matching
-  `■ monitor ended · Ns` when the monitor's command process exits — exact at any
-  tick cadence (seconds or hours apart), no grace. A *persistent* monitor's
-  process lives until it's stopped / the session ends, so its block stays open
-  until then.
+- **Monitor streams** show too — a `◉ monitor · <description> · persistent`
+  header, the **watched command** printed underneath (a highlighted `code` op,
+  like a bg/fg block — or a `⇄ ws · <url>` line for a WebSocket monitor), the
+  events as they fire (`│ ` gutter in the monitor's palette colour), and a
+  matching `■ monitor ended · Ns` when the monitor's command process exits —
+  exact at any tick cadence (seconds or hours apart), no grace. So even a quiet
+  monitor that has fired no events yet shows *what* it is watching. Header,
+  command, events, and finish chip share the taskId copy-group (`⧉cmd`/`⧉out`).
+  A *persistent* monitor's process lives until it's stopped / the session ends,
+  so its block stays open until then.
 - **Subagents** stream live with full visibility — the `▶ <type> · <desc>` header,
   then the subagent's **prompt** (`⇢ prompt`), its **text messages** (`✎ message`),
   its **commands** (`<type> ▶ foreground` / `▷ background`), **file ops**

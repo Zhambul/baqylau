@@ -76,10 +76,19 @@ def post_file(s, tool="Edit", path=None, patch=None, failure=False, agent_id=Non
 
 def post_monitor(s, description="watch the build", command="tail -f build.log",
                  task_id="mon-0001", failure=False, agent_id=None,
-                 agent_type=None, error=None):
+                 agent_type=None, error=None, persistent=None, timeout_ms=None,
+                 ws_url=None):
+    ti = {"description": description}
+    if ws_url:                       # a WebSocket monitor has no command
+        ti["ws"] = {"url": ws_url}
+    else:
+        ti["command"] = command
+    if persistent is not None:
+        ti["persistent"] = persistent
+    if timeout_ms is not None:
+        ti["timeout_ms"] = timeout_ms
     d = base(s, "PostToolUseFailure" if failure else "PostToolUse",
-             tool_name="Monitor",
-             tool_input={"command": command, "description": description},
+             tool_name="Monitor", tool_input=ti,
              tool_response={} if failure else {"taskId": task_id})
     if failure and error:
         d["error"] = error
