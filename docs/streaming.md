@@ -328,3 +328,13 @@ entries (the dashboard's per-session activity view — docs/dashboard.md). They
 are deliberately **NOT** added to `conversation()` / the dashboard mirror: the
 monitor's events already ride the ops stream (the `claude-stream.py` tailer
 above), so re-emitting them from the transcript would double them.
+
+**Not every `<task-notification>` is a monitor.** A **background job's**
+completion rides the same mechanism (`summary: 'Background command … completed
+(exit code N)'`, `status: completed`, and — like a monitor's stream-ended
+record — a `<tool-use-id>` + `<output-file>`, but **no `<event>`**). So
+`_monitor_note` keeps only the monitor ones — a `<event>` tag, or a `Monitor …`
+summary — or a bg completion would parse as a `monitor_event` and show up as a
+phantom monitor on the dashboard's monitors tab / mislabel the activity timeline.
+Background jobs get their own dashboard tab, sourced from the audit `bg` streams
++ ops, not from these notifications (docs/dashboard.md, *Jobs tab*).

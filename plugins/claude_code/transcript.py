@@ -71,17 +71,24 @@ def _note_tag(xml, name):
 
 def _monitor_note(content):
     """A queue-operation's `content` -> a monitor_event record, or None when it
-    isn't a <task-notification> (queue-operation carries other harness traffic
-    too). `event` is the per-event line; `status` (e.g. "completed") marks the
-    stream-ended notification, which carries no `event`."""
+    isn't a MONITOR <task-notification>. The same <task-notification> mechanism
+    also delivers BACKGROUND-job completions (summary 'Background command … completed')
+    and other task acks — those are NOT monitor events (they'd otherwise show as
+    phantom monitors on the monitors tab and mislabel the activity timeline). A
+    monitor is the one with a per-event `<event>` tag, or a `Monitor …` summary
+    (its stream-ended notification, which carries only `<status>`). `event` is the
+    per-event line; `status` (e.g. "completed") marks the stream-ended one."""
     if not isinstance(content, str) or "<task-notification>" not in content:
         return None
     m = _TASK_NOTE.search(content)
     xml = m.group(1) if m else content
+    event = _note_tag(xml, "event")
+    summary = _note_tag(xml, "summary") or ""
+    if event is None and not summary.startswith("Monitor"):
+        return None            # a bg-completion / other task ack — not a monitor
     return {"kind": "monitor_event",
             "task": _note_tag(xml, "task-id") or "",
-            "summary": _note_tag(xml, "summary") or "",
-            "event": _note_tag(xml, "event"),
+            "summary": summary, "event": event,
             "status": _note_tag(xml, "status")}
 
 

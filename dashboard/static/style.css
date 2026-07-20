@@ -1086,6 +1086,9 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 .mev.mev-status { border-left-color: color-mix(in srgb, var(--done) 60%, transparent);
   background: color-mix(in srgb, var(--done) 8%, transparent); }
 .mev.mev-status .mtxt { color: var(--text-soft); }
+/* background-job drill-down: the output box (from the ops, via /copy) */
+.joutput { max-height: 60vh; overflow: auto; }
+.joutput pre { margin: 0; }
 .tl { display: flex; flex-direction: column; gap: 7px; }
 .tlhead {
   display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline;
@@ -1113,6 +1116,7 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
 .k-toolfail { background: var(--red); }
 .k-teammsg { background: var(--busy); }
 .k-monitor { background: #56b6c2; }               /* Monitor events — One Dark cyan */
+.k-job { background: #d3ccad; }                   /* background jobs — the bg palette tan */
 .k-compact, .k-orphan { background: var(--dim2); color: var(--text); }
 .ent .sum { color: var(--text-soft); font-size: 12px; font-family: var(--mono);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 1; }

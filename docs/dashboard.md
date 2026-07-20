@@ -274,8 +274,9 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
+| `GET /api/session/<sid>/jobs` | the session's background Bash jobs (command + lifecycle state, merging audit streams + ops) for the jobs tab (*Jobs tab*); output via the `/copy/<task>/out` endpoint |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -2421,6 +2422,46 @@ reason) — then the **full event list** (newest-first; the stream-ended
 `completed` notification styled apart). Events are capped at `MON_EVENT_CAP`
 (2000, most-recent) with an exact `event_count` and a truncation note. A
 breadcrumb (**◉ monitors › this monitor**) leads back to the list.
+
+**Monitor vs background-job notifications.** Both a monitor's events AND a
+background job's completion ride the *same* `queue-operation` `<task-notification>`
+mechanism (a bg job's is `summary: 'Background command … completed'`,
+`status: completed`, no `<event>`). `transcript.parse_line` keeps only the
+MONITOR ones (a `<event>` tag, or a `Monitor …` summary) — otherwise a bg
+completion would show as a phantom monitor here and mislabel the activity
+timeline. Background jobs get their own tab instead (below).
+
+## Jobs tab
+
+A session-view tab **`jobs`** (between `monitors` and `errors`) lists the
+session's **background Bash jobs** — `run_in_background` launches and Ctrl+B
+conversions — as cards, the same shape as the monitors/agents tabs, drilling into
+each job's command + full output.
+
+**Data path — `sessionapi.jobs(sid)`** (pure core, parallel to `agents()`; no
+transcript — a bg job's output isn't in the transcript). It merges:
+- the audit **`streams`** rows (kind `bg`, `task_id` = backgroundTaskId — the same
+  keystone `agents()`/monitors read) for the STATE: `started_at` / `ended_at` /
+  `end_reason` / `lines`, and `live` (newest row's `ended_at` is None);
+- the mirror **ops** for the COMMAND: a bg job's block is copy-grouped by its
+  taskId, so `core.copy.group_commands` (one mode=ro ops scan) pulls each job's
+  `code` op. A Ctrl+B-converted job's command op lives in its foreground group, so
+  its `command` may be blank — the card falls back to the taskId.
+
+The full **output is not carried in the list** (a build log can be huge). The
+drill-down (`#/s/<sid>/j/<task>` → `showJob`, `ses.jobFocus`-guarded like the
+others) shows the command + a meta grid (task, lines, started/ended/duration, end
+reason), then fetches the **output on demand** from those same ops via the
+existing `⧉out` copy endpoint (`GET /api/session/<sid>/copy/<task>/out` →
+`core.copy.collect`) into a scrollable box. `jobStatus` maps state to the agent
+cards' `data-st` tint: `running` while live, else `finished` (a bg job's normal
+`writer-gone`/vanished completion), with `timed out` off `end_reason`.
+
+**Live-ness** matches the monitors tab: the badge count rides a cheap `jobs` SSE
+(`sessionapi.job_count`, distinct bg-stream count), the list is fetched lazily on
+tab-open and re-fetched on a 4s poll while any job is `live`. (A job's live output
+already streams into the *mirror* tab as ops; the jobs tab is the
+state-and-history view.)
 
 ## Stream search + kind filters
 

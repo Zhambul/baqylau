@@ -521,6 +521,51 @@ def monitor_count(sid):
     return int(rows[0][0]) if rows else 0
 
 
+def jobs(sid):
+    """Background Bash jobs of a session (run_in_background launches + Ctrl+B
+    conversions), chain-aware, from the audit `streams` keystone (kind='bg',
+    task_id=backgroundTaskId) merged with the mirror OPS: each job's COMMAND is
+    the `code` op of its copy-group (core.copy.group_commands — the job's taskId
+    IS its op group `g`). Row shape mirrors agents()/the monitors read model:
+    {task, command, started_at, ended_at, end_reason, live, lines}. The full
+    OUTPUT is deliberately NOT carried here (a build log can be huge) — the
+    drill-down reads it on demand from the same ops via the /copy/<task>/out
+    endpoint (core.copy.collect). `live` is the newest streams row's ended_at
+    being None. Sorted by first start. A converted (Ctrl+B) job's command op
+    lives in its foreground group, so `command` may be blank there — the card
+    falls back to the taskId."""
+    chain = sid_chain(sid)
+    q = ("SELECT task_id, pid, started_at, ended_at, end_reason, lines_emitted"
+         " FROM streams WHERE kind='bg' AND session_id IN (%s) ORDER BY started_at"
+         % _in_clause(len(chain)))
+    out = {}
+    for task, pid, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
+        if not task:
+            continue
+        rec = out.setdefault(task, {"task": task, "started_at": st, "command": ""})
+        rec["ended_at"], rec["end_reason"] = en, er or ""
+        rec["lines"], rec["pid"] = lines, pid
+        rec["live"] = en is None
+    sdb = state_db_for(sid)
+    if sdb and out:
+        from core import copy as CP
+        cmds = CP.group_commands(sdb, set(out))
+        for task, rec in out.items():
+            rec["command"] = cmds.get(task, "")
+    return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
+
+
+def job_count(sid):
+    """The distinct background-job COUNT for a session (chain-aware) — the cheap
+    twin of jobs() for the jobs tab's badge (audit `streams` kind='bg', no ops
+    read), so the per-session overview/SSE can show it per-tick."""
+    chain = sid_chain(sid)
+    q = ("SELECT COUNT(DISTINCT task_id) FROM streams WHERE kind='bg'"
+         " AND session_id IN (%s)" % _in_clause(len(chain)))
+    rows = _rows(audit_db(), q, tuple(chain))
+    return int(rows[0][0]) if rows else 0
+
+
 def agent_transcript(sid, agent_id):
     """The transcript path for one agent — the newest streams row's src_path
     ('' when the audit never saw a streamer for it; plugins.activity() then

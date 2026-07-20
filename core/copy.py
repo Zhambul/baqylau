@@ -130,6 +130,31 @@ def collect(db, gid, what):
     return "\n".join(out)
 
 
+def group_commands(db, gids):
+    """The command (first `code` op) of each group in `gids` — ONE mode=ro ops
+    scan (collect() is per-group; the dashboard's jobs list wants them together,
+    N per-group scans of a big ops table being wasteful). {gid: command}, only
+    for gids that have a code op. Same read discipline as collect()."""
+    gids = set(gids)
+    cmds = {}
+    if not gids:
+        return cmds
+    conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2.0)
+    try:
+        rows = conn.execute("SELECT op FROM ops ORDER BY id").fetchall()
+    finally:
+        conn.close()
+    for (s,) in rows:
+        try:
+            op = json.loads(s)
+        except Exception:
+            continue
+        g = op.get("g")
+        if g in gids and op.get("t") == "code" and g not in cmds:
+            cmds[g] = op.get("s") or ""
+    return cmds
+
+
 def to_clipboard(text):
     """Pipe `text` to the OS clipboard. CLAUDE_COPY_CMD (a shell command reading
     stdin) overrides the probe — the test seam. True on success."""

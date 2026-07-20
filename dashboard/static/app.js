@@ -472,6 +472,7 @@ function route() {
     const sid = decodeURIComponent(parts[1]);
     if (parts[2] === "a" && parts[3]) return showAgent(sid, decodeURIComponent(parts[3]));
     if (parts[2] === "m" && parts[3]) return showMonitor(sid, decodeURIComponent(parts[3]));
+    if (parts[2] === "j" && parts[3]) return showJob(sid, decodeURIComponent(parts[3]));
     return showSession(sid, parts[2] || "mirror");
   }
   if (parts[0] === "launching") {
@@ -498,6 +499,7 @@ function leaveSession() {
     if (S.ses.es) S.ses.es.close();
     closeAgentStream();
     clearMonitorPoll();
+    clearJobPoll();
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
   }
@@ -845,7 +847,8 @@ function updateHeadFromList() {
     m.kitty_window_id = row.kitty_window_id;
     m.parked = row.parked;
     const renaming = S.ses.projEl && S.ses.projEl.querySelector("input");
-    if (!S.ses.agentFocus && !S.ses.monitorFocus && !renaming) renderSessionChrome(S.ses.tab);
+    if (!S.ses.agentFocus && !S.ses.monitorFocus && !S.ses.jobFocus && !renaming)
+      renderSessionChrome(S.ses.tab);
   }
 }
 
@@ -859,6 +862,7 @@ function showSession(sid, tab) {
               agents: [], costs: null, ctx: null, running: {}, meta: null, es: null, agentEs: null,
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
+              jobs: null, jobFocus: null, jobPoll: null,
               loadingOlder: false, queue: [],
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
@@ -947,6 +951,7 @@ function connectSession(sid) {
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("monitors", (e) => { updateMonCount(JSON.parse(e.data).count | 0); });
+  es.addEventListener("jobs", (e) => { updateJobCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -3481,7 +3486,9 @@ function renderSessionChrome(tab) {
   if (!ses) return;
   ses.agentFocus = null;      // a full session/tab render is never agent-focused
   ses.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
+  ses.jobFocus = null;        // …nor background-job-focused
   clearMonitorPoll();         // leaving the monitors tab stops its live poll
+  clearJobPoll();
   const meta = ses.meta || {};
   $view.textContent = "";
 
@@ -3717,6 +3724,9 @@ function renderSessionChrome(tab) {
   // eager streams count (monitor_count) so the tab shows before the tab is opened
   ses.monTab = mk("monitors", "monitors",
                   ses.monitors ? ses.monitors.length : (meta.monitor_count || 0));
+  // ⏳ background jobs — actual list length once fetched, else the cheap eager count
+  ses.jobTab = mk("jobs", "jobs",
+                  ses.jobs ? ses.jobs.length : (meta.job_count || 0));
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
   $view.append(tabs);
 
@@ -3763,6 +3773,13 @@ function renderSessionChrome(tab) {
     if (ses.monitors) renderMonitorsGrid();   // cached from a prior fetch
     else wrap.append(el("div", "empty", "loading monitors…"));
     loadMonitors();                            // (re)fetch fresh + start the live poll
+  } else if (tab === "jobs") {
+    const wrap = el("div", "sgrid");
+    ses.jobsGrid = wrap;
+    body.append(wrap);
+    if (ses.jobs) renderJobsGrid();
+    else wrap.append(el("div", "empty", "loading jobs…"));
+    loadJobs();
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -4252,6 +4269,191 @@ function monitorEventRow(e) {
     : (e.event || "");
   row.append(el("span", "mtxt", txt));
   return row;
+}
+
+/* ---------- background jobs (list tab + drill-down) ---------- */
+/* The jobs tab mirrors the monitors/agents tabs for `run_in_background` Bash
+   jobs (and Ctrl+B conversions): a grid of job cards with lifecycle state, each
+   drilling into command + full output. Data comes from sessionapi.jobs(sid) —
+   the audit streams state (kind='bg') merged with the command from the mirror
+   ops (copy-group). A job's OUTPUT is NOT in the transcript (it streams to the
+   ops), so the drill-down fetches it from the same ops via /copy/<task>/out (the
+   ⧉out copy endpoint). Loaded lazily on tab-open, re-fetched on a light poll
+   while any job is live; the count badge stays fresh via the `jobs` SSE. */
+
+function jobStatus(j) {
+  if (j.live) return ["running", "st-run"];
+  const er = j.end_reason || "";
+  if (er.indexOf("parked") >= 0) return ["ended (session end)", "st-ok"];
+  if (er.indexOf("backstop") >= 0 || er.indexOf("timeout") >= 0)
+    return ["ended · timed out", "st-warn"];
+  if (!er && j.ended_at == null) return ["unknown", "st-warn"];
+  return ["finished", "st-ok"];   // writer-gone / vanished = normal completion
+}
+
+function sortedJobs(jobs) {
+  return [...jobs].sort((x, y) => (!!y.live - !!x.live)
+    || ((y.started_at || 0) - (x.started_at || 0)));
+}
+
+function jobCard(j) {
+  const [sttxt, stcls] = jobStatus(j);
+  const card = el("a", "acard");
+  card.dataset.st = stcls;
+  card.href = "#/s/" + encodeURIComponent(S.cur) + "/j/" + encodeURIComponent(j.task);
+  const name = firstLine(j.command) || j.task;
+  card.append(el("div", "aid", "⏳ " + name));
+  card.append(el("div", "desc", j.task));
+  const meta = el("div", "meta");
+  meta.append(el("span", stcls, sttxt));
+  if (j.lines != null) meta.append(el("span", "", j.lines + " lines"));
+  if (j.started_at && j.ended_at) meta.append(el("span", "", dur(j.ended_at - j.started_at)));
+  else if (j.started_at) meta.append(el("span", "", ago(j.started_at)));
+  card.append(meta);
+  return card;
+}
+
+function renderJobsGrid() {
+  const ses = S.ses;
+  if (!(ses && ses.tab === "jobs" && ses.jobsGrid && ses.jobsGrid.isConnected)) return;
+  ses.jobsGrid.textContent = "";
+  const jobs = ses.jobs || [];
+  if (!jobs.length) {
+    ses.jobsGrid.append(el("div", "empty", "no background jobs in this session"));
+    return;
+  }
+  for (const j of sortedJobs(jobs)) ses.jobsGrid.append(jobCard(j));
+}
+
+function loadJobs() {
+  const ses = S.ses, sid = S.cur;
+  if (!ses || !sid) return;
+  fetch("/api/session/" + encodeURIComponent(sid) + "/jobs")
+    .then(r => r.json())
+    .then(d => {
+      if (S.cur !== sid || !S.ses) return;
+      S.ses.jobs = d.jobs || [];
+      setJobCount(S.ses.jobs.length);
+      if (S.ses.jobFocus) repaintJobDetail();
+      else renderJobsGrid();
+      scheduleJobPoll();
+    })
+    .catch(() => {});
+}
+
+function scheduleJobPoll() {
+  clearJobPoll();
+  const ses = S.ses;
+  if (!ses) return;
+  const live = (ses.jobs || []).some(j => j.live);
+  if (live && (ses.tab === "jobs" || ses.jobFocus))
+    ses.jobPoll = setInterval(loadJobs, 4000);
+}
+
+function clearJobPoll() {
+  if (S.ses && S.ses.jobPoll) { clearInterval(S.ses.jobPoll); S.ses.jobPoll = null; }
+}
+
+function updateJobCount(n) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.job_count = n;
+  setTabCount(ses.jobTab, n);
+  if (ses.tab === "jobs") loadJobs();     // a new job arrived with the tab open
+}
+
+function setJobCount(n) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.job_count = n;
+  setTabCount(ses.jobTab, n);
+}
+
+function showJob(sid, task) {
+  if (S.cur !== sid) showSession(sid, "jobs");
+  const ses = S.ses;
+  if (!ses) return;
+  closeAgentStream();
+  clearJobPoll();
+  ses.tab = "job:" + task;
+  ses.jobFocus = task;
+  $view.querySelectorAll(".tabs a").forEach(a =>
+    a.classList.toggle("on", /\/jobs$/.test(a.getAttribute("href") || "")));
+  updateRunning();
+  if (ses.jobs) repaintJobDetail();
+  else loadJobs();
+}
+
+function repaintJobDetail() {
+  const ses = S.ses;
+  if (!ses || !ses.jobFocus || !ses.body) return;
+  const task = ses.jobFocus;
+  const j = (ses.jobs || []).find(x => x.task === task);
+  ses.body.textContent = "";
+  ses.body.append(jobCrumbs(S.cur, j || { task: task }));
+  const wrap = el("div");
+  ses.body.append(wrap);
+  if (!j) { wrap.append(el("div", "empty", "job not found")); return; }
+  renderJobDetail(wrap, j);
+  scheduleJobPoll();
+}
+
+/* The job breadcrumb — ⏳ jobs (back to the list) › this job. */
+function jobCrumbs(sid, j) {
+  const nav = el("div", "crumbs");
+  const back = el("a", "crumb");
+  back.href = "#/s/" + encodeURIComponent(sid) + "/jobs";
+  back.title = "back to the jobs list";
+  back.append(el("span", "cg", "⏳"), document.createTextNode(" jobs"));
+  const cur = el("span", "crumb cur");
+  cur.append(el("span", "cg", "⏳"),
+             document.createTextNode(" " + (firstLine(j.command) || j.task)));
+  nav.append(back, el("span", "csep", "›"), cur);
+  return nav;
+}
+
+function renderJobDetail(container, j) {
+  const [sttxt, stcls] = jobStatus(j);
+  const info = el("div", "mdetail");
+  const h = el("div", "mdhead");
+  h.append(el("span", "k k-job", "⏳ background"), el("span", stcls, sttxt));
+  info.append(h);
+  if (j.command) {
+    info.append(el("div", "lbl", "command"));
+    info.append(pre(j.command));
+  }
+  const grid = el("div", "mmeta");
+  const add = (k, v) => {
+    if (v == null || v === "") return;
+    grid.append(el("span", "mk", k), el("span", "mv", String(v)));
+  };
+  add("task", j.task);
+  add("lines", j.lines);
+  if (j.started_at) add("started", new Date(j.started_at * 1000).toLocaleString());
+  if (j.ended_at) add("ended", new Date(j.ended_at * 1000).toLocaleString());
+  if (j.started_at && j.ended_at) add("duration", dur(j.ended_at - j.started_at));
+  else if (j.started_at && j.live) add("running for", ago(j.started_at));
+  add("end reason", j.end_reason);
+  info.append(grid);
+  container.append(info);
+
+  // output lives in the ops, not the transcript — fetch it from the copy endpoint
+  const outwrap = el("div", "mevents");
+  outwrap.append(el("div", "mhead", "output"));
+  const box = el("div", "joutput");
+  box.append(el("div", "empty", "loading output…"));
+  outwrap.append(box);
+  container.append(outwrap);
+  fetch("/api/session/" + encodeURIComponent(S.cur) + "/copy/"
+        + encodeURIComponent(j.task) + "/out")
+    .then(r => r.text())
+    .then(t => {
+      if (!box.isConnected) return;
+      box.textContent = "";
+      box.append(t.trim() ? pre(t) : el("div", "empty",
+        j.live ? "no output yet" : "(no output)"));
+    })
+    .catch(() => { if (box.isConnected) { box.textContent = ""; box.append(el("div", "empty", "output unavailable")); } });
 }
 
 /* ---------- timeline (activity / agent drill-down) ---------- */

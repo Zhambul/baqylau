@@ -144,8 +144,9 @@ def test_monitor_event_queue_operation_is_a_monitor_event():
 
 
 def test_monitor_stream_ended_notification_carries_status_not_event():
+    # a monitor's stream-ended notification: no <event>, but a "Monitor …" summary
     rec = TR.parse_line(_l({"type": "queue-operation",
-                            "content": _mon_note(summary="stream ended",
+                            "content": _mon_note(summary='Monitor "x" stream ended',
                                                  status="completed")}))
     assert rec["kind"] == "monitor_event"
     assert rec["status"] == "completed"
@@ -157,6 +158,16 @@ def test_non_task_notification_queue_operation_is_none():
     # are monitor events.
     assert TR.parse_line(_l({"type": "queue-operation",
                              "content": "some other queue payload"})) is None
+
+
+def test_background_completion_notification_is_not_a_monitor_event():
+    # Background-job completions ride the SAME <task-notification> mechanism
+    # (summary "Background command … completed") — they must NOT be parsed as
+    # monitor events (they'd become phantom monitors + mislabel the timeline).
+    rec = TR.parse_line(_l({"type": "queue-operation", "content":
+        _mon_note(task="bgtask", status="completed",
+                  summary='Background command "build" completed (exit code 0)')}))
+    assert rec is None
 
 
 def test_conversation_surfaces_delivered_queued_message(tmp_path):
@@ -322,8 +333,8 @@ def test_timeline_surfaces_monitor_launch_and_events(tmp_path):
              "content": "Monitor started"}]}},
         {"type": "queue-operation", "content": _mon_note(event="line A")},
         {"type": "queue-operation", "content": _mon_note(event="line B")},
-        {"type": "queue-operation", "content": _mon_note(summary="ended",
-                                                         status="completed")},
+        {"type": "queue-operation", "content": _mon_note(
+            summary='Monitor "watch" stream ended', status="completed")},
     ])
     tl = TR.timeline(path)
     kinds = [e["t"] for e in tl["entries"]]

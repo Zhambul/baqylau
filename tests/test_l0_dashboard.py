@@ -944,7 +944,8 @@ def test_http_monitors_endpoint(dash, tmp_path):
                     "</task-notification>"}) + "\n" +
         json.dumps({"type": "queue-operation", "content":
                     "<task-notification>\n<task-id>mtask1</task-id>\n"
-                    "<status>completed</status>\n<summary>ended</summary>\n"
+                    "<status>completed</status>\n"
+                    "<summary>Monitor \"watch build\" stream ended</summary>\n"
                     "</task-notification>"}) + "\n")
     log = P.mirror_log("mons1")
     A.session_start({"session_id": "mons1", "cwd": "/w", "transcript_path": str(tp)})
@@ -965,6 +966,35 @@ def test_http_monitors_endpoint(dash, tmp_path):
     assert kinds == ["event", "status"]
     # the session overview carries the cheap badge count (streams, no parse)
     assert _get_json(dash + "/api/session/mons1")["monitor_count"] == 1
+
+
+def test_http_jobs_endpoint(dash):
+    """The jobs tab's data path: sessionapi.jobs merges the audit streams state
+    (kind='bg') with the command from the mirror ops copy-group, and the output
+    is read from those same ops via /copy/<task>/out (a bg job's output is in the
+    ops, not the transcript). The overview carries the cheap job_count badge."""
+    A.session_start({"session_id": "jobs1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("jobs1")
+    # the mirror block a bg launch paints: header + command + output, group=taskId
+    O.emit(log, O.label("▷ background", (211, 204, 173), g="bgt1"),
+           O.code("sleep 30; echo done", g="bgt1"),
+           O.gut("line one\nline two", (211, 204, 173), g="bgt1"))
+    rid = A.stream_start(log, "bg", task_id="bgt1")
+    A.stream_end(rid, "writer-gone", lines_emitted=2)
+    d = _get_json(dash + "/api/session/jobs1/jobs")
+    jobs = d["jobs"]
+    assert len(jobs) == 1
+    j = jobs[0]
+    assert j["task"] == "bgt1"
+    # the command is the ops `code` op text (bash pretty-printed — `;` → newlines)
+    assert "sleep 30" in j["command"] and "echo done" in j["command"]
+    assert j["live"] is False and j["end_reason"] == "writer-gone"
+    assert j["started_at"] and j["ended_at"]
+    # the overview carries the cheap badge count
+    assert _get_json(dash + "/api/session/jobs1")["job_count"] == 1
+    # the drill-down reads the job's OUTPUT from the same ops via /copy/<task>/out
+    code, out = _get(dash + "/api/session/jobs1/copy/bgt1/out")
+    assert code == 200 and "line one" in out and "line two" in out
 
 
 def test_http_agent_timeline(dash, tmp_path):

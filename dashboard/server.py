@@ -644,6 +644,7 @@ def session_payload(sid):
     data["agents"] = agents_ctx(visible_agents(data.get("agents") or []))
     data["error_count"] = API.error_count(sid)
     data["monitor_count"] = API.monitor_count(sid)   # the monitors tab badge
+    data["job_count"] = API.job_count(sid)           # the jobs tab badge
     data["title"] = session_title(data.get("transcript_path") or "")
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
     data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
@@ -1444,6 +1445,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(API.errors(sid))
             if rest == ["monitors"]:
                 return self._json({"monitors": plugins.monitors(sid) or []})
+            if rest == ["jobs"]:
+                return self._json({"jobs": API.jobs(sid)})
             if len(rest) == 2 and rest[0] == "view":
                 html = view_payload(sid, rest[1])
                 if html is None:
@@ -2773,7 +2776,7 @@ class Handler(BaseHTTPRequestHandler):
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
-                "composer_queue": None, "monitors": None}
+                "composer_queue": None, "monitors": None, "jobs": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2876,6 +2879,15 @@ class Handler(BaseHTTPRequestHandler):
                 if mc != prev["monitors"]:
                     prev["monitors"] = mc
                     if not self._sse("monitors", {"count": mc}):
+                        return
+                # the jobs tab badge, live: the cheap distinct background-job
+                # COUNT (streams keystone), pushed on change — a new bg launch
+                # bumps it. Full job detail (command, output) stays behind /jobs
+                # + /copy, fetched when the tab / drill-down opens.
+                jc = API.job_count(sid)
+                if jc != prev["jobs"]:
+                    prev["jobs"] = jc
+                    if not self._sse("jobs", {"count": jc}):
                         return
                 # the pinned tasks card, live — a task create / status flip
                 # re-stashes the `tasks` kv (task_fmt.py) and shows on the
