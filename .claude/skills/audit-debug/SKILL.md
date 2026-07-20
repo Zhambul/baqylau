@@ -39,7 +39,9 @@ New always-audited swallow sites (previously silent — their absence used to ma
 0. **If the scorebar shows an amber `⚠ N` chip** (or the mirror shows `⚠ audit:` lines) — the session ITSELF is telling you it has N swallowed exceptions: go straight to `python3 bin/claude-audit.py errors <sid>`. The chip/lines are `core/errwatch.py` reading the same `errors` table these steps query.
 1. **`python3 bin/claude-audit.py anomalies <sid>`** — canned queries for known bug
    signatures: swallowed errors, streams that never ended, slot claims without
-   release, tab left on a busy colour, duplicate SubagentStart, start-without-stop,
+   release, tab left on a busy colour, **an Esc-sending web gesture that fired on
+   a red dialog-open tab (declines the ask — the "User declined to answer
+   questions" regression signature)**, duplicate SubagentStart, start-without-stop,
    **stop-without-start (hidden agents — spend likely missing from the scoreboard)**,
    failed tools, spawns that never registered a stream, pane operations that
    failed, tab applies where `kitten @` failed, a resume that lost its mirror
@@ -386,7 +388,11 @@ New always-audited swallow sites (previously silent — their absence used to ma
 - **Web rewind failed / picked the wrong checkpoint / left the session inside a
   menu** *(full web rewind, since 2026-07-18)* — pull the session's
   `web-rewind-to` `state_files` rows. `step: busy` = refused on a busy tab (by
-  design — cancel/stop first). `step: open` = the typed `/rewind` never opened
+  design — cancel/stop first). `step: dialog` = refused on a red
+  `awaiting-command` tab (a modal ask/plan/permission dialog is open — a typed
+  `/rewind` would land IN it; `_dialog_open_guard`, since 2026-07-20 — this
+  case used to fall under `step: busy` while `awaiting-command` was in
+  `BUSY_TABS`). `step: open` = the typed `/rewind` never opened
   the menu (check the tab really was idle and the window id in `win`); `find` =
   the target prompt matched no menu entry after a full up-then-down scan
   (stale page after a kitty-side rewind, or the prompt text's first line
@@ -469,9 +475,20 @@ New always-audited swallow sites (previously silent — their absence used to ma
   dialog was long gone → a `write` without `remove`: check Stop/UserPromptSubmit
   routing (the decline paths have NO hook of their own — the turn boundary IS
   the clear). Answer 409 `step: open` → the dialog wasn't on screen (usually:
-  answered or Esc'd in the terminal, SSE clear raced the click — benign);
-  other steps name the navigation stage and pair `errors` func `dashboard
-  answer (<step>)`; the dialog is left OPEN on every bail (never Escape —
+  answered or Esc'd in the terminal, SSE clear raced the click — benign).
+  But `step: open` with the tab showing "User declined to answer questions"
+  and the user insisting they answered on the web is the **Esc-gesture-declined
+  ask** (fixed 2026-07-20, session 7809eaff): a web `interrupt` / `rewind`
+  (cancel-edit) fired an Escape into the OPEN ask and declined it before the
+  answer POSTed. The tell is a `web-rewind` row `mode: cancel-edit` (or a
+  `web-interrupt`) on the SAME `win` between the `ask-pending` write and the
+  `web-answer` `step: open`. The fix refuses those gestures on a red
+  `awaiting-command` tab (`_dialog_open_guard`), auditing the refusal as a
+  `web-interrupt`/`web-rewind`/`web-rewind-to` row `ok: false, step: dialog`
+  — so post-fix, a `step: dialog` row is the guard WORKING (by design), not the
+  bug; the bug would be an Esc-sending row with NO `step: dialog` landing while
+  an ask-pending is live. Other steps name the navigation stage and pair
+  `errors` func `dashboard answer (<step>)`; the dialog is left OPEN on every bail (never Escape —
   that declines), so the user can retry or finish in the terminal. A
   `step: question` bail ("question N never became current") has TWO
   known causes. (1) The WRAPPED-QUESTION bug (session 412b980b, pre-2026-07-18

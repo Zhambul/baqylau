@@ -784,6 +784,19 @@ ANOMALY_SECTIONS = [
      "WHERE session_id=? AND applied=1 AND ts = (SELECT MAX(ts) FROM "
      "tab_transitions WHERE session_id=? AND applied=1) AND new_state NOT IN "
      "('awaiting-response', 'awaiting-command', 'idle', 'clear', '')", 2),
+    # An Esc-sending web gesture (interrupt / cancel-edit / rewind) must NEVER
+    # reach the terminal on a red awaiting-command tab: a modal ask/plan/
+    # permission dialog is open there and an Escape DECLINES it (the "User
+    # declined to answer questions" bug, fixed 2026-07-20 via _dialog_open_guard,
+    # which refuses instead with an `ok:false, step:dialog` row). A row here — a
+    # gesture whose recorded tab was awaiting-command yet was NOT the guard's
+    # refusal — means the guard regressed (removed, or a NEW red-bearing state
+    # slipped past it) and an Esc landed in an open dialog, declining the ask.
+    ("web Esc gesture fired on a red dialog-open tab (declines the ask)",
+     "SELECT ts, action, content FROM state_files WHERE session_id=? "
+     "AND action IN ('web-interrupt', 'web-rewind', 'web-rewind-to') "
+     "AND json_extract(content, '$.tab') = 'awaiting-command' "
+     "AND COALESCE(json_extract(content, '$.step'), '') != 'dialog'", 1),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions

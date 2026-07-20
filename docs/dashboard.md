@@ -400,6 +400,22 @@ next `tab` event flips the button right back to "queue". Terminal-side Esc
 still has no signal at all (the known no-hook gap), so its stale-busy label
 only clears on the next real hook.
 
+**A red `awaiting-command` tab refuses every Esc-sending gesture** (2026-07-20).
+Red means a MODAL DIALOG is open — AskUserQuestion, ExitPlanMode, or a
+permission prompt — and an Escape there DECLINES/dismisses the dialog, it does
+not interrupt a turn. A `cancel-edit` gesture (double-Esc) once landed its
+Esc-Esc on an open ask and killed the very answer the user was giving through
+the web ask card (the tab read "User declined to answer questions", and the
+web answer then hit "no question dialog on screen"). So `awaiting-command` is
+DELIBERATELY excluded from the server's `BUSY_TABS` and the page's `CANCEL_TABS`,
+and `post_interrupt`, `post_rewind` (cancel-edit) AND `post_rewind_to` all bail
+with a 409 *"a dialog is open — answer it first"* (`_dialog_open_guard`,
+mirroring post_command's own red-tab refusal). Client-side the ■ stop / ⊘ cancel
+buttons disable on red, and the keyboard Esc gesture / ↶ rewind button swallow
+themselves with a toast pointing at the card. The ask / plan / confirm cards are
+the response path; the 409 is the authoritative backstop for a stale page that
+still believes the tab is cancelable.
+
 **Resume & send (a parked session's composer).** A parked session's composer
 is NOT disabled — everything passive works exactly like live (typing, the
 "/" menu, dictation; all free drafts), and the one send button, relabeled
@@ -490,6 +506,17 @@ end. Ctrl is free real estate in a macOS browser (the browser's own
 accelerators live on ⌘), matching is on `e.code` so a non-QWERTY layout
 can't move the keys, and ⌃W dispatches an `input` event so `autoGrow` and
 the suggest/filter `oninput` hooks see the edit.
+
+**The form's first-prompt clears the instant you launch** (`go()` in app.js).
+The message rides the launch argv, so on submit the prompt box is emptied
+OPTIMISTICALLY (before the POST resolves) rather than left looking un-sent
+through the kitten-slow launch round-trip — the "I started the session but my
+message stayed in the input box" report (2026-07-20). The form tears down on
+success anyway (`closeNewSession` empties `#modal`), so this only matters for
+the in-flight window and the failure path: on ANY launch failure the captured
+text is restored verbatim into the box (and the form stays open, submit
+re-enabled) so a retry keeps it — the same optimistic-clear-restore-on-failure
+shape the composer's own send uses.
 
 **⌃⇧←/→ cycle through live sessions** — kitty's next/previous-tab keys,
 mirrored: the cycle is the LIVE sessions ordered oldest-first (creation
@@ -912,13 +939,18 @@ lock lives on the buttons rather than the shared `interruptSession`/`cancelEdit`
 MEANING depends on session state — and the endpoint splits on the tab
 state at gesture time:
 
-- **MID-TURN** (a `BUSY_TABS` colour): double-Esc CANCELS the running work
-  and restores the last message into the input for editing (removing it
+- **MID-TURN** (a `BUSY_TABS` colour — `thinking`/`working`/`executing`/
+  `awaiting-bg`, NOT red `awaiting-command`): double-Esc CANCELS the running
+  work and restores the last message into the input for editing (removing it
   from the conversation). Mirrored with **two Escape key events**
   `DOUBLE_ESC_GAP_S` (150 ms) apart — measured **3/3 reliable** mid-turn
   on a live session (2026-07-18), unlike the idle menu — plus the same
   magenta `escape-recheck` (that experiment showed the tab stays stuck
   `thinking` after the cancel). Editing then happens in the kitty tab.
+  A red `awaiting-command` tab is NEITHER this nor the idle branch: a modal
+  dialog is open there, so the endpoint refuses outright (`_dialog_open_guard`
+  — see the interrupt section) rather than sending Esc-Esc (which would decline
+  the ask) or typing `/rewind` (which would land in the dialog).
 - **IDLE**: double-Esc opens the rewind/checkpoint menu (restore code
   and/or conversation, summarize; checkpoints are automatic, one per user
   prompt — code.claude.com/docs/en/checkpointing.md). Mirrored by **typing
@@ -1359,7 +1391,16 @@ press) but deliberately NOT unified with it: different anatomy, and
 OPPOSITE bail semantics — rewindmenu bails by pressing Escape, while
 here **Escape declines the whole question set**, so a failed step leaves
 the dialog exactly as it was (AskError → 409 with `step`; a retry
-re-normalizes).
+re-normalizes). Because Escape is the decline key, the DIALOG itself must
+never receive a stray Escape from elsewhere in the dashboard: a
+`cancel-edit` gesture once fired its Esc-Esc into an open ask (the tab was
+red `awaiting-command`, which the cancel path wrongly treated as a
+cancelable mid-turn state), so by the time the user's answer POSTed the
+dialog was already declined and `drive` bailed at the very first check with
+`AskError("open", "no question dialog on screen")` — the "I answered but it
+failed, and the tab said *User declined*" report (2026-07-20). The fix lives
+on the gesture side (`_dialog_open_guard`, the interrupt section): no web
+interrupt / cancel-edit / rewind sends a key while a red dialog is open.
 
 **The key model was overhauled in v2.1.215 (re-measured 2026-07-19).**
 The original v2.1.214 model was *digit-driven* — a digit selected a

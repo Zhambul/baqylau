@@ -2867,6 +2867,14 @@ function openNewSession(prefillCwd, resumeSid) {
     if (model.value) body.model = model.value;
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
+    // Optimistic clear: the message is on its way — it rides the launch argv, so
+    // empty the box NOW rather than leaving it looking un-sent through the
+    // (kitten-slow) launch round-trip. The form tears down on success anyway;
+    // this just guarantees the message never LINGERS in the input after you hit
+    // launch. Restored verbatim only if the launch actually fails, so a retry
+    // keeps your text (the "the draft stayed in the message input" fix).
+    const sentPrompt = prompt.value;
+    prompt.value = ""; autoGrow(prompt);
     postJSON("/api/sessions/new", body)
       .then((d) => {
         nsRemember({ cwd, model: model.value, effort: effort.value });
@@ -2884,7 +2892,11 @@ function openNewSession(prefillCwd, resumeSid) {
         if (location.hash === "#/launching") route();
         else location.hash = "#/launching";
       })
-      .catch(e => { submit.disabled = false; toast("ask", "launch failed", (e && e.error) || ""); });
+      .catch(e => {
+        submit.disabled = false;
+        prompt.value = sentPrompt; autoGrow(prompt);   // launch failed — keep it
+        toast("ask", "launch failed", (e && e.error) || "");
+      });
   };
   submit.onclick = go;
   cancel.onclick = closeNewSession;
@@ -3029,6 +3041,16 @@ function migrateSession() {
 function interruptSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return Promise.resolve();
+  // a red "asking you" tab means a MODAL DIALOG is open (ask/plan/permission).
+  // An Esc there DECLINES the dialog, it doesn't interrupt a turn — sending one
+  // once killed the answer the user was giving via the ask card. Respond
+  // through the card instead (the server 409s as the backstop, but the toast is
+  // the honest UX; docs/tab-colors.md).
+  if (liveTab() === "awaiting-command") {
+    toast("done", "a question is waiting",
+          "answer it in the card above — Esc would decline it");
+    return Promise.resolve();
+  }
   return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
     .then(r => {
       if (BUSY_TABS.includes(r && r.tab))
@@ -3062,6 +3084,14 @@ function interruptSession() {
 function rewindSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  // red "asking you" tab: a dialog is open — neither cancel-edit (Esc-Esc) nor
+  // rewind (/rewind) belongs here; both would land in the dialog and dismiss or
+  // corrupt it. Answer via the card instead.
+  if (liveTab() === "awaiting-command") {
+    toast("done", "a question is waiting",
+          "answer it in the card above first");
+    return;
+  }
   if (CANCEL_TABS.includes(liveTab())) return cancelEdit();
   rewindPickMode(true);
 }
@@ -3075,9 +3105,13 @@ function liveTab() {
 
 // Tab states in which a turn is running, so Claude Code's mid-turn double-Esc
 // means CANCEL (not the rewind menu). Matches the server's BUSY_TABS — the
-// cancel button gates on this so an idle click never opens the rewind menu.
-const CANCEL_TABS = ["thinking", "working", "executing", "awaiting-bg",
-                     "awaiting-command"];
+// cancel/stop buttons gate on this so an idle click never opens the rewind menu.
+// awaiting-command (red) is DELIBERATELY excluded: red means a modal dialog is
+// open (ask/plan/permission), where an Esc DECLINES the dialog rather than
+// cancelling a turn — the stop/cancel buttons disable there and the gestures
+// bail (see interruptSession/rewindSession), so the ask card stays the response
+// path (docs/tab-colors.md; the "User declined to answer questions" fix).
+const CANCEL_TABS = ["thinking", "working", "executing", "awaiting-bg"];
 
 // The Cancel button: Claude Code's mid-turn double-Esc — cancel the running
 // turn and restore your message into the composer for editing. Distinct from
@@ -3391,6 +3425,17 @@ const BUSY_TABS = ["thinking", "working", "executing", "awaiting-bg"];
 function escGesture() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
+  // a modal dialog is open (red asking-you tab) — an Esc here would DECLINE the
+  // ask/plan/permission dialog, not interrupt or rewind a turn. Swallow the
+  // gesture entirely (no interrupt hold-timer, no rewind) so a stray keypress
+  // can't kill the answer the user is composing in the card.
+  if (liveTab() === "awaiting-command") {
+    clearTimeout(escHold);
+    escHold = null;
+    toast("done", "a question is waiting",
+          "answer it in the card above — Esc would decline it");
+    return;
+  }
   if (escHold) {
     clearTimeout(escHold);
     escHold = null;           // a third rapid press starts a fresh gesture
@@ -3562,7 +3607,8 @@ function renderSessionChrome(tab) {
     // while a turn is running, and an Esc when idle can clear queued input, so
     // it greys out otherwise (the resting state re-derives from the tab, never
     // a blind re-enable). Same CANCEL_TABS set (thinking/working/executing/
-    // awaiting-bg/awaiting-command).
+    // awaiting-bg) — NOT red awaiting-command, where an Esc declines the open
+    // dialog instead of interrupting (interruptSession bails there too).
     ses.stopMode = (tab) => { stop.disabled = !CANCEL_TABS.includes(tab); };
     ses.stopMode(liveTab());
     act.append(stop);

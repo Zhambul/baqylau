@@ -2580,6 +2580,52 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     assert len(spawned) == 1
 
 
+def test_post_interrupt_refuses_on_open_dialog(dash, monkeypatch):
+    # a red "asking you" tab means a MODAL DIALOG is open (AskUserQuestion /
+    # ExitPlanMode / a permission prompt). An Esc there DECLINES the dialog
+    # rather than interrupting a turn — it once killed the answer the user was
+    # giving via the web ask card ("User declined to answer questions",
+    # 2026-07-20). Refuse with a 409 and press NO key; the card is the response.
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "90")
+    A.session_start({"session_id": "intrd", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"90": "awaiting-command"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/intrd/interrupt", {})
+    assert e.value.code == 409
+    assert fe.keyed == []                        # no Escape reached the dialog
+
+
+def test_post_rewind_refuses_on_open_dialog(dash, monkeypatch):
+    # the cancel-edit / rewind gesture must NOT fire on a red tab: its Esc-Esc
+    # (cancel-edit) or typed /rewind would land in the open ask/plan/permission
+    # dialog and dismiss or corrupt it. 409, and neither keys nor text sent.
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "91")
+    A.session_start({"session_id": "rewd", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"91": "awaiting-command"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rewd/rewind", {})
+    assert e.value.code == 409
+    assert fe.keyed == [] and fe.sent == []
+
+
+def test_post_rewind_to_refuses_on_open_dialog(dash, monkeypatch):
+    # full web rewind on a red tab: a dialog is open, so /rewind must not be
+    # typed into it (previously covered incidentally by the busy-tab guard; now
+    # an explicit dialog refusal since awaiting-command left BUSY_TABS)
+    fe = _MenuFE(prompts=["p"])
+    _rewind_env(monkeypatch, "rwtd", "92", fe)
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"92": "awaiting-command"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rwtd/rewind-to",
+              {"text": "p", "mode": "both", "ups": 1})
+    assert e.value.code == 409
+    assert fe.sent == [] and fe.state == "idle"     # nothing typed into the dialog
+
+
 class _MenuFE(_FakeFE):
     """_FakeFE plus a tiny simulation of Claude Code's rewind menu, so
     rewindmenu.drive's SCREEN-VERIFIED navigation runs against reactive

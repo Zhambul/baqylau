@@ -233,7 +233,12 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   bail false-positived on the gesture's own records, leaving the tab stuck
   magenta (observed live). Magenta only: blue and red keep their own
   recoveries, and any cancel that wrote the interrupt line is
-  `interrupt-watch`'s.
+  `interrupt-watch`'s. And on RED `awaiting-command` the escape-recheck never
+  arises, because a web interrupt / cancel-edit / rewind is REFUSED there
+  outright (`_dialog_open_guard`, docs/dashboard.md): red means a modal dialog
+  is open, where Esc would DECLINE the ask/plan/permission rather than
+  interrupt a turn — the dashboard's ask/plan/confirm cards are the response
+  path, and no Esc is ever sent into an open dialog.
 
 
 ## Notes / tweaking

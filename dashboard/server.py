@@ -113,10 +113,16 @@ QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 
 # Tab states in which the session is MID-TURN — where Claude Code's double-Esc
 # means "cancel the work and restore the last message for editing", not the
-# rewind menu (post_rewind mirrors that split). awaiting-command (red) counts:
-# a dialog is mid-turn, and Esc-Esc there dismisses + cancels.
-BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING,
-             tabs.AWAITING_BG, tabs.AWAITING_COMMAND)
+# rewind menu (post_rewind mirrors that split). awaiting-command (red) is
+# DELIBERATELY NOT here: red means a MODAL DIALOG is open (AskUserQuestion /
+# ExitPlanMode / a permission prompt), and an Esc there does not "cancel a
+# turn" — it DECLINES/dismisses the dialog. A cancel-edit gesture's Esc-Esc
+# once landed on an open ask and killed the very answer the user was giving via
+# the web ask card ("User declined to answer questions", 2026-07-20). The
+# dashboard has dedicated cards for those states (ask/plan/confirm), so every
+# Esc-sending gesture REFUSES on a red tab instead — see _dialog_open_guard,
+# mirroring post_command's own awaiting-command 409.
+BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING, tabs.AWAITING_BG)
 
 DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
 #                                    (ctrl+u/k) and the bracketed paste of the
@@ -1943,6 +1949,8 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
+        if self._dialog_open_guard(tab, log, sdb, win, "web-rewind"):
+            return
         restored = ""
         if tab in BUSY_TABS:
             mode = "cancel-edit"
@@ -2022,6 +2030,8 @@ class Handler(BaseHTTPRequestHandler):
                          {"win": "", "ok": False, "mode": mode})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
+        if self._dialog_open_guard(tab, log, sdb, win, "web-rewind-to"):
+            return
         if tab in BUSY_TABS:
             A.state_file(log, sdb, "web-rewind-to",
                          {"win": win, "ok": False, "tab": tab, "mode": mode,
@@ -2373,10 +2383,28 @@ class Handler(BaseHTTPRequestHandler):
                       "label": body.get("label") or "", "tool_use_id": tid})
         return self._json({"ok": True, "kind": kind})
 
+    def _dialog_open_guard(self, tab, log, sdb, win, action):
+        """Refuse an Esc-sending gesture (interrupt / cancel-edit / rewind) when
+        a MODAL DIALOG is open — the red `awaiting-command` tab means Claude is
+        asking YOU (AskUserQuestion / ExitPlanMode / a permission prompt). An
+        Esc there does not cancel a turn; it DECLINES/dismisses the dialog,
+        which once killed the answer the user was giving through the web ask
+        card ("User declined to answer questions", 2026-07-20). The dashboard's
+        dedicated cards (ask/plan/confirm) are the response path, so bail with a
+        409 and audit it — the same contract post_command uses on a red tab.
+        Returns True when it handled (sent) the refusal; False to proceed."""
+        if tab != tabs.AWAITING_COMMAND:
+            return False
+        A.state_file(log, sdb, action,
+                     {"win": win, "ok": False, "tab": tab, "step": "dialog"})
+        self._json({"error": "a dialog is open — answer it first"}, 409)
+        return True
+
     def _escape_press(self, sid, verb, action):
         """Body of post_interrupt: guard, resolve the LIVE window, press
         Escape, audit as `action`, and spawn the escape-recheck when the
-        press landed on magenta."""
+        press landed on magenta. A red (awaiting-command) tab is a 409: a
+        dialog is open and the Esc would DECLINE it, not interrupt a turn."""
         body = self._post_guard()
         if body is None:
             return
@@ -2397,6 +2425,8 @@ class Handler(BaseHTTPRequestHandler):
             A.state_file(log, sdb, action, {"win": "", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
         tab = API.tab_states().get(win) or ""
+        if self._dialog_open_guard(tab, log, sdb, win, action):
+            return
         # Press-time transcript size — the escape-recheck's growth baseline
         # (stat'd BEFORE the key lands so even the interrupt line counts as
         # growth). '' / unstat-able transcript degrades to the recheck's own
