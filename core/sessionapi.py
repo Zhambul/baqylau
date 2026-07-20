@@ -485,6 +485,42 @@ def codex_runs(sid):
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 
+def monitor_streams(sid):
+    """The audit `streams` lifecycle rows for a session's MONITORS (kind
+    'monitor'), chain-aware, keyed by task_id: {task: {started_at, ended_at,
+    end_reason, lines, pid, agent_id, live}}. Several rows per task (a re-latched
+    tailer / a resumed session) merge like agents(): keep the FIRST start and the
+    NEWEST end/status. `live` is the newest row's `ended_at` being None (still
+    tailing, or the streamer died uncleanly). This is the STATE half of the
+    monitors read-model — the transcript (plugins.monitors) owns command/events;
+    streams own start/end/liveness (the same keystone agents() reads)."""
+    chain = sid_chain(sid)
+    q = ("SELECT task_id, agent_id, pid, started_at, ended_at, end_reason,"
+         " lines_emitted FROM streams WHERE kind='monitor'"
+         " AND session_id IN (%s) ORDER BY started_at" % _in_clause(len(chain)))
+    out = {}
+    for task, aid, pid, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
+        if not task:
+            continue
+        rec = out.setdefault(task, {"started_at": st, "agent_id": aid or ""})
+        rec["ended_at"], rec["end_reason"] = en, er or ""
+        rec["lines"], rec["pid"] = lines, pid
+        rec["live"] = en is None
+    return out
+
+
+def monitor_count(sid):
+    """The distinct-monitor COUNT for a session (chain-aware) — the cheap twin of
+    plugins.monitors() for the monitors tab's badge, from the audit `streams`
+    keystone alone (no transcript parse), so the per-session overview/SSE can show
+    it without reading the whole transcript on every tick."""
+    chain = sid_chain(sid)
+    q = ("SELECT COUNT(DISTINCT task_id) FROM streams WHERE kind='monitor'"
+         " AND session_id IN (%s)" % _in_clause(len(chain)))
+    rows = _rows(audit_db(), q, tuple(chain))
+    return int(rows[0][0]) if rows else 0
+
+
 def agent_transcript(sid, agent_id):
     """The transcript path for one agent — the newest streams row's src_path
     ('' when the audit never saw a streamer for it; plugins.activity() then

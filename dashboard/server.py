@@ -643,6 +643,7 @@ def session_payload(sid):
     data = API.session(sid)
     data["agents"] = agents_ctx(visible_agents(data.get("agents") or []))
     data["error_count"] = API.error_count(sid)
+    data["monitor_count"] = API.monitor_count(sid)   # the monitors tab badge
     data["title"] = session_title(data.get("transcript_path") or "")
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
     data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
@@ -1441,6 +1442,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(tl if tl is not None else {"entries": []})
             if rest == ["errors"]:
                 return self._json(API.errors(sid))
+            if rest == ["monitors"]:
+                return self._json({"monitors": plugins.monitors(sid) or []})
             if len(rest) == 2 and rest[0] == "view":
                 html = view_payload(sid, rest[1])
                 if html is None:
@@ -2770,7 +2773,7 @@ class Handler(BaseHTTPRequestHandler):
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
-                "composer_queue": None}
+                "composer_queue": None, "monitors": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -2864,6 +2867,15 @@ class Handler(BaseHTTPRequestHandler):
                 if ec != prev["errors"]:
                     prev["errors"] = ec
                     if not self._sse("errors", {"count": ec}):
+                        return
+                # the monitors tab badge, live: the cheap distinct-monitor COUNT
+                # (streams keystone, no transcript parse), pushed on change — a
+                # new Monitor launch bumps it. Full monitor detail (command,
+                # events) stays behind /monitors, fetched when the tab opens.
+                mc = API.monitor_count(sid)
+                if mc != prev["monitors"]:
+                    prev["monitors"] = mc
+                    if not self._sse("monitors", {"count": mc}):
                         return
                 # the pinned tasks card, live — a task create / status flip
                 # re-stashes the `tasks` kv (task_fmt.py) and shows on the

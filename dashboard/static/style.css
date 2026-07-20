@@ -1063,6 +1063,29 @@ body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 40%, transparent); }
 .crumbs .cg { font-size: 11px; }
 .crumbs .csep { color: var(--dim2); }
+
+/* monitor drill-down detail (◉ monitors tab → one monitor) */
+.mdetail { background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+  padding: 12px 14px; margin-bottom: 14px; }
+.mdetail .mdhead { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.mdetail .mdesc { color: var(--text); font-size: 13px; margin-bottom: 10px; }
+.mdetail .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .08em; margin: 8px 0 3px; }
+.mmeta { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px;
+  margin-top: 10px; font: 11.5px/1.5 var(--mono); }
+.mmeta .mk { color: var(--dim); text-transform: uppercase; letter-spacing: .06em;
+  font-size: 10px; align-self: center; }
+.mmeta .mv { color: var(--text-soft); word-break: break-word; }
+.mevents .mhead { margin: 4px 0 8px; }
+.mev { display: flex; gap: 10px; padding: 4px 10px; font: 12px/1.45 var(--mono);
+  border-left: 2px solid color-mix(in srgb, #56b6c2 55%, transparent);
+  background: color-mix(in srgb, #56b6c2 6%, transparent); margin-bottom: 3px;
+  border-radius: 0 var(--r) var(--r) 0; }
+.mev .mts { color: var(--dim); flex: none; }
+.mev .mtxt { color: var(--text); white-space: pre-wrap; word-break: break-word; min-width: 0; }
+.mev.mev-status { border-left-color: color-mix(in srgb, var(--done) 60%, transparent);
+  background: color-mix(in srgb, var(--done) 8%, transparent); }
+.mev.mev-status .mtxt { color: var(--text-soft); }
 .tl { display: flex; flex-direction: column; gap: 7px; }
 .tlhead {
   display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline;

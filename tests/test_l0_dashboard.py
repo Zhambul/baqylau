@@ -923,6 +923,50 @@ def test_http_copy_and_view(dash):
     assert e.value.code == 404
 
 
+def test_http_monitors_endpoint(dash, tmp_path):
+    """The monitors tab's data path: plugins.monitors merges the MAIN transcript
+    (Monitor tool_use + its 'Monitor started (task X)' result + queue-operation
+    events) with the audit streams lifecycle state (kind='monitor'). The endpoint
+    returns one monitor per task with command/description/events/state; the
+    session overview carries the cheap monitor_count for the tab badge."""
+    tp = tmp_path / "mon-sess.jsonl"
+    tp.write_text(
+        json.dumps({"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Monitor",
+             "input": {"command": "tail -f build.log", "description": "watch build",
+                       "persistent": True}}]}}) + "\n" +
+        json.dumps({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "Monitor started (task mtask1, persistent — runs until…)"}]}}) + "\n" +
+        json.dumps({"type": "queue-operation", "content":
+                    "<task-notification>\n<task-id>mtask1</task-id>\n"
+                    "<summary>Monitor event</summary>\n<event>build ok</event>\n"
+                    "</task-notification>"}) + "\n" +
+        json.dumps({"type": "queue-operation", "content":
+                    "<task-notification>\n<task-id>mtask1</task-id>\n"
+                    "<status>completed</status>\n<summary>ended</summary>\n"
+                    "</task-notification>"}) + "\n")
+    log = P.mirror_log("mons1")
+    A.session_start({"session_id": "mons1", "cwd": "/w", "transcript_path": str(tp)})
+    rid = A.stream_start(log, "monitor", task_id="mtask1")
+    A.stream_end(rid, "monitor-process-exited", lines_emitted=2)
+    d = _get_json(dash + "/api/session/mons1/monitors")
+    mons = d["monitors"]
+    assert len(mons) == 1
+    m = mons[0]
+    assert m["task"] == "mtask1"
+    assert m["command"] == "tail -f build.log"
+    assert m["description"] == "watch build"
+    assert m["persistent"] is True
+    assert m["live"] is False and m["end_reason"] == "monitor-process-exited"
+    assert m["event_count"] == 1            # the `event`, not the stream-ended status
+    assert m["started_at"] and m["ended_at"]
+    kinds = [("status" if "status" in e else "event") for e in m["events"]]
+    assert kinds == ["event", "status"]
+    # the session overview carries the cheap badge count (streams, no parse)
+    assert _get_json(dash + "/api/session/mons1")["monitor_count"] == 1
+
+
 def test_http_agent_timeline(dash, tmp_path):
     tp = tmp_path / "agent-ag2.jsonl"
     tp.write_text(

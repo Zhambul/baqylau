@@ -100,6 +100,25 @@ def activity_since(sid, agent_id, pos):
     return None
 
 
+def monitors(sid):
+    """Monitors read-model fan-out (docs/dashboard.md, *Monitors tab*): the first
+    plugin that recognizes `sid` returns the list of its Monitor tool runs
+    (command/description/lifetime + events, merging transcript + audit streams
+    state); None when none does. claude_code:
+    plugins/claude_code/transcript.session_monitors. codex has no monitors (the
+    Monitor tool is a Claude Code concept), so the fan-out finds no provider on
+    it and moves on. Same exception contract as activity(): the callers are
+    read-side tools, not hooks."""
+    for p in all_plugins():
+        fn = getattr(p, "monitors", None)
+        if fn is None:
+            continue
+        got = fn(sid)
+        if got is not None:
+            return got
+    return None
+
+
 def session_title(transcript_path):
     """Display title for a session, resolved from its transcript/rollout path
     (path-keyed, unlike the sid-keyed fan-outs: the dashboard's list view

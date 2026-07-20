@@ -710,3 +710,140 @@ def activity_since(sid, agent_id, pos):
     if not path:
         return None
     return timeline_since(path, pos)
+
+
+# --- the monitors read-model (the dashboard's monitors tab) ------------------------
+
+# The taskId in a Monitor tool's "Monitor started (task <id>, …)" result — the
+# ONE way to map a Monitor tool_use to the taskId its events (and the audit
+# streams row) are keyed by (the tool_use INPUT carries no taskId).
+_MON_TASK = re.compile(r'\btask\s+([A-Za-z0-9]+)')
+# Cap on events carried per monitor in the read model: a chatty persistent
+# monitor can fire thousands over a session, and the whole list is one JSON
+# response. Keep the most RECENT (the drill-down's live tail); `event_count`
+# stays exact and `events_truncated` flags the elision.
+MON_EVENT_CAP = 2000
+
+
+def monitors(path):
+    """Every Monitor tool run in a transcript, in launch order, each with its
+    command/description/lifetime and its EVENTS (the queue-operation
+    <task-notification> records — parse_line's monitor_event; docs/streaming.md).
+    Keyed by taskId (from the "Monitor started (task <id>)" result). A run whose
+    launch we never saw (a truncated transcript head) still appears from its
+    events alone, command/description blank. Pure read (one file scan); [] when
+    unreadable.
+
+    Each dict: {task, command, description, source ("command"|"ws"),
+    persistent, timeout_ms, launched_at, tool_use_id, events:[…]} where an event
+    is {"event": str, "ts": float|None} or, for the stream-ended notification,
+    {"status": str, "summary": str, "ts": float|None}."""
+    launches, mons, order = {}, {}, []
+
+    def ensure(task):
+        if task not in mons:
+            mons[task] = {"task": task, "command": "", "description": "",
+                          "source": "", "persistent": None, "timeout_ms": None,
+                          "launched_at": None, "tool_use_id": "", "events": []}
+            order.append(task)
+        return mons[task]
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for s in fh:
+                s = s.strip()
+                if not s:
+                    continue
+                rec = parse_line(s)
+                if rec is None:
+                    continue
+                k = rec["kind"]
+                if k == "assistant":
+                    for bkind, blk in rec["blocks"]:
+                        if bkind != "text" and blk.get("name") == "Monitor":
+                            launches[blk.get("id")] = {"input": blk.get("input") or {},
+                                                       "ts": _line_ts(s)}
+                elif k == "results":
+                    for blk in rec["blocks"]:
+                        L = launches.get(blk.get("tool_use_id"))
+                        if L is None:
+                            continue
+                        m = _MON_TASK.search(result_text(blk.get("content")) or "")
+                        if not m:
+                            continue
+                        r, inp = ensure(m.group(1)), L["input"]
+                        cmd = inp.get("command") or ""
+                        ws = inp.get("ws") if isinstance(inp.get("ws"), dict) else None
+                        r["command"] = cmd or (ws.get("url") or "" if ws else "")
+                        r["source"] = "ws" if (ws and not cmd) else "command"
+                        r["description"] = " ".join((inp.get("description") or "").split())
+                        r["persistent"] = bool(inp["persistent"]) if "persistent" in inp else None
+                        r["timeout_ms"] = inp.get("timeout_ms")
+                        r["launched_at"] = L["ts"]
+                        r["tool_use_id"] = blk.get("tool_use_id") or ""
+                elif k == "monitor_event":
+                    ev = {"ts": _line_ts(s)}
+                    if rec.get("status"):
+                        ev["status"] = rec["status"]
+                        ev["summary"] = rec.get("summary") or ""
+                    else:
+                        ev["event"] = rec.get("event") or ""
+                    ensure(rec["task"])["events"].append(ev)
+    except OSError:
+        return []
+    return [mons[t] for t in order]
+
+
+def _merge_monitor(m, st):
+    """One monitor's read-model dict — the transcript detail (`m`, from
+    monitors()) merged with its audit `streams` lifecycle row (`st`, from
+    sessionapi.monitor_streams — {} when the streamer left no row). Streams own
+    the STATE (started/ended/end_reason/live), the transcript owns the
+    command/description/events. `event_count` is the transcript's real event
+    count (excludes the stream-ended status), falling back to the streamer's
+    line tally; the carried `events` are the most-recent MON_EVENT_CAP."""
+    events = m.get("events") or []
+    ev_count = sum(1 for e in events if "event" in e)
+    trunc = len(events) > MON_EVENT_CAP
+    return {"task": m["task"],
+            "command": m.get("command") or "",
+            "description": m.get("description") or "",
+            "source": m.get("source") or "",
+            "persistent": m.get("persistent"),
+            "timeout_ms": m.get("timeout_ms"),
+            "tool_use_id": m.get("tool_use_id") or "",
+            "started_at": st.get("started_at") or m.get("launched_at"),
+            "ended_at": st.get("ended_at"),
+            "end_reason": st.get("end_reason") or "",
+            "live": bool(st.get("live")),
+            "agent_id": st.get("agent_id") or "",
+            "event_count": ev_count if events else int(st.get("lines") or 0),
+            "events_truncated": trunc,
+            "events": events[-MON_EVENT_CAP:] if trunc else events}
+
+
+def session_monitors(sid):
+    """The monitors read-model behind plugins.monitors(): every Monitor run in a
+    session's MAIN transcript (monitors()), merged with its audit `streams`
+    lifecycle state (sessionapi.monitor_streams). A streams row with no matching
+    transcript launch (a truncated head, a subagent's monitor) still surfaces —
+    state only, blank command — so a running monitor is never hidden. Sorted by
+    start. None when this plugin has no transcript for the sid (the fan-out then
+    asks the next plugin)."""
+    from core import sessionapi as API
+    row = API.session_row(sid)
+    path = (row or {}).get("transcript_path") or ""
+    if not path or not os.path.isfile(path):
+        return None
+    streams = API.monitor_streams(sid)
+    out, seen = [], set()
+    for m in monitors(path):
+        seen.add(m["task"])
+        out.append(_merge_monitor(m, streams.get(m["task"]) or {}))
+    for task, st in streams.items():
+        if task in seen:
+            continue
+        out.append(_merge_monitor({"task": task, "events": [],
+                                   "launched_at": st.get("started_at")}, st))
+    out.sort(key=lambda r: r.get("started_at") or 0)
+    return out

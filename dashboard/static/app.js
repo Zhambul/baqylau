@@ -471,6 +471,7 @@ function route() {
     S.pendingUI = false;
     const sid = decodeURIComponent(parts[1]);
     if (parts[2] === "a" && parts[3]) return showAgent(sid, decodeURIComponent(parts[3]));
+    if (parts[2] === "m" && parts[3]) return showMonitor(sid, decodeURIComponent(parts[3]));
     return showSession(sid, parts[2] || "mirror");
   }
   if (parts[0] === "launching") {
@@ -496,6 +497,7 @@ function leaveSession() {
   if (S.ses) {
     if (S.ses.es) S.ses.es.close();
     closeAgentStream();
+    clearMonitorPoll();
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
   }
@@ -843,7 +845,7 @@ function updateHeadFromList() {
     m.kitty_window_id = row.kitty_window_id;
     m.parked = row.parked;
     const renaming = S.ses.projEl && S.ses.projEl.querySelector("input");
-    if (!S.ses.agentFocus && !renaming) renderSessionChrome(S.ses.tab);
+    if (!S.ses.agentFocus && !S.ses.monitorFocus && !renaming) renderSessionChrome(S.ses.tab);
   }
 }
 
@@ -856,6 +858,7 @@ function showSession(sid, tab) {
     S.ses = { lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
               agents: [], costs: null, ctx: null, running: {}, meta: null, es: null, agentEs: null,
               timer: null, poll: null, blocks: new Map(), moreEl: null,
+              monitors: null, monitorFocus: null, monPoll: null,
               loadingOlder: false, queue: [],
               filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
@@ -943,6 +946,7 @@ function connectSession(sid) {
   });
   es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
+  es.addEventListener("monitors", (e) => { updateMonCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -3476,6 +3480,8 @@ function renderSessionChrome(tab) {
   const ses = S.ses;
   if (!ses) return;
   ses.agentFocus = null;      // a full session/tab render is never agent-focused
+  ses.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
+  clearMonitorPoll();         // leaving the monitors tab stops its live poll
   const meta = ses.meta || {};
   $view.textContent = "";
 
@@ -3707,6 +3713,10 @@ function renderSessionChrome(tab) {
   mk("mirror", "mirror");
   mk("activity", "activity");
   mk("agents", "agents", (ses.agents || []).length);
+  // the ◉ monitors count: the actual list length once fetched, else the cheap
+  // eager streams count (monitor_count) so the tab shows before the tab is opened
+  ses.monTab = mk("monitors", "monitors",
+                  ses.monitors ? ses.monitors.length : (meta.monitor_count || 0));
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
   $view.append(tabs);
 
@@ -3746,6 +3756,13 @@ function renderSessionChrome(tab) {
     ses.agentsGrid = wrap;
     body.append(wrap);
     updateAgents();
+  } else if (tab === "monitors") {
+    const wrap = el("div", "sgrid");
+    ses.monitorsGrid = wrap;
+    body.append(wrap);
+    if (ses.monitors) renderMonitorsGrid();   // cached from a prior fetch
+    else wrap.append(el("div", "empty", "loading monitors…"));
+    loadMonitors();                            // (re)fetch fresh + start the live poll
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -4032,6 +4049,209 @@ function updateAgents() {
     if (!agents.length) ses.agentsGrid.append(el("div", "empty", "no subagents in this session"));
     for (const a of agents) ses.agentsGrid.append(agentCard(a));
   }
+}
+
+/* ---------- monitors (list tab + drill-down) ---------- */
+/* The monitors tab mirrors the agents tab: a grid of monitor cards (each a
+   Monitor tool run with its lifecycle state) that drills into a per-monitor
+   detail on click. Data comes from plugins.monitors(sid) — the MAIN transcript
+   (command/description/events) merged with the audit streams lifecycle state
+   (running/ended/duration). Loaded lazily on tab open (a transcript parse), then
+   re-fetched on a light poll while any monitor is live — the count badge stays
+   fresh live via the cheap `monitors` SSE (docs/dashboard.md, *Monitors tab*). */
+
+function monitorStatus(m) {
+  if (m.live) return ["running", "st-run"];
+  const er = m.end_reason || "";
+  if (!er && m.ended_at == null) return ["unknown", "st-warn"];
+  if (er.indexOf("no output") >= 0 || er.indexOf("silent") >= 0)
+    return ["ended · no output", "st-ok"];
+  if (er.indexOf("not-found") >= 0 || er.indexOf("never found") >= 0)
+    return ["ended · not found", "st-warn"];
+  if (er.indexOf("parked") >= 0) return ["ended (session end)", "st-ok"];
+  return ["ended", "st-ok"];
+}
+
+function sortedMonitors(mons) {
+  // live first, then most-recently-started on top
+  return [...mons].sort((x, y) => (!!y.live - !!x.live)
+    || ((y.started_at || 0) - (x.started_at || 0)));
+}
+
+function monitorCard(m) {
+  const [sttxt, stcls] = monitorStatus(m);
+  const card = el("a", "acard");
+  card.dataset.st = stcls;
+  card.href = "#/s/" + encodeURIComponent(S.cur) + "/m/" + encodeURIComponent(m.task);
+  const name = m.description || m.command || m.task;
+  card.append(el("div", "aid", "◉ " + name));
+  // subtitle: the command when the name is the description, else the task id
+  const sub = (m.description && m.command) ? m.command : m.task;
+  if (sub) card.append(el("div", "desc", sub));
+  const meta = el("div", "meta");
+  meta.append(el("span", stcls, sttxt));
+  if (m.persistent) meta.append(el("span", "amodel", "persistent"));
+  else if (m.timeout_ms) meta.append(el("span", "amodel", "≤" + dur(m.timeout_ms / 1000)));
+  meta.append(el("span", "", (m.event_count || 0) + " events"));
+  if (m.started_at && m.ended_at) meta.append(el("span", "", dur(m.ended_at - m.started_at)));
+  else if (m.started_at) meta.append(el("span", "", ago(m.started_at)));
+  card.append(meta);
+  return card;
+}
+
+function renderMonitorsGrid() {
+  const ses = S.ses;
+  if (!(ses && ses.tab === "monitors" && ses.monitorsGrid && ses.monitorsGrid.isConnected))
+    return;
+  ses.monitorsGrid.textContent = "";
+  const mons = ses.monitors || [];
+  if (!mons.length) {
+    ses.monitorsGrid.append(el("div", "empty", "no monitors in this session"));
+    return;
+  }
+  for (const m of sortedMonitors(mons)) ses.monitorsGrid.append(monitorCard(m));
+}
+
+function loadMonitors() {
+  const ses = S.ses, sid = S.cur;
+  if (!ses || !sid) return;
+  fetch("/api/session/" + encodeURIComponent(sid) + "/monitors")
+    .then(r => r.json())
+    .then(d => {
+      if (S.cur !== sid || !S.ses) return;
+      S.ses.monitors = d.monitors || [];
+      setMonCount(S.ses.monitors.length);
+      if (S.ses.monitorFocus) repaintMonitorDetail();
+      else renderMonitorsGrid();
+      scheduleMonitorPoll();
+    })
+    .catch(() => {});
+}
+
+function scheduleMonitorPoll() {
+  clearMonitorPoll();
+  const ses = S.ses;
+  if (!ses) return;
+  const live = (ses.monitors || []).some(m => m.live);
+  // keep the list / detail fresh while a monitor is still firing events
+  if (live && (ses.tab === "monitors" || ses.monitorFocus))
+    ses.monPoll = setInterval(loadMonitors, 4000);
+}
+
+function clearMonitorPoll() {
+  if (S.ses && S.ses.monPoll) { clearInterval(S.ses.monPoll); S.ses.monPoll = null; }
+}
+
+// the ◉ monitors tab badge, live — the cheap `monitors` SSE count (a new launch
+// bumps it) OR the exact list length once /monitors is fetched (setMonCount).
+function updateMonCount(n) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.monitor_count = n;
+  setTabCount(ses.monTab, n);
+  // a new monitor arrived while the tab is open -> refresh the list
+  if (ses.tab === "monitors") loadMonitors();
+}
+
+function setMonCount(n) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.monitor_count = n;
+  setTabCount(ses.monTab, n);
+}
+
+function showMonitor(sid, task) {
+  if (S.cur !== sid) showSession(sid, "monitors");
+  const ses = S.ses;
+  if (!ses) return;
+  closeAgentStream();
+  clearMonitorPoll();
+  ses.tab = "monitor:" + task;
+  ses.monitorFocus = task;
+  // no tab-bar entry is "monitor:<task>", so light the `monitors` tab (the same
+  // "you are here" cue the agents drill-down restores on its tab)
+  $view.querySelectorAll(".tabs a").forEach(a =>
+    a.classList.toggle("on", /\/monitors$/.test(a.getAttribute("href") || "")));
+  updateRunning();
+  if (ses.monitors) repaintMonitorDetail();
+  else loadMonitors();          // direct navigation / reload — fetch then paint
+}
+
+function repaintMonitorDetail() {
+  const ses = S.ses;
+  if (!ses || !ses.monitorFocus || !ses.body) return;
+  const task = ses.monitorFocus;
+  const m = (ses.monitors || []).find(x => x.task === task);
+  ses.body.textContent = "";
+  ses.body.append(monitorCrumbs(S.cur, m || { task: task }));
+  const wrap = el("div");
+  ses.body.append(wrap);
+  if (!m) { wrap.append(el("div", "empty", "monitor not found")); return; }
+  renderMonitorDetail(wrap, m);
+  scheduleMonitorPoll();        // live monitor -> keep its detail refreshing
+}
+
+/* The monitor breadcrumb — ◉ monitors (back to the list) › this monitor. */
+function monitorCrumbs(sid, m) {
+  const nav = el("div", "crumbs");
+  const back = el("a", "crumb");
+  back.href = "#/s/" + encodeURIComponent(sid) + "/monitors";
+  back.title = "back to the monitors list";
+  back.append(el("span", "cg", "◉"), document.createTextNode(" monitors"));
+  const cur = el("span", "crumb cur");
+  cur.append(el("span", "cg", "◉"),
+             document.createTextNode(" " + (m.description || m.command || m.task)));
+  nav.append(back, el("span", "csep", "›"), cur);
+  return nav;
+}
+
+function renderMonitorDetail(container, m) {
+  const [sttxt, stcls] = monitorStatus(m);
+  const info = el("div", "mdetail");
+  const h = el("div", "mdhead");
+  h.append(el("span", "k k-monitor", "◉ monitor"), el("span", stcls, sttxt));
+  info.append(h);
+  if (m.description) info.append(el("div", "mdesc", m.description));
+  if (m.command) {
+    info.append(el("div", "lbl", m.source === "ws" ? "websocket" : "command"));
+    info.append(pre(m.command));
+  }
+  const grid = el("div", "mmeta");
+  const add = (k, v) => {
+    if (v == null || v === "") return;
+    grid.append(el("span", "mk", k), el("span", "mv", String(v)));
+  };
+  add("task", m.task);
+  add("lifetime", m.persistent ? "persistent"
+    : (m.timeout_ms ? "≤" + dur(m.timeout_ms / 1000) : "—"));
+  add("events", m.event_count);
+  if (m.started_at) add("started", new Date(m.started_at * 1000).toLocaleString());
+  if (m.ended_at) add("ended", new Date(m.ended_at * 1000).toLocaleString());
+  if (m.started_at && m.ended_at) add("duration", dur(m.ended_at - m.started_at));
+  else if (m.started_at && m.live) add("running for", ago(m.started_at));
+  add("end reason", m.end_reason);
+  info.append(grid);
+  container.append(info);
+
+  const evwrap = el("div", "mevents");
+  const evs = m.events || [];
+  const label = m.events_truncated
+    ? "events (recent " + evs.length + " of " + m.event_count + ")" : "events";
+  evwrap.append(el("div", "mhead", label));
+  if (!evs.length)
+    evwrap.append(el("div", "empty", m.live ? "no events yet — waiting" : "no events fired"));
+  for (const e of evs.slice().reverse()) evwrap.append(monitorEventRow(e));   // newest first
+  container.append(evwrap);
+}
+
+function monitorEventRow(e) {
+  const row = el("div", "mev" + (e.status ? " mev-status" : ""));
+  if (e.ts) row.append(el("span", "mts", new Date(e.ts * 1000).toLocaleTimeString()));
+  const txt = e.status
+    ? ("stream " + e.status + (e.summary ? " · " + e.summary : ""))
+    : (e.event || "");
+  row.append(el("span", "mtxt", txt));
+  return row;
 }
 
 /* ---------- timeline (activity / agent drill-down) ---------- */

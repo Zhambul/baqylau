@@ -32,6 +32,15 @@ def activity_since(sid, agent_id, pos):
     return transcript.activity_since(sid, agent_id, pos)
 
 
+def monitors(sid):
+    """The monitors read-model provider (plugins.monitors fan-out) — every
+    Monitor tool run of a session, its command/description/lifetime and events,
+    merging the MAIN transcript with the audit streams state. See
+    transcript.session_monitors."""
+    from plugins.claude_code import transcript
+    return transcript.session_monitors(sid)
+
+
 def session_title(transcript_path):
     """The session-title provider (plugins.session_title fan-out) — the head
     summary record / first real prompt of a Claude transcript. See

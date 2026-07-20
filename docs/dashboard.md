@@ -274,7 +274,8 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -2372,6 +2373,54 @@ own, so without this every tab went dark and there was no "you are here" cue —
 the breadcrumb and the lit agents tab now both carry it. (It deliberately does
 NOT re-surface the session/list rungs — those live on the brand link and the tab
 bar; the breadcrumb is purely the main→sub agent relationship.)
+
+## Monitors tab
+
+A session-view tab **`monitors`** (between `agents` and `errors`) lists the
+session's Monitor tool runs as cards — the same card/grid/drill-down shape as the
+agents tab — so every monitor's *state* is visible at a glance and clicking one
+opens its full detail. It answers "what is this session watching, and what have
+those watches seen?".
+
+**Data path — `plugins.monitors(sid)`** (a registry fan-out like `activity`;
+claude_code only — the Monitor tool is a Claude Code concept, so codex declines).
+It merges two authorities per taskId:
+- the **MAIN transcript** (`transcript.session_monitors` → `monitors()`) owns the
+  *content*: the Monitor tool_use's command / description / `persistent` /
+  `timeout_ms`, and its **events** (the `queue-operation` `<task-notification>`
+  records — docs/streaming.md, *Monitor events in the transcript*). A Monitor
+  tool_use carries no taskId in its input, so the launch is tied to its events
+  through the **"Monitor started (task X)"** tool_result (the one place the taskId
+  appears); a WebSocket monitor (`ws.url`, no command) records `source: "ws"`.
+- the audit **`streams`** rows (`sessionapi.monitor_streams`, kind `monitor`, the
+  same keystone `agents()` reads) own the *state*: `started_at` / `ended_at` /
+  `end_reason`, and `live` (the newest row's `ended_at` being None). A streams row
+  with no matching transcript launch (a truncated head) still surfaces — state
+  only, blank command — so a running monitor is never hidden.
+
+**Card state** (`monitorStatus`) mirrors the agent cards' `data-st` tint:
+`running` (exec/blue) while live, else `ended` (done/green), with `no output` /
+`not found` variants read off `end_reason`. Each card shows the description (or
+command), a `persistent`/`≤timeout` chip, the event count, and duration/age.
+
+**Live-ness.** The tab **badge count** rides a cheap `monitors` SSE event — the
+distinct-monitor `streams` COUNT (`sessionapi.monitor_count`, no transcript
+parse), pushed on change, so a new `Monitor` launch bumps it like the `errors`
+badge. The card **list** is fetched lazily on tab-open (`/api/session/<sid>/
+monitors` — one transcript parse) and, while any monitor is `live`, re-fetched on
+a light 4s client poll (`scheduleMonitorPoll`); the poll stops when none is live
+or you leave the tab. (No dedicated per-event SSE increment — a monitor's live
+events already stream into the *mirror* tab as ops; the monitors tab is the
+state-and-history view.)
+
+**Drill-down** (`#/s/<sid>/m/<task>` → `showMonitor`, guarded from chrome
+re-renders by `ses.monitorFocus` exactly as `agentFocus` guards the agent
+drill-down) shows a detail card — status, the command (or `ws` url) as a `<pre>`,
+a key/value meta grid (task, lifetime, events, started/ended/duration, end
+reason) — then the **full event list** (newest-first; the stream-ended
+`completed` notification styled apart). Events are capped at `MON_EVENT_CAP`
+(2000, most-recent) with an exact `event_count` and a truncation note. A
+breadcrumb (**◉ monitors › this monitor**) leads back to the list.
 
 ## Stream search + kind filters
 

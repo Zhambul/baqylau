@@ -266,6 +266,49 @@ def test_timeline_counts_bad_lines(tmp_path):
     assert tl["bad_lines"] == 1 and tl["entries"][0]["t"] == "prompt"
 
 
+def test_monitors_correlates_launch_result_and_events(tmp_path):
+    # monitors() ties a Monitor tool_use to its taskId (via the "Monitor started
+    # (task X)" result) and gathers its events — the monitors-tab read model.
+    path = _write(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Monitor",
+             "input": {"command": "tail -f log", "description": "watch",
+                       "persistent": True}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "Monitor started (task abc123, persistent — …)"}]}},
+        {"type": "queue-operation", "content": _mon_note(task="abc123", event="A")},
+        {"type": "queue-operation", "content": _mon_note(task="abc123", event="B")},
+        {"type": "queue-operation", "content": _mon_note(task="abc123",
+                                                         status="completed")},
+    ])
+    mons = TR.monitors(path)
+    assert len(mons) == 1
+    m = mons[0]
+    assert m["task"] == "abc123"
+    assert m["command"] == "tail -f log" and m["description"] == "watch"
+    assert m["persistent"] is True and m["source"] == "command"
+    assert [e.get("event") for e in m["events"]] == ["A", "B", None]
+    assert m["events"][2]["status"] == "completed"
+
+
+def test_monitors_ws_source_and_launchless_events(tmp_path):
+    # a WebSocket monitor (ws.url, no command) records source "ws"; and an event
+    # whose launch was never seen (truncated head) still surfaces the task.
+    path = _write(tmp_path, [
+        {"type": "assistant", "message": {"content": [
+            {"type": "tool_use", "id": "t1", "name": "Monitor",
+             "input": {"ws": {"url": "wss://x/y"}, "description": "socket"}}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": "Monitor started (task wsock)"}]}},
+        {"type": "queue-operation", "content": _mon_note(task="orphan", event="lone")},
+    ])
+    mons = {m["task"]: m for m in TR.monitors(path)}
+    assert mons["wsock"]["source"] == "ws" and mons["wsock"]["command"] == "wss://x/y"
+    assert mons["orphan"]["command"] == "" and mons["orphan"]["events"][0]["event"] == "lone"
+
+
 def test_timeline_surfaces_monitor_launch_and_events(tmp_path):
     # The Monitor launch is a `tool` entry (name "Monitor"); its EVENTS follow as
     # `monitor` entries — the full drill-down story of a monitor. The mirror shows
