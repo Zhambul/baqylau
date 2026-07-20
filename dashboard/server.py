@@ -31,7 +31,10 @@
 # awaiting-response (green — done, your turn) is pushed to every connected
 # /events client, which shows the toast / OS notification. Window-keyed by
 # nature: a headless/daemon session has no window and therefore no toasts,
-# same as it has no tab colour.
+# same as it has no tab colour. The SAME transitions also arm a DEFERRED
+# off-device Telegram alert (the reused `notify` skill) that fires only if the
+# tab is still in that state after a grace window — you didn't react — and the
+# session isn't muted (docs/dashboard.md, *Telegram alerts*).
 import gzip
 import json
 import os
@@ -103,6 +106,32 @@ STATIC = {                         # whitelist — no path resolution on user in
 # is asking you; green — done, your turn.
 NOTIFY_STATES = {tabs.AWAITING_COMMAND: "asking", tabs.AWAITING_RESPONSE: "done"}
 
+# Deferred off-device (Telegram) alerts, layered on the same red/green
+# transitions the in-page toast fires on (docs/dashboard.md, *Telegram alerts*).
+# The alert is ARMED on the transition and only actually SENT if the tab is
+# STILL in that state after the grace window — i.e. you didn't react (answer,
+# resume the turn, or close the session) in time. Browser-independent: it fires
+# whether or not a page is open, since reaching you when away is the point.
+def _notify_delay():
+    """CLAUDE_DASH_NOTIFY_DELAY_S → grace seconds before a Telegram alert fires
+    (default 60). A bad / negative value falls back to the default."""
+    try:
+        v = float(os.environ.get("CLAUDE_DASH_NOTIFY_DELAY_S") or 60)
+    except ValueError:
+        return 60.0
+    return v if v >= 0 else 60.0
+
+
+NOTIFY_DELAY_S = _notify_delay()
+# Master switch: "0" disables arming + sending entirely (the in-page toast is
+# unaffected). Default on.
+NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
+# The reused `notify` skill script (Telegram bot). Overridable for a different
+# transport / for the hermetic test's recorder; ~ is expanded.
+NOTIFY_CMD = os.path.expanduser(
+    os.environ.get("CLAUDE_DASH_NOTIFY_CMD")
+    or "~/.claude/skills/notify/scripts/notify.py")
+
 # Tab states during which a composer send lands in Claude Code's own message
 # QUEUE (a turn is in progress — the TUI queues typed input and delivers it
 # when the turn ends) rather than starting a turn immediately. The /message
@@ -146,14 +175,21 @@ BOOT_ID = str(int(time.time() * 1000))
 class Notifier:
     """The tab-DB diff watcher + the /events fan-out. Clients register a
     Queue; the watcher thread pushes ('notify', payload) on every asking/done
-    transition. Also keeps the win -> session map the payloads are named
-    from (refreshed on the slow cadence — sessions come and go rarely)."""
+    transition (the in-page toast + OS notification). Also keeps the win ->
+    session map the payloads are named from (refreshed on the slow cadence —
+    sessions come and go rarely).
+
+    It ALSO drives the deferred off-device Telegram alert: each asking/done
+    transition arms `self.pending[win]`; a later scan SENDS it iff the tab is
+    still in that state after NOTIFY_DELAY_S (you didn't react) and the session
+    isn't muted — otherwise the entry is dropped when the state moves off."""
 
     def __init__(self):
         self.clients = set()
         self.lock = threading.Lock()
         self.prev = {}
         self.winmap = {}
+        self.pending = {}              # win -> dict(payload, armed_at, state)
 
     def register(self):
         q = queue.Queue(maxsize=100)
@@ -183,9 +219,26 @@ class Notifier:
                 m[win] = row
         self.winmap = m
 
+    def _payload(self, kind, state, row):
+        # a worktree session's toast names the PROJECT (the owning main
+        # checkout), not the worktree dir — same root||cwd resolution the
+        # list page groups by (git_info is cached, cheap here)
+        cwd = canon_cwd(row.get("cwd") or "")
+        home = (git_info(cwd) or {}).get("root") or cwd
+        return {
+            "kind": kind, "state": state, "sid": row.get("sid"),
+            "cwd": cwd,
+            "project": os.path.basename(home) or row.get("sid"),
+            # resolved at push time, not winmap-refresh time: the title is
+            # transcript-derived and the transcript just grew ((path, size)
+            # cache in session_title keeps this cheap)
+            "title": session_title(row.get("transcript_path") or ""),
+        }
+
     def scan(self):
         cur = API.tab_states()
         prev, self.prev = self.prev, cur
+        now = time.monotonic()
         for win, state in cur.items():
             kind = NOTIFY_STATES.get(state)
             if not kind or prev.get(win) == state or not prev:
@@ -193,20 +246,45 @@ class Notifier:
             row = self.winmap.get(win)
             if not row:
                 continue
-            # a worktree session's toast names the PROJECT (the owning main
-            # checkout), not the worktree dir — same root||cwd resolution the
-            # list page groups by (git_info is cached, cheap here)
-            cwd = canon_cwd(row.get("cwd") or "")
-            home = (git_info(cwd) or {}).get("root") or cwd
-            self.push("notify", {
-                "kind": kind, "state": state, "sid": row.get("sid"),
-                "cwd": cwd,
-                "project": os.path.basename(home) or row.get("sid"),
-                # resolved at push time, not winmap-refresh time: the title is
-                # transcript-derived and the transcript just grew ((path, size)
-                # cache in session_title keeps this cheap)
-                "title": session_title(row.get("transcript_path") or ""),
-            })
+            payload = self._payload(kind, state, row)
+            self.push("notify", payload)   # immediate in-page toast + OS notif
+            if NOTIFY_TELEGRAM:             # arm the deferred off-device alert
+                self.pending[win] = dict(payload, armed_at=now, state=state)
+        # cancel the ones you reacted to: the tab left its armed state (answered
+        # → busy, or the win vanished = session closed), all before the delay
+        for win in list(self.pending):
+            if cur.get(win) != self.pending[win]["state"]:
+                del self.pending[win]
+        # fire the ones that persisted past the grace window (once each)
+        for win in list(self.pending):
+            entry = self.pending[win]
+            if now - entry["armed_at"] < NOTIFY_DELAY_S:
+                continue
+            del self.pending[win]
+            if not prefs.notify_muted(entry.get("sid")):
+                self._telegram(entry)
+
+    def _telegram(self, entry):
+        """Send the deferred alert via the reused `notify` skill (Telegram),
+        detached so a slow round-trip never stalls the 1 s watcher. Best-effort
+        + audited; never raises into the loop."""
+        asking = entry.get("kind") == "asking"
+        proj = entry.get("project") or entry.get("sid") or "session"
+        head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
+        title = entry.get("title") or (
+            "Claude is asking a question" if asking else "finished — your turn")
+        url = "http://%s:%d/#/s/%s" % (HOST, PORT, entry.get("sid") or "")
+        msg = "%s — %s\n%s" % (head, title, url)
+        try:
+            subprocess.Popen(
+                [sys.executable or "python3", NOTIFY_CMD, msg],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True)
+            A.state_file("", "", "telegram-notify",
+                         {"sid": entry.get("sid"), "kind": entry.get("kind")})
+        except Exception:
+            A.error("", "dashboard telegram notify",
+                    {"sid": entry.get("sid")})
 
     def run(self):
         n = 0
@@ -691,6 +769,10 @@ def session_payload(sid):
     # session (the resume-&-send door), so its draft must restore there too
     data["composer_draft"] = _composer_draft(sid)
     data["composer_queue"] = _composer_queue(sid)
+    # deliberately NOT live-gated: the Telegram-alert opt-out is a dashboard
+    # pref (docs/dashboard.md, *Telegram alerts*), so the header toggle reflects
+    # + flips it live AND parked
+    data["notify_muted"] = prefs.notify_muted(sid)
     return data
 
 
@@ -1534,6 +1616,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "plan-decision":
             return self.post_plan_decision(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "notify":
+            return self.post_notify_mute(api[1])
         if api == ["sessions", "new"]:
             return self.post_new_session()
         if api == ["ns-prefs"]:
@@ -2642,6 +2727,24 @@ class Handler(BaseHTTPRequestHandler):
         # global (no session) — audited with an empty log/path like web-launch
         A.state_file("", "", "ns-prefs", dict(rec, action="write"))
         return self._json({"ok": True})
+
+    def post_notify_mute(self, sid):
+        """Opt a session in/out of the deferred Telegram alert (docs/dashboard.md
+        *Telegram alerts*) — the header 🔔/🔕 toggle. Body: `muted` (bool).
+        Writes the durable global prefs store (dashboard/prefs.py), NOT any
+        session/terminal state, so it works live AND parked. Behind _post_guard
+        like every control-plane POST; audited as a `notify-mute` state_files row
+        (global — empty log/path like hide-dir). Returns the flipped state."""
+        body = self._post_guard()
+        if body is None:
+            return
+        muted = body.get("muted")
+        if not isinstance(muted, bool):
+            return self._reject_input("notify-mute", "bad muted",
+                                      "muted must be a boolean", {"muted": muted})
+        prefs.set_notify_muted(sid, muted)
+        A.state_file("", "", "notify-mute", {"sid": sid, "muted": muted})
+        return self._json({"ok": True, "muted": muted})
 
     def post_hide_dir(self):
         """Hide a directory group from the list page (docs/dashboard.md *Hidden

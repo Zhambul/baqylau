@@ -93,3 +93,34 @@ def hide_dir(key, ts):
     d[str(key)] = float(ts)
     set(HIDDEN_KEY, d)
     return d
+
+
+# --- notification mute (the session header's 🔕 opt-out) ------------------------
+# The set of sessions the user opted OUT of the deferred Telegram alert
+# (docs/dashboard.md, *Telegram alerts*), stored under one kv key as a
+# {session_id: True} map. Global like hidden-dirs — the mute is a dashboard
+# preference, not session state, so it survives park and applies live or parked.
+# An un-mute DELETES the key so the map stays the small set of muted sids, never
+# a row per session ever seen.
+NOTIFY_MUTE_KEY = "notify-muted"
+
+
+def notify_muted(sid):
+    """True when `sid` is opted out of the deferred Telegram alert."""
+    d = get(NOTIFY_MUTE_KEY, {})
+    return bool(isinstance(d, dict) and d.get(str(sid)))
+
+
+def set_notify_muted(sid, muted):
+    """Mute (or un-mute) the Telegram alert for `sid`; returns the updated map.
+    Best-effort like set() — the returned map reflects the intended state even
+    if the write degraded."""
+    d = get(NOTIFY_MUTE_KEY, {})
+    if not isinstance(d, dict):
+        d = {}
+    if muted:
+        d[str(sid)] = True
+    else:
+        d.pop(str(sid), None)
+    set(NOTIFY_MUTE_KEY, d)
+    return d

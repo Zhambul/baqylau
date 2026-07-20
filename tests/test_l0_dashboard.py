@@ -1620,6 +1620,130 @@ def test_notifier_transitions(monkeypatch):
     n.unregister(q)
 
 
+def test_notifier_telegram_deferred_arm_cancel_fire(monkeypatch, tmp_path):
+    """The deferred off-device (Telegram) alert (docs/dashboard.md *Telegram
+    alerts*): a red/green transition ARMS a pending entry; it only FIRES if the
+    tab is still in that state past NOTIFY_DELAY_S (you didn't react), and it is
+    CANCELLED the moment the tab leaves that state before then. Driven with a
+    controllable monotonic clock so the timing is deterministic, not slept."""
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 30.0)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS, "session_title", lambda p: "t" if p else "")
+    clock = [0.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    sent = []
+    n = DS.Notifier()
+    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    n.winmap = {
+        "7": {"sid": "s7", "cwd": "/w/proj", "transcript_path": "/w/t.jsonl"},
+        "8": {"sid": "s8", "cwd": "/w/proj2", "transcript_path": "/w/t2.jsonl"}}
+    states = {"7": "working", "8": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                   # baseline — never news
+    states["7"], states["8"] = "awaiting-command", "awaiting-response"
+    n.scan()                                   # both transition -> both armed
+    assert sent == [] and set(n.pending) == {"7", "8"}
+    clock[0] = 10.0                            # win8 reacts before the delay
+    states["8"] = "working"
+    n.scan()
+    assert "8" not in n.pending and sent == []
+    clock[0] = 40.0                            # win7 still red past the delay
+    n.scan()
+    assert [e["sid"] for e in sent] == ["s7"] and sent[0]["kind"] == "asking"
+    assert "7" not in n.pending                # popped — fires exactly once
+    n.scan()
+    assert [e["sid"] for e in sent] == ["s7"]
+
+
+def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
+    """A muted session (the 🔕 opt-out) never fires even when it sits red past
+    the delay — the mute is checked at SEND time. And CLAUDE_DASH_NOTIFY_TELEGRAM
+    off (DS.NOTIFY_TELEGRAM False) arms nothing at all."""
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0.0)  # fire on the next scan
+    monkeypatch.setattr(DS, "session_title", lambda p: "t")
+    clock = [0.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    sent = []
+    n = DS.Notifier()
+    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+
+    # muted -> armed but never sent
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    DS.prefs.set_notify_muted("s7", True)
+    n.scan()                                   # baseline
+    states["7"] = "awaiting-command"
+    n.scan()                                   # arm + immediately past delay
+    assert sent == []                          # suppressed by the mute
+    DS.prefs.set_notify_muted("s7", False)     # un-mute -> next fire lands
+
+    # master switch off -> nothing even arms
+    n2 = DS.Notifier()
+    monkeypatch.setattr(n2, "_telegram", lambda entry: sent.append(entry))
+    n2.winmap = n.winmap
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", False)
+    states["7"] = "working"
+    n2.scan()
+    states["7"] = "awaiting-command"
+    n2.scan()
+    assert sent == [] and n2.pending == {}
+
+
+def test_telegram_send_invokes_notify_cmd(monkeypatch, tmp_path):
+    """_telegram Popens the reused notify script (CLAUDE_DASH_NOTIFY_CMD) with a
+    single message argv carrying the project + deep link — the reuse of the
+    global `notify` skill. A recorder script stands in for notify.py."""
+    rec = tmp_path / "rec.txt"
+    script = tmp_path / "recorder.py"
+    script.write_text(
+        "import sys, pathlib\n"
+        "pathlib.Path(%r).write_text(sys.argv[1] if len(sys.argv) > 1 else '')\n"
+        % str(rec))
+    monkeypatch.setattr(DS, "NOTIFY_CMD", str(script))
+    n = DS.Notifier()
+    n._telegram({"kind": "done", "sid": "s9", "project": "proj", "title": "all green"})
+    wait_until(rec.exists, desc="recorder ran")
+    msg = rec.read_text()
+    assert "proj is done" in msg and "all green" in msg and "#/s/s9" in msg
+
+
+def test_notify_mute_endpoint_roundtrip_and_validation(dash):
+    """POST /api/session/<sid>/notify flips the per-session Telegram opt-out in
+    the durable global prefs store and surfaces it in the session meta
+    (`notify_muted`), live or parked; a non-bool `muted` is refused (400)."""
+    A.session_start({"session_id": "nm1", "cwd": "/w", "transcript_path": ""})
+    assert _get_json(dash + "/api/session/nm1")["notify_muted"] is False
+    code, body = _post(dash + "/api/session/nm1/notify", {"muted": True})
+    d = json.loads(body)
+    assert code == 200 and d["ok"] is True and d["muted"] is True
+    assert _get_json(dash + "/api/session/nm1")["notify_muted"] is True
+    assert DS.prefs.notify_muted("nm1") is True
+    code, body = _post(dash + "/api/session/nm1/notify", {"muted": False})
+    assert json.loads(body)["muted"] is False
+    assert _get_json(dash + "/api/session/nm1")["notify_muted"] is False
+    for bad in (1, "yes", None):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/session/nm1/notify",
+                  {"muted": bad} if bad is not None else {})
+        assert e.value.code == 400
+
+
+def test_notify_mute_behind_post_guard(dash, monkeypatch):
+    """The mute POST is a control-plane write — a missing X-Claude-Dash header
+    is 403 and READONLY disables it."""
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/nm2/notify", {"muted": True}, header=None)
+    assert e.value.code == 403
+    monkeypatch.setattr(DS, "READONLY", True)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/nm2/notify", {"muted": True})
+    assert e.value.code == 403
+
+
 class _FakeFE:
     """A usable Frontend stub capturing control-plane writes (injected via
     monkeypatching frontends.get in the server module)."""

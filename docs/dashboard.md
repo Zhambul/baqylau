@@ -272,7 +272,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
@@ -2575,6 +2575,51 @@ stale) and the app shows it as the toast/notification body line, so
 the no-title fallback. The first scan is a baseline, never news. Windowless sessions (headless/daemon) produce no
 toasts, same as they have no tab colour — that's the tab system's own
 scoping, not a dashboard limitation.
+
+### Telegram alerts (deferred, opt-out)
+
+The in-page toast + OS `Notification` only reach you if a browser tab is open;
+when you're away from the desk, nothing does. So the SAME red/green transitions
+also drive a **deferred off-device alert** over the reused global `notify`
+skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
+**you not reacting in time**:
+
+- On the transition the notifier **arms** `Notifier.pending[win]` (the same
+  `_payload` the toast carries, plus a monotonic `armed_at` and the armed
+  `state`). The immediate toast still fires — the arm is purely additive.
+- Each subsequent scan **cancels** any armed entry whose tab has **left** its
+  armed state — you answered (→ busy), the turn resumed, or the session closed
+  (its window vanished from the tab table). That is the "did I react?" test:
+  reacting is the tab moving off red/green, decided deliberately over "did the
+  page get viewed" (which would need client heartbeat plumbing).
+- An entry that **survives** past the grace window is **sent once** (popped),
+  then never re-fires for that transition. It fires **regardless** of whether a
+  browser is connected — reaching you when away is the whole point.
+
+The send is a **detached** `subprocess.Popen` of the notify script
+(`start_new_session=True`, DEVNULL stdio, no `wait`) so a slow Telegram
+round-trip can't stall the 1 s watcher; it's best-effort and audited as a
+`telegram-notify` `state_files` row (an `A.error` on a launch failure). The
+message is `🔴 <project> needs you` / `🟢 <project> is done`, the session title,
+and the `#/s/<sid>` deep link.
+
+**Per-session opt-out.** The header's **🔔 alerts / 🔕 muted** button
+(`renderSessionChrome`, beside ✎ rename / ⇆ migrate) toggles
+`POST /api/session/<sid>/notify` `{"muted": bool}`, which flips the session's
+entry in the durable global prefs store (`dashboard/prefs.notify_muted` /
+`set_notify_muted`, one `notify-muted` kv map keyed by sid — an un-mute deletes
+the key so the map stays the small muted set). Like rename it is deliberately
+NOT live-gated: the opt-out is a dashboard pref, not session state, so it works
+live AND parked, and `session_payload` carries `notify_muted` so the button
+paints the right label on load. The mute is checked at SEND time (not arm time),
+so muting during the grace window still suppresses the alert.
+
+**Env knobs** (read once at server start — a restart picks up changes):
+`CLAUDE_DASH_NOTIFY_DELAY_S` (grace seconds before firing, default `60`; bad /
+negative → default), `CLAUDE_DASH_NOTIFY_TELEGRAM` (`0` disables arming +
+sending entirely, the in-page toast is unaffected; default on), and
+`CLAUDE_DASH_NOTIFY_CMD` (the notify script path — `~` expanded, overridable for
+a different transport or the hermetic test's recorder).
 
 **The session strip is the persistent complement to the toasts.** Toasts are
 transient (a 7s slide-in on the transition); the strip is the standing view of

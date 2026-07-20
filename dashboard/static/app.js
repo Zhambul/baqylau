@@ -3595,6 +3595,33 @@ function renderSessionChrome(tab) {
   mig.title = "migrate this session to another account";
   mig.onclick = () => lockDuring(mig, migrateSession);
   act.append(mig);
+  // 🔔 alerts / 🔕 muted: opt this session in/out of the DEFERRED Telegram
+  // alert (docs/dashboard.md *Telegram alerts*) — the off-device notification
+  // that fires when a chat sits red/green unattended past the grace window.
+  // Deliberately OUTSIDE the live gate (like rename): the opt-out is a
+  // dashboard pref, not session state, so it works live AND parked.
+  const notif = el("button", "sstop actses");
+  const paintNotif = (muted) => {
+    notif.textContent = muted ? "🔕 muted" : "🔔 alerts";
+    notif.title = muted
+      ? "Telegram alerts muted for this session — click to unmute"
+      : "Telegram alerts on — click to mute this session";
+  };
+  paintNotif(meta.notify_muted);
+  notif.onclick = () => {
+    const next = !meta.notify_muted;
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/notify",
+             { muted: next })
+      .then(() => {
+        meta.notify_muted = next;
+        paintNotif(next);
+        toast("done", next ? "alerts muted" : "alerts on",
+              next ? "no Telegram for this session"
+                   : "Telegram alerts re-enabled");
+      })
+      .catch(e => toast("ask", "mute toggle failed", (e && e.error) || ""));
+  };
+  act.append(notif);
   if (meta.live && meta.kitty_window_id) {
     // stop: interrupt the agent in place — an Escape key press in the
     // session's window (the TUI's own interrupt; Esc here does the same).
