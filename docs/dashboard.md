@@ -2589,9 +2589,15 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
   `state`). The immediate toast still fires — the arm is purely additive.
 - Each subsequent scan **cancels** any armed entry whose tab has **left** its
   armed state — you answered (→ busy), the turn resumed, or the session closed
-  (its window vanished from the tab table). That is the "did I react?" test:
-  reacting is the tab moving off red/green, decided deliberately over "did the
-  page get viewed" (which would need client heartbeat plumbing).
+  (its window vanished from the tab table) — OR whose session has **ended**
+  (audit `ended_at` set, `_session_ended`): you closed/quit it on the dashboard,
+  so you were satisfied and moved on and the alert (its deep link would open a
+  dead session) is moot. The `ended_at` check is the robust one the win-vanish
+  test can miss — a stale tab row can linger past a close, and a reused kitty
+  window id can even re-match the armed state under a DIFFERENT session. That is
+  the "did I react?" test: reacting is the tab moving off red/green (or the
+  session being gone), decided deliberately over "did the page get viewed"
+  (which would need client heartbeat plumbing).
 - An entry that **survives** past the grace window is **sent once** (popped),
   then never re-fires for that transition. It fires **regardless** of whether a
   browser is connected — reaching you when away is the whole point.

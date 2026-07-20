@@ -1656,6 +1656,37 @@ def test_notifier_telegram_deferred_arm_cancel_fire(monkeypatch, tmp_path):
     assert [e["sid"] for e in sent] == ["s7"]
 
 
+def test_notifier_telegram_dropped_when_session_closed(monkeypatch, tmp_path):
+    """Closing a session (you were satisfied and moved on) must cancel its
+    pending alert even if the tab row lingers red/green: the audit `ended_at`
+    is the signal, dropped in the cancel pass so nothing fires past the delay."""
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 30.0)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS, "session_title", lambda p: "t")
+    clock = [0.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    sent = []
+    n = DS.Notifier()
+    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    n.winmap = {"9": {"sid": "s9", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
+    A.session_start({"session_id": "s9", "cwd": "/w/p", "transcript_path": ""})
+    states = {"9": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                   # baseline
+    states["9"] = "awaiting-response"
+    n.scan()                                   # -> done, armed
+    assert set(n.pending) == {"9"}
+    # the user closes the session on the dashboard; the tab row lingers green
+    A.session_end({"session_id": "s9"})
+    clock[0] = 5.0
+    n.scan()                                   # ended -> dropped before the delay
+    assert "9" not in n.pending
+    clock[0] = 40.0
+    n.scan()
+    assert sent == []                          # never fired — session was closed
+
+
 def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
     """A muted session (the 🔕 opt-out) never fires even when it sits red past
     the delay — the mute is checked at SEND time. And CLAUDE_DASH_NOTIFY_TELEGRAM

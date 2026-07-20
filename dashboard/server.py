@@ -178,6 +178,16 @@ BOOT_ID = str(int(time.time() * 1000))
 
 # --- notification watcher -----------------------------------------------------------
 
+def _session_ended(sid):
+    """True when the session has a recorded SessionEnd (audit `ended_at` set) —
+    it was closed/quit, so a pending Telegram alert is moot. A MISSING row is
+    deliberately NOT ended: a transient read miss must never suppress a live
+    session's alert (the fire path re-checks anyway)."""
+    if not sid:
+        return False
+    return bool((API.session_row(sid) or {}).get("ended_at"))
+
+
 class Notifier:
     """The tab-DB diff watcher + the /events fan-out. Clients register a
     Queue; the watcher thread pushes ('notify', payload) on every asking/done
@@ -188,7 +198,8 @@ class Notifier:
     It ALSO drives the deferred off-device Telegram alert: each asking/done
     transition arms `self.pending[win]`; a later scan SENDS it iff the tab is
     still in that state after NOTIFY_DELAY_S (you didn't react) and the session
-    isn't muted — otherwise the entry is dropped when the state moves off."""
+    isn't muted — otherwise the entry is dropped when the tab moves off that
+    state OR the session ends (you closed it / moved on)."""
 
     def __init__(self):
         self.clients = set()
@@ -256,10 +267,16 @@ class Notifier:
             self.push("notify", payload)   # immediate in-page toast + OS notif
             if NOTIFY_TELEGRAM:             # arm the deferred off-device alert
                 self.pending[win] = dict(payload, armed_at=now, state=state)
-        # cancel the ones you reacted to: the tab left its armed state (answered
-        # → busy, or the win vanished = session closed), all before the delay
+        # cancel the ones you reacted to, all before the delay: the tab left its
+        # armed state (answered → busy, or the win vanished = tab gone), OR the
+        # session ENDED — you closed it / quit, so you were satisfied and moved
+        # on and the alert (whose deep link would open a dead session) is moot.
+        # ended_at is the robust signal the win-vanish check can miss: a stale
+        # tab row can linger, and a reused window id can even re-match the armed
+        # state under a DIFFERENT session.
         for win in list(self.pending):
-            if cur.get(win) != self.pending[win]["state"]:
+            entry = self.pending[win]
+            if cur.get(win) != entry["state"] or _session_ended(entry.get("sid")):
                 del self.pending[win]
         # fire the ones that persisted past the grace window (once each)
         for win in list(self.pending):
