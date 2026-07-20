@@ -340,6 +340,14 @@ def dash(monkeypatch, tmp_path):
     # the durable global prefs DB (dashboard/prefs.py reads P.DASH_PREFS_DB
     # fresh each call) — relocate so the suite never touches real ~/.claude
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "dash-prefs.db"))
+    # Isolate the global tab DB: core.tabs.TABDB is import-time-captured from
+    # /tmp, so without this every `API.tab_states()` read (the busy-tab guards,
+    # the notification watcher) sees the HOST machine's live kitty windows. A
+    # rewind test using window "36" would spuriously hit a real awaiting-bg tab
+    # and bail busy. Tests that need specific tab states monkeypatch
+    # DS.API.tab_states directly; this just makes the default empty + hermetic.
+    from core import tabs as _tabs
+    monkeypatch.setattr(_tabs, "TABDB", str(tmp_path / "claude-kitty-tab.db"))
     # Hermetic default: never enumerate the REAL kitty windows from the read
     # path (that would demote test sessions to not-live when the suite runs
     # inside a live kitty session). None = "can't enumerate → keep the state-DB
@@ -3679,6 +3687,35 @@ def test_accounts_payload_merges_model_windows(dash, monkeypatch):
     assert by["c1"]["five_hour_eff"] == 14         # from the tokenless snapshot
     # c2 has NO captured snapshot, only the fetched model window → still shown
     assert by["c2"]["usage"]["seven_day_fable"] == 100
+
+
+def test_accounts_payload_live_window_clears_model_limit_hit(dash, monkeypatch):
+    # A MODEL-scoped limit-hit stamp has no reset epoch, so limit_hit_active
+    # assumes a week of blockage — but the live per-model window is the fresher
+    # truth: below 100% means the cap cleared (Anthropic mid-week resets), so
+    # the pill drops; AT 100% the stamp stays.
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c2", "label": "claude-01", "alias": "c2"}])
+    win = {"c2": {"seven_day_fable": 100,
+                  "seven_day_fable_reset": time.time() + 8000}}
+    monkeypatch.setattr(DS.plugins, "model_windows", lambda cache=None: win)
+    A.session_start({"session_id": "accs5", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("accs5")
+    now = time.time()
+    S.kv_set(log, "account", {"slug": "c2", "label": "claude-01"})
+    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now - 3600,
+                                "model": "fable", "msg": "fable limit"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c2"]["limit_hit"]["msg"] == "fable limit"   # 100% → still blocked
+    win["c2"]["seven_day_fable"] = 3                       # the cap reset mid-week
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c2"]["limit_hit"] is None                   # live window wins
+    assert by["c2"]["usage"]["seven_day_fable"] == 3
+    # a NON-model (session-wide) stamp is never touched by model windows
+    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now,
+                                "resets_at": now + 8000, "msg": "5h limit"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c2"]["limit_hit"]["msg"] == "5h limit"
 
 
 def test_post_new_session_account_picker(dash, monkeypatch, tmp_path):

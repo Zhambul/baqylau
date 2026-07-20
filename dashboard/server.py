@@ -533,7 +533,16 @@ def accounts_payload():
     keychain login — docs/dashboard.md 'Per-model usage bars') and they are
     MERGED into `usage`, after which the generic renderer paints them like any
     other window. five_hour_eff/limit_hit stay on the tokenless snapshot; the
-    merge only ADDS windows, so a missing/failed fetch simply omits them."""
+    merge only ADDS windows, so a missing/failed fetch simply omits them.
+
+    One live-data override on the pill: a MODEL-scoped limit_hit stamp carries
+    no reset epoch (the CLI message doesn't state one), so limit_hit_active
+    falls back to 'blocked for a week from the hit'. When the fetched live
+    window for that very model reads BELOW 100%, the cap has demonstrably
+    cleared (Anthropic resets limits mid-week sometimes — reported
+    2026-07-20), so the stale stamp is dropped here. Dashboard-presentation
+    only — core (the relimit target picker) stays tokenless and keeps its
+    conservative week-long fallback."""
     per = API.account_usage(SESSIONS_LIMIT, cache=_ACCT)
     model_win = plugins.model_windows(cache=_ACCT)
     out = []
@@ -543,10 +552,15 @@ def accounts_payload():
         mw = model_win.get(a["slug"])
         if mw:                                   # per-model windows the tokenless
             usage = dict(usage or {}, **mw)      # snapshot can't carry
+        active = API.limit_hit_active(hit)
+        if active and (hit or {}).get("model"):
+            pct = (mw or {}).get("seven_day_%s" % hit["model"])
+            if isinstance(pct, (int, float)) and pct < 100:
+                active = False                   # live window says the cap cleared
         out.append(dict(
             a, usage=API.effective_usage(usage),
             five_hour_eff=API.effective_five_hour(ent.get("usage")),
-            limit_hit=hit if API.limit_hit_active(hit) else None))
+            limit_hit=hit if active else None))
     return out
 
 

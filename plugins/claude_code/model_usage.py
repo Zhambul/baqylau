@@ -260,22 +260,36 @@ def model_windows(usage_json):
 
 
 def _slug_for(usage_json, cache=None):
-    """Map the endpoint account to a switcher slug by matching its account-wide
-    5h AND 7d reset epochs against each slug's freshest captured usage
-    (core.sessionapi.account_usage — the tokenless status-line snapshots).
-    BOTH resets must match (the 5h epoch disambiguates accounts that share a 7d
-    boundary — a single-signal match mis-mapped once, 2026-07-19). None when no
-    slug matches (then the bar simply doesn't attach)."""
+    """Map the endpoint account to a switcher slug by matching its 7-DAY reset
+    epoch against each slug's freshest captured usage (core.sessionapi.
+    account_usage — the tokenless status-line snapshots). The 7d epoch is
+    stable for the whole week, so a unique match attaches even when no session
+    has run recently; the 5h epoch is only a TIE-BREAKER when two accounts
+    share a 7d boundary (a single-signal match mis-mapped once, 2026-07-19).
+    Requiring the 5h epoch to ALWAYS match was the original design, and it
+    dropped the bar whenever the captured 5h window had rolled since the last
+    status-line capture — i.e. on every dashboard start after a quiet spell
+    (reported 2026-07-20). None when no slug matches (or a 7d tie can't be
+    broken) — then the bar simply doesn't attach, audited once per process."""
     e5 = _iso_epoch(((usage_json.get("five_hour") or {}).get("resets_at")))
     e7 = _iso_epoch(((usage_json.get("seven_day") or {}).get("resets_at")))
-    if e5 is None or e7 is None:
+    if e7 is None:
         return None
+    cands = []
     for slug, ent in (API.account_usage(cache=cache) or {}).items():
         cu = ent.get("usage") or {}
-        c5, c7 = cu.get("five_hour_reset"), cu.get("seven_day_reset")
-        if (isinstance(c5, (int, float)) and abs(c5 - e5) < RESET_TOL_S
-                and isinstance(c7, (int, float)) and abs(c7 - e7) < RESET_TOL_S):
-            return slug
+        c7 = cu.get("seven_day_reset")
+        if isinstance(c7, (int, float)) and abs(c7 - e7) < RESET_TOL_S:
+            cands.append((slug, cu.get("five_hour_reset")))
+    if len(cands) == 1:
+        return cands[0][0]
+    if len(cands) > 1 and e5 is not None:
+        hits = [slug for slug, c5 in cands
+                if isinstance(c5, (int, float)) and abs(c5 - e5) < RESET_TOL_S]
+        if len(hits) == 1:
+            return hits[0]
+    _audit_once("model_usage._slug_for",
+                {"e7": e7, "candidates": sorted(s for s, _ in cands)})
     return None
 
 

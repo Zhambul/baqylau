@@ -1809,10 +1809,19 @@ Design details (docs/relimit.md borrows the same account vocabulary):
 - **Account → slug mapping.** The endpoint identifies its account only by
   email, but the switcher slugs carry no email (setup-tokens can't read the
   profile). So the fetched account is matched to a slug by its account-wide
-  **5h AND 7d reset epochs** against each slug's freshest captured usage
-  (`account_usage`). BOTH must match — the 5h epoch disambiguates accounts that
-  share a 7d boundary (a single-signal match mis-mapped personal↔work once,
-  2026-07-19). No match ⇒ the bar just doesn't attach.
+  **7d reset epoch** against each slug's freshest captured usage
+  (`account_usage`); the **5h epoch is only a tie-breaker** when two accounts
+  share a 7d boundary (that ambiguity is real — a single-signal match
+  mis-mapped personal↔work once, 2026-07-19; an unbreakable tie refuses to
+  guess). Requiring the 5h epoch to ALWAYS match was the original design and
+  the reported 2026-07-20 bug: the captured 5h epoch rolls every 5 hours, so
+  after any quiet spell (dashboard just started, no session running under that
+  account) the stale 5h reset failed the match and the Fable bar silently
+  vanished until a status line re-captured — which is also why a rarely-used
+  account showed no bar at all. The 7d epoch is stable for the whole week, so
+  one status-line capture per account per week now suffices. No match ⇒ the
+  bar just doesn't attach (audited once per process,
+  `model_usage._slug_for`).
 - **Refresh ownership** (avoids two writers fighting over one rotating refresh
   token). The actively-used login (plain `claude` — e.g. the personal account)
   is kept fresh by Claude Code itself, so baqylau only READS its keychain token.
@@ -1857,7 +1866,13 @@ snapshot carries NO per-model window today (statusline.parse_usage), so a Fable
 cap's reset is unknown and rides the weekly fallback. Sourcing that reset from
 `five_hour_reset` (which rolls in hours) was the reported bug where the Fable
 chip cleared ~5h in while the weekly limit still bit, reappearing only when a
-new chat re-hit it (docs/relimit.md). A
+new chat re-hit it (docs/relimit.md). The weekly fallback OVERSTATES in the
+other direction — Anthropic sometimes resets limits mid-week — so
+`accounts_payload` lets the LIVE per-model window override a model-scoped
+stamp: when the fetched `seven_day_<model>` for that very model reads below
+100%, the cap has demonstrably cleared and the pill drops (2026-07-20).
+Dashboard-presentation only — core (the relimit target picker) stays tokenless
+and keeps the conservative week-long fallback. A
 MODEL-scoped stamp (`limit_hit.model`, parsed at stamp time by
 `relimit.limit_model` — "You've reached your Fable 5 limit" → `fable`,
 docs/relimit.md *Limit scope*) renders as `fable limit hit` (app.js

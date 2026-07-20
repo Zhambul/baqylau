@@ -1122,11 +1122,21 @@ New always-audited swallow sites (previously silent — their absence used to ma
   whose reset passed is zeroed, reset dropped); the raw stash is still
   readable in the session's state-DB `usage` kv for comparison. A MISSING
   per-model bar (e.g. no "7d fable" despite the CLI's /usage screen showing
-  a Fable cap) is usually NOT a bug here: the capture is generic
-  (`statusline.parse_usage` takes every `rate_limits` window), but as of CLI
-  2.1.215 the statusline JSON carries only `five_hour`/`seven_day` — check
-  the raw `usage` kv: if the window key isn't there, Claude Code never sent
-  it and there is nothing downstream to fix. The stamp also
+  a Fable cap): the statusline never carries it (as of CLI 2.1.215 only
+  `five_hour`/`seven_day` — `statusline.parse_usage` is generic, but if the
+  key isn't in the raw `usage` kv Claude Code never sent it); the bar comes
+  from the OAuth fetch (`plugins/claude_code/model_usage.py`), which attaches
+  by matching the endpoint's 7d reset epoch against each slug's captured
+  snapshot (5h only breaks a 7d tie — requiring 5h always was the 2026-07-20
+  first-start-missing-bar bug). An attach failure writes an `errors` row func
+  `model_usage._slug_for` (once per process; context lists the tie
+  candidates); other funcs `model_usage.*` = keychain/refresh/endpoint
+  failures. No errors row + no bar = no matching snapshot at all (the account
+  needs one status-line capture within the 7d window) or no full-scope
+  keychain login for that account. Note the pill interplay: a model-scoped
+  `limit-hit` stamp is DROPPED from `/api/accounts` while the live fetched
+  `seven_day_<model>` reads below 100% (mid-week reset override,
+  dashboard-presentation only). The stamp also
   carries `model` (`relimit.limit_model` — `fable` for a model-scoped limit,
   null for account-wide): chip says `fable limit hit`, and the new-session
   auto-picker skips the account only for that model — a wrong/missing scope
