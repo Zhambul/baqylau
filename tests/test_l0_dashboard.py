@@ -884,6 +884,32 @@ def test_hide_dir_behind_post_guard(dash, monkeypatch):
     assert e.value.code == 403
 
 
+def test_hide_dir_refused_when_directory_has_a_live_session(dash):
+    """A directory with at least one ACTIVE (live) session can't be hidden — the
+    server 409s on the SAME grouping the list uses (dir_live_sessions over
+    sessions_payload), the authoritative guard behind the disabled ✕
+    (docs/dashboard.md *Hidden directories*). A group with only parked / no
+    sessions still hides, and the same directory becomes hideable once its
+    session parks."""
+    # a LIVE session in /w — its state DB exists (any writer creates it), so
+    # sessions_payload reports live=True (the fixture's _live_windows→None keeps
+    # the state-DB liveness signal, no window demotion)
+    A.session_start({"session_id": "hidelive", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("hidelive"), "seed", 1)      # create the state DB → live
+    # hiding /w is refused (409) and the store is left untouched
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/dirs/hide", {"cwd": "/w"})
+    assert e.value.code == 409
+    assert "/w" not in _get_json(dash + "/api/dirs/hidden")
+    # the guard is TARGETED — a different directory with no live session still hides
+    code, _ = _post(dash + "/api/dirs/hide", {"cwd": "/other"})
+    assert code == 200 and "/other" in _get_json(dash + "/api/dirs/hidden")
+    # park the session (its live state DB gone) → /w becomes hideable
+    os.remove(P.state_db(P.mirror_log("hidelive")))
+    code, body = _post(dash + "/api/dirs/hide", {"cwd": "/w"})
+    assert code == 200 and "/w" in json.loads(body)["hidden"]
+
+
 def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):
     """A resume moves the session to a NEW kitty window (the SessionStart
     upsert refreshes the sessions row) — a session SSE stream opened BEFORE

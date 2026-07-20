@@ -266,7 +266,7 @@ reflow for free and keeps the no-build rule.
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
 | `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |
-| `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `git.root\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 empty/non-string key |
+| `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `git.root\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
@@ -2114,6 +2114,14 @@ renders); the group just disappears from view. It **re-appears on its own the
 moment a NEW session starts there** — no manual "unhide" — whether that session
 is launched from the dashboard's new-session prompt or from a terminal.
 
+A directory can only be hidden while it has **no active (live) session** — you
+can't declutter away a project you're actively working in. The `✕` is **disabled**
+(dimmed, with a "can't hide — N active session(s) here" tooltip) whenever the
+group has a live card, and the server **`POST /api/dirs/hide` 409s** on the same
+condition (`dir_live_sessions` — the authoritative guard, so a stale page that
+still shows an enabled ✕ can't slip a hide through). A group with only *parked* /
+*archived* sessions hides normally.
+
 The mechanism is a single stored timestamp per directory. `POST /api/dirs/hide
 {cwd}` stamps `time.time()` into `{group_key: hidden_at}` (`prefs.hide_dir`,
 under the `hidden-dirs` key of the durable global prefs store — the same
@@ -2123,20 +2131,28 @@ reboot and is shared across every browser pointing at this dashboard). `GET
 (the SSE `sessions` snapshot carries the session ROWS, not this pref — and only
 the browser that clicks `✕` mutates it, so no SSE push is needed). The re-appear
 rule is **client-side** (`app.js` `dirHidden`): a group stays hidden only while
-NONE of its sessions has `started_at > hidden_at`. Because every wire row already
-carries `started_at` (audit `time.time()` epoch, same clock as the hide stamp),
-the filter needs no server round-trip — a fresh launch (or a resume, which
-re-stamps `started_at`) whose row rides the next snapshot simply stops matching
-the hide predicate, and the group returns. Re-hiding a re-appeared group just
-overwrites the stamp with a newer `time.time()`, which is what re-hides it.
+NONE of its sessions is **live** and NONE has `started_at > hidden_at`. Because
+every wire row already carries both `live` and `started_at` (audit `time.time()`
+epoch, same clock as the hide stamp), the filter needs no server round-trip — a
+fresh launch (or a resume, which re-stamps `started_at` and flips the row live)
+whose row rides the next snapshot stops matching the hide predicate, and the
+group returns. The `live` clause mirrors the hide guard from the *other* side: a
+directory can't be hidden while it has a live session, and a hidden directory
+that *gains* one (a parked session resumed) re-shows at once rather than waiting
+on the `started_at` comparison. Re-hiding a re-appeared group just overwrites the
+stamp with a newer `time.time()`, which is what re-hides it.
 
-**Why a timestamp and not a boolean.** A plain "hidden" flag would either be
-cleared by any activity (so a directory with a *live* session could never be
-hidden — its `last_active` keeps advancing) or need an explicit unhide step the
-feature deliberately omits. Comparing against `started_at` specifically (not
-`last_active`) is the point: it lets you hide a directory that has a busy live
-session, and brings it back only for a genuinely *new* session, not for the
-existing one continuing to stream.
+**Why a timestamp and not a boolean.** The stamp is what lets a hidden group
+re-appear **automatically** — no explicit "unhide" step, no server-side event to
+clear a flag. A plain boolean would need someone to reset it when a new session
+started there; the timestamp instead is a passive client-side predicate
+(`started_at > hidden_at`) re-evaluated on every render against rows the page
+already has. Comparing against `started_at` specifically (not `last_active`) is
+deliberate: only a genuinely *new* or *resumed* session (which re-stamps
+`started_at`) re-shows the group — a parked session merely lingering, or its
+transcript mtime ticking, does not. (Live sessions never reach this comparison —
+they can't be hidden in the first place, and the `dirHidden` `live` short-circuit
+keeps them visible.)
 
 The **key is the list's group key** (`git.root || cwd`) — the page posts the
 group header's own `g.cwd`, which already holds that key, so the server stores it

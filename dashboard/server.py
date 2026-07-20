@@ -596,6 +596,20 @@ def sessions_payload():
     return out
 
 
+def dir_live_sessions(key):
+    """The live sessions whose list-page group key equals `key` — the SAME
+    grouping app.js groupSessions does (git.root || cwd || ""), over the SAME
+    window-corrected `live` sessions_payload computes (a state-DB-live session
+    whose tab is gone is already demoted to not-live, so it doesn't count). This
+    is the hide guard's truth: a directory with an active session can't be
+    hidden (docs/dashboard.md *Hidden directories*). sessions_payload is not the
+    cheapest call, but a hide is a rare user action, and reusing it keeps the
+    'is this dir active' answer byte-identical to what the page shows."""
+    return [r for r in sessions_payload()
+            if r.get("live")
+            and ((r.get("git") or {}).get("root") or r.get("cwd") or "") == key]
+
+
 def _wire_row(r):
     """A sessions row as the PAGE consumes it: minus `transcript_path` and
     `log` — server-side paths the client never reads, ~20% of the snapshot's
@@ -2780,6 +2794,10 @@ class Handler(BaseHTTPRequestHandler):
         keyed by the list's group key (git.root||cwd — the page posts g.cwd,
         already that key). Behind _post_guard like every control-plane POST,
         though it writes only the dashboard's OWN prefs, never a session/terminal.
+
+        A directory with at least one ACTIVE (live) session can't be hidden — a
+        409, the authoritative guard behind the disabled ✕ (dir_live_sessions;
+        the client also disables the button, but a stale page could still POST).
         Audited as a `hide-dir` state_files row (global — empty log/path like
         ns-prefs). Returns the updated map so the page reconciles S.hidden with
         the server truth."""
@@ -2796,6 +2814,15 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(key, str) or len(key) > 4096:
             return self._reject_input("hide-dir", "bad key", "cwd must be a string",
                                 {"cwd": key})
+        # A directory with an active session can't be hidden (409). Not an input
+        # error — the key is well-formed — so it's a distinct `why`, but the same
+        # audited-reject shape (no errors row / errwatch chip; an expected 4xx).
+        live = dir_live_sessions(key)
+        if live:
+            return self._reject_input(
+                "hide-dir", "live session",
+                "can't hide a directory with an active session",
+                {"cwd": key, "live": len(live)}, code=409)
         ts = time.time()
         m = prefs.hide_dir(key, ts)
         A.state_file("", "", "hide-dir", {"key": key, "hidden_at": ts})

@@ -580,7 +580,11 @@ function groupSessions(rows) {
 function dirHidden(key, rows) {
   const t = S.hidden[key];
   if (t == null) return false;
-  return !rows.some(r => (r.started_at || 0) > t);
+  // never hidden while it has a LIVE session (matches the server's hide guard —
+  // a directory with an active session can't be hidden, and one that GAINS a
+  // live session re-shows at once) or one started after the hide stamp (a fresh
+  // launch / resume re-shows it).
+  return !rows.some(r => r.live || (r.started_at || 0) > t);
 }
 
 // The ✕ on a dir header: hide it from the list. Optimistic (stamp now, re-render
@@ -628,11 +632,20 @@ function renderDirGroups(groups) {
       hd.append(add);
     }
     // ✕ hides ANY group, including the projectless aggregate (g.cwd === "") —
-    // its group key is the empty string, which hideDir/the server accept
+    // its group key is the empty string, which hideDir/the server accept.
+    // DISABLED while the group has an active session: you can't hide a directory
+    // you're actively working in (the server 409s too — this is just the visible
+    // affordance + reason). The tooltip explains why rather than vanishing.
     const hide = el("button", "dirhide", "✕");
-    hide.title = g.cwd
-      ? "hide this directory from the list (re-appears when a new session starts here)"
-      : "hide the projectless sessions from the list (re-appears when a new one starts)";
+    if (g.active.length) {
+      hide.disabled = true;
+      hide.title = "can't hide — " + g.active.length
+        + (g.active.length === 1 ? " active session here" : " active sessions here");
+    } else {
+      hide.title = g.cwd
+        ? "hide this directory from the list (re-appears when a new session starts here)"
+        : "hide the projectless sessions from the list (re-appears when a new one starts)";
+    }
     hide.onclick = () => hideDir(g.cwd);
     hd.append(hide);
     $view.append(hd);
