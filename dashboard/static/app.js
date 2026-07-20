@@ -2264,7 +2264,11 @@ function buildComposer() {
   // ARGV (never typed into a half-started TUI — no readiness race), under
   // the session's own account. Headless-live stays disabled — those aren't
   // asleep, they just have no window; resume is the wrong medicine.
-  const canResume = !meta.live && !!meta.cwd;
+  // a parked session whose transcript .jsonl is gone can't be resumed —
+  // `claude --resume` would find nothing and the tab would die at once, so the
+  // server 410s it. Disable the door and say why, don't offer a dead button.
+  const gone = !meta.live && !!meta.cwd && !!meta.transcript_missing;
+  const canResume = !meta.live && !!meta.cwd && !gone;
   const usable = canSend || canResume;
   ta.disabled = !usable;
   ta.placeholder = canSend
@@ -2274,6 +2278,7 @@ function buildComposer() {
       ? (IS_IPAD ? "message this parked session — sending resumes it"
                  : "message this parked session — sending resumes it  "
                    + "(Enter to resume & send)")
+      : gone ? "this session's transcript is gone — it can't be resumed"
       : (meta.live ? "no terminal window — can't message a headless session"
                    : "session is not live");
   const btn = el("button", "csend", canResume ? "resume & send" : "send");

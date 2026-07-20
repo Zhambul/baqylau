@@ -58,6 +58,29 @@ intended target was a *separate* hooks/scripts project).
 If never named, the picker shows the conversation summary / first prompt plus metadata
 (last-activity time, message count, git branch).
 
+### baqylau's `session_title` fallback ladder (dashboard cards / tab title)
+
+`transcript.session_title()` derives the display name in this order, each a
+best-effort bounded read (never a full multi-MB transcript scan):
+
+1. `agent-name` — the `/rename` custom name (last one wins; beats everything).
+2. `ai-title` — Claude Code's auto title (last one; near EOF, tail-window read).
+3. `summary` — the last `summary` record in the head window (prepended on resume).
+4. First REAL user prompt — first line of the first non-`isMeta` user turn whose
+   content does NOT start with `<` (`<command-*>`/`<local-command-*>` wrappers are
+   plumbing, not prompts).
+5. **`/slash-command` fallback** — for a short slash-command session that has NONE
+   of the above (its first turn IS a `<command-name>/foo</command-name>` wrapper and
+   it ended before Claude auto-titled it), the `/command` (+ `<command-args>` when
+   present) is read back out (`_command_label`) so the card shows `/slack-monitor`
+   instead of a bare sid. This is the LAST resort — a typed prompt or summary always
+   wins. Sessions launched from `/`-commands (e.g. `/slack-monitor`, `/plugin`) that
+   die quickly were the observed bare-sid cards (2026-07-21).
+
+`''` (→ the UI falls back to the sid) only when the transcript is unreadable or has
+literally none of 1–5 — e.g. its `.jsonl` was deleted (which also makes it
+un-resumable; see docs/dashboard.md *Resume & send*, the gone-transcript guard).
+
 ### The supported programmatic mechanism: SessionStart hook
 ```json
 {

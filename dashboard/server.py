@@ -779,6 +779,13 @@ def session_payload(sid):
     data["monitor_count"] = API.monitor_count(sid)   # the monitors tab badge
     data["job_count"] = API.job_count(sid)           # the jobs tab badge
     data["title"] = session_title(data.get("transcript_path") or "")
+    # Whether the session's transcript .jsonl is GONE (known path, absent on
+    # disk) — the composer's resume-&-send door is dead for it (`claude
+    # --resume` finds no conversation, the launched tab exits at once). An
+    # empty/unknown path is NOT flagged: we can't prove it's broken, so the
+    # CLI decides (docs/dashboard.md *Resume & send*).
+    _tp = data.get("transcript_path") or ""
+    data["transcript_missing"] = bool(_tp) and not os.path.isfile(_tp)
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
     data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
     data["git"] = git_info(data["cwd"])
@@ -2725,6 +2732,23 @@ class Handler(BaseHTTPRequestHandler):
         # any cached/page state); fresh and --continue launches are unaffected.
         # The page gets the live window back so it can focus/message it instead.
         if resume:
+            # A resume target whose transcript .jsonl is GONE can't be resumed:
+            # `claude --resume` finds no conversation and the freshly launched
+            # tab exits at once — a silent dead tab the user reads as "resume
+            # did nothing" (observed live on an aggregator session whose file
+            # was never persisted, 2026-07-21). Reject up front when the sid's
+            # KNOWN transcript path (its audit row) is absent on disk; an
+            # unknown sid (no row / no path) is left to the CLI — we can't prove
+            # it's broken. All accounts share ~/.claude/projects (the switcher
+            # symlinks each configs/<slug>/projects to it), so the launch
+            # account is irrelevant to this check.
+            r_tpath = (API.session_row(resume) or {}).get("transcript_path") or ""
+            if r_tpath and not os.path.isfile(r_tpath):
+                A.state_file("", "", "web-launch",
+                             dict(opts, ok=False, why="transcript missing"))
+                return self._json(
+                    {"error": "session transcript is gone — can't resume",
+                     "sid": resume}, 410)
             live_win = fe.window_for_session(resume) or ""
             if live_win:
                 A.state_file("", "", "web-launch",

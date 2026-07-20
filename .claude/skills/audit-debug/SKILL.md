@@ -619,6 +619,25 @@ New always-audited swallow sites (previously silent — their absence used to ma
   guard regressed or a pre-fix server is still running (restart
   `claude-dashboard.py`). Recover a live duplicate by closing the extra tab
   (`kitten @ close-tab --match id:<tabid>`).
+- **Resume from the dashboard opens a kitty tab that instantly dies (or "does
+  nothing"), often a session that also shows only its sid, no name** *(gone
+  transcript, guard added 2026-07-21)* — the resume target's transcript
+  `.jsonl` no longer exists, so `claude --resume <sid>` finds no conversation
+  and the launched tab exits at once. Tell on a PRE-fix / bypassed path: a
+  `web-launch` row with `resume: <sid>`, `ok: true`, a `win` filled — the
+  kitten launch SUCCEEDED (a tab really spawned) — but NO SessionStart follows
+  (no fresh `sessions` row for a forked sid, no `adopt`, no `web-launch-wake`
+  arrival). Confirm the file: the resumed sid's `sessions.transcript_path` is
+  absent on disk (`ls` it). On a current build `post_new_session` PRE-REJECTS
+  it: a **410** + a `web-launch` `ok: false`, `why: transcript missing` row,
+  before any tab — so that row = the guard FIRED (healthy). NB the account is a
+  red herring: the switcher symlinks every `configs/<slug>/projects` to the
+  shared `~/.claude/projects`, so all accounts resolve the same file (or its
+  absence) — do NOT chase "wrong account". The same missing/`.jsonl`-less
+  transcript is ALSO why the card shows a bare sid (session_title returns `''`;
+  see docs/session-naming-findings.md — a slash-command session that ended
+  before an ai-title now falls back to `/command`, but a DELETED transcript
+  still has nothing to read).
 - **Clicking a Read/Update/Write line doesn't expand (or won't collapse)** — the
   click-to-view chain is stash → toggle → reflow; check it in that order. (1) Stash:
   a `state_files` `view-stash` row (content: gid = the op's tool_use_id, tool, ops

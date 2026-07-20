@@ -464,6 +464,21 @@ Headless-live sessions (live, no window) stay disabled —
 they aren't asleep, resume is the wrong medicine — and their mic button is
 now honestly `disabled` (dim, inert) instead of a live-looking button that
 swallowed clicks (`ta.disabled` guard in `dictation.start`).
+**Gone-transcript guard:** a parked session whose transcript `.jsonl` no
+longer exists on disk CANNOT be resumed — `claude --resume <sid>` finds no
+conversation and the freshly launched tab exits at once, a silent dead tab the
+user reads as "resume did nothing" (observed on a short slash-command
+aggregator session whose file was never persisted, 2026-07-21). Two layers
+close it: (1) `session_payload` stamps `transcript_missing` (the session's
+KNOWN transcript path — its audit row — is absent on disk; an empty/unknown
+path is NOT flagged, we can't prove it's broken), and the composer disables the
+door with "this session's transcript is gone — it can't be resumed" instead of
+offering a button that dies; (2) `post_new_session` is the authoritative
+backstop — a `resume: <sid>` whose known transcript path is absent 410s
+(`{error, sid}`) with a `web-launch` `ok: false`, `why: transcript missing`
+row, before any tab is launched. The account is irrelevant to this check: the
+subscription switcher symlinks every `configs/<slug>/projects` to the shared
+`~/.claude/projects`, so all accounts see the same transcript (or its absence).
 
 **The "/" menu** (the composer AND the new-session form's first-prompt box —
 one shared `slashMenu` helper in app.js). A leading `/` with no whitespace yet

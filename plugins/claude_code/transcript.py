@@ -223,6 +223,14 @@ def agent_paths(parent_tpath, agent_id):
 
 # --- session title + the main-thread conversation (dashboard read models) ----------
 
+# The slash-command wrapper Claude Code stores for a `/command` FIRST turn (the
+# `<command-name>/foo</command-name>` + optional `<command-args>bar</…>` tags in
+# the user record's content). session_title's LAST-resort fallback reads the
+# command name back out so a short slash-command session gets `/foo` instead of a
+# bare sid (docs/session-naming-findings.md, *Fallbacks*).
+_CMD_NAME_RE = re.compile(r"<command-name>\s*(/?[^<\n]+?)\s*</command-name>")
+_CMD_ARGS_RE = re.compile(r"<command-args>\s*([^<\n]*?)\s*</command-args>")
+
 TITLE_SCAN = 200        # head-window lines session_title inspects: summary records
 #                         are PREPENDED on resume, so they precede the first prompt;
 #                         a title must never cost a full multi-MB transcript read
@@ -264,18 +272,37 @@ def _title_records(path):
     return named, ai
 
 
+def _command_label(s):
+    """The `/slash-command [args]` that STARTED a session, pulled from the
+    `<command-name>`/`<command-args>` wrapper Claude Code stores for a
+    slash-command first turn. '' when the content carries no command name.
+    session_title's last-resort fallback, below summary/prompt (a slash command
+    is less descriptive than a typed prompt, but beats a bare sid)."""
+    m = _CMD_NAME_RE.search(s)
+    if not m:
+        return ""
+    name = m.group(1).strip()
+    if not name:
+        return ""
+    a = _CMD_ARGS_RE.search(s)
+    args = a.group(1).strip() if a else ""
+    return ("%s %s" % (name, args)).strip()[:200] if args else name[:200]
+
+
 def session_title(path):
     """Best-effort display TITLE for a session transcript — what the kitty tab
     (Claude Code's OSC title) and the `claude --resume` picker show: the last
     `agent-name` (a /rename custom name — never clobbered by auto titles), else
     the last `ai-title`, else the LAST `summary` record in the head window,
     else the first line of the first REAL user prompt (isMeta rows and
-    `<command-*>`/`<local-command-*>` wrappers are plumbing, not prompts).
-    '' when unreadable / nothing found."""
+    `<command-*>`/`<local-command-*>` wrappers are plumbing, not prompts), else
+    — for a short slash-command session with none of the above — the `/command`
+    that started it (docs/session-naming-findings.md, *Fallbacks*). '' when
+    unreadable / nothing found."""
     named, ai = _title_records(path)
     if named or ai:
         return named or ai
-    summary, prompt = "", ""
+    summary, prompt, cmd = "", "", ""
     try:
         with open(path, encoding="utf-8") as fh:
             for i, raw in enumerate(fh):
@@ -297,9 +324,11 @@ def session_title(path):
                         s = c.strip()
                         if s and not s.startswith("<"):
                             prompt = s.split("\n", 1)[0][:200]
+                        elif s and not cmd:      # the /command that opened it
+                            cmd = _command_label(s)
     except OSError:
         return ""
-    return summary or prompt
+    return summary or prompt or cmd
 
 
 def set_session_title(path, name):

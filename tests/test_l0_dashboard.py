@@ -1479,6 +1479,30 @@ def test_session_title_finds_ai_title_past_head_window(tmp_path):
     assert TR.session_title(p) == "title near eof"
 
 
+def test_session_title_falls_back_to_slash_command(tmp_path):
+    # A short slash-command session (first prompt is a <command-*> wrapper) with
+    # no summary/ai-title/plain prompt gets the /command as its name instead of
+    # a bare sid (docs/session-naming-findings.md, *Fallbacks*).
+    from plugins.claude_code import transcript as TR
+    p = _tw(tmp_path, "c1.jsonl",
+            {"type": "user", "message": {"content":
+             "<command-message>slack-monitor</command-message>\n"
+             "<command-name>/slack-monitor</command-name>"}})
+    assert TR.session_title(p) == "/slack-monitor"
+    # command-args ride along when present
+    q = _tw(tmp_path, "c2.jsonl",
+            {"type": "user", "message": {"content":
+             "<command-name>/task</command-name>\n"
+             "<command-args>fix the flaky test</command-args>"}})
+    assert TR.session_title(q) == "/task fix the flaky test"
+    # a later plain prompt (or a summary) still WINS over the command fallback
+    r = _tw(tmp_path, "c3.jsonl",
+            {"type": "user", "message": {"content": "<command-name>/plugin</command-name>"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "ok"}]}},
+            {"type": "user", "message": {"content": "now do the real thing"}})
+    assert TR.session_title(r) == "now do the real thing"
+
+
 def test_conversation_anchors_and_cursor(tmp_path):
     from plugins.claude_code import transcript as TR
     p = _tw(tmp_path, "c1.jsonl",
@@ -4271,6 +4295,40 @@ def test_post_new_session_refuses_resume_of_live_session(dash, monkeypatch,
     # a fresh (non-resume) launch in the same dir is unaffected
     _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "prompt": "new"})
     assert fe.launched and fe.launched[-1][1][-1] == "new"
+
+
+def test_post_new_session_refuses_resume_of_missing_transcript(dash, monkeypatch,
+                                                               tmp_path):
+    """A resume-launch for a session whose transcript .jsonl is GONE is refused
+    (410), not launched into a tab that would instantly die (`claude --resume`
+    finds no conversation). The refusal lands a web-launch ok:False row with
+    why=transcript missing. A sid with a PRESENT transcript resumes normally,
+    and an UNKNOWN sid (no audit row / no known path) is left to the CLI."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    # session_start stamps kitty_window_id from the env; clear it so the seeded
+    # rows don't read as live (window_for_session) and trip the 409 live guard.
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+    gone_sid = "9c1e2f34-aaaa-4bbb-8ccc-0123456789ab"
+    A.session_start({"session_id": gone_sid, "cwd": str(tmp_path),
+                     "transcript_path": str(tmp_path / "gone.jsonl")})  # never written
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new",
+              {"cwd": str(tmp_path), "resume": gone_sid, "prompt": "hi"})
+    assert e.value.code == 410
+    assert fe.launched == []                    # nothing was launched
+    # a session WITH a present transcript resumes normally
+    tp = _tw(tmp_path, "there.jsonl", {"type": "user", "message": {"content": "hi"}})
+    ok_sid = "9c1e2f34-aaaa-4bbb-8ccc-0123456789ac"
+    A.session_start({"session_id": ok_sid, "cwd": str(tmp_path), "transcript_path": tp})
+    _post(dash + "/api/sessions/new",
+          {"cwd": str(tmp_path), "resume": ok_sid, "prompt": "go"})
+    assert fe.launched and fe.launched[-1][1][4:] == ["--resume", ok_sid, "go"]
+    # an UNKNOWN sid (no row) is NOT pre-rejected — the CLI decides
+    unk = "9c1e2f34-aaaa-4bbb-8ccc-0123456789ad"
+    _post(dash + "/api/sessions/new",
+          {"cwd": str(tmp_path), "resume": unk, "prompt": "x"})
+    assert fe.launched[-1][1][4:] == ["--resume", unk, "x"]
 
 
 def test_launch_argv_falls_back_to_zsh(monkeypatch):
