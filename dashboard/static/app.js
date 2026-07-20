@@ -855,6 +855,8 @@ function updateHeadFromList() {
 /* ---------- session view ---------- */
 
 function showSession(sid, tab) {
+  // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror
+  if (!["mirror", "agents", "monitors", "jobs", "errors"].includes(tab)) tab = "mirror";
   if (S.cur !== sid) {
     leaveSession();
     S.cur = sid;
@@ -864,7 +866,7 @@ function showSession(sid, tab) {
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
               loadingOlder: false, queue: [],
-              filter: { q: "", kind: "all" } };   // cleared per session (new S.ses)
+              filter: { kind: "all" } };          // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     fetch("/api/session/" + encodeURIComponent(sid))
       .then(r => r.json())
@@ -1246,18 +1248,14 @@ function streamItems() {
 }
 
 function matchesFilter(elem) {
-  const f = (S.ses && S.ses.filter) || { q: "", kind: "all" };
+  const f = (S.ses && S.ses.filter) || { kind: "all" };
   if (f.kind !== "all" && elem.dataset.kind !== f.kind) return false;
-  if (f.q && !(elem.textContent || "").toLowerCase().includes(f.q)) return false;
   return true;
 }
 
 function applyFilterTo(elem) {
   if (!elem || !elem.dataset || !elem.dataset.kind) return;
-  const ok = matchesFilter(elem);
-  elem.classList.toggle("fhide", !ok);
-  const f = S.ses && S.ses.filter;
-  elem.classList.toggle("fq", ok && !!(f && f.q));     // subtle text-match highlight
+  elem.classList.toggle("fhide", !matchesFilter(elem));
 }
 
 function applyFilter() {
@@ -1281,27 +1279,6 @@ function buildFilterBar() {
   const f = ses.filter;
   const bar = el("div", "fbar");
 
-  const input = el("input", "finput");
-  input.type = "text";
-  input.placeholder = "filter…";
-  input.spellcheck = false;
-  input.value = f.q;
-  ses.input = input;
-  let deb;
-  input.oninput = () => {
-    clearTimeout(deb);
-    deb = setTimeout(() => { f.q = input.value.trim().toLowerCase(); applyFilter(); }, 150);
-  };
-  input.onkeydown = (e) => {
-    if (e.key === "Escape" && f.q) {
-      input.value = ""; f.q = ""; applyFilter();
-      e.stopPropagation();
-    }
-  };
-
-  const clear = el("button", "fclear", "✕");
-  clear.title = "clear filter";
-
   const chipwrap = el("div", "fchips");
   const chips = new Map();
   for (const key of FILTER_KINDS) {
@@ -1315,16 +1292,9 @@ function buildFilterBar() {
     chipwrap.append(c);
   }
 
-  clear.onclick = () => {
-    input.value = ""; f.q = ""; f.kind = "all";
-    chips.forEach((cc, k) => cc.classList.toggle("on", k === "all"));
-    applyFilter();
-    input.focus();
-  };
-
   const count = el("span", "fcount");
   ses.countEl = count;
-  bar.append(input, clear, chipwrap, count);
+  bar.append(chipwrap, count);
   ses.filterBar = bar;
   return bar;
 }
@@ -3791,7 +3761,6 @@ function renderSessionChrome(tab) {
     return a;
   };
   mk("mirror", "mirror");
-  mk("activity", "activity");
   mk("agents", "agents", (ses.agents || []).length);
   // the ◉ monitors count: the actual list length once fetched, else the cheap
   // eager streams count (monitor_count) so the tab shows before the tab is opened
@@ -3831,9 +3800,6 @@ function renderSessionChrome(tab) {
     updateAgents();
     updateMoreBtn();                      // the load-older affordance at the bottom
     applyFilter();                        // re-filter items already in the stream
-  } else if (tab === "activity") {
-    renderTimelineInto(body, "/api/session/" + encodeURIComponent(S.cur) + "/activity",
-                       "main thread");
   } else if (tab === "agents") {
     const wrap = el("div", "sgrid");
     ses.agentsGrid = wrap;

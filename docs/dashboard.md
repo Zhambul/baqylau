@@ -2359,6 +2359,27 @@ bound, invisibly to the child cap, and its live-tail card never reaches the
 bottom to be evicted. So `fillBlock` also caps each block **body** at
 `MAX_BLOCK_BODY` (800), trimming its oldest (top) op nodes as new ones append.
 
+## Mirror card styling
+
+The mirror stream is styled to read like the **activity-timeline cards** (which
+the user liked and asked the mirror to adopt — the standalone `activity` tab was
+retired, *Ordering: newest-first* above). Each fold block (`.blk`) is a roomy
+card: a solid kind-coloured pill (the label op's `.chip`, already background-
+coloured per kind by `opshtml`) plus a one-line `.bsum` summary, expanding onto
+a darker inset body — the same shape as an `.ent`. There is **no disclosure
+triangle**: the whole header is the click target, matching an activity entry.
+Loose top-level rows (file-op one-liners, standalone chip lines) get the same
+card treatment, scoped to DIRECT `.stream` children so ops nested inside a block
+body keep their compact inline form.
+
+This is **CSS only** (`style.css` `.blk`/`.bhead`/`.bsum`/`.bbody` + the
+`.stream > .opl/.ol/.og/.ogut` rule). The fold/expand machinery — `createBlock`,
+the `data-open` toggle, the `KEEP_OPEN` window, click-to-view, and ⧉ copy — is
+UNCHANGED; only the appearance moved. Deliberately NOT ported from the activity
+tab: its information architecture (a short *category* pill like `BASH`/`READ`
+with the detail in the summary). The mirror keeps its own richer pill (glyph +
+command/name) and what it shows — the request was the *look*, not the data.
+
 ## Live agent timelines
 
 An agent's drill-down (`/api/session/<sid>/agent/<aid>`) is fetched once for its
@@ -2377,8 +2398,12 @@ recent message reads at the TOP — matching the main agent's mirror stream, whi
 prepends (`appendItems`, `st.prepend`). The timeline head stays pinned above. The
 live SSE then *prepends* each new increment (in chronological order, so its newest
 lands topmost and the whole increment sits above older entries) — the mirror of
-the oldest-first append path. The main-thread **activity** tab is unaffected: it
-renders the same component without `newestFirst`, so it stays oldest-first.
+the oldest-first append path. The same component still supports an oldest-first
+render (`renderTimelineInto` without `newestFirst`): the server's `/activity`
+main-thread endpoint (`plugins.activity(sid)`) is unchanged and test-covered,
+but the dashboard **no longer surfaces a `activity` tab** for it — it was a
+main-thread timeline that only duplicated the mirror tab's stream, so it was
+retired (2026-07-21).
 
 Server-side the SSE polls `plugins.activity_since(sid, aid, pos)` at `TICK_S` —
 the incremental companion to `activity()`, sharing timeline()'s per-record entry
@@ -2522,19 +2547,22 @@ tab-open and re-fetched on a 4s poll while any job is `live`. (A job's live outp
 already streams into the *mirror* tab as ops; the jobs tab is the
 state-and-history view.)
 
-## Stream search + kind filters
+## Stream kind filters
 
-The session view's mirror tab carries a filter bar directly above the stream: a
-mono text input plus toggle chips (`all · commands · files · agents ·
-messages`) and an `N of M shown` count. Text filtering is a debounced
-(~150ms) case-insensitive substring over each top-level item's `textContent`
-(folded block bodies included — `textContent` reads hidden children, so a match
-in a collapsed command output still counts without force-opening it). Filtering
-never removes DOM (SSE keeps appending); non-matching items get a `.fhide`
+The session view's mirror tab carries a filter bar directly above the stream:
+toggle chips (`all · commands · files · agents · messages`) and an `N of M
+shown` count. Clicking a chip narrows the stream to one kind. Filtering never
+removes DOM (SSE keeps appending); non-matching items get a `.fhide`
 (`display:none`) class, applied in `appendItems` to newly arrived items too via
 the shared `matchesFilter()` — so a live filter holds as the stream grows.
-Filter state lives on `S.ses.filter` and is cleared when switching sessions
-(a fresh `S.ses`).
+Filter state lives on `S.ses.filter` (`{kind}`) and is cleared when switching
+sessions (a fresh `S.ses`).
+
+**There is deliberately no free-text search box.** The bar once carried a
+debounced substring input (over each item's `textContent`, folded bodies
+included) with a clear button; it was removed 2026-07-21 as unused — the kind
+chips are the whole filter surface now, and the `data-kind` machinery below is
+what they act on.
 
 Each top-level stream child is stamped with a `data-kind`
 (`commands`/`files`/`agents`/`messages`) ONCE at creation in `appendItems`

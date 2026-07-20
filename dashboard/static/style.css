@@ -402,20 +402,6 @@ code, pre, .mono { font-family: var(--mono); }
   box-shadow: var(--card); border-radius: var(--r);
   background: var(--panel); padding: 8px 12px; margin-bottom: 10px;
 }
-.finput {
-  flex: 1; min-width: 140px; background: color-mix(in srgb, var(--bg) 88%, black);
-  color: var(--text); border: none; box-shadow: inset 0 0 0 1px var(--hair);
-  border-radius: var(--r); padding: 6px 10px;
-  font: 12px/1.4 var(--mono);
-}
-.finput:focus { outline: none; box-shadow: inset 0 0 0 1px var(--hair2); }
-.finput::placeholder { color: var(--dim2); }
-.fclear {
-  background: transparent; color: var(--dim); border: none; cursor: pointer;
-  box-shadow: var(--card); border-radius: var(--r); padding: 5px 9px;
-  font-size: 11px; line-height: 1; flex: none;
-}
-.fclear:hover { color: var(--text); box-shadow: var(--card-hover); }
 .fchips { display: inline-flex; gap: 2px; flex: none; }
 .fchip {
   background: transparent; color: var(--dim); border: none; cursor: pointer;
@@ -830,11 +816,8 @@ body.modal-open { overflow: hidden; }
 }
 .pendhint { font: 12px/1.5 var(--sans); color: var(--dim); }
 
-/* hidden by the filter; never removed (SSE keeps appending) */
+/* hidden by the kind filter; never removed (SSE keeps appending) */
 .fhide { display: none; }
-/* subtle emphasis on a text-match hit */
-.blk.fq { box-shadow: inset 0 0 0 1px var(--hair2); }
-.blk.fq > .bhead .bsum { color: var(--text-soft); }
 
 /* ---- the mirror stream -------------------------------------------------- */
 .stream {
@@ -847,39 +830,49 @@ body.modal-open { overflow: hidden; }
 .orule { box-shadow: inset 0 1px 0 var(--hair); height: 1px; margin: 6px 0; }
 .ol { margin: 2px 0; display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
 
-/* collapsible activity blocks (same-`g` items folded by the app) */
+/* collapsible blocks (same-`g` items folded by the app), styled to match the
+   activity-timeline card look (docs/dashboard.md *Mirror card styling*): a roomy
+   card whose header is a solid kind-coloured pill + a one-line summary, with the
+   expanded body on a darker inset — the `.ent` treatment. NO disclosure
+   triangle (the whole header is the click target, like an activity entry). This
+   is CSS ONLY: the fold/expand logic (data-open, KEEP_OPEN, click-to-view, ⧉
+   copy) is unchanged. */
 .blk {
   box-shadow: var(--card); border-radius: var(--r);
-  background: var(--panel); margin: 6px 0; overflow: hidden;
+  background: var(--panel); margin: 7px 0; overflow: hidden;
 }
 .blk > .bhead {
-  display: flex; align-items: baseline; gap: 10px;
-  padding: 5px 10px 5px 26px; cursor: pointer; position: relative;
-  min-width: 0;
+  display: flex; align-items: center; gap: 10px;
+  padding: 7px 13px; cursor: pointer; user-select: none; min-width: 0;
 }
-.blk > .bhead::before {
-  content: "▸"; position: absolute; left: 10px; color: var(--dim2);
-  font-size: 10px;
-}
-.blk[data-open="1"] > .bhead::before { content: "▾"; }
 .blk > .bhead:hover { background: var(--panel2); }
-.bchips { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: baseline; flex: none; }
+.bchips { display: inline-flex; gap: 8px; flex-wrap: wrap; align-items: center; flex: none; }
 .bchips .ol, .bchips .og { margin: 0; display: inline-flex; border: none; padding: 0; }
 .bsum {
-  color: var(--dim); font: 11px/1.5 var(--mono); flex: 1; min-width: 0;
+  color: var(--text-soft); font: 12px/1.4 var(--mono); flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 .bbody {
   box-shadow: inset 0 1px 0 var(--hair);
-  padding: 5px 10px 8px; max-height: 480px; overflow: auto;
+  background: color-mix(in srgb, var(--bg) 88%, black);
+  padding: 9px 13px; max-height: 480px; overflow: auto;
 }
 .blk[data-open="0"] > .bbody { display: none; }
+
+/* loose top-level rows (file-op one-liners, standalone chip/label lines) get the
+   same card treatment so the WHOLE stream reads as uniform activity-style cards.
+   Scoped to DIRECT `.stream` children — ops nested inside a block body keep their
+   compact inline form. */
+.stream > .opl, .stream > .ol, .stream > .og, .stream > .ogut {
+  box-shadow: var(--card); border-radius: var(--r);
+  background: var(--panel); padding: 7px 13px; margin: 7px 0;
+}
 /* ⧉ copy links only materialize on hover — ambient noise otherwise */
 .cl { opacity: 0; transition: opacity .12s; }
 .bhead:hover .cl, .ol:hover .cl, .bbody:hover .cl { opacity: 1; }
 .chip {
   color: #14161c; font-weight: 650; font-size: 12px; font-family: var(--mono);
-  padding: 0 8px; border-radius: calc(var(--r) / 2); display: inline-block;
+  padding: 1px 9px; border-radius: calc(var(--r) / 2); display: inline-block;
   max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cl { display: inline-flex; gap: 10px; }
@@ -1218,12 +1211,12 @@ html { touch-action: manipulation; }
 
 @media (pointer: coarse) {
   /* ≥16px focused text == no Safari auto-zoom; desktop keeps its density */
-  .cinput, .finput, .nsinput, .askother, .shead .proj input.renamein {
+  .cinput, .nsinput, .askother, .shead .proj input.renamein {
     font-size: 16px;
   }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
-  .ghost, .fchip, .fclear, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
+  .ghost, .fchip, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
   .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn {
     min-height: 36px;
   }
