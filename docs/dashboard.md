@@ -271,7 +271,7 @@ reflow for free and keeps the no-build rule.
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
 | `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |
-| `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `git.root\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
+| `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `group_dir\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
@@ -2017,9 +2017,10 @@ first `.git`; a directory is a main checkout, a file is a linked worktree
 (`gitdir: .../worktrees/<name>` — the name is the `⋔` chip) or a submodule
 (no `worktrees` segment → no name). A linked worktree's payload also carries
 `root` — the MAIN checkout that owns it (`gitdir` is
-`<root>/.git/worktrees/<name>`; `null` for a main checkout): that is the list
-page's grouping key (*Grouping and titles* below) and the toast `project`
-name, so a worktree session files under its project. HEAD at the resolved
+`<root>/.git/worktrees/<name>`; `null` for a main checkout): that is what
+`group_dir` resolves a worktree session to — the list page's grouping key
+(*Grouping and titles* below) — and the toast `project` name, so a worktree
+session files under its project. HEAD at the resolved
 gitdir gives the
 branch (`ref: refs/heads/<b>`, or a 7-char sha when detached). The ancestor
 walk + gitdir indirection is cached per cwd (in the `_GIT` `BoundedLRU`, so a
@@ -2047,15 +2048,30 @@ tick.
 
 ## Grouping and titles
 
-The sessions view groups by PROJECT directory — `git.root || cwd` (cwd from
-the audit `sessions` row, root from `git_info`, the git-chips section above):
-a linked-worktree session files under the main checkout that owns it, not its
-worktree dir, so N agents fanned out over `.claude/worktrees/*` of one repo
-stay ONE group (the per-card `⋔` chip is what tells them apart, and the group
-header's "+" launches new sessions at the main checkout). A parked session
-whose worktree was since REMOVED degrades to its own cwd-keyed group
-(`git_info` returns null once the `.git` file is gone — the branch chip drops
-the same way). Groups are ordered by their newest session's `started_at`
+The sessions view groups by PROJECT directory — the server's `group_dir`
+(app.js keys on it; `group_dir || cwd` for legacy/parked rows that predate it).
+`group_dir` is the session's FROZEN original cwd resolved to its linked-worktree
+owner: `_group_dir(start_cwd)` in server.py walks the `.git` files (via
+`_git_resolve`, never the dirty subprocess) exactly as `git_info` does, but
+returns the worktree owner (`root`) or the dir itself. Two consequences:
+
+- A linked-worktree session files under the main checkout that owns it, not its
+  worktree dir, so N agents fanned out over `.claude/worktrees/*` of one repo
+  stay ONE group (the per-card `⋔` chip is what tells them apart, and the group
+  header's "+" launches new sessions at the main checkout).
+- Grouping keys off `start_cwd` — the frozen ORIGINAL cwd (audit `sessions`
+  column, set once at SessionStart, NEVER re-stamped; added by
+  `audit._migrate`) — rather than the live `cwd`, so an agent's mid-session
+  `cd`, which `session_paths` folds into the live `cwd` on every event, can NOT
+  move a card between groups. The card still SHOWS its live `cwd`; only the
+  group key is pinned. *Why not the live cwd:* a `cd` into a subdir, `/tmp`, or
+  another repo silently re-aggregated the whole card mid-session — the reported
+  bug this pinning fixes. `start_cwd` is server-internal (it only feeds
+  `group_dir`) and is stripped from the wire by `_wire_row`.
+
+A parked session whose worktree was since REMOVED degrades to its own
+start-cwd-keyed group (`_git_resolve` returns null once the `.git` file is
+gone — the branch chip drops the same way). Groups are ordered by their newest session's `started_at`
 (app.js `orderKey`), NOT `last_active`: started_at is fixed for the session's
 whole life, so the order only moves when a session starts or resumes
 somewhere. Sorting groups on `last_active` (transcript mtime, which grows on
@@ -2174,7 +2190,7 @@ transcript mtime ticking, does not. (Live sessions never reach this comparison �
 they can't be hidden in the first place, and the `dirHidden` `live` short-circuit
 keeps them visible.)
 
-The **key is the list's group key** (`git.root || cwd`) — the page posts the
+The **key is the list's group key** (`group_dir || cwd`) — the page posts the
 group header's own `g.cwd`, which already holds that key, so the server stores it
 verbatim (validated as a string under a length cap; it is only ever a kv key and
 a client-side compare, never a filesystem path). The **`✕` hides ANY group,

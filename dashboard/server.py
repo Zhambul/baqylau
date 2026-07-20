@@ -238,11 +238,12 @@ class Notifier:
         self.winmap = m
 
     def _payload(self, kind, state, row):
-        # a worktree session's toast names the PROJECT (the owning main
-        # checkout), not the worktree dir — same root||cwd resolution the
-        # list page groups by (git_info is cached, cheap here)
+        # a worktree session's toast names the PROJECT it groups under, not the
+        # worktree dir — the SAME group_dir resolution the list page uses (the
+        # frozen start_cwd -> its worktree owner), so a session that cd'd away
+        # is still named by where it started (_git_resolve is cached, cheap)
         cwd = canon_cwd(row.get("cwd") or "")
-        home = (git_info(cwd) or {}).get("root") or cwd
+        home = _group_dir(canon_cwd(row.get("start_cwd") or "") or cwd)
         return {
             "kind": kind, "state": state, "sid": row.get("sid"),
             "cwd": cwd,
@@ -499,6 +500,24 @@ def git_info(cwd):
             "dirty": _git_dirty(cwd)}
 
 
+def _group_dir(cwd):
+    """The directory a session GROUPS under on the list page: its linked-
+    worktree OWNER (so N worktrees of one repo aggregate under the main
+    checkout, as git_info's `root` did), else `cwd` itself. Fed the session's
+    start_cwd (the frozen ORIGINAL cwd), NOT the live cwd, so a mid-session cd
+    can never move a card between groups. File-read-only (_git_resolve + the
+    _GIT cache, shared with git_info) — deliberately NOT the `dirty`
+    subprocess, which grouping doesn't need."""
+    if not cwd:
+        return cwd
+    hit = _GIT.get(cwd, False)
+    if hit is False:
+        hit = _git_resolve(cwd)
+        _GIT[cwd] = hit
+    root = hit[2] if hit else None
+    return root or cwd
+
+
 _CTX = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, ctx): same
 #                   (path, size) cache key
 #                   as _TITLES — saturation only changes when the file grows, and
@@ -602,7 +621,13 @@ def sessions_payload():
         row["title"] = session_title(row.get("transcript_path") or "")
         row["ctx"] = session_ctx(row.get("transcript_path") or "", main=True)
         row["cwd"] = canon_cwd(row.get("cwd") or "")   # collapse the /kitty symlink
-        row["git"] = git_info(row["cwd"])
+        row["git"] = git_info(row["cwd"])              # chips: the LIVE location
+        # what the list GROUPS on: the frozen ORIGINAL cwd (start_cwd) resolved
+        # to its linked-worktree owner. Distinct from row.git (live cwd) on
+        # purpose — so worktrees still aggregate under their main checkout AND a
+        # mid-session cd never moves a card between groups.
+        row["group_dir"] = _group_dir(
+            canon_cwd(row.get("start_cwd") or "") or row["cwd"])
         row["last_active"] = _last_active(row, sdb)
         out.append(row)
     return out
@@ -610,7 +635,7 @@ def sessions_payload():
 
 def dir_live_sessions(key):
     """The live sessions whose list-page group key equals `key` — the SAME
-    grouping app.js groupSessions does (git.root || cwd || ""), over the SAME
+    grouping app.js groupSessions does (group_dir || cwd || ""), over the SAME
     window-corrected `live` sessions_payload computes (a state-DB-live session
     whose tab is gone is already demoted to not-live, so it doesn't count). This
     is the hide guard's truth: a directory with an active session can't be
@@ -619,16 +644,18 @@ def dir_live_sessions(key):
     'is this dir active' answer byte-identical to what the page shows."""
     return [r for r in sessions_payload()
             if r.get("live")
-            and ((r.get("git") or {}).get("root") or r.get("cwd") or "") == key]
+            and (r.get("group_dir") or r.get("cwd") or "") == key]
 
 
 def _wire_row(r):
-    """A sessions row as the PAGE consumes it: minus `transcript_path` and
-    `log` — server-side paths the client never reads, ~20% of the snapshot's
-    bytes at 50 rows. sessions_payload keeps them internally (the notifier's
-    winmap and the title/ctx caches resolve through them); only the two wire
-    exits (`/api/sessions`, the global SSE) strip."""
-    return {k: v for k, v in r.items() if k not in ("transcript_path", "log")}
+    """A sessions row as the PAGE consumes it: minus `transcript_path`, `log`
+    and `start_cwd` — server-side values the client never reads (start_cwd only
+    feeds group_dir server-side; the page groups on group_dir), ~20% of the
+    snapshot's bytes at 50 rows. sessions_payload keeps them internally (the
+    notifier's winmap and the title/ctx caches resolve through them); only the
+    two wire exits (`/api/sessions`, the global SSE) strip."""
+    return {k: v for k, v in r.items()
+            if k not in ("transcript_path", "log", "start_cwd")}
 
 
 def _row_key(wire_row):

@@ -555,13 +555,15 @@ function renderList(force) {
 function groupSessions(rows) {
   // one group per PROJECT directory (ordered by its newest session); inside
   // each: active cards visible, parked / archived (>3d) as click-to-open
-  // folds. A linked-worktree session files under the main checkout that owns
-  // it (git.root — server git_info), not its worktree dir: N agents fanned
-  // out over worktrees of one repo are one project, and the per-card ⋔ chip
-  // already tells them apart.
+  // folds. The group key is the server's `group_dir`: the session's frozen
+  // ORIGINAL cwd resolved to its linked-worktree owner. So N agents fanned out
+  // over worktrees of one repo file under the main checkout (the per-card ⋔
+  // chip tells them apart), AND a mid-session `cd` never moves a card between
+  // groups — group_dir ignores the live cwd entirely (row.cwd is the fallback
+  // for legacy/parked rows with no group_dir).
   const groups = new Map();
   for (const row of rows) {
-    const k = (row.git && row.git.root) || row.cwd || "";
+    const k = row.group_dir || row.cwd || "";
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(row);
   }

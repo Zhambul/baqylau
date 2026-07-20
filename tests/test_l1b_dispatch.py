@@ -389,9 +389,12 @@ def test_relocated_transcript_refreshes_sessions_row(run_hook, test_env, session
     new_cwd = os.path.join(s.cwd, ".claude", "worktrees", "wt")
     new_t = s.transcript.replace(".jsonl", "-moved.jsonl")
     run_hook(HOOK, P.base(s, "PostToolBatch", cwd=new_cwd, transcript_path=new_t))
-    row = oracle.q(test_env, "SELECT cwd, project_slug, transcript_path"
+    row = oracle.q(test_env, "SELECT cwd, project_slug, transcript_path, start_cwd"
                    " FROM sessions WHERE session_id=?", (s.sid,))
-    assert row == [(new_cwd, "wt", new_t)]
+    # cwd/project/transcript follow the relocation, but start_cwd stays FROZEN at
+    # the original — the dashboard groups on it (via group_dir), so a cd / worktree
+    # entry can't move the card between groups (docs/dashboard.md Grouping and titles).
+    assert row == [(new_cwd, "wt", new_t, s.cwd)]
     # The relocation moment itself is audited: ONE session-paths row, old -> new.
     moves = [r for r in oracle.state_files(test_env, s.sid)
              if r[1] == "session-paths"]

@@ -82,6 +82,24 @@ def audit_db():
         return ""
 
 
+_HAS_START_CWD = False
+
+
+def _sessions_has_start_cwd(db):
+    """Whether the audit `sessions` table has the `start_cwd` column yet.
+    It's a late-added column (core.audit._migrate ALTERs it in): a WRITER adds
+    it the first time it opens the DB after an upgrade, but this read-only
+    module can't ALTER — so for the brief window right after an upgrade the
+    column may still be absent. Probe once and cache the True result (a column
+    never disappears once added), so the sessions list degrades to the old
+    group-by-live-cwd for that window instead of a _rows() error blanking it."""
+    global _HAS_START_CWD
+    if not _HAS_START_CWD:
+        _HAS_START_CWD = any(r[1] == "start_cwd"
+                             for r in _rows(db, "PRAGMA table_info(sessions)"))
+    return _HAS_START_CWD
+
+
 # --- sid-fork chain ---------------------------------------------------------------
 
 def sid_chain(sid):
@@ -123,17 +141,25 @@ def _in_clause(n):
 def sessions(limit=25):
     """Recent sessions, newest first: the audit `sessions` rows joined with
     on-disk liveness (live state DB in /tmp vs parked history), plus any parked
-    DBs the audit never saw (audit disabled at the time) as minimal rows."""
+    DBs the audit never saw (audit disabled at the time) as minimal rows. Each
+    row carries both `cwd` (live — session_paths re-stamps it as the session
+    moves) and `start_cwd` (the frozen ORIGINAL cwd, for stable grouping — the
+    dashboard groups on it so a mid-session cd never moves a card's group)."""
     out, seen = [], set()
-    for sid, cwd, tpath, mlog, st, en, er, win in _rows(
-            audit_db(),
+    db = audit_db()
+    # A controlled 2-value column choice, never user input: fall back to `cwd`
+    # (the pre-migration behaviour) when start_cwd isn't in the table yet.
+    scwd_col = "start_cwd" if _sessions_has_start_cwd(db) else "cwd"
+    for sid, cwd, tpath, mlog, st, en, er, win, scwd in _rows(
+            db,
             "SELECT session_id, cwd, transcript_path, mirror_log, started_at,"
-            " ended_at, end_reason, kitty_window_id FROM sessions"
+            " ended_at, end_reason, kitty_window_id, " + scwd_col + " FROM sessions"
             " ORDER BY started_at DESC LIMIT ?",
             (limit,)):
         log = mlog or P.mirror_log(sid)
         seen.add(P.sid_from_log(log))
-        out.append({"sid": sid, "cwd": cwd, "transcript_path": tpath, "log": log,
+        out.append({"sid": sid, "cwd": cwd, "start_cwd": scwd or cwd or "",
+                    "transcript_path": tpath, "log": log,
                     "started_at": st, "ended_at": en, "end_reason": er,
                     "kitty_window_id": win or "",
                     "live": os.path.isfile(P.state_db(log)),
@@ -148,7 +174,8 @@ def sessions(limit=25):
         if key in seen:
             continue
         log = P.log_for_key(key)
-        out.append({"sid": key, "cwd": "", "transcript_path": "", "log": log,
+        out.append({"sid": key, "cwd": "", "start_cwd": "",
+                    "transcript_path": "", "log": log,
                     "started_at": None, "ended_at": None, "end_reason": "",
                     "kitty_window_id": "",
                     "live": os.path.isfile(P.state_db(log)), "parked": True})

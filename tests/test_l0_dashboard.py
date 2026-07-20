@@ -1260,10 +1260,38 @@ def test_git_chip_payloads(dash, tmp_path):
     ov = _get_json(dash + "/api/session/gitB")
     assert ov["git"] == {"branch": "abcdef0", "worktree": "wt1",
                          "root": str(repo), "dirty": None}
+    # group_dir is the list's grouping key: the frozen start_cwd resolved to its
+    # linked-worktree OWNER. A main checkout / non-checkout groups under itself;
+    # a worktree groups under its owning checkout (== git.root here). start_cwd
+    # itself is server-internal (it only feeds group_dir) — never on the wire.
+    assert rows["gitA"]["group_dir"] == rows["gitA"]["cwd"]
+    assert rows["gitB"]["group_dir"] == rows["gitB"]["git"]["root"] == str(repo)
+    assert rows["gitC"]["group_dir"] == rows["gitC"]["cwd"]
+    assert "start_cwd" not in rows["gitA"]
     # HEAD is re-read each call: a branch switch shows without cache eviction
     (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
     rows = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}
     assert rows["gitA"]["git"]["branch"] == "main"
+
+
+def test_group_dir_pins_to_start_cwd(dash, tmp_path):
+    """The list groups on group_dir = the session's FROZEN original cwd
+    (start_cwd), NOT the live cwd — so an agent's mid-session `cd` (which
+    session_paths folds into the live cwd) can't move a card between groups.
+    Regression for the reported 'cd changes the main-page aggregation' bug."""
+    start = tmp_path / "proj"
+    start.mkdir()
+    moved = tmp_path / "elsewhere"
+    moved.mkdir()
+    A.session_start({"session_id": "pin1", "cwd": str(start),
+                     "transcript_path": ""})
+    # the agent cd's: session_paths re-stamps the LIVE cwd on the next event
+    A.session_paths({"session_id": "pin1", "cwd": str(moved),
+                     "transcript_path": ""})
+    row = {r["sid"]: r for r in _get_json(dash + "/api/sessions")}["pin1"]
+    assert os.path.basename(row["cwd"]) == "elsewhere"      # live cwd followed the cd
+    assert os.path.basename(row["group_dir"]) == "proj"     # group pinned to start
+    assert row["cwd"] != row["group_dir"]
 
 
 def test_git_dirty_marker(dash, tmp_path):
@@ -4616,3 +4644,23 @@ def test_canon_cwd_collapses_symlinked_repo(tmp_path):
         == str(real / ".claude" / "worktrees" / "x")   # nested under the symlink
     assert DS.canon_cwd(str(real)) == str(real)         # already-canonical unchanged
     assert DS.canon_cwd("") == ""                       # never the process cwd
+
+
+def test_group_dir_resolves_worktree_owner(tmp_path):
+    """_group_dir — the list's grouping-key resolver — maps a session's cwd to
+    the directory it files under: a linked-worktree cwd resolves to its OWNING
+    main checkout (so N worktrees of one repo aggregate as one project), a main
+    checkout / non-checkout resolves to itself, '' stays ''. File-reads only, no
+    dirty subprocess. Fed start_cwd (the frozen original), so a later cd can't
+    change it."""
+    repo = tmp_path / "repo"
+    (repo / ".git" / "worktrees" / "wt1").mkdir(parents=True)
+    (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n")
+    wt = tmp_path / "wt1"
+    wt.mkdir()
+    (wt / ".git").write_text("gitdir: %s\n" % (repo / ".git" / "worktrees" / "wt1"))
+    assert DS._group_dir(str(wt)) == str(repo)           # worktree -> owning checkout
+    assert DS._group_dir(str(repo)) == str(repo)         # main checkout -> itself
+    plain = tmp_path / "plain"
+    assert DS._group_dir(str(plain)) == str(plain)       # non-checkout -> itself
+    assert DS._group_dir("") == ""

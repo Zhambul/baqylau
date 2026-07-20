@@ -76,7 +76,13 @@ _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions(
   session_id TEXT PRIMARY KEY, cwd TEXT, project_slug TEXT, transcript_path TEXT,
   mirror_log TEXT, kitty_window_id TEXT, started_at REAL, ended_at REAL,
-  end_reason TEXT, env TEXT);
+  end_reason TEXT, env TEXT,
+  -- the session's ORIGINAL cwd, frozen at SessionStart. Unlike `cwd` (which
+  -- session_paths re-stamps on every event as the session relocates), this
+  -- never changes, so the dashboard groups a session under where it STARTED
+  -- even after the agent cd's away (docs/dashboard.md "Grouping and titles").
+  -- Added by _migrate() on DBs that predate it.
+  start_cwd TEXT);
 CREATE TABLE IF NOT EXISTS hook_events(
   id INTEGER PRIMARY KEY, ts REAL, session_id TEXT, hook TEXT, tool_name TEXT,
   agent_id TEXT, handler TEXT, decision TEXT, pid INTEGER, duration_ms REAL,
@@ -126,6 +132,24 @@ CREATE INDEX IF NOT EXISTS ix_otel_sid   ON otel(session_id, ts);
 """
 
 
+def _migrate(conn):
+    """Additive COLUMN migrations for DBs created before a column existed. The
+    base _SCHEMA is CREATE TABLE IF NOT EXISTS, so adding a whole new TABLE is
+    free — but a new COLUMN on an existing table needs an explicit ALTER. Each
+    step is guarded by PRAGMA table_info, so it's idempotent (every open
+    re-checks; re-running is a no-op). Writers only — the read-only consumers
+    (dashboard / core.sessionapi) can't ALTER, so they tolerate the column still
+    being absent right after an upgrade (see core.sessionapi.sessions)."""
+    have = {r[1] for r in conn.execute("PRAGMA table_info(sessions)")}
+    if "start_cwd" not in have:
+        conn.execute("ALTER TABLE sessions ADD COLUMN start_cwd TEXT")
+        # Backfill: the TRUE original cwd of a pre-existing session lives only
+        # in its SessionStart hook_events.payload; its last-known `cwd` is the
+        # best cheap approximation. Sessions started after the upgrade capture
+        # start_cwd exactly (session_start below).
+        conn.execute("UPDATE sessions SET start_cwd=cwd WHERE start_cwd IS NULL")
+
+
 def _connect():
     """Open (and cache) the audit DB, creating the schema on first use. Returns None
     when auditing is off or sqlite is unusable (callers then spool)."""
@@ -142,6 +166,7 @@ def _connect():
         conn.execute("PRAGMA busy_timeout=3000")
         conn.execute("PRAGMA synchronous=NORMAL")
         conn.executescript(_SCHEMA)
+        _migrate(conn)
         conn.commit()
         _CONN = conn
         _ingest_spool(conn)
@@ -483,6 +508,7 @@ def session_start(d):
                                 "CLAUDE_CODEX_", "CLAUDE_OTEL_"))
                or k in ("KITTY_WINDOW_ID",)}
     cols = dict(session_id=sid, cwd=d.get("cwd") or os.getcwd(),
+                start_cwd=d.get("cwd") or os.getcwd(),
                 project_slug=_project_slug(d.get("cwd") or os.getcwd()),
                 transcript_path=d.get("transcript_path") or "",
                 mirror_log=P.mirror_log(sid),
@@ -493,10 +519,13 @@ def session_start(d):
         return
     try:
         conn.execute(
-            "INSERT INTO sessions(session_id, cwd, project_slug, transcript_path,"
-            " mirror_log, kitty_window_id, started_at, env)"
-            " VALUES(:session_id, :cwd, :project_slug, :transcript_path, :mirror_log,"
-            " :kitty_window_id, :started_at, :env)"
+            "INSERT INTO sessions(session_id, cwd, start_cwd, project_slug,"
+            " transcript_path, mirror_log, kitty_window_id, started_at, env)"
+            " VALUES(:session_id, :cwd, :start_cwd, :project_slug, :transcript_path,"
+            " :mirror_log, :kitty_window_id, :started_at, :env)"
+            # start_cwd is deliberately absent from the UPDATE: it's the frozen
+            # ORIGINAL cwd, so a resume (same sid, new SessionStart) keeps the
+            # first value — session_paths never touches it either.
             " ON CONFLICT(session_id) DO UPDATE SET started_at=excluded.started_at,"
             " transcript_path=excluded.transcript_path, env=excluded.env,"
             # the session is alive again (a resume restarts it under the SAME
