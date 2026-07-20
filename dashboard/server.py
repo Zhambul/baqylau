@@ -841,7 +841,7 @@ def session_payload(sid):
             and not _within_live_grace(row)):
         data["live"] = False
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
-    data["ask"] = _ask_pending(sid) if data.get("live") else None
+    data["ask"] = _ask_wire(sid, _ask_pending(sid)) if data.get("live") else None
     data["ask_draft"] = _ask_draft(sid, data["ask"]) if data.get("ask") else None
     data["plan"] = _plan_pending(sid) if data.get("live") else None
     # deliberately NOT live-gated: the `tasks` kv survives park (Claude Code
@@ -874,6 +874,28 @@ def _dialog_pending(sid, key):
 
 def _ask_pending(sid):
     return _dialog_pending(sid, "ask-pending")
+
+
+def _ask_wire(sid, ask):
+    """The pending ask ENRICHED for the page: `preamble_html` — Claude's prose
+    LEAD-IN to the question (the text framing it, which the terse dialog stash
+    omits; plugins.ask_preamble over the transcript), rendered with the
+    msg-bubble md_html (escape-first, the neutralize() analog). So the "why"
+    Claude gave rides ON the ask card, not just as a detached stream bubble
+    (docs/dashboard.md, *Web ask*). Kept OUT of _ask_pending — that is the
+    per-tick SSE change-detection poll and must stay a cheap kv read; the
+    transcript is touched only when the ask actually changes / on session open.
+    Defensive: a preamble read that fails must never block the question from
+    rendering, so it degrades to "". None passes through (the ask cleared)."""
+    if not ask:
+        return ask
+    try:
+        pre = plugins.ask_preamble(sid, ask.get("tool_use_id") or "") or ""
+    except Exception:
+        pre = ""
+    ask = dict(ask)
+    ask["preamble_html"] = opshtml.md_html(pre) if pre else ""
+    return ask
 
 
 def _ask_draft(sid, ask=None):
@@ -3186,10 +3208,13 @@ class Handler(BaseHTTPRequestHandler):
                     return
             # the pending modal-dialog cards (fast cadence — the dialog just
             # appeared and the user is waiting); None clears each card
+            # change-detect on the RAW stash (a cheap kv read); enrich with the
+            # preamble only when it actually changed (_ask_wire reads the
+            # transcript — see there)
             ask = _ask_pending(sid)
             if ask != prev["ask"]:
                 prev["ask"] = ask
-                if not self._sse("ask", {"ask": ask}):
+                if not self._sse("ask", {"ask": _ask_wire(sid, ask)}):
                     return
             # the unsubmitted-selections draft — so a card open on ANOTHER
             # device tracks this one's edits (the writer suppresses its own

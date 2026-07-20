@@ -257,6 +257,76 @@ def test_conversation_surfaces_declined_question(tmp_path):
     assert "Proceed?" in recs[0]["text"]
 
 
+def test_ask_preamble_from_separate_message(tmp_path):
+    # The common shape: Claude writes the framing text in ONE assistant message,
+    # then calls AskUserQuestion in the NEXT (a tool call and its lead-in are
+    # usually separate messages). ask_preamble returns the preceding message's
+    # text — the same `message` the stream shows before the `question`.
+    p = tmp_path / "sep.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "message": {"content": "figure it out"}},
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "t1", "name": "Bash",
+             "input": {"command": "ls"}}]}},
+        {"type": "assistant", "message": {"id": "m2", "content": [
+            {"type": "text", "text": "Two problems, not one. **Red herring** ruled out."}]}},
+        {"type": "assistant", "message": {"id": "m3", "content": [
+            {"type": "tool_use", "id": "t2", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"question": "Which fix?", "options": [{"label": "A"}]}]}}]},
+        },
+    ]), encoding="utf-8")
+    assert TR.ask_preamble(str(p), "t2") == \
+        "Two problems, not one. **Red herring** ruled out."
+
+
+def test_ask_preamble_same_message_wins(tmp_path):
+    # When the framing text and the ask share ONE assistant message, the
+    # same-message text before the tool_use wins over an earlier message.
+    p = tmp_path / "same.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "stale earlier note"}]}},
+        {"type": "assistant", "message": {"id": "m2", "content": [
+            {"type": "text", "text": "here's the framing"},
+            {"type": "tool_use", "id": "t9", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"question": "Go?", "options": [{"label": "Yes"}]}]}}]}},
+    ]), encoding="utf-8")
+    assert TR.ask_preamble(str(p), "t9") == "here's the framing"
+
+
+def test_ask_preamble_resets_on_new_prompt(tmp_path):
+    # A real user prompt is a turn boundary: an assistant message from a PRIOR
+    # turn is not the lead-in to this turn's ask. With no framing text in the
+    # ask's own turn, the preamble is empty rather than a stale earlier message.
+    p = tmp_path / "reset.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "an answer from the last turn"}]}},
+        {"type": "user", "message": {"content": "new question please"}},
+        {"type": "assistant", "message": {"id": "m2", "content": [
+            {"type": "tool_use", "id": "t1", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"question": "Pick?", "options": [{"label": "A"}]}]}}]}},
+    ]), encoding="utf-8")
+    assert TR.ask_preamble(str(p), "t1") == ""
+
+
+def test_ask_preamble_edge_cases(tmp_path):
+    p = tmp_path / "edge.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "lead"},
+            {"type": "tool_use", "id": "t1", "name": "AskUserQuestion",
+             "input": {"questions": [{"question": "?", "options": []}]}}]}},
+    ]), encoding="utf-8")
+    assert TR.ask_preamble(str(p), "t1") == "lead"
+    assert TR.ask_preamble(str(p), "") == ""            # no id
+    assert TR.ask_preamble(str(p), "nope") == ""        # id not found
+    assert TR.ask_preamble(str(tmp_path / "gone.jsonl"), "t1") == ""  # unreadable
+
+
 # ------------------------------------------------------------------ agent_paths
 
 def test_agent_paths_layout():

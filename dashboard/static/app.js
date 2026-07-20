@@ -1633,6 +1633,16 @@ function renderAsk() {
   chatB.onclick = () => submitAsk(ask, null, true);
   head.append(chatB);
   card.append(head);
+  // Claude's prose lead-in to the question (server-rendered md_html, escape-
+  // first like op HTML) — the "why", which the terse dialog omits; shown
+  // above the questions so the context rides ON the card, not just as a
+  // detached stream bubble (docs/dashboard.md, *Web ask*). Empty when Claude
+  // asked with no framing text.
+  if (ask.preamble_html) {
+    const pre = el("div", "askpreamble md");
+    pre.innerHTML = ask.preamble_html;
+    card.append(pre);
+  }
   const sub = el("button", "asksubmit",
                  qs.length > 1 ? "submit answers" : "submit answer");
   const syncSubmit = () => {

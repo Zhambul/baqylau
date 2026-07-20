@@ -1365,6 +1365,31 @@ the TUI's one-key select but wrong for the web: a misclick would fire the
 answer with no chance to reconsider, so the card favors
 review-before-send (selections stay editable until submitted).
 
+**Claude's context rides on the card.** The AskUserQuestion dialog carries
+only the terse question + options, but Claude almost always writes a prose
+LEAD-IN first — the "why" framing the choice ("I've traced this all the
+way down; there are two separate problems…"). That text is a normal
+assistant `message`, so it already shows as a `claude` bubble in the merged
+stream — but detached from the card you actually answer from, and easy to
+miss. So the ask card now renders it above the questions:
+`transcript.ask_preamble(path, tool_use_id)` returns the text block(s) in
+the SAME assistant message before the AskUserQuestion tool_use, or (the
+common shape, where the tool call stands alone in its own message) the
+trailing text of the most recent earlier assistant message in the SAME turn
+(a real user prompt resets the turn) — i.e. exactly the last `message` the
+stream shows before the question, so card and stream can't disagree (both
+walk `parse_line`'s blocks with the same non-empty-text rule). It reaches
+the page via `plugins.ask_preamble(sid, tool_use_id)` (the registry fan-out,
+same sid resolution as `conversation`), rendered by the server to
+`preamble_html` (the msg-bubble `md_html`, escape-first) and enriched onto
+the ask payload in `_ask_wire` — kept OUT of `_ask_pending`, which is the
+per-tick SSE change-detection poll and must stay a cheap kv read, so the
+transcript is touched only when the ask actually changes / on session open.
+A pure read-model addition over the already-audited transcript (no new hook,
+stream, or state), the same shape as the `question`/`answer` bubbles below.
+`""` when Claude asked with no framing text (the card just omits the block);
+a failed read degrades to `""` too — it never blocks the question rendering.
+
 **Detection** is a hook stash, because the dialog is otherwise just
 pixels: `plugins/claude_code/ask_fmt.py` (routed by the dispatcher on
 PreToolUse/PostToolUse(+Failure) matcher `AskUserQuestion`, plus

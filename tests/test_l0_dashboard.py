@@ -775,6 +775,36 @@ def test_ask_draft_tolerates_non_dict_answers(dash, monkeypatch):
     assert S.kv_get(log, "ask-draft")["answers"] == [{"selected": [], "other": ""}]
 
 
+def test_ask_payload_carries_preamble_html(dash, monkeypatch, tmp_path):
+    """The ask card shows Claude's prose LEAD-IN to the question (docs/
+    dashboard.md, *Web ask*): the ask payload gains `preamble_html` — the
+    preceding assistant message, rendered with the msg-bubble md_html (bold
+    survives, html-escaped). Empty when the ask has no framing text."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    tr = tmp_path / "pre.jsonl"
+    tr.write_text("".join(json.dumps(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "Two **separate** problems here."}]}},
+        {"type": "assistant", "message": {"id": "m2", "content": [
+            {"type": "tool_use", "id": "tuX", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"question": "Which?", "options": [{"label": "A"}]}]}}]}},
+    ]), encoding="utf-8")
+    A.session_start({"session_id": "pre1", "cwd": "/w",
+                     "transcript_path": str(tr)})
+    log = P.mirror_log("pre1")
+    qs = [{"question": "Which?", "options": [{"label": "A"}]}]
+    S.kv_set(log, "ask-pending", {"tool_use_id": "tuX", "questions": qs})
+    ask = _get_json(dash + "/api/session/pre1")["ask"]
+    assert ask["tool_use_id"] == "tuX"
+    assert "<strong>separate</strong>" in ask["preamble_html"]
+    assert "Two" in ask["preamble_html"]
+    # a question whose tool_use_id has no framing text -> empty, never absent
+    S.kv_set(log, "ask-pending", {"tool_use_id": "gone", "questions": qs})
+    ask2 = _get_json(dash + "/api/session/pre1")["ask"]
+    assert ask2["preamble_html"] == ""
+
+
 def test_composer_draft_persist_payload_and_sse(dash, monkeypatch):
     """The web composer's UNSENT message survives a device switch / reopen /
     return-to-session (docs/dashboard.md, *Web composer draft*): POST

@@ -565,6 +565,68 @@ def conversation_for(sid, pos=0):
     return conversation(path, pos)
 
 
+def ask_preamble(path, tool_use_id):
+    """The assistant prose LEAD-IN to the AskUserQuestion whose tool_use id is
+    `tool_use_id` — the text Claude wrote to frame the question, which the web
+    ask card shows above the options (docs/dashboard.md, *Web ask*). The
+    question dialog itself carries only the terse question + options, so the
+    "why" Claude gave lived only as a `message` bubble in the stream, detached
+    from the card the user answers from.
+
+    It is the text block(s) in the SAME assistant message before that tool_use
+    (joined), or — when the ask stands alone in its own message (the common
+    shape, since a tool call and its framing text are usually separate
+    messages) — the trailing text of the most recent EARLIER assistant message
+    in the same turn (a real user prompt resets the turn). This is exactly the
+    last `message` record conversation() emits before the question, so the
+    card and the stream can't disagree — both walk parse_line's blocks with the
+    same non-empty-text rule. Returns the stripped markdown, or "" (id absent /
+    no prose / unreadable)."""
+    if not tool_use_id:
+        return ""
+    try:
+        with open(path, encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except OSError:
+        return ""
+    lead = ""                                  # last assistant text this turn
+    for s in lines:
+        s = s.strip()
+        if not s:
+            continue
+        rec = parse_line(s)
+        if rec is None:
+            continue
+        kind = rec["kind"]
+        if kind == "prompt":
+            lead = ""                          # a new turn — forget the lead-in
+        elif kind == "assistant":
+            here = [b.strip() for k, b in rec["blocks"]
+                    if k == "text" and b.strip()]
+            for bkind, blk in rec["blocks"]:
+                if (bkind == "tool" and blk.get("name") == "AskUserQuestion"
+                        and blk.get("id") == tool_use_id):
+                    # same-message framing wins; else the previous message's
+                    return "\n\n".join(here).strip() or lead
+            if here:
+                lead = "\n\n".join(here).strip()
+    return ""
+
+
+def ask_preamble_for(sid, tool_use_id):
+    """The ask-preamble provider behind plugins.ask_preamble(): resolve the
+    session's MAIN transcript and read the lead-in for `tool_use_id`. None when
+    this plugin has no transcript for the sid (the fan-out asks the next
+    plugin), else the preamble string (possibly "") — same sid resolution and
+    deferred-import shape as conversation_for()."""
+    from core import sessionapi as API
+    row = API.session_row(sid)
+    path = (row or {}).get("transcript_path") or ""
+    if not path or not os.path.isfile(path):
+        return None
+    return ask_preamble(path, tool_use_id)
+
+
 # --- the drill-down timeline (full fidelity — deliberately UNCAPPED) ---------------
 
 def _fold_record(rec, entries, pend, acc, on_unresolved, ACC):

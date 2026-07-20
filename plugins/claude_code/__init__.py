@@ -74,6 +74,14 @@ def conversation(sid, pos=0):
     return transcript.conversation_for(sid, pos)
 
 
+def ask_preamble(sid, tool_use_id):
+    """The ask-preamble provider (plugins.ask_preamble fan-out) — Claude's
+    prose lead-in to a pending AskUserQuestion, for the web ask card. None when
+    this plugin has no transcript for the sid. See transcript.ask_preamble."""
+    from plugins.claude_code import transcript
+    return transcript.ask_preamble_for(sid, tool_use_id)
+
+
 def slash_commands(cwd):
     """The slash-command provider (plugins.slash_commands fan-out) — the CLI
     built-ins + the cwd's discovered .claude commands/skills, for the web

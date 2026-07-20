@@ -337,3 +337,18 @@ def conversation(sid, pos=0):
         if got is not None:
             return got
     return None
+
+
+def ask_preamble(sid, tool_use_id):
+    """Claude's prose lead-in to a pending AskUserQuestion (the text framing the
+    question, shown on the dashboard's ask card): the string from the first
+    plugin that recognizes the sid, None otherwise. "" when the plugin owns the
+    sid but found no prose. Same exception contract as conversation()."""
+    for p in all_plugins():
+        fn = getattr(p, "ask_preamble", None)
+        if fn is None:
+            continue
+        got = fn(sid, tool_use_id)
+        if got is not None:
+            return got
+    return None
