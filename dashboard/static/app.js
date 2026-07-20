@@ -951,7 +951,10 @@ function connectSession(sid) {
   });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
-    if (S.ses && S.ses.badge) setBadge(S.ses.badge, d.tab || "");
+    // while drilled into a subagent the badge/wash belong to that agent's
+    // status (setBadgeAgent) — a session tab event must not repaint them
+    // (same focus guard as updateRunning/updateStatsRow).
+    if (S.ses && S.ses.badge && !S.ses.agentFocus) setBadge(S.ses.badge, d.tab || "");
     if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
     if (S.ses && S.ses.cancelMode) S.ses.cancelMode(d.tab || "");
     if (S.ses && S.ses.stopMode) S.ses.stopMode(d.tab || "");
@@ -3364,12 +3367,27 @@ document.addEventListener("keydown", (e) => {
 });
 
 function setBadge(badge, tab) {
+  badge.removeAttribute("data-st");     // drop any focused-subagent status stamp
   badge.dataset.tab = tab;
   badge.replaceChildren(el("span", "st"),
                         document.createTextNode(TAB_LABEL[tab] || tab || "no tab"));
   // the whole session header (the web scoreboard) washes with the state hue
   const head = badge.closest(".shead");
-  if (head) head.dataset.tab = tab;
+  if (head) { head.removeAttribute("data-st"); head.dataset.tab = tab; }
+}
+
+/* The header badge + .shead wash for a drilled-into subagent. A subagent has no
+   tab of its own, so the pill text, its dot, and the header tint follow the
+   agent STATUS (data-st from agentStatus) instead of the session tab — the CSS
+   mirrors the agent cards. Symmetric with setBadge, which clears data-st (and
+   renderSessionChrome rebuilds the header outright) on the way back. */
+function setBadgeAgent(badge, sttxt, stcls) {
+  if (!badge) return;
+  badge.removeAttribute("data-tab");
+  badge.dataset.st = stcls;
+  badge.replaceChildren(el("span", "st"), document.createTextNode(sttxt));
+  const head = badge.closest(".shead");
+  if (head) { head.removeAttribute("data-tab"); head.dataset.st = stcls; }
 }
 
 function startRenameHeader() {
@@ -3815,6 +3833,9 @@ function renderAgentScoreboard(sr, focus) {
   const rec = (ses.agents || []).find(a => a.agent_id === focus.aid) || {};
   const d = focus.data || {};
   const [sttxt, stcls] = agentStatus(rec);
+  // the header badge/dot + .shead wash follow THIS agent's status, not the
+  // session tab (the session pill said "busy" over a finished subagent).
+  setBadgeAgent(ses.badge, sttxt, stcls);
   // the big header name updates to the subagent (the session title returns when
   // renderSessionChrome rebuilds on the way back). Skip during an inline rename.
   if (ses.projEl && !ses.projEl.querySelector("input"))
@@ -3954,7 +3975,16 @@ function updateAgents() {
   const ses = S.ses;
   if (!ses) return;
   // a focused subagent finishing (running → done) must drop the ■ stop button
-  if (ses.agentFocus) applyAgentActionVis();
+  // AND flip its scoreboard status/badge/wash (renderAgentScoreboard reads the
+  // fresh agents row) — an `agents` SSE doesn't move statsSig, so re-render here
+  // rather than via updateStatsRow's change-gate.
+  if (ses.agentFocus) {
+    applyAgentActionVis();
+    if (ses.statsRow) {
+      ses.statsRow.textContent = "";
+      renderAgentScoreboard(ses.statsRow, ses.agentFocus);
+    }
+  }
   const agents = sortedAgents(ses.agents || []);
   if (ses.tab === "mirror" && ses.rail && ses.rail.isConnected) {
     ses.rail.textContent = "";

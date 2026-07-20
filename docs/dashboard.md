@@ -2412,6 +2412,21 @@ and a leading **← session** link that restores the session view (it points at
 skipped mid-inline-rename). The running ribbon hides while focused (it's
 session-scoped).
 
+The header **state indicator follows the focused agent too**: the badge pill
+(its text and colored dot) and the whole `.shead` state wash switch from the
+session's tab state to THIS agent's status. `renderAgentScoreboard` calls
+`setBadgeAgent`, which stamps `data-st` (from `agentStatus`: running blue · done
+green · cancelled/crashed red · unknown amber) and clears `data-tab` on both the
+badge and the `.shead`, so the pill reads e.g. "done" over a finished subagent
+even while the main agent is still busy (the CSS is `.badge[data-st]`/
+`.shead[data-st]`, mirroring the agent cards). Without this the session pill said
+"busy" over a done subagent. The live `tab` SSE handler skips `setBadge` while
+`agentFocus` is set (the same focus guard as `updateRunning`/`updateStatsRow`) so
+a session tab event can't repaint the header back; a running→done flip while
+focused re-renders through `updateAgents` (an `agents` SSE, which doesn't move
+`statsSig`). `setBadge` clears `data-st` on the way back, and a full
+`renderSessionChrome` rebuilds the header outright.
+
 The header **action buttons** are pruned to what applies to a subagent
 (`applyAgentActionVis`): the session-only actions — rename, migrate, cancel,
 rewind, close, resume, and the compact/model/effort quick commands (all marked
@@ -2484,10 +2499,15 @@ asking red · your-turn green — same buckets as the badge dot); everything els
 derives via `color-mix()`, so the wash stays subtle on the near-black canvas.
 The attribute is stamped by `sessionCard()`/`renderSessionChrome()` and kept
 live by `setBadge()` (which re-stamps the enclosing `.shead` on every `tab`
-SSE event); the list cards re-stamp on each global-snapshot re-render. Agent
+SSE event — but is skipped while a subagent is focused, see below); the list
+cards re-stamp on each global-snapshot re-render. Agent
 cards key off agent STATUS instead (`data-st` from `agentStatus()`: running
 blue, done green, cancelled/crashed red, unknown amber) since a subagent has
-no tab of its own. The tint made the "live" chip redundant — it's gone from
+no tab of its own — and when you **drill into** one, the session header itself
+switches to that `data-st` (`setBadgeAgent` swaps `data-tab`→`data-st` on the
+badge and `.shead`, `.badge[data-st]`/`.shead[data-st]` rules), so the pill and
+wash track the focused agent's status rather than the session tab (*Subagent
+scoreboard swap*). The tint made the "live" chip redundant — it's gone from
 both the session cards and the header; only the inactive states still label
 themselves (`parked`/`gone`).
 

@@ -203,6 +203,13 @@ code, pre, .mono { font-family: var(--mono); }
 .acard[data-st="st-ok"] { --state: var(--done); }
 .acard[data-st="st-bad"] { --state: var(--red); }
 .acard[data-st="st-warn"] { --state: var(--amber); }
+/* drilled into a subagent: the header washes with the AGENT's status (data-st,
+   stamped by setBadgeAgent) — it has no tab of its own, same as the cards above.
+   class+attr (0,2,0) beats the [data-tab] mappings, so it wins while set. */
+.shead[data-st="st-run"] { --state: var(--exec); }
+.shead[data-st="st-ok"] { --state: var(--done); }
+.shead[data-st="st-bad"] { --state: var(--red); }
+.shead[data-st="st-warn"] { --state: var(--amber); }
 /* the tinted hairlines the washed surfaces share */
 .scard, .shead, .acard {
   --scard: inset 0 0 0 1px color-mix(in srgb, var(--state) 26%, var(--hair));
@@ -239,6 +246,12 @@ code, pre, .mono { font-family: var(--mono); }
   { background: var(--exec); animation: pulse 1.6s infinite; }
 .badge[data-tab="awaiting-command"] .st { background: var(--ask); animation: pulse .9s infinite; }
 .badge[data-tab="awaiting-response"] .st { background: var(--done); }
+/* focused-subagent badge dot follows agent STATUS (setBadgeAgent clears
+   data-tab first, so only these match while drilled in) */
+.badge[data-st="st-run"] .st { background: var(--exec); animation: pulse 1.6s infinite; }
+.badge[data-st="st-ok"] .st { background: var(--done); }
+.badge[data-st="st-bad"] .st { background: var(--red); }
+.badge[data-st="st-warn"] .st { background: var(--amber); }
 @keyframes pulse { 50% { opacity: .35; } }
 .corner { position: absolute; top: 13px; right: 13px; display: flex; gap: 6px; }
 .chip2 {
