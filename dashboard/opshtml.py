@@ -161,10 +161,19 @@ def ansi_html(s):
             if cc:
                 out.append("<a class=\"cc\" data-cc=\"%s\">"
                            % html.escape(cc.group(1).strip("/"), quote=True))
-            else:
+                link = url
+            elif url.startswith(("http://", "https://")):
+                # http(s) ONLY — the same scheme gate _md_inline applies. Op
+                # text is RAW command output and OSC 8 is one of the two
+                # survivors of neutralize(), so an attacker-printed
+                # `\x1b]8;;javascript:…` (or data:) would otherwise become a
+                # clickable href in the dashboard origin (XSS-on-click the
+                # terminal mirror can't have — a terminal has no href). Any
+                # other scheme opens NO anchor; the link's visible label still
+                # renders as plain escaped text via flush().
                 out.append("<a href=\"%s\" target=\"_blank\" rel=\"noopener\">"
                            % html.escape(url, quote=True))
-            link = url
+                link = url
     flush(s[pos:])
     if link is not None:
         out.append("</a>")
@@ -747,16 +756,24 @@ def tool_html(tool_name, inp):
     everything here — every leaf rides ansi_html or html.escape."""
     if not isinstance(inp, dict) or not inp:
         return None
-    if tool_name == "Bash":
-        return _bash_html(inp)
-    if tool_name in _EDIT_TOOLS:
-        return _edit_html(tool_name, inp)
-    if tool_name == "Write":
-        return _write_html(inp)
-    if tool_name == "Read":
-        return _read_html(inp)
-    if tool_name in _DEFLIST_TOOLS:
-        return _deflist_html(inp)
+    # A malformed input dict must degrade to None (the caller's escaped-JSON
+    # fallback), never raise out of the timeline enrichment: the sub-presenters
+    # reach into single-owner shape helpers (tools.diff_rows / read_extent,
+    # streamfmt.file_line) that can throw on an unexpected shape, and only some
+    # of them guard locally. Honour the docstring's contract uniformly here.
+    try:
+        if tool_name == "Bash":
+            return _bash_html(inp)
+        if tool_name in _EDIT_TOOLS:
+            return _edit_html(tool_name, inp)
+        if tool_name == "Write":
+            return _write_html(inp)
+        if tool_name == "Read":
+            return _read_html(inp)
+        if tool_name in _DEFLIST_TOOLS:
+            return _deflist_html(inp)
+    except Exception:
+        return None
     return None
 
 

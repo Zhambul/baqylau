@@ -139,11 +139,18 @@ def current_question(screen, questions):
     if REVIEW in reg:
         return None
     flat = "".join(reg.split())
+    # LONGEST match wins, not the first: only ONE question is on screen at a
+    # time, but if question i's stripped text is a substring of question j's
+    # (e.g. "Pickacolor" ⊂ "Pickacolorscheme"), then while j is showing, flat
+    # contains j's text — which contains i's — and a first-match scan would
+    # wrongly return i, so `drive`'s wait for j never resolves. The most
+    # specific (longest) matching question is the one actually displayed.
+    best, best_len = None, -1
     for i, q in enumerate(questions):
         text = "".join((q.get("question") or "").split())
-        if text and text in flat:
-            return i
-    return None
+        if text and text in flat and len(text) > best_len:
+            best, best_len = i, len(text)
+    return best
 
 
 def _wait(fe, win, pred, timeout, sleep):
@@ -309,11 +316,16 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
                            % (i + 1, (q.get("question") or "")[:60]))
         _answer_question(fe, win, q, ans, sleep)
     # a single single-select question submits outright; everything else lands
-    # on the review pane, where "Submit answers" is the cursored top row
+    # on the review pane, where "Submit answers" is the cursored top row. The
+    # review pane appears locally-fast, but the outright submit is the dialog
+    # going away because the tool ROUND-TRIPS — the same event the review-pane
+    # Submit below budgets SUBMIT_TIMEOUT_S for, so this dual-purpose wait needs
+    # that longer budget too (a single single-select whose round-trip took
+    # 2.5-4.0 s spuriously raised "neither review pane nor submit happened").
     screen, ok = _wait(fe, win,
                        lambda s: review_open(s)
                        or (not dialog_open(s) and not review_open(s)),
-                       STEP_TIMEOUT_S, sleep)
+                       SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise AskError("review", "neither review pane nor submit happened")
     if review_open(screen):

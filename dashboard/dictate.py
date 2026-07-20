@@ -50,7 +50,10 @@ def available():
     iff this is true — no key means the feature is invisible, never broken."""
     try:
         return bool(_read(key_file()))
-    except OSError:
+    except Exception:
+        # not just OSError: a non-UTF-8 key file raises UnicodeDecodeError
+        # (a ValueError) out of _read, and the contract is "never broken" —
+        # a malformed key file hides the mic button, it doesn't 500 the probe.
         return False
 
 

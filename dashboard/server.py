@@ -204,7 +204,8 @@ class Notifier:
     def __init__(self):
         self.clients = set()
         self.lock = threading.Lock()
-        self.prev = {}
+        self.prev = None               # None = not yet baselined; distinct from
+        #                                {} (a real empty screen — all tabs gone)
         self.winmap = {}
         self.pending = {}              # win -> dict(payload, armed_at, state)
 
@@ -255,11 +256,18 @@ class Notifier:
     def scan(self):
         cur = API.tab_states()
         prev, self.prev = self.prev, cur
+        if prev is None:
+            return                         # first scan is baseline only, no news
+        # NOT `not prev`: when the tab table momentarily empties (all sessions
+        # closed), self.prev became {}, and treating an empty prev as a fresh
+        # baseline would swallow the very next transition into red/green (its
+        # toast AND its Telegram arm). Only the true first scan (prev is None) is
+        # a baseline; an empty {} is a real state a transition diffs against.
         now = time.monotonic()
         for win, state in cur.items():
             kind = NOTIFY_STATES.get(state)
-            if not kind or prev.get(win) == state or not prev:
-                continue                   # first scan is baseline, not news
+            if not kind or prev.get(win) == state:
+                continue
             row = self.winmap.get(win)
             if not row:
                 continue
@@ -1087,7 +1095,11 @@ def _cut_blocks(entries, blocks):
 def _snap(entries, start):
     """Move `start` back to the beginning of its slot so a window contains only
     WHOLE slots (its first item is the slot's op, whose id is the cursor) — the
-    guarantee that windows never split a slot across the load boundary."""
+    guarantee that windows never split a slot across the load boundary. A
+    `start` at/after the end (an empty window) needs no snap and must not index
+    entries[start] — defence in depth against a bad cut index."""
+    if start >= len(entries):
+        return len(entries)
     while start > 0 and entries[start - 1][0] == entries[start][0]:
         start -= 1
     return start
@@ -1545,8 +1557,12 @@ class Handler(BaseHTTPRequestHandler):
             if rest == ["history"]:
                 row = API.session_row(sid)
                 key = P.sid_from_log(row["log"]) if row else sid
+                # clamp blocks POSITIVE: a negative ?blocks makes _cut_blocks
+                # return len(entries), and _snap then indexes entries[len] →
+                # IndexError → 500 (crafted-request crash).
                 oldest, items = history(sid, key, _qint(url, "before"),
-                                        _qint(url, "blocks") or HISTORY_BLOCKS)
+                                        max(1, _qint(url, "blocks")
+                                            or HISTORY_BLOCKS))
                 return self._json({"oldest": oldest, "items": items})
             if rest == ["backlog"]:
                 # The GET twin of the SSE fresh-connect backlog: same
@@ -2210,11 +2226,16 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "answers must match the %d question%s"
                                % (len(questions),
                                   "" if len(questions) == 1 else "s")}, 400)
-        clean = [{"selected": [str(s) for s in (a.get("selected") or [])
-                               if isinstance(a, dict)],
-                  "other": str((a.get("other") or "") if isinstance(a, dict)
-                               else "")}
-                 for a in answers]
+        # normalize each answer to a dict FIRST: `answers` is only validated for
+        # length above, so a non-dict element (adversarial/malformed body) must
+        # not reach `.get()`. The old inline `if isinstance(a, dict)` on the
+        # `selected` sub-comprehension was inert — the iterable `a.get(...)` was
+        # evaluated before that per-element filter, raising AttributeError → 500.
+        clean = []
+        for a in answers:
+            a = a if isinstance(a, dict) else {}
+            clean.append({"selected": [str(s) for s in (a.get("selected") or [])],
+                          "other": str(a.get("other") or "")})
         draft = {"tool_use_id": pending.get("tool_use_id") or "",
                  "answers": clean,
                  "origin": str(body.get("origin") or "")}
@@ -2303,9 +2324,12 @@ class Handler(BaseHTTPRequestHandler):
         items = body.get("items")
         if not isinstance(items, list):
             return self._json({"error": "items must be a list"}, 400)
+        # str() the filter side too, not just the value side: a non-string
+        # `text` (e.g. a number in a malformed body) makes `(it.get("text") or
+        # "").strip()` raise AttributeError → 500.
         clean = [{"text": str(it.get("text") or "")}
                  for it in items if isinstance(it, dict)
-                 and (it.get("text") or "").strip()]
+                 and str(it.get("text") or "").strip()]
         origin = str(body.get("origin") or "")
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)

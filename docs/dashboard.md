@@ -175,7 +175,12 @@ inline-styled `<span>`s (truecolor verbatim; 256/16-color mapped); a
 the terminal click handler uses — one owner of "what does ⧉cmd copy") and put
 the result on the clipboard; the `view` verb fetches the rendered
 `view:<gid>` stash from `/view/<gid>` and toggles it inline, the web twin of
-click-to-view. Any other URL becomes a plain `target=_blank` anchor.
+click-to-view. Any other `http(s)` URL becomes a plain `target=_blank` anchor;
+**any other scheme is dropped to the link's plain escaped label with no
+anchor** — the same `http(s)`-only gate `_md_inline` applies, because OSC 8 is
+one of neutralize()'s two survivors and raw output could otherwise print
+`\x1b]8;;javascript:…` (or `data:`) and mint a clickable href in the dashboard
+origin (an XSS-on-click the terminal, having no `href`, can't have).
 
 **Markdown for conversation text** (`opshtml.md_html`). Assistant messages,
 user prompts and teammate mail are markdown in practice, so the dashboard

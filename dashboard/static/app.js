@@ -162,6 +162,11 @@ function shortModel(m) {
   return parts[0] + (ver.length ? "-" + ver.join(".") : "");
 }
 function copySid(sid) {
+  // navigator.clipboard is undefined in a NON-secure context (a plain-http
+  // remote tunnel); calling .writeText on it throws synchronously. 127.0.0.1 is
+  // a secure context, so localhost is unaffected — this only guards the remote
+  // http case (docs/remote.md) from an uncaught TypeError.
+  if (!navigator.clipboard) return toast("ask", "copy failed", "needs https");
   navigator.clipboard.writeText(sid).then(
     () => toast("done", "copied session id", sid),
     () => toast("ask", "copy failed", "clipboard permission?"));
@@ -503,6 +508,10 @@ function leaveSession() {
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
   }
+  // a single-Esc arms a 450ms interrupt hold-timer that reads S.cur/S.ses at
+  // FIRE time; leaving within that window (e.g. ⌃⇧←/→ tab-cycle) would land the
+  // interrupt on whatever session is open next. Disarm it on navigation.
+  if (escHold) { clearTimeout(escHold); escHold = null; }
   S.ses = null;
   S.cur = null;
 }
@@ -881,10 +890,16 @@ function showSession(sid, tab) {
               loadingOlder: false, queue: [],
               filter: { kind: "all" } };          // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
-    fetch("/api/session/" + encodeURIComponent(sid))
+    // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
+    // snapshots never repair it (updateHeadFromList no-ops while meta is null),
+    // so a transient failure left the whole view stuck unusable (composer
+    // disabled, no title) until a reload. Retry while still on this session and
+    // still unpopulated; the guards make a late retry after a leave a harmless
+    // no-op.
+    const loadMeta = () => fetch("/api/session/" + encodeURIComponent(sid))
       .then(r => r.json())
       .then(d => {
-        if (S.cur !== sid) return;
+        if (S.cur !== sid || !S.ses) return;
         S.ses.meta = d;
         S.ses.stats = d.stats || {};
         S.ses.agents = d.agents || [];
@@ -892,7 +907,11 @@ function showSession(sid, tab) {
         S.ses.ctx = d.ctx || null;
         S.ses.running = d.running || {};
         renderSessionChrome(tab);
+      })
+      .catch(() => {
+        if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, 1500);
       });
+    loadMeta();
     // Initial stream content over a plain GET, NOT the SSE fresh-connect
     // backlog: _send gzips this HTML 8-9x, while SSE frames are never
     // compressed — on a remote/tunnel connection that difference IS the
@@ -919,6 +938,12 @@ function showSession(sid, tab) {
 
 function connectSession(sid) {
   if (!S.ses || S.cur !== sid) return;
+  // Never leak a prior EventSource. Two backlog fetches can race a leave/return
+  // to the SAME sid (on a slow/tunnel link the backlog is deliberately a plain
+  // GET), and each fires this from its .finally; the onerror reconnect re-enters
+  // too. Without closing first, the earlier ES is orphaned — never closed, still
+  // streaming, and its overlapping ops double-append into the feed.
+  if (S.ses.es) { try { S.ses.es.close(); } catch (e) { /* already closed */ } }
   const es = new EventSource("/events/session/" + encodeURIComponent(sid)
                              + "?after=" + S.ses.lastId + "&mpos=" + S.ses.mpos);
   S.ses.es = es;
@@ -938,10 +963,10 @@ function connectSession(sid) {
     S.ses.mpos = d.mpos;
     appendItems(d.items);
   });
-  es.addEventListener("stats", (e) => { S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
-  es.addEventListener("agents", (e) => { S.ses.agents = JSON.parse(e.data); updateAgents(); });
-  es.addEventListener("costs", (e) => { S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
-  es.addEventListener("ctx", (e) => { S.ses.ctx = JSON.parse(e.data).ctx; updateStatsRow(); });
+  es.addEventListener("stats", (e) => { if (!S.ses) return; S.ses.stats = JSON.parse(e.data); updateStatsRow(); });
+  es.addEventListener("agents", (e) => { if (!S.ses) return; S.ses.agents = JSON.parse(e.data); updateAgents(); });
+  es.addEventListener("costs", (e) => { if (!S.ses) return; S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
+  es.addEventListener("ctx", (e) => { if (!S.ses) return; S.ses.ctx = JSON.parse(e.data).ctx; updateStatsRow(); });
   es.addEventListener("git", (e) => {
     const g = JSON.parse(e.data).git || null;
     if (!S.ses) return;
@@ -963,7 +988,7 @@ function connectSession(sid) {
       if (S.ses.effortBtn) setEffortBtn(S.ses.effortBtn);
     }
   });
-  es.addEventListener("running", (e) => { S.ses.running = JSON.parse(e.data); updateRunning(); });
+  es.addEventListener("running", (e) => { if (!S.ses) return; S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("monitors", (e) => { updateMonCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("jobs", (e) => { updateJobCount(JSON.parse(e.data).count | 0); });
@@ -4835,11 +4860,15 @@ document.addEventListener("click", (e) => {
     .then(r => r.text())
     .then(text => {
       if (!text.trim()) return toast("", "nothing to copy", "");
+      // clipboard is undefined over a plain-http tunnel (non-secure context);
+      // guard it so the ⧉ copy doesn't reject unhandled there.
+      if (!navigator.clipboard) return toast("ask", "copy failed", "needs https");
       navigator.clipboard.writeText(text).then(
         () => toast("done", "copied " + (what === "cmd" ? "command" : what === "out" ? "output" : "block"),
                     text.length + " chars"),
         () => toast("ask", "copy failed", "clipboard permission?"));
-    });
+    })
+    .catch(() => toast("ask", "copy failed", "try again"));
 });
 
 function toggleView(anchor, key, gid) {

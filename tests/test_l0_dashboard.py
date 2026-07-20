@@ -57,6 +57,21 @@ def test_ansi_html_osc8_links():
     assert '<a href="https://x.test/a" target="_blank" rel="noopener">link</a>' in h2
 
 
+def test_ansi_html_osc8_unsafe_scheme_is_plain_text():
+    # OSC 8 is one of the two survivors of neutralize() and op text is RAW
+    # command output, so a printed `\x1b]8;;javascript:…` (or data:) must NOT
+    # become a clickable href in the dashboard origin (XSS-on-click). Only
+    # http(s) opens an anchor — the same gate _md_inline applies; any other
+    # scheme drops to the link's plain escaped label with no <a>.
+    for scheme in ("javascript:alert(1)", "data:text/html,<script>x</script>",
+                   "vbscript:msgbox", "file:///etc/passwd"):
+        seq = "\x1b]8;;%s\x1b\\click\x1b]8;;\x1b\\" % scheme
+        h = opshtml.ansi_html(seq)
+        assert "<a " not in h and "href" not in h
+        assert "click" in h                       # the label still renders
+        assert "javascript:" not in h and "<script>" not in h
+
+
 def test_label_copy_links_default_and_custom():
     d = opshtml.op_html({"t": "label", "s": "hdr", "c": [1, 2, 3], "g": "gid"}, "key")
     assert 'data-cc="key/gid/cmd">⧉cmd</a>' in d
@@ -333,6 +348,17 @@ def test_tool_html_unknown_tool_and_empty_fall_back():
     assert opshtml.tool_html("MysteryTool", {"x": 1}) is None
     assert opshtml.tool_html("Bash", {}) is None
     assert opshtml.tool_html("Bash", "notadict") is None
+
+
+def test_tool_html_presenter_error_degrades_to_none(monkeypatch):
+    # The docstring promises None on a bad shape so the caller keeps its
+    # escaped-JSON fallback — a sub-presenter that RAISES (its single-owner
+    # shape helpers can, on an unexpected input) must degrade to None too, not
+    # propagate out of the timeline enrichment.
+    def boom(*a, **k):
+        raise ValueError("bad shape")
+    monkeypatch.setattr(opshtml, "_read_html", boom)
+    assert opshtml.tool_html("Read", {"file_path": "x.py"}) is None
 
 
 def test_tool_output_html_only_bash():
@@ -734,6 +760,21 @@ def test_ask_draft_persist_payload_and_sse(dash, monkeypatch):
     assert S.kv_get(log, "ask-draft")["answers"][0]["selected"] == ["Banana"]
 
 
+def test_ask_draft_tolerates_non_dict_answers(dash, monkeypatch):
+    # answers is only LENGTH-validated; a non-dict element (malformed body) must
+    # not reach `.get()` and raise AttributeError -> 500. It normalizes to an
+    # empty selection (the old inline isinstance guard on `selected` was inert).
+    A.session_start({"session_id": "adr3", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("adr3")
+    qs = [{"question": "Which fruit?", "options": [{"label": "Apple"}],
+           "multiSelect": False}]
+    S.kv_set(log, "ask-pending", {"tool_use_id": "tu1", "questions": qs})
+    code, resp = _post(dash + "/api/session/adr3/ask-draft",
+                       {"tool_use_id": "tu1", "origin": "d", "answers": ["oops"]})
+    assert code == 200 and json.loads(resp)["ok"]
+    assert S.kv_get(log, "ask-draft")["answers"] == [{"selected": [], "other": ""}]
+
+
 def test_composer_draft_persist_payload_and_sse(dash, monkeypatch):
     """The web composer's UNSENT message survives a device switch / reopen /
     return-to-session (docs/dashboard.md, *Web composer draft*): POST
@@ -818,6 +859,21 @@ def test_composer_queue_persist_payload_and_sse(dash, monkeypatch):
     assert _get_json(dash + "/api/session/cq1")["composer_queue"] is None
 
 
+def test_composer_queue_tolerates_non_string_text(dash, monkeypatch):
+    # a non-string `text` (malformed body) must not raise AttributeError on
+    # .strip() -> 500; both the filter and the value str() it. A number stays a
+    # chip (its str), a falsy 0 drops out.
+    A.session_start({"session_id": "cq2", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cq2")
+    O.emit(log, O.label("hi", (1, 2, 3)))     # materialize the state DB
+    code, resp = _post(dash + "/api/session/cq2/composer-queue",
+                       {"items": [{"text": 5}, {"text": "real"}, {"text": 0},
+                                  "notadict"], "origin": "d"})
+    assert code == 200 and json.loads(resp)["ok"]
+    q = S.kv_get(log, "composer-queue")
+    assert [it["text"] for it in q["items"]] == ["5", "real"]
+
+
 def test_ns_prefs_roundtrip(dash):
     """The new-session form's last-used {cwd, model, effort} live on the backend
     now (docs/dashboard.md, *New-session prefs*) so a launch on one device
@@ -870,6 +926,27 @@ def test_hide_dir_prefs_roundtrip_and_validation(dash):
             _post(dash + "/api/dirs/hide", {"cwd": bad} if bad is not None else {})
         assert e.value.code == 400
     assert set(_get_json(dash + "/api/dirs/hidden")) == {"/w/proj", ""}
+
+
+def test_prefs_mutate_map_accumulates_atomically(monkeypatch, tmp_path):
+    # mutate_map is a single-transaction read-modify-write: successive mutations
+    # ACCUMULATE (no lost update), and it degrades to the intended map even when
+    # the store can't open. Both hide_dir and set_notify_muted ride it.
+    from dashboard import prefs
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    assert prefs.hide_dir("/a", 1.0) == {"/a": 1.0}
+    assert prefs.hide_dir("/b", 2.0) == {"/a": 1.0, "/b": 2.0}   # /a not lost
+    assert prefs.hidden_dirs() == {"/a": 1.0, "/b": 2.0}
+    assert prefs.set_notify_muted("s1", True) == {"s1": True}
+    assert prefs.set_notify_muted("s2", True) == {"s1": True, "s2": True}
+    assert prefs.set_notify_muted("s1", False) == {"s2": True}   # un-mute deletes
+    assert prefs.notify_muted("s2") is True and prefs.notify_muted("s1") is False
+    # degraded (unopenable store — dirname is a FILE): still returns the
+    # intended map, never raises
+    afile = tmp_path / "afile"
+    afile.write_text("x")
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(afile / "no.db"))
+    assert prefs.mutate_map("k", lambda d: d.__setitem__("x", 1)) == {"x": 1}
 
 
 def test_hide_dir_behind_post_guard(dash, monkeypatch):
@@ -1619,6 +1696,14 @@ def test_http_history_endpoint(dash):
         == {"oldest": 0, "items": []}
 
 
+def test_http_history_negative_blocks_does_not_crash(dash):
+    # a negative ?blocks made _cut_blocks return len(entries) and _snap index
+    # entries[len] → IndexError → 500. Now clamped positive: a clean 200.
+    ids = _blocks("hnb1", 4)
+    d = _get_json(dash + "/api/session/hnb1/history?before=%d&blocks=-1" % ids[3])
+    assert isinstance(d["items"], list)       # 200, not a 500 IndexError
+
+
 # ------------------------------------------------------- notification watcher
 
 def test_notifier_transitions(monkeypatch):
@@ -1643,6 +1728,28 @@ def test_notifier_transitions(monkeypatch):
         [("notify", "asking"), ("notify", "done")]
     assert got[0][1]["sid"] == "s7" and got[0][1]["project"] == "proj"
     assert got[0][1]["title"] == "fix the flaky test"
+    n.unregister(q)
+
+
+def test_notifier_refires_after_empty_tab_table(monkeypatch):
+    # When the tab table momentarily EMPTIES (all sessions closed), self.prev
+    # becomes {}. Treating an empty prev as a fresh baseline (the old `not prev`)
+    # swallowed the very next transition into red/green. Only the true first
+    # scan (prev is None) is a baseline; an empty {} is a real state.
+    n = DS.Notifier()
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w/proj",
+                      "transcript_path": "/w/t.jsonl"}}
+    monkeypatch.setattr(DS, "session_title", lambda p: "t" if p else "")
+    q = n.register()
+    seq = [{"7": "working"}, {}, {"7": "awaiting-command"}]
+    monkeypatch.setattr(DS.API, "tab_states", lambda: seq.pop(0))
+    n.scan()                                  # baseline (prev is None)
+    n.scan()                                  # table empties -> prev == {}
+    n.scan()                                  # -> asking: MUST still fire
+    got = []
+    while not q.empty():
+        got.append(q.get_nowait())
+    assert [(ev, p["kind"]) for ev, p in got] == [("notify", "asking")]
     n.unregister(q)
 
 
@@ -2120,6 +2227,22 @@ def test_confirm_find_menu_shape_not_prose():
     assert cd.find_menu("some output\n❯ \n") is None          # bare prompt
     assert cd.find_menu("1. Yes, option A\n2. No, option B\n") is None  # no ❯
     assert cd.find_menu(" ❯ 1. Restore code\n   2. No, go back\n") is None
+
+
+def test_ask_current_question_longest_match():
+    # only ONE question shows at a time, but if question i's stripped text is a
+    # substring of question j's, a FIRST-match scan returns i while j is on
+    # screen and drive()'s wait for j never resolves. The most specific
+    # (longest) matching question is the one displayed.
+    from dashboard import askdialog as ad
+    qs = [{"question": "Pick a color"}, {"question": "Pick a color scheme"}]
+    # ☐ anchors the region; "Enter to select" is the pane footer
+    showing_j = "☐ chips\nPick a color scheme\n1. dark\nEnter to select"
+    assert ad.current_question(showing_j, qs) == 1
+    showing_i = "☐ chips\nPick a color\n1. red\nEnter to select"
+    assert ad.current_question(showing_i, qs) == 0
+    # the review pane repeats every question's text — still None
+    assert ad.current_question("☐ x\nReview your answers\nPick a color", qs) is None
 
 
 def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
@@ -4346,6 +4469,22 @@ def test_dictate_keyterms_cap_prefers_nearest(tmp_path, monkeypatch):
     terms = dictate.keyterms(str(proj))
     assert len(terms) == dictate.KEYTERMS_MAX
     assert "evicted-global" not in terms      # the FARTHEST layer falls off
+
+
+def test_dictate_available_degrades_on_bad_key_file(tmp_path, monkeypatch):
+    from dashboard import dictate
+    # a non-UTF-8 key file raises UnicodeDecodeError (a ValueError) out of
+    # _read — available() must degrade to False (feature invisible), never let
+    # it escape the probe. A missing file is False; a good file is True.
+    keyf = tmp_path / "key"
+    keyf.write_bytes(b"\xff\xfe\x00bad")
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(keyf))
+    assert dictate.available() is False
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "nope"))
+    assert dictate.available() is False
+    keyf.write_text("dg-key-123")
+    monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(keyf))
+    assert dictate.available() is True
 
 
 def test_post_dictate_token_cwd_keys_project_vocab(dash, tmp_path, monkeypatch):

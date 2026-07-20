@@ -68,6 +68,43 @@ def set(key, obj):
         conn.close()
 
 
+def mutate_map(key, fn):
+    """Atomically read-modify-write the DICT stored under `key`: load it (or a
+    fresh {}), apply `fn(d)` in place, and persist — all inside ONE
+    BEGIN IMMEDIATE transaction. The get()+set() pattern its callers used spans
+    TWO short-lived connections, so two concurrent control-plane POSTs (each its
+    own request thread + connection) could both read the old map and the second
+    write clobber the first — one entry silently lost. BEGIN IMMEDIATE takes the
+    write lock up front, so a racing mutate blocks (WAL + timeout=5.0) and reads
+    the committed map. Returns the updated map (best-effort like set(): the
+    intended map even if the write degraded — `fn` is called once either way)."""
+    try:
+        conn = _connect()
+    except Exception:
+        conn = None
+    if conn is not None:
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            row = conn.execute("SELECT val FROM kv WHERE key=?", (key,)).fetchone()
+            d = json.loads(row[0]) if row else {}
+            if not isinstance(d, dict):
+                d = {}
+            fn(d)
+            conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                         (key, json.dumps(d, ensure_ascii=False)))
+            conn.commit()
+            return d
+        except Exception:
+            pass
+        finally:
+            conn.close()
+    d = get(key, {})                       # degraded: reflect intent anyway
+    d = d if isinstance(d, dict) else {}
+    fn(d)
+    return d
+
+
 # --- hidden directories (the list page's ✕) ------------------------------------
 # The set of project directories the user hid from the crowded list page
 # (docs/dashboard.md, *Hidden directories*), stored under one kv key as
@@ -87,12 +124,9 @@ def hidden_dirs():
 def hide_dir(key, ts):
     """Stamp `key` hidden at epoch `ts` and persist; returns the updated map.
     A re-hide (a re-appeared group hidden again) just overwrites with the newer
-    time, which is what re-hides it. Best-effort like set() — the returned map
-    reflects the intended state even if the write degraded."""
-    d = hidden_dirs()
-    d[str(key)] = float(ts)
-    set(HIDDEN_KEY, d)
-    return d
+    time, which is what re-hides it. Atomic read-modify-write (mutate_map) so a
+    second concurrent hide can't lose this stamp; best-effort like set()."""
+    return mutate_map(HIDDEN_KEY, lambda d: d.__setitem__(str(key), float(ts)))
 
 
 # --- notification mute (the session header's 🔕 opt-out) ------------------------
@@ -113,14 +147,11 @@ def notify_muted(sid):
 
 def set_notify_muted(sid, muted):
     """Mute (or un-mute) the Telegram alert for `sid`; returns the updated map.
-    Best-effort like set() — the returned map reflects the intended state even
-    if the write degraded."""
-    d = get(NOTIFY_MUTE_KEY, {})
-    if not isinstance(d, dict):
-        d = {}
-    if muted:
-        d[str(sid)] = True
-    else:
-        d.pop(str(sid), None)
-    set(NOTIFY_MUTE_KEY, d)
-    return d
+    Atomic read-modify-write (mutate_map) so two concurrent mute toggles can't
+    lose each other's change; best-effort like set()."""
+    def _apply(d):
+        if muted:
+            d[str(sid)] = True
+        else:
+            d.pop(str(sid), None)
+    return mutate_map(NOTIFY_MUTE_KEY, _apply)
