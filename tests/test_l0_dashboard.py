@@ -2341,6 +2341,12 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     # a session whose state DB lingers but whose tab is gone must NOT show live
     monkeypatch.setenv("KITTY_WINDOW_ID", "11")
     A.session_start({"session_id": "ghost", "cwd": "/w", "transcript_path": ""})
+    # backdate past the just-started grace (_within_live_grace) so the missing-
+    # window demotion applies — this test is the LEAKED/CRASHED lingering
+    # session, not a brand-new launch (that case is covered separately below)
+    A._connect().execute("UPDATE sessions SET started_at=? WHERE session_id=?",
+                         (time.time() - 3600, "ghost"))
+    A._connect().commit()
     log = P.mirror_log("ghost")
     O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
     # window enumeration returns a map WITHOUT this sid → tab is closed
@@ -2355,6 +2361,34 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     assert row["live"] is True
     ov = _get_json(dash + "/api/session/ghost")
     assert ov["live"] is True and ov["kitty_window_id"] == "11"
+
+
+def test_fresh_session_within_grace_stays_live(dash, monkeypatch):
+    # a JUST-started session whose pane isn't tagged claude_session=<sid> yet
+    # (the startup tag-race: A.session_start writes the sessions row before
+    # split.tag_window runs, and _live_windows is memoized on top) must NOT be
+    # demoted to not-live during _LIVE_GRACE_S — else the card flashes "parked"
+    # and the detail header (meta fetched once) froze on it, uncloseable.
+    monkeypatch.setenv("KITTY_WINDOW_ID", "12")
+    A.session_start({"session_id": "fresh", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("fresh")
+    O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
+    # window map WITHOUT this sid — the pane hasn't been tagged yet — but the
+    # session started just now, so the grace keeps it live and controllable
+    monkeypatch.setattr(DS, "_live_windows", lambda: {"other": "99"})
+    row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "fresh")
+    assert row["live"] is True                 # inside the grace — not demoted
+    ov = _get_json(dash + "/api/session/fresh")
+    # live (no parked flash), but the control plane's window resolves from the
+    # live tag map — still "" until the pane is actually tagged (kitty_window_id
+    # fills in the moment tag_window lands; the client re-renders on that flip)
+    assert ov["live"] is True and ov["kitty_window_id"] == ""
+    # once the grace has elapsed, the same missing-window state DOES demote
+    A._connect().execute("UPDATE sessions SET started_at=? WHERE session_id=?",
+                         (time.time() - 3600, "fresh"))
+    A._connect().commit()
+    row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "fresh")
+    assert row["live"] is False                # past the grace — demoted
 
 
 def test_post_interrupt_sends_escape(dash, monkeypatch):

@@ -795,6 +795,26 @@ to not-live (and its control plane disabled). When no frontend resolves (map is
 can't verify. This is also why the control-plane writes below resolve the
 **live** window rather than the stored id.
 
+**Startup grace (why a brand-new session must NOT be demoted).** The demotion
+above has a race at the START of a session: the audit `sessions` row (carrying
+`kitty_window_id`) is written a beat BEFORE the pane is tagged
+`claude_session=<sid>` (`split.cmd_open` runs `A.session_start`, then
+`tag_window`), and `_live_windows` is memoized up to `_LIVE_TTL` (5s) on top —
+so for a few seconds a fresh launch has a window id but isn't in the tagged-window
+map, and the naive demotion flips it to not-live: the card flashes **parked** and
+the session-detail header (whose `meta` is fetched ONCE at open — the launch jump
+navigates straight into it) *froze* on that reading, leaving the parked chip stuck
+on and every live-gated action (stop/cancel/rewind/close/quick-commands) missing —
+so the just-launched session couldn't even be closed. Two fixes, both needed:
+`_within_live_grace` EXEMPTS a session from the missing-window demotion for
+`_LIVE_GRACE_S` (10s) after its `started_at` (covers boot + the memo TTL; a
+session that dies within its first 10s only shows live until the next tick past
+the grace), and the client's `updateHeadFromList` now re-syncs `meta.live` /
+`meta.kitty_window_id` from the authoritative global `sessions` snapshot and
+re-renders the header chrome on a real live↔parked flip (skipping a subagent
+drill-down and an in-progress rename) — so any later flip (kill, crash, resume)
+also stops freezing the header.
+
 `POST /api/session/<sid>/stop` closes the session's whole kitty TAB
 (`Frontend.close_tab` → `kitten @ close-tab --match window_id:<win>` — the
 main window, mirror pane, and scorebar go together). **The target window is

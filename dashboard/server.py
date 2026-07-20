@@ -470,9 +470,12 @@ def sessions_payload():
             sdb = P.parked_db(row["log"])
         # demote a state-DB-live session whose window is gone. Only when we can
         # actually enumerate windows (live_wins is not None) and the session
-        # ever HAD a window (a headless/daemon session legitimately has none).
+        # ever HAD a window (a headless/daemon session legitimately has none) —
+        # and NOT within the just-started grace (a fresh launch's pane isn't
+        # tagged yet; _within_live_grace).
         if (row.get("live") and live_wins is not None
-                and row.get("kitty_window_id") and row["sid"] not in live_wins):
+                and row.get("kitty_window_id") and row["sid"] not in live_wins
+                and not _within_live_grace(row)):
             row["live"] = False
         st = _db_cached(_STATS, sdb, API.stats_at)
         row["stats"] = st
@@ -651,7 +654,8 @@ def session_payload(sid):
     live_wins = _live_windows()
     row = API.session_row(sid) or {}
     if (data.get("live") and live_wins is not None
-            and row.get("kitty_window_id") and sid not in live_wins):
+            and row.get("kitty_window_id") and sid not in live_wins
+            and not _within_live_grace(row)):
         data["live"] = False
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
     data["ask"] = _ask_pending(sid) if data.get("live") else None
@@ -1062,6 +1066,31 @@ _LIVE_TTL = 5.0   # every consumer of the map is READ-side (the live→parked
 #                   That buys dropping the ~21ms `kitten @ ls` SUBPROCESS from
 #                   ~1.25/s (the old 0.8, chosen to bound it under the 1s
 #                   tick) to 0.2/s while any client keeps the payloads warm.
+
+
+_LIVE_GRACE_S = 10.0   # a just-started session is EXEMPT from the missing-window
+#                        demotion for this long. Its audit `sessions` row (with
+#                        kitty_window_id) is written a beat BEFORE its pane is
+#                        tagged claude_session=<sid> (split.cmd_open runs
+#                        A.session_start then tag_window), and _live_windows is
+#                        memoized up to _LIVE_TTL on top — so a fresh launch would
+#                        momentarily miss the tagged-window map and get demoted to
+#                        not-live, flashing "parked" on a brand-new session (and
+#                        the detail header, whose meta is fetched once, froze on
+#                        it — app.js updateHeadFromList now self-heals, but the
+#                        flash itself is the "starts parked" half of the report).
+#                        Comfortably covers boot + the memo TTL; the only cost is
+#                        a session that dies within its first 10s showing live
+#                        briefly, which the next tick past the grace corrects.
+
+
+def _within_live_grace(row):
+    """True while `row`'s session is inside the just-started grace (see
+    _LIVE_GRACE_S) — used to SUPPRESS the missing-window demotion. A parked
+    minimal row carries no started_at (None → False), but those never reach the
+    demotion anyway (their base `live` is already False)."""
+    st = row.get("started_at") or 0
+    return bool(st) and (time.time() - st) < _LIVE_GRACE_S
 
 
 def _live_windows():

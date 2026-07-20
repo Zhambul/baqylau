@@ -817,7 +817,34 @@ function ctxBar(cx, big) {
 
 function updateHeadFromList() {
   const row = S.sessions.find(r => r.sid === S.cur);
-  if (row && S.ses && S.ses.badge) setBadge(S.ses.badge, row.tab || "");
+  if (!row || !S.ses) return;
+  if (S.ses.badge) setBadge(S.ses.badge, row.tab || "");
+  // Keep the header's live/window state honest against the authoritative global
+  // snapshot. `meta` is fetched ONCE at session-open, so a session opened during
+  // its startup tag-race — the launch jumps straight to the new sid, but its
+  // kitty pane isn't tagged claude_session=<sid> yet, so the server momentarily
+  // reports it not-live (or live-but-window-not-yet-resolved during the grace) —
+  // would otherwise FREEZE on that reading: the parked chip stuck on and every
+  // live-gated action (stop/cancel/rewind/close/quick-commands) missing, so the
+  // user can't even close the session (the reported bug). A later live↔parked
+  // flip (kill, crash, resume) has the same staleness. Re-render the chrome ONLY
+  // on a real change — not every per-tick tab change (that reflows the header
+  // each second) — and not while drilled into a subagent (renderSessionChrome
+  // clears agentFocus; the ← session rebuild picks it up on the way back) or mid
+  // inline-rename. The window compare is gated on row.live: meta's
+  // kitty_window_id is the live-RESOLVED id (blank until the pane is tagged)
+  // while the list row's is the RAW audit id, so an unconditional compare would
+  // spuriously rebuild a parked session's header (blank vs a stale raw id).
+  const m = S.ses.meta;
+  const winMoved = row.live
+    && (m && m.kitty_window_id || "") !== (row.kitty_window_id || "");
+  if (m && (!!m.live !== !!row.live || winMoved)) {
+    m.live = row.live;
+    m.kitty_window_id = row.kitty_window_id;
+    m.parked = row.parked;
+    const renaming = S.ses.projEl && S.ses.projEl.querySelector("input");
+    if (!S.ses.agentFocus && !renaming) renderSessionChrome(S.ses.tab);
+  }
 }
 
 /* ---------- session view ---------- */
