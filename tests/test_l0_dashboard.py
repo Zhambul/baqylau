@@ -3735,7 +3735,9 @@ def test_post_migrate_spawns_the_manual_migrator(dash, monkeypatch, tmp_path):
     assert code == 200 and json.loads(body) == {"ok": True, "to": "c2"}
     path, argv, kw = spawned[0]
     assert path.endswith("claude-relimit.py")
-    assert argv[1:] == ["migs1", "c2", "c2", "/w", "manual"]
+    # trailing "" is the model rung (empty here — no transcript model → keep the
+    # current model; the ladder downgrade path is covered in test_l2_relimit)
+    assert argv[1:] == ["migs1", "c2", "c2", "/w", "manual", ""]
     assert kw["purpose"] == "relimit:c2 (web)"
     # no other account in the registry → 409, nothing spawned
     tsv.write_text("c1\toboard\tsvc-1\n")

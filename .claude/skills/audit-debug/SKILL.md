@@ -1086,8 +1086,12 @@ New always-audited swallow sites (previously silent — their absence used to ma
   Read its **decision** first — every skip path names itself: `no live state
   DB` (unhosted/headless), `migration off (CLAUDE_RELIMIT=0)`, `cooldown`
   (a second limit within 600s of an attempt — deliberate anti-ping-pong),
-  `no hosted tab`, `no fallback account under 90%` (every other account is
-  itself near/at its limit or inside an active `limit-hit` stamp). No relimit
+  `no hosted tab`, `no fallback account under 90%` (NO account can serve ANY
+  rung of the fable→opus→sonnet ladder under 90% — every candidate is over the
+  ceiling or its `limit-hit` stamp bars that rung). The go decision names the
+  target + effective %, and on a downgrade appends `downgrading <cur>→<rung>`
+  (e.g. `downgrading fable→opus`) — that's the tell the session dropped a model
+  rather than switched account-only. No relimit
   decision row at all = the StopFailure never carried `error="rate_limit"`
   (check the subscriber row's payload) or the dispatch route regressed
   (`test_plan_sequences_pinned`). The pill's truth is the `limit-hit` kv
@@ -1096,16 +1100,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
   `/api/accounts` (`sessionapi.limit_hit_active`: an expired stamp is
   deliberately dropped). A MANUAL migrate (the header's ⇆ button) leaves NO
   relimit decision row — its trail starts at the `web-migrate` state_files row
-  (ok/from/to, or the `no target`/`no terminal` reject) and continues in the
-  same `relimit` stream (ctx/`relimit-launch` carry `mode: manual`). A manual
-  `no target` where the other account clearly has quota: it drops the 90%
-  ceiling AND lets a MODEL-scoped `limit-hit` through (`sessionapi.
-  limit_hit_blocks(model_scoped_ok=True)`), so a lingering `no target` means
-  the other account's stamp is ACCOUNT-WIDE (`limit-hit` content `model:
-  null`) or it too is inside a stamp — check the `state_files` `limit-hit`
-  content's `model` field for each account (the pre-2026-07-19 bug refused a
-  Fable-only-limited account with Opus quota; automatic `pick_target` still
-  refuses it by design — it keeps the limited model). The chip
+  (ok/from/to/**model**, or the `no target`/`no terminal` reject) and continues
+  in the same `relimit` stream (ctx/`relimit-launch` carry `mode: manual` and
+  the chosen **`model`**). Both paths now walk the same fable→opus→sonnet ladder
+  (`account.pick_target(cur_slug, cur_model)`, `sessionapi.model_available` per
+  rung), so a `no target`/`no fallback account` means NO account can serve any
+  rung: check each account's `state_files` `limit-hit` content — an
+  ACCOUNT-WIDE stamp (`model: null`) bars every rung, a model-scoped stamp bars
+  only its own family, and an over-ceiling 5h bars the automatic path (manual
+  drops the ceiling). A downgrade landing on the WRONG model = the picker chose
+  a rung whose account was mis-read: cross the `relimit-launch`/`web-migrate`
+  `model` field against the accounts' `limit-hit` scopes and 5h `usage`. The
+  chip
   on the WRONG account = the stamp's own `slug` field vs the session's
   `account` kv (after a migration the adopted session's DB carries the OLD
   account's stamp under the NEW account — `account_usage` must file by the

@@ -186,22 +186,25 @@ def account_alias(slug):
     return None
 
 
-def migration_target(cur_slug, manual=False):
-    """The account-migration target for a session leaving `cur_slug`
-    (plugins.claude_code.account.pick_target, docs/relimit.md): the other
-    account with the lowest effective 5h usage, or None when nothing
-    qualifies. manual=True is the dashboard's ⇆ migrate button — it drops the
-    90% refuge ceiling AND lets a MODEL-scoped limit-hit through (the account's
-    other models still work; the user picks the model on the resumed prompt).
-    An ACCOUNT-WIDE limit-hit still disqualifies. First plugin that recognizes
-    the request wins. Same
-    exception contract as census()/activity(): the caller is the dashboard's
-    control plane, not a hook."""
+def migration_target(cur_slug, cur_model, manual=False):
+    """The account-migration target for a rate-limited session leaving
+    `cur_slug` while running `cur_model` (a model.family word)
+    (plugins.claude_code.account.pick_target, docs/relimit.md *Model-downgrade
+    ladder*): the best-headroom account for the highest model on the
+    fable→opus→sonnet ladder that any account can still serve, or None when
+    nothing qualifies. Returns {"slug","alias","model","eff"} — `model` is the
+    chosen family (the caller downgrades only when it differs from `cur_model`).
+    manual=True is the dashboard's ⇆ migrate button — it drops the 90% refuge
+    ceiling (an explicit click outranks the refuge rule); it runs the SAME
+    ladder (model-scoped limit-hits are handled per-rung, not waved through).
+    First plugin that recognizes the request wins. Same exception contract as
+    census()/activity(): the caller is the dashboard's control plane, not a
+    hook."""
     for p in all_plugins():
         fn = getattr(p, "migration_target", None)
         if fn is None:
             continue
-        got = fn(cur_slug, manual)
+        got = fn(cur_slug, cur_model, manual)
         if got is not None:
             return got
     return None

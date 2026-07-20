@@ -15,6 +15,7 @@ import os
 import re
 
 from core import sessionapi as API
+from plugins.claude_code import model as M
 
 # The switcher's registry: TSV rows `slug<TAB>label<TAB>keychain-service`.
 ACCOUNTS_TSV = os.path.expanduser(
@@ -115,32 +116,77 @@ TARGET_MAX_PCT = 90   # a candidate at/above this effective 5h usage is no
                       # refuge — migrating there would hit the wall again
 
 
-def pick_target(cur_slug, now=None, cache=None, ceiling=TARGET_MAX_PCT,
-                model_scoped_ok=False):
-    """The migration target for a session leaving its current account
-    (plugins/claude_code/relimit.py): the OTHER registry account with the
-    lowest effective 5h usage (core.sessionapi.effective_five_hour over the
-    freshest per-account snapshots), skipping any account whose active limit-hit
-    stamp bars it (core.sessionapi.limit_hit_blocks). Returns {"slug", "alias",
-    "eff"} or None when no account qualifies — then the caller must NOT migrate
-    (ping-ponging between two exhausted accounts helps nobody). Two knobs relax
-    the bar for a MANUAL migrate (an explicit click outranks the automatic
-    refuge rules): ceiling=None drops the % headroom bar, and model_scoped_ok
-    lets a MODEL-scoped stamp (e.g. Fable-only) through — the account's other
-    models are still a refuge, and the resumed session opens at the prompt so
-    the user picks the model. An ACCOUNT-WIDE stamp still disqualifies either
-    way — a fully blocked account is useless however deliberate the click."""
+def _rank(per, model, cur_slug, skip_cur, now, ceiling):
+    """The best-headroom (lowest effective 5h) registry account that can run
+    `model` (a family word), or None. Skips the current account when `skip_cur`
+    (the same-model rung — you never migrate a model to the account that just
+    ran out of it), any account an active limit-hit bars for `model`
+    (core.sessionapi.model_available), and any account at/above the % ceiling."""
+    best = None
+    for a in registry():
+        if skip_cur and a["slug"] == cur_slug:
+            continue
+        ent = per.get(a["slug"]) or {}
+        if not API.model_available(ent.get("limit_hit"), model, now):
+            continue
+        eff = API.effective_five_hour(ent.get("usage"), now)
+        if ceiling is not None and eff >= ceiling:
+            continue
+        if best is None or eff < best["eff"]:
+            best = {"slug": a["slug"], "alias": a["alias"],
+                    "model": model, "eff": eff}
+    return best
+
+
+def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PCT):
+    """The migration target for a rate-limited session, walking the model
+    downgrade ladder (docs/relimit.md *Model-downgrade ladder*). `cur_model` is
+    the limited/current model family (model.family vocabulary). For each rung of
+    model.ladder_from(cur_model) — fable→opus→sonnet, best model first — pick the
+    best-headroom account that can still run that model; the FIRST rung with any
+    candidate wins. This keeps the model as high as possible (same model on
+    another account before any downgrade) AND never skips a rung (Opus is fully
+    explored across all accounts before Sonnet). At the top rung the current
+    account is skipped (it just ran out of `cur_model`); at downgrade rungs it
+    rejoins as a normal candidate (its Fable cap doesn't bar Opus). Returns
+    {"slug", "alias", "model", "eff"} or None when nothing qualifies — then the
+    caller must NOT migrate. `model` is the downgrade rung to pass to `--model`,
+    or "" when the chosen model IS the current one (a same-model migration, or
+    the keep-model fallback below) — so a caller forwards `model` verbatim and
+    passes `--model` exactly when it is non-empty (a same-model resume stays bare,
+    the proven path). `ceiling` is the % headroom bar (TARGET_MAX_PCT for the
+    automatic path, None for a manual ⇆ click, which outranks the refuge rule).
+
+    When `cur_model` is unknown / not a ladder rung (an account-wide limit whose
+    transcript model couldn't be read, or a haiku session), the ladder is empty:
+    fall back to today's behavior — keep the current model, migrate to the
+    least-used OTHER account with NO active limit-hit at all (we can't prove the
+    kept model survives a model-scoped stamp, so any active stamp disqualifies),
+    and return `model=""` so the caller resumes bare (no `--model`)."""
     per = API.account_usage(cache=cache)
+    # Accept EITHER a family word (relimit's limit_model/session_model already
+    # collapse to one) OR a raw model id (the dashboard passes what it reads off
+    # the transcript) — family() is idempotent on a family word.
+    cur_model = M.family(cur_model)
+    ladder = M.ladder_from(cur_model)
+    if ladder:
+        for i, model in enumerate(ladder):
+            best = _rank(per, model, cur_slug, i == 0, now, ceiling)
+            if best is not None:
+                if best["model"] == cur_model:   # top rung — no downgrade
+                    best["model"] = ""           # resume bare (proven path)
+                return best
+        return None
     best = None
     for a in registry():
         if a["slug"] == cur_slug:
             continue
         ent = per.get(a["slug"]) or {}
-        if API.limit_hit_blocks(ent.get("limit_hit"), now, model_scoped_ok):
+        if API.limit_hit_active(ent.get("limit_hit"), now):
             continue
         eff = API.effective_five_hour(ent.get("usage"), now)
+        if ceiling is not None and eff >= ceiling:
+            continue
         if best is None or eff < best["eff"]:
-            best = {"slug": a["slug"], "alias": a["alias"], "eff": eff}
-    if best is None or (ceiling is not None and best["eff"] >= ceiling):
-        return None
+            best = {"slug": a["slug"], "alias": a["alias"], "model": "", "eff": eff}
     return best

@@ -348,7 +348,7 @@ def limit_hit_active(hit, now=None):
     chip vanished ~5h in while the weekly limit was still in force (reported
     2026-07-19). The dashboard pill gates purely on this (a limited account is
     flagged regardless of which model was capped); the migration target-picker
-    layers model scope on top via limit_hit_blocks."""
+    layers per-model scope on top via model_available."""
     if not hit:
         return False
     now = time.time() if now is None else now
@@ -359,23 +359,21 @@ def limit_hit_active(hit, now=None):
     return (hit.get("ts") or 0) + span > now
 
 
-def limit_hit_blocks(hit, now=None, model_scoped_ok=False):
-    """Whether an active `limit-hit` stamp should DISQUALIFY an account as a
-    migration target. An ACCOUNT-WIDE stamp (no `model` scope — nothing on the
-    account works) always blocks. A MODEL-scoped stamp (e.g. Fable-only, other
-    models still run) blocks UNLESS `model_scoped_ok`: the manual ⇆ migrate
-    sets it True (an explicit click can pick a model the account still has —
-    the resumed session opens at the prompt, so the user chooses; the dashboard
-    pill still shows the scoped chip), mirroring the new-session picker's
-    model-awareness. The automatic path leaves it False — that migration keeps
-    the limited model (bare `--resume`, no model change), so a same-scope
-    account is no refuge and conservative wins. The ONE owner of 'does this
-    stamp bar a migration target' (docs/styleguide.md single-owner table)."""
+def model_available(hit, model, now=None):
+    """Whether `model` (a family word — model.family / relimit.limit_model
+    vocabulary: 'fable'/'opus'/'sonnet') is still runnable on an account, given
+    that account's freshest `limit-hit` stamp. True unless an ACTIVE stamp
+    (limit_hit_active) bars it: an ACCOUNT-WIDE stamp (no `model` scope — nothing
+    on the account works) bars every model; a MODEL-scoped stamp bars ONLY its
+    own family (a Fable weekly cap leaves Opus/Sonnet on that same account fully
+    usable). This is the per-model successor to the old coarse limit_hit_blocks
+    — the migration ladder (account.pick_target, docs/relimit.md *Model-downgrade
+    ladder*) asks it once per rung. The ONE owner of 'does this stamp bar this
+    model on this account' (docs/styleguide.md single-owner table)."""
     if not limit_hit_active(hit, now):
-        return False
-    if model_scoped_ok and (hit or {}).get("model"):
-        return False
-    return True
+        return True
+    scope = (hit or {}).get("model")
+    return bool(scope) and scope != model
 
 
 def session_row(sid):

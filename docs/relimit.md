@@ -13,6 +13,18 @@ interrupted turn. The mirror history follows (adopt machinery), the dashboard's
 account chip flips to the new account on its own, and the account strip pill
 says `limit hit · resets …` on the exhausted account.
 
+When the limit is MODEL-scoped (e.g. a Fable weekly cap) and no OTHER account
+has that model free either, the migration additionally **downgrades the model**
+one rung — fable→opus→sonnet, never skipping a rung — on whichever account
+(current or other) has the most headroom, so the session keeps working on a
+lesser model instead of stalling (*Model-downgrade ladder* below). This is why
+the recovery has to live here and not in Claude Code config: the in-TUI *"Fable
+now uses usage credits → Switch to Sonnet 5"* dialog is a **billing** event, and
+Claude Code's own `fallbackModel`/`--fallback-model` chain explicitly never
+fires on authentication/**billing**/rate-limit/request-size/transport errors
+(code.claude.com/docs/en/model-config). An external, event-driven migration is
+the only lever — and it can reach the Opus rung the TUI dialog skips.
+
 ## The trigger — StopFailure error="rate_limit"
 
 A main-session turn blocked by the account limit fires a **`StopFailure` whose
@@ -52,19 +64,18 @@ ONE parser of the message's scope, docs/styleguide.md). Consumers:
   `limit hit` (docs/dashboard.md *The "limit hit" pill*);
 - the new-session auto-picker skips the account only when the limited model
   is the one being launched (docs/dashboard.md);
-- **`pick_target` treats a model-scoped stamp as disqualifying for the
-  AUTOMATIC path but not the manual one** (`model_scoped_ok`, defaulting
-  False → `core.sessionapi.limit_hit_blocks`, the single owner of the rule).
-  The automatic migration keeps the limited model (bare `--resume`, no model
-  change), so a target with that same model blocked is no refuge and
-  conservative wins. The MANUAL ⇆ migrate passes `model_scoped_ok=True`: the
-  account's other models still run and the resumed session opens at the
-  prompt, so the user picks a model the account still has — the same
-  model-awareness the new-session picker already has, and the fix for the
-  reported bug where a Fable-only-limited account with Opus quota was refused
-  as a manual target (2026-07-19). An ACCOUNT-WIDE stamp (no `model` scope)
-  still disqualifies both paths — a fully blocked account is useless however
-  deliberate the click.
+- **`pick_target` walks the model-downgrade ladder** (below), asking
+  `core.sessionapi.model_available(hit, model)` — the single owner of the
+  per-model bar rule — once per rung: a model-scoped stamp bars ONLY its own
+  family (a Fable cap leaves Opus/Sonnet on that same account usable), an
+  account-wide stamp (no `model` scope) bars every model on it. This replaces
+  the old coarse `limit_hit_blocks(model_scoped_ok=…)` fudge: the automatic
+  path no longer gives up when the current model is capped everywhere — it
+  drops a rung; and the manual ⇆ migrate no longer waves a scoped stamp through
+  blindly — it too runs the ladder (an account whose Fable is capped is a fine
+  target *for Opus*, chosen explicitly). This also subsumes the reported bug
+  where a Fable-only-limited account with Opus quota was refused as a target
+  (2026-07-19): now it is a valid Opus rung.
 
 ## The hook half (relimit.main) — decide and hand off
 
@@ -101,18 +112,64 @@ Ordered guards, every skip audited as a decision row:
 5. **Cooldown** (`relimit-attempt` kv younger than `COOLDOWN_S`, 600s) → skip.
    A relaunch that instantly re-hits a limit must not ping-pong tabs forever.
 6. **No hosted tab** (`window_for_session`) → skip (headless / daemon).
-7. **No target** (`account.pick_target`) → skip. The picker takes the OTHER
-   registry accounts, drops any inside an active `limit-hit` stamp, ranks by
-   `sessionapi.effective_five_hour` (freshest per-account snapshots via
-   `sessionapi.account_usage` — the same numbers the dashboard strip shows),
-   and refuses candidates at/above `TARGET_MAX_PCT` (90) — migrating to an
-   almost-exhausted account would hit the wall again.
-8. Otherwise: stamp `relimit-attempt`, emit the AMBER announce op
-   (`⚠ <label> hit its rate limit → resuming on <slug>` — it parks with the
-   DB and REPLAYS in the successor's mirror, the visible record of the swap),
-   and spawn the detached migrator (`hookkit.spawn_streamer`, purpose
-   `relimit:<slug>`). The hook exits immediately — closing the tab from inside
-   the dying session's own hook would race Claude Code's shutdown.
+7. **No target** (`account.pick_target(cur_slug, cur_model)`) → skip. `cur_model`
+   is the ladder start: the limited family for a model-scoped limit
+   (`limit_model`), else the session's running model read from its transcript
+   (`model.session_model` → `model.family`), else None. The picker walks the
+   downgrade ladder (below) and returns the best-headroom account + the model to
+   run there (or None → skip: ping-ponging between exhausted accounts helps
+   nobody). Ranking is `sessionapi.effective_five_hour` over the freshest
+   per-account snapshots (`sessionapi.account_usage` — the same numbers the
+   dashboard strip shows); candidates at/above `TARGET_MAX_PCT` (90) are refused.
+8. Otherwise: stamp `relimit-attempt`, emit the AMBER announce op — `⚠ <label>
+   hit its rate limit → resuming on <slug>` for a same-model migrate, or
+   `⚠ <label> hit its <cur_model> limit → resuming as <model> on <slug>` for a
+   downgrade — it parks with the DB and REPLAYS in the successor's mirror, the
+   visible record of the swap. Then spawn the detached migrator
+   (`hookkit.spawn_streamer`, purpose `relimit:<slug>`), passing the chosen
+   model as the 7th argv element (empty ⇒ same model). The hook exits
+   immediately — closing the tab from inside the dying session's own hook would
+   race Claude Code's shutdown.
+
+## The model-downgrade ladder (`account.pick_target`)
+
+The one algorithm behind both the automatic path and the manual ⇆ button. Given
+`cur_model` (a `model.family` word) and the per-account usage + `limit-hit`
+snapshots, walk `model.ladder_from(cur_model)` — `fable→opus→sonnet`, best model
+first (`model.MODEL_LADDER` is the single owner of the order; Haiku is
+deliberately NOT a rung — the floor is Sonnet):
+
+    for rung in ladder:                 # e.g. [fable, opus, sonnet]
+        candidates = accounts where model_available(hit, rung) and eff5h < ceiling
+        if candidates: return the lowest-eff5h one, model=rung   # FIRST rung wins
+
+Three properties fall out for free:
+
+- **Keep the model as high as possible.** The `cur_model` rung is tried across
+  every account before any downgrade — *same model on another account* beats
+  *downgrade in place*, which is what you want (Fable on c2 beats Opus on c1).
+- **Never skip a rung.** Opus is explored across all accounts before Sonnet is
+  considered — so a Fable limit can never jump straight to Sonnet while any
+  account has Opus.
+- **Most headroom within a rung.** Candidates are ranked by
+  `effective_five_hour`, so the least-loaded account wins that rung.
+
+The current account needs no special-casing: at the top (`cur_model`) rung it is
+skipped (`skip_cur` — you never migrate a model to the account that just ran out
+of it; its fresh stamp would exclude it anyway); at downgrade rungs it rejoins as
+a normal candidate, because a Fable-scoped stamp doesn't bar Opus
+(`model_available`). An account-wide stamp excludes it at every rung.
+
+`pick_target` returns `model=""` when the chosen rung IS `cur_model` (a same-model
+migration, or the keep-model fallback) so callers resume **bare** (`--resume`
+only — the proven path), and a family word only for a real downgrade (→ `--model
+<rung>`). When `cur_model` is unknown / not a rung (an account-wide limit whose
+transcript model couldn't be read, or a Haiku session) the ladder is empty and
+it falls back to the pre-ladder behavior: keep the current model, migrate to the
+least-used OTHER account with no active `limit-hit` at all (any active stamp
+disqualifies — we can't prove the kept model survives a scoped one). The `ceiling`
+is `TARGET_MAX_PCT` for the automatic path and `None` for a manual click (which
+outranks the % refuge rule but still runs the same ladder).
 
 ## The migrator half (relimit.migrate) — close, wait, relaunch
 
@@ -129,13 +186,17 @@ every exit path is a distinct `end_reason` (the anomalies query keys on them):
    already parked skips straight to launch; gone-but-live is `window-gone`
    (bail — something else owns that session's fate).
 3. **Launch the resume tab**: `Frontend.launch_tab(cwd,
-   account.launch_argv(["--resume", <sid>, NUDGE], <alias>))` — byte-for-byte
-   the dashboard's resume-&-send web launch (same `$SHELL -lic '<alias> "$@"'`
-   wrapper, same registry-vetted command word). `NUDGE` is the auto-continue
-   message: the failed turn's prompt is already in the transcript, so the
-   resumed session just needs a push to pick the work back up
-   (`launch-failed` / `launched`, plus a `relimit-launch` state_files row
-   recording sid/slug/cwd/ok).
+   account.launch_argv(["--resume", <sid>] + ["--model", <model>]? + [NUDGE]?,
+   <alias>))` — byte-for-byte the dashboard's resume-&-send web launch (same
+   `$SHELL -lic '<alias> "$@"'` wrapper, same registry-vetted command word).
+   `--model <model>` is present only on a downgrade (the 7th argv element the
+   picker chose — empty ⇒ same model, resume bare); it overrides the model the
+   transcript would otherwise restore (code.claude.com/docs/en/model-config).
+   `NUDGE` is the auto-continue message (auto mode only): the failed turn's
+   prompt is already in the transcript, so the resumed session just needs a
+   push to pick the work back up — on a downgrade it also names the new model so
+   the turn knows why it changed (`launch-failed` / `launched`, plus a
+   `relimit-launch` state_files row recording sid/slug/cwd/**model**/ok).
 
 ## Manual migrate (the dashboard's ⇆ button)
 
@@ -145,16 +206,16 @@ The session header's action row carries **`⇆ migrate`** right after `✎ renam
 **`mode=manual`**, which differs from the automatic hand-off in exactly the
 ways manual intent implies:
 
-- **Both automatic refuge rules relaxed** (`plugins.migration_target(
-  manual=True)` → `account.pick_target(ceiling=None, model_scoped_ok=True)`):
-  an explicit click outranks them. `ceiling=None` drops the 90% headroom bar;
-  `model_scoped_ok=True` lets a MODEL-scoped limit-hit through (see *Limit
-  scope* — the account's other models are still a refuge, and the resumed
-  session opens at the prompt so the user picks one). An ACCOUNT-WIDE
-  `limit-hit` stamp still disqualifies — a fully blocked account is useless
-  however deliberate the click. No qualifying account → `409`.
+- **The % refuge ceiling dropped** (`plugins.migration_target(cur, cur_model,
+  manual=True)` → `account.pick_target(ceiling=None)`): an explicit click
+  outranks the headroom bar. It runs the SAME `fable→opus→sonnet` ladder as the
+  automatic path (`cur_model` read off the transcript via `plugins.context`), so
+  a manual migrate now ALSO downgrades the model when no account has the current
+  one free — a downgrade rung rides through to `--model`, just like the
+  automatic path. No qualifying account at any rung → `409`.
 - **No auto-continue nudge**: nothing was cut off, so the relaunch is a bare
-  `--resume <sid>` and the session opens at the prompt.
+  `--resume <sid>` (plus `--model <rung>` on a downgrade) and the session opens
+  at the prompt, already on the chosen model.
 - **The announce line moves into the migrator** (`⇆ migrating to <slug>
   (web)`, emitted just before the tab close): the hook half never ran for a
   web migrate. Emitted only on the live-window path — a parked session's DB
@@ -163,11 +224,11 @@ ways manual intent implies:
   IS the intent, and the worst case is a tab swap you watch happen.
 
 Everything else is shared: same close→park-wait→launch legs, same `relimit`
-stream end_reasons (the `relimit-launch` row carries `mode`), same adopt/
-status-line continuity. The endpoint audits every attempt as a `web-migrate`
-state_files row (`from`/`to`/`eff`/`ok`, or the `no target`/`no terminal`/
-`unknown sid` reject), and the migrator spawn carries purpose
-`relimit:<slug> (web)`.
+stream end_reasons (the `relimit-launch` row carries `mode` and `model`), same
+adopt/status-line continuity. The endpoint audits every attempt as a
+`web-migrate` state_files row (`from`/`to`/`model`/`eff`/`ok`, or the `no
+target`/`no terminal`/`unknown sid` reject), and the migrator spawn carries
+purpose `relimit:<slug> (web)`.
 
 One guard the endpoint owns: a sid this machine has never seen (no audit
 sessions row, no live/parked state DB) is a `404`, never a spawn. The
@@ -214,11 +275,12 @@ gains a copy step; today one would be dead code.
 
 - hook decisions: `hook_events` handler `claude-relimit.py` — every skip path
   names itself (`stamped; no hosted tab …`, `cooldown`, `migration off`,
-  `no fallback account`), the go path records target + effective % + migrator
-  pid.
+  `no fallback account`), the go path records target + effective % + `migrating
+  to <slug> … downgrading <cur>→<rung>` when a rung was dropped + migrator pid.
 - spawn: a `spawns` row (purpose `relimit:<slug>`); stream: a `streams` row
-  kind `relimit` whose `end_reason` is the migrator's outcome; launch: a
-  `state_files` row `relimit-launch` with `ok`.
+  kind `relimit` whose `end_reason` is the migrator's outcome and whose ctx
+  carries the chosen `model`; launch: a `state_files` row `relimit-launch` with
+  `model` + `ok`.
 - canned anomaly ("rate-limit migration incomplete"): any relimit stream that
   ended ≠ `launched`, or `launched` with no later SessionStart under the sid
   (the `--resume` fires SessionStart under the OLD sid, so its absence means
@@ -243,3 +305,19 @@ gains a copy step; today one would be dead code.
 - **`/api/oauth/usage` for target picking**: needs each account's token from
   the keychain — the whole usage pipeline is deliberately tokenless
   (docs/dashboard.md, *Accounts & usage*).
+- **Driving Claude Code's native "switch model" dialog** (the in-TUI *"Fable
+  now uses usage credits → Switch to Sonnet 5"* prompt) instead of a relaunch:
+  it would have to be screen-scraped and key-driven (fragile, like the rewind
+  menu), it can't cross accounts, and it only ever offers **Sonnet** — skipping
+  the Opus rung the ladder insists on. Relaunching with `--model` reaches any
+  rung on any account deterministically.
+- **A same-account model downgrade WITHOUT a tab relaunch** (inject `/model
+  opus` into the live session): there is no hook or control channel to change a
+  running session's model — the only lever is relaunch. So even a same-account
+  downgrade goes through the full close→park→`--resume --model` cycle, uniform
+  with an account switch (the tab swap is the same one the user already sees for
+  a plain migration).
+- **Auto-UPGRADING back to Fable when its weekly cap resets**: out of scope —
+  the migration is a one-way recovery. The session stays on the downgraded model
+  until the user switches back with `/model`; re-upgrading would need polling the
+  (tokenless-unavailable) per-model reset and would surprise a mid-task session.

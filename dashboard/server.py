@@ -1828,13 +1828,17 @@ class Handler(BaseHTTPRequestHandler):
         manual`: no auto-continue nudge (nothing was cut off — the resumed
         session opens at the prompt) and no 90% usage ceiling on the target
         (plugins.migration_target(manual=True) — an explicit click outranks
-        the refuge rule; an ACTIVE limit-hit still disqualifies). Immediate,
-        no confirm (user request — like ■ stop). Works live AND parked: a
-        parked session skips the close leg and just relaunches. 404 for a sid
-        this machine has never seen (no audit row, no live/parked state DB —
-        the migrator can't tell "parked" from "never existed", so an unknown
-        sid would sail through its park check and launch a doomed --resume
-        tab; caught live 2026-07-19); 409 when no other account qualifies;
+        the refuge rule). It runs the SAME fable→opus→sonnet downgrade ladder
+        the automatic path does (docs/relimit.md *Model-downgrade ladder*):
+        same model on another account when one has quota, else a downgrade rung
+        passed through to `--model` (the current model is read off the
+        transcript via plugins.context). Immediate, no confirm (user request —
+        like ■ stop). Works live AND parked: a parked session skips the close
+        leg and just relaunches. 404 for a sid this machine has never seen (no
+        audit row, no live/parked state DB — the migrator can't tell "parked"
+        from "never existed", so an unknown sid would sail through its park
+        check and launch a doomed --resume tab; caught live 2026-07-19); 409
+        when no account (any rung) qualifies;
         503 when no terminal resolves. Every attempt is a `web-migrate`
         state_files row, failures also an A.error."""
         body = self._post_guard()
@@ -1855,20 +1859,28 @@ class Handler(BaseHTTPRequestHandler):
                          {"ok": False, "reason": "no terminal"})
             return self._json({"error": "no terminal available"}, 503)
         cur = (API.kv_at(sdb, "account") or {}).get("slug") or ""
-        target = plugins.migration_target(cur, manual=True)
+        # The model the session is running (off its transcript) feeds the
+        # downgrade ladder (docs/relimit.md *Model-downgrade ladder*): a manual
+        # ⇆ now downgrades too when no account has the current model free.
+        cur_model = (plugins.context(row.get("transcript_path") or "")
+                     or {}).get("model") or ""
+        target = plugins.migration_target(cur, cur_model, manual=True)
         if target is None:
             A.state_file(log, sdb, "web-migrate",
                          {"ok": False, "reason": "no target", "from": cur})
             return self._json({"error": "no other account available"}, 409)
+        # target["model"] is the downgrade rung (or "" for a same-model migrate);
+        # pick_target already resolved same-vs-downgrade, so forward it verbatim.
         proc = SP.spawn_detached(
             os.path.join(P.BIN, "claude-relimit.py"),
             [log, sid, target["slug"], target["alias"],
-             row.get("cwd") or "", "manual"],
+             row.get("cwd") or "", "manual", target["model"]],
             log, purpose="relimit:%s (web)" % target["slug"])
         ok = proc is not None
         A.state_file(log, sdb, "web-migrate",
                      {"ok": ok, "from": cur, "to": target["slug"],
-                      "eff": target["eff"], "cwd": row.get("cwd") or ""})
+                      "model": target["model"], "eff": target["eff"],
+                      "cwd": row.get("cwd") or ""})
         if not ok:                       # spawn failure already audited by SP
             return self._json({"error": "migrator spawn failed"}, 502)
         return self._json({"ok": True, "to": target["slug"]})

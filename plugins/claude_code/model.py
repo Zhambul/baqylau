@@ -393,3 +393,34 @@ def short_model(model):
         else:
             break
     return parts[0] + ("-" + ".".join(ver) if ver else "")
+
+
+# The rate-limit downgrade ladder (docs/relimit.md, *Model-downgrade ladder*):
+# when a model's quota is exhausted on EVERY account, fall to the next rung —
+# stepwise, never skipping one (fable→opus→sonnet, never fable→sonnet). Haiku is
+# deliberately NOT a rung: the floor is Sonnet. The ONE owner of the
+# model-downgrade order (docs/styleguide.md single-owner table).
+MODEL_LADDER = ("fable", "opus", "sonnet")
+
+
+def family(model):
+    """The model FAMILY word of a model id or alias ("claude-opus-4-8" → "opus",
+    "sonnet[1m]" → "sonnet", alias "fable" → "fable"), or None when empty /
+    unrecognised. The vocabulary matches the /model picker aliases AND
+    relimit.limit_model's scope word, so a limit-hit's `model` scope and a
+    resolved version collapse to the same key the ladder is indexed by."""
+    if not model:
+        return None
+    m = model.lower()
+    for fam in ("fable", "opus", "sonnet", "haiku"):
+        if fam in m:
+            return fam
+    return None
+
+
+def ladder_from(fam):
+    """The MODEL_LADDER suffix starting at family `fam` — the models to try,
+    best first, once `fam`'s quota is gone (("opus", "sonnet") from "opus"). ()
+    when `fam` is not a ladder rung (haiku / None / unknown): the caller then
+    keeps the current model rather than inventing a downgrade."""
+    return MODEL_LADDER[MODEL_LADDER.index(fam):] if fam in MODEL_LADDER else ()

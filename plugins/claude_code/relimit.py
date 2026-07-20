@@ -41,6 +41,7 @@ from core.noaudit import load_audit
 from core.tail import stream_lifecycle
 from plugins.claude_code import account as ACC
 from plugins.claude_code import hookkit as H
+from plugins.claude_code import model as M
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -199,26 +200,42 @@ def main():
         return A.hook_event(
             d, decision="rate_limit: stamped; no hosted tab (headless/daemon) "
                         "— not migrating")
-    target = ACC.pick_target(acc.get("slug") or "")
+    # The model to walk the downgrade ladder from (docs/relimit.md
+    # *Model-downgrade ladder*): the limited family for a MODEL-scoped limit, else
+    # the session's actually-running model read from its transcript (an
+    # account-wide limit names no model). None/unreadable → pick_target keeps the
+    # current model (bare resume), today's behavior.
+    cur_model = model or M.family(M.session_model(d.get("transcript_path") or ""))
+    target = ACC.pick_target(acc.get("slug") or "", cur_model)
     if target is None:
         return A.hook_event(
             d, decision="rate_limit: stamped; no fallback account under %d%% "
                         "effective 5h — not migrating" % ACC.TARGET_MAX_PCT)
+    # pick_target returns model="" for a same-model migration (resume bare, the
+    # proven path) and a family word only for a real downgrade rung.
+    mig_model = target["model"]
+    dg = bool(mig_model)
     St.kv_set(LOG, "relimit-attempt", {"ts": time.time(), "to": target["slug"]})
     # The announce line lands in the ops stream BEFORE the park, so the adopted
     # successor replays it — the mirror's own record of why the tab was swapped.
-    O.emit(LOG, O.label("⚠ %s hit its rate limit → resuming on %s"
-                        % (acc.get("label") or "account", target["slug"]),
-                        O.AMBER))
+    label = acc.get("label") or "account"
+    O.emit(LOG, O.label(
+        ("⚠ %s hit its %s limit → resuming as %s on %s"
+         % (label, cur_model, target["model"], target["slug"])) if dg else
+        ("⚠ %s hit its rate limit → resuming on %s" % (label, target["slug"])),
+        O.AMBER))
     proc = H.spawn_streamer(
         "claude-relimit.py",
-        [LOG, sid, target["slug"], target["alias"], d.get("cwd") or "", "auto"],
+        [LOG, sid, target["slug"], target["alias"], d.get("cwd") or "", "auto",
+         mig_model],
         LOG, purpose="relimit:" + target["slug"])
     if proc is None:
         return A.hook_event(d, decision="rate_limit: migrator spawn FAILED")
-    A.hook_event(d, decision="rate_limit: migrating to %s (effective 5h %d%%),"
+    A.hook_event(d, decision="rate_limit: migrating to %s (effective 5h %d%%)%s,"
                              " migrator pid %d"
-                             % (target["slug"], target["eff"], proc.pid))
+                             % (target["slug"], target["eff"],
+                                " downgrading %s→%s" % (cur_model, mig_model)
+                                if dg else "", proc.pid))
 
 
 def entry():
@@ -227,12 +244,15 @@ def entry():
 
 # ------------------------------------------------------------ migrator half
 
-def migrate(log, sid, slug, alias, cwd, mode="auto"):
+def migrate(log, sid, slug, alias, cwd, mode="auto", model=""):
     """The detached migrator: close the session's tab, wait for its SessionEnd
     to park the state DB, then launch `<alias> claude --resume <sid>` in a new
-    tab. Every exit path closes the audit streams row with a distinct
-    end_reason — a `relimit` stream that isn't 'launched' IS the triage signal
-    (see the anomalies query). Two modes:
+    tab. When `model` is non-empty (a downgrade rung the picker chose —
+    docs/relimit.md *Model-downgrade ladder*) the launch carries `--model
+    <model>`, so the resumed session drops to that model instead of the
+    transcript's exhausted one. Every exit path closes the audit streams row
+    with a distinct end_reason — a `relimit` stream that isn't 'launched' IS the
+    triage signal (see the anomalies query). Two modes:
       auto   — the rate-limit hook's hand-off: the failed turn's prompt is in
                the transcript, so the relaunch rides the NUDGE auto-continue
                (the hook half already emitted the announce line).
@@ -243,7 +263,8 @@ def migrate(log, sid, slug, alias, cwd, mode="auto"):
                a parked session must not be recreated by a paint op."""
     fe = frontends.get()
     with stream_lifecycle(log, "relimit", task_id=slug,
-                          ctx={"sid": sid, "to": slug, "mode": mode}) as run:
+                          ctx={"sid": sid, "to": slug, "mode": mode,
+                               "model": model}) as run:
         win = fe.window_for_session(sid)
         if win:
             if mode == "manual":
@@ -272,12 +293,18 @@ def migrate(log, sid, slug, alias, cwd, mode="auto"):
             A.error(log, "relimit window gone but session live", {"sid": sid})
             run.end("window-gone")
             return
-        words = ["--resume", sid] + ([NUDGE] if mode == "auto" else [])
+        # `--model` (a downgrade rung) precedes the positional nudge; the auto
+        # nudge names the new model so the resumed turn knows why it changed.
+        nudge = NUDGE + (
+            " It is now running %s because the previous model's quota was "
+            "exhausted." % model if model else "")
+        words = (["--resume", sid] + (["--model", model] if model else [])
+                 + ([nudge] if mode == "auto" else []))
         argv = ACC.launch_argv(words, alias)
         ok = bool(fe.launch_tab(cwd or os.path.expanduser("~"), argv))
         A.state_file(log, "", "relimit-launch",
                      {"sid": sid, "to": slug, "cwd": cwd, "mode": mode,
-                      "ok": ok})
+                      "model": model, "ok": ok})
         if not ok:
             A.error(log, "relimit launch_tab", {"to": slug, "cwd": cwd})
             run.end("launch-failed")
@@ -286,9 +313,12 @@ def migrate(log, sid, slug, alias, cwd, mode="auto"):
 
 
 def migrate_entry(argv):
-    """bin/claude-relimit.py's argv mode: LOG SID SLUG ALIAS CWD MODE
-    (mode: auto = the rate-limit hand-off, manual = the web button)."""
-    if len(argv) != 6 or argv[5] not in ("auto", "manual"):
+    """bin/claude-relimit.py's argv mode: LOG SID SLUG ALIAS CWD MODE [MODEL]
+    (mode: auto = the rate-limit hand-off, manual = the web button; MODEL is the
+    downgrade rung, optional/empty ⇒ keep the current model). The 7th arg is
+    accepted as absent for a same-model migrate (migrate()'s `model` defaults to
+    "")."""
+    if len(argv) not in (6, 7) or argv[5] not in ("auto", "manual"):
         A.error(argv[0] if argv else "", "relimit migrate (bad argv)",
                 {"argv": list(argv)})
         return

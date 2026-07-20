@@ -324,6 +324,37 @@ def test_manual_migrate_launches_without_nudge(run_hook, rl_env, hosted,
     assert json.loads(launch_rows[-1][2])["mode"] == "manual"
 
 
+def test_migrator_downgrades_model_in_launch(run_hook, rl_env, hosted,
+                                             fake_kitten):
+    """A 7th argv element (the downgrade rung the ladder chose) rides through to
+    `--model <rung>` on the resume launch, before the positional nudge, and the
+    auto nudge names the new model so the resumed turn knows why it changed."""
+    s = hosted()
+    run_hook("claude-split.py", P.session_end(s), argv=("close",), env=rl_env)
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "auto", "opus"),
+             env=rl_env)
+    assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["launched"]
+    argv = next(c for c in fake_kitten.calls("launch") if "--type=tab" in c)
+    assert argv[argv.index("--model") + 1] == "opus"
+    assert argv.index("--model") > argv.index("--resume")
+    assert "opus" in argv[-1]                        # the nudge names the model
+    launch_rows = [r for r in oracle.state_files(rl_env, s.sid)
+                   if r[1] == "relimit-launch"]
+    assert json.loads(launch_rows[-1][2])["model"] == "opus"
+
+
+def test_manual_migrate_downgrades_without_nudge(run_hook, rl_env, hosted,
+                                                 fake_kitten):
+    """A manual downgrade carries `--model` but still no positional nudge — the
+    session opens at the prompt, already on the downgraded model."""
+    s = hosted()
+    run_hook("claude-split.py", P.session_end(s), argv=("close",), env=rl_env)
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "manual", "opus"),
+             env=rl_env)
+    argv = next(c for c in fake_kitten.calls("launch") if "--type=tab" in c)
+    assert argv[-2] == "--model" and argv[-1] == "opus"   # no trailing nudge
+
+
 def test_manual_migrate_announces_in_the_live_mirror(run_hook, rl_env, hosted,
                                                      fake_kitten):
     """A manual migrate of a LIVE session paints its own announce line (the
@@ -348,6 +379,10 @@ def test_migrator_rejects_a_bad_mode(run_hook, rl_env, hosted):
 
 def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
                                                           tmp_path):
+    """The keep-model fallback (cur_model=None — an account-wide limit whose
+    model couldn't be read): migrate to the least-used OTHER account, skipping
+    any with an active limit-hit and any at/above the ceiling. The direct
+    successor of the pre-ladder picker."""
     from core import sessionapi as API
     from plugins.claude_code import account as ACC
     tsv = tmp_path / "accounts.tsv"
@@ -359,71 +394,117 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
              "c3": {"usage": {"five_hour": 20, "five_hour_reset": now + 1000,
                               "ts": now}, "limit_hit": None}}
     monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
-    assert ACC.pick_target("c1") == {"slug": "c3", "alias": "c3", "eff": 20}
+    assert ACC.pick_target("c1", None) == {"slug": "c3", "alias": "c3",
+                                           "model": "", "eff": 20}
     # the current account is never its own target; an account with NO snapshot
     # (c1 — no recent traffic) counts as effective 0 and wins
-    assert ACC.pick_target("c3")["slug"] == "c1"
-    assert ACC.pick_target("c2")["slug"] == "c1"
+    assert ACC.pick_target("c3", None)["slug"] == "c1"
+    assert ACC.pick_target("c2", None)["slug"] == "c1"
     # an account inside an active limit-hit stamp is skipped even at low usage
     fresh["c3"]["limit_hit"] = {"ts": now, "resets_at": now + 500}
-    assert ACC.pick_target("c1")["slug"] == "c2"
+    assert ACC.pick_target("c1", None)["slug"] == "c2"
     # ... but an EXPIRED stamp is no bar
     fresh["c3"]["limit_hit"] = {"ts": now - 9000, "resets_at": now - 10}
-    assert ACC.pick_target("c1")["slug"] == "c3"
+    assert ACC.pick_target("c1", None)["slug"] == "c3"
     # nobody under the ceiling → no target (never ping-pong exhausted accounts)
     fresh["c2"]["usage"]["five_hour"] = 95
     fresh["c3"]["usage"]["five_hour"] = 92
-    assert ACC.pick_target("c1") is None
+    assert ACC.pick_target("c1", None) is None
     # ...but a MANUAL migrate drops the ceiling (an explicit click outranks
     # the refuge rule) — the limit-hit skip still applies
-    assert ACC.pick_target("c1", ceiling=None)["slug"] == "c3"
+    assert ACC.pick_target("c1", None, ceiling=None)["slug"] == "c3"
     fresh["c3"]["limit_hit"] = {"ts": now, "resets_at": now + 500}
-    assert ACC.pick_target("c1", ceiling=None)["slug"] == "c2"
+    assert ACC.pick_target("c1", None, ceiling=None)["slug"] == "c2"
     fresh["c3"]["limit_hit"] = None
     # the plugins registry fan-out routes manual through the same owner
     import plugins
-    assert plugins.migration_target("c1") is None
-    assert plugins.migration_target("c1", manual=True)["slug"] == "c3"
+    assert plugins.migration_target("c1", None) is None
+    assert plugins.migration_target("c1", None, manual=True)["slug"] == "c3"
     # rolled-over snapshots count as 0 → eligible again
     fresh["c3"]["usage"]["five_hour_reset"] = now - 10
-    assert ACC.pick_target("c1") == {"slug": "c3", "alias": "c3", "eff": 0}
+    assert ACC.pick_target("c1", None) == {"slug": "c3", "alias": "c3",
+                                           "model": "", "eff": 0}
 
 
-def test_manual_migrate_allows_model_scoped_limit(monkeypatch, tmp_path):
-    """A MODEL-scoped limit-hit (e.g. Fable-only) bars an account from the
-    AUTOMATIC picker but NOT from the manual ⇆ migrate — the account's other
-    models are still a refuge and the user picks the model on the resumed
-    prompt (the reported bug: c2 had a Fable stamp but Opus quota, and migrate
-    said 'no target'). An ACCOUNT-WIDE stamp still blocks BOTH."""
+def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
+    """The fable→opus→sonnet downgrade ladder (docs/relimit.md): keep the model
+    as high as possible (same model on another account before any downgrade),
+    rank each rung by most headroom, never skip a rung, and rejoin the current
+    account at downgrade rungs (its Fable cap doesn't bar Opus)."""
     from core import sessionapi as API
     from plugins.claude_code import account as ACC
-    import plugins
     tsv = tmp_path / "accounts.tsv"
-    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\nc3\tspare\tsvc-3\n")
     monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
     now = time.time()
-    fresh = {"c2": {"usage": {"five_hour": 30, "five_hour_reset": now + 1000,
-                              "ts": now},
-                    "limit_hit": {"ts": now, "resets_at": now + 500,
-                                  "model": "fable"}}}
+
+    def u(pct):
+        return {"five_hour": pct, "five_hour_reset": now + 1000, "ts": now}
+
+    def fable():
+        return {"ts": now, "resets_at": now + 500, "model": "fable"}
+
+    # (a) Fable limited on c1; c2 & c3 have Fable free → SAME model, most-headroom
+    # OTHER account (c3=20 < c2=40), and model="" (no downgrade — resume bare).
+    fresh = {"c1": {"usage": u(50), "limit_hit": fable()},
+             "c2": {"usage": u(40), "limit_hit": None},
+             "c3": {"usage": u(20), "limit_hit": None}}
     monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
-    # automatic: a model-scoped stamp still disqualifies (conservative — the
-    # resumed turn keeps the limited model)
-    assert ACC.pick_target("c1") is None
-    assert plugins.migration_target("c1") is None
-    # manual: the Fable-only stamp is no bar — c2 is the target
-    assert ACC.pick_target("c1", ceiling=None, model_scoped_ok=True)["slug"] == "c2"
-    assert plugins.migration_target("c1", manual=True)["slug"] == "c2"
-    # ...but an ACCOUNT-WIDE stamp (model=None) blocks the manual migrate too
-    fresh["c2"]["limit_hit"]["model"] = None
-    assert plugins.migration_target("c1", manual=True) is None
-    assert ACC.pick_target("c1", ceiling=None, model_scoped_ok=True) is None
-    # limit_hit_blocks is the single owner of the rule
+    assert ACC.pick_target("c1", "fable") == {"slug": "c3", "alias": "c3",
+                                              "model": "", "eff": 20}
+
+    # (b) Fable limited on EVERY account, but Opus free everywhere → downgrade to
+    # Opus on the most-headroom account, current account (c1=10) INCLUDED.
+    fresh = {"c1": {"usage": u(10), "limit_hit": fable()},
+             "c2": {"usage": u(40), "limit_hit": fable()},
+             "c3": {"usage": u(20), "limit_hit": fable()}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    t = ACC.pick_target("c1", "fable")
+    assert t == {"slug": "c1", "alias": "c1", "model": "opus", "eff": 10}, t
+
+    # (c) never-skip: on Opus, blocked everywhere, Sonnet free → Sonnet (not
+    # skipped), most-headroom account (c1=10, rejoined at the downgrade rung).
+    def opus():
+        return {"ts": now, "resets_at": now + 500, "model": "opus"}
+    fresh = {"c1": {"usage": u(10), "limit_hit": opus()},
+             "c2": {"usage": u(40), "limit_hit": opus()},
+             "c3": {"usage": u(30), "limit_hit": opus()}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    assert ACC.pick_target("c1", "opus") == {"slug": "c1", "alias": "c1",
+                                             "model": "sonnet", "eff": 10}
+    # ...and a raw model id normalizes to its family (the dashboard passes the id)
+    assert ACC.pick_target("c1", "claude-opus-4-8")["model"] == "sonnet"
+
+    # (d) manual (ceiling=None) runs the SAME ladder — no special model-scoped
+    # wave-through, just the % bar dropped.
+    fresh = {"c1": {"usage": u(95), "limit_hit": fable()},
+             "c2": {"usage": u(96), "limit_hit": fable()},
+             "c3": {"usage": u(97), "limit_hit": fable()}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    assert ACC.pick_target("c1", "fable") is None            # every rung over ceiling
+    assert ACC.pick_target("c1", "fable", ceiling=None)["model"] == "opus"
+
+    # (e) all accounts account-wide blocked → nothing, at any rung.
+    def wide():
+        return {"ts": now, "resets_at": now + 500, "model": None}
+    fresh = {"c1": {"usage": u(10), "limit_hit": wide()},
+             "c2": {"usage": u(10), "limit_hit": wide()},
+             "c3": {"usage": u(10), "limit_hit": wide()}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    assert ACC.pick_target("c1", "fable", ceiling=None) is None
+
+
+def test_model_available_single_owner():
+    """core.sessionapi.model_available is the ONE per-model bar rule: an
+    account-wide stamp blocks every model, a model-scoped stamp only its own,
+    an expired/absent stamp blocks nothing."""
+    from core import sessionapi as API
+    now = time.time()
     scoped = {"ts": now, "resets_at": now + 500, "model": "fable"}
     wide = {"ts": now, "resets_at": now + 500, "model": None}
     expired = {"ts": now - 9000, "resets_at": now - 10, "model": "fable"}
-    assert API.limit_hit_blocks(scoped) is True             # conservative default
-    assert API.limit_hit_blocks(scoped, model_scoped_ok=True) is False
-    assert API.limit_hit_blocks(wide, model_scoped_ok=True) is True
-    assert API.limit_hit_blocks(expired, model_scoped_ok=True) is False
-    assert API.limit_hit_blocks(None, model_scoped_ok=True) is False
+    assert API.model_available(scoped, "fable", now) is False
+    assert API.model_available(scoped, "opus", now) is True
+    assert API.model_available(wide, "opus", now) is False
+    assert API.model_available(expired, "fable", now) is True
+    assert API.model_available(None, "fable", now) is True
