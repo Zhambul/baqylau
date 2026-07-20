@@ -46,7 +46,7 @@ import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlparse
 
 import frontends
 import plugins
@@ -304,7 +304,11 @@ class Notifier:
         head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
         title = entry.get("title") or (
             "Claude is asking a question" if asking else "finished — your turn")
-        url = "%s/#/s/%s" % (NOTIFY_URL_BASE, entry.get("sid") or "")
+        # ?s=<sid>, NOT the app's #/s/<sid> hash route: Telegram's auto-linker
+        # drops the URL fragment, so a #-link opens the dashboard ROOT on the
+        # phone, not the session. The sid rides a query param (linkified whole);
+        # the page translates ?s=<sid> back into the hash route on load.
+        url = "%s/?s=%s" % (NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
         msg = "%s — %s\n%s" % (head, title, url)
         try:
             subprocess.Popen(

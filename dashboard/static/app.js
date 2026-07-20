@@ -4928,6 +4928,17 @@ fetch("/api/dirs/hidden").then(r => r.json())
   .then(d => { if (d && typeof d === "object") { S.hidden = d; if (!S.cur) renderList(true); } })
   .catch(() => {});
 connectGlobal();
+// A deep link from a Telegram/off-device notification lands as ?s=<sid> (a
+// query param, NOT a #fragment — Telegram's auto-linker drops the fragment, so
+// the sid must ride the query). Translate it into the hash route the router
+// speaks, and strip ?s= from the URL so a later reload/share carries a clean
+// hash link. A pre-existing hash wins (an explicit #/... in the same URL).
+(function deepLinkFromQuery() {
+  const m = /[?&]s=([^&]+)/.exec(location.search);
+  if (!m || location.hash) return;
+  history.replaceState(null, "", location.pathname);   // drop ?s=…
+  location.hash = "#/s/" + encodeURIComponent(decodeURIComponent(m[1]));
+})();
 route();
 renderAttention();
 refreshAccounts();

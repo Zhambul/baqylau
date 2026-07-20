@@ -2656,9 +2656,13 @@ The send is a **detached** `subprocess.Popen` of the notify script
 round-trip can't stall the 1 s watcher; it's best-effort and audited as a
 `telegram-notify` `state_files` row (an `A.error` on a launch failure). The
 message is `🔴 <project> needs you` / `🟢 <project> is done`, the session title,
-and a `<public-url>/#/s/<sid>` deep link — pointed at the PUBLIC proxied origin
+and a `<public-url>/?s=<sid>` deep link — pointed at the PUBLIC proxied origin
 (`CLAUDE_DASH_PUBLIC_URL`, default `https://baqylau.zhambyl.top`), never the
-`127.0.0.1` bind: the alert lands on a phone, where localhost is useless.
+`127.0.0.1` bind: the alert lands on a phone, where localhost is useless. The
+sid rides a QUERY PARAM, not the app's own `#/s/<sid>` hash route, because
+Telegram's auto-linker drops a URL fragment — a `#`-link would open the
+dashboard root on the phone, not the session. The page translates `?s=<sid>`
+back into the hash route on load (`deepLinkFromQuery` in app.js).
 
 **Per-session opt-out.** The header's **🔔 alerts / 🔕 muted** button
 (`renderSessionChrome`, beside ✎ rename / ⇆ migrate) toggles

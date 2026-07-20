@@ -1875,7 +1875,8 @@ def test_telegram_send_invokes_notify_cmd(monkeypatch, tmp_path):
     wait_until(rec.exists, desc="recorder ran")
     msg = rec.read_text()
     assert "proj is done" in msg and "all green" in msg
-    assert "https://dash.example/#/s/s9" in msg
+    # ?s=<sid> query param, NOT a #fragment (Telegram drops the fragment)
+    assert "https://dash.example/?s=s9" in msg and "#" not in msg
 
 
 def test_notify_mute_endpoint_roundtrip_and_validation(dash):
