@@ -273,6 +273,16 @@ def test_msg_html_renders_markdown_body():
     assert "<strong>bold</strong>" in h
 
 
+def test_msg_html_question_bubble():
+    # the AskUserQuestion the transcript records: a `claude ▸ asks you` bubble
+    # (no rewind ↶ — not a re-runnable prompt), options rendered as a list
+    h = opshtml.msg_html("question", "Cats or dogs?\n- Cats\n- Dogs")
+    assert 'class="msg question"' in h
+    assert "claude ▸ asks you" in h
+    assert "<li>Cats</li>" in h and "<li>Dogs</li>" in h
+    assert 'class="rw"' not in h                       # no rewind affordance
+
+
 # ---------------------------------------------------------- rich tool rendering
 
 def test_tool_html_bash_highlights_command():

@@ -192,6 +192,71 @@ def test_conversation_surfaces_delivered_queued_message(tmp_path):
     assert prompts == ["first prompt", "queued while busy"]
 
 
+def test_format_questions_flattens_text_and_options():
+    md = TR._format_questions({"questions": [
+        {"header": "Drink", "question": "Coffee or tea?",
+         "options": [{"label": "Coffee", "description": "hot"}, {"label": "Tea"}]},
+        {"question": "Milk?",
+         "options": [{"label": "Yes"}, {"label": "No"}], "multiSelect": True}]})
+    assert "Coffee or tea?" in md and "- Coffee" in md and "- Tea" in md
+    assert "Milk?" in md and "- Yes" in md and "- No" in md
+    # a malformed shape renders nothing rather than raising a broken bubble
+    assert TR._format_questions({}) == ""
+    assert TR._format_questions({"questions": "nope"}) == ""
+    assert TR._format_questions("garbage") == ""
+
+
+def test_conversation_surfaces_ask_question_and_answer(tmp_path):
+    # AskUserQuestion is recorded in the transcript as an assistant tool_use (the
+    # question) then a user tool_result (the answer). conversation() — the
+    # dashboard's mirror provider — surfaces BOTH: a `question` record carrying
+    # the question text + offered options, and the `answer` recap. Every OTHER
+    # tool_use (the Bash) stays the terminal mirror's job (an op), never a
+    # conversation record — it only anchors the records that follow it.
+    p = tmp_path / "ask.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "let me check"},
+            {"type": "tool_use", "id": "t1", "name": "Bash",
+             "input": {"command": "ls"}},
+            {"type": "tool_use", "id": "t2", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"header": "Pets", "question": "Cats or dogs?",
+                  "options": [{"label": "Cats"}, {"label": "Dogs"}]}]}}]},
+         "timestamp": "2026-07-20T00:00:01.000Z"},
+        {"type": "user", "toolUseResult": {"answers": [{"selected": ["Dogs"]}]},
+         "message": {"content": [
+             {"type": "tool_result", "tool_use_id": "t2",
+              "content": "Your questions have been answered: Dogs"}]},
+         "timestamp": "2026-07-20T00:00:09.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    assert [r["kind"] for r in recs] == ["message", "question", "answer"]
+    q = next(r for r in recs if r["kind"] == "question")
+    assert "Cats or dogs?" in q["text"]
+    assert "- Cats" in q["text"] and "- Dogs" in q["text"]
+    assert q["anchor"] == "t1"        # anchors after the Bash op, before its own id
+    ans = next(r for r in recs if r["kind"] == "answer")
+    assert ans["text"].startswith("Your questions have been answered")
+
+
+def test_conversation_surfaces_declined_question(tmp_path):
+    # A DECLINED question still records the question (the assistant tool_use is
+    # written regardless), just with no `answer` recap — the transcript honestly
+    # shows what was asked even when nothing was picked.
+    p = tmp_path / "declined.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "t1", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"question": "Proceed?", "options": [{"label": "Yes"}]}]}}]},
+         "timestamp": "2026-07-20T00:00:01.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    assert [r["kind"] for r in recs] == ["question"]
+    assert "Proceed?" in recs[0]["text"]
+
+
 # ------------------------------------------------------------------ agent_paths
 
 def test_agent_paths_layout():

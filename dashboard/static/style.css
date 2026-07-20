@@ -957,6 +957,13 @@ body.modal-open { overflow: hidden; }
 .msg.message { border-left-color: color-mix(in srgb, var(--mid) 55%, transparent); }
 .msg.teammsg { border-left-color: var(--busy); }
 .msg.teammsg .who { color: var(--busy); }
+/* AskUserQuestion in the transcript: the question Claude asked (red "asking
+   you" hue, matching the tab/ask card) and, once submitted, the answer (green
+   "done"). Neither carries the rewind ↶ — they aren't re-runnable prompts. */
+.msg.question { border-left-color: var(--ask); }
+.msg.question .who { color: var(--ask); }
+.msg.answer { border-left-color: var(--done); }
+.msg.answer .who { color: var(--done); }
 
 /* markdown-rendered conversation text (opshtml.md_html — escaped server-side).
    Shared by the interleaved .msg blocks and the timeline .ent .bd bodies. */

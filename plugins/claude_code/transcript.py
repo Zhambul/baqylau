@@ -417,10 +417,38 @@ def _line_ts(s):
         return None
 
 
+def _format_questions(tool_input):
+    """Flatten an AskUserQuestion tool_use `input` into readable markdown for the
+    dashboard transcript's `question` bubble — each question's text followed by a
+    bulleted list of the options it OFFERED (the answer the user picked is a
+    separate `answer` record below). '' when the shape is unusable, so a
+    malformed ask renders nothing rather than a broken bubble. A presentation
+    flatten like the teammsg unwrap above; opshtml.md_html renders the markdown."""
+    questions = tool_input.get("questions") if isinstance(tool_input, dict) else None
+    if not isinstance(questions, list):
+        return ""
+    blocks = []
+    for q in questions:
+        if not isinstance(q, dict):
+            continue
+        lines = []
+        qtext = (q.get("question") or "").strip()
+        if qtext:
+            lines.append(qtext)
+        for o in q.get("options") or []:
+            if isinstance(o, dict) and (o.get("label") or "").strip():
+                lines.append("- " + o["label"].strip())
+        if lines:
+            blocks.append("\n".join(lines))
+    return "\n\n".join(blocks)
+
+
 def conversation(path, pos=0):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
-    (docs/dashboard.md): every prompt / assistant message / teammate message
-    from byte `pos` on, in transcript order, each carrying `ts` — the line's
+    (docs/dashboard.md): every prompt / assistant message / teammate message —
+    plus, for AskUserQuestion, the `question` Claude asked and the `answer` the
+    user submitted — from byte `pos` on, in transcript order, each carrying `ts`
+    — the line's
     `timestamp` as an epoch float (None when absent) — and `anchor`, the id of
     the last tool_use seen BEFORE it. Ops carry both a wall-clock `_ts` and the
     same tool ids (`g`/`v`), so the dashboard interleaves conversation into the
@@ -479,8 +507,19 @@ def conversation(path, pos=0):
                     if blk.strip():
                         out.append({"kind": "message", "text": blk.strip(),
                                     "anchor": anchor, "ts": ts})
-                elif blk.get("id"):
-                    anchor = blk["id"]
+                elif bkind == "tool":
+                    # the AskUserQuestion tool_use IS the question Claude asked —
+                    # surface it so the transcript records the Q alongside the
+                    # answer (the `results` branch above). Every OTHER tool_use is
+                    # the terminal mirror's job (rendered as ops); here it only
+                    # anchors the conversation records that follow it.
+                    if blk.get("name") == "AskUserQuestion":
+                        q = _format_questions(blk.get("input") or {})
+                        if q:
+                            out.append({"kind": "question", "text": q,
+                                        "anchor": anchor, "ts": ts})
+                    if blk.get("id"):
+                        anchor = blk["id"]
     return out, new_pos
 
 

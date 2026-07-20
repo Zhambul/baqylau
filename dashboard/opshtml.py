@@ -590,11 +590,13 @@ def msg_html(kind, text, sender=""):
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
     interleaves them — docs/dashboard.md). kind: prompt | message | teammsg |
-    answer (an AskUserQuestion answer the user submitted — the "my answer
-    didn't appear" fix; a `you` bubble WITHOUT the rewind affordance, since it
-    is not a re-runnable prompt). The body rides md_html (readable markdown),
-    which is escape-first like everything else here — the neutralize() analog."""
-    who = {"prompt": "you", "message": "claude", "answer": "you ▸ answered"} \
+    question (the AskUserQuestion Claude asked — its text + offered options) |
+    answer (the answer the user submitted — the "my answer didn't appear" fix;
+    both are `you`/`claude` bubbles WITHOUT the rewind affordance, since neither
+    is a re-runnable prompt). The body rides md_html (readable markdown), which
+    is escape-first like everything else here — the neutralize() analog."""
+    who = {"prompt": "you", "message": "claude",
+           "question": "claude ▸ asks you", "answer": "you ▸ answered"} \
         .get(kind) or ("✉ " + (sender or "team"))
     extra = ""
     if kind == "prompt":

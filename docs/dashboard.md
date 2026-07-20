@@ -2233,6 +2233,24 @@ questions have been answered: …"). `opshtml.msg_html` renders `answer` as a
 prompt). This is the DASHBOARD's conversation view only — the terminal mirror
 never showed main-thread messages anyway.
 
+**The QUESTION surfaces too** (added 2026-07-20, "I want questions also to be in
+the transcript"). The answer alone was half the record — the transcript showed
+what you picked but not what was asked. The question Claude asks is an assistant
+*tool_use* block (`name == "AskUserQuestion"`, `input.questions`), which
+`conversation` previously used only as an anchor. It now also emits a distinct
+`question` record — `transcript._format_questions` flattens the questions into
+readable markdown (each question's text + a bulleted list of its offered
+options; the answer bubble already shows which was chosen), and
+`opshtml.msg_html` renders it as a `claude ▸ asks you` bubble in the red
+"asking-you" hue, again without the rewind ↶. Every OTHER tool_use stays the
+terminal mirror's job (rendered as ops); only AskUserQuestion becomes a
+conversation record. It appears for DECLINED questions too (the tool_use is
+written regardless of the answer), so the transcript honestly records what was
+asked even when nothing was picked. The interactive ask CARD is unchanged and
+still handles answering — the bubble is the permanent record, the card the
+ephemeral answerer. No new hook or state: a pure read-model addition over the
+already-audited transcript, exactly like the `answer` record above.
+
 **Interleaving by timestamp, anchors as the fallback.** The ops table carries
 a `ts REAL` column (`core/state.py`, one wall-clock stamp per `ops_append`
 batch — additive migration, so older parked `*.keep` DBs keep working and their
