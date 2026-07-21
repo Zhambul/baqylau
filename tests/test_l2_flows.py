@@ -274,27 +274,28 @@ def test_f2json_json_file_is_pretty_printed(
 _KEYWORD_SGR = "38;2;198;120;221"
 
 
-def test_f2code_source_file_is_syntax_highlighted(
-        run_hook, test_env, session, writer):
-    """`sed -n '1,3p' Foo.kt` colours the body with the kotlin lexer. Detection
-    runs in the TAILER, from the raw command passed via CLAUDE_STREAM_CMD
-    (hookkit.stream_env) — launch sites pass the command, never the decision."""
+def test_f2code_source_file_renders_as_read(run_hook, test_env, session):
+    """A main-session `sed -n '1,3p' Foo.kt` (a code reader — CT.read_command)
+    COLLAPSES to a Read one-liner instead of a streamed foreground block: cmd-pre
+    skips live streaming (no fg-live record), and cmd-fmt emits a blue Read(name)
+    line with a dim reader tag, tagged with the tool_use_id as 'v' for
+    click-to-expand. (The command + kotlin-highlighted output stash + ⧉cmd/⧉out
+    copy are covered in test_l9_copy.)"""
     s = session.make()
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "sed -n '1,3p' Foo.kt"))
-    rec = fg_live_record(s)
-    w = writer(rec["src"])
-    with open(rec["src"], "a") as f:
-        f.write("fun main() {\n    val x = 3\n}\n")
-    # Code renders only at close (partial colouring is unreliable) — finish it.
-    run_hook("claude-cmd-fmt.py", P.post_bash(s, "sed -n '1,3p' Foo.kt",
-                                              duration_ms=100))
-    w.terminate()
-    wait_until(lambda: "sentinel" in end_reasons(test_env, s.sid),
-               desc="fg stream ends on the done hand-off")
-    txt = s.ops_text()
-    assert "fun" in txt and "val" in txt, "kotlin body missing from mirror"
-    assert _KEYWORD_SGR in txt, "keywords not coloured (code-render didn't run)"
-    assert not s.live("fg"), "fg slot not released"
+    assert fg_live_record(s) is None, "a code reader must not start live streaming"
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, "sed -n '1,3p' Foo.kt", tid="toolu_kt",
+                         stdout="fun main() {\n    val x = 3\n}\n",
+                         duration_ms=100))
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    assert "Foo.kt" in lop["s"] and "sed" in lop["s"], "Read(name) + reader tag"
+    assert lop.get("v") == "toolu_kt"
+    assert "claude-copy:///%s/toolu_kt/view" % s.sid in lop["s"]
+    # rendered as a compact line — the raw output is NOT dumped inline as a block
+    assert not any(op["t"] == "gut" and "fun main" in op.get("s", "")
+                   for op in s.ops()), "output should collapse into the view stash"
+    assert not s.live("fg"), "no fg slot claimed for a code reader"
     oracle.assert_clean(test_env, s.sid)
 
 

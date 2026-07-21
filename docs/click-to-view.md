@@ -285,3 +285,48 @@ recorded poisoned history is defused too, with no data scrubbing. Why not the al
   to match whole OSC sequences (before the 2-char branch that ate just
   `\x1b]`), so hyperlinks are zero-width to `wrap_gutter`/`dwidth` and vanish
   from `strip_ansi` copies.
+
+
+## Code-reading commands render as a Read one-liner
+
+A foreground Bash command whose stdout *is* a source file verbatim — a
+`sed`/`grep`/`egrep`/`fgrep`/`cat`/`head`/`tail` of a `.py`/`.kt`/`.java`/… file
+(exactly the `code` render kind from [streaming.md](streaming.md); detected by
+`tools.code_read_target`, gated by `CLAUDE_MIRROR_CMD_READ`, default on) — is
+**not streamed as a `▶ foreground` block**. It collapses to a Read one-liner,
+because that is what it *is* from the reader's point of view: a slice of a file.
+This was the request "make sed and sed-like reads of code look like Read ops".
+
+- **Two hooks, one decision.** `tools.read_command` is the single owner both
+  Bash hooks consult so they can never disagree. `claude-cmd-pre.py` (PreToolUse)
+  SKIPS its live tee/header/tailer for such a command (no `fg-live` record, no
+  slot, no rewrite — it runs unchanged); `claude-cmd-fmt.py` (PostToolUse) then
+  emits the one-liner from `tool_response`. A *mismatch* between the two would
+  strand a streamed header with no body, so the gate lives in one place.
+- **The one-liner** is the shared `streamfmt.file_line` shape — `Read(name)` in
+  the Read BLUE — with a **dim reader tag** (`sed`/`grep`/…) appended, so it
+  reads like a native Read yet stays honest that a command produced it (it is
+  counted as a Bash command in the scoreboard, not a file read). It carries the
+  tool_use_id as `"v"` and the `…/view` hyperlink, exactly like a real Read line.
+- **The stash** (`cmd_fmt._stash_read_view` → `view:<tool_use_id>`) is a
+  COMMAND + its OUTPUT, not a file payload: a `rule`, a header `label`, a `code`
+  op (the command, pretty-printed) and a `gut` op carrying the raw output + a
+  paint-time `lex` spec (highlighted in the renderer like any Read body — the
+  same deferral, since the hook python may lack pygments). So a click expands to
+  *both the command and its highlighted output*, in place, collapse on re-click.
+- **Copiable, unlike a native Read.** A real Read's expansion carries no copy
+  links (its payload is the content, and you clicked to *see* it). A command
+  read's header `label` DOES — `⧉cmd`/`⧉out`, the same specs a `▶ foreground`
+  block paints — because you often want the exact invocation or its output on the
+  clipboard. Since this block streams NOTHING into the `ops` table (the whole
+  point is that it collapses), `core.copy.collect` FALLS BACK to the
+  `view:<gid>` stash when its ops-table scan for the group comes up empty: `⧉cmd`
+  reads the stash's `code` op, `⧉out` its `gut` op. The fallback fires only on an
+  empty ops-table match, so ordinary command blocks (which tag their ops) are
+  untouched. Both terminal (`claude-copy.py`) and web (`/api/session/…/copy/…`)
+  go through the one `collect`, so both surfaces copy identically.
+- **Main session only** (like `file_fmt` vs the substream): a subagent's code
+  read is still streamed by the substream (`agent_id` bails both Bash hooks
+  before the gate), and the web mirror is main-agent-only anyway. A **failed** or
+  **empty-output** read falls through to the normal foreground block — a real
+  error message, or a `(no output)` chip, reads better than an empty Read.

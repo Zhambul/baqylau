@@ -709,3 +709,34 @@ def test_view_toggle_unnudged_falls_back_to_slow_poll(session, run_hook, seed,
                    desc="slow-fallback poll expanded the unnudged toggle")
     finally:
         proc.terminate()
+
+
+def test_code_reader_renders_as_read_with_copiable_stash(session, run_hook,
+                                                         test_env, tmp_path):
+    """A code-reading Bash command (a sed of a .kt) renders as a Read one-liner
+    whose view:<tid> stash holds the command + syntax-highlighted output; ⧉cmd/
+    ⧉out copy them through core.copy.collect's stash fallback (this block streams
+    NOTHING into the ops table, so collect falls back to the view stash)."""
+    s = session.make()
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, "sed -n '1,3p' Foo.kt", tid="tu_rd",
+                         stdout="fun main() {\n    val x = 3\n}\n"))
+    # the one-liner: a Read line tagged for click-to-view
+    lop = next(op for op in s.ops() if op["t"] == "line" and "Read" in op["s"])
+    assert lop.get("v") == "tu_rd" and "sed" in lop["s"]
+    assert "claude-copy:///%s/tu_rd/view" % s.sid in lop["s"]
+    # nothing is group-tagged in the ops table — the block lives in the stash
+    assert not [op for op in s.ops() if op.get("g") == "tu_rd"]
+    # the stash: rule + header label + command `code` op + kotlin-lex `gut` op
+    stash = _kv(s, "view:tu_rd")
+    assert stash and {"rule", "label", "code", "gut"} <= {o["t"] for o in stash}
+    gutop = next(o for o in stash if o["t"] == "gut")
+    assert gutop["lex"] == "kotlin"
+    assert gutop["s"] == "fun main() {\n    val x = 3\n}"
+    # ⧉cmd / ⧉out copy through the collect() stash fallback
+    clip = str(tmp_path / "clip.txt")
+    _copy(run_hook, test_env, s.sid, "tu_rd", "cmd", clip)
+    cmd_copy = open(clip).read()
+    assert "sed" in cmd_copy and "Foo.kt" in cmd_copy
+    _copy(run_hook, test_env, s.sid, "tu_rd", "out", clip)
+    assert "fun main" in open(clip).read()

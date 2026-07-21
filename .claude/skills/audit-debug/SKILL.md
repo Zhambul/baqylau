@@ -693,7 +693,14 @@ New always-audited swallow sites (previously silent — their absence used to ma
   click-to-view chain is stash → toggle → reflow; check it in that order. (1) Stash:
   a `state_files` `view-stash` row (content: gid = the op's tool_use_id, tool, ops
   count; subagent stashes also carry `agent`) must exist from `claude-file-fmt.py`
-  or `claude-substream.py` — no row + no `errors` `view-stash (…)` means the op
+  or `claude-substream.py` (or `claude-cmd-fmt.py` with `tool: Bash, kind: read` —
+  a code-reading command, `sed`/`grep`/`cat`/`head`/`tail` of a source file,
+  rendered AS a Read one-liner instead of a `▶ foreground` block; its healthy trace
+  is a `claude-cmd-pre.py` decision `code reader …` (streaming SKIPPED) + a
+  `claude-cmd-fmt.py` decision `rendered as Read …`, and its ⧉cmd/⧉out copy reads
+  the command/output from THIS stash, not the ops table — `core.copy.collect`'s
+  fallback; disable via `CLAUDE_MIRROR_CMD_READ=0`) — no row + no `errors`
+  `view-stash (…)` means the op
   failed / had no content / carried no tool_use_id, and the line was deliberately
   left unlinked. (2) Toggle: each click leaves a `state_files` `view` row (content:
   gid + `open: true/false`); `open: null` = clicked an id with NO stash (feedback

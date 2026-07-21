@@ -135,6 +135,15 @@ def main():
     if not cmd.strip() or ti.get("run_in_background"):
         return H.ignore(d, "background command" if cmd.strip() else "empty command")
 
+    # A code-reading command (sed/grep/cat of a source file — CT.read_command)
+    # renders as a COLLAPSED Read one-liner, not a streamed block: skip the live
+    # tee/header/tailer here and let claude-cmd-fmt.py's PostToolUse emit the
+    # Read(name) line + view stash from tool_response. Both hooks gate on the same
+    # CT.read_command so they agree (a mismatch would strand a header here with no
+    # body). The command runs unrewritten — no updatedInput.
+    if CT.read_command(cmd)[0]:
+        return H.ignore(d, "code reader (claude-cmd-fmt renders it as Read)")
+
     held = S.hand_peek(log, "fg-live")
     if held:
         # Normally consumed by claude-cmd-fmt.py's PostToolUse handler — but a

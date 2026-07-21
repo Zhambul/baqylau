@@ -25,7 +25,15 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   can use both quote characters without bash-quoting hazards. For a **background**
   command it writes a single
   `▷ background` chip + the command and spawns the tailer below (which appends
-  the live output directly under it).
+  the live output directly under it). **Exception — a code-reading command is
+  NOT streamed at all:** a foreground `sed`/`grep`/`cat`/`head`/`tail` of a
+  source file (the `code` render kind — `tools.read_command`, gated by
+  `CLAUDE_MIRROR_CMD_READ`) collapses to a click-to-expand **Read one-liner**
+  instead ([click-to-view.md](click-to-view.md), *Code-reading commands render
+  as a Read one-liner*); `claude-cmd-pre.py` skips its live tee/tailer for the
+  same command so the two hooks agree. The content-render kinds below still
+  apply to a code read that ISN'T collapsed (a subagent's — the substream owns
+  it; or a run with `CLAUDE_MIRROR_CMD_READ=0`).
 - **`claude-stream.py`** (spawned detached, in its own session, by the launch
   hook) tails a background job's / monitor's `tasks/<id>.output` file — located
   by globbing the unique id — and appends each new line to the mirror ops with a

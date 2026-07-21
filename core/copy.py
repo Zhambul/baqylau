@@ -103,15 +103,35 @@ def toggle_view(log, db, gid):
         A.error(log, "view (toggle write)", {"gid": gid})
 
 
+def _pick(op, what, R):
+    """One op's copy contribution for `what`, or None: a `code` op is the command
+    ("cmd"/"all"), a `gut` op the ANSI-stripped output ("out"/"all")."""
+    t = op.get("t")
+    if t == "code" and what in ("cmd", "all"):
+        return op.get("s") or ""
+    if t == "gut" and what in ("out", "all"):
+        return R.strip_ansi(op.get("s") or "")
+    return None
+
+
 def collect(db, gid, what):
     """The copy text for a group, in insertion order: its `code` ops ("cmd"), the
     visible text of its `gut` ops ("out"), or BOTH interleaved ("all" — the whole
     block, for a body-only activity like a message/prompt/result/file op). Opens the
-    state DB mode=ro — this handler must never create runtime state (see docstring)."""
+    state DB mode=ro — this handler must never create runtime state (see docstring).
+
+    FALLBACK to the `view:<gid>` stash when no group-tagged ops exist: a
+    code-reading command rendered as a collapsed Read one-liner
+    (plugins/claude_code/cmd_fmt._render_read) streams NOTHING to the ops table —
+    its command + output live in that stash, whose header carries the ⧉cmd/⧉out
+    links that route here. Only fires when the ops scan came up empty, so ordinary
+    command blocks (which DO tag their ops) are unaffected."""
     from core import render as R
     conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=2.0)
     try:
         rows = conn.execute("SELECT op FROM ops ORDER BY id").fetchall()
+        stash_row = conn.execute("SELECT val FROM kv WHERE key=?",
+                                 ("view:" + gid,)).fetchone()
     finally:
         conn.close()
     out = []
@@ -122,11 +142,19 @@ def collect(db, gid, what):
             continue
         if op.get("g") != gid:
             continue
-        t = op.get("t")
-        if t == "code" and what in ("cmd", "all"):
-            out.append(op.get("s") or "")
-        elif t == "gut" and what in ("out", "all"):
-            out.append(R.strip_ansi(op.get("s") or ""))
+        v = _pick(op, what, R)
+        if v is not None:
+            out.append(v)
+    if not out and stash_row:
+        try:
+            stash = json.loads(stash_row[0])
+        except Exception:
+            stash = None
+        for op in stash if isinstance(stash, list) else []:
+            if isinstance(op, dict):
+                v = _pick(op, what, R)
+                if v is not None:
+                    out.append(v)
     return "\n".join(out)
 
 

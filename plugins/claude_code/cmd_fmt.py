@@ -12,11 +12,14 @@
 # subagent's whole transcript is streamed in order by claude-substream.py instead,
 # so we IGNORE agent_id events here to avoid double-rendering / mis-ordering.
 import os, re
+from urllib.parse import quote
 
 from core import ops as O
+from core import paths as PATHS
 from core import render as R
 from core import slots as claude_slots
 from core import state as S
+from core import streamfmt as SF
 from plugins.claude_code import hookkit as H
 from plugins.claude_code import tools as CT
 
@@ -92,6 +95,21 @@ def main():
 
     if bg or converted:
         return _render_background(d, cmd, taskid, converted, done)
+    # A foreground code-reading command (sed/grep/cat of a source file —
+    # CT.read_command) renders as a COLLAPSED Read one-liner, not a streamed
+    # block. claude-cmd-pre.py skipped its live streaming (same gate), so there is
+    # never a live tailer here (`live` is None); a FAILED command falls through to
+    # the normal block so its error is shown, and an EMPTY-output run does too
+    # (nothing to "read" — a normal "(no output)" block reads better than an empty
+    # Read). The command + its syntax-highlighted output expand from a view stash.
+    if not live and not H.is_failure(d):
+        lexer, path, reader = CT.read_command(cmd)
+        if lexer:
+            out = tr.get("stdout", "") if isinstance(tr, dict) else str(tr)
+            err = tr.get("stderr", "") if isinstance(tr, dict) else ""
+            output = (out + (("\n" + err) if err else "")).rstrip("\n")
+            if output.strip():
+                return _render_read(d, cmd, output, lexer, path, reader)
     _render_finished(d, tr, cmd, live, done)
 
 
@@ -228,6 +246,57 @@ def _render_finished(d, tr, cmd, live, done):
     # is the authoritative cost source and updates the scoreboard live. Best-effort —
     # a failed bump must never break the command block above.
     O.bump(LOG, tool="Bash", commands=1, **({"failed": 1} if failed else {}))
+
+
+def _stash_read_view(log, gid, name, cmd, output, lexer, line):
+    """Stash a code-reading command's block under kv `view:<gid>` and wrap `line`
+    in the claude-copy:///…/view hyperlink — the same click-to-view protocol
+    file_fmt.stash_view pins for file ops, but the block is a COMMAND (a `code`
+    op, pretty-printed) + its syntax-highlighted OUTPUT (a `gut` op carrying the
+    raw text + a paint-time `lex` spec, highlighted in the renderer like a Read
+    body). The header label carries the group id + ⧉cmd/⧉out link specs so the
+    expansion is copiable: core.copy.collect falls back to this stash (the block
+    streams nothing to the ops table). Returns (hyperlinked line, gid), or
+    (line, None) when the stash write failed (the caller keeps the plain line)."""
+    vops = [O.rule(),
+            O.label("Read " + name, O.BLUE, g=gid,
+                    lk=[["cmd", "⧉cmd"], ["out", "⧉out"]]),
+            O.code(cmd, g=gid),
+            O.gut(output, O.BLUE, lex=lexer, g=gid),
+            O.blank()]
+    if not S.kv_set(log, "view:" + str(gid), vops):
+        return line, None
+    url = "claude-copy:///%s/%s/view" % (
+        quote(PATHS.sid_from_log(log), safe=""), quote(str(gid), safe=""))
+    A.state_file(log, S.db_path(log), "view-stash",
+                 {"gid": gid, "tool": "Bash", "kind": "read", "ops": len(vops)})
+    return R.hyperlink(url, line), gid
+
+
+def _render_read(d, cmd, output, lexer, path, reader):
+    """Render a code-reading foreground command as a collapsed Read one-liner: a
+    blue Read(name) line (the shared streamfmt.file_line shape, so it reads like a
+    real Read) with a dim reader tag (`sed`/`grep`/…), clickable to expand the
+    command + its highlighted output (_stash_read_view). The reader tag keeps it
+    honest — it is a command, not a native Read — while the noise (the streamed
+    file dump) collapses behind the click, ⧉cmd/⧉out copiable."""
+    disp, loc = SF.file_display(path, d.get("cwd"))
+    name = os.path.basename(path.rstrip("/")) or path
+    line = SF.file_line("Read", disp, O.BLUE)
+    if reader:
+        line += "  " + R.DIM + reader + R.RST
+    gid = d.get("tool_use_id") or None
+    vid = None
+    if gid:
+        line, vid = _stash_read_view(LOG, gid, name, cmd, output, lexer, line)
+    O.emit(LOG, O.line(line, view=vid))
+    # It is still a Bash command — count it as one (not a file read), matching how
+    # the normal foreground path bumps. The OTLP receiver owns token/cost.
+    O.bump(LOG, tool="Bash", commands=1)
+    A.hook_event(d, decision="rendered as Read: Read(%s) via %s"
+                 % (name, reader or "<stdin>")
+                 + (f" [{loc}]" if loc else "")
+                 + (" +view" if vid else ""))
 
 
 def entry():

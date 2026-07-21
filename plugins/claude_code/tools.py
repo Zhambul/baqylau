@@ -265,27 +265,30 @@ RENDER_KINDS = (
 )
 
 
-def _detect_source(cmd, kind):
-    """The one detection skeleton. If `cmd` is a single simple command whose body
-    streams a matching file's raw contents — an allowlisted reader with a matching
-    file argument, or a bare `< file.ext` stdin redirect — return kind.match's
-    truthy value; else None. Conservative: any pipe, output redirect, chain
-    (; && ||), or command substitution disqualifies, because then the streamed
-    bytes are filtered/derived, not the document itself. Runs on the command's
-    `_effective` read, so a trailing `| head`/`| tail` (truncation) still renders
-    and a multi-statement block keys off its LAST statement's file."""
+def _match_reader(cmd, kind):
+    """The one detection skeleton — the token-matching core, additionally naming
+    WHICH word matched and the reader command that owns it. If `cmd` is a single
+    simple command whose body streams a matching file's raw contents — an
+    allowlisted reader with a matching file argument, or a bare `< file.ext` stdin
+    redirect — return (kind.match's truthy value, file_word, reader); else
+    (None, None, None). `reader` is the invoking command basename ('' for a bare
+    `< file`). Conservative: any pipe, output redirect, chain (; && ||), or command
+    substitution disqualifies, because then the streamed bytes are filtered/
+    derived, not the document itself. Runs on the command's `_effective` read, so a
+    trailing `| head`/`| tail` (truncation) still renders and a multi-statement
+    block keys off its LAST statement's file."""
     cmd = _effective(cmd)
     try:
         toks = shlex.split(cmd, posix=False)
     except ValueError:
-        return None
+        return None, None, None
     if not toks:
-        return None
+        return None, None, None
     # Any shell plumbing means the output is no longer the file verbatim.
     if any(t in _PLUMBING for t in toks):
-        return None
+        return None, None, None
     if "$(" in cmd:
-        return None
+        return None, None, None
     def _match(word):
         return kind.match(word.strip("'\"").lower())
     # `< file.ext` (with or without a leading command)
@@ -294,17 +297,29 @@ def _detect_source(cmd, kind):
         if i + 1 < len(toks):
             v = _match(toks[i + 1])
             if v:
-                return v
+                reader = "" if toks[0] == "<" else os.path.basename(toks[0].strip("'\""))
+                return v, toks[i + 1].strip("'\""), reader
     head = os.path.basename(toks[0].strip("'\""))
     if head in kind.readers:
         for w in toks[1:]:
             v = _match(w)
             if v:
-                return v
-        return None
+                return v, w.strip("'\""), head
+        return None, None, None
     if head in kind.tailarg_readers and len(toks) > 1:
-        return _match(toks[-1])             # the FILE is the trailing arg
-    return None
+        w = toks[-1]                        # the FILE is the trailing arg
+        v = _match(w)
+        if v:
+            return v, w.strip("'\""), head
+    return None, None, None
+
+
+def _detect_source(cmd, kind):
+    """kind.match's truthy value when `cmd` streams a matching file's raw contents,
+    else None — the render-kind detector stream.py's _detect_render iterates. Thin
+    over _match_reader (which additionally names the matched file + reader; only the
+    Read-one-liner path, code_read_target, needs those)."""
+    return _match_reader(cmd, kind)[0]
 
 
 def is_md(path):
@@ -338,6 +353,30 @@ def code_source(cmd):
     """If `cmd` streams a source file the mirror can syntax-highlight, return the
     pygments LEXER NAME (e.g. 'python'); else None (see _detect_source)."""
     return _BY_NAME["code"].detect(cmd)
+
+
+def code_read_target(cmd):
+    """(lexer, file_path, reader) for a command whose stdout is a source file the
+    mirror can syntax-highlight — a sed/grep/cat/head/tail of a .py/.kt/.java/…
+    file (the `code` render kind; see code_source / _match_reader) — else
+    (None, None, None). `reader` is the invoking command basename (the dim tag on
+    the Read one-liner). The seam behind rendering such a command as a collapsed
+    Read op instead of a streamed foreground block."""
+    return _match_reader(cmd, _BY_NAME["code"])
+
+
+def read_command(cmd):
+    """(lexer, file_path, reader) when `cmd` should render as a collapsed Read
+    one-liner instead of a streamed foreground block (a code-reading command —
+    code_read_target), else (None, None, None). Gated by CLAUDE_MIRROR_CMD_READ
+    (default on; '0' falls back to live streaming). The SINGLE owner of the
+    decision both Bash hooks consult — claude-cmd-pre.py skips live streaming and
+    claude-cmd-fmt.py renders the Read one-liner for exactly the same commands, so
+    they can never disagree (a mismatch would strand a streamed header with no
+    body, or double-render)."""
+    if os.environ.get("CLAUDE_MIRROR_CMD_READ", "1") == "0":
+        return None, None, None
+    return code_read_target(cmd)
 
 
 def diff_counts(tool_name, inp):
