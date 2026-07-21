@@ -429,7 +429,9 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---- account usage strip (under the header) ----------------------------- */
 #accounts {
   display: flex; flex-direction: column; gap: 8px; align-items: flex-start;
-  padding: 7px 16px; background: var(--panel);
+  padding: 7px max(var(--gx), env(safe-area-inset-right))
+           7px max(var(--gx), env(safe-area-inset-left));
+  background: var(--panel);
   box-shadow: inset 0 -1px 0 var(--hair);
 }
 /* wrap + max-width: the row (name + two ubars, ~500px) must fold on a narrow
