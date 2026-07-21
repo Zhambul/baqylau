@@ -818,7 +818,7 @@ body.in-session #accounts { display: none; }
    hover-red, dimmer than at rest so it reads as unavailable not just secondary */
 .dirhide:disabled { opacity: .4; cursor: default; box-shadow: none; }
 .nsback {
-  position: fixed; inset: 0; z-index: 40;
+  position: fixed; inset: 0; z-index: 80;   /* above #top (50) and #attn (46) */
   display: flex; align-items: flex-start; justify-content: center;
   padding-top: 12vh; padding-bottom: 24px;
   background: color-mix(in srgb, var(--bg) 68%, transparent);
