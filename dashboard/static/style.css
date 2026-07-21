@@ -449,7 +449,10 @@ code, pre, .mono { font-family: var(--mono); }
 .ubar .ufill { display: block; height: 100%; background: var(--accent, #6b9bd1); }
 .ubar.warn .ufill { background: var(--amber, #d1a35a); }
 .ubar.hot .ufill { background: var(--red, #b5484d); }
-.ubar .upct { color: var(--text-soft); font: 10px/1 var(--mono); }
+/* fixed width + right-align so 0% / 10% / 100% occupy the same column and the
+   "resets …" text that follows stays aligned across the c1/c2 account rows */
+.ubar .upct { color: var(--text-soft); font: 10px/1 var(--mono);
+  min-width: 4ch; text-align: right; flex: none; }
 .ubar .ureset, .acct > .ureset { color: var(--dim2); font: 10px/1 var(--mono); white-space: nowrap; }
 /* the account is BLOCKED right now (an active `limit-hit` stamp — the usage
    bar alone freezes at ~95% at exactly the moment requests start bouncing) */
