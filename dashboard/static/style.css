@@ -47,6 +47,11 @@
   /* horizontal page gutter — shared by #top/#attn/#view, shrunk on narrow
      screens by the mobile section at the bottom of this file */
   --gx: 20px;
+  /* top safe-area inset (notch / status bar under viewport-fit=cover); 0 on
+     devices without one. Added to the header's top padding and to every
+     sticky element pinned below the header (#attn, .rail) so the whole stack
+     clears the notch instead of hiding under it. */
+  --sat: env(safe-area-inset-top, 0px);
 }
 
 * { box-sizing: border-box; }
@@ -79,7 +84,7 @@ code, pre, .mono { font-family: var(--mono); }
 #top {
   position: sticky; top: 0; z-index: 50;
   display: flex; align-items: center; justify-content: space-between;
-  padding: 10px max(var(--gx), env(safe-area-inset-right))
+  padding: calc(10px + var(--sat)) max(var(--gx), env(safe-area-inset-right))
            10px max(var(--gx), env(safe-area-inset-left));
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--bg) 90%, transparent),
@@ -117,7 +122,7 @@ code, pre, .mono { font-family: var(--mono); }
    quieter — colored dot only, plain hairline. One row, horizontal-scrolls if
    it overflows. */
 #attn {
-  position: sticky; top: 47px; z-index: 46;
+  position: sticky; top: calc(47px + var(--sat)); z-index: 46;
   display: flex; align-items: center; gap: 8px;
   padding: 6px max(var(--gx), env(safe-area-inset-right))
            6px max(var(--gx), env(safe-area-inset-left));
@@ -1070,10 +1075,10 @@ body.modal-open { overflow: hidden; }
 
 /* ---- agents rail -------------------------------------------------------- */
 .rail { display: flex; flex-direction: column; gap: 8px; align-self: start;
-  position: sticky; top: 59px; max-height: calc(100vh - 72px); overflow-y: auto; }
+  position: sticky; top: calc(59px + var(--sat)); max-height: calc(100vh - 72px - var(--sat)); overflow-y: auto; }
 /* when the session strip is showing it takes the below-header slot; drop the
    sticky rail below it (min-height 34px) so the two never overlap */
-body.attn-on .rail { top: 93px; max-height: calc(100vh - 106px); }
+body.attn-on .rail { top: calc(93px + var(--sat)); max-height: calc(100vh - 106px - var(--sat)); }
 /* single-column .split (the 1000px breakpoint above): the rail's DOM position
    would bury the agent cards BELOW a long stream — order: -1 lifts it above
    instead, restyled from a sticky sidebar into a horizontally swipable strip.

@@ -3111,7 +3111,10 @@ pan and pinch still work), tap targets grown toward the 44px HIG guideline
 under `(pointer: coarse)` (36–40px effective — padding grows the hit area,
 not the type), `viewport-fit=cover` + `env(safe-area-inset-*)` gutters on
 `#top`/`#attn`/`#view`/`#toasts` (the shared `--gx` gutter var, 12px under
-900px), `interactive-widget=resizes-content` + `40dvh` grow caps so the
+900px; the top inset is its own `--sat` var — `env(safe-area-inset-top)` —
+added to `#top`'s top padding AND to every sticky element pinned below the
+header (`#attn` at 47px, `.rail` at 59/93px) so the whole stack clears the
+notch instead of the brand/buttons hiding under the status bar), `interactive-widget=resizes-content` + `40dvh` grow caps so the
 keyboard resizes the layout instead of hiding the composer, and — below the
 1000px `.split` breakpoint — the agents rail flips from a sticky sidebar to a
 horizontally swipable card strip *above* the stream (`order: -1`; its DOM
