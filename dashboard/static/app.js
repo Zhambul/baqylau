@@ -3575,7 +3575,12 @@ function renderSessionChrome(tab) {
   l1.append(badge);
   // "live" goes unsaid (state tint + badge carry it); parked still shows
   if (!meta.live) l1.append(el("span", "chip2 parked", "parked"));
-  if (meta.cwd) l1.append(el("span", "sid", meta.cwd));
+  if (meta.cwd) {
+    // just the directory name (basename) — the full path rides the tooltip
+    const cwdChip = el("span", "sid", meta.cwd.split("/").filter(Boolean).pop());
+    cwdChip.title = meta.cwd;
+    l1.append(cwdChip);
+  }
   const sidChip = el("span", "sid copysid", shortSid(S.cur));
   sidChip.title = "click to copy the full session id";
   sidChip.onclick = () => copySid(S.cur);
