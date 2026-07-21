@@ -226,18 +226,38 @@ function initNotifBtn() {
 // are a misclick trap.
 
 const BASE_TITLE = "baqylau";
-// the baqylau eye — бақылау, "observation": eye outline, magenta (busy) iris
+// the baqylau shanyrak — бақылау, "observation": the radial yurt-crown seen
+// looking up into it, reworked as a control view — a central aperture (the
+// observer) with spokes to gold nodes on a ring (the agents). Gold accent
+// (#E9B949) on a neutral ink (#9aa7b0) that reads on a light OR dark browser
+// tab; the asking state adds a red node top-right (favData's `extra`). 200
+// viewBox = the design's own coordinates, strokes bumped for 16px legibility.
 const FAV_GLYPH =
-  "<path d='M1 8 Q8 1.5 15 8 Q8 14.5 1 8 Z' fill='none'"
-  + " stroke='#7d8590' stroke-width='1.6'/>"
-  + "<circle cx='8' cy='8' r='3.4' fill='#c678dd'/>"
-  + "<circle cx='8' cy='8' r='1.5' fill='#1a0620'/>";
+  "<g stroke='#9aa7b0' stroke-width='6' stroke-linecap='round'>"
+  + "<line x1='100' y1='84' x2='100' y2='18'/>"
+  + "<line x1='111.31' y1='88.69' x2='157.98' y2='42.02'/>"
+  + "<line x1='116' y1='100' x2='182' y2='100'/>"
+  + "<line x1='111.31' y1='111.31' x2='157.98' y2='157.98'/>"
+  + "<line x1='100' y1='116' x2='100' y2='182'/>"
+  + "<line x1='88.69' y1='111.31' x2='42.02' y2='157.98'/>"
+  + "<line x1='84' y1='100' x2='18' y2='100'/>"
+  + "<line x1='88.69' y1='88.69' x2='42.02' y2='42.02'/>"
+  + "</g>"
+  + "<circle cx='100' cy='100' r='82' fill='none' stroke='#E9B949' stroke-width='8'/>"
+  + "<g fill='#E9B949'>"
+  + "<circle cx='100' cy='18' r='9'/><circle cx='157.98' cy='42.02' r='9'/>"
+  + "<circle cx='182' cy='100' r='9'/><circle cx='157.98' cy='157.98' r='9'/>"
+  + "<circle cx='100' cy='182' r='9'/><circle cx='42.02' cy='157.98' r='9'/>"
+  + "<circle cx='18' cy='100' r='9'/><circle cx='42.02' cy='42.02' r='9'/>"
+  + "</g>"
+  + "<circle cx='100' cy='100' r='16' fill='none' stroke='#9aa7b0' stroke-width='6'/>"
+  + "<circle cx='100' cy='100' r='8' fill='#E9B949'/>";
 const favData = (extra) =>
   "data:image/svg+xml," + encodeURIComponent(
-    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'>"
+    "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'>"
     + FAV_GLYPH + (extra || "") + "</svg>");
 const FAVICON = favData("");
-const FAVICON_ASK = favData("<circle cx='12' cy='4' r='4' fill='#e06c75'/>");
+const FAVICON_ASK = favData("<circle cx='168' cy='32' r='30' fill='#e06c75'/>");
 
 // tab state → pill class (the dot/ring color, mirroring the kitty tab
 // palette) + its needs-you-first sort rank. Anything unmapped — idle, or ""
@@ -2375,9 +2395,20 @@ function attachTray(getSid, onChange) {
 // prompt box); enabled() gates every path (a parked/headless box takes none).
 // Returns the picker button to place in the UI (the hidden <input> rides with
 // it in a fragment).
+// a paperclip glyph as an inline SVG (not the 📎 emoji): the emoji's own
+// line-box metrics made the button a different height than the SVG mic beside
+// it, so its icon sat misaligned — an SVG sized exactly like `.micbtn svg`
+// (15px) lines up and matches the mic's monochrome style.
+const CLIP_SVG =
+  "<svg viewBox='0 0 24 24' fill='none' stroke='currentColor' stroke-width='2'"
+  + " stroke-linecap='round' stroke-linejoin='round'><path d='M21.44 11.05l-9.19"
+  + " 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1"
+  + "-2.83-2.83l8.49-8.48'/></svg>";
+
 function wireAttach(tray, ta, zone, enabled) {
-  const btn = el("button", "cattach", "📎");
+  const btn = el("button", "cattach");
   btn.type = "button";
+  btn.innerHTML = CLIP_SVG;
   btn.title = "attach image or file";
   const input = el("input", "attach-input");
   input.type = "file";
@@ -2551,8 +2582,11 @@ function buildComposer() {
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
-  wrap.append(tray.strip, ta, dic.btn, btn);
+  // order: [attachment strip (full-width, wraps to top)], textarea, 📎 attach,
+  // 🎤 mic, send — the attach sits next to the mic, not stranded past send
+  wrap.append(tray.strip, ta);
   if (attachBtn) wrap.append(attachBtn);
+  wrap.append(dic.btn, btn);
   return wrap;
 }
 

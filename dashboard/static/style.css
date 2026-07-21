@@ -87,8 +87,14 @@ code, pre, .mono { font-family: var(--mono); }
   backdrop-filter: blur(10px);
   box-shadow: inset 0 -1px 0 var(--hair);
 }
-.brand { color: var(--text); letter-spacing: .01em; font-size: 14px; }
+.brand {
+  color: var(--text); letter-spacing: .01em; font-size: 14px;
+  display: inline-flex; align-items: center; gap: 7px;
+}
 .brand b { font-weight: 650; }
+/* the shanyrak mark in the header lockup — gold accent baked in, ink follows
+   the brand's currentColor (see index.html) */
+.brandmark { width: 1.25em; height: 1.25em; flex: none; display: block; }
 .dimtxt { color: var(--dim); }
 .topright { display: flex; align-items: center; gap: 14px; }
 .dot {
@@ -701,13 +707,15 @@ code, pre, .mono { font-family: var(--mono); }
   50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 15%, transparent); }
 }
 /* ---- composer attachments (images/screenshots + files) ------------------- */
-/* the 📎 picker button — sits beside the mic, same chrome */
+/* the paperclip picker button — same chrome + exact box as the mic, so its
+   inline-SVG icon lines up with the mic's (an emoji glyph did not) */
 .cattach {
   flex: none; display: flex; align-items: center; justify-content: center;
   background: var(--panel2); color: var(--text-soft); border: none;
   cursor: pointer; box-shadow: inset 0 0 0 1px var(--hair);
-  border-radius: var(--r); padding: 7px 9px; font-size: 14px; line-height: 1;
+  border-radius: var(--r); padding: 7px 9px;
 }
+.cattach svg { width: 15px; height: 15px; display: block; }
 .cattach:hover { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
 .attach-input { display: none; }
 /* the pending-attachment strip — full-width row above the input (composer
