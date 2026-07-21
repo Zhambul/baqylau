@@ -530,6 +530,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
   routing (the decline paths have NO hook of their own — the turn boundary IS
   the clear). Answer 409 `step: open` → the dialog wasn't on screen (usually:
   answered or Esc'd in the terminal, SSE clear raced the click — benign).
+  Since 2026-07-22 the open-check POLLS up to `STEP_TIMEOUT_S` (it was the ONE
+  step that read the screen once with no retry — a capture taken while the
+  dialog was still rendering, e.g. right after a `--resume` into a fresh
+  window, or a transient blank/partial `get_text`, bailed instantly with
+  step:open on a genuinely-open, never-answered ask; session 0247ebb2,
+  2026-07-21), and the bail now records the SCREEN it saw: the `dashboard
+  answer (open)` `errors` row carries a `screen` field (last ~2000 chars of
+  `get_text`) — read it to tell the causes apart (dialog-too-tall so the
+  `☐`/`☒` chip bar or the `"Enter to select"` footer fell off the visible
+  screen · a footer-string DRIFT after a Claude Code upgrade — `FOOT`/`REVIEW`
+  in `askdialog.py` no longer match · a blank/partial capture). `step:
+  question`/`review` bails carry the same `screen` field now.
   But `step: open` with the tab showing "User declined to answer questions"
   and the user insisting they answered on the web is the **Esc-gesture-declined
   ask** (fixed 2026-07-20, session 7809eaff): a web `interrupt` / `rewind`

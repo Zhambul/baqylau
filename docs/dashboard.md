@@ -1509,6 +1509,20 @@ failed, and the tab said *User declined*" report (2026-07-20). The fix lives
 on the gesture side (`_dialog_open_guard`, the interrupt section): no web
 interrupt / cancel-edit / rewind sends a key while a red dialog is open.
 
+**The open-check polls (2026-07-22).** `drive`'s first check — is the dialog
+on screen at all — used to read `get_text` ONCE with no retry, unlike every
+later step (which polls via `_wait` up to `STEP_TIMEOUT_S`). So a capture
+taken a beat too early — the dialog still rendering right after a `--resume`
+into a fresh kitty window, or a transient blank/partial `get_text` — bailed
+immediately with `step: open` on an ask that was genuinely up and never
+answered (session `0247ebb2`, 2026-07-21). It now polls like the rest. And
+every `AskError` carries the SCREEN it saw (`e.screen`); `post_answer` folds
+the last ~2000 chars into the `dashboard answer (<step>)` audit `errors` row's
+`screen` field, because the bail otherwise records only its outcome — a
+step:open can't be told apart after the fact (dialog too tall for the visible
+screen · a `FOOT`/`REVIEW` footer-string drift after a Claude Code upgrade · a
+blank capture) without the pixels.
+
 **The key model was overhauled in v2.1.215 (re-measured 2026-07-19).**
 The original v2.1.214 model was *digit-driven* — a digit selected a
 single-select option, toggled a multiSelect box, and numbered the "Type

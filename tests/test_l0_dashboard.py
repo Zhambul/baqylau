@@ -3658,6 +3658,10 @@ def _ask_env(monkeypatch, sid, win, fe, questions, tid="toolu_a1"):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setattr(DS.askdialog, "POLL_S", 0.01)
     monkeypatch.setattr(DS.askdialog, "KEY_GAP_S", 0)
+    # the open-check polls up to STEP_TIMEOUT_S now (like every other step) —
+    # keep the dialog-dismissed "open" bail from burning the full budget
+    monkeypatch.setattr(DS.askdialog, "STEP_TIMEOUT_S", 0.1)
+    monkeypatch.setattr(DS.askdialog, "SUBMIT_TIMEOUT_S", 0.1)
     monkeypatch.setenv("KITTY_WINDOW_ID", win)
     A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
     S.kv_set(DS.P.mirror_log(sid), "ask-pending",

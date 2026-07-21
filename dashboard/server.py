@@ -2635,9 +2635,10 @@ class Handler(BaseHTTPRequestHandler):
         try:
             askdialog.drive(fe, win, questions, answers or [], chat=chat)
         except askdialog.AskError as e:
-            A.error(log, "dashboard answer (%s)" % e.step,
-                    {"sid": sid, "win": win, "chat": chat,
-                     "detail": str(e)})
+            ctx = {"sid": sid, "win": win, "chat": chat, "detail": str(e)}
+            if e.screen is not None:      # the pixels the failing step saw
+                ctx["screen"] = e.screen[-2000:]
+            A.error(log, "dashboard answer (%s)" % e.step, ctx)
             A.state_file(log, sdb, "web-answer",
                          {"win": win, "ok": False, "chat": chat,
                           "step": e.step,

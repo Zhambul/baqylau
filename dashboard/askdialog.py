@@ -74,11 +74,18 @@ class AskError(Exception):
     """A step's expected screen state never appeared. .step names it for the
     audit row. The dialog is left EXACTLY as it was — never Escape-closed,
     because Escape declines the whole question set (the opposite of
-    rewindmenu's bail); a re-answer from the web normalizes and retries."""
+    rewindmenu's bail); a re-answer from the web normalizes and retries.
 
-    def __init__(self, step, detail=""):
+    `.screen` carries the last screen capture the failing step saw (truncated
+    by the caller into the audit `errors` context): the bail records only its
+    OUTCOME, so without the pixels a step:open ("no dialog") can't be told
+    apart after the fact — dialog-too-tall vs a footer-string drift after a
+    Claude Code upgrade vs a blank/partial capture all look identical."""
+
+    def __init__(self, step, detail="", screen=None):
         super().__init__(step + ((": " + detail) if detail else ""))
         self.step = step
+        self.screen = screen
 
 
 def region(screen):
@@ -284,9 +291,17 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     (declines + tells Claude to discuss — the page then focuses its
     composer). Raises AskError with the dialog LEFT OPEN on any unverified
     step; returns {"submitted": True} / {"chat": True}."""
-    screen = fe.get_text(win) or ""
-    if not dialog_open(screen) and not review_open(screen):
-        raise AskError("open", "no question dialog on screen")
+    # Poll for the dialog like every other step does (via _wait) — this was
+    # the ONE step that read the screen ONCE with no retry, so a capture taken
+    # while the dialog was still rendering (e.g. right after a --resume) or a
+    # transient blank/partial get_text bailed immediately with step:open even
+    # though the dialog was genuinely up (session 0247ebb2, 2026-07-21: a still
+    # -open, never-answered ask failed here on a freshly-resumed window).
+    screen, ok = _wait(fe, win,
+                       lambda s: dialog_open(s) or review_open(s),
+                       STEP_TIMEOUT_S, sleep)
+    if not ok:
+        raise AskError("open", "no question dialog on screen", screen=screen)
     if chat:
         if not any(r["label"] == CHAT_LABEL for r in rows(screen)):
             raise AskError("chat", "no 'Chat about this' row on screen")
@@ -313,7 +328,8 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
                            STEP_TIMEOUT_S, sleep)
         if not ok:
             raise AskError("question", "question %d never became current: %r"
-                           % (i + 1, (q.get("question") or "")[:60]))
+                           % (i + 1, (q.get("question") or "")[:60]),
+                           screen=screen)
         _answer_question(fe, win, q, ans, sleep)
     # a single single-select question submits outright; everything else lands
     # on the review pane, where "Submit answers" is the cursored top row. The
@@ -327,7 +343,8 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
                        or (not dialog_open(s) and not review_open(s)),
                        SUBMIT_TIMEOUT_S, sleep)
     if not ok:
-        raise AskError("review", "neither review pane nor submit happened")
+        raise AskError("review", "neither review pane nor submit happened",
+                       screen=screen)
     if review_open(screen):
         _cursor_to(fe, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
                    "Submit answers")
