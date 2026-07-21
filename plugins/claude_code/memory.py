@@ -28,6 +28,13 @@ MARK = "\U0001f9e0"                 # 🧠 — the distinct memory marker baked 
 
 _DEFAULT_ROOT = "~/wiki/01"
 
+# The feature is SCOPED to one project: the memory wiki (~/wiki/01) is shared
+# across all of code/01, but a session only gets the 🧠 marker / Memory tab /
+# note viewer when it is working inside aggregator-adapters (the project whose
+# .claude/ wires up the wiki). BAQYLAU_MEMORY_PROJECT overrides it — the
+# hermetic-test seam only, not a user knob.
+_DEFAULT_PROJECT = "~/code/01/aggregator-adapters"
+
 # Verb precedence for the stored label when a note is touched more than once: a
 # Write (note created) outranks an Update (revised) outranks a Read (recalled), so
 # the tab shows the most consequential thing that happened to each note.
@@ -56,10 +63,32 @@ def root():
 
 def is_memory(path):
     """True when `path` is a note UNDER the memory root (the file-op → memory-op
-    test). The bare root (a directory) or anything outside returns False."""
+    test). The bare root (a directory) or anything outside returns False. This
+    is the PATH test only — callers combine it with in_scope() (the project
+    gate) so the feature activates only for aggregator-adapters sessions."""
     if not path:
         return False
     return os.path.abspath(path).startswith(root() + os.sep)
+
+
+def project():
+    """The project the memory feature is enabled for (aggregator-adapters),
+    absolute. BAQYLAU_MEMORY_PROJECT overrides it (test seam only)."""
+    return os.path.abspath(os.path.expanduser(
+        os.environ.get("BAQYLAU_MEMORY_PROJECT") or _DEFAULT_PROJECT))
+
+
+def in_scope(cwd=None):
+    """True when a session working in `cwd` (default: this process's cwd — the
+    session dir a hook/tailer runs in) is inside the enabled project. The wiki
+    is shared across code/01, but the feature is deliberately scoped to
+    aggregator-adapters, so a wiki note touched from ANOTHER project is not a
+    memory op here (and that session shows no Memory tab). A worktree under the
+    project (…/.claude/worktrees/<x>) is in scope (it starts with the root)."""
+    cwd = cwd or os.getcwd()
+    p = project()
+    ap = os.path.abspath(cwd)
+    return ap == p or ap.startswith(p + os.sep)
 
 
 # --- write side: the per-session `memory` kv snapshot -------------------------------

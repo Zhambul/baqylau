@@ -229,13 +229,14 @@ class Renderer:
                                   added=added, removed=removed, rng=rng)
         if failed:
             line += "  " + R.DIM + "✗" + RST
-        # A subagent memory-wiki op (~/wiki/01): mark it 🧠 (baked into the line
-        # before the emit below); the `memory` kv snapshot happens AFTER the emit,
-        # into the SAME per-session kv the main agent writes (self.agent names the
-        # subagent — e.g. the note-writer). The mirror block stays main-agent-only;
-        # this op only surfaces in the agent's drill-down, but the Memory tab is
-        # team-wide.
-        is_mem = MEM.is_memory(path)
+        # A subagent memory-wiki op (~/wiki/01), and ONLY when this session is in
+        # the enabled project (MEM.in_scope over the tailer's cwd = the session
+        # dir): mark it 🧠 (baked into the line before the emit below); the
+        # `memory` kv snapshot happens AFTER the emit, into the SAME per-session kv
+        # the main agent writes (self.agent names the subagent — e.g. the
+        # note-writer). The mirror block stays main-agent-only; this op only
+        # surfaces in the agent's drill-down, but the Memory tab is team-wide.
+        is_mem = MEM.is_memory(path) and MEM.in_scope()
         if is_mem:
             line += "  " + R.DIM + MEM.MARK + RST
         tag = self._op_tag()

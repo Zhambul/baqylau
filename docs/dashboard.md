@@ -2675,8 +2675,19 @@ A session-view tab **`memory`** (between `jobs` and `errors`) lists the
 `~/wiki/01` (markdown notes with YAML frontmatter, cross-linked with bare
 `[[wikilinks]]`). A Read/Write/Edit whose path falls under that root is a MEMORY op
 — recall (Read), persist (Write), or revise (Update/Edit). `plugins/claude_code/
-memory.py` is the single owner of that vocabulary (the root, the `is_memory` test,
-the mirror 🧠 `MARK`, the `memory` kv, and the read-side vault helpers).
+memory.py` is the single owner of that vocabulary (the root, the project scope, the
+`is_memory` test, the project gate, the mirror 🧠 `MARK`, the `memory` kv, and the
+read-side vault helpers).
+
+**Scoped to one project.** The wiki (`~/wiki/01`) is shared across all of
+`code/01`, but the feature is deliberately enabled ONLY for sessions inside
+`~/code/01/aggregator-adapters` (`memory.project()`, `BAQYLAU_MEMORY_PROJECT`
+overrides — a test seam). The producers gate on `is_memory(path) and
+in_scope(cwd)`, so a wiki note touched from another project is a plain file op; and
+the server serves `memory_scope` (`in_scope` over the session's cwd) so the client
+**hides the Memory tab entirely** off-scope (a deep-link to `…/memory` there falls
+back to the mirror). A worktree under the project (`…/.claude/worktrees/<x>`) is in
+scope.
 
 **Mirror side.** When `file_fmt.py` (main agent) or `substream_render.py` (a
 subagent) renders a file op under the root, it appends 🧠 (`memory.MARK`) to the

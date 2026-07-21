@@ -466,7 +466,12 @@ New always-audited swallow sites (previously silent — their absence used to ma
   memory wiki (`~/wiki/01`). Evidence: the `memory` `state_files` rows (each write
   carries `verb`/`path`/`agent`/`notes`-count) and the producers' `hook_events`
   decisions (the `+... [mem:<who>]` fragment on `claude-file-fmt.py`, or the
-  substream's file-op render for a subagent). Tab empty though the wiki was edited
+  substream's file-op render for a subagent). Tab MISSING entirely → the session
+  is OUT OF SCOPE: the feature is enabled only for sessions inside
+  `~/code/01/aggregator-adapters` (`memory.in_scope` over the session cwd; the
+  server's `memory_scope` flag gates the tab client-side), so a session elsewhere
+  has no Memory tab AND records nothing even after editing the wiki — by design.
+  Tab present but empty though the wiki was edited
   → no `memory` write: unhosted session (no state DB — `record` is `parked`-guarded
   by design), or the path wasn't under the hardcoded root (`memory.root()` is
   `~/wiki/01` unless the `BAQYLAU_MEMORY_ROOT` test seam is set — a vault elsewhere

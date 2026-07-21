@@ -33,6 +33,19 @@ def test_is_memory_root_and_boundaries(tmp_path, monkeypatch):
     assert not MEM.is_memory(str(tmp_path / "wiki" / "01x" / "note.md"))
 
 
+def test_in_scope_gates_to_the_project(tmp_path, monkeypatch):
+    proj = tmp_path / "code" / "01" / "aggregator-adapters"
+    proj.mkdir(parents=True)
+    monkeypatch.setenv("BAQYLAU_MEMORY_PROJECT", str(proj))
+    assert MEM.in_scope(str(proj))
+    assert MEM.in_scope(str(proj / "adapters-api" / "src"))
+    assert MEM.in_scope(str(proj / ".claude" / "worktrees" / "wt1"))  # a worktree is in scope
+    assert not MEM.in_scope(str(tmp_path / "code" / "01" / "aggregator-services"))
+    assert not MEM.in_scope(str(tmp_path / "elsewhere"))
+    # a sibling sharing the prefix string must NOT count
+    assert not MEM.in_scope(str(tmp_path / "code" / "01" / "aggregator-adapters-x"))
+
+
 # ------------------------------------------------------------------ record
 
 def test_record_merges_and_escalates_verb(tmp_path, monkeypatch):
@@ -142,20 +155,23 @@ def test_frontmatter_rows_escape():
 
 # ------------------------------------------------ end-to-end: the real hook
 
-def _mem_env(test_env, vault):
-    return dict(test_env, BAQYLAU_MEMORY_ROOT=str(vault))
+def _mem_env(test_env, vault, project):
+    # BAQYLAU_MEMORY_PROJECT is the scope seam — the session's cwd is s.cwd, so an
+    # in-scope test points it at s.cwd; an out-of-scope test points it elsewhere.
+    return dict(test_env, BAQYLAU_MEMORY_ROOT=str(vault),
+                BAQYLAU_MEMORY_PROJECT=str(project))
 
 
 def test_file_fmt_marks_and_records_a_memory_op(run_hook, test_env, session, tmp_path):
-    """The real claude-file-fmt.py hook: a Write under the vault paints the 🧠
-    marker AND stashes the note into the `memory` kv."""
+    """The real claude-file-fmt.py hook: a Write under the vault, from an IN-SCOPE
+    session, paints the 🧠 marker AND stashes the note into the `memory` kv."""
     s = session.make()
     vault = tmp_path / "wiki" / "01"
     (vault / "platform" / "concepts").mkdir(parents=True)
     note = str(vault / "platform" / "concepts" / "arch.md")
     run_hook("claude-file-fmt.py",
              P.post_file(s, tool="Write", path=note, tid="toolu_mem1"),
-             env=_mem_env(test_env, vault))
+             env=_mem_env(test_env, vault, s.cwd))
     wait_until(lambda: (ST.kv_get(s.log, "memory") or {}).get("files"),
                desc="memory kv populated")
     files = (ST.kv_get(s.log, "memory") or {}).get("files")
@@ -166,6 +182,23 @@ def test_file_fmt_marks_and_records_a_memory_op(run_hook, test_env, session, tmp
     assert any(op.get("mem") for op in s.ops() if op.get("t") == "line")
 
 
+def test_file_fmt_scope_gate_off_project(run_hook, test_env, session, tmp_path):
+    """The SAME wiki write from a session OUTSIDE the enabled project is a plain
+    file op — no 🧠 marker, no `memory` kv (the feature is scoped)."""
+    s = session.make()
+    vault = tmp_path / "wiki" / "01"
+    (vault / "platform").mkdir(parents=True)
+    note = str(vault / "platform" / "arch.md")
+    other_project = str(tmp_path / "some" / "other" / "project")
+    run_hook("claude-file-fmt.py",
+             P.post_file(s, tool="Write", path=note, tid="toolu_oos1"),
+             env=_mem_env(test_env, vault, other_project))
+    wait_until(lambda: s.ops(), desc="op emitted")
+    assert MEM.MARK not in s.ops_text()
+    assert not any(op.get("mem") for op in s.ops())
+    assert ST.kv_get(s.log, "memory") is None
+
+
 def test_file_fmt_leaves_non_memory_ops_untouched(run_hook, test_env, session, tmp_path):
     s = session.make()
     vault = tmp_path / "wiki" / "01"
@@ -173,7 +206,7 @@ def test_file_fmt_leaves_non_memory_ops_untouched(run_hook, test_env, session, t
     run_hook("claude-file-fmt.py",
              P.post_file(s, tool="Edit", path=os.path.join(s.cwd, "app.py"),
                          tid="toolu_code1"),
-             env=_mem_env(test_env, vault))
+             env=_mem_env(test_env, vault, s.cwd))
     wait_until(lambda: s.ops(), desc="op emitted")
     assert MEM.MARK not in s.ops_text()
     assert not any(op.get("mem") for op in s.ops())
@@ -188,6 +221,9 @@ def test_substream_render_file_records_under_the_subagent(tmp_path, monkeypatch)
     vault = tmp_path / "wiki" / "01"
     (vault / "providers").mkdir(parents=True)
     monkeypatch.setenv("BAQYLAU_MEMORY_ROOT", str(vault))
+    # the substream tailer's cwd is the session dir; in this in-process test that
+    # is the pytest cwd, so point the scope seam at it (in_scope() over getcwd())
+    monkeypatch.setenv("BAQYLAU_MEMORY_PROJECT", os.getcwd())
     log = str(tmp_path / "claude-mirror-sub.log")
     ST.kv_set(log, "boot", 1)
     r = SR.Renderer(

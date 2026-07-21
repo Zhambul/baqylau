@@ -824,7 +824,11 @@ def session_payload(sid):
     data["error_count"] = API.error_count(sid)
     data["monitor_count"] = API.monitor_count(sid)   # the monitors tab badge
     data["job_count"] = API.job_count(sid)           # the jobs tab badge
-    data["memory_count"] = API.memory_count(sid)     # the memory tab badge
+    # the Memory tab is SCOPED: only sessions inside the enabled project
+    # (aggregator-adapters) get it. The flag gates the tab client-side (hidden
+    # off-scope); the count still rides along (0 off-scope — nothing recorded).
+    data["memory_scope"] = MEM.in_scope(canon_cwd(data.get("cwd") or ""))
+    data["memory_count"] = API.memory_count(sid) if data["memory_scope"] else 0
     data["title"] = session_title(data.get("transcript_path") or "")
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude

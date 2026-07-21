@@ -269,12 +269,15 @@ def main():
     line = SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
                         failed=failed, extent=ext,
                         added=added, removed=removed, rng=rng) + mark
-    # A file op under the memory wiki (~/wiki/01) is a MEMORY op: append the 🧠
-    # MARK to the one-liner (baked in before the emit); the `memory` kv snapshot
-    # itself happens AFTER the emit, so the first op's own emit has created the
-    # state DB the parked-guarded record() needs (main agent — agent_id was
-    # bailed above; the substream records subagent memory ops into the same kv).
-    is_mem = MEM.is_memory(path)
+    # A file op under the memory wiki (~/wiki/01) is a MEMORY op — but ONLY for a
+    # session inside the enabled project (aggregator-adapters; MEM.in_scope over
+    # the payload cwd): a wiki note touched from another project is a plain file
+    # op. When it IS one: append the 🧠 MARK to the one-liner (baked in before the
+    # emit); the `memory` kv snapshot itself happens AFTER the emit, so the first
+    # op's own emit has created the state DB the parked-guarded record() needs
+    # (main agent — agent_id was bailed above; the substream records subagent
+    # memory ops into the same kv).
+    is_mem = MEM.is_memory(path) and MEM.in_scope(d.get("cwd") or "")
     if is_mem:
         line += "  " + R.DIM + MEM.MARK + R.RST
     # Click-to-view: stash the pre-rendered content block under the op's

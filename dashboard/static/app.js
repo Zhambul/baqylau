@@ -3597,6 +3597,9 @@ function renderSessionChrome(tab) {
   clearMonitorPoll();         // leaving the monitors tab stops its live poll
   clearJobPoll();
   const meta = ses.meta || {};
+  // the Memory tab only exists for in-scope (aggregator-adapters) sessions — a
+  // deep-link / stale bookmark to it elsewhere falls back to the mirror
+  if (tab === "memory" && !meta.memory_scope) tab = "mirror";
   $view.textContent = "";
 
   const head = el("div", "shead");
@@ -3867,9 +3870,11 @@ function renderSessionChrome(tab) {
   ses.jobTab = mk("jobs", "jobs",
                   ses.jobs ? ses.jobs.length : (meta.job_count || 0));
   // 🧠 memory-wiki notes touched — actual list length once fetched, else the
-  // cheap eager count (memory_count)
-  ses.memTab = mk("memory", "memory",
-                  ses.memory ? ses.memory.length : (meta.memory_count || 0));
+  // cheap eager count. SCOPED: only sessions inside the enabled project
+  // (aggregator-adapters, meta.memory_scope) get the tab at all.
+  if (meta.memory_scope)
+    ses.memTab = mk("memory", "memory",
+                    ses.memory ? ses.memory.length : (meta.memory_count || 0));
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
   $view.append(tabs);
 
