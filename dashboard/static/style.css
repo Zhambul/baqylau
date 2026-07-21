@@ -91,7 +91,7 @@ code, pre, .mono { font-family: var(--mono); }
   color: var(--text); letter-spacing: .01em; font-size: 14px;
   display: inline-flex; align-items: center; gap: 9px;
 }
-.brand b { font-weight: 650; }
+.brand b { font-weight: 650; font-size: 18px; }
 /* the shanyrak mark in the header lockup — gold accent baked in, ink follows
    the brand's currentColor (see index.html) */
 .brandmark { width: 2em; height: 2em; flex: none; display: block; }
