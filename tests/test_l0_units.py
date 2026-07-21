@@ -1779,6 +1779,53 @@ def test_errwatch_cached_conn_and_db_appears_later(tmp_path, monkeypatch):
     assert EW._conn is conn1                          # same conn reused
 
 
+# ---- core.errwatch — IGNORE_FUNCS keep benign degrade-audits off the light ---
+# A func in IGNORE_FUNCS is an EXPECTED-outcome degrade-audit, not a failure:
+# still written to `errors` (queryable), but excluded from the ⚠ chip count AND
+# the painted one-liners. A real error alongside it is unaffected.
+
+
+def test_errwatch_ignore_funcs_off_warning_light(tmp_path, monkeypatch):
+    import sqlite3
+
+    from core import errwatch as EW
+    db = tmp_path / "audit.db"
+    log = str(tmp_path / "claude-mirror-sid1.log")
+    emitted = []
+
+    class StubA:
+        def enabled(self):
+            return True
+
+        def db_path(self):
+            return str(db)
+
+        def error(self, *a, **k):
+            pass
+
+        def state_file(self, *a, **k):
+            pass
+    monkeypatch.setattr(EW, "A", StubA())
+    monkeypatch.setattr(EW, "_conn", None)
+    monkeypatch.setattr(EW.O, "emit", lambda log, *ops: emitted.extend(ops))
+    ignored = next(iter(EW.IGNORE_FUNCS))              # a real ignored signature
+    w = sqlite3.connect(str(db))
+    w.execute("CREATE TABLE errors(id INTEGER PRIMARY KEY, session_id TEXT,"
+              " script TEXT, func TEXT DEFAULT '', traceback TEXT)")
+    w.execute("INSERT INTO errors(session_id, script, func, traceback)"
+              " VALUES('', 'x.py', ?, 'NoneType: None')", (ignored,))
+    w.execute("INSERT INTO errors(session_id, script, func, traceback)"
+              " VALUES('', 'y.py', 'real.boom', 'ValueError: boom')")
+    w.commit()
+    w.close()
+    # only the genuine error counts and paints; the ignored func is neither
+    assert EW.poll(log, "sid1") == 1
+    texts = " ".join(str(o.__dict__ if hasattr(o, "__dict__") else o)
+                     for o in emitted)
+    assert "boom" in texts
+    assert ignored not in texts
+
+
 # ---- substream.cancelled_by_user — the stat-gated meta.json poll -------------
 # The 0.4s completion loop used to re-open + json.loads the whole meta.json
 # every tick to read one monotonic boolean. Now the parse is gated on the

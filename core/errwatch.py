@@ -69,6 +69,36 @@ KV_KEY = "errseen"  # state-DB kv: last errors rowid already emitted to the mirr
 # tag so they read as machine-wide, not this session's.
 KV_KEY_GLOBAL = "errseen-global"
 
+# Known-BENIGN error signatures (by `errors.func`) kept OFF the warning light.
+# Some code paths call A.error for a NORMAL, EXPECTED outcome (a deliberate
+# degrade-audit outside any except block — traceback 'NoneType: None'), purely so
+# the outcome stays debuggable in the audit `errors` table. Those are not
+# failures, and lighting the ⚠ chip / painting a `⚠ audit:` line in EVERY
+# session's mirror forever is pure noise. Funcs listed here are EXCLUDED from
+# both the chip count and the emitted one-liners — the rows are STILL written and
+# STILL queryable (`bin/claude-audit.py errors ''`), just not surfaced live.
+# Adding a signature here is the "ignore" action of the global-errors skill
+# (.claude/skills/global-errors/SKILL.md) — only for an audit that is a normal
+# expected return path; a genuine failure gets FIXED, not ignored.
+IGNORE_FUNCS = frozenset({
+    # model_usage._slug_for returns None (the per-model usage bar simply doesn't
+    # attach) when an account's 7-day reset epoch ties with another's and the 5h
+    # tie-breaker can't separate them — an expected outcome, not a failure (see
+    # the _slug_for docstring). Investigated 2026-07-21.
+    "model_usage._slug_for",
+})
+
+
+def _ignore_clause():
+    """SQL fragment + params to exclude IGNORE_FUNCS from an errors query
+    (`''` fragment when nothing is ignored). Applied to the chip COUNT and the
+    row/global-row SELECTs so an ignored func neither counts nor paints."""
+    if not IGNORE_FUNCS:
+        return "", ()
+    ph = ",".join("?" * len(IGNORE_FUNCS))
+    return f" AND func NOT IN ({ph})", tuple(sorted(IGNORE_FUNCS))
+
+
 _self_audited = False   # poll()'s own failure audited once per process (see header)
 
 # Cached read-only conn to the global audit DB. The audit DB path is fixed for
@@ -159,22 +189,27 @@ def poll(log, sid=None):
             return None
         sid = sid or P.sid_from_log(log)
         conn = _audit_conn(db)   # cached across polls — see the header above
+        # Benign, expected-outcome degrade-audits are kept off the warning light
+        # (IGNORE_FUNCS) — excluded from the chip count AND the painted rows, so
+        # a normal return path never lights ⚠ in every session forever.
+        ign, iparams = _ignore_clause()
         # The chip counts GLOBAL (session_id='') rows too: an audit outage /
         # pre-session error degrades every session, so every session shows it.
-        n = conn.execute("SELECT COUNT(*) FROM errors WHERE session_id IN (?, '')",
-                         (sid,)).fetchone()[0]
+        n = conn.execute("SELECT COUNT(*) FROM errors "
+                         "WHERE session_id IN (?, '')" + ign,
+                         (sid, *iparams)).fetchone()[0]
         rows, grows = [], []
         if n:
             last = int(St.kv_get(log, KV_KEY) or 0)
             rows = conn.execute(
                 "SELECT id, script, func, traceback FROM errors "
-                "WHERE session_id=? AND id>? ORDER BY id",
-                (sid, last)).fetchall()
+                "WHERE session_id=? AND id>?" + ign + " ORDER BY id",
+                (sid, last, *iparams)).fetchall()
             glast = int(St.kv_get(log, KV_KEY_GLOBAL) or 0)
             grows = conn.execute(
                 "SELECT id, script, func, traceback FROM errors "
-                "WHERE session_id='' AND id>? ORDER BY id",
-                (glast,)).fetchall()
+                "WHERE session_id='' AND id>?" + ign + " ORDER BY id",
+                (glast, *iparams)).fetchall()
         if rows or grows:
             # Checkpoint BEFORE emitting: a failing emit must not re-emit the
             # same rows every POLL_S forever (at-most-once beats at-least-once
