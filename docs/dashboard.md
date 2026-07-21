@@ -264,7 +264,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
-| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); backs the new-session picker and the top usage strip |
+| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
@@ -1255,7 +1255,8 @@ per-session effort). The fetch is async and **yields to a hand pick** made
 while it was in flight (`modelPicked`/`effortPicked`, the same discipline as
 `acctPicked`); it only replaces a value still on its default. The account
 picker keeps load-balancing — setting the resumed model re-runs `autoAcct`,
-so the account is still auto-picked by 5h headroom against that model.
+so the account is still auto-picked by weekly-quota perishability, skipping any
+account the resumed model is limit-blocked on (*Default account* below).
 
 **Resume / continue.** The new-session form's "start from" picker maps to the
 CLI's own conversation-pickup flags: `continue` → `claude --continue` (the
@@ -1809,22 +1810,50 @@ registry is empty and whose picker row hides, still launches). The account word
 rides the same `$SHELL -lic '<word> "$@"'` login shell, so the alias resolves
 exactly as typing it in a fresh tab.
 
-The picker's **default selection load-balances across subscriptions**: the form
-preselects the account with the most 5-hour headroom (lowest effective
-`five_hour` used %; ties keep registry order). "Effective" because a snapshot
-whose `five_hour_reset` has passed — or, when the reset time is unknown, one
-older than the 5h window itself — means the window rolled over and counts as 0
-used; an account with no snapshot at all has had no recent traffic and also
-counts as 0. That arithmetic is SERVER-computed and served as each account's
-`five_hour_eff` (`core/sessionapi.effective_five_hour` — the single owner,
-because the rate-limit migration's target picker needs the SAME number,
-docs/relimit.md; app.js `fiveHourUsed` just reads the field). The suggestion is
-recomputed when the fresh `/api/accounts` fetch supersedes the cached list, but
-a manual pick (the dropdown's `onpick` hook) always wins and is never
-overridden. (Historically this lived client-side in app.js; the migration
-feature forced a Python owner, and two encodings of "effective" is exactly what
-the single-owner rule exists to prevent.) On top of the headroom rank, the
-auto-pick **skips any account whose active `limit_hit` applies to the launch**:
+### Default account
+
+The picker's **default selection burns PERISHABLE weekly quota first** — the
+scheduling objective is *(b) maximise total work extracted across accounts per
+week*, not *never hit a wall this session*. Unused weekly (`seven_day`) quota is
+wiped at the window's reset whether you spend it or not, so quota that resets
+SOON is perishable: leaving it idle wastes it, while an account whose 7d window
+resets days out can be conserved (its headroom survives to next week). So the
+form preselects the account with the highest **perishability** —
+`remaining% / hours-to-7d-reset`: quota still left AND a near reset scores high
+(spend it now), the same headroom with a distant reset scores low (save it). The
+higher per-session wall risk this accepts is by design: the **automigrate safety
+net** (docs/relimit.md) catches a session that then runs into a limit and moves
+it to another account, so aggressive burning is safe.
+
+Two server-computed signals ride each `/api/accounts` row (single-owner in
+`core/sessionapi`, `app.js` only reads them):
+
+- **`sched_score`** — the perishability above (`sessionapi.sched_score`). A
+  rolled-over / unknown-reset 7d window, or no snapshot at all, counts as full
+  quota over a full-week horizon: a low BASELINE score, never a spike (so a
+  stale/quiet account doesn't get falsely prioritised); an exhausted window
+  (0 remaining) scores 0. A reset only seconds away is floored (`SCHED_MIN_HORIZON_H`)
+  so it can't produce an unbounded score.
+- **`sched_ok`** — a 5h **session-safety gate** (`sessionapi.sched_ok`):
+  effective `five_hour` used below `SCHED_5H_GATE` (90%). The picker ranks by
+  `sched_score` only among accounts that clear this gate, so it won't open a
+  session onto an account already at its 5h wall. (Effective `five_hour` — the
+  `five_hour_eff` field, `sessionapi.effective_five_hour` — still means a
+  rolled-over or reset-passed 5h window reads 0, and a no-snapshot account reads
+  0.) Gate empties the pool → fall back to any open account; all blocked → any.
+
+Only the account-wide `seven_day` window feeds `sched_score`; per-MODEL weekly
+caps still HARD-block via `limit_hit` (below), but a soft per-model perishability
+tie-break is a deliberate non-goal for now (the tokenless snapshot the migration
+picker shares carries no per-model window, and the user's own framing was the
+account-wide 7d reset). The migration target picker (`account.pick_target`,
+docs/relimit.md) is UNCHANGED — it still picks the least-used-5h refuge; it is
+the safety net, not the scheduler, and runs on tokenless snapshots with no 7d
+reset to reason about. The suggestion is recomputed when the fresh
+`/api/accounts` fetch supersedes the cached list, but a manual pick (the
+dropdown's `onpick` hook) always wins and is never overridden. On top of the
+perishability rank, the auto-pick **skips any account whose active `limit_hit`
+applies to the launch**:
 an account-wide stamp always applies; a model-scoped one (`limit_hit.model` —
 e.g. a Fable-only limit, docs/relimit.md *Limit scope*) only when that model
 is the one selected in the form, which is why flipping the model picker
