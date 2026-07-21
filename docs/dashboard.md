@@ -2766,7 +2766,12 @@ a stem that doesn't resolve gets a `dead` class (the wiki keeps dangling links o
 purpose). Clicking a `[[link]]` fetches the target and pushes a breadcrumb (🧠
 memory › note › followed note …) so you can walk the vault beyond the touched set
 and back out. A **Backlinks** section lists the notes whose text links to this one
-(`memory.backlinks`, same index), each itself clickable.
+(`memory.backlinks`, same index), each itself clickable. Each wikilink/backlink
+anchor gets a DIRECT `onclick` (not a container-level delegated listener): the
+anchors have no `href`, and mobile Safari won't dispatch a bubbled click from a tap
+on such an element to an ancestor listener — a delegated handler silently did
+nothing on the phone while the desktop worked (the grid cards use a direct onclick
+for the same reason).
 
 ## Stream kind filters
 

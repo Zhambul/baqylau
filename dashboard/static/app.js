@@ -4832,12 +4832,14 @@ function renderNoteView() {
     }
     wrap.append(bl);
   }
-  // follow a [[wikilink]] / backlink (delegated — the body HTML is server-built)
-  wrap.addEventListener("click", (ev) => {
-    const a = ev.target.closest("a.wl");
-    if (!a || !wrap.contains(a) || a.classList.contains("dead")) return;
-    ev.preventDefault();
-    openNoteRef({ stem: a.dataset.note });
+  // follow a [[wikilink]] / backlink. DIRECT per-anchor onclick, NOT delegation:
+  // these anchors have no href, and mobile Safari won't dispatch a bubbled click
+  // from a tap on such an element to a container listener — the same reason the
+  // grid cards (which DO open on the phone) use a direct onclick. Covers both the
+  // body links and the backlinks (both live under `wrap`); dead links get none.
+  wrap.querySelectorAll("a.wl").forEach(a => {
+    if (a.classList.contains("dead")) return;
+    a.onclick = (ev) => { ev.preventDefault(); openNoteRef({ stem: a.dataset.note }); };
   });
   ses.body.append(wrap);
 }
