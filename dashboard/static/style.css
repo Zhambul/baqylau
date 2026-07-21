@@ -89,12 +89,12 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .brand {
   color: var(--text); letter-spacing: .01em; font-size: 14px;
-  display: inline-flex; align-items: center; gap: 7px;
+  display: inline-flex; align-items: center; gap: 9px;
 }
 .brand b { font-weight: 650; }
 /* the shanyrak mark in the header lockup — gold accent baked in, ink follows
    the brand's currentColor (see index.html) */
-.brandmark { width: 1.25em; height: 1.25em; flex: none; display: block; }
+.brandmark { width: 2em; height: 2em; flex: none; display: block; }
 .dimtxt { color: var(--dim); }
 .topright { display: flex; align-items: center; gap: 14px; }
 .dot {
@@ -1281,7 +1281,7 @@ html { touch-action: manipulation; }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
   .ghost, .fchip, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
-  .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn {
+  .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn, .cattach {
     min-height: 36px;
   }
   .tabs a { padding: 10px 15px; }
