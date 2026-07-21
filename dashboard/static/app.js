@@ -4806,6 +4806,10 @@ function openNoteRef(ref, reset) {
       S.ses.noteTrail.push(d);
       S.ses.noteFocus = d.path || d.name;
       paintMemory();
+      // start the newly-opened note from its top — following a link deep in one
+      // note shouldn't land you mid-way down the next (the page scrolls the
+      // window; the sticky header stays pinned)
+      window.scrollTo(0, 0);
     })
     .catch(() => {});
 }
