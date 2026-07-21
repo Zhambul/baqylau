@@ -124,9 +124,9 @@ code, pre, .mono { font-family: var(--mono); }
 #attn {
   position: sticky; top: calc(47px + var(--sat)); z-index: 46;
   display: flex; align-items: center; gap: 8px;
-  padding: 6px max(var(--gx), env(safe-area-inset-right))
-           6px max(var(--gx), env(safe-area-inset-left));
-  min-height: 34px; overflow-x: auto;
+  padding: 10px max(var(--gx), env(safe-area-inset-right))
+           10px max(var(--gx), env(safe-area-inset-left));
+  min-height: 42px; overflow-x: auto;
   background: linear-gradient(180deg,
     color-mix(in srgb, var(--bg) 92%, transparent),
     color-mix(in srgb, var(--bg) 80%, transparent));
@@ -1080,7 +1080,7 @@ body.modal-open { overflow: hidden; }
   position: sticky; top: calc(59px + var(--sat)); max-height: calc(100vh - 72px - var(--sat)); overflow-y: auto; }
 /* when the session strip is showing it takes the below-header slot; drop the
    sticky rail below it (min-height 34px) so the two never overlap */
-body.attn-on .rail { top: calc(93px + var(--sat)); max-height: calc(100vh - 106px - var(--sat)); }
+body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114px - var(--sat)); }
 /* single-column .split (the 1000px breakpoint above): the rail's DOM position
    would bury the agent cards BELOW a long stream — order: -1 lifts it above
    instead, restyled from a sticky sidebar into a horizontally swipable strip.
