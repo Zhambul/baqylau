@@ -446,6 +446,9 @@ code, pre, .mono { font-family: var(--mono); }
 .acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; min-width: 14ch; }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
 .ubar { display: inline-flex; align-items: center; gap: 5px; }
+/* separate each usage window (5h · 7d · 7d fable) with a hairline + extra
+   space so its "resets in …" tail doesn't run into the next window's label */
+.ubar + .ubar { padding-left: 14px; border-left: 1px solid var(--hair); }
 .ubar .ulabel { color: var(--dim); font: 10px/1 var(--mono); }
 .ubar .utrack {
   width: 60px; height: 6px; border-radius: 999px; overflow: hidden;
