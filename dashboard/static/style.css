@@ -427,6 +427,7 @@ code, pre, .mono { font-family: var(--mono); }
 .fcount { color: var(--dim2); font: 11px/1 var(--mono); flex: none; margin-left: auto; }
 
 /* ---- account usage strip (under the header) ----------------------------- */
+body.in-session #accounts { display: none; }
 #accounts {
   display: flex; flex-direction: column; gap: 12px; align-items: flex-start;
   padding: 14px max(var(--gx), env(safe-area-inset-right))

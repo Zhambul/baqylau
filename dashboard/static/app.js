@@ -499,6 +499,8 @@ window.addEventListener("hashchange", route);
 
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
+  // hide the c1/c2 account strip once we're inside a particular session
+  document.body.classList.toggle("in-session", parts[0] === "s");
   // A user-driven navigation while a launch watch is armed flips it QUIET:
   // the watch keeps running, but resolution becomes a clickable toast instead
   // of a navigation — yanking the browser away from wherever the user went is
