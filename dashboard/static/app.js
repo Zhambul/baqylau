@@ -2798,6 +2798,11 @@ function openNewSession(prefillCwd, resumeSid) {
     ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
   ]);
   effort.value = effort.has(last.effort) ? last.effort : "high";
+  // Track whether the user has touched a picker by hand — the resume prefill
+  // below (async) must not clobber a deliberate choice made while it was in
+  // flight (same discipline as acctPicked).
+  let modelPicked = false, effortPicked = false;
+  effort.onpick = () => { effortPicked = true; };
 
   // account picker — the subscription to launch under (a switcher alias like
   // c1/c2). Populated from /api/accounts (cached in S.accts); each option shows
@@ -2825,7 +2830,7 @@ function openNewSession(prefillCwd, resumeSid) {
     const pool = open.length ? open : acctList;
     acct.value = pool.reduce((b, a) => fiveHourUsed(a) < fiveHourUsed(b) ? a : b).slug;
   };
-  model.onpick = autoAcct;
+  model.onpick = () => { modelPicked = true; autoAcct(); };
   const fillAccts = (list) => {
     acctList = list;
     acctRow.style.display = list.length ? "" : "none";
@@ -2844,6 +2849,20 @@ function openNewSession(prefillCwd, resumeSid) {
   if (S.accts) fillAccts(S.accts);
   fetch("/api/accounts").then(r => r.json())
     .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
+
+  // Resuming should continue where the SESSION was, not where the launcher
+  // last was: preselect the resumed session's own model (its transcript-tail
+  // model, from ctx) and effort (its last-applied /effort level), overriding
+  // the global last-used ns-prefs defaults set above. Async (a /api/session
+  // fetch) and yielding to a hand pick made while it was in flight; the
+  // account still load-balances (autoAcct re-runs against the chosen model).
+  if (resumeSid)
+    fetch("/api/session/" + encodeURIComponent(resumeSid)).then(r => r.json())
+      .then(d => {
+        const fam = (shortModel(d.ctx && d.ctx.model) || "").split("-")[0];
+        if (!modelPicked && fam && model.has(fam)) { model.value = fam; autoAcct(); }
+        if (!effortPicked && d.effort && effort.has(d.effort)) effort.value = d.effort;
+      }).catch(() => {});
   const split = el("div", "nssplit");
   split.append(modelRow, effortRow);
   const split2 = el("div", "nssplit");

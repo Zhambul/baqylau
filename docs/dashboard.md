@@ -1242,6 +1242,19 @@ the remembered directory. Model and effort offer **concrete values only — no
 keeps `model`/`effort` optional — absent flags remain valid for other
 clients; only the form always sends them.
 
+**Resuming preselects the SESSION's own model/effort, not the last-used
+prefs.** When the form opens on a `resume: <sid>` (a parked session's resume
+button), a resume should continue where the *session* was, not where the
+launcher last was — so a `/api/session/<sid>` fetch overrides the remembered
+model/effort defaults with the resumed session's own: its **model** from the
+ctx probe (the transcript tail's last assistant turn) and its **effort** from
+`effort_default` (the last-applied `/effort` level — the only readable
+per-session effort). The fetch is async and **yields to a hand pick** made
+while it was in flight (`modelPicked`/`effortPicked`, the same discipline as
+`acctPicked`); it only replaces a value still on its default. The account
+picker keeps load-balancing — setting the resumed model re-runs `autoAcct`,
+so the account is still auto-picked by 5h headroom against that model.
+
 **Resume / continue.** The new-session form's "start from" picker maps to the
 CLI's own conversation-pickup flags: `continue` → `claude --continue` (the
 directory's most recent conversation), `resume: <sid>` → `claude --resume
