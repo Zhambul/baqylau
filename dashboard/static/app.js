@@ -367,7 +367,15 @@ function acctPill(a) {
     track.append(fill);
     seg.append(track, el("span", "upct", pct + "%"));
     const reset = u && u[resetKey];
-    if (reset) seg.append(el("span", "ureset", "resets " + resetAgo(reset)));
+    if (reset) {
+      // dim "resets in" prefix, keep the duration (4h 12m) at full weight
+      const txt = resetAgo(reset);          // "in 4h 12m" | "in <1m" | "now"
+      const box = el("span", "ureset");
+      const hasIn = txt.startsWith("in ");
+      box.append(el("span", "rlbl", hasIn ? "resets in " : "resets "));
+      box.append(el("span", "rval", hasIn ? txt.slice(3) : txt));
+      seg.append(box);
+    }
     return seg;
   };
   // one bar per captured window — the 5h/7d pair plus any model-scoped
