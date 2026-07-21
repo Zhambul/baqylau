@@ -982,32 +982,30 @@ def test_find_proc_multiline_heredoc_disambiguates(monkeypatch):
     bug where a `python3 - <<PY` monitor whose longest token was the shared
     project path matched many processes AND whose raw newlines could never match
     ps's escaped argv, so the full-command disambiguation silently failed and
-    find_proc returned None ('monitor process never found')."""
-    import os
-    import shlex
-    import subprocess
-    from conftest import wait_until
+    find_proc returned None ('monitor process never found'). Hermetic: `ps` is
+    stubbed with a canned rendering (no real zsh — CI has no /bin/zsh — and no
+    dependence on how a given platform's ps escapes newlines)."""
+    import types
     from plugins.claude_code import stream as ST
-    tag = f"/tmp/findproc-multiline-{os.getpid()}"   # shared-ish sig token
-    body = f"import time\ntime.sleep(30)  # {tag}\n"
-    cmd = f": {tag}\npython3 - <<PY\n{body}PY"
-    sig = ST.monitor_sig(cmd)
+    proj = "/code/proj/aggregator-adapters"          # the shared project path
+    cmd = f"cd ~{proj} && python3 - <<PY\nimport time\ntime.sleep(9)\nPY"
+    sig = ST.monitor_sig(cmd)                          # longest token = that path
+    assert sig == proj
     monkeypatch.setenv("CLAUDE_MONITOR_CMD", cmd)
-    # A DECOY carrying the same sig token but a different command — with only the
-    # ambiguous sig to go on, find_proc would refuse to pick (or pick wrong).
-    decoy = subprocess.Popen(["/bin/sh", "-c", f": {tag}; sleep 30"],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    # The real monitor: `source … && eval <cmd>` so the wrapper shell can't
-    # exec-optimize itself away and its argv carries the (escaped) full command.
-    real = subprocess.Popen(["/bin/zsh", "-c", f"true && eval {shlex.quote(cmd)}"],
-                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    try:
-        wait_until(lambda: ST.find_proc(sig) is not None)
-        assert ST.find_proc(sig) == real.pid
-    finally:
-        for p in (decoy, real):
-            p.kill()
-            p.wait()
+    # The real wrapper's argv carries the full command with ps-ESCAPED newlines
+    # ($'\n' from zsh quoting) + backslash-escaped specials — a raw substring of
+    # CLAUDE_MONITOR_CMD (real \n) could never match it, so only _norm_cmd does.
+    esc = (r"cd\ ~/code/proj/aggregator-adapters\ &&\ python3\ -\ \<\<PY"
+           r"$'\n'import\ time$'\n'time.sleep\(9\)$'\n'PY")
+    ps_out = "\n".join([
+        f" 111 -zsh cd ~{proj}",                       # decoy: a shell in the dir
+        f" 222 /bin/zsh -c source snap.sh && eval {esc}",  # the real monitor wrapper
+        f" 333 tail -f ~{proj}/build.log",             # decoy: unrelated, same path
+    ])
+    monkeypatch.setattr(ST.subprocess, "run",
+                        lambda *a, **k: types.SimpleNamespace(stdout=ps_out))
+    # All three carry the ambiguous sig; only the wrapper matches the full command.
+    assert ST.find_proc(sig) == 222
 
 
 # ---- core.errwatch — the audit warning light (pure shapes) ------------------
