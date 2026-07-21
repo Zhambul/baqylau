@@ -435,9 +435,14 @@ code, pre, .mono { font-family: var(--mono); }
   box-shadow: inset 0 -1px 0 var(--hair);
 }
 /* wrap + max-width: the row (name + two ubars, ~500px) must fold on a narrow
-   screen — #accounts has no internal scroll, an unwrapped row widens the page */
+   screen — #accounts has no internal scroll, an unwrapped row widens the page.
+   each row is its own padded, rounded chip (left edge still on the --gx page
+   gutter; the padding insets the content within the chip) */
 .acct { display: inline-flex; flex-wrap: wrap; align-items: center;
-        gap: 4px 10px; min-width: 0; max-width: 100%; }
+        gap: 4px 10px; min-width: 0; max-width: 100%;
+        padding: 7px 14px; border-radius: var(--r);
+        background: color-mix(in srgb, var(--mid) 5%, transparent);
+        box-shadow: inset 0 0 0 1px var(--hair); }
 .acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; min-width: 14ch; }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
 .ubar { display: inline-flex; align-items: center; gap: 5px; }
