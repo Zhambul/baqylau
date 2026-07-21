@@ -453,7 +453,7 @@ code, pre, .mono { font-family: var(--mono); }
    "resets …" text that follows stays aligned across the c1/c2 account rows */
 .ubar .upct { color: var(--text-soft); font: 10px/1 var(--mono);
   min-width: 4ch; text-align: right; flex: none; }
-.ubar .ureset, .acct > .ureset { color: var(--dim2); font: 10px/1 var(--mono); white-space: nowrap; }
+.ubar .ureset, .acct > .ureset { color: var(--text-soft); font: 11px/1 var(--mono); white-space: nowrap; }
 /* the account is BLOCKED right now (an active `limit-hit` stamp — the usage
    bar alone freezes at ~95% at exactly the moment requests start bouncing) */
 .acct .ulimit {
