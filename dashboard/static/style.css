@@ -449,9 +449,7 @@ code, pre, .mono { font-family: var(--mono); }
 /* separate each usage window (5h · 7d · 7d fable) with a hairline + extra
    space so its "resets in …" tail doesn't run into the next window's label */
 .ubar + .ubar { padding-left: 14px; border-left: 1px solid var(--hair); }
-/* fixed label column ("5h" / "7d" / "7d fable") so each window is the same
-   width and the dividers line up across the c1/c2 rows */
-.ubar .ulabel { color: var(--dim); font: 10px/1 var(--mono); min-width: 9ch; flex: none; }
+.ubar .ulabel { color: var(--dim); font: 10px/1 var(--mono); flex: none; }
 .ubar .utrack {
   width: 60px; height: 6px; border-radius: 999px; overflow: hidden;
   background: color-mix(in srgb, var(--bg) 70%, black);
