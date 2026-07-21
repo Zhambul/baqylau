@@ -414,7 +414,14 @@ def _get_json(url):
 def test_http_root_and_static_whitelist(dash):
     code, body = _get(dash + "/")
     assert code == 200 and body.lstrip().startswith("<!doctype html>")
+    # cache-bust: the index's sub-resource URLs carry ?v=<BOOT_ID> so a restart
+    # forces remote browsers/CDNs off a stale app.js/style.css
+    assert ("/static/app.js?v=" + DS.BOOT_ID) in body
+    assert ("/static/style.css?v=" + DS.BOOT_ID) in body
     code, _ = _get(dash + "/static/app.js")
+    assert code == 200
+    # the ?v= is a cache key only — the file still serves with the query present
+    code, _ = _get(dash + "/static/app.js?v=" + DS.BOOT_ID)
     assert code == 200
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(dash + "/static/secret.txt")          # not on the whitelist

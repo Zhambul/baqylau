@@ -292,6 +292,24 @@ global) pushed over a held response — no websockets dependency, and
 `EventSource` gives the client reconnect for free (the app reconnects with
 `?after=<last seen op id>` so nothing repeats).
 
+## Cache-busting (`?v=<BOOT_ID>`)
+
+Static responses are sent `Cache-Control: no-store`, but that only asks a
+browser not to cache — it can't EVICT bytes already cached, and a remote client
+(mobile Safari especially, or a CDN in front — the public origin is a Cloudflare
+tunnel) can keep serving a stale `app.js`/`style.css` across a dashboard restart.
+That is exactly the "does NOT hot-reload" hazard (CLAUDE.md): a fix shipped, the
+origin served it, the phone kept the pre-fix bytes (the *memory wikilinks don't
+follow on mobile* report was really this — the fix was live at the origin the
+whole time). So `static()` rewrites the sub-resource URLs in `index.html` to
+`/static/app.js?v=<BOOT_ID>` / `/static/style.css?v=<BOOT_ID>` (`BOOT_ID` is
+bumped every server start). `index.html` is itself `no-store` AND is the main
+document a reload always refetches, so each restart hands the browser fresh
+`?v=` URLs that nothing (browser or CDN, which key by full URL incl. query) has
+cached. The `?v=` is a cache key only — `do_GET` parses the path (query
+stripped), so `static()` still serves the same file. A hard reload is no longer
+required for a remote page to pick up new JS/CSS; a normal reload suffices.
+
 ## Control plane (web writes)
 
 The dashboard was born read-only; these POST endpoints deliberately break

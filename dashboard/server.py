@@ -3167,9 +3167,23 @@ class Handler(BaseHTTPRequestHandler):
             return self._json({"error": "not found"}, 404)
         try:
             with open(os.path.join(STATIC_DIR, name), "rb") as fh:
-                return self._send(200, fh.read(), ctype)
+                data = fh.read()
         except OSError:
             return self._json({"error": "unreadable"}, 500)
+        if name == "index.html":
+            # CACHE-BUST the sub-resource URLs with BOOT_ID (bumped every
+            # restart). The origin sends no-store, but that can't evict an
+            # already-cached app.js/style.css in a remote browser (mobile Safari
+            # is sticky, and a CDN keys by URL) — so a dashboard update left the
+            # phone running old JS forever (the "links don't follow on mobile"
+            # report traced here: the fix shipped, the origin served it, the
+            # phone kept the pre-fix bytes). index.html itself is served no-store
+            # AND is the main document a reload always refetches, so a fresh
+            # ?v=<BOOT_ID> reaches the browser and points at a URL nothing has
+            # cached. See docs/dashboard.md *Cache-busting*.
+            data = data.replace(b"/static/app.js", b"/static/app.js?v=" + BOOT_ID.encode())
+            data = data.replace(b"/static/style.css", b"/static/style.css?v=" + BOOT_ID.encode())
+        return self._send(200, data, ctype)
 
     # -- SSE loops --
     def sse_global(self):
