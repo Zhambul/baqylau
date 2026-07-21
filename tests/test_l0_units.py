@@ -960,6 +960,56 @@ def test_find_proc_matches_ps_line_with_sig(monkeypatch):
         proc.wait()
 
 
+def test_norm_cmd_escape_insensitive():
+    """_norm_cmd (plugins/claude_code/stream.py) must normalize a raw multi-line
+    command and its ps-escaped renderings to the SAME string, so find_proc's
+    full-command match survives however ps escaped the embedded newlines — the
+    heredoc-monitor bug (raw \\n never a substring of the escaped argv)."""
+    from plugins.claude_code.stream import _norm_cmd
+    raw = "cd ~/x && python3 - <<PY\nimport time\ntime.sleep(9)\nPY"
+    zsh = r"cd\ ~/x\ &&\ python3\ -\ \<\<PY$'\n'import\ time$'\n'time.sleep\(9\)$'\n'PY"
+    octal = "cd ~/x && python3 - <<PY\\012import time\\012time.sleep(9)\\012PY"
+    n = _norm_cmd(raw)
+    assert n and n == _norm_cmd(zsh) == _norm_cmd(octal)
+    # and the normalized raw command is CONTAINED in a realistic wrapper argv
+    wrapper = "/bin/zsh -c source snap.sh 2>/dev/null || true && eval " + zsh
+    assert n in _norm_cmd(wrapper)
+
+
+def test_find_proc_multiline_heredoc_disambiguates(monkeypatch):
+    """find_proc identifies a MULTI-LINE heredoc monitor's wrapper process even
+    when its sig (the command's longest token) is ambiguous — regression for the
+    bug where a `python3 - <<PY` monitor whose longest token was the shared
+    project path matched many processes AND whose raw newlines could never match
+    ps's escaped argv, so the full-command disambiguation silently failed and
+    find_proc returned None ('monitor process never found')."""
+    import os
+    import shlex
+    import subprocess
+    from conftest import wait_until
+    from plugins.claude_code import stream as ST
+    tag = f"/tmp/findproc-multiline-{os.getpid()}"   # shared-ish sig token
+    body = f"import time\ntime.sleep(30)  # {tag}\n"
+    cmd = f": {tag}\npython3 - <<PY\n{body}PY"
+    sig = ST.monitor_sig(cmd)
+    monkeypatch.setenv("CLAUDE_MONITOR_CMD", cmd)
+    # A DECOY carrying the same sig token but a different command — with only the
+    # ambiguous sig to go on, find_proc would refuse to pick (or pick wrong).
+    decoy = subprocess.Popen(["/bin/sh", "-c", f": {tag}; sleep 30"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    # The real monitor: `source … && eval <cmd>` so the wrapper shell can't
+    # exec-optimize itself away and its argv carries the (escaped) full command.
+    real = subprocess.Popen(["/bin/zsh", "-c", f"true && eval {shlex.quote(cmd)}"],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        wait_until(lambda: ST.find_proc(sig) is not None)
+        assert ST.find_proc(sig) == real.pid
+    finally:
+        for p in (decoy, real):
+            p.kill()
+            p.wait()
+
+
 # ---- core.errwatch — the audit warning light (pure shapes) ------------------
 # The ⚠ chip / mirror-block vocabulary is single-owned by core/errwatch.py
 # (styleguide ownership table); pin the shapes the scorebar and the e2e flow

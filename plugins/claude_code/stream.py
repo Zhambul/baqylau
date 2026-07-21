@@ -437,6 +437,24 @@ def monitor_sig(cmd):
     return max(toks, key=len) if toks else ""
 
 
+# ps whitespace-escapes — a command's embedded newlines/tabs never survive into
+# `ps` argv output verbatim: they come back escaped (`$'\n'` from zsh's quoting,
+# octal `\012`/`\011` from BSD ps, or a bare `\n`), while CLAUDE_MONITOR_CMD holds
+# the RAW command with real newlines. `_norm_cmd` erases exactly these (the whole
+# escape token, `n`/`012` residue and all) plus real whitespace and shell
+# backslash-escapes (`\ `, `\>`, `\(` …), so the same command normalizes identically
+# whether it arrives raw or ps-escaped — the containment check below is then
+# insensitive to HOW ps rendered a multi-line command (a `python3 - <<'PY'` heredoc
+# monitor whose raw `\n` could never be a substring of the escaped argv, which
+# silently killed the FULL-command disambiguation and dropped find_proc to the
+# ambiguous sig-only path — docs/streaming.md, *Monitor completion detection*).
+_WS_ESC = re.compile(r"\$'\\[nrt]'|\\0\d\d|\\[nrt]")
+
+
+def _norm_cmd(s):
+    return re.sub(r"[\s\\]+", "", _WS_ESC.sub("", s or ""))
+
+
 def find_proc(sig):
     # Find the command process whose args contain `sig` (the monitor's command
     # runs as `zsh -c … eval '<command>'`, so the signature is in its argv). This
@@ -449,7 +467,11 @@ def find_proc(sig):
     # the same file path in its argv); latching onto that pid kept the monitor
     # block open and the tab blue forever, with the slot row owned by a live pid
     # so it was never reaped. With a full command available, ambiguous token-only
-    # hits return None — the idle fallback then closes the block instead.
+    # hits return None — the idle fallback then closes the block instead. The full
+    # match is whitespace/escape-INSENSITIVE (`_norm_cmd`): a multi-line heredoc
+    # monitor's raw newlines never match ps's escaped rendering, so a raw substring
+    # check always failed for it and left only the ambiguous sig (often just the
+    # project path) — every session in that dir then matched and find_proc gave up.
     if not sig:
         return None
     try:
@@ -458,6 +480,7 @@ def find_proc(sig):
     except Exception:
         return None
     full = os.environ.get("CLAUDE_MONITOR_CMD") or ""
+    full_n = _norm_cmd(full) if full else ""
     me, hits, full_hits = os.getpid(), [], []
     for line in out.splitlines():
         line = line.strip()
@@ -467,9 +490,14 @@ def find_proc(sig):
         pid = int(pid_s)
         if pid == me or "claude-stream.py" in args:
             continue
-        if full and full in args:
+        # sig is a token OF the command (and unescaped by the shell — the monitor_sig
+        # charset carries no shell-special chars), so it appears verbatim in the
+        # wrapper's argv and cheaply gates the more expensive full-command normalize.
+        if sig not in args:
+            continue
+        if full_n and full_n in _norm_cmd(args):
             full_hits.append(pid)
-        elif sig in args:
+        else:
             hits.append(pid)
     if full_hits:
         return full_hits[-1]

@@ -717,7 +717,17 @@ New always-audited swallow sites (previously silent — their absence used to ma
   `state_files` `proc-found` row (path `monitor:<taskid>`, content pid) — an
   idle-fallback end with NO proc-found row = find_proc never matched (it died
   before the tailer ran `ps`, or its argv was unmatchable); one WITH the row =
-  the latch broke later. A `■ monitor failed` chip with no stream row is normal — a failed
+  the latch broke later. **A monitor that ends `output-file-not-found`/`idle-fallback`
+  with "monitor process never found", 0–1 `lines_emitted`, and NO proc-found row —
+  while the monitor demonstrably ran fine (nothing in the mirror OR the web
+  dashboard) — is the MULTI-LINE/HEREDOC signature** (fixed 2026-07-21): a
+  `python3 - <<'PY' … PY` monitor's raw newlines in `CLAUDE_MONITOR_CMD` never
+  matched ps's escaped argv rendering (`$'\n'`/`\012`/`\n`), so the full-command
+  disambiguation silently failed and find_proc fell to the sig alone; when the
+  longest token was just the shared project path (`cd ~/proj && python3 …`) it
+  multi-hit every session's shell there → "never found". find_proc now normalizes
+  both sides escape-insensitively (`_norm_cmd`) — a recurrence means that
+  normalization regressed (or a new ps escape form slipped past `_WS_ESC`). A `■ monitor failed` chip with no stream row is normal — a failed
   Monitor call closes inline, no tailer is spawned. Substream/codex AND (since
   2026-07-14) bg/fg/monitor streams
   ending `state-db-parked (session end)` (and codex `(before header)`) are the

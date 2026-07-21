@@ -92,7 +92,21 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     unrelated long-lived process (another tail/editor holding the same file path
     in its argv), and latching onto that pid kept the block open and the tab blue
     forever. With the full command available, ambiguous token-only multi-hits
-    return "not found" so the idle fallback closes the block instead. A **failed
+    return "not found" so the idle fallback closes the block instead. That
+    whole-command match is **whitespace/escape-insensitive** (`find_proc`'s
+    `_norm_cmd`): a **multi-line command** — most commonly a `python3 - <<'PY' … PY`
+    heredoc monitor — carries real newlines in `CLAUDE_MONITOR_CMD`, but `ps` never
+    renders them verbatim (they come back as zsh's `$'\n'`, BSD ps's octal `\012`,
+    or a bare `\n`), so a *raw* substring check could **never** match the wrapper's
+    argv. That silently disabled the disambiguation and dropped find_proc to the
+    ambiguous sig-only path; when the longest token was just the **shared project
+    path** (every heredoc that opens `cd ~/proj && python3 - <<PY`), it matched
+    every session's shell in that directory → multi-hit → "monitor process never
+    found", so the block was killed with 0–1 lines and nothing streamed to the
+    mirror OR the web dashboard while the monitor ran on fine. `_norm_cmd` erases
+    those escape tokens (residue and all), real whitespace, and shell backslash-
+    escapes from BOTH sides before the containment check, so a heredoc monitor's
+    wrapper is identified uniquely regardless of how ps escaped it. A **failed
     Monitor call** (`PostToolUseFailure` — no `taskId`, nothing will ever stream)
     gets its block closed inline by `claude-monitor-fmt.py` with a
     `■ monitor failed` chip, instead of a dangling open header.
