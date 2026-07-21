@@ -188,6 +188,14 @@ def _session_ended(sid):
     return bool((API.session_row(sid) or {}).get("ended_at"))
 
 
+def _composing(sid):
+    """True when the session has a non-empty UNSENT web composer draft — you're
+    actively working on a reply, so a pending alert would just nag you about a
+    session you're already handling. `_composer_draft` returns None for an empty
+    / tombstone draft, so this is exactly 'there is unsent text'. Read-only."""
+    return bool(sid and _composer_draft(sid))
+
+
 class Notifier:
     """The tab-DB diff watcher + the /events fan-out. Clients register a
     Queue; the watcher thread pushes ('notify', payload) on every asking/done
@@ -199,7 +207,8 @@ class Notifier:
     transition arms `self.pending[win]`; a later scan SENDS it iff the tab is
     still in that state after NOTIFY_DELAY_S (you didn't react) and the session
     isn't muted — otherwise the entry is dropped when the tab moves off that
-    state OR the session ends (you closed it / moved on)."""
+    state, the session ends (you closed it / moved on), or you're composing a
+    reply to it (an unsent web draft = you're already on it)."""
 
     def __init__(self):
         self.clients = set()
@@ -276,16 +285,19 @@ class Notifier:
             self.push("notify", payload)   # immediate in-page toast + OS notif
             if NOTIFY_TELEGRAM:             # arm the deferred off-device alert
                 self.pending[win] = dict(payload, armed_at=now, state=state)
-        # cancel the ones you reacted to, all before the delay: the tab left its
-        # armed state (answered → busy, or the win vanished = tab gone), OR the
-        # session ENDED — you closed it / quit, so you were satisfied and moved
-        # on and the alert (whose deep link would open a dead session) is moot.
-        # ended_at is the robust signal the win-vanish check can miss: a stale
-        # tab row can linger, and a reused window id can even re-match the armed
-        # state under a DIFFERENT session.
+        # cancel the ones you reacted to / are already handling, all before the
+        # delay: the tab left its armed state (answered → busy, or the win
+        # vanished = tab gone), the session ENDED (you closed / quit it — moved
+        # on, and the alert's deep link would open a dead session), OR you're
+        # actively COMPOSING a reply to it (a non-empty unsent web draft is
+        # "I'm on it" — don't nag). ended_at is the robust signal the win-vanish
+        # check can miss: a stale tab row can linger, and a reused window id can
+        # even re-match the armed state under a DIFFERENT session.
         for win in list(self.pending):
             entry = self.pending[win]
-            if cur.get(win) != entry["state"] or _session_ended(entry.get("sid")):
+            sid = entry.get("sid")
+            if (cur.get(win) != entry["state"]
+                    or _session_ended(sid) or _composing(sid)):
                 del self.pending[win]
         # fire the ones that persisted past the grace window (once each)
         for win in list(self.pending):

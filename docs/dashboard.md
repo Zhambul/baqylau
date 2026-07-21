@@ -2712,9 +2712,12 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
   so you were satisfied and moved on and the alert (its deep link would open a
   dead session) is moot. The `ended_at` check is the robust one the win-vanish
   test can miss — a stale tab row can linger past a close, and a reused kitty
-  window id can even re-match the armed state under a DIFFERENT session. That is
-  the "did I react?" test: reacting is the tab moving off red/green (or the
-  session being gone), decided deliberately over "did the page get viewed"
+  window id can even re-match the armed state under a DIFFERENT session. It is
+  ALSO cancelled while you're **composing** a reply — a non-empty unsent web
+  composer draft (`_composing` over `_composer_draft`): typing a draft means
+  you're already on it, so an alert would just nag. That is the "did I react?"
+  test: reacting is the tab moving off red/green, the session being gone, or an
+  unsent draft in hand — decided deliberately over "did the page get viewed"
   (which would need client heartbeat plumbing).
 - An entry that **survives** past the grace window is **sent once** (popped),
   then never re-fires for that transition. It fires **regardless** of whether a
