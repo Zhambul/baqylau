@@ -35,6 +35,8 @@
 # off-device Telegram alert (the reused `notify` skill) that fires only if the
 # tab is still in that state after a grace window — you didn't react — and the
 # session isn't muted (docs/dashboard.md, *Telegram alerts*).
+import base64
+import binascii
 import gzip
 import json
 import os
@@ -45,6 +47,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
@@ -76,6 +79,16 @@ HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
+# The composer-attachment upload endpoint (post_upload) carries base64-encoded
+# bytes, so it gets its OWN, larger cap — ~14 MiB admits a base64-inflated 10 MB
+# image (Claude's per-image ceiling) with headroom for the JSON envelope. Every
+# other POST stays at the tiny POST_MAX default.
+UPLOAD_MAX = 14 * 1024 * 1024
+# Image content types the composer treats as inline screenshots (thumbnailed,
+# and always admitted). Non-image files are still allowed as attachments, just
+# size-capped and shown as a filename chip. Kept in sync with Claude's vision
+# formats (docs/dashboard.md, *Web attachments*).
+IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
 POST_HEADER = "X-Claude-Dash"      # the custom header a simple cross-origin POST can't add
 # The only Origins a legit same-origin browser POST carries (it usually sends
 # none at all for same-origin fetches; when it does, it is one of these).
@@ -1783,6 +1796,8 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "notify":
             return self.post_notify_mute(api[1])
+        if api == ["upload"]:
+            return self.post_upload()
         if api == ["sessions", "new"]:
             return self.post_new_session()
         if api == ["ns-prefs"]:
@@ -1800,11 +1815,15 @@ class Handler(BaseHTTPRequestHandler):
         self.close_connection = True
         self._json({"error": err}, code)
 
-    def _post_guard(self):
+    def _post_guard(self, max_bytes=POST_MAX):
         """Validate a control-plane POST against the browser-vector defense
         (see do_POST) and return its parsed JSON body — or send a 4xx and return
         None (the caller just returns). Order: read-only kill switch, content
-        type, custom header, Origin, size cap, then the JSON parse."""
+        type, custom header, Origin, size cap, then the JSON parse.
+
+        `max_bytes` overrides the default POST_MAX cap — the upload endpoint
+        raises it to UPLOAD_MAX to admit a base64-inflated image (every other
+        caller stays at the tiny control-plane default)."""
         if READONLY:
             return self._reject(403, "control plane disabled (read-only)")
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip()
@@ -1819,7 +1838,7 @@ class Handler(BaseHTTPRequestHandler):
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:
             n = -1
-        if n < 0 or n > POST_MAX:
+        if n < 0 or n > max_bytes:
             return self._reject(413, "body too large")
         try:
             raw = self.rfile.read(n) if n else b""
@@ -1829,6 +1848,101 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             return self._reject(400, "invalid JSON")
         return body
+
+    def post_upload(self):
+        """Stage a composer ATTACHMENT (an image/screenshot the browser pasted,
+        dropped, or picked, or any other file) on disk, and hand back the
+        ABSOLUTE path the composer will inject as an `@path` mention (post_message
+        / post_new_session). Body: {sid?, name, mime, data(base64)}.
+
+        Transport is JSON+base64, NOT multipart: it keeps the whole _post_guard
+        browser-vector defense (same-origin + custom header + read-only switch)
+        with no boundary parser to write; the price is a base64 envelope, which
+        UPLOAD_MAX budgets for. The bytes land under paths.UPLOADS_DIR (durable
+        ~/.claude, OUTSIDE any repo working tree so `git status` stays clean),
+        in a per-session subdir; this mkdir is a sanctioned control-plane write
+        (gated by _post_guard/READONLY like every other mutating POST).
+
+        docs/dashboard.md, *Web attachments*."""
+        body = self._post_guard(UPLOAD_MAX)
+        if body is None:
+            return
+        sid = body.get("sid")
+        sid = sid if isinstance(sid, str) and _sid(sid) else ""
+        name = body.get("name")
+        mime = body.get("mime") or ""
+        data_b64 = body.get("data")
+        if not isinstance(name, str) or not isinstance(data_b64, str) \
+                or not isinstance(mime, str):
+            return self._json({"error": "name, mime, data required"}, 400)
+        # basename only — strip any path component a hostile name carries, and
+        # fall back to a neutral stem so an empty/dotfile name can't produce a
+        # bare-uuid or hidden file.
+        safe = re.sub(r"[^A-Za-z0-9._-]", "_", os.path.basename(name)).lstrip(".")
+        safe = safe[:80] or "attachment"
+        try:
+            raw = base64.b64decode(data_b64, validate=True)
+        except (binascii.Error, ValueError):
+            return self._json({"error": "invalid base64"}, 400)
+        if not raw:
+            return self._json({"error": "empty file"}, 400)
+        if len(raw) > UPLOAD_MAX:
+            return self._json({"error": "file too large"}, 413)
+        is_image = mime in IMAGE_MIMES
+        # audit target: the uploader's session log if we have a sid, else the
+        # shared staging bucket keyed on the log-less "staging" slug.
+        row = API.session_row(sid) or {} if sid else {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        dest_dir = P.session_uploads_dir(sid)
+        path = os.path.join(dest_dir, "%s-%s" % (uuid.uuid4().hex[:8], safe))
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+            with open(path, "wb") as f:
+                f.write(raw)
+        except OSError as e:
+            A.error(log, "dashboard upload (write failed)",
+                    {"sid": sid, "name": safe, "err": str(e)})
+            A.state_file(log, sdb, "web-upload",
+                         {"sid": sid, "name": safe, "bytes": len(raw),
+                          "ok": False})
+            return self._json({"error": "could not store upload"}, 500)
+        A.state_file(log, sdb, "web-upload",
+                     {"sid": sid, "name": safe, "bytes": len(raw),
+                      "mime": mime, "ok": True})
+        return self._json({"ok": True, "path": path, "name": safe,
+                           "mime": mime, "is_image": is_image})
+
+    def _attachment_paths(self, body):
+        """The vetted `@path` prefix for the delivered message text, from a POST
+        body's optional `attachments` list. Each entry MUST be an absolute path
+        under paths.UPLOADS_DIR (so a caller can't smuggle an arbitrary
+        filesystem path into an `@`-mention) and exist on disk. Returns a list of
+        absolute paths (possibly empty); silently drops anything that fails the
+        checks — the message still goes, just without the bad attachment."""
+        raw = body.get("attachments")
+        if not isinstance(raw, list):
+            return []
+        root = os.path.realpath(P.UPLOADS_DIR) + os.sep
+        out = []
+        for p in raw:
+            if not isinstance(p, str) or not p:
+                continue
+            rp = os.path.realpath(p)
+            if (rp + os.sep).startswith(root) and os.path.isfile(rp):
+                out.append(rp)
+        return out
+
+    def _with_attachments(self, text, paths):
+        """Prepend `@path` mention tokens (one per attachment) to the message
+        text — the TUI-native way to attach a file, delivered verbatim over the
+        existing paste_text / launch-argv transport. Paths first, then a newline,
+        then the typed text (mirrors the TUI's paste-then-type order). No text is
+        fine: the mentions alone are a valid message."""
+        if not paths:
+            return text
+        mentions = " ".join("@" + p for p in paths)
+        return mentions + ("\n" + text if text else "")
 
     def post_message(self, sid):
         """Type a message into a session's kitty window (the composer). 4xx when
@@ -1848,8 +1962,16 @@ class Handler(BaseHTTPRequestHandler):
         if body is None:
             return
         text = body.get("text")
-        if not isinstance(text, str) or not text.strip():
+        if text is None:
+            text = ""
+        if not isinstance(text, str):
             return self._json({"error": "empty text"}, 400)
+        # attachments (vetted @-paths) may stand in for text — a screenshot with
+        # no words is a valid message; an empty message with neither is not.
+        attachments = self._attachment_paths(body)
+        if not text.strip() and not attachments:
+            return self._json({"error": "empty text"}, 400)
+        text = self._with_attachments(text, attachments)
         clear_draft = bool(body.get("clear_draft"))
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
@@ -1900,7 +2022,7 @@ class Handler(BaseHTTPRequestHandler):
         ok = bool(fe.paste_text(win, text))
         A.state_file(log, sdb, "web-send",
                      {"win": win, "chars": len(text), "ok": ok, "tab": tab,
-                      "clear_draft": clear_draft})
+                      "clear_draft": clear_draft, "attachments": len(attachments)})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
@@ -2807,16 +2929,22 @@ class Handler(BaseHTTPRequestHandler):
             return self._reject_input("web-launch", "bad account", "unknown account",
                                 {"account": acct})
         prompt = body.get("prompt")
+        prompt = prompt if isinstance(prompt, str) else ""
+        # attachments ride the launch prompt as leading @-mentions, same as the
+        # live composer (covers the new-session form AND the parked "resume &
+        # send" path, which both route through here). With no typed prompt, the
+        # mentions alone are a valid initial prompt.
+        attachments = self._attachment_paths(body)
+        prompt = self._with_attachments(prompt, attachments)
         words = ((["--resume", resume] if resume else [])
                  + (["--continue"] if cont else [])
                  + (["--model", model] if model else [])
                  + (["--effort", effort] if effort else [])
-                 + ([prompt] if isinstance(prompt, str) and prompt.strip()
-                    else []))
+                 + ([prompt] if prompt.strip() else []))
         argv = launch_argv(words, cmd)
         opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
                 "resume": resume or "", "cont": bool(cont),
-                "account": acct or ""}
+                "account": acct or "", "attachments": len(attachments)}
         fe = _frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
@@ -3351,6 +3479,37 @@ def _qstr(url, name):
 
 # --- lifecycle ---------------------------------------------------------------------
 
+UPLOAD_TTL_S = 7 * 24 * 3600      # composer attachments older than this are pruned
+
+
+def _prune_uploads():
+    """Best-effort sweep of stale composer attachments (paths.UPLOADS_DIR) at
+    server start — the bytes are only needed until Claude Code has read them, so
+    a week is generous. Never raises (it's off the request path, and a failed
+    prune must not stop the server from booting); empty per-session subdirs are
+    removed too."""
+    root = P.UPLOADS_DIR
+    now = time.time()
+    try:
+        subs = os.listdir(root)
+    except OSError:
+        return
+    for sub in subs:
+        d = os.path.join(root, sub)
+        try:
+            for name in os.listdir(d):
+                f = os.path.join(d, name)
+                try:
+                    if now - os.path.getmtime(f) > UPLOAD_TTL_S:
+                        os.remove(f)
+                except OSError:
+                    pass
+            if not os.listdir(d):
+                os.rmdir(d)
+        except OSError:
+            pass
+
+
 def serve():
     """Run the server in THIS process (the `serve` CLI verb — `start` spawns
     it detached). Singleton: the paths.DASH_DB pid-lock first, the port bind
@@ -3370,6 +3529,7 @@ def serve():
             A.error("", "dashboard serve (port busy)", {"port": PORT})
             return 1
         httpd.daemon_threads = True
+        _prune_uploads()
         threading.Thread(target=NOTIFIER.run, daemon=True).start()
 
         def _term(signum, frame):

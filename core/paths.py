@@ -82,9 +82,32 @@ DASH_PREFS_DB = os.path.join(
 )
 
 
+# Durable staging area for web-dashboard composer ATTACHMENTS (images/files a
+# browser uploads to the running session — dashboard/server.py post_upload). The
+# bytes are written here and referenced by ABSOLUTE `@path` in the delivered
+# message, so they must live OUTSIDE any repo working tree (keeps `git status`
+# clean) yet survive long enough for Claude Code to read them. Durable ~/.claude
+# like HISTORY_DIR (same reboot-survival + hermetic-tmpdir-relocation reasons);
+# per-session subdirs keep parallel sessions' uploads from colliding.
+UPLOADS_DIR = os.path.join(
+    _TMP if os.environ.get("CLAUDE_MIRROR_TMPDIR")
+    else os.path.expanduser("~/.claude"),
+    "baqylau-uploads",
+)
+
+
 def sanitize_sid(sid):
     """A session id as it appears in the mirror-log key."""
     return re.sub(r"[^A-Za-z0-9._-]", "-", sid)
+
+
+def session_uploads_dir(sid):
+    """The per-session composer-attachment staging dir (see UPLOADS_DIR). Returns
+    the path; does NOT create it (the caller mkdirs, gated behind the dashboard
+    control-plane guard). The sid is sanitized so a hostile key can't escape the
+    root; a missing sid falls back to a shared "staging" bucket (the new-session
+    form has no sid yet)."""
+    return os.path.join(UPLOADS_DIR, sanitize_sid((sid or "").strip()) or "staging")
 
 
 def cwd_slug(cwd=None):

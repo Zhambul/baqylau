@@ -625,10 +625,14 @@ code, pre, .mono { font-family: var(--mono); }
 .planfb .askother { margin-top: 0; flex: 1; }
 
 .composer {
-  display: flex; align-items: flex-end; gap: 8px;
+  display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px;
   box-shadow: var(--card); border-radius: var(--r);
   background: var(--panel); padding: 8px 10px; margin-bottom: 10px;
   position: relative;               /* the "/" menu anchors to the composer box */
+}
+/* active drag-drop target (composer wrap / new-session prompt row) */
+.composer.dropping, .nsfield.dropping {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--exec) 60%, transparent);
 }
 /* the "/" command menu — drops BELOW its host box (downward over the stream /
    form actions, never up over the stats row), scrolls past ~9 rows */
@@ -696,6 +700,42 @@ code, pre, .mono { font-family: var(--mono); }
   0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 55%, transparent); }
   50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 15%, transparent); }
 }
+/* ---- composer attachments (images/screenshots + files) ------------------- */
+/* the 📎 picker button — sits beside the mic, same chrome */
+.cattach {
+  flex: none; display: flex; align-items: center; justify-content: center;
+  background: var(--panel2); color: var(--text-soft); border: none;
+  cursor: pointer; box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r); padding: 7px 9px; font-size: 14px; line-height: 1;
+}
+.cattach:hover { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
+.attach-input { display: none; }
+/* the pending-attachment strip — full-width row above the input (composer
+   flex-wraps; the new-session form stacks it in the field label) */
+.attach-strip { display: none; flex-basis: 100%; flex-wrap: wrap; gap: 6px; }
+.attach-strip.has { display: flex; }
+.nsfield .attach-strip.has { margin-bottom: 6px; }
+.attach-chip {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px;
+  background: var(--panel2); box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r); padding: 3px 6px 3px 4px;
+}
+.attach-chip.pending { opacity: 0.55; }
+.attach-chip.failed { box-shadow: inset 0 0 0 1px var(--ask); }
+.attach-thumb {
+  width: 28px; height: 28px; object-fit: cover; border-radius: 4px; flex: none;
+}
+.attach-icon { font-size: 15px; flex: none; }
+.attach-name {
+  font: 11px/1.3 var(--mono); color: var(--text-soft);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.attach-x {
+  flex: none; background: none; border: none; cursor: pointer;
+  color: var(--dim2); font-size: 11px; padding: 0 2px; line-height: 1;
+}
+.attach-x:hover { color: var(--text); }
+
 /* the new-session prompt row: textarea + mic side by side inside the label */
 .nsdictrow { display: flex; align-items: flex-end; gap: 8px; }
 .nsdictrow .nsinput { flex: 1; }

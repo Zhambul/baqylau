@@ -376,6 +376,9 @@ def dash(monkeypatch, tmp_path):
     # the durable global prefs DB (dashboard/prefs.py reads P.DASH_PREFS_DB
     # fresh each call) — relocate so the suite never touches real ~/.claude
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "dash-prefs.db"))
+    # composer-attachment staging (paths.UPLOADS_DIR is import-time-captured
+    # under ~/.claude) — relocate so the upload endpoint never writes real home
+    monkeypatch.setattr(P, "UPLOADS_DIR", str(tmp_path / "uploads"))
     # Isolate the global tab DB: core.tabs.TABDB is import-time-captured from
     # /tmp, so without this every `API.tab_states()` read (the busy-tab guards,
     # the notification watcher) sees the HOST machine's live kitty windows. A
@@ -2184,6 +2187,144 @@ def test_post_message_empty_text_is_400(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/msg3/message", {"text": "   "})
     assert e.value.code == 400
+
+
+# ------------------------------------------------------------ attachments (uploads)
+
+def _b64_png(b=b"\x89PNG\r\n\x1a\nfake"):
+    import base64 as _b
+    return _b.b64encode(b).decode()
+
+
+def test_post_upload_writes_file_and_returns_path(dash, monkeypatch):
+    """POST /api/upload stages the bytes under paths.UPLOADS_DIR/<sid>/ and
+    hands back the absolute path (the composer's @-mention target) + an
+    is_image flag for the thumbnail decision."""
+    A.session_start({"session_id": "up1", "cwd": "/w", "transcript_path": ""})
+    code, body = _post(dash + "/api/upload",
+                       {"sid": "up1", "name": "shot.png", "mime": "image/png",
+                        "data": _b64_png()})
+    d = json.loads(body)
+    assert code == 200 and d["ok"] and d["is_image"] is True
+    assert d["path"].startswith(str(P.UPLOADS_DIR)) and os.path.isfile(d["path"])
+    assert "up1" in d["path"] and d["path"].endswith("-shot.png")
+    with open(d["path"], "rb") as f:
+        assert f.read().startswith(b"\x89PNG")
+
+
+def test_post_upload_sanitizes_traversal_name(dash):
+    """A hostile filename can't escape the per-session dir — the basename is
+    slugged, so `../../etc/x` lands as a plain file inside UPLOADS_DIR."""
+    code, body = _post(dash + "/api/upload",
+                       {"sid": "", "name": "../../etc/passwd", "mime": "text/plain",
+                        "data": _b64_png(b"hi")})
+    d = json.loads(body)
+    assert code == 200
+    assert os.path.realpath(d["path"]).startswith(os.path.realpath(str(P.UPLOADS_DIR)))
+    assert "/etc/passwd" not in d["path"]
+
+
+def test_post_upload_bad_base64_is_400(dash):
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/upload",
+              {"name": "x.png", "mime": "image/png", "data": "not@@base64"})
+    assert e.value.code == 400
+
+
+def test_post_upload_over_cap_rejected(dash):
+    # Content-Length past UPLOAD_MAX is rejected by the guard before any decode.
+    # The guard closes the connection without draining the oversize body (the
+    # _reject contract), so the client sees either a clean 413 or a reset —
+    # both are "refused", which is the contract under test.
+    raw = json.dumps({"name": "big", "mime": "image/png",
+                      "data": "A" * (DS.UPLOAD_MAX + 10)}).encode()
+    with pytest.raises((urllib.error.HTTPError, urllib.error.URLError)) as e:
+        _post(dash + "/api/upload", raw=raw)
+    if isinstance(e.value, urllib.error.HTTPError):
+        assert e.value.code == 413
+
+
+def test_post_upload_admits_body_over_post_max(dash):
+    # the raised cap is the whole point: a payload well past the 64 KiB
+    # control-plane POST_MAX still uploads (a real screenshot is ~MBs)
+    big = _b64_png(b"\x89PNG\r\n\x1a\n" + b"x" * (DS.POST_MAX * 2))
+    code, body = _post(dash + "/api/upload",
+                       {"name": "big.png", "mime": "image/png", "data": big})
+    assert code == 200 and os.path.isfile(json.loads(body)["path"])
+
+
+def test_post_message_with_attachment_prepends_mention(dash, monkeypatch):
+    """A message carrying vetted attachment paths delivers them as leading
+    @-mentions ahead of the text — the TUI-native attach — over the same
+    bracketed paste."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "51")
+    A.session_start({"session_id": "att1", "cwd": "/w", "transcript_path": ""})
+    _, body = _post(dash + "/api/upload",
+                    {"sid": "att1", "name": "a.png", "mime": "image/png",
+                     "data": _b64_png()})
+    path = json.loads(body)["path"]
+    code, _ = _post(dash + "/api/session/att1/message",
+                    {"text": "look", "attachments": [path]})
+    assert code == 200
+    assert fe.pasted == [("51", "@%s\nlook" % path)]
+
+
+def test_post_message_attachment_only_no_text(dash, monkeypatch):
+    """A screenshot with no words is a valid message (the mention alone)."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "52")
+    A.session_start({"session_id": "att2", "cwd": "/w", "transcript_path": ""})
+    _, body = _post(dash + "/api/upload",
+                    {"sid": "att2", "name": "a.png", "mime": "image/png",
+                     "data": _b64_png()})
+    path = json.loads(body)["path"]
+    code, _ = _post(dash + "/api/session/att2/message",
+                    {"text": "", "attachments": [path]})
+    assert code == 200 and fe.pasted == [("52", "@" + path)]
+
+
+def test_post_message_rejects_attachment_outside_uploads(dash, monkeypatch, tmp_path):
+    """An @-path the server didn't stage (anywhere outside UPLOADS_DIR) is
+    silently dropped — a page can't smuggle an arbitrary filesystem path into
+    a mention. With no text left, that's an empty message → 400."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "53")
+    A.session_start({"session_id": "att3", "cwd": "/w", "transcript_path": ""})
+    evil = tmp_path / "secret.txt"
+    evil.write_text("x")
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/att3/message",
+              {"text": "", "attachments": [str(evil)]})
+    assert e.value.code == 400
+    assert fe.pasted == []
+
+
+def test_post_new_session_prompt_carries_attachment(dash, monkeypatch):
+    """The new-session launch prompt gets the @-mentions prepended too (covers
+    the form AND the parked resume-&-send path)."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    _, body = _post(dash + "/api/upload",
+                    {"name": "a.png", "mime": "image/png", "data": _b64_png()})
+    path = json.loads(body)["path"]
+    code, _ = _post(dash + "/api/sessions/new",
+                    {"cwd": str(REPO), "prompt": "start", "attachments": [path]})
+    assert code == 200
+    (cwd, argv) = fe.launched[-1]
+    assert ("@%s\nstart" % path) in " ".join(str(w) for w in argv)
+
+
+def test_post_upload_control_plane_guarded(dash):
+    """/api/upload is a control-plane write like every other — a missing
+    X-Claude-Dash header is a 403."""
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/upload", {"name": "x", "mime": "image/png",
+              "data": _b64_png()}, header=None)
+    assert e.value.code == 403
 
 
 def test_post_message_blocked_while_dialog_open(dash, monkeypatch):

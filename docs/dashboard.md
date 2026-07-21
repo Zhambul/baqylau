@@ -272,10 +272,11 @@ reflow for free and keeps the no-build rule.
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
 | `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |
 | `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `group_dir\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
-| `POST /api/session/<sid>/message` | **control plane:** `{"text"}` → type it (+ Enter) into the session's kitty window (`Frontend.send_text`); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
+| `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
+| `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
@@ -422,6 +423,51 @@ buttons disable on red, and the keyboard Esc gesture / ↶ rewind button swallow
 themselves with a toast pointing at the card. The ask / plan / confirm cards are
 the response path; the 409 is the authoritative backstop for a stale page that
 still believes the tab is cancelable.
+
+**Web attachments (images/screenshots + files).** The composer and the
+new-session prompt accept attachments the way the Claude Code TUI does — paste a
+screenshot (`onpaste` over `clipboardData.items` of kind `file`), drag-drop
+files onto the composer/prompt box, or the 📎 picker. Claude Code has NO CLI
+flag or stdin channel for images, so the mechanism reuses its ONE native path:
+an `@path` mention in the message text, which Claude Code itself resolves and
+attaches (an image becomes an image content block). The dashboard's job is only
+to get the bytes onto disk and put the path in the message:
+
+- The browser base64-encodes the file and POSTs `POST /api/upload` (`{sid?,
+  name, mime, data}` → `{path, name, mime, is_image}`). Transport is
+  JSON+base64, NOT multipart — it keeps the whole `_post_guard` browser-vector
+  defense (same-origin + `X-Claude-Dash` + read-only switch) with no boundary
+  parser to write. `_post_guard(max_bytes=)` raises the cap to `UPLOAD_MAX`
+  (~14 MiB, a base64-inflated 10 MB image — Claude's per-image ceiling) for this
+  one endpoint; every other POST keeps the tiny 64 KiB `POST_MAX`. Bad base64 is
+  a 400; an oversize `Content-Length` is refused by the guard (413 / a reset,
+  the `_reject` close-without-drain contract).
+- `post_upload` writes the bytes under `paths.UPLOADS_DIR`
+  (`~/.claude/baqylau-uploads/<sid>/`, or a shared `staging` bucket for the
+  new-session form which has no sid yet) — durable ~/.claude, OUTSIDE any repo
+  working tree, so an uploaded screenshot never dirties `git status`. The
+  filename is slugged to a basename (a `../` name can't escape the dir), prefixed
+  with a uuid. Every write is a `web-upload` `state_files` row (`ok`, `bytes`,
+  `name`, `mime`); a write/decode failure adds an `A.error`. `serve()` best-effort
+  prunes attachments older than a week (`_prune_uploads`) — the bytes are only
+  needed until Claude Code has read them.
+- On send, the composer prepends the vetted paths as leading `@path` mentions
+  (`_with_attachments`: `"@p1 @p2\n" + text`, paths-then-text like the TUI's
+  paste-then-type order) and rides the existing transport — `paste_text` for a
+  live send (`post_message` accepts `attachments`), the launch argv for a new /
+  parked-resume launch (`post_new_session` accepts `attachments` too). A message
+  with attachments but no text is valid (the mention alone). `web-send` /
+  `web-launch` rows carry the attachment count.
+- **Security:** `_attachment_paths` accepts a path ONLY if it resolves inside
+  `UPLOADS_DIR` and exists — a page cannot smuggle an arbitrary filesystem path
+  into an `@`-mention. A rejected path is silently dropped; if nothing valid is
+  left and there's no text, the send is a 400.
+- The browser shows pending attachments as removable chips above the input
+  (image thumbnail from a local `URL.createObjectURL`, no server round-trip;
+  📄 + filename otherwise); an in-flight upload dims the chip and a send waits on
+  it. Attachments are NOT persisted into the `composer-draft` kv, so a reload
+  drops the pending chips (the staged files themselves survive on disk until the
+  prune) — a deliberate scope limit; the draft machinery stays text-only.
 
 **Resume & send (a parked session's composer).** A parked session's composer
 is NOT disabled — everything passive works exactly like live (typing, the

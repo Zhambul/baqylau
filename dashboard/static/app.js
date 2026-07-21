@@ -2271,6 +2271,143 @@ function applyComposerDraft(draft) {
   autoGrow(ta);
 }
 
+/* ---------- composer attachments (images/screenshots + files) ----------
+   The browser captures a file (paste of a screenshot, a drag-drop, or the 📎
+   picker), uploads its bytes to /api/upload, and the server stages it on disk
+   and hands back an absolute path. On send, those paths ride the message as
+   leading `@path` mentions — the TUI-native way to attach a file — so Claude
+   Code itself reads/attaches them (docs/dashboard.md, *Web attachments*). */
+const ATTACH_MAX = 14 * 1024 * 1024;      // mirrors the server's UPLOAD_MAX
+
+// A File → base64 (no data: prefix), the JSON-transport shape /api/upload wants.
+function fileToB64(file) {
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onerror = () => rej(r.error || new Error("read failed"));
+    r.onload = () => {
+      const s = String(r.result || "");
+      const i = s.indexOf(",");          // "data:<mime>;base64,<data>"
+      res(i >= 0 ? s.slice(i + 1) : s);
+    };
+    r.readAsDataURL(file);
+  });
+}
+
+// The pending-attachment strip + upload plumbing, shared by the live composer
+// and the new-session form. getSid() names the session to stage under ("" for
+// the form → the server's shared "staging" bucket). onChange() fires whenever
+// the set changes so the host can re-evaluate its send/launch button. Returns
+// { strip, addFiles, paths, pending, count, clear }.
+function attachTray(getSid, onChange) {
+  const items = [];                       // {name, is_image, url, path, failed}
+  const strip = el("div", "attach-strip");
+  const notify = () => {
+    strip.classList.toggle("has", items.length > 0);
+    if (onChange) onChange();
+  };
+  const remove = (it) => {
+    const i = items.indexOf(it);
+    if (i < 0) return;
+    if (it.url) URL.revokeObjectURL(it.url);
+    items.splice(i, 1);
+    draw(); notify();
+  };
+  function draw() {
+    strip.textContent = "";
+    for (const it of items) {
+      const chip = el("div", "attach-chip"
+        + (it.path ? "" : it.failed ? " failed" : " pending"));
+      if (it.is_image && it.url) {
+        const img = el("img", "attach-thumb");
+        img.src = it.url;
+        chip.append(img);
+      } else {
+        chip.append(el("span", "attach-icon", "📄"));
+      }
+      chip.append(el("span", "attach-name", it.name));
+      const x = el("button", "attach-x", "✕");
+      x.type = "button";
+      x.title = "remove attachment";
+      x.onclick = () => remove(it);
+      chip.append(x);
+      strip.append(chip);
+    }
+  }
+  const add = (file) => {
+    if (!file) return;
+    if (file.size > ATTACH_MAX) {
+      return toast("ask", "file too large",
+                   (file.name || "file") + " exceeds the upload limit");
+    }
+    const is_image = /^image\//.test(file.type || "");
+    const it = {
+      name: file.name || (is_image ? "screenshot.png" : "attachment"),
+      is_image, url: is_image ? URL.createObjectURL(file) : "",
+      path: null, failed: false,
+    };
+    items.push(it);
+    draw(); notify();
+    fileToB64(file)
+      .then((data) => postJSON("/api/upload", {
+        sid: getSid() || "", name: it.name,
+        mime: file.type || "application/octet-stream", data }))
+      .then((d) => { it.path = d.path; it.is_image = !!d.is_image; draw(); notify(); })
+      .catch((e) => {
+        it.failed = true; draw(); notify();
+        toast("ask", "attachment upload failed", (e && e.error) || "");
+      });
+  };
+  return {
+    strip,
+    addFiles: (files) => { for (const f of files || []) add(f); },
+    paths: () => items.filter((it) => it.path).map((it) => it.path),
+    pending: () => items.some((it) => !it.path && !it.failed),
+    count: () => items.filter((it) => it.path).length,
+    clear: () => {
+      for (const it of items) if (it.url) URL.revokeObjectURL(it.url);
+      items.length = 0; draw(); notify();
+    },
+  };
+}
+
+// Wire the 📎 picker, clipboard paste (screenshots), and drag-drop onto a tray.
+// `ta` is the paste target (textarea); `zone` the drop target (composer wrap /
+// prompt box); enabled() gates every path (a parked/headless box takes none).
+// Returns the picker button to place in the UI (the hidden <input> rides with
+// it in a fragment).
+function wireAttach(tray, ta, zone, enabled) {
+  const btn = el("button", "cattach", "📎");
+  btn.type = "button";
+  btn.title = "attach image or file";
+  const input = el("input", "attach-input");
+  input.type = "file";
+  input.multiple = true;
+  input.onchange = () => { tray.addFiles(input.files); input.value = ""; };
+  btn.onclick = () => { if (enabled()) input.click(); };
+  ta.addEventListener("paste", (e) => {
+    if (!enabled()) return;
+    const files = [];
+    for (const it of (e.clipboardData && e.clipboardData.items) || [])
+      if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
+    if (files.length) { e.preventDefault(); tray.addFiles(files); }
+  });
+  zone.addEventListener("dragover", (e) => {
+    if (!enabled() || !e.dataTransfer || e.dataTransfer.types.indexOf("Files") < 0)
+      return;
+    e.preventDefault(); zone.classList.add("dropping");
+  });
+  zone.addEventListener("dragleave", (e) => {
+    if (e.target === zone) zone.classList.remove("dropping");
+  });
+  zone.addEventListener("drop", (e) => {
+    zone.classList.remove("dropping");
+    if (!enabled()) return;
+    const files = (e.dataTransfer && e.dataTransfer.files) || [];
+    if (files.length) { e.preventDefault(); tray.addFiles(files); }
+  });
+  return frag(btn, input);
+}
+
 function buildComposer() {
   const ses = S.ses;
   const meta = ses.meta || {};
@@ -2317,14 +2454,24 @@ function buildComposer() {
   }
   const dic = dictation(ta, () => meta.cwd || "");
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
+  // attachments: staged under this session's id (live) or its own id for a
+  // parked resume (the bytes are read once the revived session boots)
+  const tray = attachTray(() => S.cur);
+  const attachBtn = usable
+    ? wireAttach(tray, ta, wrap, () => usable && !ta.disabled)
+    : null;
   const send = () => {
     dic.stop();          // the visible (validated) text is what sends
     const text = ta.value.trim();
-    if (!text || ta.disabled) return;
+    const atts = tray.paths();
+    if ((!text && !atts.length) || ta.disabled) return;
+    if (tray.pending())    // an upload is still in flight — don't drop it
+      return toast("ask", "attachment still uploading", "one moment…");
     ta.disabled = true; btn.disabled = true;
     clearComposerDraft(ses, sid);   // sending consumes the draft (both paths)
     if (canResume) {
       const body = { cwd: meta.cwd, resume: S.cur, prompt: text };
+      if (atts.length) body.attachments = atts;
       const slug = meta.account && meta.account.slug;
       if (slug) body.account = slug;   // wake it under ITS account, silently
       postJSON("/api/sessions/new", body)
@@ -2342,6 +2489,7 @@ function buildComposer() {
             toast("ask", "resume timed out",
                   "the session never came back — your message is kept; try again");
           } });
+          tray.clear();
           toast("done", "resuming session", "your message starts the revived turn");
         })
         .catch(e => {
@@ -2356,10 +2504,11 @@ function buildComposer() {
     // after a mid-turn cancel-edit the TUI holds the restored draft, so this
     // edited send must replace it (server: Ctrl+U/K then bracketed paste)
     const msg = { text };
+    if (atts.length) msg.attachments = atts;
     if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg)
       .then(d => {
-        ta.value = ""; autoGrow(ta);
+        ta.value = ""; autoGrow(ta); tray.clear();
         if (d && d.queued) {
           ses.queue.push({ text });
           renderQueue();
@@ -2402,7 +2551,8 @@ function buildComposer() {
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
-  wrap.append(ta, dic.btn, btn);
+  wrap.append(tray.strip, ta, dic.btn, btn);
+  if (attachBtn) wrap.append(attachBtn);
   return wrap;
 }
 
@@ -2895,9 +3045,13 @@ function openNewSession(prefillCwd, resumeSid) {
     ? "what should Claude start on?"
     : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
   const pdic = dictation(prompt, () => dir.value.trim());
+  // attachments for the initial prompt — staged under the shared "staging"
+  // bucket (no sid yet); ride the launch argv as leading @-mentions
+  const nsTray = attachTray(() => "");
+  const nsAttach = wireAttach(nsTray, prompt, promptRow, () => true);
   const promptBox = el("div", "nsdictrow");
-  promptBox.append(prompt, pdic.btn);
-  promptRow.append(promptBox);
+  promptBox.append(prompt, nsAttach, pdic.btn);
+  promptRow.append(nsTray.strip, promptBox);
   // "/" completion here too — cwd-keyed to whatever directory is currently
   // typed (cached per dir, so flipping between dirs doesn't refetch)
   const cmdCache = {};
@@ -2921,8 +3075,12 @@ function openNewSession(prefillCwd, resumeSid) {
     pdic.stop();         // the visible (validated) prompt is what launches
     const cwd = dir.value.trim();
     if (!cwd) { dir.focus(); return; }
+    if (nsTray.pending())
+      return toast("ask", "attachment still uploading", "one moment…");
     submit.disabled = true;
     const body = { cwd };
+    const atts = nsTray.paths();
+    if (atts.length) body.attachments = atts;
     if (start.value === "continue") body.continue = true;
     else if (start.value.startsWith("resume:")) body.resume = start.value.slice(7);
     if (acct.value) body.account = acct.value;
