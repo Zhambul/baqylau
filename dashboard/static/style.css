@@ -476,7 +476,7 @@ code, pre, .mono { font-family: var(--mono); }
 .ubar .ureset, .acct > .ureset { color: var(--text-soft); font: 11px/1 var(--mono); white-space: nowrap; }
 /* fixed reset-text column (the widest is ~"resets in 6d 23h") — the last
    variable-width part of a window, so pinning it aligns the dividers */
-.ubar .ureset { min-width: 16ch; flex: none; }
+.ubar .ureset { min-width: 16ch; flex: none; margin-left: 6px; }
 /* de-emphasise the "resets in" prefix; the duration keeps the ureset weight */
 .ubar .ureset .rlbl { color: var(--dim); }
 /* the account is BLOCKED right now (an active `limit-hit` stamp — the usage
