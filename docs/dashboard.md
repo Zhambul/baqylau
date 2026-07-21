@@ -279,9 +279,11 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
 | `GET /api/session/<sid>/jobs` | the session's background Bash jobs (command + lifecycle state, merging audit streams + ops) for the jobs tab (*Jobs tab*); output via the `/copy/<task>/out` endpoint |
+| `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
+| `GET /api/session/<sid>/note?path=<abs>` / `?stem=<stem>` | one memory-wiki note rendered for the viewer (`{name, frontmatter, html, backlinks, missing}`); path-traversal-guarded to `~/wiki/01` (*Memory tab*) |
 | `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -2637,10 +2639,53 @@ tab-open and re-fetched on a 4s poll while any job is `live`. (A job's live outp
 already streams into the *mirror* tab as ops; the jobs tab is the
 state-and-history view.)
 
+## Memory tab
+
+A session-view tab **`memory`** (between `jobs` and `errors`) lists the
+**memory-wiki notes** the session touched — the Obsidian-style knowledge vault at
+`~/wiki/01` (markdown notes with YAML frontmatter, cross-linked with bare
+`[[wikilinks]]`). A Read/Write/Edit whose path falls under that root is a MEMORY op
+— recall (Read), persist (Write), or revise (Update/Edit). `plugins/claude_code/
+memory.py` is the single owner of that vocabulary (the root, the `is_memory` test,
+the mirror 🧠 `MARK`, the `memory` kv, and the read-side vault helpers).
+
+**Mirror side.** When `file_fmt.py` (main agent) or `substream_render.py` (a
+subagent) renders a file op under the root, it appends 🧠 (`memory.MARK`) to the
+one-liner and tags the op `mem` (`ops.line`/`ops.gut`), which `opshtml` surfaces as
+`data-mem` so the page sorts it into its own **`memory`** stream-kind filter
+(*Stream kind filters* below), distinct from generic `files`.
+
+**Tab data path.** Both producers also `memory.record()` the touched note into a
+per-session **`memory` kv** (state DB, survives park) — `{files: [{path, name,
+verb, agent, count, ts}]}` keyed by path, verb ESCALATED by rank (Write > Update >
+Read) on a repeat touch, stamping the escalating op's agent (None = main). Unlike
+the main-agent-only *mirror*, this is **team-wide**: a subagent (e.g. a note-writer)
+records under `self.agent`, so the tab shows who touched each note. The read model
+is `sessionapi.memory(sid)` (`kv_at`, live-or-parked), newest-touch first; the badge
+rides a cheap `memory` SSE (`sessionapi.memory_count`). The list renders one card
+per note: a verb chip (read=blue · update=gold · write=green, the `FILE_RGB`
+semantics) + the note name + the subagent name (if any) + a `×N` repeat count.
+
+**Note viewer + link following.** Clicking a card opens the note via `GET
+/api/session/<sid>/note?path=<abs>` (a followed link uses `?stem=<stem>`). The
+server resolves the stem through `memory.resolve()` (a TTL-cached vault index of
+`{stem: path}`, Obsidian bare-name resolution), reads it path-traversal-guarded to
+the root (`memory.read_note`), and renders `{name, frontmatter, html, backlinks,
+missing}`. The body is markdown → **safe HTML** via `dashboard/notehtml.py`, which
+reuses `opshtml.md_html` (the escape-first, dependency-free subset the message
+bubbles use) and adds `[[wikilink]]` linkification: links are protected as
+control-byte sentinels BEFORE `md_html` and restored as `data-note` anchors AFTER
+(so a stem's `_`/`*` can't be eaten by emphasis and nothing raw reaches the page);
+a stem that doesn't resolve gets a `dead` class (the wiki keeps dangling links on
+purpose). Clicking a `[[link]]` fetches the target and pushes a breadcrumb (🧠
+memory › note › followed note …) so you can walk the vault beyond the touched set
+and back out. A **Backlinks** section lists the notes whose text links to this one
+(`memory.backlinks`, same index), each itself clickable.
+
 ## Stream kind filters
 
 The session view's mirror tab carries a filter bar directly above the stream:
-toggle chips (`all · commands · files · agents · messages`) and an `N of M
+toggle chips (`all · commands · files · memory · agents · messages`) and an `N of M
 shown` count. Clicking a chip narrows the stream to one kind. Filtering never
 removes DOM (SSE keeps appending); non-matching items get a `.fhide`
 (`display:none`) class, applied in `appendItems` to newly arrived items too via
@@ -2662,8 +2707,9 @@ exact chip text, which drifts. Blocks default to `commands` and upgrade to
 nested job, or a block-opening chip that starts with a who-prefix rather than a
 main-session command glyph `▶▷◉■` — subagent/teammate/codex chips lead with
 their label/`codex`). Ungrouped items classify by item type: `msg` items are
-`messages`, file-op one-liners (they carry a `data-v` click-to-view id) are
-`files`, the rest `commands`. On a CURRENT session the `agents` chip mostly
+`messages`, memory-wiki file ops (they carry `data-mem` — the 🧠 marker, checked
+first) are `memory`, other file-op one-liners (they carry a `data-v` click-to-view
+id) are `files`, the rest `commands`. On a CURRENT session the `agents` chip mostly
 matches nothing: agent/codex stream ops are producer-source-stamped and never
 reach the page (the main-agent-only rule, *The web presenter* above). The
 chip and its heuristic survive deliberately for pre-stamp history — parked

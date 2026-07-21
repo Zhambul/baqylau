@@ -646,6 +646,31 @@ def job_count(sid):
     return int(rows[0][0]) if rows else 0
 
 
+def memory(sid):
+    """The memory-wiki notes a session touched — the `memory` kv the file
+    formatter / substream stash on every op under ~/wiki/01 (plugins.claude_code
+    .memory.record), which survives park. A list of {path, name, verb, agent,
+    count, ts} (verb ∈ Read/Update/Write, agent None = main), newest-touch first;
+    [] when the session touched no memory. Team-wide (main agent AND subagents,
+    unlike the main-agent-only mirror). Read-only (kv_at, live-or-parked path)."""
+    sdb = state_db_for(sid)
+    if not sdb:
+        return []
+    stash = kv_at(sdb, "memory")
+    files = stash.get("files") if isinstance(stash, dict) else None
+    if not isinstance(files, list):
+        return []
+    return sorted((f for f in files if isinstance(f, dict)),
+                  key=lambda f: f.get("ts") or 0, reverse=True)
+
+
+def memory_count(sid):
+    """The distinct memory-note COUNT for a session — the cheap twin of memory()
+    for the Memory tab's badge (the kv is small, so this just len()s it, but the
+    separate entry keeps the per-tick SSE symmetric with jobs/errors)."""
+    return len(memory(sid))
+
+
 def agent_transcript(sid, agent_id):
     """The transcript path for one agent — the newest streams row's src_path
     ('' when the audit never saw a streamer for it; plugins.activity() then

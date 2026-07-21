@@ -118,10 +118,13 @@ def code(s, ind="  ", g=None):
 
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
-        web=False):
+        web=False, mem=False):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if web:
         o["web"] = 1
+    if mem:
+        # A memory-wiki file op (see line()'s `mem`) — web-only filter hint.
+        o["mem"] = 1
     if view:
         # Click-to-view id (see line()) — a subagent's file-op one-liner is a
         # gut op, so gut carries the same expansion tag.
@@ -149,14 +152,20 @@ def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
     return o
 
 
-def line(s, view=None):
+def line(s, view=None, mem=False):
     # view: a click-to-view group id (the file op's tool_use_id). The renderer
     # paints the kv-stashed block `view:<id>` INLINE under this line while the
     # id is in the session's `view-open` kv set (toggled by claude-copy.py on a
     # /view click); the producer bakes the matching OSC 8 hyperlink into `s`.
+    # mem: this file op touched a memory-wiki note (plugins.claude_code.memory) —
+    # a web-only classification hint the dashboard uses to sort it into its own
+    # `memory` filter kind; the terminal renderer ignores it (the 🧠 MARK is
+    # already baked into `s`).
     o = {"t": "line", "s": s}
     if view:
         o["v"] = str(view)
+    if mem:
+        o["mem"] = 1
     return o
 
 

@@ -272,6 +272,7 @@ def op_html(op, key=""):
             style += ";background:%s" % _rgb(op.get("bg"))
         v = op.get("v")
         vattr = " data-v=\"%s\"" % html.escape(str(v), quote=True) if v else ""
+        vattr += " data-mem=\"1\"" if op.get("mem") else ""
         body = ("<div class=\"%s\" style=\"%s\"%s><pre>%s</pre></div>"
                 % (cls, style, vattr, ansi_html(s)))
         outer = op.get("outer")
@@ -282,6 +283,7 @@ def op_html(op, key=""):
     if t == "line":
         v = op.get("v")
         vattr = " data-v=\"%s\"" % html.escape(str(v), quote=True) if v else ""
+        vattr += " data-mem=\"1\"" if op.get("mem") else ""
         return "<pre class=\"opl\"%s>%s</pre>" % (vattr,
                                                   ansi_html(op.get("s", "")))
     return ""

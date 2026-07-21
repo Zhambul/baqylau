@@ -887,7 +887,7 @@ function updateHeadFromList() {
 
 function showSession(sid, tab) {
   // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror
-  if (!["mirror", "agents", "monitors", "jobs", "errors"].includes(tab)) tab = "mirror";
+  if (!["mirror", "agents", "monitors", "jobs", "memory", "errors"].includes(tab)) tab = "mirror";
   if (S.cur !== sid) {
     leaveSession();
     S.cur = sid;
@@ -896,6 +896,7 @@ function showSession(sid, tab) {
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
+              memory: null, noteTrail: null, noteFocus: null,
               loadingOlder: false, queue: [],
               filter: { kind: "all" } };          // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
@@ -1001,6 +1002,7 @@ function connectSession(sid) {
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("monitors", (e) => { updateMonCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("jobs", (e) => { updateJobCount(JSON.parse(e.data).count | 0); });
+  es.addEventListener("memory", (e) => { updateMemCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("ask", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -1285,6 +1287,9 @@ function refineBlockKind(b, it) {
 
 function ungroupedKind(it, elem) {
   if (it.t === "msg") return "messages";
+  // memory-wiki file ops carry data-mem (🧠) — their own kind, checked before
+  // the generic files test (a memory op is also a data-v file op).
+  if (elem.matches("[data-mem]") || elem.querySelector("[data-mem]")) return "memory";
   // file-op one-liners carry the click-to-view id as data-v (.opl / gut ops)
   if (elem.matches("[data-v]") || elem.querySelector("[data-v]")) return "files";
   return "commands";
@@ -1319,7 +1324,7 @@ function updateFilterCount() {
   ses.countEl.textContent = shown + " of " + items.length + " shown";
 }
 
-const FILTER_KINDS = ["all", "commands", "files", "agents", "messages"];
+const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"];
 
 function buildFilterBar() {
   const ses = S.ses;
@@ -3861,6 +3866,10 @@ function renderSessionChrome(tab) {
   // ⏳ background jobs — actual list length once fetched, else the cheap eager count
   ses.jobTab = mk("jobs", "jobs",
                   ses.jobs ? ses.jobs.length : (meta.job_count || 0));
+  // 🧠 memory-wiki notes touched — actual list length once fetched, else the
+  // cheap eager count (memory_count)
+  ses.memTab = mk("memory", "memory",
+                  ses.memory ? ses.memory.length : (meta.memory_count || 0));
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
   $view.append(tabs);
 
@@ -3911,6 +3920,10 @@ function renderSessionChrome(tab) {
     if (ses.jobs) renderJobsGrid();
     else wrap.append(el("div", "empty", "loading jobs…"));
     loadJobs();
+  } else if (tab === "memory") {
+    if (!ses.memory) body.append(el("div", "empty", "loading memory…"));
+    paintMemory();                        // grid, or the note viewer if one is open
+    loadMemory();
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -4498,6 +4511,167 @@ function setJobCount(n) {
   if (!ses) return;
   if (ses.meta) ses.meta.job_count = n;
   setTabCount(ses.jobTab, n);
+}
+
+/* ---------- memory tab (the memory-wiki notes a session touched) ---------- */
+
+function loadMemory() {
+  const ses = S.ses, sid = S.cur;
+  if (!ses || !sid) return;
+  fetch("/api/session/" + encodeURIComponent(sid) + "/memory")
+    .then(r => r.json())
+    .then(d => {
+      if (S.cur !== sid || !S.ses) return;
+      S.ses.memory = d.memory || [];
+      setMemCount(S.ses.memory.length);
+      // repaint the grid only when it's showing (a note viewer stays put)
+      if (S.ses.tab === "memory" && !(S.ses.noteTrail && S.ses.noteTrail.length))
+        paintMemory();
+    })
+    .catch(() => {});
+}
+
+function setMemCount(n) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.memory_count = n;
+  setTabCount(ses.memTab, n);
+}
+
+function updateMemCount(n) {          // live SSE badge patch
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.memory_count = n;
+  setTabCount(ses.memTab, n);
+  if (ses.tab === "memory" && !(ses.noteTrail && ses.noteTrail.length))
+    loadMemory();                     // a new note was touched with the grid open
+}
+
+/* Paint the memory tab body: the note grid, or the note viewer when a note
+   (or a followed [[wikilink]]) is open. */
+function paintMemory() {
+  const ses = S.ses;
+  if (!ses || !ses.body || ses.tab !== "memory") return;
+  ses.body.textContent = "";
+  if (ses.noteTrail && ses.noteTrail.length) { renderNoteView(); return; }
+  const wrap = el("div", "sgrid memgrid");
+  ses.memGrid = wrap;
+  ses.body.append(wrap);
+  renderMemoryGrid();
+}
+
+function renderMemoryGrid() {
+  const ses = S.ses;
+  if (!ses || !ses.memGrid) return;
+  ses.memGrid.textContent = "";
+  const mem = ses.memory || [];
+  if (!mem.length) {
+    ses.memGrid.append(el("div", "empty", "no memory notes touched in this session"));
+    return;
+  }
+  for (const m of mem) ses.memGrid.append(memCard(m));
+}
+
+function memCard(m) {
+  const card = el("div", "memcard");
+  const verb = (m.verb || "Read").toLowerCase();
+  card.append(el("span", "vchip v-" + verb, verb));
+  card.append(el("span", "memname", m.name || "?"));
+  if (m.agent) card.append(el("span", "memagent", "⇢ " + m.agent));
+  if (m.count > 1) card.append(el("span", "memcount", "×" + m.count));
+  card.onclick = () => openNoteRef({ path: m.path }, true);
+  return card;
+}
+
+/* Open a note by absolute path (a grid row) or bare stem (a followed
+   [[wikilink]]). `reset` starts a fresh breadcrumb trail (a grid click);
+   following a link pushes onto it. */
+function openNoteRef(ref, reset) {
+  const ses = S.ses, sid = S.cur;
+  if (!ses || !sid) return;
+  const q = ref.path ? ("path=" + encodeURIComponent(ref.path))
+                     : ("stem=" + encodeURIComponent(ref.stem || ""));
+  fetch("/api/session/" + encodeURIComponent(sid) + "/note?" + q)
+    .then(r => r.json())
+    .then(d => {
+      if (S.cur !== sid || !S.ses) return;
+      if (reset || !S.ses.noteTrail) S.ses.noteTrail = [];
+      S.ses.noteTrail.push(d);
+      S.ses.noteFocus = d.path || d.name;
+      paintMemory();
+    })
+    .catch(() => {});
+}
+
+function renderNoteView() {
+  const ses = S.ses;
+  if (!ses || !ses.body) return;
+  const trail = ses.noteTrail || [];
+  const d = trail[trail.length - 1];
+  ses.body.textContent = "";
+  ses.body.append(noteCrumbs(trail));
+  if (!d) return;
+  const wrap = el("div", "note");
+  if (d.missing) {
+    wrap.append(el("div", "empty", "note not found: " + (d.name || "?")));
+    ses.body.append(wrap);
+    return;
+  }
+  if (d.frontmatter && d.frontmatter.length) {
+    const fm = el("div", "note-fm");
+    for (const [k, v] of d.frontmatter) { fm.append(el("span", "fk", k), el("span", "fv", v)); }
+    wrap.append(fm);
+  }
+  const bodyEl = el("div", "note-body");
+  bodyEl.innerHTML = d.html || "";        // server-rendered, escape-first (opshtml/notehtml)
+  wrap.append(bodyEl);
+  if (d.backlinks && d.backlinks.length) {
+    const bl = el("div", "note-backlinks");
+    bl.append(el("div", "lbl", "backlinks"));
+    for (const stem of d.backlinks) {
+      const a = el("a", "wl", stem);
+      a.dataset.note = stem;
+      bl.append(a);
+    }
+    wrap.append(bl);
+  }
+  // follow a [[wikilink]] / backlink (delegated — the body HTML is server-built)
+  wrap.addEventListener("click", (ev) => {
+    const a = ev.target.closest("a.wl");
+    if (!a || !wrap.contains(a) || a.classList.contains("dead")) return;
+    ev.preventDefault();
+    openNoteRef({ stem: a.dataset.note });
+  });
+  ses.body.append(wrap);
+}
+
+/* The note breadcrumb — 🧠 memory (back to the grid) › note › followed note … */
+function noteCrumbs(trail) {
+  const nav = el("div", "crumbs");
+  const back = el("a", "crumb");
+  back.href = "#/s/" + encodeURIComponent(S.cur) + "/memory";
+  back.title = "back to the memory list";
+  back.append(el("span", "cg", "🧠"), document.createTextNode(" memory"));
+  back.onclick = (e) => {
+    e.preventDefault();
+    S.ses.noteTrail = []; S.ses.noteFocus = null; paintMemory();
+  };
+  nav.append(back);
+  trail.forEach((d, i) => {
+    nav.append(el("span", "csep", "›"));
+    if (i === trail.length - 1) {
+      const cur = el("span", "crumb cur");
+      cur.append(el("span", "cg", "🧠"), document.createTextNode(" " + (d.name || "?")));
+      nav.append(cur);
+    } else {
+      const a = el("a", "crumb");
+      a.href = "javascript:void 0";
+      a.append(document.createTextNode(d.name || "?"));
+      a.onclick = (e) => { e.preventDefault(); S.ses.noteTrail = trail.slice(0, i + 1); paintMemory(); };
+      nav.append(a);
+    }
+  });
+  return nav;
 }
 
 function showJob(sid, task) {

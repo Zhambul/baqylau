@@ -1253,3 +1253,45 @@ html { touch-action: manipulation; }
 @media (max-width: 900px) {
   :root { --gx: 12px; }
 }
+
+/* ---------- memory tab (memory-wiki notes) ---------- */
+/* note cards: a verb chip (read=blue · update=gold · write=green, matching
+   plugins/claude_code/tools.py FILE_RGB) + the note name + who touched it */
+.memgrid { grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr)); }
+.memcard { display: flex; align-items: center; gap: 8px; padding: 10px 12px;
+  background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+  cursor: pointer; }
+.memcard:hover { box-shadow: var(--card-hover); background: var(--panel2); }
+.memcard .vchip { font-size: 10px; text-transform: uppercase; letter-spacing: .08em;
+  padding: 2px 7px; border-radius: 999px; font-weight: 600; flex: none; }
+.vchip.v-read { color: var(--blue);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--blue) 40%, transparent); }
+.vchip.v-update { color: var(--gold);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 40%, transparent); }
+.vchip.v-write { color: var(--green);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--green) 40%, transparent); }
+.memcard .memname { color: var(--text); font-size: 13px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; flex: 1 1 auto; }
+.memcard .memagent { color: var(--dim); font-size: 11px; flex: none; }
+.memcard .memcount { color: var(--dim2); font-size: 11px; flex: none; }
+
+/* the note viewer */
+.note { background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+  padding: 16px 18px; margin-top: 10px; }
+.note-fm { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px;
+  padding-bottom: 10px; margin-bottom: 12px; border-bottom: 1px solid var(--hair);
+  font-family: var(--mono); font-size: 11px; }
+.note-fm .fk { color: var(--dim); }
+.note-fm .fv { color: var(--text-soft); }
+.note-body { color: var(--text); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.note-body h1, .note-body h2, .note-body h3 { line-height: 1.3; }
+.note-body a.wl { color: var(--mid); text-decoration: none;
+  border-bottom: 1px dotted color-mix(in srgb, var(--mid) 50%, transparent); cursor: pointer; }
+.note-body a.wl:hover { border-bottom-style: solid; }
+.note-body a.wl.dead { color: var(--dim); border-bottom-color: var(--dim2); cursor: default; }
+.note-backlinks { margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--hair); }
+.note-backlinks .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .12em; margin-bottom: 6px; }
+.note-backlinks a.wl { display: inline-block; margin: 0 10px 4px 0; color: var(--mid);
+  text-decoration: none; font-size: 13px; cursor: pointer; }
+.note-backlinks a.wl:hover { text-decoration: underline; }

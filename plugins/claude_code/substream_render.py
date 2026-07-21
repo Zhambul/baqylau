@@ -21,6 +21,7 @@ from core import render as R
 from core import state as S
 from core import streamfmt as SF
 from plugins.claude_code import accounting as ACC
+from plugins.claude_code import memory as MEM
 from plugins.claude_code import tools as CT
 from plugins.claude_code import transcript as TR
 
@@ -228,6 +229,15 @@ class Renderer:
                                   added=added, removed=removed, rng=rng)
         if failed:
             line += "  " + R.DIM + "✗" + RST
+        # A subagent memory-wiki op (~/wiki/01): mark it 🧠 (baked into the line
+        # before the emit below); the `memory` kv snapshot happens AFTER the emit,
+        # into the SAME per-session kv the main agent writes (self.agent names the
+        # subagent — e.g. the note-writer). The mirror block stays main-agent-only;
+        # this op only surfaces in the agent's drill-down, but the Memory tab is
+        # team-wide.
+        is_mem = MEM.is_memory(path)
+        if is_mem:
+            line += "  " + R.DIM + MEM.MARK + RST
         tag = self._op_tag()
         if tag:
             line += "  " + R.DIM + tag + RST
@@ -247,7 +257,9 @@ class Renderer:
                 self.log, tid, name_tool, label, name, path, inp,
                 result if isinstance(result, dict) else {}, line,
                 who="substream render", extra={"agent": self.agent})
-        O.emit(self.log, O.gut(line, self.rgb, view=vid))
+        O.emit(self.log, O.gut(line, self.rgb, view=vid, mem=is_mem))
+        if is_mem:
+            MEM.record(self.log, path, label, agent=self.agent)
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
         # reflect TEAM-WIDE file activity, not just the main session's own file ops
         # (claude-file-fmt.py skips agent_id calls — the substream owns their rendering,

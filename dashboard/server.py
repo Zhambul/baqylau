@@ -59,8 +59,9 @@ from core import state as ST
 from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard import askdialog, confirmdialog, dictate, opshtml, \
+from dashboard import askdialog, confirmdialog, dictate, notehtml, opshtml, \
     plandialog, prefs, rewindmenu
+from plugins.claude_code import memory as MEM
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -823,6 +824,7 @@ def session_payload(sid):
     data["error_count"] = API.error_count(sid)
     data["monitor_count"] = API.monitor_count(sid)   # the monitors tab badge
     data["job_count"] = API.job_count(sid)           # the jobs tab badge
+    data["memory_count"] = API.memory_count(sid)     # the memory tab badge
     data["title"] = session_title(data.get("transcript_path") or "")
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude
@@ -1257,6 +1259,28 @@ def view_payload(sid, gid):
     return opshtml.view_html(ops, sid)
 
 
+def note_payload(path, stem):
+    """A memory-wiki note rendered for the Memory-tab viewer, by absolute `path`
+    (a tab row) OR bare `stem` (a followed [[wikilink]]). Resolves the stem
+    through the vault index, reads the note (path-traversal-guarded to the memory
+    root by MEM.read_note), and renders the body with clickable/backlink-aware
+    HTML. Returns {name, path, frontmatter:[[k,v]…], html, backlinks:[stem…],
+    missing:bool}; missing=True (empty html) for a dangling stem / a path outside
+    the root / an unreadable note — the client shows a 'note not found' card."""
+    p = path or (MEM.resolve(stem) or "")
+    fm, body = MEM.read_note(p) if p else (None, None)
+    if body is None:
+        return {"name": stem or os.path.basename(path or "") or "?", "path": "",
+                "frontmatter": [], "html": "", "backlinks": [], "missing": True}
+    name = os.path.basename(p)
+    if name.endswith(".md"):
+        name = name[:-3]
+    return {"name": name, "path": p,
+            "frontmatter": notehtml.frontmatter_rows(fm),
+            "html": notehtml.note_html(body, resolve=MEM.resolve),
+            "backlinks": MEM.backlinks(p), "missing": False}
+
+
 def _last_prompt(sid):
     """The session's LAST main-thread user prompt text (via
     plugins.conversation), or '' — what a mid-turn cancel-edit restores into
@@ -1667,6 +1691,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({"monitors": plugins.monitors(sid) or []})
             if rest == ["jobs"]:
                 return self._json({"jobs": API.jobs(sid)})
+            if rest == ["memory"]:
+                return self._json({"memory": API.memory(sid)})
+            if rest == ["note"]:
+                return self._json(note_payload(_qstr(url, "path"),
+                                               _qstr(url, "stem")))
             if len(rest) == 2 and rest[0] == "view":
                 html = view_payload(sid, rest[1])
                 if html is None:
@@ -3079,7 +3108,8 @@ class Handler(BaseHTTPRequestHandler):
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
-                "composer_queue": None, "monitors": None, "jobs": None}
+                "composer_queue": None, "monitors": None, "jobs": None,
+                "memory": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -3192,6 +3222,15 @@ class Handler(BaseHTTPRequestHandler):
                     prev["jobs"] = jc
                     if not self._sse("jobs", {"count": jc}):
                         return
+                # the memory tab badge, live: the distinct-note COUNT from the
+                # `memory` kv (plugins.claude_code.memory), pushed on change — a
+                # new op under ~/wiki/01 bumps it. Full note list stays behind
+                # /memory, note bodies behind /note, fetched when the tab opens.
+                memc = API.memory_count(sid)
+                if memc != prev["memory"]:
+                    prev["memory"] = memc
+                    if not self._sse("memory", {"count": memc}):
+                        return
                 # the pinned tasks card, live — a task create / status flip
                 # re-stashes the `tasks` kv (task_fmt.py) and shows on the
                 # slow cadence (tasks change per-hook, not per-keystroke;
@@ -3300,6 +3339,10 @@ def _qint(url, name):
         return int((parse_qs(url.query).get(name) or ["0"])[0])
     except ValueError:
         return 0
+
+
+def _qstr(url, name):
+    return (parse_qs(url.query).get(name) or [""])[0]
 
 
 # --- lifecycle ---------------------------------------------------------------------

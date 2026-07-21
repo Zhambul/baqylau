@@ -37,6 +37,7 @@ from core import render as R
 from core import state as S
 from core import streamfmt as SF
 from plugins.claude_code import hookkit as H
+from plugins.claude_code import memory as MEM
 from plugins.claude_code import tools as CT
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
@@ -268,6 +269,14 @@ def main():
     line = SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
                         failed=failed, extent=ext,
                         added=added, removed=removed, rng=rng) + mark
+    # A file op under the memory wiki (~/wiki/01) is a MEMORY op: append the 🧠
+    # MARK to the one-liner (baked in before the emit); the `memory` kv snapshot
+    # itself happens AFTER the emit, so the first op's own emit has created the
+    # state DB the parked-guarded record() needs (main agent — agent_id was
+    # bailed above; the substream records subagent memory ops into the same kv).
+    is_mem = MEM.is_memory(path)
+    if is_mem:
+        line += "  " + R.DIM + MEM.MARK + R.RST
     # Click-to-view: stash the pre-rendered content block under the op's
     # tool_use_id, wrap the WHOLE one-liner in the claude-copy:///…/view
     # hyperlink (a `line` op paints verbatim, so the producer bakes the link;
@@ -280,7 +289,11 @@ def main():
     if not failed and gid:
         line, vid = stash_view(LOG, gid, tool, label, name, path, ti, tr, line)
     viewed = vid is not None
-    O.emit(LOG, O.line(line, view=vid))
+    O.emit(LOG, O.line(line, view=vid, mem=is_mem))
+    # Now that the emit has ensured the state DB exists, snapshot the touched note
+    # into the `memory` kv (mem_note = the audit fragment, None when not a memory
+    # op / the DB is somehow still parked).
+    mem_note = MEM.record(LOG, path, label, agent=None) if is_mem else None
     # Feed the session scoreboard (best-effort): the touched path (files counts
     # UNIQUE files — see bump()) plus the mutation's +/- line counts, keyed by the
     # raw tool name (Read/Edit/Write/MultiEdit/NotebookEdit) for the tools breakdown.
@@ -291,7 +304,8 @@ def main():
                  + (f" [{loc}]" if loc else "")
                  + (" FAILED" if failed else
                     ("" if tool == "Read" else f" +{added} -{removed}"))
-                 + (" +view" if viewed else ""))
+                 + (" +view" if viewed else "")
+                 + (f" +{mem_note}" if mem_note else (" +mem" if is_mem else "")))
 
 
 def entry():
