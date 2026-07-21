@@ -4189,6 +4189,28 @@ def test_accounts_payload_serves_fresh_eff_and_limit_hit(dash, monkeypatch):
     assert by["c1"]["limit_hit"] is None
 
 
+def test_accounts_payload_serves_sched_signals(dash, monkeypatch):
+    # the new-session picker's load-balancing signals ride the payload:
+    # sched_score (weekly-quota perishability) + sched_ok (5h safety gate).
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c1", "label": "oboard", "alias": "c1"},
+        {"slug": "c2", "label": "claude-01", "alias": "c2"}])
+    now = time.time()
+    for sid, slug, five, seven, reset in [
+            ("scd1", "c1", 40, 30, now + 6 * 3600),      # quota left, resets soon
+            ("scd2", "c2", 40, 30, now + 5 * 86400)]:    # same, resets far off
+        A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+        log = P.mirror_log(sid)
+        S.kv_set(log, "account", {"slug": slug, "label": slug})
+        S.kv_set(log, "usage", {"five_hour": five, "five_hour_reset": now + 8000,
+                                "seven_day": seven, "seven_day_reset": reset,
+                                "ts": now})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    # both clear the 5h gate; the soon-resetting account is more perishable
+    assert by["c1"]["sched_ok"] is True and by["c2"]["sched_ok"] is True
+    assert by["c1"]["sched_score"] > by["c2"]["sched_score"]
+
+
 def test_accounts_payload_files_limit_hit_under_its_own_slug(dash, monkeypatch):
     # After a rate-limit migration the adopted session runs under the NEW
     # account (its `account` kv), but the limit-hit stamp in the same state DB

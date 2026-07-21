@@ -196,6 +196,18 @@ FIVE_HOUR_S = 5 * 3600      # the 5h window length — the rolled-over fallback
                             # when a snapshot has no resets_at
 SEVEN_DAY_S = 7 * 86400     # the 7d window length — same fallback role
 
+# Scheduling knobs for the new-session default-account picker (sched_score,
+# docs/dashboard.md *Default account*). Objective (b): maximise total work
+# extracted across accounts per week, so we BURN perishable weekly quota first.
+SCHED_5H_GATE = 90          # effective 5h use at/above this bars an account from
+                            # the PREFERRED pool — a session-safety gate so the
+                            # picker doesn't open onto an account already at its
+                            # 5h wall (mirrors account.TARGET_MAX_PCT); the burn-
+                            # perishable ordering runs among the survivors
+SCHED_MIN_HORIZON_H = 0.5   # floor on hours-to-reset in the perishability ratio,
+                            # so a window resetting in seconds can't produce an
+                            # unbounded score (div-by-~0)
+
 
 def db_sig(path):
     """A change fingerprint for a sqlite state DB: (mtime_ns, size) of the DB
@@ -363,6 +375,47 @@ def effective_usage(usage, now=None):
             out[key] = 0
             out.pop(key + "_reset", None)
     return out
+
+
+def sched_score(usage, now=None):
+    """The PERISHABILITY of an account's weekly (7d) quota, for the new-session
+    default-account picker (docs/dashboard.md *Default account*). Objective (b) —
+    maximise total work extracted across accounts per week — means BURNING quota
+    that will otherwise be wiped soon: score = remaining% / hours-to-7d-reset, so
+    an account with quota still left AND a near reset scores HIGH (spend it before
+    it resets), while the same headroom with a distant reset scores low (conserve
+    it — it survives to next week). The picker prefers the highest score among
+    accounts under the 5h session-safety gate (SCHED_5H_GATE); the automigrate
+    safety net (docs/relimit.md) catches the higher per-session wall risk this
+    accepts. The single owner of the scheduling arithmetic — the dashboard serves
+    this number and never re-derives it (docs/styleguide.md single-owner table).
+
+    A rolled-over / unknown-reset 7d window (or no snapshot at all) counts as full
+    quota over a full-week horizon — a baseline, non-urgent score, never a spike.
+    An exhausted window (0 remaining) scores 0. Only the account-wide `seven_day`
+    window is scored: per-MODEL weekly caps still HARD-block via limit_hit, but a
+    soft per-model perishability tie-break is a deliberate non-goal for now (the
+    tokenless snapshot the migration picker shares carries no per-model window)."""
+    now = time.time() if now is None else now
+    used = (usage or {}).get("seven_day")
+    if (not isinstance(used, (int, float))
+            or _window_rolled(usage, "seven_day", SEVEN_DAY_S, now)):
+        remaining, horizon_h = 100.0, SEVEN_DAY_S / 3600.0
+    else:
+        remaining = max(0.0, 100.0 - used)
+        reset = usage.get("seven_day_reset")
+        horizon_h = ((reset - now) / 3600.0
+                     if isinstance(reset, (int, float)) and reset > now
+                     else SEVEN_DAY_S / 3600.0)
+    return remaining / max(horizon_h, SCHED_MIN_HORIZON_H)
+
+
+def sched_ok(usage, now=None):
+    """Whether an account clears the 5h session-safety gate (SCHED_5H_GATE) —
+    i.e. it belongs in the PREFERRED pool the new-session picker ranks by
+    sched_score. False = near its 5h wall, kept as a fallback only. The gate owner
+    (docs/dashboard.md *Default account*); the dashboard serves this boolean."""
+    return effective_five_hour(usage, now) < SCHED_5H_GATE
 
 
 def limit_hit_active(hit, now=None):

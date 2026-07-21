@@ -373,6 +373,50 @@ def test_effective_usage_rolls_stale_windows():
         now)["seven_day_fable"] == 0
 
 
+def test_sched_score_perishability():
+    now = 10_000_000.0
+    week_h = API.SEVEN_DAY_S / 3600.0
+    # same remaining, SOONER reset scores higher (burn perishable quota first)
+    soon = {"seven_day": 40, "seven_day_reset": now + 7 * 3600, "ts": now}
+    far = {"seven_day": 40, "seven_day_reset": now + 5 * 86400, "ts": now}
+    assert API.sched_score(soon, now) > API.sched_score(far, now)
+    # exactly remaining / hours-to-reset
+    assert API.sched_score(soon, now) == 60.0 / 7
+    # more remaining, same reset scores higher
+    a = {"seven_day": 20, "seven_day_reset": now + 3600, "ts": now}
+    b = {"seven_day": 70, "seven_day_reset": now + 3600, "ts": now}
+    assert API.sched_score(a, now) > API.sched_score(b, now)
+    # exhausted window → 0 (never preferred, even with a near reset)
+    assert API.sched_score(
+        {"seven_day": 100, "seven_day_reset": now + 60, "ts": now}, now) == 0
+    # rolled-over / unknown-reset / no snapshot → the full-week baseline
+    # (100% remaining over a 7d horizon), NOT a spike
+    base = 100.0 / week_h
+    assert API.sched_score({"seven_day": 55, "ts": now - API.SEVEN_DAY_S - 1},
+                           now) == base            # snapshot older than the window
+    assert API.sched_score({"seven_day": 55, "seven_day_reset": now - 10,
+                            "ts": now}, now) == base                  # reset past
+    assert API.sched_score(None, now) == base                     # no snapshot
+    assert API.sched_score({"five_hour": 10, "ts": now}, now) == base  # no 7d win
+    # a reset seconds away can't blow the score up (horizon floored)
+    spike = API.sched_score(
+        {"seven_day": 50, "seven_day_reset": now + 1, "ts": now}, now)
+    assert spike == 50.0 / API.SCHED_MIN_HORIZON_H
+
+
+def test_sched_ok_gate():
+    now = 10_000_000.0
+    # under the gate → in the preferred pool; at/above → out
+    assert API.sched_ok({"five_hour": 40, "five_hour_reset": now + 100,
+                         "ts": now}, now) is True
+    assert API.sched_ok({"five_hour": API.SCHED_5H_GATE,
+                         "five_hour_reset": now + 100, "ts": now}, now) is False
+    # a ROLLED 5h window is effective 0 → passes (no recent 5h load)
+    assert API.sched_ok({"five_hour": 99, "five_hour_reset": now - 10,
+                         "ts": now}, now) is True
+    assert API.sched_ok(None, now) is True
+
+
 def test_usage_windows_order_and_span():
     # windows enumerate account-wide pair first, then model windows by key;
     # ts and *_reset siblings and non-numerics are never windows

@@ -314,6 +314,13 @@ function fiveHourUsed(a) {
   return typeof a.five_hour_eff === "number" ? a.five_hour_eff : 0;
 }
 
+// The new-session picker's weekly-quota PERISHABILITY (higher = burn first).
+// SERVER-computed (core/sessionapi.sched_score, the single owner of the
+// scheduling arithmetic); missing → 0 (no snapshot / no urgency).
+function schedScore(a) {
+  return typeof a.sched_score === "number" ? a.sched_score : 0;
+}
+
 // The limit-hit chip/marker text: "fable limit hit" for a model-scoped stamp
 // (limit_hit.model, parsed server-side by relimit.limit_model), "limit hit"
 // for an account-wide one.
@@ -2810,14 +2817,19 @@ function openNewSession(prefillCwd, resumeSid) {
   // marker. No "default" option: the plain-claude login duplicates one of
   // these accounts. The row hides when there is no switcher (empty list → the
   // launch just runs plain claude).
-  // The DEFAULT selection load-balances: the account with the most 5h headroom
-  // (fiveHourUsed; ties → registry order), SKIPPING any account whose active
-  // limit-hit applies to the launch — an account-wide stamp always does, a
-  // model-scoped one (limit_hit.model, e.g. a fable-only limit) only when
-  // that model is the one selected, so flipping the model picker re-runs the
-  // choice (that's why the model picker is built above this block). All
-  // accounts blocked → plain lowest-usage fallback. Refined again when the
-  // fresh /api/accounts fetch lands — unless the user already picked by hand.
+  // The DEFAULT selection burns PERISHABLE weekly quota first (objective (b) —
+  // maximise total work per week; core/sessionapi.sched_score, docs/dashboard.md
+  // *Default account*): among accounts not limit-blocked for the launch AND under
+  // the 5h session-safety gate (sched_ok), pick the highest sched_score — quota
+  // still left whose 7d window resets soonest. Ties → registry order. It SKIPS
+  // any account whose active limit-hit applies to the launch — an account-wide
+  // stamp always does, a model-scoped one (limit_hit.model, e.g. a fable-only
+  // limit) only when that model is the one selected, so flipping the model picker
+  // re-runs the choice (that's why the model picker is built above this block).
+  // Gate empties the pool → fall back to any open account; all blocked → any at
+  // all. Refined again when the fresh /api/accounts fetch lands — unless the user
+  // already picked by hand. Higher per-session wall risk is by design: the
+  // automigrate safety net (docs/relimit.md) catches it.
   const [acctRow, acct] = pick("account", []);
   acctRow.style.display = "none";
   let acctPicked = false, acctList = [];
@@ -2827,8 +2839,9 @@ function openNewSession(prefillCwd, resumeSid) {
   const autoAcct = () => {
     if (acctPicked || !acctList.length) return;
     const open = acctList.filter(a => !limitBlocks(a));
-    const pool = open.length ? open : acctList;
-    acct.value = pool.reduce((b, a) => fiveHourUsed(a) < fiveHourUsed(b) ? a : b).slug;
+    const safe = open.filter(a => a.sched_ok);
+    const pool = safe.length ? safe : (open.length ? open : acctList);
+    acct.value = pool.reduce((b, a) => schedScore(a) > schedScore(b) ? a : b).slug;
   };
   model.onpick = () => { modelPicked = true; autoAcct(); };
   const fillAccts = (list) => {

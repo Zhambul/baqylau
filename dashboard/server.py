@@ -732,6 +732,12 @@ def accounts_payload():
         out.append(dict(
             a, usage=API.effective_usage(usage),
             five_hour_eff=API.effective_five_hour(ent.get("usage")),
+            # the new-session picker's load-balancing signals: sched_score is the
+            # weekly-quota perishability it ranks by, sched_ok the 5h session-
+            # safety gate it filters on (core/sessionapi, docs/dashboard.md
+            # *Default account*). Server-computed; the page never re-derives them.
+            sched_score=API.sched_score(usage),
+            sched_ok=API.sched_ok(ent.get("usage")),
             limit_hit=hit if active else None))
     return out
 
