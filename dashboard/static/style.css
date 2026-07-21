@@ -167,7 +167,7 @@ code, pre, .mono { font-family: var(--mono); }
 
 /* ---- layout ----------------------------------------------------------- */
 #view { max-width: 1500px; margin: 0 auto;
-  padding: 20px max(var(--gx), env(safe-area-inset-right))
+  padding: 10px max(var(--gx), env(safe-area-inset-right))
            20px max(var(--gx), env(safe-area-inset-left)); }
 .mhead {
   font-size: 11px; text-transform: uppercase; letter-spacing: .16em;
