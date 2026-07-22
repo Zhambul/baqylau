@@ -1617,6 +1617,27 @@ function hintAudit(pend, phase, extra) {
     .catch(() => {});   // a telemetry beacon must never surface to the user
 }
 
+// Beacon a control-plane failure the PAGE saw (a "send failed" / "resume
+// failed" toast) into the audit — a `web-clientfail` row. The server audits
+// each gesture's outcome BEFORE its HTTP response returns, so a lost response
+// (server restart, tunnel reset, dropped connection) rejects the fetch and
+// toasts a failure even when the send SUCCEEDED — invisible to the audit
+// otherwise (docs/dashboard.md, *Client-observed send failures*). `err` is a
+// postJSON rejection: an HTTP-error body ({error}) → kind "http"; a raw
+// fetch TypeError (no .error) → kind "transport" (the audit-blind case). The
+// beacon rides the same tunnel that may have failed, so it's strictly
+// best-effort — the toast is the user-facing signal, this is the breadcrumb.
+function clientFail(sid, gesture, err, chars) {
+  if (!sid) return;
+  const http = !!(err && err.error);
+  const body = { gesture, kind: http ? "http" : "transport",
+                 error: (err && (err.error || err.message)) || "" };
+  if (http && typeof err.status === "number") body.status = err.status;
+  if (typeof chars === "number") body.chars = chars;
+  postJSON("/api/session/" + encodeURIComponent(sid) + "/client-fail", body)
+    .catch(() => {});   // a telemetry beacon must never surface to the user
+}
+
 // The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
 // the pinned queued bubble): the text with hard line breaks, textContent only —
 // never innerHTML, since an undelivered prompt must never interpret markup.
@@ -2721,6 +2742,7 @@ function buildComposer() {
           // the draft survives in the box — nothing is lost on a failed wake
           // (re-persist it: send-start cleared the stash optimistically)
           toast("ask", "resume failed", (e && e.error) || "");
+          clientFail(sid, "resume", e, text.length);
           ta.disabled = false; btn.disabled = false; ta.focus();
           saveComposerDraft(ses, sid);
         });
@@ -2756,6 +2778,7 @@ function buildComposer() {
         // so re-persist it — a reload mustn't lose an unsent message
         if (pend) settlePending(pend, "dropped", { reason: "send-failed" });
         toast("ask", "send failed", (e && e.error) || "");
+        clientFail(sid, "send", e, text.length);
         saveComposerDraft(ses, sid);
       })
       .finally(() => {

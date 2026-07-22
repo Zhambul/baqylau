@@ -762,6 +762,37 @@ enough to correlate with the session's `web-send` row without storing content).
 `leaveSession` disarms the watchdog so a deliberate navigate-away doesn't
 false-fire `stale`. See the audit-debug skill's stuck-grey-bubble shape.
 
+## Client-observed send failures (`POST /api/session/<sid>/client-fail`)
+
+The `"send failed"` / `"resume failed"` toast is a purely CLIENT-side reaction:
+it fires in the composer's `.catch()` whenever the send `fetch` PROMISE rejects.
+But `post_message` audits the outcome (`web-send`, `ok`) and returns `200`
+*before* that response travels back to the browser. So a response LOST in transit
+— a dashboard restart, a tunnel/proxy reset, a dropped connection, a slept laptop
+— rejects the page's fetch and toasts a failure **even though the send
+succeeded**: the `web-send` row reads `ok: true`, the message really landed in the
+TUI, and (if it had an optimistic bubble) it even `reconciled` to gold over SSE.
+That combination — a failed toast next to a healthy `web-send ok:true` — was
+INVISIBLE to the audit, since server-side auditing happens before the response is
+sent and the browser's own view of the outcome was never recorded (the
+`web-hint` `send-failed` beacon only fires when there's a bubble, and it rides the
+same failed tunnel).
+
+`clientFail(sid, gesture, err, chars)` closes the gap: on a failed send/resume it
+beacons what the PAGE saw as a `web-clientfail` `state_files` row (`gesture`
+send | resume; `kind` `transport` = the fetch itself rejected — the request or its
+response was lost, the audit-blind class — vs `http` = the server returned an
+error status, so a paired `web-send ok:false` / `A.error` should exist; `error`
+the toast text, `status` on `http`, `chars` the message length). Like `hint-audit`
+it types nothing, writes no session state, and is best-effort — it too rides the
+tunnel that may have failed, so a MISSING row for a reported failed toast is
+itself the signal of a total outage (the user-facing toast is the primary signal;
+this is the after-the-fact breadcrumb). Correlate it with the paired `web-send`:
+a `web-clientfail kind:transport` next to a `web-send ok:true` at the same second
+IS the lost-response case (the message went through — no resend needed); a
+`kind:http` points at the server row/`A.error` for the real refusal. See the
+audit-debug skill's "failed toast but the message went through" shape.
+
 ## Web ghost suggestion (the TUI's "suggested answer", mirrored)
 
 **Claude Code pre-fills a greyish *suggested answer* in its input box when a

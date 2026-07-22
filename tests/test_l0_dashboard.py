@@ -2512,6 +2512,72 @@ def test_post_message_no_terminal_is_503(dash, monkeypatch):
     assert e.value.code == 503
 
 
+def _clientfail_rows(sid):
+    """Read the `web-clientfail` state_files rows written to the hermetic
+    in-process audit DB. A dashboard REQUEST runs in its own thread, so its
+    audit write SPOOLS (the cached _CONN is bound to another thread) rather than
+    hitting the DB — the same degrade path production relies on, drained by the
+    next process to open the DB. Force that drain here (fresh _connect ingests
+    the spool) before reading."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()                     # drains spool.jsonl into the DB
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [json.loads(c) for (c,) in con.execute(
+            "SELECT content FROM state_files WHERE session_id=? "
+            "AND action='web-clientfail' ORDER BY ts", (sid,))]
+    finally:
+        con.close()
+
+
+def test_client_fail_beacon_records_transport_and_http(dash, monkeypatch):
+    """A "send failed" toast is a CLIENT-side fetch rejection the server can't
+    see (it audits `web-send` + returns 200 BEFORE the response travels back —
+    a lost response toasts a failure over a send that SUCCEEDED). The page
+    beacons what IT saw as a `web-clientfail` row: `kind:transport` (the fetch
+    itself rejected — the audit-blind case) vs `kind:http` (a server error
+    status; a paired failure row exists). Audit-only: 200, no terminal writes.
+    docs/dashboard.md, *Client-observed send failures*."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+    A.session_start({"session_id": "cf1", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("cf1"), O.label("hi", (1, 2, 3)))   # materialize state DB
+    # transport failure (the lost-response class): no status, kind coerced
+    code, body = _post(dash + "/api/session/cf1/client-fail",
+                       {"gesture": "send", "kind": "transport",
+                        "error": "Failed to fetch", "chars": 10})
+    assert code == 200 and json.loads(body)["ok"] is True
+    # a beacon never types into the terminal
+    assert fe.pasted == [] and fe.sent == []
+    # http failure carries the status through
+    _post(dash + "/api/session/cf1/client-fail",
+          {"gesture": "resume", "kind": "http", "error": "send failed",
+           "status": 502})
+    rows = _clientfail_rows("cf1")
+    assert rows[0] == {"gesture": "send", "kind": "transport",
+                       "error": "Failed to fetch", "chars": 10}
+    assert rows[1]["gesture"] == "resume" and rows[1]["kind"] == "http"
+    assert rows[1]["status"] == 502
+
+
+def test_client_fail_beacon_defaults_bad_kind_and_guards(dash, monkeypatch):
+    """An unknown/absent `kind` defaults to `transport` (the conservative
+    audit-blind reading), and the beacon is behind the control-plane POST guard
+    like every write — a missing X-Claude-Dash header is a 403."""
+    A.session_start({"session_id": "cf2", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("cf2"), O.label("hi", (1, 2, 3)))
+    code, _ = _post(dash + "/api/session/cf2/client-fail", {"gesture": "send"})
+    assert code == 200
+    assert _clientfail_rows("cf2")[0]["kind"] == "transport"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/cf2/client-fail",
+              {"gesture": "send"}, header=None)
+    assert e.value.code == 403
+
+
 def test_post_command_sends_slash_text(dash, monkeypatch):
     # the quick-command row types the TUI's OWN slash commands — exact text,
     # bracketed paste like the composer (never send_text). Blank screens: no

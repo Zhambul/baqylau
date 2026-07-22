@@ -1893,6 +1893,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "hint-audit":
             return self.post_hint_audit(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "client-fail":
+            return self.post_client_fail(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "plan-options":
             return self.post_plan_options(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -2721,6 +2724,52 @@ class Handler(BaseHTTPRequestHandler):
         if isinstance(reason, str) and reason:
             content["reason"] = reason
         A.state_file(log, sdb, "web-hint", content)
+        return self._json({"ok": True})
+
+    def post_client_fail(self, sid):
+        """Record a control-plane failure the PAGE observed but the server
+        can't see — a `web-clientfail` state_files row, audit-only.
+
+        A gesture like a composer send audits its outcome server-side BEFORE
+        the HTTP response travels back (post_message writes `web-send ok:true`,
+        returns 200), so a response LOST in transit (server restart, tunnel /
+        proxy reset, dropped connection, a slept laptop) rejects the page's
+        fetch and toasts "send failed" while the send actually SUCCEEDED — an
+        outcome invisible to the audit until now (the "I saw a failed toast but
+        the message went through" report). This beacon closes that blind spot:
+        the page posts what IT saw, to be correlated against the paired
+        `web-send`/`web-*` row.
+
+        Body: `gesture` (send | resume | queue | … — which action the page was
+        attempting), `kind` (transport = the fetch itself rejected, the
+        server likely never saw the request OR its response was lost | http =
+        the server returned an error status, so a paired failure row should
+        exist), `error` (the error text the page had, capped), `status` (the
+        HTTP status when `kind='http'`), `chars` (message length, optional).
+        Types NOTHING and writes NO session state — best-effort, always 200
+        unless the guard rejects (a telemetry beacon must not surface to the
+        page; it also rides the SAME tunnel that may have just failed, so a
+        missing row is itself expected for a total outage — the toast is the
+        user-facing signal, this is only the after-the-fact breadcrumb)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        gesture = str(body.get("gesture") or "")[:32]
+        kind = str(body.get("kind") or "")
+        if kind not in ("transport", "http"):
+            kind = "transport"
+        content = {"gesture": gesture, "kind": kind}
+        err = body.get("error")
+        if isinstance(err, str) and err:
+            content["error"] = err[:200]
+        for k in ("status", "chars"):
+            v = body.get(k)
+            if isinstance(v, (int, float)):
+                content[k] = int(v)
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        A.state_file(log, sdb, "web-clientfail", content)
         return self._json({"ok": True})
 
     def post_answer(self, sid):
