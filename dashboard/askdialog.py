@@ -32,18 +32,25 @@
 #     SELECTS and auto-advances (the sole question of a one-question ask
 #     submits outright — no review pane); multiSelect Enter TOGGLES the
 #     cursored checkbox (cursor stays), and the pane advances by moving the
-#     cursor onto its "Next"/"Submit" advance row + Enter (NOT `right`: after a
-#     custom typed answer the cursor sits on the ex-"Type something" input row,
-#     whose edit focus eats left/right/Tab as caret movement — the 3fd325d9
-#     stuck-on-question-2 bug; the advance row leaves the field first);
+#     cursor onto its "Next"/"Submit" advance row + Enter;
+#   - THE FLOW IS FORWARD-ONLY: `left`/`right`/Tab do NOT switch questions in
+#     this build — they are inert (or, on a focused "Type something"/custom
+#     row, caret movement), verified live 2026-07-22 (session 3fd325d9: a
+#     `left`/`right`/`Tab` from every row left the same question showing). The
+#     ONLY way to a later question is answering the current one (Enter
+#     auto-advance / the "Next" row); there is no back-navigation. So `drive`
+#     answers whatever question is CURRENTLY shown, in order — it does NOT
+#     normalize to question 1 first (the old `left`×len assumed back-nav and
+#     could never recover a dialog stuck on a later question: the 3fd325d9
+#     "question 1 never became current" retry). up/down still move the row
+#     cursor, EXCEPT a filled custom-text row traps upward movement (edit
+#     focus) — `_cursor_to`'s down-walk fallback handles that;
 #   - free text: cursor ONTO the "Type something" row, then send_text (types
 #     the text + a CR): single-select commits it and auto-advances; multiSelect
 #     commits + checks the custom row (verified, with a fallback Enter);
 #   - the review pane ("Review your answers" · `1. Submit answers/2. Cancel`)
 #     appears after the last question unless the ask was a single
 #     single-select question; cursor onto "Submit answers" + Enter submits;
-#   - `left`/`right`/Tab switch questions; `left` at the first is a NO-OP, so
-#     `left`×len(questions) is a deterministic normalize-to-start from any tab;
 #   - Esc ANYWHERE (and Enter on an EMPTY "Type something") declines the whole
 #     question set — which is why this driver never presses Escape.
 import re
@@ -195,12 +202,25 @@ def _cursor_to(fe, win, pred, sleep, what):
     (the option), so the walk never recognized it reached Chat and dead-looped
     (`cursor never reached Chat row`). Checking every cursored row fixes it
     WITHOUT breaking option targeting: the down-from-top walk stops at option N
-    (clean, single ❯) before it ever descends into the ambiguous two-❯ state."""
+    (clean, single ❯) before it ever descends into the ambiguous two-❯ state.
+
+    The normalize-up bails early if `up` stops making progress: a FILLED
+    "Type something"/custom-answer row TRAPS upward movement (its edit focus
+    eats `up` as caret history — verified live 2026-07-22, session 3fd325d9),
+    so pressing up NAV_STEPS times there is 24 dead no-ops. The down-walk still
+    finds any target at or below the trap (e.g. the "Next" advance row), so a
+    stuck normalize is harmless — just cut it short."""
+    prev = object()
     for _ in range(NAV_STEPS):               # normalize to the first row
+        cur = _cursor_row(fe.get_text(win) or "")
+        if (cur or {}).get("digit") == "1":
+            break
+        key = None if cur is None else (cur["digit"], cur["label"])
+        if key == prev:                      # up made no progress (trapped row)
+            break
+        prev = key
         fe.send_key(win, "up")
         sleep(POLL_S)
-        if (_cursor_row(fe.get_text(win) or "") or {}).get("digit") == "1":
-            break
     for _ in range(NAV_STEPS):
         screen = fe.get_text(win) or ""
         if any(r["cursor"] and pred(r) for r in rows(screen)):
@@ -352,20 +372,45 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     if len(answers) != len(questions):
         raise AskError("answers", "expected %d answers, got %d"
                        % (len(questions), len(answers)))
-    # normalize to the first question — `left` is a no-op there (measured),
-    # so len(questions) presses land on tab 1 from anywhere (incl. review)
-    for _ in range(len(questions)):
-        fe.send_key(win, "left")
-        sleep(KEY_GAP_S)
-    for i, (q, ans) in enumerate(zip(questions, answers)):
+    # FORWARD-ONLY. This Claude Code build does NOT switch questions with
+    # left/right/Tab — they are inert (or caret movement in a focused text
+    # row), verified live 2026-07-22 (session 3fd325d9): a `right`/`left`/`Tab`
+    # from ANY row left the same question showing. The dialog is a one-way
+    # forward flow — single-select Enter selects + auto-advances, multiSelect
+    # advances via its "Next"/"Submit" row (_answer_question) — so we answer
+    # whatever question is CURRENTLY shown, in order, and let each answer move
+    # the pane on. The OLD `left`×len normalize assumed back-navigation: on a
+    # fresh dialog it was a harmless no-op, but a dialog stuck/partway on a
+    # LATER question (a prior half-answer, or a terminal-side answer) could
+    # never be walked back to question 1, so the very first wait bailed
+    # "question 1 never became current" (the 3fd325d9 retry). Starting from the
+    # current question also RECOVERS such a dialog: the remaining questions get
+    # answered forward (earlier ones keep whatever already set them).
+    last = -1
+    for _ in range(len(questions) + 1):     # bounded; each pass advances one q
+        screen = fe.get_text(win) or ""
+        if review_open(screen) or not dialog_open(screen):
+            break                            # reached review / submitted out
+        i = current_question(screen, questions)
+        if i is None:
+            raise AskError("question", "no current question on screen",
+                           screen=screen)
+        if i <= last:                        # answered but the pane didn't move
+            raise AskError("advance",
+                           "dialog did not advance past question %d" % (i + 1),
+                           screen=screen)
+        _answer_question(fe, win, questions, i, answers[i], sleep)
+        # confirm the answer advanced the pane before looking for the next one
+        # (single-select auto-advance has no explicit verify of its own)
         screen, ok = _wait(fe, win,
-                           lambda s, i=i: current_question(s, questions) == i,
+                           lambda s, i=i: current_question(s, questions) != i
+                           or review_open(s) or not dialog_open(s),
                            STEP_TIMEOUT_S, sleep)
         if not ok:
-            raise AskError("question", "question %d never became current: %r"
-                           % (i + 1, (q.get("question") or "")[:60]),
+            raise AskError("advance",
+                           "dialog did not advance past question %d" % (i + 1),
                            screen=screen)
-        _answer_question(fe, win, questions, i, ans, sleep)
+        last = i
     # a single single-select question submits outright; everything else lands
     # on the review pane, where "Submit answers" is the cursored top row. The
     # review pane appears locally-fast, but the outright submit is the dialog

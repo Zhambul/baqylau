@@ -3816,29 +3816,15 @@ class _AskFE(_FakeFE):
                     self.cursor = min(1, self.cursor + 1)
                 elif k == "enter" and self.cursor == 0:
                     self._finish()                   # "Submit answers"
-                elif k == "left":
-                    self.tab = len(self.questions) - 1
-                    self.cursor = 0
-                continue                             # digits inert
+                continue                    # left/right/Tab/digits all inert
             qi = self.tab
             q = self.questions[qi]
             kinds = self._kinds(qi)
-            # a FOCUSED "Type something"/custom input row swallows left/right/
-            # Tab as text-caret movement — they do NOT switch questions while
-            # the cursor sits on it (measured live: session 3fd325d9,
-            # 2026-07-22, a `right` after a multiSelect custom answer stayed on
-            # the same question). up/down still leave the field normally.
-            on_type = (self.cursor < len(kinds)
-                       and kinds[self.cursor][0] == "type")
-            if k == "left":
-                if self.tab > 0 and not on_type:
-                    self.tab -= 1
-                    self.cursor = 0
-            elif k in ("right", "tab"):
-                if not on_type:
-                    self.tab += 1
-                    self.cursor = 0
-            elif k == "up":
+            # FORWARD-ONLY: left/right/Tab do NOT switch questions in this build
+            # (measured live 2026-07-22, session 3fd325d9 — inert from every
+            # row); the only way forward is Enter (auto-advance / the "Next"
+            # row). up/down move the row cursor.
+            if k == "up":
                 self.cursor = max(0, self.cursor - 1)
             elif k == "down":
                 self.cursor = min(len(kinds) - 1, self.cursor + 1)
@@ -3991,6 +3977,29 @@ def test_post_answer_middle_multiselect_custom_advances(dash, monkeypatch):
     assert fe.submitted == {"Teleport where?": "City",
                             "Which snacks? (pick any)": "Fruit, test",
                             "Pick a superpower — or type your own.": "Flight"}
+
+
+def test_post_answer_recovers_dialog_stuck_midflow(dash, monkeypatch):
+    # the 3fd325d9 RETRY: left/right/Tab don't switch questions in this build,
+    # so a dialog already sitting on a LATER question (a prior half-answer, or
+    # a terminal-side answer) cannot be walked back to question 1. The old
+    # `left`×len normalize no-oped and the first wait bailed "question 1 never
+    # became current"; the forward-only drive answers from the CURRENT question
+    # instead, recovering it. Q1 keeps whatever already set it (no back-nav).
+    fe = _AskFE(_ASK_3Q_MID_MULTI)
+    fe.single[0] = "City"          # Q1 already answered (in the terminal)
+    fe.tab = 2                     # dialog stuck on Q3
+    _ask_env(monkeypatch, "ask9", "49", fe, _ASK_3Q_MID_MULTI)
+    code, body = _post(dash + "/api/session/ask9/answer",
+                       {"tool_use_id": "toolu_a1",
+                        "answers": [{"selected": ["City"], "other": ""},
+                                    {"selected": ["Fruit"], "other": ""},
+                                    {"selected": ["Teleportation"], "other": ""}]})
+    assert code == 200 and json.loads(body) == {"ok": True, "chat": False}
+    # Q3 answered from the web; Q1 kept its terminal value; Q2 never became
+    # current so it stays empty (the dialog was already past it)
+    assert fe.submitted["Pick a superpower — or type your own."] == "Teleportation"
+    assert fe.submitted["Teleport where?"] == "City"
 
 
 _ASK_LONGQ = [{"question": "Which rename mechanism should the dashboard "

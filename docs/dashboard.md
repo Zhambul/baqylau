@@ -1746,17 +1746,10 @@ wait for the next question timed out. The measured v2.1.215 model:
   actually shows (boxes the user pre-toggled in the terminal are
   reconciled, not re-flipped), then it advances by cursoring onto the
   question's own "Next"/"Submit" advance row + Enter (`_advance_multi`,
-  screen-verified). **NOT a blind `right`**: after a custom typed answer
-  the cursor is parked on the ex-"Type something" input row, whose
-  text-edit focus SWALLOWS `left`/`right`/`Tab` as caret movement instead
-  of switching questions — so the `right` never advanced and the NEXT
-  question's wait bailed `question N never became current` one step later
-  (session 3fd325d9, 2026-07-22: a 3-question ask, MIDDLE multiSelect
-  answered with a custom "other", stuck on question 2 — the whole answer
-  failed with a 409, step `question`). Moving DOWN to the explicit advance
-  row leaves the text field first, so it works with or without custom text;
-  a failed advance now bails its own step `advance` (not the misleading
-  `question` one tab later);
+  screen-verified). **NOT a blind `right`** — see the forward-only note
+  below: `right`/`left`/`Tab` don't switch questions at all in this build,
+  so the only advance is the "Next" row's Enter. A failed advance bails its
+  own step `advance` (not the misleading `question` one tab later);
 - TWO layouts: with no `preview` on any option, options carry an indented
   description line and "Chat about this" is NUMBERED; when ANY option has
   a `preview`, the dialog draws a box to the RIGHT of the option rows
@@ -1771,9 +1764,25 @@ wait for the next question timed out. The measured v2.1.215 model:
   auto-advances; multiSelect commits + checks the custom row — with a
   screen-verified fallback Enter, since whether the CR alone checks it was
   not nailed down;
-- `left`/`right`/Tab switch questions; `left` at the first is a no-op, so
-  `left`×len(questions) deterministically normalizes to question 1 from
-  any state (including the review pane, including a half-answered dialog);
+- **FORWARD-ONLY navigation.** `left`/`right`/`Tab` do NOT switch questions
+  in this Claude Code build — they are inert, or caret movement on a focused
+  text row (verified live 2026-07-22, session 3fd325d9: `left`/`right`/`Tab`
+  from every row left the same question showing). The ONLY way to a later
+  question is answering the current one (single-select auto-advance / the
+  "Next" row's Enter); there is no back-navigation. So `drive` answers
+  whatever question is CURRENTLY on screen, in order, and lets each answer
+  move the pane on — it does NOT normalize to question 1 first. The old
+  `left`×len normalize assumed back-nav: on a fresh dialog it was a harmless
+  no-op, but a dialog already stuck/partway on a LATER question (a prior
+  half-answer, or a terminal-side answer) could never be walked back, so the
+  very first wait bailed `question 1 never became current` (the 3fd325d9
+  RETRY, after the custom-multiSelect advance bug above left the dialog on
+  question 2). Starting from the current question also RECOVERS such a
+  dialog — the remaining questions get answered forward, earlier ones keep
+  whatever already set them. up/down still move the row cursor, except a
+  filled custom-text row traps upward movement (edit focus) — `_cursor_to`'s
+  down-walk fallback handles that and its normalize-up bails early when up
+  stops making progress;
 - each question is verified CURRENT by finding its text in the dialog
   region — ALL whitespace stripped from both sides before the substring
   match, because long question text wraps across screen lines and a

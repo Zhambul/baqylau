@@ -633,23 +633,36 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the tell is a `step: question` bail on a MULTI-question ask right after a
   Claude Code upgrade, with the FIRST question's answer never landing. The
   fix re-measured the dialog and rewrote `askdialog.py` to cursor + Enter
-  (docs/dashboard.md *Web ask*). (3) **The multiSelect-CUSTOM-advance bug**
-  (session 3fd325d9, fixed 2026-07-22): a MIDDLE multiSelect answered with a
-  custom "other" left the cursor on the ex-"Type something" input row, whose
-  text-edit focus SWALLOWED the blind `right` advance (arrow/Tab = caret
-  movement in a focused field), so the pane never left the multiSelect and
-  the NEXT question's wait bailed `step: question` one tab later — the tell is
-  a `step: question` bail whose `errors` `screen` field shows the dialog STILL
-  on the PRIOR (multiSelect) question with a checked custom option row cursored
-  (chip bar shows that question ☒ answered but its pane still displayed), NOT
-  the awaited question at all. The fix advances multiSelect via its explicit
-  "Next"/"Submit" row (`_advance_multi`, cursor-to + Enter — leaves the text
-  field first) and bails its own **`step: advance`** ("multiSelect did not
-  advance past question N") instead of the misleading `question` one tab later,
-  so a fresh `step: advance` row on a current build IS this advance-failure
-  directly. The FakeAsk test harness now models the edit-focus (arrow/Tab
-  don't switch tabs on the Type row), so `test_post_answer_middle_multiselect_
-  custom_advances` reproduces it. This class of bug can ONLY be caught by
+  (docs/dashboard.md *Web ask*). (3) **The FORWARD-ONLY navigation bug**
+  (session 3fd325d9, fixed 2026-07-22 — supersedes the intermediate
+  "custom-advance" fix earlier the same day): live probing of the stuck
+  dialog proved `left`/`right`/`Tab` do NOT switch questions in this Claude
+  Code build AT ALL — they are inert (or caret movement on a focused text
+  row), from EVERY row. The dialog is forward-only: the only way to a later
+  question is answering the current one (single-select auto-advance / the
+  multiSelect "Next" row's Enter). This broke TWO ways: (3a) a MIDDLE
+  multiSelect answered with a custom "other" — the blind `right` advance was
+  swallowed, so the pane never left it and the NEXT question bailed
+  `step: question` one tab later (the `errors` `screen` shows the dialog STILL
+  on the multiSelect with a checked custom row cursored, chip bar that
+  question ☒ but its pane displayed); (3b) on a RETRY, the driver's old
+  `left`×len "normalize to question 1" no-oped (left is inert), so a dialog
+  stuck/partway on a LATER question could never be walked back and the very
+  first wait bailed **`step: question` "question 1 never became current"**
+  even though question 1 was long answered — the `screen` shows the dialog on
+  a LATER question than the one the bail names. The fix drops the left-normalize
+  entirely: `drive` is now forward-only, answering whatever question is
+  CURRENTLY shown (which also RECOVERS a stuck dialog), and a multiSelect
+  advances via its "Next"/"Submit" row (`_advance_multi`), bailing its own
+  **`step: advance`** ("dialog did not advance past question N") instead of a
+  misleading `question` one tab later. So on a current build: a `step: advance`
+  row IS an advance-failure directly; a `step: question` "question 1 never
+  became current" whose `screen` shows a LATER question is the pre-fix retry
+  shape (a stale server — restart `claude-dashboard.py`). The FakeAsk harness
+  now models forward-only (left/right/Tab inert), and
+  `test_post_answer_recovers_dialog_stuck_midflow` +
+  `test_post_answer_middle_multiselect_custom_advances` reproduce both.
+  This class of bug can ONLY be caught by
   driving a live dialog — so on any `step: question`/`step: cursor`/`step:
   options` bail, first confirm the running `claude --version` still matches
   what `askdialog.py`'s header comment was measured against. Otherwise the
