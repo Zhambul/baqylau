@@ -1864,16 +1864,55 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(note_payload(_qstr(url, "path"),
                                                _qstr(url, "stem")))
             if len(rest) == 2 and rest[0] == "view":
-                html = view_payload(sid, rest[1])
-                if html is None:
-                    return self._json({"error": "no stash"}, 404)
-                return self._send(200, html, "text/html; charset=utf-8")
+                return self.get_view(sid, rest[1])
             if len(rest) == 3 and rest[0] == "copy" \
                     and rest[2] in ("cmd", "out", "all"):
-                sdb = API.state_db_for(sid)
-                text = CP.collect(sdb, rest[1], rest[2]) if sdb else ""
-                return self._send(200, text, "text/plain; charset=utf-8")
+                return self.get_copy(sid, rest[1], rest[2])
         return self._json({"error": "not found"}, 404)
+
+    def get_copy(self, sid, gid, what):
+        """Serve a mirror block's ⧉ copy text — the WEB twin of the terminal's
+        ⧉ link (core.copy.main / claude-copy.py). READ-ONLY: a mode=ro ops scan
+        via core.copy.collect, no clipboard, no pane feedback (the browser copies
+        client-side). Audited as a `web-copy` state_files row (gid/what/chars —
+        chars 0 = the group held nothing of that type), because the dashboard
+        calls collect() DIRECTLY and so bypasses every audit row main() writes:
+        a web copy must be as reconstructible as the terminal `copy` row. A gone
+        session DB or a read failure lands an A.error, mirroring main()'s
+        `copy (state DB gone …)` / `copy (read ops)` paths. Always 200 with the
+        text (empty on any miss — the same silent no-op the terminal shows)."""
+        row = API.session_row(sid)
+        log = (row.get("log") if row else "") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid)
+        if not sdb:
+            A.error(log, "dashboard copy (state DB gone)",
+                    {"gid": gid, "what": what})
+            return self._send(200, "", "text/plain; charset=utf-8")
+        try:
+            text = CP.collect(sdb, gid, what)
+        except Exception:
+            A.error(log, "dashboard copy (read ops)", {"gid": gid, "what": what})
+            return self._send(200, "", "text/plain; charset=utf-8")
+        A.state_file(log, sdb, "web-copy",
+                     {"gid": gid, "what": what, "chars": len(text)})
+        return self._send(200, text, "text/plain; charset=utf-8")
+
+    def get_view(self, sid, gid):
+        """Serve a click-to-view stash rendered to HTML — the WEB twin of the
+        terminal's ⧉view toggle (which audits a `view` row on every click).
+        READ-ONLY (collapse is client-side, so this fires once per EXPAND).
+        Audited as a `web-view` state_files row (gid/ok) so the web expand
+        isn't a blind spot: `ok:false` = no stash (pre-feature line / failed
+        stash write) → 404, the same no-op the terminal shows."""
+        row = API.session_row(sid)
+        log = (row.get("log") if row else "") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid)
+        html = view_payload(sid, gid)
+        A.state_file(log, sdb or "", "web-view",
+                     {"gid": gid, "ok": html is not None})
+        if html is None:
+            return self._json({"error": "no stash"}, 404)
+        return self._send(200, html, "text/html; charset=utf-8")
 
     # -- POST routing (the control plane) --
     # The dashboard is READ-ONLY except these control-plane writes, which TYPE INTO a

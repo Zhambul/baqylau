@@ -47,10 +47,15 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
 
 - **Read-only except the control plane, 127.0.0.1 only.** The page shows raw
   command output and transcripts; it must never sit on a routable interface. The
-  GET surface is pure read (the ⧉ copy endpoint *returns* text; the browser owns
-  its clipboard). The only writes are the control-plane POSTs (*Control plane
-  (web writes)* below), which type into / launch a terminal and are guarded
-  against the browser cross-origin vector.
+  GET surface is pure read of SESSION state (the ⧉ copy endpoint *returns* text;
+  the browser owns its clipboard) — but the two mirror-block gesture reads (⧉
+  copy, click-to-view expand) leave their OWN audit rows (`web-copy`/`web-view`
+  `state_files`), because they call `core/copy.collect`/`view_payload` DIRECTLY
+  and so bypass every audit row the terminal's `claude-copy.py` entry writes for
+  the same click; without them a web copy/expand was an audit blind spot next to
+  a fully-traced terminal one. The only STATE writes are the control-plane POSTs
+  (*Control plane (web writes)* below), which type into / launch a terminal and
+  are guarded against the browser cross-origin vector.
 - **`ThreadingHTTPServer` + per-request fresh `mode=ro` reads** — NOT the OTLP
   receiver's single-threaded request loop: sqlite connections are
   thread-affine, and concurrent SSE streams need concurrent handlers. No
@@ -282,8 +287,8 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
-| `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML) |
-| `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`) |
+| `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML); leaves a `web-view` `state_files` row (`gid`/`ok`) — the web twin of the terminal ⧉view toggle's audit |
+| `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`); leaves a `web-copy` `state_files` row (`gid`/`what`/`chars`) — the web twin of the terminal `copy` row (the dashboard calls `collect()` directly, bypassing `claude-copy.py`'s audit) |
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
 | `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |

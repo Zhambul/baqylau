@@ -1268,6 +1268,22 @@ def test_sse_tab_re_resolves_window_after_resume(dash, monkeypatch):
     assert seen[0] == "awaiting-response" and seen[-1] == "thinking", seen
 
 
+def _state_rows(action):
+    """state_files rows for an action, oldest-first. Same spool-drain dance as
+    _reject_rows (the audit conn is per-process; a fresh connect flushes)."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [json.loads(c) for (c,) in con.execute(
+            "SELECT content FROM state_files WHERE action=? ORDER BY ts",
+            (action,))]
+    finally:
+        con.close()
+
+
 def test_http_copy_and_view(dash):
     A.session_start({"session_id": "dash2", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("dash2")
@@ -1283,6 +1299,16 @@ def test_http_copy_and_view(dash):
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(dash + "/api/session/dash2/view/missing")
     assert e.value.code == 404
+    # The web copy/view flows call collect()/view_payload DIRECTLY, bypassing
+    # the terminal claude-copy.py entry's audit rows — so each must leave its own
+    # trace (docs/dashboard.md, the web-copy/web-view schema rows).
+    copies = _state_rows("web-copy")
+    assert {"gid": "cg", "what": "cmd", "chars": len("echo copyme")} in copies
+    assert any(c["what"] == "out" and c["chars"] == len("outline")
+               for c in copies)
+    views = _state_rows("web-view")
+    assert {"gid": "vg", "ok": True} in views
+    assert {"gid": "missing", "ok": False} in views
 
 
 def test_http_monitors_endpoint(dash, tmp_path):
