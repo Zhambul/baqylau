@@ -84,6 +84,14 @@ POST_MAX = 64 * 1024               # request-body cap for the control-plane POST
 # image (Claude's per-image ceiling) with headroom for the JSON envelope. Every
 # other POST stays at the tiny POST_MAX default.
 UPLOAD_MAX = 14 * 1024 * 1024
+# The frontend-audit (clientlog) batch cap: most events per POST we'll persist as
+# `web-client` rows (a page can't flood the audit with an oversized batch — the
+# rest is silently dropped, the ring on the client already bounds normal volume).
+CLIENTLOG_MAX = 64
+# Per-event scalar fields we keep from a clientlog event (keys outside this set are
+# dropped, so the page can't stuff arbitrary bulk into the audit). Strings capped.
+CLIENTLOG_FIELD_MAX = 24
+CLIENTLOG_STR_MAX = 200
 # Image content types the composer treats as inline screenshots (thumbnailed,
 # and always admitted). Non-image files are still allowed as attachments, just
 # size-capped and shown as a filename chip. Kept in sync with Claude's vision
@@ -2001,6 +2009,8 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_hide_dir()
         if api == ["dictate", "token"]:
             return self.post_dictate_token()
+        if api == ["clientlog"]:
+            return self.post_client_log()
         return self._json({"error": "not found"}, 404)
 
     def _reject(self, code, err):
@@ -2037,15 +2047,18 @@ class Handler(BaseHTTPRequestHandler):
             set it, and a cross-origin fetch that tries triggers a preflight this
             no-CORS server never answers), OR
           * a present-and-allowlisted `Origin` — because `navigator.sendBeacon`
-            CANNOT set a custom header, yet the close path needs it (the one
-            transport that isn't starved of a connection when a plain fetch POST
-            silently stalls through the tunnel — observed on Safari AND Chrome,
-            docs/dashboard.md *Close via sendBeacon*). A cross-origin page cannot
-            forge an allowlisted Origin,
-            and the browser stamps the *real* Origin on every cross-origin
-            request, so the Origin allowlist IS the CSRF gate here; the header was
-            only ever defence-in-depth. A non-allowlisted Origin is still the
-            attack signal and is always rejected."""
+            CANNOT set a custom header, yet the frontend-audit flush on `pagehide`
+            rides sendBeacon (a last-ditch delivery as the tab goes away —
+            `flushClog`, docs/dashboard.md *Frontend audit (clientlog)*). (The
+            close itself no longer needs this branch: routing it through
+            sendBeacon REGRESSED it — queued-then-silently-dropped by the tunnel —
+            so it is back on the plain-`fetch` channel that carries the header,
+            docs/dashboard.md *Close via the plain-fetch channel*.) A cross-origin
+            page cannot forge an allowlisted Origin, and the browser stamps the
+            *real* Origin on every cross-origin request, so the Origin allowlist IS
+            the CSRF gate here; the header was only ever defence-in-depth. A
+            non-allowlisted Origin is still the attack signal and is always
+            rejected."""
         if READONLY:
             return self._reject(403, "control plane disabled (read-only)")
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip()
@@ -2054,8 +2067,9 @@ class Handler(BaseHTTPRequestHandler):
         origin = self.headers.get("Origin")
         if origin and origin not in ALLOWED_ORIGINS:
             return self._reject(403, "cross-origin")
-        # header OR allowlisted Origin — the sendBeacon path carries no header but
-        # a real allowlisted Origin (a cross-origin caller can forge neither).
+        # header OR allowlisted Origin — the pagehide clientlog sendBeacon carries
+        # no header but a real allowlisted Origin (a cross-origin caller can forge
+        # neither).
         if self.headers.get(POST_HEADER) != "1" and origin not in ALLOWED_ORIGINS:
             return self._reject(403, "missing %s header" % POST_HEADER)
         try:
@@ -2924,6 +2938,81 @@ class Handler(BaseHTTPRequestHandler):
         sdb = API.state_db_for(sid) or P.state_db(log)
         A.state_file(log, sdb, "web-clientfail", content)
         return self._json({"ok": True})
+
+    def post_client_log(self):
+        """The FRONTEND AUDIT sink (docs/dashboard.md, *Frontend audit
+        (clientlog)*): record a BATCH of browser-side events — one `web-client`
+        state_files row each — so the page can report what IT actually did with a
+        control request the server may never have seen. This closes the whole
+        blind spot behind the "still not closing" saga: a `/stop` the browser
+        *tried* but that never reached a handler (dropped by the tunnel, starved
+        of a connection, queued forever) left NO server trace — only a client-side
+        `close.begin` with no `close.ok`/`close.fail` reveals it, and only the
+        browser can write that. Distinct from the other two client beacons:
+        `web-hint` tracks OPTIMISTIC-UI lifecycle (shown/reconciled/stale),
+        `web-clientfail` a single observed gesture failure; `web-client` is the
+        general per-gesture transport + connection + JS-error timeline they sit
+        on top of.
+
+        Body: `client` (the page's opaque CLIENT_ID — correlates a device's rows
+        across a batch), `conn` (a connection-health snapshot: `online`, `vis`,
+        `view`, `es` = SSE streams held open, `conn` = global stream up), and
+        `events` — a list of `{t, sid, ev, …scalars}`. `ev` is a dotted name
+        (close.begin | close.ok | close.fail | send.* | sse.open | sse.drop |
+        js.error | boot | …). Each event becomes one row scoped to its own `sid`
+        (so it lands in that session's timeline); a blank/invalid sid is a
+        session-less row (a launch, a boot record). Only scalar fields survive,
+        strings capped, at most CLIENTLOG_MAX events — a page can't stuff bulk
+        into the audit. Always 200 unless the guard rejects (telemetry must not
+        surface to the page); rides the same channel a failing gesture might, so a
+        missing batch is itself expected for a total outage."""
+        body = self._post_guard()
+        if body is None:
+            return
+        events = body.get("events")
+        if not isinstance(events, list):
+            return self._json({"error": "bad events"}, 400)
+        client = str(body.get("client") or "")[:40]
+        conn = body.get("conn") if isinstance(body.get("conn"), dict) else None
+        conn = self._clip_scalars(conn) if conn else None
+        for e in events[:CLIENTLOG_MAX]:
+            if not isinstance(e, dict):
+                continue
+            ev = str(e.get("ev") or "")[:40]
+            if not ev:
+                continue
+            esid = e.get("sid")
+            esid = esid if isinstance(esid, str) and _sid(esid) else ""
+            row = API.session_row(esid) if esid else {}
+            log = (row or {}).get("log") or (P.mirror_log(esid) if esid else "")
+            sdb = (API.state_db_for(esid) or P.state_db(log)) if esid else ""
+            content = {"ev": ev}
+            if client:
+                content["client"] = client
+            ts = e.get("t")
+            if isinstance(ts, (int, float)):
+                content["t"] = int(ts)
+            for k, v in self._clip_scalars(e).items():
+                if k not in ("ev", "sid", "t", "client"):
+                    content[k] = v
+            if conn:
+                content["conn"] = conn
+            A.state_file(log, sdb, "web-client", content)
+        return self._json({"ok": True})
+
+    @staticmethod
+    def _clip_scalars(d):
+        """Keep only JSON scalars from a client-supplied dict — bounded count,
+        strings capped — so telemetry can't smuggle bulk/nesting into the audit."""
+        out = {}
+        for k, v in list(d.items())[:CLIENTLOG_FIELD_MAX]:
+            if not isinstance(k, str):
+                continue
+            if isinstance(v, bool) or isinstance(v, (int, float)):
+                out[k] = v
+            elif isinstance(v, str):
+                out[k] = v[:CLIENTLOG_STR_MAX]
+        return out
 
     def post_answer(self, sid):
         """Answer the session's OPEN AskUserQuestion dialog from the web (the

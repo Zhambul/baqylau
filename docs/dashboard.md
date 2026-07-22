@@ -297,6 +297,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
+| `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below) |
@@ -1678,39 +1679,87 @@ for the `/stop` path = guard-bounced; a `web-clientfail gesture:close` = the
 fetch itself failed/aborted; neither, only the `web-hint` = the POST never left
 the page (a rendering/wiring bug, e.g. the launch tag-race below).
 
-### Close via sendBeacon
+### Close via the plain-fetch channel (and why sendBeacon was a regression)
 
-A stuck close turned out to be the hardest: the `/stop` fetch hung *pending
-forever* — no resolve, no reject, so no `.catch`, no `web-clientfail`, just the
-client's 20s `web-hint … stale` and NO server row of any kind (not even the
-`web-stop attempt`, since the request never reached the handler). It reproduced
-on BOTH Safari and Chrome, but ONLY through the tunnel (`*.zhambyl.top`), while
-the same click's `/hint-audit` beacon and the composer's `/message` got through
-— i.e. a control POST that couldn't get a connection at close time, the page's
-long-lived SSE `EventSource` streams having consumed the pool between the
-browser and the proxy. A plain `fetch` (even with `keepalive` + an
-`AbortController` timeout) could not be relied on to leave the page; the timeout
-didn't even fire.
+A stuck close was the hardest bug of the lot, and the wrong turn is instructive.
+Repeated closes left the SAME shape server-side: the click's `/hint-audit`
+beacon arrived (a `web-hint op=close shown` row), then a 20s `web-hint … stale`
+and **NO `web-stop`, no `web-reject`** — the `/stop` request never reached the
+handler. On the (mistaken) theory that the page's long-lived SSE `EventSource`
+streams had starved the browser→proxy fetch connection pool, the close was moved
+to **`navigator.sendBeacon`**. That REGRESSED it: `sendBeacon` returns `true`
+(queued) so `closeSession` resolved `ok` optimistically, but the queued beacon
+was then silently dropped by the tunnel — still no `web-stop`, no `web-reject`,
+no fallback, no trace.
 
-`closeSession()` (app.js) therefore sends the close over **`navigator.send
-Beacon`** — the browser's dedicated background-POST queue, which is independent
-of the fetch connection pool and survives the optimistic navigation. sendBeacon
-CANNOT set the `X-Claude-Dash` header, so `_post_guard` accepts it via the
-**allowlisted-Origin branch** (see the browser-vector defense above — a
-cross-origin page can forge neither the header nor an allowlisted Origin, so the
-Origin allow-list is the CSRF gate). It is fire-and-forget: `closeSession`
-resolves as soon as the beacon is QUEUED, the optimistic UI navigates, and the
-sessions poll (`reconcileCloses`) confirms the park — a close that didn't land
-just reverts the optimistic card. Where `sendBeacon` is unavailable or refused,
-it falls back to a timed `fetch` (`CLOSE_POST_MS` < the 20s watchdog) so that
-path still rejects visibly (→ `web-clientfail gesture:close`) rather than
-hanging silently.
+What the frontend audit (below) finally proved: the transport that DOES traverse
+the tunnel is the plain `fetch` — the `/hint-audit` beacon and the composer's
+`/message` both ride it and always land, and every morning-era close (plain
+`fetch`, before the sendBeacon change) succeeded; `sendBeacon` is the one that
+vanishes. So `closeSession()` (app.js) sends the close over `postJSON` — the
+plain-fetch channel (`X-Claude-Dash` header, JSON body) — tagged
+`audit:"close"`, with a `CLOSE_POST_MS` (< the 20s watchdog) `AbortController`
+timeout so a genuine upstream stall becomes a VISIBLE, retryable, audited
+failure (`close.fail kind:transport` + `web-clientfail`) instead of a silent
+hang. It is optimistic: the card greys immediately, the sessions poll
+(`reconcileCloses`) confirms the park, and a close that didn't land reverts the
+card.
 
-(Note: `sendBeacon` bypasses the BROWSER→proxy connection pool. If a close still
-stalls, the bottleneck is the proxy→`127.0.0.1:8377` upstream pool starved by the
-SSE streams — that is proxy config, e.g. more upstream keepalive connections, not
-an app fix; the local `127.0.0.1:8377` bind, which holds no proxy in between, is
-the control.)
+`_post_guard` still accepts a header-less POST by **allowlisted Origin** — no
+longer for the close (which carries the header again) but for the one legitimate
+`sendBeacon` left: the frontend-audit flush on `pagehide` (below). A cross-origin
+page can forge neither the header nor an allowlisted Origin, so the Origin
+allow-list remains the CSRF gate.
+
+### Frontend audit (clientlog)
+
+The close saga burned several rounds because the server can only ever see a
+control request that ACTUALLY ARRIVED — a `/stop` the browser *tried* but that
+never reached a handler (dropped by the tunnel, starved of a connection, queued
+forever) left no server trace at all, so every diagnosis was a guess. The fix is
+a **frontend audit channel**: the browser reports what IT did, and those reports
+become audit rows.
+
+- **Client** (`app.js`): `clog(sid, ev, data)` appends an event to a ring
+  buffer; `flushClog()` delivers the batch as ONE `POST /api/clientlog` over the
+  plain-fetch channel (the one proven to traverse the tunnel — NOT `sendBeacon`,
+  the very transport that vanished the close). A `pagehide` /
+  `visibilitychange→hidden` does flush via `sendBeacon` (a last-ditch flush as
+  the tab goes away is exactly beacon's job, and losing the tail then is fine).
+  Every batch carries a `connInfo()` snapshot — `online`, `view`, `es` (SSE
+  streams held open — the connection-pool evidence), `conn` (global stream up).
+- **The spine is `postJSON`**: a control POST tagged `{audit:"<gesture>"}`
+  auto-logs its whole transport lifecycle — `<gesture>.begin` (with `ep`, `es`,
+  and gesture-specific `auditData`), `<gesture>.ok` (`ms`, `status`), and
+  `<gesture>.fail` (`ms`, `kind` http|transport, `status`/`error`, `aborted` for
+  a timeout). Tagged today: `close`, `send`, `command`, `interrupt`, `rename`,
+  `migrate`, `rewind`, `rewind-to`, `answer`, `plan`, `new`, `resume-send`. The
+  telemetry endpoints themselves (`/clientlog`, `/hint-audit`, `/client-fail`)
+  are deliberately untagged — tagging them would recurse.
+- **Also captured**: SSE up/down TRANSITIONS (`sse.open` / `sse.drop` per stream
+  — the direct read on connection health), uncaught JS errors
+  (`js.error` / `js.reject` — a handler throwing used to be a silent product
+  bug), and one `boot` record per load (origin — `127.0.0.1` vs the tunnel — +
+  device + viewport, anchoring a client's event stream).
+- **Server** (`post_client_log`): behind `_post_guard`, writes one `web-client`
+  `state_files` row per event, scoped to the event's own `sid` (a blank sid is a
+  session-less row — a boot, a launch). Bounded by construction: at most
+  `CLIENTLOG_MAX` events per batch, only JSON scalars kept (`_clip_scalars`),
+  strings capped — a page can't stuff bulk into the audit. Audit-only, always
+  200 unless the guard rejects.
+
+This is the general per-gesture transport + connection + error timeline the two
+older client beacons sit on top of: `web-hint` tracks OPTIMISTIC-UI lifecycle
+(shown/reconciled/stale), `web-clientfail` a single observed gesture failure,
+`web-client` the transport truth beneath both. A stuck close is now fully
+attributable from the DB alone: a `close.begin` with no `close.ok`/`close.fail`
+= the request left but no response came (tunnel/upstream drop — the sendBeacon
+failure mode); a `close.fail kind:transport aborted:true` = our timeout fired (a
+genuine hang); a `web-reject` on `/stop` = guard-bounced; a paired `web-stop
+attempt` with no `done` = `close_tab` itself hung. If a close still stalls with
+`close.begin`-only rows through the tunnel while `127.0.0.1:8377` (no proxy
+between) closes fine, the bottleneck is the proxy→upstream pool — proxy config,
+not an app fix.
 
 **The launch tag-race (why a just-launched session's controls were dead).** A
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged

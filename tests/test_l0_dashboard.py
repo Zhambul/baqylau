@@ -2741,6 +2741,90 @@ def test_hint_audit_guards_bad_op_and_phase(dash, monkeypatch):
     assert _hint_rows("wh2") == []
 
 
+def _client_rows(sid):
+    """The `web-client` frontend-audit rows. Same spool-drain dance as
+    _hint_rows — a request-thread audit write spools; force the drain."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [json.loads(c) for (c,) in con.execute(
+            "SELECT content FROM state_files WHERE session_id=? "
+            "AND action='web-client' ORDER BY ts", (sid,))]
+    finally:
+        con.close()
+
+
+def test_client_log_records_frontend_audit_batch(dash, monkeypatch):
+    """The frontend audit sink (docs/dashboard.md, *Frontend audit (clientlog)*):
+    a BATCH of browser events lands as one `web-client` state_files row each,
+    scoped to each event's OWN sid — the ground truth a control request the
+    server never saw (a tunnel-dropped /stop) leaves ONLY on the client. Each row
+    keeps the event name + its scalar fields + the shared connection snapshot; a
+    session-less event (a boot record, a launch) lands under sid=''. Audit-only:
+    200, no terminal writes."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    A.session_start({"session_id": "cl1", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("cl1"), O.label("hi", (1, 2, 3)))   # materialize state DB
+    body = {
+        "client": "abc123",
+        "conn": {"online": True, "view": "session", "es": 2, "conn": 1},
+        "events": [
+            {"t": 1000, "sid": "cl1", "ev": "close.begin", "via": "header", "es": 2},
+            {"t": 1100, "sid": "cl1", "ev": "close.fail",
+             "kind": "transport", "aborted": True, "ms": 12000},
+            {"t": 1200, "sid": "cl1", "ev": "sse.drop", "s": "session"},
+            {"t": 1300, "sid": "", "ev": "boot",
+             "origin": "https://baqylau.zhambyl.top"},
+        ],
+    }
+    code, resp = _post(dash + "/api/clientlog", body)
+    assert code == 200 and json.loads(resp)["ok"] is True
+    assert fe.pasted == [] and fe.sent == []       # telemetry never types
+    rows = _client_rows("cl1")
+    assert [r["ev"] for r in rows] == ["close.begin", "close.fail", "sse.drop"]
+    assert rows[0]["via"] == "header" and rows[0]["client"] == "abc123"
+    assert rows[0]["t"] == 1000
+    assert rows[0]["conn"] == {"online": True, "view": "session", "es": 2, "conn": 1}
+    assert rows[1]["kind"] == "transport" and rows[1]["aborted"] is True
+    # the session-less boot record lands under sid=''
+    boot = [r for r in _client_rows("") if r["ev"] == "boot"]
+    assert boot and boot[-1]["origin"] == "https://baqylau.zhambyl.top"
+
+
+def test_client_log_caps_guards_and_sanitizes(dash, monkeypatch):
+    """The sink is bounded + guarded: a non-list `events` is 400; more than
+    CLIENTLOG_MAX events are truncated; non-dict / blank-`ev` events are skipped;
+    string fields are capped; and it sits behind the control-plane POST guard
+    (missing X-Claude-Dash header → 403)."""
+    A.session_start({"session_id": "cl2", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("cl2"), O.label("hi", (1, 2, 3)))
+    # a non-list events payload is a 400
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/clientlog", {"events": "nope"})
+    assert e.value.code == 400
+    # an oversized batch is truncated to CLIENTLOG_MAX rows
+    events = [{"sid": "cl2", "ev": "spam"} for _ in range(DS.CLIENTLOG_MAX + 20)]
+    code, _ = _post(dash + "/api/clientlog", {"events": events})
+    assert code == 200 and len(_client_rows("cl2")) == DS.CLIENTLOG_MAX
+    # junk events skipped; a long string field capped
+    A.session_start({"session_id": "cl3", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("cl3"), O.label("hi", (1, 2, 3)))
+    _post(dash + "/api/clientlog", {"events": [
+        "not-a-dict", {"sid": "cl3", "ev": ""},        # both skipped
+        {"sid": "cl3", "ev": "boot", "big": "x" * 5000}]})
+    rows = _client_rows("cl3")
+    assert len(rows) == 1 and rows[0]["ev"] == "boot"
+    assert len(rows[0]["big"]) == DS.CLIENTLOG_STR_MAX
+    # behind the control-plane guard
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/clientlog", {"events": []}, header=None)
+    assert e.value.code == 403
+
+
 def test_post_command_sends_slash_text(dash, monkeypatch):
     # the quick-command row types the TUI's OWN slash commands — exact text,
     # bracketed paste like the composer (never send_text). Blank screens: no
@@ -3131,10 +3215,10 @@ def test_post_guard_rejections(dash):
 
 
 def test_post_guard_accepts_beacon_by_allowlisted_origin(dash, monkeypatch):
-    # navigator.sendBeacon (the close transport) can't set X-Claude-Dash, so a
-    # HEADERLESS POST is accepted when it carries a present, allowlisted Origin —
-    # a cross-origin page can forge neither, so the Origin allowlist is the CSRF
-    # gate (docs/dashboard.md *Close via sendBeacon*).
+    # navigator.sendBeacon (the pagehide clientlog flush — flushClog) can't set
+    # X-Claude-Dash, so a HEADERLESS POST is accepted when it carries a present,
+    # allowlisted Origin — a cross-origin page can forge neither, so the Origin
+    # allowlist is the CSRF gate (docs/dashboard.md *Frontend audit (clientlog)*).
     monkeypatch.setattr(DS, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {dash})
     ep = dash + "/api/session/beacon1/hint-audit"
     body = {"op": "close", "phase": "shown"}

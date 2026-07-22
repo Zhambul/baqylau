@@ -59,10 +59,11 @@ const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compa
 // race*). Bounded — a truly headless session never tags a window.
 const LAUNCH_RESOLVE_MS = 1000;
 const LAUNCH_RESOLVE_TRIES = 12;
-// Timeout for the ✕ close's FETCH FALLBACK (closeSession prefers sendBeacon).
-// < the 20s optPending watchdog so a stalled close rejects visibly/retryably
-// (→ web-clientfail) instead of hanging silently (docs/dashboard.md *Close via
-// sendBeacon*).
+// Timeout for the ✕ close's fetch (closeSession → postJSON, the plain-fetch
+// channel proven to traverse the tunnel). < the 20s optPending watchdog so a
+// stalled close rejects visibly/retryably (→ close.fail + web-clientfail)
+// instead of hanging silently (docs/dashboard.md *Close via the plain-fetch
+// channel*).
 const CLOSE_POST_MS = 12000;
 
 // iPad detection — gates the message boxes' Enter behavior AND every
@@ -91,11 +92,19 @@ function el(tag, cls, text) {
 }
 function frag(...kids) { const f = document.createDocumentFragment(); kids.forEach(k => k && f.append(k)); return f; }
 
+// The compact endpoint label for the frontend audit — the path minus the /api/
+// prefix and the (already-separately-logged) sid, so `/api/session/<sid>/stop`
+// → `session/stop`. Purely for readable `web-client` rows.
+function apiEp(url) {
+  return String(url || "").replace(/^\/?api\//, "")
+    .replace(/session\/[^/]+\//, "session/").replace(/\?.*$/, "");
+}
+
 // The control-plane write: every POST carries the JSON content type AND the
 // custom X-Claude-Dash header the server's _post_guard demands (both force a
 // CORS preflight a cross-origin page can't pass). Resolves to the parsed JSON
 // on success, rejects with the server's {error} on a 4xx/5xx.
-// opts (optional): { keepalive, timeout }.
+// opts (optional): { keepalive, timeout, audit, sid, auditData }.
 //   keepalive — send via the browser's keepalive pool (the sendBeacon infra),
 //     which is NOT starved by the page's long-lived SSE EventSource streams. On
 //     an HTTP/1.1 origin (this server) the ~6-connections/origin cap is eaten by
@@ -107,8 +116,27 @@ function frag(...kids) { const f = document.createDocumentFragment(); kids.forEa
 //   timeout — abort (→ reject) after N ms so a hung request becomes a VISIBLE,
 //     retryable, auditable failure (web-clientfail kind:transport) instead of a
 //     silent pending forever.
+//   audit — a gesture name (e.g. "close", "send"): when set, this POST's whole
+//     transport lifecycle is mirrored into the frontend audit as `<audit>.begin`
+//     (with a connection snapshot + optional auditData), `<audit>.ok` (ms +
+//     status) and `<audit>.fail` (ms + kind http|transport + status/error). This
+//     is the ONE place the browser records what actually happened to a control
+//     request the server may never have seen. `sid` scopes the rows; `auditData`
+//     adds gesture-specific fields to the begin row. NEVER tag the telemetry
+//     endpoints themselves (/clientlog, /hint-audit, /client-fail) — that recurses.
 function postJSON(url, body, opts) {
   opts = opts || {};
+  const tag = opts.audit;
+  const sid = opts.sid || (tag ? S.cur : "") || "";
+  const t0 = performance.now();
+  if (tag) {
+    const info = connInfo();
+    // es (SSE streams held open at send time) + online are the per-gesture
+    // connection facts; the batch's `conn` snapshot carries the rest. No `conn`
+    // key here — it would collide with that batch dict server-side.
+    clog(sid, tag + ".begin", Object.assign(
+      { ep: apiEp(url), es: info.es, online: info.online }, opts.auditData || {}));
+  }
   const init = {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Claude-Dash": "1" },
@@ -121,8 +149,27 @@ function postJSON(url, body, opts) {
     init.signal = ctl.signal;
     timer = setTimeout(() => ctl.abort(), opts.timeout);
   }
-  return fetch(url, init).then(r => r.json().then(
-    d => r.ok ? d : Promise.reject(d || { error: "request failed" })))
+  return fetch(url, init).then(
+    // reached the server (any status): parse, then resolve/reject on r.ok. A body
+    // that isn't JSON is only expected on an error, so synthesize one there.
+    r => r.json().catch(() => ({ error: "bad response", status: r.status }))
+      .then(d => {
+        if (tag) clog(sid, r.ok ? tag + ".ok" : tag + ".fail", {
+          ms: Math.round(performance.now() - t0), status: r.status,
+          kind: r.ok ? undefined : "http",
+          error: r.ok ? undefined : (d && d.error) || "" });
+        return r.ok ? d : Promise.reject(
+          Object.assign({ status: r.status }, d || { error: "request failed" }));
+      }),
+    // never reached / no response — a transport failure (network, tunnel drop,
+    // our own AbortController timeout). THE case the server can't see.
+    err => {
+      if (tag) clog(sid, tag + ".fail", {
+        ms: Math.round(performance.now() - t0), kind: "transport",
+        aborted: !!(err && err.name === "AbortError"),
+        error: (err && err.message) || "" });
+      throw err;
+    })
     .finally(() => { if (timer) clearTimeout(timer); });
 }
 
@@ -131,6 +178,24 @@ function postJSON(url, body, opts) {
 // origin and IS applied). Per-load: two tabs are two peers, which is correct.
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 const ASK_DRAFT_DEBOUNCE_MS = 350;      // coalesce typing before persisting
+
+// The FRONTEND audit channel (clog → POST /api/clientlog → `web-client` state_files
+// rows, docs/dashboard.md *Frontend audit (clientlog)*). The server can only ever
+// see a control POST that ACTUALLY ARRIVED; a request the browser tried but that
+// never reached the handler (dropped by the tunnel, starved of a connection, queued
+// forever) is invisible server-side — the entire class of "still not closing" bugs
+// where /stop left no trace. This channel is the browser reporting what IT did:
+// each control gesture logs a begin/ok/fail lifecycle with timing + a connection
+// snapshot, delivered over the plain-fetch channel that IS proven to traverse the
+// tunnel (the same one /hint-audit and /message ride). Best-effort, batched,
+// never surfaces to the user.
+const CLOG = [];              // pending client-audit events (ring, oldest dropped)
+const CLOG_MAX = 100;         // cap so a delivery outage can't grow it unbounded
+const CLOG_FLUSH_MS = 500;    // debounce — coalesce a gesture's begin+ok into one POST
+const CLOG_RETRY_MS = 4000;   // re-flush backoff after a failed delivery
+let clogTimer = null;
+const SSE_UP = {};            // stream label -> last up? — clog SSE only on TRANSITIONS
+                              // (EventSource.onerror re-fires each reconnect attempt)
 
 function kfmt(n) {
   n = +n || 0;
@@ -459,8 +524,8 @@ function refreshAccounts() {
 function connectGlobal() {
   const es = new EventSource("/events");
   S.esGlobal = es;
-  es.onopen = () => { $conn.dataset.on = "1"; };
-  es.onerror = () => { $conn.dataset.on = "0"; };
+  es.onopen = () => { $conn.dataset.on = "1"; sseMark("global", true); };
+  es.onerror = () => { $conn.dataset.on = "0"; sseMark("global", false); };
   es.addEventListener("sessions", (e) => {
     S.sessions = JSON.parse(e.data);
     reconcileCloses();
@@ -532,6 +597,35 @@ function connectGlobal() {
 /* ---------- router ---------- */
 
 window.addEventListener("hashchange", route);
+// Flush the frontend-audit buffer as the tab goes away (navigation, tab close,
+// backgrounding) — via sendBeacon here, the one place beacon is the right tool
+// and a lost tail is acceptable. Both events fire on mobile Safari where an
+// unload alone is unreliable.
+window.addEventListener("pagehide", () => flushClog(true));
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushClog(true);
+});
+// Uncaught client errors — a handler throwing and leaving NO trace is exactly the
+// blind spot this audit closes (a broken render reads as a silent product bug).
+// First stack frame is enough to locate it; capped, best-effort.
+window.addEventListener("error", (e) => {
+  clog(S.cur || "", "js.error", {
+    msg: (e && e.message || "").slice(0, 200), src: apiEp(e && e.filename || ""),
+    line: (e && e.lineno) || 0, col: (e && e.colno) || 0 });
+});
+window.addEventListener("unhandledrejection", (e) => {
+  const r = e && e.reason;
+  clog(S.cur || "", "js.reject",
+       { msg: String((r && (r.message || r.error)) || r || "").slice(0, 200) });
+});
+// One boot record per page load — anchors this client's event stream to a device
+// + ORIGIN (127.0.0.1 vs the tunnel — the difference that mattered for the close
+// bug) + build. Best-effort; sits in the buffer until the first flush.
+clog("", "boot", {
+  origin: location.origin, hash: location.hash, ipad: IS_IPAD,
+  plat: (navigator.platform || "").slice(0, 24),
+  online: navigator.onLine !== false,
+  w: screen.width, h: screen.height, dpr: window.devicePixelRatio || 1 });
 
 function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -784,6 +878,8 @@ function reconcileCloses() {
   for (const sid of Object.keys(S.closePend)) {
     const row = S.sessions.find(r => r.sid === sid);
     if (row && row.live) continue;             // still live — close hasn't landed
+    clog(sid, "close.reconciled",
+         { ms: Math.round(performance.now() - S.closePend[sid].t0) });
     S.closePend[sid].settle("reconciled");
     delete S.closePend[sid];
     S.closing.delete(sid);
@@ -904,7 +1000,7 @@ function cardClose(sid) {
     btn.textContent = "closing…";
     const a = btn.closest(".scard");
     if (a) a.classList.add("closing");
-    closeSession(sid)
+    closeSession(sid, "card")
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
         S.closing.delete(sid);
@@ -1203,8 +1299,9 @@ function connectSession(sid) {
     if (row) row.tab = d.tab || "";
     renderAttention();
   });
-  es.onopen = () => { $conn.dataset.on = "1"; };
+  es.onopen = () => { $conn.dataset.on = "1"; sseMark("session", true, { sid }); };
   es.onerror = () => {
+    sseMark("session", false, { sid });
     es.close();
     if (S.cur !== sid) return;
     S.ses.timer = setTimeout(() => connectSession(sid), 1500);
@@ -1797,27 +1894,81 @@ function clientFail(sid, gesture, err, chars) {
     .catch(() => {});   // a telemetry beacon must never surface to the user
 }
 
-// The close POST rides navigator.sendBeacon — the browser's dedicated
-// background-POST path, independent of the fetch connection pool, and it
-// survives the optimistic navigation. A plain fetch to /stop was observed to
-// hang pending FOREVER through the tunnel (baqylau/dash.zhambyl.top) on BOTH
-// Safari and Chrome: no server row, no reject, just the 20s web-hint … stale,
-// while the click's own /hint-audit beacon and composer /message got through —
-// a control POST starved of a connection at close time. sendBeacon uses a
-// separate queue the page's long-lived SSE EventSource streams don't occupy.
-// It can't set X-Claude-Dash, so the server accepts it by allowlisted Origin
-// (_post_guard, docs/dashboard.md *Close via sendBeacon*). Fire-and-forget:
-// resolves once QUEUED — the sessions poll (reconcileCloses) confirms the park,
-// and a close that didn't land just reverts the optimistic card. Falls back to a
-// timed fetch where sendBeacon is unavailable/refused.
-function closeSession(sid) {
+// A snapshot of the page's connection health, stamped on every clog batch — the
+// evidence for the connection-starvation theory (the page's long-lived SSE
+// EventSource streams eating the HTTP/1.1 pool). `es` is the count of SSE streams
+// we hold open right now (global always + the session view's own + the agent
+// drill-down's), `conn` whether the global stream is currently connected, `online`
+// / `vis` the browser's own network + tab-visibility state.
+function connInfo() {
+  return {
+    online: navigator.onLine !== false,
+    vis: document.visibilityState || "",
+    view: S.cur ? "session" : (S.pendingUI ? "launching" : "list"),
+    es: 1 + (S.cur ? 1 : 0) + (S.ses && S.ses.agentEs ? 1 : 0),
+    conn: $conn && $conn.dataset.on === "1" ? 1 : 0,
+  };
+}
+
+// Append one frontend-audit event and schedule a batched flush. `ev` is a dotted
+// name (close.begin | close.ok | close.fail | close.reconciled …); `data` is a
+// small flat bag of scalars. Ring-capped so a delivery outage can't grow it.
+function clog(sid, ev, data) {
+  CLOG.push(Object.assign({ t: Date.now(), sid: sid || "", ev }, data || {}));
+  while (CLOG.length > CLOG_MAX) CLOG.shift();
+  if (!clogTimer) clogTimer = setTimeout(flushClog, CLOG_FLUSH_MS);
+}
+
+// Deliver the buffered events as ONE POST over the plain-fetch channel proven to
+// traverse the tunnel (NOT sendBeacon — the very transport that silently vanished
+// the close). On a page-hide we do fall back to sendBeacon (a last-ditch flush as
+// the tab goes away is exactly beacon's job, and losing the tail then is fine). A
+// failed delivery re-queues (front, capped) and retries on a backoff so a blip
+// doesn't lose the breadcrumb. Best-effort; never surfaces to the user.
+function flushClog(useBeacon) {
+  if (clogTimer) { clearTimeout(clogTimer); clogTimer = null; }
+  if (!CLOG.length) return;
+  const batch = CLOG.splice(0, CLOG.length);
+  const payload = { client: CLIENT_ID, conn: connInfo(), events: batch };
+  if (useBeacon && navigator.sendBeacon) {
+    try {
+      navigator.sendBeacon("/api/clientlog",
+        new Blob([JSON.stringify(payload)], { type: "application/json" }));
+      return;
+    } catch (e) { /* fall through to the fetch path */ }
+  }
+  postJSON("/api/clientlog", payload).catch(() => {
+    for (let i = batch.length - 1; i >= 0 && CLOG.length < CLOG_MAX; i--)
+      CLOG.unshift(batch[i]);   // re-queue at the front for the retry
+    if (!clogTimer) clogTimer = setTimeout(flushClog, CLOG_RETRY_MS);
+  });
+}
+
+// Log an SSE stream's up/down TRANSITION (open ↔ drop) — the direct read on the
+// connection-pool health the control POSTs compete for. EventSource.onerror
+// re-fires on every reconnect attempt, so gate on the last-known state.
+function sseMark(label, up, extra) {
+  if (SSE_UP[label] === up) return;
+  SSE_UP[label] = up;
+  clog((extra && extra.sid) || S.cur || "", up ? "sse.open" : "sse.drop",
+       Object.assign({ s: label }, extra || {}));
+}
+
+// The close POST rides the plain-fetch channel (postJSON — X-Claude-Dash header,
+// JSON body, a CLOSE_POST_MS timeout), tagged `audit:"close"` so its whole
+// transport lifecycle lands in the frontend audit (close.begin/ok/fail). This is
+// the transport PROVEN to traverse the tunnel (baqylau/dash.zhambyl.top): the
+// click's own /hint-audit beacon and the composer /message ride it and always
+// land, and every morning-era close (plain fetch) succeeded. navigator.sendBeacon
+// was tried instead and REGRESSED close — it returns true (queued) so we resolved
+// ok optimistically, but the queued beacon was then silently dropped by the
+// tunnel: no `web-stop`, no `web-reject`, just the 20s `web-hint … stale`. The
+// timeout turns a genuine upstream stall into a VISIBLE, retryable, audited
+// failure (close.fail transport + web-clientfail) instead of a silent hang.
+function closeSession(sid, via) {
   const url = "/api/session/" + encodeURIComponent(sid) + "/stop";
-  try {
-    if (navigator.sendBeacon
-        && navigator.sendBeacon(url, new Blob(["{}"], { type: "application/json" })))
-      return Promise.resolve({ ok: true, beacon: true });
-  } catch (e) { /* fall through to the fetch path */ }
-  return postJSON(url, {}, { timeout: CLOSE_POST_MS });
+  return postJSON(url, {}, { timeout: CLOSE_POST_MS, audit: "close", sid,
+                             auditData: { via: via || "" } });
 }
 
 // The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
@@ -2249,7 +2400,8 @@ function submitAsk(ask, answers, chat) {
     : "answer submitted — waiting for the session…";
   ses.askPend = optPending(S.cur, "answer", ask.tool_use_id || "", note);
   renderAsk();
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body)
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body,
+           { audit: "answer" })
     .then(() => {
       if (chat) {
         if (message)
@@ -2379,7 +2531,8 @@ function submitPlan(plan, body, okTitle, okDetail) {
   // `web-hint` op=plan.
   ses.planPend = optPending(S.cur, "plan", plan.tool_use_id || "", okDetail);
   renderPlan();
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-decision", body)
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-decision", body,
+           { audit: "plan" })
     .then(() => {
       toast("done", okTitle, okDetail);
       // stay greyed — the SSE `plan` event is the real confirmation
@@ -2967,7 +3120,7 @@ function buildComposer() {
       if (atts.length) body.attachments = atts;
       const slug = meta.account && meta.account.slug;
       if (slug) body.account = slug;   // wake it under ITS account, silently
-      postJSON("/api/sessions/new", body)
+      postJSON("/api/sessions/new", body, { audit: "resume-send", sid: S.cur })
         .then(() => {
           // the revived session appears via its own SessionStart (then forks
           // sids — adopt); the armed jump follows it, same as a form resume.
@@ -3005,7 +3158,8 @@ function buildComposer() {
     // in the real bubble when it lands (see the optimistic-bubbles section).
     // Only for typed text (empty send = attachments only: nothing to preview).
     const pend = text ? addPending(ses, text) : null;
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg)
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg,
+             { audit: "send", auditData: { chars: (text || "").length } })
       .then(d => {
         ta.value = ""; autoGrow(ta); tray.clear();
         if (d && d.queued) {
@@ -3614,7 +3768,7 @@ function openNewSession(prefillCwd, resumeSid) {
     // keeps your text (the "the draft stayed in the message input" fix).
     const sentPrompt = prompt.value;
     prompt.value = ""; autoGrow(prompt);
-    postJSON("/api/sessions/new", body)
+    postJSON("/api/sessions/new", body, { audit: "new", sid: "" })
       .then((d) => {
         nsRemember({ cwd, model: model.value, effort: effort.value });
         armJump(cwd, body.resume, {
@@ -3769,7 +3923,8 @@ function lockDuring(btn, run, rest) {
 // resolves so a caller's `.finally` re-enable still runs.
 function migrateSession() {
   if (!S.cur) return Promise.resolve();
-  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/migrate", {})
+  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/migrate", {},
+                  { audit: "migrate" })
     .then(r => toast("done", "migrating",
                      "resuming on " + ((r && r.to) || "another account")))
     .catch(e => toast("ask", "migrate failed", (e && e.error) || ""));
@@ -3790,7 +3945,8 @@ function interruptSession() {
           "answer it in the card above — Esc would decline it");
     return Promise.resolve();
   }
-  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {})
+  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {},
+                  { audit: "interrupt" })
     .then(r => {
       if (BUSY_TABS.includes(r && r.tab))
         toast("done", "interrupted", "Esc sent to the session");
@@ -3865,7 +4021,8 @@ function cancelEdit() {
     toast("done", "nothing to cancel", "no turn is running");
     return Promise.resolve();
   }
-  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {})
+  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {},
+                  { audit: "rewind" })
     .then(r => {
       if (r && r.mode === "cancel-edit") {
         applyCancelEdit(r.restored || "");
@@ -3938,7 +4095,7 @@ function sendQuickCmd(cmd, arg) {
   if (!S.cur) return;
   const label = "/" + cmd + (arg ? " " + arg : "");
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
-           arg ? { cmd, arg } : { cmd })
+           arg ? { cmd, arg } : { cmd }, { audit: "command", auditData: { cmd } })
     .then(r => {
       // `confirm`: the server auto-answers the TUI's switch-confirm menu
       // when /model // /effort opens one (the prompt-cache warning)
@@ -4100,7 +4257,7 @@ function doRewindTo(bubble, mode, menu) {
   menu.querySelectorAll("button").forEach(b => b.disabled = true);
   toast("done", "rewinding…", "driving the checkpoint menu");
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind-to",
-           { text, mode, ups })
+           { text, mode, ups }, { audit: "rewind-to", auditData: { mode, ups } })
     .then(r => {
       rewindPickMode(false);
       if (r && r.restored) {
@@ -4239,7 +4396,8 @@ function startRenameHeader() {
     if (!name) return cancel();
     done = true;
     inp.disabled = true;
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rename", {name})
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rename", {name},
+             { audit: "rename" })
       .then((d) => {
         if (ses.meta) ses.meta.title = d.title || name;
         restore(d.title || name);
@@ -4436,7 +4594,7 @@ function renderSessionChrome(tab) {
       // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
       S.closing.add(sid);
       S.closePend[sid] = optPending(sid, "close");
-      closeSession(sid)
+      closeSession(sid, "header")
         .then(() => {
           toast("done", "session closed", "terminal tab closed");
           // the session just ended — back to the list, unless the user
@@ -5566,6 +5724,7 @@ function connectAgentStream(sid, aid, pos, list, newestFirst) {
   const es = new EventSource("/events/agent/" + encodeURIComponent(sid)
                              + "/" + encodeURIComponent(aid) + "?pos=" + cur);
   S.ses.agentEs = es;
+  es.onopen = () => sseMark("agent", true, { sid });
   es.addEventListener("entries", (e) => {
     const d = JSON.parse(e.data);
     if (d.pos != null) cur = d.pos;
@@ -5585,6 +5744,7 @@ function connectAgentStream(sid, aid, pos, list, newestFirst) {
     for (const r of d.resolutions || []) applyResolution(list, r);
   });
   es.onerror = () => {
+    sseMark("agent", false, { sid });
     es.close();
     if (!S.ses || S.ses.agentEs !== es) return;   // navigated away
     S.ses.agentEs = null;
