@@ -466,7 +466,21 @@ def test_http_root_and_static_whitelist(dash):
     assert e.value.code == 404
 
 
-def test_http_sessions_and_ops(dash):
+def test_app_js_initializes_close_state(dash):
+    """Regression guard for THE "still not closing" bug: the ✕ handler does
+    `S.closePend[sid] = optPending(...)` and reconcileCloses does
+    `Object.keys(S.closePend)` on every sessions tick — if `closePend` is not
+    initialized in the `S` state object it is `undefined`, and BOTH throw a
+    TypeError ("Cannot convert undefined or null to object" / "set property of
+    undefined"), the second BEFORE `closeSession` runs, so /stop never fires and
+    the close silently does nothing. It shipped uninitialized once (found only
+    once the js.error frontend-audit row pointed at app.js:878). A pure static
+    check on the served bundle — no JS engine needed."""
+    code, body = _get(dash + "/static/app.js")
+    assert code == 200
+    # the S state literal must declare closePend (and closing) as containers
+    assert "closePend: {}" in body, "S.closePend must be initialized (see the bug)"
+    assert "closing: new Set()" in body
     A.session_start({"session_id": "dash1", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("dash1")
     O.emit(log, O.label("▶ foreground", (170, 185, 210), g="g1"),

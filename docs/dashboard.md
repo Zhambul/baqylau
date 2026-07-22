@@ -1761,6 +1761,22 @@ attempt` with no `done` = `close_tab` itself hung. If a close still stalls with
 between) closes fine, the bottleneck is the proxy→upstream pool — proxy config,
 not an app fix.
 
+**What it actually caught (and why the transport hunt was a red herring).** The
+first restart with this audit live immediately produced recurring
+`ev:"js.error"` rows — `Uncaught TypeError: Cannot convert undefined or null to
+object` at `app.js:878`, firing on EVERY sessions tick — with NO `close.begin`
+at all. That is the TRUE "still not closing" root cause: the `S` state object
+shipped WITHOUT initializing `closePend`, so `reconcileCloses`'s
+`Object.keys(S.closePend)` threw every tick AND the ✕ handler's
+`S.closePend[sid] = optPending(...)` threw BEFORE `closeSession` ever ran — so
+`/stop` was never sent (only the `web-hint shown`+`stale` from the `optPending`
+that evaluated first). It reproduced on the tunnel AND locally because it was
+never a transport bug — `closeSession` wasn't reached at all; the whole
+sendBeacon-vs-fetch investigation chased a symptom. `S.closePend` is now
+initialized (`closePend: {}`), guarded by `test_app_js_initializes_close_state`.
+The frontend audit is what surfaced it — an uncaught handler exception was
+previously invisible server-side, exactly the blind spot this channel closes.
+
 **The launch tag-race (why a just-launched session's controls were dead).** A
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged
 `claude_session=<sid>` for a moment, so `/api/session` momentarily reports

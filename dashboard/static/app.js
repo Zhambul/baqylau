@@ -40,6 +40,13 @@ const S = {
                          // DEADLINE held here (not in the button) so it
                          // survives the per-tick card rebuilds (patchCards)
   closing: new Set(),    // sids with a close POST in flight (card ✕ disabled)
+  closePend: {},         // sid -> optPending handle for a close in flight (the
+                         // web-hint lifecycle + reconcile). MUST be an object:
+                         // reconcileCloses does Object.keys(S.closePend) on every
+                         // sessions tick and the ✕ handler does S.closePend[sid]=…
+                         // — an undefined here threw a TypeError BEFORE closeSession
+                         // ran, so /stop never fired (THE "still not closing" bug,
+                         // caught by the js.error frontend-audit row at app.js:878)
   hidden: {},            // {group_key: hidden_at_epoch} — directories the ✕
                          // hid from the list (server prefs, /api/dirs/hidden).
                          // A group stays hidden only while it has no session

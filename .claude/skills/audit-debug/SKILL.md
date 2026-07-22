@@ -158,6 +158,14 @@ New always-audited swallow sites (previously silent — their absence used to ma
     POST never reached `post_stop`; the **`web-client` `close.*` rows are now the
     primary evidence** — read them first (`sql "SELECT ts, content FROM
     state_files WHERE session_id='<sid>' AND action='web-client' ORDER BY ts"`):
+    - **`ev:"js.error"` rows (check FIRST)** with NO `close.begin` = the ✕ click
+      handler THREW before `closeSession` ran — it builds `S.closePend[sid] =
+      optPending(...)` then calls `closeSession` after, so an uncaught handler
+      exception (the shipped-once uninitialized `S.closePend` → a TypeError at
+      `app.js:<line>` firing on every sessions tick; the `optPending` that ran
+      first still leaves the `web-hint shown`+`stale`) means /stop is NEVER sent.
+      That is a CLIENT JS bug (fix + a `test_app_js_initializes_close_state`-style
+      static guard), NOT transport — the whole original "still not closing" saga;
     - a **`close.begin` with a paired `close.ok`** = the /stop landed and returned
       200 (so the tab-close side is where to look, not transport);
     - a **`close.fail kind:http`** = the server rejected it (a `web-reject` on
