@@ -31,7 +31,11 @@
 #     ❯ cursor with up/down onto a row and press Enter. single-select Enter
 #     SELECTS and auto-advances (the sole question of a one-question ask
 #     submits outright — no review pane); multiSelect Enter TOGGLES the
-#     cursored checkbox (cursor stays), and `right` then moves to the next tab;
+#     cursored checkbox (cursor stays), and the pane advances by moving the
+#     cursor onto its "Next"/"Submit" advance row + Enter (NOT `right`: after a
+#     custom typed answer the cursor sits on the ex-"Type something" input row,
+#     whose edit focus eats left/right/Tab as caret movement — the 3fd325d9
+#     stuck-on-question-2 bug; the advance row leaves the field first);
 #   - free text: cursor ONTO the "Type something" row, then send_text (types
 #     the text + a CR): single-select commits it and auto-advances; multiSelect
 #     commits + checks the custom row (verified, with a fallback Enter);
@@ -226,11 +230,42 @@ def _require_type_row(fe, win, type_digit):
                        "answer via 'Chat about this'")
 
 
-def _answer_question(fe, win, q, ans, sleep):
+def _advance_multi(fe, win, questions, i, sleep):
+    """Advance a multiSelect pane to the next tab via its OWN "Next"/"Submit"
+    advance row (cursor-to-the-row + Enter), NOT a blind `right`.
+
+    `right` is unreliable here: after a custom typed answer, the cursor is
+    parked on the freshly-typed custom option row (the ex-"Type something"
+    input), whose text-edit focus SWALLOWS left/right/Tab as caret movement
+    instead of switching questions — so the `right` never advanced and the
+    NEXT question's `_wait` bailed `question N never became current` one step
+    later (session 3fd325d9, 2026-07-22: a 3-question ask, middle multiSelect
+    answered with a custom "other", stuck on question 2). Navigating DOWN to
+    the explicit "Next"/"Submit" row leaves the text field first, so it works
+    whether or not custom text was typed; then Enter is the dialog's designed
+    advance. Screen-verified: the pane must actually leave question `i`."""
+    _cursor_to(fe, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
+               "advance row")
+    fe.send_key(win, "enter")
+    screen, ok = _wait(fe, win,
+                       lambda s: current_question(s, questions) != i
+                       or review_open(s)
+                       or not dialog_open(s),
+                       STEP_TIMEOUT_S, sleep)
+    if not ok:
+        raise AskError("advance",
+                       "multiSelect did not advance past question %d" % (i + 1),
+                       screen=screen)
+
+
+def _answer_question(fe, win, questions, i, ans, sleep):
     """Apply one question's answer to the CURRENT pane. Leaves the dialog on
     the next tab: single-select Enter auto-advances; multiSelect toggles each
-    box (Enter) then `right` advances. Digits are inert in v2.1.215 — every
-    selection is cursor-to-the-row + Enter."""
+    box (Enter) then advances via its "Next"/"Submit" row (_advance_multi —
+    NOT a blind `right`, which a custom-text row's edit focus swallows).
+    Digits are inert in v2.1.215 — every selection is cursor-to-the-row +
+    Enter."""
+    q = questions[i]
     labels = [o.get("label") or "" for o in (q.get("options") or [])]
     selected = [s for s in (ans.get("selected") or []) if s in labels]
     other = (ans.get("other") or "").strip()
@@ -239,14 +274,14 @@ def _answer_question(fe, win, q, ans, sleep):
         # Enter TOGGLES the cursored box — diff each option's desired state
         # against the checkbox the screen actually shows (the user may have
         # pre-toggled some in the terminal), and only flip the ones that differ
-        for i, label in enumerate(labels):
+        for j, label in enumerate(labels):
             row = next((r for r in rows(fe.get_text(win) or "")
-                        if r["digit"] == str(i + 1)), None)
+                        if r["digit"] == str(j + 1)), None)
             if row is None:
-                raise AskError("options", "row %d not on screen" % (i + 1))
+                raise AskError("options", "row %d not on screen" % (j + 1))
             if bool(row["check"]) != (label in selected):
-                _cursor_to(fe, win, _by_digit(str(i + 1)), sleep,
-                           "option %d" % (i + 1))
+                _cursor_to(fe, win, _by_digit(str(j + 1)), sleep,
+                           "option %d" % (j + 1))
                 fe.send_key(win, "enter")        # toggle
                 sleep(KEY_GAP_S)
         if other:
@@ -267,7 +302,7 @@ def _answer_question(fe, win, q, ans, sleep):
                 STEP_TIMEOUT_S, sleep)
             if not ok:
                 raise AskError("type", "custom option never checked")
-        fe.send_key(win, "right")                # non-edit → next tab
+        _advance_multi(fe, win, questions, i, sleep)   # → next tab / review
         return
     if other:
         _require_type_row(fe, win, type_digit)
@@ -330,7 +365,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
             raise AskError("question", "question %d never became current: %r"
                            % (i + 1, (q.get("question") or "")[:60]),
                            screen=screen)
-        _answer_question(fe, win, q, ans, sleep)
+        _answer_question(fe, win, questions, i, ans, sleep)
     # a single single-select question submits outright; everything else lands
     # on the review pane, where "Submit answers" is the cursored top row. The
     # review pane appears locally-fast, but the outright submit is the dialog

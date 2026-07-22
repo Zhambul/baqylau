@@ -1744,7 +1744,19 @@ wait for the next question timed out. The measured v2.1.215 model:
 - multiSelect: Enter on the cursored option TOGGLES its checkbox — so the
   driver DIFFS the desired selection against the checkboxes the screen
   actually shows (boxes the user pre-toggled in the terminal are
-  reconciled, not re-flipped), then `right` moves to the next tab;
+  reconciled, not re-flipped), then it advances by cursoring onto the
+  question's own "Next"/"Submit" advance row + Enter (`_advance_multi`,
+  screen-verified). **NOT a blind `right`**: after a custom typed answer
+  the cursor is parked on the ex-"Type something" input row, whose
+  text-edit focus SWALLOWS `left`/`right`/`Tab` as caret movement instead
+  of switching questions — so the `right` never advanced and the NEXT
+  question's wait bailed `question N never became current` one step later
+  (session 3fd325d9, 2026-07-22: a 3-question ask, MIDDLE multiSelect
+  answered with a custom "other", stuck on question 2 — the whole answer
+  failed with a 409, step `question`). Moving DOWN to the explicit advance
+  row leaves the text field first, so it works with or without custom text;
+  a failed advance now bails its own step `advance` (not the misleading
+  `question` one tab later);
 - TWO layouts: with no `preview` on any option, options carry an indented
   description line and "Chat about this" is NUMBERED; when ANY option has
   a `preview`, the dialog draws a box to the RIGHT of the option rows

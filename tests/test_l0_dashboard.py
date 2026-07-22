@@ -3820,13 +3820,21 @@ class _AskFE(_FakeFE):
             qi = self.tab
             q = self.questions[qi]
             kinds = self._kinds(qi)
+            # a FOCUSED "Type something"/custom input row swallows left/right/
+            # Tab as text-caret movement — they do NOT switch questions while
+            # the cursor sits on it (measured live: session 3fd325d9,
+            # 2026-07-22, a `right` after a multiSelect custom answer stayed on
+            # the same question). up/down still leave the field normally.
+            on_type = (self.cursor < len(kinds)
+                       and kinds[self.cursor][0] == "type")
             if k == "left":
-                if self.tab > 0:
+                if self.tab > 0 and not on_type:
                     self.tab -= 1
                     self.cursor = 0
             elif k in ("right", "tab"):
-                self.tab += 1
-                self.cursor = 0
+                if not on_type:
+                    self.tab += 1
+                    self.cursor = 0
             elif k == "up":
                 self.cursor = max(0, self.cursor - 1)
             elif k == "down":
@@ -3890,7 +3898,7 @@ class _AskFE(_FakeFE):
                                 self._type_label(qi)))
             elif kind == "advance":
                 lines.append("%s   %s"
-                             % (cur, "Submit" if len(self.questions) == 1
+                             % (cur, "Submit" if qi == len(self.questions) - 1
                                 else "Next"))
             elif kind == "chat":
                 lines += ["────────",
@@ -3950,6 +3958,36 @@ def test_post_answer_two_questions_mixed(dash, monkeypatch):
     assert code == 200
     assert fe.submitted == {"Pick a planet": "Venus",
                             "Pick metals": "Iron, Zinc, titanium"}
+
+
+# the exact failing shape of session 3fd325d9 (2026-07-22): a MIDDLE
+# multiSelect answered with a custom "other", followed by a THIRD question —
+# the pane must advance PAST the multiSelect to reach question 3. The old
+# blind `right` advance was eaten by the custom-text row's edit focus, so
+# question 3 "never became current"; _advance_multi uses the "Next" row.
+_ASK_3Q_MID_MULTI = [
+    {"question": "Teleport where?", "header": "Teleport", "multiSelect": False,
+     "options": [{"label": "Beach"}, {"label": "City"}]},
+    {"question": "Which snacks? (pick any)", "header": "Snacks",
+     "multiSelect": True,
+     "options": [{"label": "Coffee"}, {"label": "Fruit"}]},
+    {"question": "Pick a superpower — or type your own.", "header": "Power",
+     "multiSelect": False,
+     "options": [{"label": "Flight"}, {"label": "Teleportation"}]}]
+
+
+def test_post_answer_middle_multiselect_custom_advances(dash, monkeypatch):
+    fe = _AskFE(_ASK_3Q_MID_MULTI)
+    _ask_env(monkeypatch, "ask8", "48", fe, _ASK_3Q_MID_MULTI)
+    code, body = _post(dash + "/api/session/ask8/answer",
+                       {"tool_use_id": "toolu_a1",
+                        "answers": [{"selected": ["City"], "other": ""},
+                                    {"selected": ["Fruit"], "other": "test"},
+                                    {"selected": ["Flight"], "other": ""}]})
+    assert code == 200 and json.loads(body) == {"ok": True, "chat": False}
+    assert fe.submitted == {"Teleport where?": "City",
+                            "Which snacks? (pick any)": "Fruit, test",
+                            "Pick a superpower — or type your own.": "Flight"}
 
 
 _ASK_LONGQ = [{"question": "Which rename mechanism should the dashboard "
