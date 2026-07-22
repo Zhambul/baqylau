@@ -1494,22 +1494,26 @@ function slashMenu(ta, host, getCmds, opts) {
 // (`queued: true` when the send landed mid-turn — the server's QUEUE_TABS
 // verdict is the authority; the client QUEUE_TABS below only styles the send
 // button). A queued message would otherwise VANISH from the page until
-// delivery (it reaches the transcript only when the turn ends), so it shows
-// as a ⧗ chip under the composer until its prompt record actually arrives in
-// the stream (drainQueue — matched by exact text; tab transitions are useless
-// as a delivery signal since green flips busy again the instant a queued
-// prompt starts processing). ✕ only hides a chip — the message is already in
-// the TUI's queue and the web can't unqueue it.
+// delivery (it reaches the transcript only when the turn ends), so it shows as
+// an amber "⧗ queued" prompt bubble PINNED at the top of the transcript — above
+// the newest-first stream, so incoming activity never buries it — until its
+// prompt record actually arrives in the stream (drainQueue — matched by text;
+// tab transitions are useless as a delivery signal since green flips busy again
+// the instant a queued prompt starts processing). At that point drainQueue drops
+// the pinned bubble and the delivered prompt appears in the stream itself. ✕
+// only removes the marker — the message is already in the TUI's queue and the
+// web can't unqueue it.
 
 const QUEUE_TABS = ["thinking", "working", "executing"];
 
-function buildQueueBar() {
-  const q = el("div", "cqueue");
+function buildQueuePin() {
+  const q = el("div", "pinq");
+  q.hidden = true;
   S.ses.queueEl = q;
-  // restore the pending ⧗ chips persisted server-side (composer-queue kv) so a
-  // reload / device switch keeps showing what the TUI still holds unqueued —
-  // seed only when the in-memory queue is empty (a live session already has
-  // its chips); drainQueue reconciles them out as their prompts arrive.
+  // restore the pinned queued messages persisted server-side (composer-queue kv)
+  // so a reload / device switch keeps showing what the TUI still holds unqueued —
+  // seed only when the in-memory queue is empty (a live session already has its
+  // entries); drainQueue reconciles them out as their prompts arrive.
   const cq = S.ses.meta && S.ses.meta.composer_queue;
   if (cq && Array.isArray(cq.items) && !S.ses.queue.length)
     S.ses.queue = cq.items.map(it => ({ text: (it && it.text) || "" }));
@@ -1542,6 +1546,11 @@ function applyComposerQueue(q) {
   renderQueue();
 }
 
+// Paint the queued messages as amber "⧗ queued" prompt bubbles, pinned at the
+// top of the transcript until each is delivered (drainQueue removes it, and the
+// real prompt bubble then arrives in the stream). Mirrors opshtml.msg_html's
+// .msg.prompt shape (minus the rewind ↶ — a not-yet-delivered prompt isn't
+// re-runnable), plus a ⧗ badge and a ✕ to drop a stale marker.
 function renderQueue() {
   const ses = S.ses;
   if (!ses || !ses.queueEl) return;
@@ -1549,15 +1558,17 @@ function renderQueue() {
   q.textContent = "";
   q.hidden = !ses.queue.length;
   ses.queue.forEach((m, i) => {
-    const c = el("span", "qchip");
-    c.title = "queued in the terminal — delivers when this turn ends";
-    c.append(el("span", "qg", "⧗"), document.createTextNode(
-      m.text.length > 70 ? m.text.slice(0, 70) + "…" : m.text));
+    const d = el("div", "msg prompt queued");
+    d.title = "queued in the terminal — delivers when this turn ends";
+    const who = el("span", "who");
+    who.append(document.createTextNode("you"), el("span", "qbadge", "⧗ queued"));
+    d.append(who);
     const x = el("button", "qx", "✕");
-    x.title = "hide this chip (the message stays queued in the terminal)";
+    x.title = "remove this queued marker (the message stays queued in the terminal)";
     x.onclick = () => { ses.queue.splice(i, 1); renderQueue(); saveQueue(ses); };
-    c.append(x);
-    q.append(c);
+    d.append(x);
+    d.append(promptMd(m.text));
+    q.append(d);
   });
 }
 
@@ -1583,9 +1594,9 @@ function drainQueue(items) {
 // after the paste lands. To close it, send() prepends a GREYED stand-in bubble
 // (.msg.prompt.pending) the instant it POSTs; drainPending removes it when the
 // matching REAL prompt arrives (the server-rendered bubble takes its place), or
-// send() removes it directly on failure / when the send was queued (the ⧗ chip
-// owns that case). DOM-only + in-memory (ses.pending) — a reload replays from
-// the real transcript, so nothing is persisted and stale stand-ins can't leak.
+// send() removes it directly on failure / when the send was queued (the pinned
+// ⧗ queued bubble owns that case). DOM-only + in-memory (ses.pending) — a reload
+// replays from the real transcript, so nothing is persisted and stand-ins can't leak.
 //
 // The stand-in's whole lifecycle is client-only, so the SERVER can't see it —
 // a stuck grey bubble (shown, never reconciled) leaves no trace by default. So
@@ -1606,20 +1617,26 @@ function hintAudit(pend, phase, extra) {
     .catch(() => {});   // a telemetry beacon must never surface to the user
 }
 
-// Plain-text bubble mirroring opshtml.msg_html's .msg.prompt shape, minus the
-// rewind ↶ (a not-yet-delivered prompt isn't re-runnable). textContent, never
-// innerHTML — the transient body never interprets markup.
-function pendingBubble(text) {
-  const d = el("div", "msg prompt pending");
-  d.append(el("span", "who", "you"));
+// The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
+// the pinned queued bubble): the text with hard line breaks, textContent only —
+// never innerHTML, since an undelivered prompt must never interpret markup.
+function promptMd(text) {
   const md = el("div", "md");
   const p = el("p");
-  text.split("\n").forEach((line, i) => {
+  (text || "").split("\n").forEach((line, i) => {
     if (i) p.append(el("br"));
     p.append(document.createTextNode(line));
   });
   md.append(p);
-  d.append(md);
+  return md;
+}
+
+// Plain-text bubble mirroring opshtml.msg_html's .msg.prompt shape, minus the
+// rewind ↶ (a not-yet-delivered prompt isn't re-runnable).
+function pendingBubble(text) {
+  const d = el("div", "msg prompt pending");
+  d.append(el("span", "who", "you"));
+  d.append(promptMd(text));
   return d;
 }
 
@@ -2368,7 +2385,7 @@ function dictation(ta, getCwd) {
 // with a hint when the session isn't live or has no window (a headless/daemon
 // session — the /message endpoint would 409). The sent text surfaces in the
 // stream on its own via the conversation tail, so we only clear + toast —
-// unless the response says it QUEUED (see above), which adds a ⧗ chip.
+// unless the response says it QUEUED (see above), which pins a ⧗ queued bubble.
 
 // Both message boxes (the composer and the form's first prompt) grow with
 // their content, capped at a viewport fraction so a long paste can't swallow
@@ -2723,8 +2740,8 @@ function buildComposer() {
       .then(d => {
         ta.value = ""; autoGrow(ta); tray.clear();
         if (d && d.queued) {
-          // queued mid-turn — the ⧗ chip owns this until delivery; drop the
-          // stand-in so the two representations don't double up
+          // queued mid-turn — the pinned ⧗ queued bubble owns this until
+          // delivery; drop the stand-in so the two representations don't double up
           if (pend) settlePending(pend, "dropped", { reason: "queued" });
           ses.queue.push({ text });
           renderQueue();
@@ -4285,10 +4302,14 @@ function renderSessionChrome(tab) {
     // on-screen keyboard over the stream on every session open (and focus is
     // what triggers Safari's page auto-zoom — see style.css touch section).
     if (!ses.composer.disabled && !IS_IPAD) ses.composer.focus();
-    body.append(buildQueueBar());
     body.append(buildFilterBar());
     const split = el("div", "split");
-    split.append(ses.stream);
+    // the transcript column: queued messages pinned ABOVE the newest-first
+    // stream (so incoming activity never buries them) until they're delivered
+    const scol = el("div", "scol");
+    scol.append(buildQueuePin());
+    scol.append(ses.stream);
+    split.append(scol);
     const rail = el("div", "rail");
     ses.rail = rail;
     split.append(rail);

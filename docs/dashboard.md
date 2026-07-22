@@ -676,37 +676,49 @@ delete) so its `seq` survives to reject a later straggler. Writes without a
 ## Web composer queue (`POST /api/session/<sid>/composer-queue`)
 
 A message sent while a turn is running lands in Claude Code's OWN message queue
-and delivers at the turn boundary; the composer shows it as a ⧗ **queued chip**
-meanwhile (matched out by `drainQueue` when its prompt actually arrives in the
-stream — the only true delivery signal). That chip list used to be purely
-browser-memory, so a reload lost it (the "shown in the queue but gone even from
-the queue after refresh" report, 2026-07-19) — alarming, since you couldn't
-tell whether the message was still coming. The page now mirrors the whole chip
-list to the `composer-queue` kv on every mutation (a queued send, a delivery
-drain, a ✕-hide) via `POST /api/session/<sid>/composer-queue`
+and delivers at the turn boundary; the page shows it meanwhile as an amber **⧗
+queued prompt bubble PINNED at the top of the transcript** — the `.pinq` pane
+that `buildQueuePin` stacks ABOVE the newest-first stream inside the transcript
+column (`.scol`), so incoming activity can never bury it (the newest-first stream
+prepends new rows below it, never above). It looks like the delivered prompt
+bubble it will become — same `.msg.prompt` shape, minus the rewind ↶ (a
+not-yet-delivered prompt isn't re-runnable) — plus a `⧗ queued` badge and a `✕`
+to drop a stale marker. It stays pinned until `drainQueue` matches its prompt
+arriving in the stream (the only true delivery signal), at which point the pinned
+bubble is removed and the delivered prompt appears in the stream itself.
+
+*(This replaced the earlier narrow ⧗ **chip** row under the composer — the
+message reads as a real, prominent transcript entry now, pinned on top until
+sent, rather than a cramped tag detached from the conversation.)*
+
+The queue used to be purely browser-memory, so a reload lost it (the "shown in
+the queue but gone even from the queue after refresh" report, 2026-07-19) —
+alarming, since you couldn't tell whether the message was still coming. The page
+now mirrors the whole list to the `composer-queue` kv on every mutation (a queued
+send, a delivery drain, a ✕-remove) via `POST /api/session/<sid>/composer-queue`
 (`{items:[{text}], origin}`; a pure state write, no terminal keys). The session
 snapshot carries `composer_queue`, the SSE emits a `composer-queue` event on
-change (slow cadence, convenience state like the draft), `buildQueueBar` seeds
+change (slow cadence, convenience state like the draft), `buildQueuePin` seeds
 `ses.queue` from it on open (only when the in-memory queue is empty), and
 `applyComposerQueue` adopts a peer's update (own-`origin` echo ignored). An
 empty list deletes the stash. This is display persistence only — the message
-itself lives in the TUI's queue regardless; the chip just stops vanishing.
+itself lives in the TUI's queue regardless; the pinned bubble just stops vanishing.
 
-`drainQueue` matches a delivered prompt against a chip **tolerantly** — exact
-text, or (attachments prepend leading `@path` mentions + `\n`) the delivered
-prompt ends with the queued suffix — the same match `drainPending` uses, so a
-queued message *with attachments* (delivered as `@path\n<text>`) still drains
-instead of sticking.
+`drainQueue` matches a delivered prompt against a queued entry **tolerantly** —
+exact text, or (attachments prepend leading `@path` mentions + `\n`) the
+delivered prompt ends with the queued suffix — the same match `drainPending`
+uses, so a queued message *with attachments* (delivered as `@path\n<text>`) still
+drains instead of sticking.
 
-**Delivered chips are also reconciled server-side, or a persisted chip stuck
+**Delivered entries are also reconciled server-side, or a persisted one stuck
 forever.** `drainQueue` only reconciles NEW stream items, never the
-already-loaded backlog. So if the client that persisted a chip closed or
-reloaded *before* its message was delivered, every later page load re-seeded the
-chip from the kv (`buildQueueBar`), found the delivered prompt already sitting in
-the backlog, and had no fresh item to drain it against — a ⧗ chip stuck forever
-even though Claude Code received and answered the message (the "still shows as
-queued after it was delivered" report). `_composer_queue` now drops any chip
-whose prompt already appears among the transcript's delivered prompts
+already-loaded backlog. So if the client that persisted an entry closed or
+reloaded *before* its message was delivered, every later page load re-seeded it
+from the kv (`buildQueuePin`), found the delivered prompt already sitting in the
+backlog, and had no fresh item to drain it against — a ⧗ queued bubble stuck
+forever even though Claude Code received and answered the message (the "still
+shows as queued after it was delivered" report). `_composer_queue` now drops any
+entry whose prompt already appears among the transcript's delivered prompts
 (`_delivered_prompts` / `_chip_delivered`, the same tolerant match) before it
 ever seeds the page. Read-only — the server can't rewrite the kv (`mode=ro`), so
 the stale rows are pruned by the client's next `saveQueue` once this filtered
