@@ -52,6 +52,13 @@ const S = {
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"
 const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compact)
+// A just-launched session's kitty pane isn't tagged claude_session=<sid> for a
+// moment, so /api/session reports live:true with a blank kitty_window_id — the
+// startup tag-race. showSession re-fetches meta until the window resolves so the
+// composer + ✕ close button don't stay stuck (docs/dashboard.md, *Launch tag-
+// race*). Bounded — a truly headless session never tags a window.
+const LAUNCH_RESOLVE_MS = 1000;
+const LAUNCH_RESOLVE_TRIES = 12;
 
 // iPad detection — gates the message boxes' Enter behavior AND every
 // non-user-initiated .focus() (view-open, form-open, post-send refocus:
@@ -881,6 +888,7 @@ function cardClose(sid) {
         btn.disabled = false;
         btn.textContent = "✕";
         if (a) a.classList.remove("closing");
+        clientFail(sid, "close", err);   // a lost/rejected /stop the audit can't see
         toast("ask", "close failed", (err && err.error) || "");
       });
   };
@@ -980,6 +988,7 @@ function showSession(sid, tab) {
     // disabled, no title) until a reload. Retry while still on this session and
     // still unpopulated; the guards make a late retry after a leave a harmless
     // no-op.
+    let resolveTries = 0;
     const loadMeta = () => fetch("/api/session/" + encodeURIComponent(sid))
       .then(r => r.json())
       .then(d => {
@@ -991,6 +1000,20 @@ function showSession(sid, tab) {
         S.ses.ctx = d.ctx || null;
         S.ses.running = d.running || {};
         renderSessionChrome(tab);
+        // startup TAG-RACE self-heal: a just-launched session momentarily
+        // reports live:true with a BLANK kitty_window_id (its kitty pane isn't
+        // tagged claude_session=<sid> yet, so session_payload can't resolve the
+        // window). That partial meta fails BOTH composer gates — canSend
+        // (live && window) AND canResume (!live) — so the box locks and the
+        // live-gated ✕ close button never renders (the reported "no close
+        // button + can't type, fixed only by reload"). Re-fetch until the pane
+        // tags: authoritative and self-healing where the fragile global-poll
+        // heal (updateHeadFromList, raw-vs-resolved window id spaces) misses.
+        // Bounded — a truly headless session never resolves a window.
+        if (d.live && !d.kitty_window_id && resolveTries < LAUNCH_RESOLVE_TRIES) {
+          resolveTries++;
+          setTimeout(loadMeta, LAUNCH_RESOLVE_MS);
+        }
       })
       .catch(() => {
         if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, 1500);
@@ -4378,6 +4401,7 @@ function renderSessionChrome(tab) {
           }
           cls.disabled = false;
           cls.textContent = "✕ close";
+          clientFail(sid, "close", e);   // a lost/rejected /stop the audit can't see
           toast("ask", "close failed", (e && e.error) || "");
         });
     };

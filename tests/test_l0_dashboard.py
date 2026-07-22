@@ -1179,6 +1179,37 @@ def test_hide_dir_behind_post_guard(dash, monkeypatch):
     assert e.value.code == 403
 
 
+def _reject_rows():
+    """The `web-reject` state_files rows (_post_guard rejections). Same
+    spool-drain dance as _hint_rows."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [(p, json.loads(c)) for (p, c) in con.execute(
+            "SELECT path, content FROM state_files WHERE action='web-reject' "
+            "ORDER BY ts")]
+    finally:
+        con.close()
+
+
+def test_guard_rejection_is_audited(dash, monkeypatch):
+    # THE close-blind-spot fix: a control POST that fails _post_guard (a missing
+    # X-Claude-Dash header) previously vanished — no audit row at all, so a
+    # browser /stop that never passed the guard was invisible server-side. Now
+    # every guard reject writes a `web-reject` row naming the path + reason.
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    A.session_start({"session_id": "rej1", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rej1/stop", {}, header=None)
+    assert e.value.code == 403
+    rows = _reject_rows()
+    hit = [r for r in rows if r[0].endswith("/session/rej1/stop")]
+    assert hit and hit[-1][1]["code"] == 403 and "header" in hit[-1][1]["why"]
+
+
 def test_hide_dir_refused_when_directory_has_a_live_session(dash):
     """A directory with at least one ACTIVE (live) session can't be hidden — the
     server 409s on the SAME grouping the list uses (dir_live_sessions over

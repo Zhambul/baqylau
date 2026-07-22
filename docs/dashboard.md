@@ -1649,6 +1649,38 @@ not light a warning light that never clears. Genuine server-side failures (no
 terminal, launch/grant returned false) stay `A.error` — those ARE bugs worth
 the light.
 
+**Guard rejections ARE audited now (`web-reject`).** The above is the
+INPUT-validation layer (a handler ran and disliked a field). BENEATH it,
+`_post_guard` rejects a POST before ANY handler runs — a missing `X-Claude-Dash`
+header, a cross-origin `Origin`, read-only mode, an oversized/malformed body.
+Those used to write NOTHING, which was a real blind spot: a browser `/stop`
+that produced a client `web-hint op=close` beacon yet **no `web-stop` row** was
+indistinguishable between "the POST never left the browser" and "it arrived but
+the guard bounced it". `_reject` now writes a `web-reject` `state_files` row
+(path = the rejected request path, content `{code, why}`) — audit-only
+telemetry, NOT an `errors` row (an expected 4xx, same reasoning as the
+input-validation rejects), so it never lights the warning chip. Paired with the
+client's `web-clientfail` beacon (which the `close` gesture now also fires on a
+failed `/stop` fetch), a stuck close is now fully attributable: a `web-reject`
+for the `/stop` path = guard-bounced; a `web-clientfail gesture:close` = the
+fetch itself failed/aborted; neither, only the `web-hint` = the POST never left
+the page (a rendering/wiring bug, e.g. the launch tag-race below).
+
+**The launch tag-race (why a just-launched session's controls were dead).** A
+dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged
+`claude_session=<sid>` for a moment, so `/api/session` momentarily reports
+`live:true` with a BLANK `kitty_window_id` (`session_payload` resolves the
+window through `_live_windows`, empty until the pane is tagged — unlike the
+sessions LIST, which carries the RAW audit id immediately). The client gates the
+composer AND the `✕ close` button on `meta.live && meta.kitty_window_id`, and
+that partial meta fails BOTH the send gate (`live && window`) and the resume
+gate (`!live`) — so the box locked and the close button never rendered until a
+manual reload (the reported bug). The global-poll heal (`updateHeadFromList`) is
+meant to repair it but is fragile across the raw-vs-resolved window-id spaces, so
+`showSession` now re-fetches meta directly (bounded, `LAUNCH_RESOLVE_TRIES` ×
+`LAUNCH_RESOLVE_MS`) until the window resolves — authoritative and
+self-healing, no reload needed.
+
 ## Web ask (`POST /api/session/<sid>/answer`) — AskUserQuestion from the browser
 
 When Claude asks a question (the AskUserQuestion tool), the session view

@@ -1967,7 +1967,19 @@ class Handler(BaseHTTPRequestHandler):
     def _reject(self, code, err):
         """A guard rejection: close the connection (an unread body would desync
         a kept-alive connection) and send the JSON error. Returns None (implicit)
-        so the caller can `return self._reject(...)` straight out of _post_guard."""
+        so the caller can `return self._reject(...)` straight out of _post_guard.
+
+        Audited as a `web-reject` state_files row (path = the rejected request
+        path, content = code + reason). This is the ONE place a control-plane
+        POST could vanish without a trace: _post_guard rejects BEFORE any
+        handler runs, so a browser POST that arrives but fails the guard (a
+        missing X-Claude-Dash header, a cross-origin Origin, read-only mode) wrote
+        nothing — the `/stop that produced a client `web-hint op=close` beacon
+        yet no `web-stop` row` blind spot. Audit-only telemetry (not an `errors`
+        row — an expected 4xx, same rationale as _reject_input), so it never
+        lights the errwatch chip."""
+        A.state_file("", self.path[:200], "web-reject",
+                     {"code": code, "why": err})
         self.close_connection = True
         self._json({"error": err}, code)
 
