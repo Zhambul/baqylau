@@ -2551,11 +2551,24 @@ didn't appear in this session" report). An answer is recorded as a *tool_result*
 it never rendered — the card cleared and the choice vanished from the feed.
 `conversation` now emits a distinct `answer` record for it, identified by the
 line's `toolUseResult` sidecar being a dict with an `answers` key (so a Bash/Read
-tool_result stays out); the text is Claude Code's own recap string ("Your
-questions have been answered: …"). `opshtml.msg_html` renders `answer` as a
-`you ▸ answered` bubble WITHOUT the rewind affordance (it is not a re-runnable
-prompt). This is the DASHBOARD's conversation view only — the terminal mirror
-never showed main-thread messages anyway.
+tool_result stays out). `opshtml.msg_html` renders `answer` as a `you ▸ answered`
+bubble WITHOUT the rewind affordance (it is not a re-runnable prompt). This is the
+DASHBOARD's conversation view only — the terminal mirror never showed main-thread
+messages anyway.
+
+**The answer bubble is a STRUCTURED card** (added 2026-07-22, "it just appears as
+one line — make each question and answer its own section"). Claude Code's recap
+string ("Your questions have been answered: …") crammed every Q="A" onto one line.
+The `toolUseResult` sidecar, though, carries `answers` as a `{question_text:
+answer_string}` map (the chosen label, `", "`-joined labels for multiSelect, or
+the typed free text) alongside the `questions` list (for each question's `header`).
+`transcript._answer_pairs` pairs them into `[{q, header, answer}]` (attached to the
+record as `qa`), and `opshtml.answer_html` renders one section per question — its
+optional header chip + question text — with the PICKED answer HIGHLIGHTED (`.ansv`,
+the `--done` hue), mirroring the `question` bubble's per-question layout. It
+degrades to the flat recap markdown when the sidecar isn't that map (an older shape
+/ no pairs) — so the old rendering is the fallback, never lost. Escape-first like
+every `md_html` leaf. Pure read-model: no new hook, stream, or state.
 
 **The QUESTION surfaces too** (added 2026-07-20, "I want questions also to be in
 the transcript"). The answer alone was half the record — the transcript showed

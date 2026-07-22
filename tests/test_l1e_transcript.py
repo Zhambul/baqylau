@@ -279,6 +279,38 @@ def test_conversation_surfaces_ask_question_and_answer(tmp_path):
     assert ans["text"].startswith("Your questions have been answered")
 
 
+def test_conversation_answer_carries_qa_pairs(tmp_path):
+    # Claude Code's REAL toolUseResult carries `answers` as a {question:
+    # answer_string} map (+ `questions` for headers) — the answer record carries
+    # the structured [{q, header, answer}] pairs the dashboard's answer card
+    # highlights (multiSelect answers arrive ", "-joined).
+    p = tmp_path / "qa.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "tool_use", "id": "t1", "name": "AskUserQuestion",
+             "input": {"questions": [
+                 {"header": "Pets", "question": "Cats or dogs?",
+                  "options": [{"label": "Cats"}, {"label": "Dogs"}]},
+                 {"header": "Sides", "question": "Which sides?",
+                  "multiSelect": True, "options": [{"label": "Fries"}]}]}}]},
+         "timestamp": "2026-07-20T00:00:01.000Z"},
+        {"type": "user", "toolUseResult": {
+            "questions": [{"header": "Pets", "question": "Cats or dogs?"},
+                          {"header": "Sides", "question": "Which sides?"}],
+            "answers": {"Cats or dogs?": "Dogs",
+                        "Which sides?": "Fries, Slaw"}},
+         "message": {"content": [
+             {"type": "tool_result", "tool_use_id": "t1",
+              "content": "Your questions have been answered: …"}]},
+         "timestamp": "2026-07-20T00:00:09.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    ans = next(r for r in recs if r["kind"] == "answer")
+    assert ans["qa"] == [
+        {"q": "Cats or dogs?", "header": "Pets", "answer": "Dogs"},
+        {"q": "Which sides?", "header": "Sides", "answer": "Fries, Slaw"}]
+
+
 def test_conversation_surfaces_declined_question(tmp_path):
     # A DECLINED question still records the question (the assistant tool_use is
     # written regardless), just with no `answer` recap — the transcript honestly

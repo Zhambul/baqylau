@@ -469,6 +469,36 @@ def _line_ts(s):
         return None
 
 
+def _answer_pairs(tur):
+    """Pair each answered AskUserQuestion with the answer the user picked, for
+    the dashboard's STRUCTURED `answer` bubble (docs/dashboard.md, *Web ask*).
+    Claude Code's toolUseResult carries `answers` as a {question_text:
+    answer_string} map (answer = the chosen label, ", "-joined labels for
+    multiSelect, or the typed free text) and `questions` as the tool_input list
+    — used only for each question's optional header chip. Returns
+    [{q, header, answer}] in the map's (question) order, or [] when `answers`
+    isn't that map (an older/other shape → the flat recap renders instead).
+    Pure data — opshtml.answer_html does the HTML (escape-first there)."""
+    answers = tur.get("answers") if isinstance(tur, dict) else None
+    if not isinstance(answers, dict):
+        return []
+    headers = {}
+    qs = tur.get("questions")
+    if isinstance(qs, list):
+        for q in qs:
+            if isinstance(q, dict) and isinstance(q.get("question"), str):
+                headers[q["question"]] = (q.get("header") or "").strip()
+    pairs = []
+    for q_text, ans in answers.items():
+        if not isinstance(q_text, str):
+            continue
+        val = ans if isinstance(ans, str) else str(ans)
+        pairs.append({"q": q_text.strip(),
+                      "header": headers.get(q_text, ""),
+                      "answer": val.strip()})
+    return pairs
+
+
 def _format_questions(tool_input):
     """Flatten an AskUserQuestion tool_use `input` into readable markdown for the
     dashboard transcript's `question` bubble — each question's text followed by a
@@ -544,10 +574,11 @@ def conversation(path, pos=0):
             # have been answered: …" recap (docs/dashboard.md, *Web ask*).
             tur = rec.get("tur")
             if isinstance(tur, dict) and "answers" in tur:
+                qa = _answer_pairs(tur)
                 for blk in rec["blocks"]:
                     txt = result_text(blk.get("content")).strip()
                     if txt:
-                        out.append({"kind": "answer", "text": txt,
+                        out.append({"kind": "answer", "text": txt, "qa": qa,
                                     "anchor": anchor, "ts": ts})
             for text in rec["texts"]:
                 k, a, b = classify_user_text(text)

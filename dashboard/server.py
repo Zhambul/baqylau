@@ -1185,7 +1185,7 @@ def _conv_items(recs):
     for r in recs:
         it = {"g": None, "t": "msg", "kind": r["kind"],
               "html": opshtml.msg_html(r["kind"], r.get("text", ""),
-                                       r.get("sender", ""))}
+                                       r.get("sender", ""), r.get("qa"))}
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
         out.append(it)

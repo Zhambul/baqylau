@@ -596,7 +596,37 @@ def md_html(text):
         return "<p>%s</p>" % html.escape(text or "", quote=False).replace("\n", "<br>")
 
 
-def msg_html(kind, text, sender=""):
+def answer_html(pairs):
+    """The STRUCTURED AskUserQuestion answer bubble body: one section per
+    answered question (its optional header chip + question text) with the CHOSEN
+    answer HIGHLIGHTED — mirrors the question bubble's per-question layout, the
+    answer standing out in the --done hue instead of the flat one-line recap
+    (docs/dashboard.md, *Web ask*). `pairs` is transcript._answer_pairs output
+    ([{q, header, answer}]). Returns None when there's nothing structured to show
+    (→ msg_html falls back to the flat recap markdown). Escape-first, like every
+    leaf here — the neutralize() analog."""
+    rows = []
+    for p in pairs or []:
+        if not isinstance(p, dict):
+            continue
+        q = (p.get("q") or "").strip()
+        ans = (p.get("answer") or "").strip()
+        if not q and not ans:
+            continue
+        head = ""
+        hdr = (p.get("header") or "").strip()
+        if hdr:
+            head += "<span class=\"anshdr\">%s</span>" % html.escape(hdr, quote=False)
+        if q:
+            head += "<span class=\"ansqt\">%s</span>" % html.escape(q, quote=False)
+        val = ("<span class=\"ansv\">%s</span>" % html.escape(ans, quote=False)
+               if ans else "<span class=\"ansv none\">—</span>")
+        rows.append("<div class=\"ansq\"><div class=\"ansqh\">%s</div>%s</div>"
+                    % (head, val))
+    return "<div class=\"ansqa\">%s</div>" % "".join(rows) if rows else None
+
+
+def msg_html(kind, text, sender="", qa=None):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
@@ -607,7 +637,10 @@ def msg_html(kind, text, sender=""):
     is a re-runnable prompt) | recap (Claude Code's away-summary — a
     system-generated bubble, not a re-runnable prompt either). The body rides
     md_html (readable markdown), which is escape-first like everything else
-    here — the neutralize() analog."""
+    here — the neutralize() analog. `qa` (answer only) is the structured
+    [{q, header, answer}] pairs from transcript._answer_pairs: when present it
+    renders the highlighted per-question card (answer_html) instead of the flat
+    recap text."""
     who = {"prompt": "you", "message": "claude",
            "question": "claude ▸ asks you", "answer": "you ▸ answered",
            "recap": "↩ recap"} \
@@ -623,6 +656,14 @@ def msg_html(kind, text, sender=""):
                % html.escape(who))
     else:
         who = html.escape(who)
+    # a submitted answer renders as a STRUCTURED card (per-question sections with
+    # the picked answer highlighted) when the transcript gave us the pairs;
+    # otherwise it degrades to the flat recap markdown below like any other kind
+    if kind == "answer":
+        inner = answer_html(qa)
+        if inner is not None:
+            return ("<div class=\"msg answer\"><span class=\"who\">%s</span>%s</div>"
+                    % (who, inner))
     return ("<div class=\"msg %s\"%s><span class=\"who\">%s</span>"
             "<div class=\"md\">%s</div></div>"
             % (html.escape(kind, quote=True), extra, who, md_html(text)))

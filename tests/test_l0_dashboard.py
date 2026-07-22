@@ -298,6 +298,31 @@ def test_msg_html_question_bubble():
     assert 'class="rw"' not in h                       # no rewind affordance
 
 
+def test_msg_html_answer_structured_card():
+    # a submitted answer with structured qa pairs renders per-question sections
+    # (header chip + question text) with the picked answer HIGHLIGHTED (.ansv),
+    # NOT the flat recap markdown
+    qa = [{"q": "Which fruit?", "header": "Pick", "answer": "Banana"},
+          {"q": "Which planet?", "header": "", "answer": "Mars, Venus"}]
+    h = opshtml.msg_html("answer", "Your questions have been answered: …", "", qa)
+    assert 'class="msg answer"' in h and "you ▸ answered" in h
+    assert 'class="ansqa"' in h and h.count('class="ansq"') == 2
+    assert "Which fruit?" in h and '<span class="ansv">Banana</span>' in h
+    assert '<span class="anshdr">Pick</span>' in h
+    assert '<span class="ansv">Mars, Venus</span>' in h
+    assert "<div class=\"md\">" not in h                 # structured, not flat md
+
+
+def test_msg_html_answer_escapes_and_falls_back():
+    # no usable pairs → falls back to the flat recap markdown (escape-first)
+    h = opshtml.msg_html("answer", "answered: **x**", "", None)
+    assert 'class="msg answer"' in h and "<div class=\"md\">" in h
+    # a script tag in a picked answer is neutralized, never live
+    qa = [{"q": "q", "header": "", "answer": "<script>alert(1)</script>"}]
+    h2 = opshtml.msg_html("answer", "recap", "", qa)
+    assert "<script>" not in h2 and "&lt;script&gt;" in h2
+
+
 def test_msg_html_recap_bubble():
     # Claude Code's away-summary recap: an `↩ recap` bubble (no rewind ↶ — it
     # isn't a re-runnable prompt), body rendered as markdown.
