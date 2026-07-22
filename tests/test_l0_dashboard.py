@@ -540,6 +540,70 @@ def test_live_windows_memoized_by_ttl(monkeypatch):
     assert len(calls) == 2
 
 
+def _notifier_for_asking(monkeypatch, screen, delay=999):
+    """A Notifier wired hermetically to one red 'asking' tab on window '9':
+    controllable tab states, a fake frontend returning `screen["txt"]`, and
+    every home-touching dependency (session-end / composer / mute / audit /
+    payload) stubbed. Returns (n, cur, asking, sent, audited)."""
+    win = "9"
+    asking = next(s for s, k in DS.NOTIFY_STATES.items() if k == "asking")
+    cur = {"states": {}}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
+    monkeypatch.setattr(DS, "_session_ended", lambda sid: False)
+    monkeypatch.setattr(DS, "_composing", lambda sid: False)
+    monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", delay)
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file",
+                        lambda *a, **k: audited.append(a))
+
+    class FE:
+        def get_text(self, w, extent="screen"):
+            return screen["txt"]
+
+    n = DS.Notifier()
+    n.fe = FE()
+    n.winmap = {win: {"sid": "sX"}}
+    n._payload = lambda kind, state, row: {
+        "kind": kind, "state": state, "sid": row["sid"]}
+    sent = []
+    n._telegram = lambda entry: sent.append(entry)
+    n.push = lambda ev, pl: None
+    return n, cur, asking, sent, audited
+
+
+def test_notify_suppressed_when_answering_dialog_at_terminal(monkeypatch):
+    """A red 'asking' tab whose TERMINAL dialog region CHANGES (you typed a
+    free-text answer / toggled a selection) drops the armed Telegram alert:
+    answering at the keyboard moves neither the tab off red nor the transcript,
+    so the dialog-region diff is the only 'I'm on it' signal."""
+    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No\nEnter to select"}
+    n, cur, asking, sent, audited = _notifier_for_asking(monkeypatch, screen)
+    n.scan()                                 # baseline (prev is None)
+    cur["states"] = {"9": asking}
+    n.scan()                                 # arm + region baseline
+    assert n.pending.get("9", {}).get("ask_region")
+    screen["txt"] = "☒ Q\n  1. Yes\n❯ 2. No\nEnter to select"
+    n.scan()                                 # region moved → suppressed
+    assert "9" not in n.pending and sent == []
+    assert any(a[2] == "notify-suppress" for a in audited)
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    n.scan()                                 # nothing left to fire
+    assert sent == []
+
+
+def test_notify_fires_when_dialog_untouched(monkeypatch):
+    """The guard is precise: a STABLE dialog region (you walked away) still
+    fires after the grace window — the baseline sighting alone never suppresses."""
+    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No\nEnter to select"}
+    n, cur, asking, sent, _ = _notifier_for_asking(monkeypatch, screen, delay=0)
+    n.scan()                                 # baseline
+    cur["states"] = {"9": asking}
+    n.scan()                                 # arm, baseline, fire (delay 0)
+    assert sent and sent[0]["sid"] == "sX"
+
+
 def _pump_global(r, got):
     """Collect (event, data) frames from a global-SSE response into `got`."""
     def pump():

@@ -1454,7 +1454,12 @@ block per question (the header chip + question text + a dim
 "pick one"/"pick any" hint), option buttons whose leading mark makes the
 select mode legible at a glance (a radio circle for single-select, a
 checkbox square that fills with a ✓ for multiSelect), a free-text "type
-your own" input per question (the dialog's "Type something" row), a
+your own" input per question (the dialog's "Type something" row) — which
+carries a **red (`--ask`) border exactly while it holds text**, since a
+non-empty custom answer IS the selected answer (for single-select, typing
+it clears the option buttons; the `.on` class is toggled on every
+keystroke and cleared when an option click empties it), and no border
+when empty — a
 submit row, and **chat about this** (the dialog's own
 decline-and-discuss). Submission is ALWAYS the explicit submit button
 (or Enter in a free-text row) — a lone single-select question does NOT
@@ -2906,6 +2911,21 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
   test: reacting is the tab moving off red/green, the session being gone, or an
   unsent draft in hand — decided deliberately over "did the page get viewed"
   (which would need client heartbeat plumbing).
+- It is ALSO cancelled while you're **answering the question AT THE TERMINAL**.
+  A red `awaiting-command` is a modal AskUserQuestion dialog; you typing a
+  free-text answer or toggling a selection there moves neither the tab off red
+  nor the transcript, so none of the checks above catch it — its ONLY trace is
+  the on-screen dialog changing. So for an `asking` arm the notifier reads the
+  window's dialog region (`askdialog.region` over the frontend's `get_text`,
+  which isolates the dialog from a live-ticking status line below it), baselines
+  it on first sighting (the untouched dialog), and **drops the arm the moment it
+  differs** — you're on it. The region is `""` for a non-ask red tab (a
+  permission / plan prompt has no `☐`/`☒` header chip) and when no terminal
+  channel resolves, so both keep the plain grace-window behaviour. The drop is
+  audited as a `notify-suppress` `state_files` row (`reason: dialog-activity`).
+  Limitation by design: pure thinking with ZERO keystrokes for the whole grace
+  window is indistinguishable from walking away and still fires — bump
+  `CLAUDE_DASH_NOTIFY_DELAY_S` for a longer think.
 - An entry that **survives** past the grace window is **sent once** (popped),
   then never re-fires for that transition. It fires **regardless** of whether a
   browser is connected — reaching you when away is the whole point.

@@ -1774,6 +1774,7 @@ function renderAsk() {
           if (other) other.value = "";
         }
         paintAll();
+        paintOther();
         syncSubmit();
         saveAskDraft(ask, st);
       };
@@ -1792,12 +1793,15 @@ function renderAsk() {
       : q.multiSelect
         ? "add your own answer…" : "or type your own answer…";
     other.value = st.answers[qi].other;
+    // red border == this custom text is the selected answer (empty → none)
+    const paintOther = () => other.classList.toggle("on", !!other.value.trim());
     other.oninput = () => {
       st.answers[qi].other = other.value;
       if (!q.multiSelect && other.value.trim()) {
         st.answers[qi].selected = [];
         paintAll();
       }
+      paintOther();
       syncSubmit();
       saveAskDraft(ask, st);
     };
@@ -1808,6 +1812,7 @@ function renderAsk() {
     };
     qbox.append(other);
     paintAll();
+    paintOther();
     card.append(qbox);
   });
   const foot = el("div", "askfoot");

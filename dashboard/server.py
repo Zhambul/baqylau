@@ -231,6 +231,8 @@ class Notifier:
         #                                {} (a real empty screen — all tabs gone)
         self.winmap = {}
         self.pending = {}              # win -> dict(payload, armed_at, state)
+        self.fe = None                 # cached Frontend for the dialog-region
+        #                                read (refreshed on the slow cadence)
 
     def register(self):
         q = queue.Queue(maxsize=100)
@@ -259,6 +261,26 @@ class Notifier:
             if win and win not in m:
                 m[win] = row
         self.winmap = m
+        # the frontend used to read a red tab's dialog region (below). Resolved
+        # here, not per-scan: a hunt for kitty's socket is a subprocess, and a
+        # missing terminal control channel degrades cleanly to None → no
+        # dialog-activity signal, alerts fire as before.
+        self.fe = _frontend()
+
+    def _dialog_region(self, win):
+        """The AskUserQuestion dialog pane's text on window `win`, or None when
+        there's no terminal channel / read miss. `askdialog.region` isolates the
+        dialog (from its header-chip bar down), so a live-ticking status line
+        below it doesn't register as change — and it's "" for a non-ask red tab
+        (a permission / plan prompt has no ☐/☒ chip), so those keep the plain
+        grace-window behaviour."""
+        fe = self.fe
+        if not (fe and win):
+            return None
+        try:
+            return askdialog.region(fe.get_text(win) or "")
+        except Exception:
+            return None
 
     def _payload(self, kind, state, row):
         # a worktree session's toast names the PROJECT it groups under, not the
@@ -313,6 +335,23 @@ class Notifier:
             if (cur.get(win) != entry["state"]
                     or _session_ended(sid) or _composing(sid)):
                 del self.pending[win]
+                continue
+            # You answering AT THE TERMINAL — typing a free-text answer or
+            # toggling a selection — doesn't move the tab off red and doesn't
+            # grow the transcript (the dialog is still open, unsubmitted), so
+            # none of the checks above fire. Its ONLY trace is the dialog region
+            # changing. Baseline it on first sighting (the untouched dialog),
+            # then drop the arm the moment it differs: you're on it, don't nag.
+            if entry.get("kind") == "asking":
+                reg = self._dialog_region(win)
+                if reg:                          # "" = no ask dialog / read miss
+                    if entry.get("ask_region") is None:
+                        entry["ask_region"] = reg
+                    elif reg != entry["ask_region"]:
+                        del self.pending[win]
+                        A.state_file("", "", "notify-suppress",
+                                     {"sid": sid, "kind": "asking",
+                                      "reason": "dialog-activity"})
         # fire the ones that persisted past the grace window (once each)
         for win in list(self.pending):
             entry = self.pending[win]
