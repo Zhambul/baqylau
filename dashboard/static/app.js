@@ -1811,9 +1811,11 @@ function renderAsk() {
             ? a.selected.filter(x => x !== o.label)
             : [...a.selected, o.label];
         } else {
+          // single-select: the option becomes the answer, but KEEP any typed
+          // custom text (it stays in the field, re-selectable on focus) — the
+          // old clear here was silent data loss. Submit sends other:"" while an
+          // option is selected, so the lingering text never hijacks the answer.
           a.selected = [o.label];
-          a.other = "";
-          if (other) other.value = "";
         }
         paintAll();
         paintOther();
@@ -1835,17 +1837,33 @@ function renderAsk() {
       : q.multiSelect
         ? "add your own answer…" : "or type your own answer…";
     other.value = st.answers[qi].other;
-    // red border == this custom text is the selected answer (empty → none)
-    const paintOther = () => other.classList.toggle("on", !!other.value.trim());
+    // red border == this custom text IS the active answer. multiSelect: whenever
+    // it holds text (additive to any checked options). single-select: only while
+    // no option is selected (a clicked option is the answer then; the text stays
+    // but sits dormant, borderless — derived, no extra state).
+    const otherIsAnswer = () => !!other.value.trim()
+      && (q.multiSelect || !st.answers[qi].selected.length);
+    const paintOther = () => other.classList.toggle("on", otherIsAnswer());
     other.oninput = () => {
       st.answers[qi].other = other.value;
       if (!q.multiSelect && other.value.trim()) {
-        st.answers[qi].selected = [];
+        st.answers[qi].selected = [];         // typing (re)claims the answer
         paintAll();
       }
       paintOther();
       syncSubmit();
       saveAskDraft(ask, st);
+    };
+    // clicking BACK into a non-empty custom field reclaims it as the answer
+    // (deselects the option) — no retype needed, and the text was never lost
+    other.onfocus = () => {
+      if (!q.multiSelect && other.value.trim() && st.answers[qi].selected.length) {
+        st.answers[qi].selected = [];
+        paintAll();
+        paintOther();
+        syncSubmit();
+        saveAskDraft(ask, st);
+      }
     };
     other.onkeydown = (e) => {
       e.stopPropagation();                  // keep Esc/gestures out of typing
@@ -1930,15 +1948,25 @@ function submitAsk(ask, answers, chat) {
   // presses chat, waits for the dialog to close, then delivers the text as a
   // message so the custom answer reaches the session (docs/dashboard.md, *Web
   // ask*). Explicit "chat about this" (answers == null) is untouched.
+  // the custom text counts as the answer only when it's ACTIVE: multiSelect
+  // (additive) or single-select with no option chosen. A single-select option
+  // wins → send other:"" so the (preserved-but-dormant) text can't override it
+  // (askdialog._answer_question gives `other` precedence over `selected`).
+  const qs = ask.questions || [];
+  const effOther = (a, i) => {
+    const t = (a.other || "").trim();
+    return t && ((qs[i] && qs[i].multiSelect) || !(a.selected || []).length)
+      ? t : "";
+  };
   let message = "";
   if (!chat && answers && askHasPreview(ask)) {
-    const typed = answers.map(a => (a.other || "").trim()).filter(Boolean);
+    const typed = answers.map(effOther).filter(Boolean);
     if (typed.length) { chat = true; message = typed.join("\n"); }
   }
   const body = { tool_use_id: ask.tool_use_id || "" };
   if (chat) { body.chat = true; if (message) body.message = message; }
-  else body.answers = (answers || []).map(a =>
-    ({ selected: a.selected, other: (a.other || "").trim() }));
+  else body.answers = (answers || []).map((a, i) =>
+    ({ selected: a.selected, other: effOther(a, i) }));
   if (ses.askEl)
     ses.askEl.querySelectorAll("button,input").forEach(x => x.disabled = true);
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body)

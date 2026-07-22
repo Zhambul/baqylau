@@ -1484,11 +1484,17 @@ block per question (the header chip + question text + a dim
 select mode legible at a glance (a radio circle for single-select, a
 checkbox square that fills with a ✓ for multiSelect), a free-text "type
 your own" input per question (the dialog's "Type something" row) — which
-carries a **red (`--ask`) border exactly while it holds text**, since a
-non-empty custom answer IS the selected answer (for single-select, typing
-it clears the option buttons; the `.on` class is toggled on every
-keystroke and cleared when an option click empties it), and no border
-when empty — a
+carries a **red (`--ask`) border while it is the ACTIVE answer** and none
+otherwise: multiSelect whenever it holds text (additive to any checked
+options), single-select only while NO option is selected (typing a custom
+answer deselects the options; clicking an option reclaims the answer but
+**keeps the typed text** — it sits dormant and borderless, and clicking
+back into the field reselects it, no retype). The old option-click USED to
+wipe the field (silent data loss); now the text is preserved and submit
+sends `other:""` whenever a single-select option is chosen, so the dormant
+text can never override the clicked option (`askdialog._answer_question`
+gives `other` precedence over `selected`). "Active answer" is derived, not
+stored — `hasText && (multiSelect || noOptionSelected)` — a
 submit row, and **chat about this** (the dialog's own
 decline-and-discuss). Submission is ALWAYS the explicit submit button
 (or Enter in a free-text row) — a lone single-select question does NOT
