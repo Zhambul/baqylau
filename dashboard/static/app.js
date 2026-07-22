@@ -59,10 +59,10 @@ const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compa
 // race*). Bounded — a truly headless session never tags a window.
 const LAUNCH_RESOLVE_MS = 1000;
 const LAUNCH_RESOLVE_TRIES = 12;
-// The ✕ close POST goes through the keepalive pool with a timeout (< the 20s
-// optPending watchdog) so a connection-pool-starved /stop rejects visibly and
-// retryably instead of hanging silently (docs/dashboard.md *The launch tag-race*
-// / close robustness).
+// Timeout for the ✕ close's FETCH FALLBACK (closeSession prefers sendBeacon).
+// < the 20s optPending watchdog so a stalled close rejects visibly/retryably
+// (→ web-clientfail) instead of hanging silently (docs/dashboard.md *Close via
+// sendBeacon*).
 const CLOSE_POST_MS = 12000;
 
 // iPad detection — gates the message boxes' Enter behavior AND every
@@ -904,8 +904,7 @@ function cardClose(sid) {
     btn.textContent = "closing…";
     const a = btn.closest(".scard");
     if (a) a.classList.add("closing");
-    postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {},
-             { keepalive: true, timeout: CLOSE_POST_MS })
+    closeSession(sid)
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
         S.closing.delete(sid);
@@ -1796,6 +1795,29 @@ function clientFail(sid, gesture, err, chars) {
   if (typeof chars === "number") body.chars = chars;
   postJSON("/api/session/" + encodeURIComponent(sid) + "/client-fail", body)
     .catch(() => {});   // a telemetry beacon must never surface to the user
+}
+
+// The close POST rides navigator.sendBeacon — the browser's dedicated
+// background-POST path, independent of the fetch connection pool, and it
+// survives the optimistic navigation. A plain fetch to /stop was observed to
+// hang pending FOREVER through the tunnel (baqylau/dash.zhambyl.top) on BOTH
+// Safari and Chrome: no server row, no reject, just the 20s web-hint … stale,
+// while the click's own /hint-audit beacon and composer /message got through —
+// a control POST starved of a connection at close time. sendBeacon uses a
+// separate queue the page's long-lived SSE EventSource streams don't occupy.
+// It can't set X-Claude-Dash, so the server accepts it by allowlisted Origin
+// (_post_guard, docs/dashboard.md *Close via sendBeacon*). Fire-and-forget:
+// resolves once QUEUED — the sessions poll (reconcileCloses) confirms the park,
+// and a close that didn't land just reverts the optimistic card. Falls back to a
+// timed fetch where sendBeacon is unavailable/refused.
+function closeSession(sid) {
+  const url = "/api/session/" + encodeURIComponent(sid) + "/stop";
+  try {
+    if (navigator.sendBeacon
+        && navigator.sendBeacon(url, new Blob(["{}"], { type: "application/json" })))
+      return Promise.resolve({ ok: true, beacon: true });
+  } catch (e) { /* fall through to the fetch path */ }
+  return postJSON(url, {}, { timeout: CLOSE_POST_MS });
 }
 
 // The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
@@ -4414,8 +4436,7 @@ function renderSessionChrome(tab) {
       // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
       S.closing.add(sid);
       S.closePend[sid] = optPending(sid, "close");
-      postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {},
-               { keepalive: true, timeout: CLOSE_POST_MS })
+      closeSession(sid)
         .then(() => {
           toast("done", "session closed", "terminal tab closed");
           // the session just ended — back to the list, unless the user

@@ -357,15 +357,22 @@ the browser must preflight, and we never let the preflight pass
 - **JSON content type required** (`Content-Type: application/json`) — a simple
   request can only be `text/plain` / form encodings, so this alone forces a
   preflight; a wrong type is `415`.
-- **A custom header required** (`X-Claude-Dash: 1`) — a header a `<form>` or a
-  simple `fetch` cannot set, independently forcing the preflight; absent is
-  `403`.
+- **A custom header (`X-Claude-Dash: 1`) OR a present, allowlisted `Origin`** —
+  the caller must prove same-origin one of two ways, because a cross-origin page
+  can forge NEITHER. The header is what a `<form>` or a simple `fetch` cannot set
+  (forcing the preflight below); the Origin-allowlist alternative exists so
+  `navigator.sendBeacon` — which physically cannot set a custom header — is
+  accepted for the close (see *Close via sendBeacon*). A request with neither is
+  `403`. A cross-origin request always carries its real (non-allowlisted) Origin,
+  so it can never satisfy the Origin branch, and it can't set the header branch —
+  the Origin allow-list is therefore the actual CSRF gate; the header was always
+  belt-and-suspenders.
 - **We answer `OPTIONS` with a bare `501`** (no `do_OPTIONS`, so no
-  `Access-Control-Allow-*` headers ever) — the forced preflight therefore fails
+  `Access-Control-Allow-*` headers ever) — a forced preflight therefore fails
   and the browser never sends the real POST. Same-origin requests never
   preflight, so the dashboard's own page is unaffected.
-- **Origin allow-list** as defense in depth — any `Origin` header present and
-  not `http://127.0.0.1:<port>` / `http://localhost:<port>` is `403`.
+- **Origin allow-list** — any `Origin` header present and not
+  `http://127.0.0.1:<port>` / `http://localhost:<port>` is `403`.
   `CLAUDE_DASH_ORIGINS` (comma-separated full origins) EXTENDS the set for a
   proxied deployment (docs/remote.md) — it never replaces the local ones and
   is not an exposure switch: the bind stays `127.0.0.1`.
@@ -1666,19 +1673,39 @@ for the `/stop` path = guard-bounced; a `web-clientfail gesture:close` = the
 fetch itself failed/aborted; neither, only the `web-hint` = the POST never left
 the page (a rendering/wiring bug, e.g. the launch tag-race below).
 
-**Close robustness (keepalive + timeout).** A subtler stuck close had no reject
-at all — the `/stop` fetch hung *pending forever*: on this HTTP/1.1 origin the
-~6-connections/origin browser cap is consumed by the page's long-lived SSE
-`EventSource` streams (`/events` + `/events/session` + agent), so a plain fetch
-for the close can QUEUE behind them and never send — no resolve, no reject, so no
-`.catch`, no `web-clientfail`, just the client's 20s `web-hint … stale` and no
-server row of any kind. The ✕ close POST now (a) rides `fetch(keepalive:true)` —
-the browser's keepalive/sendBeacon pool, which the SSE streams don't starve — and
-(b) carries a `CLOSE_POST_MS` timeout (< the 20s watchdog) so if it STILL can't
-complete it aborts → rejects → fires the `web-clientfail gesture:close` beacon
-and a retryable "close failed" toast instead of hanging silently. So the last
-invisible case ("only a `web-hint`, no reject") is now both mitigated and, if it
-recurs, audited.
+### Close via sendBeacon
+
+A stuck close turned out to be the hardest: the `/stop` fetch hung *pending
+forever* — no resolve, no reject, so no `.catch`, no `web-clientfail`, just the
+client's 20s `web-hint … stale` and NO server row of any kind (not even the
+`web-stop attempt`, since the request never reached the handler). It reproduced
+on BOTH Safari and Chrome, but ONLY through the tunnel (`*.zhambyl.top`), while
+the same click's `/hint-audit` beacon and the composer's `/message` got through
+— i.e. a control POST that couldn't get a connection at close time, the page's
+long-lived SSE `EventSource` streams having consumed the pool between the
+browser and the proxy. A plain `fetch` (even with `keepalive` + an
+`AbortController` timeout) could not be relied on to leave the page; the timeout
+didn't even fire.
+
+`closeSession()` (app.js) therefore sends the close over **`navigator.send
+Beacon`** — the browser's dedicated background-POST queue, which is independent
+of the fetch connection pool and survives the optimistic navigation. sendBeacon
+CANNOT set the `X-Claude-Dash` header, so `_post_guard` accepts it via the
+**allowlisted-Origin branch** (see the browser-vector defense above — a
+cross-origin page can forge neither the header nor an allowlisted Origin, so the
+Origin allow-list is the CSRF gate). It is fire-and-forget: `closeSession`
+resolves as soon as the beacon is QUEUED, the optimistic UI navigates, and the
+sessions poll (`reconcileCloses`) confirms the park — a close that didn't land
+just reverts the optimistic card. Where `sendBeacon` is unavailable or refused,
+it falls back to a timed `fetch` (`CLOSE_POST_MS` < the 20s watchdog) so that
+path still rejects visibly (→ `web-clientfail gesture:close`) rather than
+hanging silently.
+
+(Note: `sendBeacon` bypasses the BROWSER→proxy connection pool. If a close still
+stalls, the bottleneck is the proxy→`127.0.0.1:8377` upstream pool starved by the
+SSE streams — that is proxy config, e.g. more upstream keepalive connections, not
+an app fix; the local `127.0.0.1:8377` bind, which holds no proxy in between, is
+the control.)
 
 **The launch tag-race (why a just-launched session's controls were dead).** A
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged

@@ -3104,6 +3104,24 @@ def test_post_guard_rejections(dash):
     assert e.value.code == 400
 
 
+def test_post_guard_accepts_beacon_by_allowlisted_origin(dash, monkeypatch):
+    # navigator.sendBeacon (the close transport) can't set X-Claude-Dash, so a
+    # HEADERLESS POST is accepted when it carries a present, allowlisted Origin —
+    # a cross-origin page can forge neither, so the Origin allowlist is the CSRF
+    # gate (docs/dashboard.md *Close via sendBeacon*).
+    monkeypatch.setattr(DS, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {dash})
+    ep = dash + "/api/session/beacon1/hint-audit"
+    body = {"op": "close", "phase": "shown"}
+    code, _ = _post(ep, body, header=None, origin=dash)   # the sendBeacon shape
+    assert code == 200
+    with pytest.raises(urllib.error.HTTPError) as e:       # headerless + NO origin
+        _post(ep, body, header=None)                       # still rejected (unchanged)
+    assert e.value.code == 403
+    with pytest.raises(urllib.error.HTTPError) as e:       # headerless + bad origin
+        _post(ep, body, header=None, origin="https://evil.test")
+    assert e.value.code == 403
+
+
 def test_post_new_session_bad_cwd_is_400(dash, monkeypatch):
     _inject_fe(monkeypatch, _FakeFE())
     with pytest.raises(urllib.error.HTTPError) as e:

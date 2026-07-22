@@ -1991,17 +1991,34 @@ class Handler(BaseHTTPRequestHandler):
 
         `max_bytes` overrides the default POST_MAX cap — the upload endpoint
         raises it to UPLOAD_MAX to admit a base64-inflated image (every other
-        caller stays at the tiny control-plane default)."""
+        caller stays at the tiny control-plane default).
+
+        Two accepted proofs of a same-origin caller, EITHER suffices:
+          * the `X-Claude-Dash` custom header (a cross-origin *simple* POST can't
+            set it, and a cross-origin fetch that tries triggers a preflight this
+            no-CORS server never answers), OR
+          * a present-and-allowlisted `Origin` — because `navigator.sendBeacon`
+            CANNOT set a custom header, yet the close path needs it (the one
+            transport that isn't starved of a connection when a plain fetch POST
+            silently stalls through the tunnel — observed on Safari AND Chrome,
+            docs/dashboard.md *Close via sendBeacon*). A cross-origin page cannot
+            forge an allowlisted Origin,
+            and the browser stamps the *real* Origin on every cross-origin
+            request, so the Origin allowlist IS the CSRF gate here; the header was
+            only ever defence-in-depth. A non-allowlisted Origin is still the
+            attack signal and is always rejected."""
         if READONLY:
             return self._reject(403, "control plane disabled (read-only)")
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip()
         if ctype != "application/json":
             return self._reject(415, "content-type must be application/json")
-        if self.headers.get(POST_HEADER) != "1":
-            return self._reject(403, "missing %s header" % POST_HEADER)
         origin = self.headers.get("Origin")
         if origin and origin not in ALLOWED_ORIGINS:
             return self._reject(403, "cross-origin")
+        # header OR allowlisted Origin — the sendBeacon path carries no header but
+        # a real allowlisted Origin (a cross-origin caller can forge neither).
+        if self.headers.get(POST_HEADER) != "1" and origin not in ALLOWED_ORIGINS:
+            return self._reject(403, "missing %s header" % POST_HEADER)
         try:
             n = int(self.headers.get("Content-Length") or 0)
         except ValueError:

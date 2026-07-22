@@ -158,17 +158,21 @@ New always-audited swallow sites (previously silent — their absence used to ma
     POST never reached `post_stop`; now distinguish WHY: a **`web-reject`** row
     for the `/…/stop` path = the guard bounced it (missing header / cross-origin
     / read-only — read its `why`); a **`web-clientfail gesture:close`** row = the
-    fetch itself failed/aborted client-side — INCLUDING the connection-pool-
-    starvation case (a plain fetch queued behind the page's SSE `EventSource`
-    streams on the HTTP/1.1 origin, hung with no resolve/reject): the ✕ close now
-    rides `fetch(keepalive:true)` + a `CLOSE_POST_MS` timeout, so that hang aborts
-    → `web-clientfail kind:transport` instead of only a silent 20s `web-hint …
-    stale`. NEITHER (only the `web-hint`) = the POST never left the page — a
-    client rendering/wiring bug, classically the LAUNCH TAG-RACE (a just-launched session rendered `live:true` with a blank
-    `kitty_window_id`, so the composer locked and the ✕ close button never
-    rendered until a reload; fixed by showSession's meta re-fetch, docs/
-    dashboard.md *The launch tag-race*). Also check whether a SessionEnd/park
-    ever landed (`sessions.ended_at`).
+    fetch itself failed/aborted client-side (the timed-fetch FALLBACK path).
+    NEITHER (only the `web-hint`, going `stale` at 20s) = the close POST never
+    left the page over fetch — the connection-starvation case: a control POST
+    queued behind the page's long-lived SSE `EventSource` streams and hung with
+    no resolve/reject (seen on Safari AND Chrome, but only through the tunnel).
+    The ✕ close now sends over **`navigator.sendBeacon`** (`closeSession`,
+    accepted server-side by the allowlisted-Origin guard branch), which uses a
+    queue independent of the fetch pool — so a recurring stuck close after this
+    points at the PROXY→127.0.0.1 upstream pool (proxy config), not the app;
+    confirm by whether it also stalls on the local `127.0.0.1:8377` bind (it
+    should NOT). Also NEITHER can be the LAUNCH TAG-RACE (a just-launched session
+    rendered `live:true` with a blank `kitty_window_id`, so the composer locked
+    and the ✕ close button never rendered until a reload; fixed by showSession's
+    meta re-fetch, docs/dashboard.md *The launch tag-race*). Also check whether a
+    SessionEnd/park ever landed (`sessions.ended_at`).
   - **`op=answer` / `op=plan`** — the answer/decision was driven but the modal
     stash never dropped (no SSE `ask`/`plan` clear to swap the card away). Check
     the paired `web-answer`/`web-plan` row for `ok:true` and whether the
