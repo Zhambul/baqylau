@@ -1004,6 +1004,47 @@ def test_f10b_daemon_origin_start_skips_pane(run_hook, test_env, session,
 
 # ------------------------------------------------------------------- F10c
 
+def test_f10c_nested_claude_start_skips_pane(run_hook, test_env, session,
+                                             fake_kitten):
+    """A `claude` launched INSIDE another live Claude session's tab (a nested run
+    in a subdir — e.g. a `/goal` test spawning `claude` in /tmp — inherits the
+    outer pane's KITTY_WINDOW_ID) must not run the mirror lifecycle: the old code
+    swept the OUTER session's mirror as "stale" (its sid differs), re-tagged the
+    host window to itself, then untagged + closed the panes at its own SessionEnd
+    — orphaning the real session's mirror AND dropping it off the dashboard (the
+    host's claude_session tag was gone, so _live_windows saw no live pane). One
+    tab holds exactly one host session, so the nested run skips the whole
+    lifecycle (like a daemon/headless start)."""
+    outer = session.make()                   # the real, live session in this tab
+    run_hook("claude-split.py", P.session_start(outer), argv=("open",))
+    assert any(w["user_vars"].get("claude_session") == outer.sid
+               for w in fake_kitten.windows())
+    fake_kitten.clear()
+
+    nested = session.make()                   # a `claude` spawned in the SAME tab
+    run_hook("claude-split.py", P.session_start(nested), argv=("open",))
+
+    assert fake_kitten.calls("launch") == [], "nested session opened a pane"
+    assert fake_kitten.calls("close-window") == [], \
+        "nested session swept the outer mirror"
+    assert any(w["user_vars"].get("claude_mirror") == outer.sid
+               for w in fake_kitten.windows()), "outer session's mirror was hijacked"
+    # the host window still points at the OUTER session — the dashboard liveness
+    # tag (_live_windows) that the hijack destroyed.
+    assert any(w["user_vars"].get("claude_session") == outer.sid
+               for w in fake_kitten.windows()), "host window re-tagged away from outer"
+    assert not os.path.exists(nested.state_db), "nested session grew a state DB"
+    rows = oracle.q(test_env, "SELECT action, detail FROM pane_events "
+                              "WHERE session_id=?", (nested.sid,))
+    assert rows == [("open", "skipped: nested in live host %s" % outer.sid)]
+    run_hook("claude-split.py", P.session_end(outer), argv=("close",))
+    wait_until(lambda: streams_all_ended(test_env, outer.sid), desc="all ended")
+    oracle.assert_clean(test_env, outer.sid)
+    oracle.assert_clean(test_env, nested.sid)
+
+
+# ------------------------------------------------------------------- F10c
+
 def test_f10c_daemon_origin_resume_reopens_anchored(run_hook, test_env, session,
                                                     fake_kitten):
     """Re-entering a chat from the agents view fires a source=resume

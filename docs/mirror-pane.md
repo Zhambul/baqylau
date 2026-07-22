@@ -526,7 +526,33 @@ many large Reads no longer pins all their content for its life (the durable
   `--next-to` the window inside it — and `close_stale_mirrors` sweeps the
   *anchor's* tab — each sweep now
   audited (`pane_events` action `close-stale` naming the closed sid; sweeping a
-  still-open session's mirror is the canned `pane hijack` anomaly). The
+  still-open session's mirror is the canned `pane hijack` anomaly).
+
+  **Nested-host guard (a `claude` inside another session's tab).** A `claude`
+  launched *inside* a live session's own pane — a `/goal`-style test that spawns
+  `claude` in a scratch dir, a shell-out to `claude` from within a session —
+  inherits the outer pane's `KITTY_WINDOW_ID`, so its SessionStart resolves the
+  outer session's window as its anchor. Left unchecked it ran the FULL lifecycle:
+  `close_stale_mirrors` swept the outer session's mirror as "stale" (its sid
+  differs), it re-tagged the host window `claude_session=<nested>`, then at its
+  own (usually seconds-later) SessionEnd it untagged the window and closed the
+  panes — orphaning the real session's mirror AND dropping it off the web
+  dashboard, whose `_live_windows` liveness scan keys on the now-vanished
+  `claude_session` tag (observed live 2026-07-22: three `/goal` runs in
+  `/private/tmp/goaltest` nested in a baqylau session's tab; the pane-hijack
+  anomaly fired). "One tab holds exactly one host session", so a live different-sid
+  host already present in the anchor's tab is the **outer owner, not something
+  stale to replace**. `open` therefore consults `hostpane.tab_host_sid(exclude_sid=<this
+  sid>)` right after resolving the anchor and, if it finds a live host, **skips the
+  entire lifecycle** exactly like the no-host-pane case (audited `skipped: nested
+  in live host <sid>`) — this is the same guard the standalone codex host already
+  applies (`plugins/codex/session.py`, decision `nested-skip`). `tab_host_sid`
+  excludes our own sid and any PARKED sid, so a `--resume`/`--continue` (whose
+  predecessor was parked at its prior SessionEnd) or an adopt-retagged fork still
+  falls through to the normal `close_stale_mirrors` sweep — only a genuinely
+  concurrent, still-live host triggers the skip.
+
+  The
   keybinding `toggle` anchors the same way (env, else the focused tab's
   `claude_session` window — `sid_from_focus` already proved it's there).
   `toggle` closes the pane if present **without** touching the DB, so reopening re-shows

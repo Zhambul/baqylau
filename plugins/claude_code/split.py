@@ -417,6 +417,23 @@ def cmd_open():                              # SessionStart (payload on stdin)
     if not anchor:
         audit_pane(sid, "open", 1, "skipped: no host pane (daemon/headless session)")
         return
+    # NESTED-HOST GUARD. A `claude` launched INSIDE another live Claude session's
+    # tab (a nested run in a subdir — e.g. a `/goal` test spawning `claude` in
+    # /tmp — inherits the outer pane's KITTY_WINDOW_ID) would otherwise sweep the
+    # OUTER session's mirror as "stale" (its sid differs), re-tag the host window
+    # to itself, then UNTAG + close the panes at its own SessionEnd — orphaning
+    # the real session's mirror and dropping it off the dashboard (its
+    # claude_session tag is gone, so _live_windows sees no live pane). "One tab
+    # holds exactly one host session", so a live different-sid host in this tab is
+    # the outer owner, not something stale to replace. Skip the whole lifecycle —
+    # no sweep, no pane, no re-tag — exactly as the daemon/headless start above and
+    # the codex host (plugins/codex/session.py) already do. tab_host_sid excludes
+    # our own sid and any PARKED sid, so a --resume/--continue (predecessor parked
+    # at its SessionEnd) or an adopt-retagged fork still falls through to the sweep.
+    host = HP.tab_host_sid(_fe(), exclude_sid=sid)
+    if host:
+        audit_pane(sid, "open", 1, "skipped: nested in live host %s" % host)
+        return
     log_fate = decide_log_fate(sid, log)
     audit_state(log, P.parked_db(log), log_fate,
                 f"source={payload.get('source') or ''}")
