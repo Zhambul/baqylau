@@ -132,28 +132,37 @@ New always-audited swallow sites (previously silent — their absence used to ma
   only across a resume relaunch); the `--resume` picker does a full read and keeps
   the name regardless.
 
-- **A message sent from the web composer stays a GREY stand-in and never turns
-  into the normal gold bubble** (docs/dashboard.md *Optimistic composer bubble*):
-  the greyed `.msg.prompt.pending` bubble is client-only DOM, reconciled to the
-  real transcript prompt by client-side TEXT matching, and its whole lifecycle is
-  beaconed as `web-hint` `state_files` rows (`phase` = shown | reconciled |
-  dropped | stale). A **`phase='stale'`** row (also the "optimistic composer
-  bubble never reconciled" anomaly) is the stuck-bubble signal — the watchdog
-  fired ~20s after `shown` with no `reconciled`. Two root causes: (1) the send
-  never reached the terminal — check the session's paired `web-send` row
-  (`ok:false`, or an `A.error` "dashboard message (send failed)"); the message
-  genuinely never went out. (2) the send landed but the reconcile match failed —
-  a `web-send` `ok:true` with the prompt visibly IN the transcript (`msgs`)
-  around that ts means the shown text and the recorded prompt diverged
-  (attachments prepend `@path\n`, or whitespace/normalization) so
-  `real===shown || real.endsWith("\n"+shown)` missed. A **`shown` with no later
-  `reconciled`/`dropped`/`stale`** at all means the page was closed/navigated
-  before either (leaveSession disarms the watchdog) — not a bug. `dropped`
-  (`reason: queued|send-failed`) is the clean teardown (the ⧗ chip or a failed
-  POST owns it), and `reconciled` carries `wait_ms`, the shown→swap latency — a
-  large distribution there is the "the grey lingers too long" perception, not a
-  stuck bubble. Pull them with `sql "SELECT ts, content FROM state_files WHERE
-  session_id='<sid>' AND action='web-hint' ORDER BY ts"`.
+- **An OPTIMISTIC web UI stays GREYED and never resolves** — a composer message
+  stuck as a grey stand-in, the ask/plan card stuck "submitting…/sending…", or a
+  session list-card stuck "closing…" (docs/dashboard.md *Optimistic UI & the
+  web-hint audit*). All four are client-only DOM shown the instant the user acts
+  and reconciled by a REAL async SSE confirmation; each lifecycle is beaconed as
+  `web-hint` `state_files` rows carrying an **`op`** (composer | close | answer |
+  plan) + `phase` (shown | reconciled | dropped | stale). A **`phase='stale'`**
+  row (the "optimistic web action never reconciled" anomaly) is the stuck signal
+  — the ~20s watchdog fired with no `reconciled`. Read `op` to know which, then:
+  - **`op=composer`** — the prompt stand-in never matched its transcript prompt.
+    (1) the send never went out: check the paired `web-send` row (`ok:false` / an
+    `A.error` "dashboard message (send failed)"). (2) it landed but the reconcile
+    text-match missed: `web-send` `ok:true` with the prompt visibly in `msgs`
+    means shown≠recorded text (attachments prepend `@path\n`, or whitespace) so
+    `real===shown || real.endsWith("\n"+shown)` failed.
+  - **`op=close`** — the tab never parked: the sessions snapshot kept the sid
+    live. Check the paired `web-stop` row (`ok:false` = the HUP didn't issue) and
+    whether a SessionEnd/park ever landed (`sessions.ended_at`).
+  - **`op=answer` / `op=plan`** — the answer/decision was driven but the modal
+    stash never dropped (no SSE `ask`/`plan` clear to swap the card away). Check
+    the paired `web-answer`/`web-plan` row for `ok:true` and whether the
+    answer's/approval's PostToolUse fired (the stash-drop hook).
+
+  A **`shown` with no later `reconciled`/`dropped`/`stale`** means the page was
+  closed/navigated before it resolved (leaveSession disarms the ask/plan/composer
+  watchdogs; close pends keep reconciling from the poll) — not a bug. `dropped`
+  (`reason: queued | send-failed | failed | <dialog step>`) is the clean teardown
+  (a queued send, or a failed POST). `reconciled` carries `wait_ms` (the
+  shown→confirm latency) — a large distribution is "the grey lingers too long"
+  perception, not a stuck state. Pull them with `sql "SELECT ts, content FROM
+  state_files WHERE session_id='<sid>' AND action='web-hint' ORDER BY ts"`.
 - **A "send failed" (or "resume failed") toast appeared but the message
   actually WENT THROUGH — the `web-send` row even reads `ok:true`** (docs/dashboard.md
   *Client-observed send failures*, since 2026-07-22): the toast is a purely

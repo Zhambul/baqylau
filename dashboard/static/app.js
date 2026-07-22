@@ -429,6 +429,7 @@ function connectGlobal() {
   es.onerror = () => { $conn.dataset.on = "0"; };
   es.addEventListener("sessions", (e) => {
     S.sessions = JSON.parse(e.data);
+    reconcileCloses();
     if (!S.cur) renderList();
     else updateHeadFromList();
     renderAttention();
@@ -446,6 +447,7 @@ function connectGlobal() {
       const i = at.get(row.sid);
       if (i !== undefined) S.sessions[i] = row;
     }
+    reconcileCloses();
     if (!S.cur) renderList();
     else updateHeadFromList();
     renderAttention();
@@ -544,10 +546,14 @@ function leaveSession() {
     clearJobPoll();
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
-    // disarm optimistic-bubble stale watchdogs: navigating away is a
-    // deliberate abandon, not a stuck bubble, so it mustn't beacon `stale`
+    // disarm optimistic stale watchdogs (composer bubbles + the ask/plan card
+    // pends): navigating away is a deliberate abandon, not a stuck state, so it
+    // mustn't beacon `stale` (close pends are global — S.closePend — and keep
+    // reconciling from the sessions poll regardless of the current view)
     if (S.ses.pending)
       S.ses.pending.forEach(p => { if (p.timer) clearTimeout(p.timer); });
+    if (S.ses.askPend && S.ses.askPend.timer) clearTimeout(S.ses.askPend.timer);
+    if (S.ses.planPend && S.ses.planPend.timer) clearTimeout(S.ses.planPend.timer);
   }
   // a single-Esc arms a 450ms interrupt hold-timer that reads S.cur/S.ses at
   // FIRE time; leaving within that window (e.g. ⌃⇧←/→ tab-cycle) would land the
@@ -735,6 +741,23 @@ function patchCards() {
   }
 }
 
+// The REAL confirmation of an optimistic close: the sessions snapshot now shows
+// the sid gone (or demoted to not-live) — the tab actually parked. Beacon the
+// reconcile, drop the in-flight state, and un-grey the (about-to-be-rebuilt)
+// card. Called on every sessions/-delta update, BEFORE the re-render so the
+// rebuilt card shows the parked chip, not a stale 'closing…'.
+function reconcileCloses() {
+  for (const sid of Object.keys(S.closePend)) {
+    const row = S.sessions.find(r => r.sid === sid);
+    if (row && row.live) continue;             // still live — close hasn't landed
+    S.closePend[sid].settle("reconciled");
+    delete S.closePend[sid];
+    S.closing.delete(sid);
+    const card = S.cards.get(sid);
+    if (card) card.classList.remove("closing");
+  }
+}
+
 function fold(cwd, kind, rows) {
   if (!rows.length) return;
   const key = cwd + "|" + kind;
@@ -773,7 +796,10 @@ function sessionCard(row) {
   const corner = el("div", "corner");
   if (!row.live)
     corner.append(el("span", "chip2 parked", row.parked ? "parked" : "gone"));
-  else if (row.kitty_window_id)
+  else if (S.closing.has(row.sid)) {           // optimistic close in flight
+    a.classList.add("closing");                // greyed until the sessions poll parks it
+    corner.append(el("span", "chip2 closing", "closing…"));
+  } else if (row.kitty_window_id)
     corner.append(cardClose(row.sid));
   if (corner.childNodes.length) a.append(corner);
   const r = el("div", "row");
@@ -833,15 +859,28 @@ function cardClose(sid) {
       return;
     }
     S.armClose = null;
-    btn.textContent = "✕";
     btn.classList.remove("arm");
     btn.disabled = true;
-    S.closing.add(sid);      // on success the card demotes to parked (✕ gone)
+    // optimistic: grey THIS card + swap the ✕ to 'closing…' at once (a rebuild
+    // from the sessions poll may lag a tick), and beacon the `close` lifecycle
+    // (web-hint op=close). reconcileCloses swaps it to the parked chip when the
+    // snapshot shows the sid go not-live; a failed POST reverts.
+    S.closing.add(sid);
+    S.closePend[sid] = optPending(sid, "close");
+    btn.textContent = "closing…";
+    const a = btn.closest(".scard");
+    if (a) a.classList.add("closing");
     postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
         S.closing.delete(sid);
+        if (S.closePend[sid]) {
+          S.closePend[sid].settle("dropped", { reason: "failed" });
+          delete S.closePend[sid];
+        }
         btn.disabled = false;
+        btn.textContent = "✕";
+        if (a) a.classList.remove("closing");
         toast("ask", "close failed", (err && err.error) || "");
       });
   };
@@ -932,6 +971,7 @@ function showSession(sid, tab) {
               jobs: null, jobFocus: null, jobPoll: null,
               memory: null, noteTrail: null, noteFocus: null,
               loadingOlder: false, queue: [], pending: [],
+              askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
               filter: { kind: "all" } };          // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
@@ -1040,7 +1080,16 @@ function connectSession(sid) {
   es.addEventListener("ask", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
-    if (S.ses.meta) S.ses.meta.ask = d.ask || null;
+    const newAsk = d.ask || null;
+    // the REAL confirmation of an optimistic answer: the stash we submitted
+    // against is gone (cleared, or replaced by a different ask) — swap the
+    // greyed card away and beacon the reconcile latency
+    const pend = S.ses.askPend;
+    if (pend && pend.live && (!newAsk || newAsk.tool_use_id !== pend.id)) {
+      pend.settle("reconciled");
+      S.ses.askPend = null;
+    }
+    if (S.ses.meta) S.ses.meta.ask = newAsk;
     renderAsk();
   });
   es.addEventListener("ask-draft", (e) => {
@@ -1066,7 +1115,14 @@ function connectSession(sid) {
   es.addEventListener("plan", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
-    if (S.ses.meta) S.ses.meta.plan = d.plan || null;
+    const newPlan = d.plan || null;
+    // real confirmation of an optimistic plan decision — the stash dropped
+    const pend = S.ses.planPend;
+    if (pend && pend.live && (!newPlan || newPlan.tool_use_id !== pend.id)) {
+      pend.settle("reconciled");
+      S.ses.planPend = null;
+    }
+    if (S.ses.meta) S.ses.meta.plan = newPlan;
     renderPlan();
   });
   es.addEventListener("tasks", (e) => {
@@ -1608,13 +1664,60 @@ function drainQueue(items) {
 
 const STALE_HINT_MS = 20000;
 
+// Low-level optimistic-action audit beacon: ONE lifecycle transition of a
+// client action whose REAL confirmation arrives async over SSE (op = composer
+// bubble | close | answer | plan — docs/dashboard.md, *Optimistic UI & the
+// web-hint audit*). A stuck greyed state is invisible server-side without this.
+// Best-effort, never surfaces to the user.
+function optAudit(sid, op, phase, t0, extra) {
+  if (!sid) return;
+  const body = Object.assign(
+    { op, phase, wait_ms: Math.round(performance.now() - t0) }, extra || {});
+  postJSON("/api/session/" + encodeURIComponent(sid) + "/hint-audit", body)
+    .catch(() => {});   // a telemetry beacon must never surface to the user
+}
+
+// The composer bubble's beacon — op="composer", carries the message length.
 function hintAudit(pend, phase, extra) {
   if (!pend || !pend.sid) return;
-  const body = Object.assign(
-    { phase, chars: (pend.text || "").length,
-      wait_ms: Math.round(performance.now() - pend.t0) }, extra || {});
-  postJSON("/api/session/" + encodeURIComponent(pend.sid) + "/hint-audit", body)
-    .catch(() => {});   // a telemetry beacon must never surface to the user
+  optAudit(pend.sid, "composer", phase, pend.t0,
+           Object.assign({ chars: (pend.text || "").length }, extra || {}));
+}
+
+// A tracked optimistic CARD action (close | answer | plan): beacons `shown` +
+// arms a stale watchdog; the caller holds the handle and calls .settle(phase,
+// extra) on the SSE reconcile (`reconciled`) or on failure (`dropped`). `id`
+// is the tool_use_id / sid the confirmation is matched against; `note` is the
+// greyed card's caption. Sibling of addPending (the composer bubble's own
+// tracker), minus the DOM node — the card flows grey an existing element.
+function optPending(sid, op, id, note) {
+  const p = { sid, op, id: id || "", note: note || "",
+              t0: performance.now(), timer: null, live: true };
+  optAudit(sid, op, "shown", p.t0);
+  p.timer = setTimeout(() => {
+    p.timer = null;
+    if (p.live) optAudit(sid, op, "stale", p.t0);   // stuck greyed — the bug signal
+  }, STALE_HINT_MS);
+  p.settle = (phase, extra) => {
+    if (!p.live) return;
+    p.live = false;
+    if (p.timer) { clearTimeout(p.timer); p.timer = null; }
+    optAudit(sid, op, phase, p.t0, extra);
+  };
+  return p;
+}
+
+// A greyed "…" stand-in shown in place of the interactive ask/plan card while
+// an optimistic decision is in flight — the card analog of the composer's
+// greyed prompt bubble. Cleared when the SSE reconcile drops the stash (or on
+// failure, which re-renders the live card). `cls` = askcard | plancard.
+function pendingCard(cls, title, note) {
+  const card = el("div", cls + " pending");
+  const head = el("div", "askhead");
+  head.append(el("span", cls === "plancard" ? "plantitle" : "asktitle", title));
+  card.append(head);
+  card.append(el("div", "plandim", note));
+  return card;
 }
 
 // Beacon a control-plane failure the PAGE saw (a "send failed" / "resume
@@ -1798,6 +1901,14 @@ function renderAsk() {
   const ask = ses.meta && ses.meta.ask;
   wrap.hidden = !ask;
   if (!ask) return;
+  // an optimistic answer is in flight — show the card greyed until the SSE
+  // `ask` reconcile drops the stash (or a failure clears askPend and rebuilds
+  // the interactive card). Reasserted on every render so a stray draft/rebuild
+  // can't resurrect the live controls mid-submit.
+  if (ses.askPend && ses.askPend.live) {
+    wrap.append(pendingCard("askcard", "submitting answer…", ses.askPend.note));
+    return;
+  }
   const qs = ask.questions || [];
   const preview = askHasPreview(ask);
   // per-ask draft state, keyed by tool_use_id so a NEW ask resets it —
@@ -1970,6 +2081,7 @@ function applyAskDraft(draft) {
   const ses = S.ses;
   if (!ses) return;
   if (ses.meta) ses.meta.ask_draft = draft || null;   // for a later rebuild
+  if (ses.askPend && ses.askPend.live) return;   // don't un-grey a submitting card
   const ask = ses.meta && ses.meta.ask;
   if (!draft || !ask || draft.tool_use_id !== ask.tool_use_id) return;
   if (draft.origin && draft.origin === CLIENT_ID) return;   // our own write
@@ -2014,8 +2126,15 @@ function submitAsk(ask, answers, chat) {
   if (chat) { body.chat = true; if (message) body.message = message; }
   else body.answers = (answers || []).map((a, i) =>
     ({ selected: a.selected, other: effOther(a, i) }));
-  if (ses.askEl)
-    ses.askEl.querySelectorAll("button,input").forEach(x => x.disabled = true);
+  // optimistic: grey the card immediately (renderAsk shows the pending stand-in
+  // while askPend is live) and keep it until the SSE `ask` reconcile drops the
+  // stash — NOT the old hide-on-POST-return, which claimed done before the
+  // answer had actually landed. The lifecycle is beaconed as `web-hint` op=answer.
+  const note = chat
+    ? (message ? "delivering your answer via chat…" : "dismissing the questions…")
+    : "answer submitted — waiting for the session…";
+  ses.askPend = optPending(S.cur, "answer", ask.tool_use_id || "", note);
+  renderAsk();
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/answer", body)
     .then(() => {
       if (chat) {
@@ -2029,10 +2148,8 @@ function submitAsk(ask, answers, chat) {
       } else {
         toast("done", "answered", "answers submitted to the session");
       }
-      // optimistic hide — the SSE `ask` event (stash cleared by the answer's
-      // PostToolUse) is the real confirmation
-      if (ses.meta) ses.meta.ask = null;
-      renderAsk();
+      // stay greyed — the SSE `ask` event (stash cleared by the answer's
+      // PostToolUse) is the real confirmation that swaps the card away
     })
     .catch(e => {
       // a cursor/type bail means the driver couldn't steer the TUI dialog (a
@@ -2042,8 +2159,12 @@ function submitAsk(ask, answers, chat) {
       const hint = (step === "cursor" || step === "type")
         ? "couldn't drive the dialog — pick an option, or answer in the terminal"
         : (e && e.error) || "";
+      if (ses.askPend) {
+        ses.askPend.settle("dropped", { reason: step || "failed" });
+        ses.askPend = null;
+      }
       toast("ask", "answer failed", hint);
-      renderAsk();                           // re-enable for a retry
+      renderAsk();                           // rebuild the interactive card to retry
     });
 }
 
@@ -2072,6 +2193,12 @@ function renderPlan() {
   const plan = ses.meta && ses.meta.plan;
   wrap.hidden = !plan;
   if (!plan) return;
+  // an optimistic decision is in flight — grey the card until the SSE `plan`
+  // reconcile drops the stash (or a failure clears planPend and rebuilds it)
+  if (ses.planPend && ses.planPend.live) {
+    wrap.append(pendingCard("plancard", "sending decision…", ses.planPend.note));
+    return;
+  }
   const card = el("div", "plancard");
   const head = el("div", "askhead");
   head.append(el("span", "plantitle", "claude has a plan — proceed?"));
@@ -2133,17 +2260,23 @@ function submitPlan(plan, body, okTitle, okDetail) {
   const ses = S.ses;
   if (!ses || !S.cur) return;
   body.tool_use_id = plan.tool_use_id || "";
-  if (ses.planEl)
-    ses.planEl.querySelectorAll("button,input").forEach(x => x.disabled = true);
+  // optimistic: grey the card immediately and keep it until the SSE `plan`
+  // reconcile drops the stash — not the old hide-on-POST-return. Beaconed as
+  // `web-hint` op=plan.
+  ses.planPend = optPending(S.cur, "plan", plan.tool_use_id || "", okDetail);
+  renderPlan();
   postJSON("/api/session/" + encodeURIComponent(S.cur) + "/plan-decision", body)
     .then(() => {
       toast("done", okTitle, okDetail);
-      if (ses.meta) ses.meta.plan = null;   // optimistic — SSE confirms
-      renderPlan();
+      // stay greyed — the SSE `plan` event is the real confirmation
     })
     .catch(e => {
+      if (ses.planPend) {
+        ses.planPend.settle("dropped", { reason: (e && e.step) || "failed" });
+        ses.planPend = null;
+      }
       toast("ask", "plan decision failed", (e && e.error) || "");
-      renderPlan();                          // re-enable for a retry
+      renderPlan();                          // rebuild the interactive card to retry
     });
 }
 
@@ -4182,7 +4315,13 @@ function renderSessionChrome(tab) {
       clearTimeout(armed);
       disarm();
       cls.disabled = true;
+      cls.textContent = "closing…";
       const sid = S.cur;
+      // optimistic close: beacon the `close` lifecycle (web-hint op=close) and
+      // navigate back to the list on the POST ack — the list card shows greyed
+      // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
+      S.closing.add(sid);
+      S.closePend[sid] = optPending(sid, "close");
       postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
         .then(() => {
           toast("done", "session closed", "terminal tab closed");
@@ -4191,7 +4330,13 @@ function renderSessionChrome(tab) {
           if (S.cur === sid) location.hash = "#/";
         })
         .catch(e => {
+          S.closing.delete(sid);
+          if (S.closePend[sid]) {
+            S.closePend[sid].settle("dropped", { reason: "failed" });
+            delete S.closePend[sid];
+          }
           cls.disabled = false;
+          cls.textContent = "✕ close";
           toast("ask", "close failed", (e && e.error) || "");
         });
     };

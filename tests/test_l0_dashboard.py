@@ -2618,6 +2618,72 @@ def test_client_fail_beacon_defaults_bad_kind_and_guards(dash, monkeypatch):
     assert e.value.code == 403
 
 
+def _hint_rows(sid):
+    """The `web-hint` state_files rows (the optimistic-UI lifecycle beacons).
+    Same spool-drain dance as _clientfail_rows — a request-thread audit write
+    spools; force the drain before reading."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [json.loads(c) for (c,) in con.execute(
+            "SELECT content FROM state_files WHERE session_id=? "
+            "AND action='web-hint' ORDER BY ts", (sid,))]
+    finally:
+        con.close()
+
+
+def test_hint_audit_records_op_lifecycle(dash, monkeypatch):
+    """The optimistic-UI beacon (docs/dashboard.md, *Optimistic UI & the
+    web-hint audit*): every op (composer | close | answer | plan) beacons its
+    shown → reconciled/dropped/stale lifecycle as `web-hint` rows so a stuck
+    greyed state is debuggable. Audit-only: 200, no terminal writes, and the op
+    + phase (+ optional wait_ms/reason/chars) round-trip into content."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    A.session_start({"session_id": "wh1", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("wh1"), O.label("hi", (1, 2, 3)))   # materialize state DB
+    # composer bubble (op omitted → defaults to composer), then its reconcile
+    code, body = _post(dash + "/api/session/wh1/hint-audit",
+                       {"phase": "shown", "chars": 12})
+    assert code == 200 and json.loads(body)["ok"] is True
+    _post(dash + "/api/session/wh1/hint-audit",
+          {"op": "composer", "phase": "reconciled", "chars": 12, "wait_ms": 340})
+    # a card op with a dropped reason, and a close op
+    _post(dash + "/api/session/wh1/hint-audit",
+          {"op": "answer", "phase": "dropped", "reason": "failed"})
+    _post(dash + "/api/session/wh1/hint-audit", {"op": "close", "phase": "stale"})
+    # a beacon never types into the terminal
+    assert fe.pasted == [] and fe.sent == []
+    rows = _hint_rows("wh1")
+    assert rows[0] == {"op": "composer", "phase": "shown", "chars": 12}
+    assert rows[1]["op"] == "composer" and rows[1]["phase"] == "reconciled"
+    assert rows[1]["wait_ms"] == 340
+    assert rows[2] == {"op": "answer", "phase": "dropped", "reason": "failed"}
+    assert rows[3] == {"op": "close", "phase": "stale"}
+
+
+def test_hint_audit_guards_bad_op_and_phase(dash, monkeypatch):
+    """A bad phase or op is a 400 (nothing recorded); the beacon is behind the
+    control-plane POST guard like every write (missing header → 403)."""
+    A.session_start({"session_id": "wh2", "cwd": "/w", "transcript_path": ""})
+    O.emit(P.mirror_log("wh2"), O.label("hi", (1, 2, 3)))
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/wh2/hint-audit", {"phase": "bogus"})
+    assert e.value.code == 400
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/wh2/hint-audit",
+              {"op": "nonsense", "phase": "shown"})
+    assert e.value.code == 400
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/wh2/hint-audit",
+              {"phase": "shown"}, header=None)
+    assert e.value.code == 403
+    assert _hint_rows("wh2") == []
+
+
 def test_post_command_sends_slash_text(dash, monkeypatch):
     # the quick-command row types the TUI's OWN slash commands — exact text,
     # bracketed paste like the composer (never send_text). Blank screens: no

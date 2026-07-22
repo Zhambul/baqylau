@@ -747,7 +747,36 @@ queue, and is lost (perturbing the dialog too). `post_message` now checks
 pointing the user at the ask/plan card above; the composer keeps its text. Once
 the dialog resolves, the send goes through normally.
 
-## Optimistic composer bubble
+## Optimistic UI & the web-hint audit
+
+The dashboard's write actions are **optimistic**: the page reflects the action
+the instant you take it (a greyed stand-in / greyed card) and reconciles to the
+REAL confirmation when it arrives async over SSE — rather than blocking on the
+POST, or (the old way) claiming done the moment the POST returns, before the
+action had actually landed. Four flows share the pattern, and one audit
+mechanism (`web-hint` rows, `op` = composer | close | answer | plan): the
+composer bubble (below), plus session **close**, ask **answer**, and **plan**
+decisions.
+
+- **Close** (`cardClose` / the header ✕): the list-card greys to `closing…`
+  (`.scard.closing`, `S.closing`) the instant the confirm fires; `reconcileCloses`
+  (run on every `sessions`/`-delta` snapshot, before the re-render) swaps it to
+  the parked chip when the sid goes not-live — the true "the tab actually parked"
+  signal. A failed POST reverts.
+- **Answer** (`submitAsk`) / **Plan** (`submitPlan`): the card is replaced by a
+  greyed `pendingCard` (`.askcard.pending` / `.plancard.pending`) and stays until
+  the SSE `ask`/`plan` event drops the stash (the answer's/approval's PostToolUse)
+  — reconciled in those handlers by `tool_use_id`. `renderAsk`/`renderPlan`
+  reassert the greyed state on every render (a stray draft push can't un-grey a
+  submitting card); a failed POST clears the pend and rebuilds the live card.
+
+Each flow holds an `optPending(sid, op, id, note)` handle (`ses.askPend` /
+`ses.planPend` / `S.closePend[sid]`) that beacons `shown` + arms a stale
+watchdog, and `.settle(phase)` on reconcile/failure — the sibling of the
+composer's `addPending`, minus the DOM node. The audit is the same `web-hint`
+endpoint (`op` distinguishes them); see below.
+
+### Composer bubble
 
 A composer send only reaches the transcript once Claude Code writes the user
 prompt record and the server pushes the `msgs` SSE event — a visible lag after
