@@ -544,6 +544,10 @@ function leaveSession() {
     clearJobPoll();
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
+    // disarm optimistic-bubble stale watchdogs: navigating away is a
+    // deliberate abandon, not a stuck bubble, so it mustn't beacon `stale`
+    if (S.ses.pending)
+      S.ses.pending.forEach(p => { if (p.timer) clearTimeout(p.timer); });
   }
   // a single-Esc arms a 450ms interrupt hold-timer that reads S.cur/S.ses at
   // FIRE time; leaving within that window (e.g. ⌃⇧←/→ tab-cycle) would land the
@@ -1573,6 +1577,25 @@ function drainQueue(items) {
 // send() removes it directly on failure / when the send was queued (the ⧗ chip
 // owns that case). DOM-only + in-memory (ses.pending) — a reload replays from
 // the real transcript, so nothing is persisted and stale stand-ins can't leak.
+//
+// The stand-in's whole lifecycle is client-only, so the SERVER can't see it —
+// a stuck grey bubble (shown, never reconciled) leaves no trace by default. So
+// each transition beacons a `web-hint` audit row (hintAudit → POST /hint-audit,
+// server-side A.state_file): `shown` on create, `reconciled` on the swap
+// (carrying wait_ms — the swap latency), `dropped` on queued/send-failed, and
+// `stale` from a watchdog when a stand-in outlives STALE_HINT_MS unreconciled
+// (THE bug signal). Audit-only, best-effort, never blocks or toasts.
+
+const STALE_HINT_MS = 20000;
+
+function hintAudit(pend, phase, extra) {
+  if (!pend || !pend.sid) return;
+  const body = Object.assign(
+    { phase, chars: (pend.text || "").length,
+      wait_ms: Math.round(performance.now() - pend.t0) }, extra || {});
+  postJSON("/api/session/" + encodeURIComponent(pend.sid) + "/hint-audit", body)
+    .catch(() => {});   // a telemetry beacon must never surface to the user
+}
 
 // Plain-text bubble mirroring opshtml.msg_html's .msg.prompt shape, minus the
 // rewind ↶ (a not-yet-delivered prompt isn't re-runnable). textContent, never
@@ -1591,12 +1614,34 @@ function pendingBubble(text) {
   return d;
 }
 
-function removePending(pend) {
-  const ses = S.ses;
-  if (!ses || !ses.pending) return;
-  const i = ses.pending.indexOf(pend);
-  if (i >= 0) ses.pending.splice(i, 1);
-  if (pend && pend.node) pend.node.remove();
+// Create + track the optimistic stand-in for a send; returns its pend handle.
+function addPending(ses, text) {
+  const node = pendingBubble(text);
+  const w = ses.stream.querySelector(".waiting");
+  if (w) w.remove();
+  ses.stream.insertBefore(node, ses.stream.firstChild);
+  const pend = { text, node, ses, sid: S.cur, t0: performance.now(), timer: null };
+  ses.pending.push(pend);
+  hintAudit(pend, "shown");
+  // watchdog: a stand-in still unreconciled after STALE_HINT_MS is a stuck
+  // grey bubble — the failure this audit exists to catch. Fire the beacon once
+  // and KEEP the node (the user is still staring at grey; the row is the
+  // breadcrumb). Cleared by settlePending / leaveSession on a clean outcome.
+  pend.timer = setTimeout(() => {
+    pend.timer = null;
+    if (pend.ses.pending.indexOf(pend) >= 0) hintAudit(pend, "stale");
+  }, STALE_HINT_MS);
+  return pend;
+}
+
+// Tear a stand-in down (matched | queued | send-failed) and audit the outcome.
+function settlePending(pend, phase, extra) {
+  if (!pend) return;
+  if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
+  const i = pend.ses.pending.indexOf(pend);
+  if (i >= 0) pend.ses.pending.splice(i, 1);
+  if (pend.node) pend.node.remove();
+  hintAudit(pend, phase, extra);
 }
 
 function drainPending(items) {
@@ -1609,10 +1654,7 @@ function drainPending(items) {
     // real text ends with the typed suffix — server._with_attachments order
     const i = ses.pending.findIndex(p =>
       real === p.text || real.endsWith("\n" + p.text));
-    if (i >= 0) {
-      const [p] = ses.pending.splice(i, 1);
-      if (p.node) p.node.remove();
-    }
+    if (i >= 0) settlePending(ses.pending[i], "reconciled");
   }
 }
 
@@ -2609,22 +2651,14 @@ function buildComposer() {
     // before its real transcript prompt arrives over SSE — drainPending swaps
     // in the real bubble when it lands (see the optimistic-bubbles section).
     // Only for typed text (empty send = attachments only: nothing to preview).
-    let pend = null;
-    if (text) {
-      const node = pendingBubble(text);
-      const w = ses.stream.querySelector(".waiting");
-      if (w) w.remove();
-      ses.stream.insertBefore(node, ses.stream.firstChild);
-      pend = { text, node };
-      ses.pending.push(pend);
-    }
+    const pend = text ? addPending(ses, text) : null;
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg)
       .then(d => {
         ta.value = ""; autoGrow(ta); tray.clear();
         if (d && d.queued) {
           // queued mid-turn — the ⧗ chip owns this until delivery; drop the
           // stand-in so the two representations don't double up
-          if (pend) removePending(pend);
+          if (pend) settlePending(pend, "dropped", { reason: "queued" });
           ses.queue.push({ text });
           renderQueue();
           saveQueue(ses);
@@ -2636,7 +2670,7 @@ function buildComposer() {
       .catch(e => {
         // send-start cleared the stash optimistically; the box keeps its text,
         // so re-persist it — a reload mustn't lose an unsent message
-        if (pend) removePending(pend);   // the send didn't land — no stand-in
+        if (pend) settlePending(pend, "dropped", { reason: "send-failed" });
         toast("ask", "send failed", (e && e.error) || "");
         saveComposerDraft(ses, sid);
       })

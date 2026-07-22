@@ -1827,6 +1827,9 @@ class Handler(BaseHTTPRequestHandler):
                 and api[2] == "composer-queue":
             return self.post_composer_queue(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "hint-audit":
+            return self.post_hint_audit(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "plan-options":
             return self.post_plan_options(api[1])
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
@@ -2618,6 +2621,43 @@ class Handler(BaseHTTPRequestHandler):
             ST.kv_del_at(sdb, "composer-queue")
             A.state_file(log, sdb, "composer-queue",
                          {"action": "remove", "origin": origin})
+        return self._json({"ok": True})
+
+    def post_hint_audit(self, sid):
+        """Record one lifecycle transition of an OPTIMISTIC composer bubble (the
+        greyed stand-in the page shows the instant it sends, before the real
+        transcript prompt lands — docs/dashboard.md, *Optimistic composer
+        bubble*) as a `web-hint` state_files row, purely for after-the-fact
+        debugging. The stand-in is client-only DOM, so its lifecycle is
+        INVISIBLE to the server otherwise; this beacon is the ONLY audit trail
+        for it. Types NOTHING and writes NO session state — audit-only,
+        best-effort, distinct from post_message (which sends).
+
+        Body: `phase` — shown | reconciled | dropped | stale (the stuck-bubble
+        watchdog signal); `chars` (the message length — the raw prompt text is
+        deliberately NOT sent, a length + timing is enough to correlate with
+        the session's `web-send` row without storing content); `wait_ms` (ms
+        since the stand-in was shown — the swap latency on `reconciled`);
+        `reason` (for `dropped`: queued | send-failed). A bad phase is a 400;
+        otherwise always 200 — a telemetry beacon must not surface to the page."""
+        body = self._post_guard()
+        if body is None:
+            return
+        phase = str(body.get("phase") or "")
+        if phase not in ("shown", "reconciled", "dropped", "stale"):
+            return self._json({"error": "bad phase"}, 400)
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        content = {"phase": phase}
+        for k in ("chars", "wait_ms"):
+            v = body.get(k)
+            if isinstance(v, (int, float)):
+                content[k] = int(v)
+        reason = body.get("reason")
+        if isinstance(reason, str) and reason:
+            content["reason"] = reason
+        A.state_file(log, sdb, "web-hint", content)
         return self._json({"ok": True})
 
     def post_answer(self, sid):

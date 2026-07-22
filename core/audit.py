@@ -826,6 +826,18 @@ ANOMALY_SECTIONS = [
      "AND action IN ('web-interrupt', 'web-rewind', 'web-rewind-to') "
      "AND json_extract(content, '$.tab') = 'awaiting-command' "
      "AND COALESCE(json_extract(content, '$.step'), '') != 'dialog'", 1),
+    # A `web-hint` row with phase='stale' is an OPTIMISTIC composer bubble (the
+    # greyed stand-in shown on send — docs/dashboard.md, *Optimistic composer
+    # bubble*) the page never reconciled to the real transcript prompt within
+    # the client watchdog window: a stuck grey bubble. The swap is client-side
+    # text matching, so a `stale` means either the match failed (attachment/
+    # whitespace mangled the text so real!=shown and !endsWith) or the prompt
+    # never arrived (the `web-send` paste itself failed — check its row). Pair
+    # each stale row with the session's `web-send` state_files rows and the
+    # `msgs` the transcript actually recorded around that ts.
+    ("optimistic composer bubble never reconciled (stuck grey stand-in)",
+     "SELECT ts, content FROM state_files WHERE session_id=? "
+     "AND action='web-hint' AND json_extract(content, '$.phase')='stale'", 1),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions
