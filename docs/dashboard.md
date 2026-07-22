@@ -1753,11 +1753,29 @@ become audit rows.
   `migrate`, `rewind`, `rewind-to`, `answer`, `plan`, `new`, `resume-send`. The
   telemetry endpoints themselves (`/clientlog`, `/hint-audit`, `/client-fail`)
   are deliberately untagged — tagging them would recurse.
-- **Also captured**: SSE up/down TRANSITIONS (`sse.open` / `sse.drop` per stream
-  — the direct read on connection health), uncaught JS errors
-  (`js.error` / `js.reject` — a handler throwing used to be a silent product
-  bug), and one `boot` record per load (origin — `127.0.0.1` vs the tunnel — +
-  device + viewport, anchoring a client's event stream).
+- **Also captured** (event-driven, never periodic — the ring + server cap bound
+  the volume):
+  - **SSE health**: `sse.open` / `sse.drop` per stream (global/session/agent) —
+    the direct read on connection health.
+  - **Uncaught JS**: `js.error` / `js.reject` — a handler throwing used to be a
+    silent product bug (this is what caught the real can't-close cause, an
+    uninitialized `S.closePend` throwing before `closeSession` ran).
+  - **Page + build lifecycle**: one `boot` per load (origin — `127.0.0.1` vs the
+    tunnel — + device + viewport + the LOADED build id from the `?v=` on this
+    `app.js`); `hello` (the server build the page first connected to); `stale`
+    (the server redeployed under an open page — `boot.build` ≠ current = the
+    browser is on stale cached JS, the "product bug that was really old code").
+  - **Session-view load / the launch tag-race**: `meta.stuck` (the composer + ✕
+    close stayed dead because the pane never tagged), `meta.resolved` (the
+    self-heal worked after N retries), `meta.fail` (the meta GET rejected);
+    `backlog.fail` (the initial stream GET failed → "waiting for activity…").
+  - **Launch story** (the client half of `web-launch`/`web-launch-wake`):
+    `launch.arm` → `launch.hit` (appeared, with latency) / `launch.timeout`
+    (never showed up in time).
+  The audit itself is SELF-GUARDING — `clog`/`flushClog` swallow their own
+  exceptions and a re-entrancy flag stops a throw-in-a-flush from looping back
+  through the `js.error` handler (the one channel that must never raise the very
+  error it exists to record).
 - **Server** (`post_client_log`): behind `_post_guard`, writes one `web-client`
   `state_files` row per event, scoped to the event's own `sid` (a blank sid is a
   session-less row — a boot, a launch). Bounded by construction: at most

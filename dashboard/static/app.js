@@ -201,6 +201,8 @@ const CLOG_MAX = 100;         // cap so a delivery outage can't grow it unbounde
 const CLOG_FLUSH_MS = 500;    // debounce — coalesce a gesture's begin+ok into one POST
 const CLOG_RETRY_MS = 4000;   // re-flush backoff after a failed delivery
 let clogTimer = null;
+let clogBusy = false;         // re-entrancy guard — clog() is a no-op while a flush
+                              // is mid-build, so the audit can't recurse into itself
 const SSE_UP = {};            // stream label -> last up? — clog SSE only on TRANSITIONS
                               // (EventSource.onerror re-fires each reconnect attempt)
 
@@ -591,8 +593,20 @@ function connectGlobal() {
   // handlers against a new server and the mismatch read as a product bug.
   es.addEventListener("hello", (e) => {
     const boot = (JSON.parse(e.data) || {}).boot;
-    if (!S.boot) { S.boot = boot; return; }
+    if (!S.boot) {
+      S.boot = boot;
+      // anchor this client to the server build it FIRST connected to — so a later
+      // "the page behaved like old code" report is checkable (compare against the
+      // stale row below and the boot record's loaded-build)
+      clog("", "hello", { boot: boot || "" });
+      return;
+    }
     if (boot !== S.boot) {
+      // the server redeployed under an OPEN page — its JS is now stale. This
+      // caused "product bugs" that were really stale-code mismatches; the row
+      // makes "was the user on old code?" answerable from the DB (the reload
+      // toast is easily missed / dismissed).
+      clog("", "stale", { was: S.boot || "", now: boot || "" });
       S.boot = boot;
       toast("ask", "dashboard updated",
             "refresh the page to load the latest UI",
@@ -627,9 +641,15 @@ window.addEventListener("unhandledrejection", (e) => {
 });
 // One boot record per page load — anchors this client's event stream to a device
 // + ORIGIN (127.0.0.1 vs the tunnel — the difference that mattered for the close
-// bug) + build. Best-effort; sits in the buffer until the first flush.
+// bug) + the LOADED BUILD (the ?v=<BOOT_ID> the index stamped on THIS app.js;
+// document.currentScript is that <script> during top-level eval). Compared with
+// the server's boot id in the `hello` row, a mismatch = the browser is running
+// stale cached JS — the "product bug that was really old code" case, now provable
+// from the DB. Best-effort; sits in the buffer until the first flush.
 clog("", "boot", {
   origin: location.origin, hash: location.hash, ipad: IS_IPAD,
+  build: ((document.currentScript && document.currentScript.src || "")
+          .match(/[?&]v=([^&]+)/) || [, ""])[1],
   plat: (navigator.platform || "").slice(0, 24),
   online: navigator.onLine !== false,
   w: screen.width, h: screen.height, dpr: window.devicePixelRatio || 1 });
@@ -1143,9 +1163,18 @@ function showSession(sid, tab) {
         if (d.live && !d.kitty_window_id && resolveTries < LAUNCH_RESOLVE_TRIES) {
           resolveTries++;
           setTimeout(loadMeta, LAUNCH_RESOLVE_MS);
+        } else if (d.live && !d.kitty_window_id) {
+          // the tag-race NEVER resolved — the composer + ✕ close stay dead. The
+          // "no close button, can't type, only a reload fixes it" report, now a
+          // row instead of a mystery (vs a truly headless session, which never
+          // has a window and is EXPECTED to land here).
+          clog(sid, "meta.stuck", { tries: resolveTries });
+        } else if (d.live && d.kitty_window_id && resolveTries > 0) {
+          clog(sid, "meta.resolved", { tries: resolveTries });   // self-heal worked
         }
       })
       .catch(() => {
+        clog(sid, "meta.fail", {});   // the session-view meta GET rejected
         if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, 1500);
       });
     loadMeta();
@@ -1165,7 +1194,7 @@ function showSession(sid, tab) {
         if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
         if (d.items && d.items.length) appendItems(d.items);
       })
-      .catch(() => {})
+      .catch(() => { clog(sid, "backlog.fail", {}); })   // stream may read empty
       .finally(() => { if (S.cur === sid) connectSession(sid); });
   }
   closeAgentStream();                       // leaving any agent drill-down view
@@ -1920,10 +1949,16 @@ function connInfo() {
 // Append one frontend-audit event and schedule a batched flush. `ev` is a dotted
 // name (close.begin | close.ok | close.fail | close.reconciled …); `data` is a
 // small flat bag of scalars. Ring-capped so a delivery outage can't grow it.
+// SELF-GUARDING: the audit must never throw into the page — an exception here
+// would fire window.onerror → clog → … a feedback loop, and this very channel is
+// what CATCHES uncaught errors, so it must be the one thing that can't raise one.
 function clog(sid, ev, data) {
-  CLOG.push(Object.assign({ t: Date.now(), sid: sid || "", ev }, data || {}));
-  while (CLOG.length > CLOG_MAX) CLOG.shift();
-  if (!clogTimer) clogTimer = setTimeout(flushClog, CLOG_FLUSH_MS);
+  if (clogBusy) return;                 // re-entrancy: don't log from inside a flush
+  try {
+    CLOG.push(Object.assign({ t: Date.now(), sid: sid || "", ev }, data || {}));
+    while (CLOG.length > CLOG_MAX) CLOG.shift();
+    if (!clogTimer) clogTimer = setTimeout(flushClog, CLOG_FLUSH_MS);
+  } catch (e) { /* swallow — a broken breadcrumb must not break the page */ }
 }
 
 // Deliver the buffered events as ONE POST over the plain-fetch channel proven to
@@ -1931,24 +1966,29 @@ function clog(sid, ev, data) {
 // the close). On a page-hide we do fall back to sendBeacon (a last-ditch flush as
 // the tab goes away is exactly beacon's job, and losing the tail then is fine). A
 // failed delivery re-queues (front, capped) and retries on a backoff so a blip
-// doesn't lose the breadcrumb. Best-effort; never surfaces to the user.
+// doesn't lose the breadcrumb. Best-effort; wrapped so a throw in here (e.g. a
+// timer callback) can never reach window.onerror and loop back through clog.
 function flushClog(useBeacon) {
   if (clogTimer) { clearTimeout(clogTimer); clogTimer = null; }
   if (!CLOG.length) return;
-  const batch = CLOG.splice(0, CLOG.length);
-  const payload = { client: CLIENT_ID, conn: connInfo(), events: batch };
-  if (useBeacon && navigator.sendBeacon) {
-    try {
-      navigator.sendBeacon("/api/clientlog",
-        new Blob([JSON.stringify(payload)], { type: "application/json" }));
-      return;
-    } catch (e) { /* fall through to the fetch path */ }
-  }
-  postJSON("/api/clientlog", payload).catch(() => {
-    for (let i = batch.length - 1; i >= 0 && CLOG.length < CLOG_MAX; i--)
-      CLOG.unshift(batch[i]);   // re-queue at the front for the retry
-    if (!clogTimer) clogTimer = setTimeout(flushClog, CLOG_RETRY_MS);
-  });
+  clogBusy = true;
+  try {
+    const batch = CLOG.splice(0, CLOG.length);
+    const payload = { client: CLIENT_ID, conn: connInfo(), events: batch };
+    if (useBeacon && navigator.sendBeacon) {
+      try {
+        navigator.sendBeacon("/api/clientlog",
+          new Blob([JSON.stringify(payload)], { type: "application/json" }));
+        return;
+      } catch (e) { /* fall through to the fetch path */ }
+    }
+    postJSON("/api/clientlog", payload).catch(() => {
+      for (let i = batch.length - 1; i >= 0 && CLOG.length < CLOG_MAX; i--)
+        CLOG.unshift(batch[i]);   // re-queue at the front for the retry
+      if (!clogTimer) clogTimer = setTimeout(flushClog, CLOG_RETRY_MS);
+    });
+  } catch (e) { /* never throw out of the audit */ }
+  finally { clogBusy = false; }
 }
 
 // Log an SSE stream's up/down TRANSITION (open ↔ drop) — the direct read on the
@@ -3275,6 +3315,10 @@ function armJump(cwd, resumeSid, o) {
              known: new Set(S.sessions.map(r => r.sid)),
              liveAtArm: new Set(S.sessions.filter(r => r.live).map(r => r.sid)),
              until: Date.now() + JUMP_TIMEOUT_MS };
+  // the client half of the launch story (the server logs web-launch/-wake): when
+  // we START waiting for the launched tab to appear on the list — paired with the
+  // hit/timeout below it bounds "launched from web but never showed up".
+  clog(resumeSid || "", "launch.arm", { win: o.win || "", resume: !!resumeSid });
 }
 
 function checkJump() {
@@ -3296,6 +3340,8 @@ function checkJump() {
 
 function jumpHit(sid, title) {
   const quiet = !!(S.jump && S.jump.quiet);
+  clog(sid, "launch.hit",             // the launched session appeared — with latency
+       { ms: S.jump ? Date.now() - S.jump.armedAt : 0, quiet });
   S.jump = null;                       // clear FIRST — route() must never see
   //                                      this function's own hash change armed
   const to = "#/s/" + encodeURIComponent(sid);
@@ -3317,6 +3363,8 @@ function jumpHit(sid, title) {
 
 function jumpFail() {
   const onfail = S.jump && S.jump.onfail;
+  clog(S.jump && S.jump.resumeSid || "", "launch.timeout",   // never appeared in time
+       { ms: S.jump ? Date.now() - S.jump.armedAt : 0 });
   S.jump = null;
   if (onfail) onfail();          // a composer resume: revive its dead composer
   if (S.pendingUI) showPendingFail();

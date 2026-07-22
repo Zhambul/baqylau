@@ -2850,22 +2850,40 @@ def test_client_log_records_frontend_audit_batch(dash, monkeypatch):
             {"t": 1100, "sid": "cl1", "ev": "close.fail",
              "kind": "transport", "aborted": True, "ms": 12000},
             {"t": 1200, "sid": "cl1", "ev": "sse.drop", "s": "session"},
+            # the wider vocabulary the server records generically (any ev name +
+            # its scalars): a numeric-field js.error, a session-view stuck, a
+            # launch latency, and a session-less boot/stale build record
+            {"t": 1150, "sid": "cl1", "ev": "js.error",
+             "msg": "TypeError: x", "src": "static/app.js", "line": 878, "col": 28},
+            {"t": 1250, "sid": "cl1", "ev": "meta.stuck", "tries": 12},
+            {"t": 1350, "sid": "", "ev": "launch.hit", "ms": 2200, "quiet": False},
             {"t": 1300, "sid": "", "ev": "boot",
-             "origin": "https://baqylau.zhambyl.top"},
+             "origin": "https://baqylau.zhambyl.top", "build": "b1"},
+            {"t": 1400, "sid": "", "ev": "stale", "was": "b1", "now": "b2"},
         ],
     }
     code, resp = _post(dash + "/api/clientlog", body)
     assert code == 200 and json.loads(resp)["ok"] is True
     assert fe.pasted == [] and fe.sent == []       # telemetry never types
     rows = _client_rows("cl1")
-    assert [r["ev"] for r in rows] == ["close.begin", "close.fail", "sse.drop"]
+    assert [r["ev"] for r in rows] == [
+        "close.begin", "close.fail", "sse.drop", "js.error", "meta.stuck"]
     assert rows[0]["via"] == "header" and rows[0]["client"] == "abc123"
     assert rows[0]["t"] == 1000
     assert rows[0]["conn"] == {"online": True, "view": "session", "es": 2, "conn": 1}
     assert rows[1]["kind"] == "transport" and rows[1]["aborted"] is True
-    # the session-less boot record lands under sid=''
-    boot = [r for r in _client_rows("") if r["ev"] == "boot"]
-    assert boot and boot[-1]["origin"] == "https://baqylau.zhambyl.top"
+    js = next(r for r in rows if r["ev"] == "js.error")
+    assert js["line"] == 878 and js["col"] == 28 and js["src"] == "static/app.js"
+    assert next(r for r in rows if r["ev"] == "meta.stuck")["tries"] == 12
+    # session-less rows (boot with its loaded build, stale, launch) land under ''
+    less = {r["ev"]: r for r in _client_rows("")}
+    assert less["boot"]["origin"] == "https://baqylau.zhambyl.top"
+    assert less["boot"]["build"] == "b1"
+    assert less["stale"] == {"ev": "stale", "client": "abc123", "t": 1400,
+                             "was": "b1", "now": "b2",
+                             "conn": {"online": True, "view": "session",
+                                      "es": 2, "conn": 1}}
+    assert less["launch.hit"]["ms"] == 2200 and less["launch.hit"]["quiet"] is False
 
 
 def test_client_log_caps_guards_and_sanitizes(dash, monkeypatch):

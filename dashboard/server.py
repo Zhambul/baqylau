@@ -2995,9 +2995,15 @@ class Handler(BaseHTTPRequestHandler):
         Body: `client` (the page's opaque CLIENT_ID — correlates a device's rows
         across a batch), `conn` (a connection-health snapshot: `online`, `vis`,
         `view`, `es` = SSE streams held open, `conn` = global stream up), and
-        `events` — a list of `{t, sid, ev, …scalars}`. `ev` is a dotted name
-        (close.begin | close.ok | close.fail | send.* | sse.open | sse.drop |
-        js.error | boot | …). Each event becomes one row scoped to its own `sid`
+        `events` — a list of `{t, sid, ev, …scalars}`. `ev` is a dotted name:
+        `<gesture>.begin`/`.ok`/`.fail` for a tagged control POST (close | send |
+        command | interrupt | rename | migrate | rewind | rewind-to | answer |
+        plan | new | resume-send), `close.reconciled`; `sse.open`/`sse.drop` per
+        stream; `js.error`/`js.reject` (uncaught); `boot`/`hello`/`stale` (page +
+        build lifecycle — a `boot.build` ≠ `hello.boot` mismatch = stale cached
+        JS); `meta.stuck`/`meta.resolved`/`meta.fail` (session-view load + the
+        launch tag-race); `launch.arm`/`launch.hit`/`launch.timeout` (the launched
+        session appearing); `backlog.fail`. Each event becomes one row scoped to its own `sid`
         (so it lands in that session's timeline); a blank/invalid sid is a
         session-less row (a launch, a boot record). Only scalar fields survive,
         strings capped, at most CLIENTLOG_MAX events — a page can't stuff bulk
