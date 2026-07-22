@@ -604,10 +604,13 @@ def msg_html(kind, text, sender=""):
     question (the AskUserQuestion Claude asked — its text + offered options) |
     answer (the answer the user submitted — the "my answer didn't appear" fix;
     both are `you`/`claude` bubbles WITHOUT the rewind affordance, since neither
-    is a re-runnable prompt). The body rides md_html (readable markdown), which
-    is escape-first like everything else here — the neutralize() analog."""
+    is a re-runnable prompt) | recap (Claude Code's away-summary — a
+    system-generated bubble, not a re-runnable prompt either). The body rides
+    md_html (readable markdown), which is escape-first like everything else
+    here — the neutralize() analog."""
     who = {"prompt": "you", "message": "claude",
-           "question": "claude ▸ asks you", "answer": "you ▸ answered"} \
+           "question": "claude ▸ asks you", "answer": "you ▸ answered",
+           "recap": "↩ recap"} \
         .get(kind) or ("✉ " + (sender or "team"))
     extra = ""
     if kind == "prompt":

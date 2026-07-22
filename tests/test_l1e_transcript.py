@@ -32,6 +32,24 @@ def test_compact_boundary():
     assert rec == {"kind": "compact", "meta": {"preTokens": 9}}
 
 
+def test_away_summary_is_a_recap_record():
+    # Claude Code's recap: a `type=system` `subtype=away_summary` line whose
+    # plain-string content is the summary. The trailing "(disable recaps in
+    # /config)" hint (terminal-only menu) is stripped for the web bubble.
+    rec = TR.parse_line(_l({
+        "type": "system", "subtype": "away_summary",
+        "content": "Fixed the bug; next is QA. (disable recaps in /config)"}))
+    assert rec == {"kind": "recap", "text": "Fixed the bug; next is QA."}
+
+
+def test_empty_away_summary_is_none():
+    # A recap whose content is only the config hint (or blank) yields nothing —
+    # an empty bubble is worse than no bubble.
+    assert TR.parse_line(_l({"type": "system", "subtype": "away_summary",
+                             "content": " (disable recaps in /config) "})) is None
+    assert TR.parse_line(_l({"type": "system", "subtype": "away_summary"})) is None
+
+
 def test_blank_user_content_is_none():
     assert TR.parse_line(_l({"type": "user", "message": {"content": "  \n"}})) is None
 
@@ -190,6 +208,27 @@ def test_conversation_surfaces_delivered_queued_message(tmp_path):
     recs, _ = TR.conversation(str(p), 0)
     prompts = [r["text"] for r in recs if r["kind"] == "prompt"]
     assert prompts == ["first prompt", "queued while busy"]
+
+
+def test_conversation_and_timeline_surface_recap(tmp_path):
+    # A recap (away_summary) shows in BOTH read models: the mirror conversation
+    # (a `recap` bubble) and the drill-down timeline (a `recap` entry), the hint
+    # stripped in each.
+    p = tmp_path / "r.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "message": {"content": "do the thing"},
+         "timestamp": "2026-07-22T00:00:01.000Z"},
+        {"type": "system", "subtype": "away_summary",
+         "content": "Did the thing; nothing pending. (disable recaps in /config)",
+         "timestamp": "2026-07-22T00:05:00.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    assert [r["kind"] for r in recs] == ["prompt", "recap"]
+    assert recs[1]["text"] == "Did the thing; nothing pending."
+    tl = TR.timeline(str(p))
+    kinds = [e["t"] for e in tl["entries"]]
+    assert kinds == ["prompt", "recap"]
+    assert tl["entries"][1]["text"] == "Did the thing; nothing pending."
 
 
 def test_format_questions_flattens_text_and_options():

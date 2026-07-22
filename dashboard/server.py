@@ -1082,7 +1082,7 @@ def _enrich_entry(ent):
     provider, or a tool with no rich render). The ONE post-processor both the
     REST timelines (_mdify) and the live SSE increments run."""
     t = ent.get("t")
-    if t in ("message", "prompt"):
+    if t in ("message", "prompt", "recap"):
         ent["html"] = opshtml.md_html(ent.get("text", ""))
     elif t == "teammsg":
         ent["html"] = opshtml.md_html(ent.get("body", ""))
@@ -1112,7 +1112,7 @@ def _mdify(tl):
 
 def _conv_items(recs):
     """Conversation records -> stream items. Additively carry `kind`
-    (prompt|message|teammsg|question|answer) and, for prompts, the raw `text`:
+    (prompt|message|teammsg|question|answer|recap) and, for prompts, the raw `text`:
     the page's queued-message chips match a DELIVERED prompt against what they
     sent — the transcript's prompt record is the one true delivery signal (tab
     transitions are useless: green flips busy again the instant a queued

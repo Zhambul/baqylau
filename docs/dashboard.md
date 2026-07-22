@@ -223,6 +223,22 @@ the bubble. The timeline endpoints (`/activity`, `/agent`) add an
 stays), and `app.js` uses it via `innerHTML` (server-escaped by construction),
 falling back to `pre(text)` when absent.
 
+**Recap bubbles** (Claude Code's away-summary). Claude Code writes a one-line
+summary of what happened while you were away — automatically after ~3 min idle,
+or on demand via `/recap` — as a `type=system` `subtype=away_summary` transcript
+line whose plain-string `content` is the summary (disable with
+`CLAUDE_CODE_ENABLE_AWAY_SUMMARY=0` or `/config`). `transcript.parse_line`
+surfaces it as a `recap` record (a sibling of `compact`, the other system
+subtype it reads), stripping the trailing `(disable recaps in /config)` hint
+(a terminal-only menu, noise in the web bubble) and dropping a hint-only /
+empty summary entirely. Both read models carry it: the merged mirror
+`conversation()` emits a `recap` bubble (`opshtml.msg_html` — an `↩ recap`
+label, cyan, no rewind ↶ since it isn't a re-runnable prompt), and the
+drill-down `timeline()` a `recap` entry (`app.js timelineEntry` — a `k-recap`
+chip). No new audit wiring: a recap is derived from the already-audited session
+transcript (its path is in the audit `sessions` row), like every other
+conversation record.
+
 **Rich tool rendering** (`opshtml.tool_html` / `tool_output_html`). A tool entry
 in the drill-down timeline used to dump its input as raw JSON; the presenter now
 renders the well-known built-in tools structurally, reusing the single owners of

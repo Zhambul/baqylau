@@ -1065,6 +1065,10 @@ body.modal-open { overflow: hidden; }
 .msg.question .who { color: var(--ask); }
 .msg.answer { border-left-color: var(--done); }
 .msg.answer .who { color: var(--done); }
+/* Claude Code recap (away-summary): a system-generated summary bubble, cyan to
+   set it apart from prompts/messages. No rewind ↶ — it isn't a re-runnable prompt. */
+.msg.recap { border-left-color: #56b6c2; }
+.msg.recap .who { color: #56b6c2; }
 
 /* markdown-rendered conversation text (opshtml.md_html — escaped server-side).
    Shared by the interleaved .msg blocks and the timeline .ent .bd bodies. */
@@ -1224,6 +1228,7 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
 .k-toolfail { background: var(--red); }
 .k-teammsg { background: var(--busy); }
 .k-monitor { background: #56b6c2; }               /* Monitor events — One Dark cyan */
+.k-recap { background: #56b6c2; }                 /* away-summary recap — One Dark cyan */
 .k-job { background: #d3ccad; }                   /* background jobs — the bg palette tan */
 .k-compact, .k-orphan { background: var(--dim2); color: var(--text); }
 .ent .sum { color: var(--text-soft); font-size: 12px; font-family: var(--mono);

@@ -298,6 +298,16 @@ def test_msg_html_question_bubble():
     assert 'class="rw"' not in h                       # no rewind affordance
 
 
+def test_msg_html_recap_bubble():
+    # Claude Code's away-summary recap: an `↩ recap` bubble (no rewind ↶ — it
+    # isn't a re-runnable prompt), body rendered as markdown.
+    h = opshtml.msg_html("recap", "Fixed the **bug**; next is QA.")
+    assert 'class="msg recap"' in h
+    assert "↩ recap" in h
+    assert "<strong>bug</strong>" in h
+    assert 'class="rw"' not in h                       # no rewind affordance
+
+
 # ---------------------------------------------------------- rich tool rendering
 
 def test_tool_html_bash_highlights_command():

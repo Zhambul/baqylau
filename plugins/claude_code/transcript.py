@@ -22,6 +22,11 @@
 # parse_line(s) returns one record per JSONL line (None = nothing renderable):
 #   {"kind": "bad", "raw": s}                       unparseable JSON
 #   {"kind": "compact", "meta": {...}}              a compact_boundary system record
+#   {"kind": "recap", "text": str}                  an away_summary system record —
+#       Claude Code's "recap": the one-line summary of what happened while you
+#       were away (auto after ~3min idle, or on-demand via /recap), stored as a
+#       `type=system` `subtype=away_summary` line whose plain-text `content` is
+#       the summary. Not a compaction (adds context, doesn't compress it)
 #   {"kind": "prompt", "text": str}                 a user prompt (unstripped) —
 #       a plain `user` string OR a `queued_command` attachment (the delivered
 #       form of a message queued mid-turn; commandMode=="prompt" only)
@@ -142,6 +147,17 @@ def classify_user_text(text):
     return "prompt", text, None
 
 
+# The trailing config hint Claude Code appends to every recap `content` — it
+# points at the terminal's `/config` menu, irrelevant in the web bubble.
+_RECAP_HINT = re.compile(r"\s*\(disable recaps in /config\)\s*$")
+
+
+def _strip_recap_hint(text):
+    """A recap's `content` minus the trailing "(disable recaps in /config)"
+    hint. An empty result stays empty (parse_line drops it)."""
+    return _RECAP_HINT.sub("", text).strip()
+
+
 def parse_line(s):
     """One transcript JSONL line -> a typed record (see the module header)."""
     try:
@@ -153,6 +169,13 @@ def parse_line(s):
     content = msg.get("content")
     if t == "system" and o.get("subtype") == "compact_boundary":
         return {"kind": "compact", "meta": o.get("compactMetadata") or {}}
+    if t == "system" and o.get("subtype") == "away_summary":
+        # Claude Code's recap — the away summary (see the module header). The
+        # summary text is the system record's plain-string `content`; drop the
+        # trailing "(disable recaps in /config)" config hint, which points at a
+        # terminal-only menu and is noise in the dashboard bubble.
+        text = _strip_recap_hint(o.get("content") or "")
+        return {"kind": "recap", "text": text} if text else None
     if t == "user":
         if isinstance(content, str):
             if not content.strip():
@@ -474,9 +497,10 @@ def _format_questions(tool_input):
 
 def conversation(path, pos=0):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
-    (docs/dashboard.md): every prompt / assistant message / teammate message —
-    plus, for AskUserQuestion, the `question` Claude asked and the `answer` the
-    user submitted — from byte `pos` on, in transcript order, each carrying `ts`
+    (docs/dashboard.md): every prompt / assistant message / teammate message /
+    recap (Claude Code's away-summary) — plus, for AskUserQuestion, the
+    `question` Claude asked and the `answer` the user submitted — from byte
+    `pos` on, in transcript order, each carrying `ts`
     — the line's
     `timestamp` as an epoch float (None when absent) — and `anchor`, the id of
     the last tool_use seen BEFORE it. Ops carry both a wall-clock `_ts` and the
@@ -503,6 +527,9 @@ def conversation(path, pos=0):
             if t and not t.startswith("<"):        # command/caveat wrappers
                 out.append({"kind": "prompt", "text": t, "anchor": anchor,
                             "ts": ts})
+        elif kind == "recap":
+            out.append({"kind": "recap", "text": rec["text"],
+                        "anchor": anchor, "ts": ts})
         elif kind == "teammsg":
             out.append({"kind": "teammsg", "text": rec["body"],
                         "sender": rec["sender"], "anchor": anchor, "ts": ts})
@@ -649,6 +676,8 @@ def _fold_record(rec, entries, pend, acc, on_unresolved, ACC):
         acc["bad"] += 1
     elif kind == "compact":
         entries.append({"t": "compact", "meta": rec["meta"]})
+    elif kind == "recap":
+        entries.append({"t": "recap", "text": rec["text"]})
     elif kind == "prompt":
         entries.append({"t": "prompt", "text": rec["text"].strip()})
     elif kind == "teammsg":
@@ -748,6 +777,7 @@ def timeline(path):
                                                 the returned result, mirroring
                                                 the substream's flush semantics)
       {"t": "compact", "meta"}                  a compaction boundary
+      {"t": "recap", "text"}                    an away-summary recap
       {"t": "monitor", "task", "summary", "event", "status"}
                                                 a Monitor tool event (or its
                                                 stream-ended `status`) — see
