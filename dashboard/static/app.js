@@ -1131,6 +1131,12 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.tasks = d.tasks || null;
     renderTasks();
   });
+  es.addEventListener("goal", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    if (S.ses.meta) S.ses.meta.goal = d.goal || null;
+    renderGoal();
+  });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     // while drilled into a subagent the badge/wash belong to that agent's
@@ -1822,6 +1828,41 @@ function drainPending(items) {
 // Answers POST /answer, where the server drives the REAL dialog with
 // screen-verified key events (dashboard/askdialog.py). The card clears via
 // the SSE `ask` event when the answer's PostToolUse drops the stash.
+
+// ---- the pinned goal card (docs/dashboard.md, *Web goal*) -------------------
+// Claude Code's `/goal <condition>` built-in puts the session into autonomous
+// mode toward a completion condition. No hook fires for it, so the server scans
+// the transcript tail (session_goal → plugins.goal → transcript.goal_probe) and
+// pushes {condition, met} on the `goal` SSE event. Pinned at the very top of the
+// mirror tab (above tasks), amber while working and green "✓ achieved" once the
+// checker confirms; hidden when there is no active goal. Read-only — the goal is
+// set/cleared at the terminal (or via the composer's `/goal`), never here.
+
+function buildGoalCard() {
+  const wrap = el("div", "goalwrap");
+  S.ses.goalEl = wrap;
+  renderGoal();
+  return wrap;
+}
+
+function renderGoal() {
+  const ses = S.ses;
+  if (!ses || !ses.goalEl) return;
+  const wrap = ses.goalEl;
+  wrap.textContent = "";
+  const goal = (ses.meta && ses.meta.goal) || null;
+  wrap.hidden = !goal || !goal.condition;
+  if (wrap.hidden) return;
+  const met = !!goal.met;
+  const card = el("div", "goalcard" + (met ? " met" : ""));
+  const head = el("div", "goalhead");
+  head.append(el("span", "goalmark", met ? "✓" : "🎯"));
+  head.append(el("span", "goaltitle", "goal"));
+  head.append(el("span", "goalstate", met ? "achieved" : "active"));
+  card.append(head);
+  card.append(el("div", "goalcond", goal.condition));
+  wrap.append(card);
+}
 
 // ---- the pinned tasks card (docs/dashboard.md, *Web tasks*) -----------------
 // The session's native task list (TaskCreate/TaskUpdate), pinned at the very
@@ -4458,6 +4499,7 @@ function renderSessionChrome(tab) {
   $view.append(body);
 
   if (tab === "mirror") {
+    body.append(buildGoalCard());           // the active /goal, pinned at the very top
     body.append(buildTasksCard());          // the session's task list, pinned first
     body.append(buildPlanCard());           // pending plan approval …
     body.append(buildAskCard());            // … and question, above the composer

@@ -628,6 +628,30 @@ def session_ctx(tpath, main=False):
     return ctx
 
 
+_GOAL = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, goal): same
+#                   (path, size) cache key as _CTX — the active /goal only
+#                   changes when the transcript grows, so the list/session
+#                   polls must not re-scan every transcript tail per tick.
+
+
+def session_goal(tpath):
+    """plugins.goal() (the session's active `/goal` as {condition, met}, the
+    pinned goal card's source) behind the (path, size) cache; None when there's
+    no active goal / unknown."""
+    if not tpath:
+        return None
+    try:
+        size = os.path.getsize(tpath)
+    except OSError:
+        return None
+    hit = _GOAL.get(tpath)
+    if hit and hit[0] == size:
+        return hit[1]
+    g = plugins.goal(tpath)
+    _GOAL[tpath] = (size, g)
+    return g
+
+
 def _last_active(row, sdb):
     """The session's last-activity timestamp, for the list card's recency
     chip: the transcript's mtime (the file grows on every turn — the same
@@ -943,6 +967,11 @@ def session_payload(sid):
     # deletes the on-disk task files at session end — the stash is the only
     # record left), so a parked session still shows its final task list
     data["tasks"] = _session_tasks(sid)
+    # deliberately NOT live-gated: the active /goal lives in the transcript
+    # (which persists past park, unlike the task files), so a parked session
+    # still shows its final/achieved goal — read-side, no hook (docs/dashboard.md
+    # *Web goal*)
+    data["goal"] = session_goal(data.get("transcript_path") or "")
     # deliberately NOT live-gated: the composer stays usable on a PARKED
     # session (the resume-&-send door), so its draft must restore there too
     data["composer_draft"] = _composer_draft(sid)
@@ -3488,7 +3517,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
                 "composer_queue": None, "monitors": None, "jobs": None,
-                "memory": None, "suggestion": None}
+                "memory": None, "suggestion": None, "goal": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -3618,6 +3647,15 @@ class Handler(BaseHTTPRequestHandler):
                 if tasks != prev["tasks"]:
                     prev["tasks"] = tasks
                     if not self._sse("tasks", {"tasks": tasks}):
+                        return
+                # the pinned goal card, live — the active `/goal` scanned from
+                # the transcript tail (session_goal, read-side, no hook fires).
+                # Slow cadence like tasks: a goal changes per-turn, not per-
+                # keystroke, and nobody is blocked waiting on this card
+                goal = session_goal(row.get("transcript_path") or "")
+                if goal != prev["goal"]:
+                    prev["goal"] = goal
+                    if not self._sse("goal", {"goal": goal}):
                         return
                 # the unsent composer draft — so a composer open on ANOTHER
                 # device tracks this one's edits (the writer suppresses its own

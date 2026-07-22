@@ -453,6 +453,70 @@ def context_probe(path, main=False):
     return None
 
 
+# The `/goal <condition>` slash command's args, pulled from its transcript
+# command record (`<command-name>/goal</command-name> … <command-args>ARGS
+# </command-args>`). A bare `/goal clear` (or `off`) ends the goal; `/goal
+# status` only queries it.
+_GOAL_ARGS = re.compile(r'<command-args>(.*?)</command-args>', re.S)
+
+
+def goal_probe(path):
+    """The session's ACTIVE `/goal` from its transcript tail (docs/dashboard.md
+    *Web goal*). `/goal <condition>` is a real Claude Code built-in (2.1.139+):
+    it writes an `{"type":"attachment","attachment":{"type":"goal_status",
+    "condition":…,"met":…}}` line (re-stamped as the internal checker
+    re-evaluates each turn), and NO hook fires — so, like context_probe, this is
+    a read-side tail scan; the transcript is authoritative (Claude Code itself
+    restores the goal from it on resume). Returns {"condition": str, "met":
+    bool}, or None (no goal / cleared / not in the tail window).
+
+    Most-recent-record-wins over the same bounded window as context_probe: a
+    `goal_status` attachment gives the live condition + met flag (an empty
+    condition = a cleared goal → None); a bare `/goal clear`|`off` command that
+    post-dates the last attachment ends it (None); `/goal status` is a query and
+    is skipped. A goal set writes its attachment right AFTER its command record,
+    so the attachment is seen first and wins."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - CTX_TAIL_B))
+            lines = fh.read().split(b"\n")
+    except OSError:
+        return None
+    if size > CTX_TAIL_B:
+        lines = lines[1:]                       # first line of a mid-file seek is torn
+    for raw in reversed(lines):
+        is_status = b'"goal_status"' in raw
+        is_cmd = b'<command-name>/goal</command-name>' in raw
+        if not is_status and not is_cmd:
+            continue
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        if not isinstance(o, dict):
+            continue
+        if is_status and o.get("type") == "attachment":
+            att = o.get("attachment") or {}
+            if att.get("type") == "goal_status":
+                cond = (att.get("condition") or "").strip()
+                if not cond:
+                    return None                 # a cleared goal_status
+                return {"condition": cond, "met": bool(att.get("met"))}
+        if is_cmd:
+            msg = o.get("message") or {}
+            m = _GOAL_ARGS.search(msg.get("content") or "")
+            args = (m.group(1).strip() if m else "")
+            low = args.lower()
+            if low == "status":
+                continue                        # a query, not a state change
+            if low in ("", "clear", "off"):
+                return None                     # goal ended at the terminal
+            return {"condition": args, "met": False}
+    return None
+
+
 def _complete_lines(path, pos):
     """Complete lines from byte `pos`: ([line, …], new_pos). A trailing
     partial line is NOT consumed (new_pos stops before it), so a json parse

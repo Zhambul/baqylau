@@ -830,3 +830,90 @@ def test_renderer_aliases_are_the_parser_functions():
     from plugins.claude_code import substream_render as SR
     assert SR.result_text is TR.result_text
     assert SR.input_summary is TR.input_summary
+
+
+# ------------------------------------------------------------------- goal_probe
+
+def _goal_status(cond, met=False, sentinel=False):
+    # The `/goal <cond>` attachment record Claude Code writes (measured 2.1.217).
+    return {"type": "attachment",
+            "attachment": {"type": "goal_status", "met": met,
+                           "sentinel": sentinel, "condition": cond}}
+
+
+def _goal_cmd(args):
+    # The `/goal <args>` slash-command user record (args="" | "clear" | a cond).
+    return {"type": "user", "message": {
+        "content": ("<command-name>/goal</command-name>\n"
+                    "            <command-message>goal</command-message>\n"
+                    "            <command-args>%s</command-args>" % args)}}
+
+
+def test_goal_probe_none_without_transcript(tmp_path):
+    assert TR.goal_probe(str(tmp_path / "missing.jsonl")) is None
+
+
+def test_goal_probe_no_goal_is_none(tmp_path):
+    p = tmp_path / "g.jsonl"
+    p.write_text(_l({"type": "user", "message": {"content": "hi"}}) + "\n",
+                 encoding="utf-8")
+    assert TR.goal_probe(str(p)) is None
+
+
+def test_goal_probe_active_goal_from_status_attachment(tmp_path):
+    p = tmp_path / "g.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        _goal_cmd("ship the feature"),
+        _goal_status("ship the feature", met=False, sentinel=True),
+    ]), encoding="utf-8")
+    assert TR.goal_probe(str(p)) == {"condition": "ship the feature", "met": False}
+
+
+def test_goal_probe_latest_status_wins_and_reports_met(tmp_path):
+    # The checker re-stamps goal_status each turn; the last one is the state.
+    p = tmp_path / "g.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        _goal_status("build it", met=False, sentinel=True),
+        _goal_status("build it", met=False),
+        _goal_status("build it", met=True),
+    ]), encoding="utf-8")
+    assert TR.goal_probe(str(p)) == {"condition": "build it", "met": True}
+
+
+def test_goal_probe_cleared_status_is_none(tmp_path):
+    # A cleared goal writes a goal_status with an empty condition.
+    p = tmp_path / "g.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        _goal_status("old goal", met=False),
+        _goal_status("", met=False),
+    ]), encoding="utf-8")
+    assert TR.goal_probe(str(p)) is None
+
+
+def test_goal_probe_clear_command_after_status_ends_goal(tmp_path):
+    # A bare `/goal clear` post-dating the last attachment ends the goal even if
+    # the terminal wrote no cleared attachment.
+    p = tmp_path / "g.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        _goal_status("old goal", met=False),
+        _goal_cmd("clear"),
+    ]), encoding="utf-8")
+    assert TR.goal_probe(str(p)) is None
+
+
+def test_goal_probe_status_query_command_is_skipped(tmp_path):
+    # `/goal status` only queries — it must not mask the active goal beneath it.
+    p = tmp_path / "g.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        _goal_status("keep going", met=False),
+        _goal_cmd("status"),
+    ]), encoding="utf-8")
+    assert TR.goal_probe(str(p)) == {"condition": "keep going", "met": False}
+
+
+def test_goal_probe_bare_set_command_without_attachment(tmp_path):
+    # Defensive: a `/goal <cond>` command with no following attachment still
+    # reads as active (condition from the command args).
+    p = tmp_path / "g.jsonl"
+    p.write_text(_l(_goal_cmd("do the thing")) + "\n", encoding="utf-8")
+    assert TR.goal_probe(str(p)) == {"condition": "do the thing", "met": False}

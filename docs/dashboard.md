@@ -1999,6 +1999,57 @@ parked session still shows its final task list. The per-session SSE
 diff-emits a `tasks` event on the slow cadence (tasks change per-hook,
 not per-keystroke; nobody is blocked waiting on this card).
 
+## Web goal (the pinned goal card)
+
+Claude Code's `/goal <condition>` built-in (2.1.139+) puts the session
+into an **autonomous mode**: Claude works across turns toward a stated
+completion condition until an internal checker confirms it, at which
+point the goal auto-clears. The dashboard mirrors the active goal as a
+**goal card pinned at the very top of the mirror tab — above the tasks
+card** (`buildGoalCard`/`renderGoal` in app.js, `.goalcard`): a 🎯 mark,
+the condition text, and an amber **active** state while working; once the
+checker reports the condition met the card flips to a green ✓ **achieved**
+before it clears. The card hides when there is no active goal. Read-only
+— the goal is set/cleared at the terminal (or by typing `/goal` in the
+composer, now in the "/" menu), never from this card, so there is no POST
+endpoint.
+
+**Detection — read-side, no hook (why it's a transcript scan, not a
+stash).** Unlike tasks, **no hook fires** for `/goal` — not on set, met,
+or clear (there is no `Goal*` hook event). But the goal is **persisted in
+the session transcript**: setting one writes an
+`{"type":"attachment","attachment":{"type":"goal_status","condition":…,
+"met":…,"sentinel":…}}` line (captured live from a real run, 2.1.217), the
+checker re-stamps a fresh `goal_status` each turn, and Claude Code itself
+restores the goal from the transcript on resume (`restoreGoalFromTranscript`).
+So detection is a **read-side tail scan**, exactly like context saturation
+(`transcript.context_probe`): `transcript.goal_probe(path)` reads the same
+bounded `CTX_TAIL_B` window and takes the most-recent-record-wins — a
+`goal_status` attachment gives `{condition, met}` (an empty condition = a
+cleared goal → `None`), and a bare `/goal clear`|`off` command that
+post-dates the last attachment ends it (`/goal status` is a query and is
+skipped). It surfaces through the `plugins.goal()` fan-out (path-keyed,
+sibling of `plugins.context()`).
+
+`session_payload` carries it as `data["goal"]` behind the `session_goal`
+`(path, size)` memo (sibling of `session_ctx`), deliberately **NOT
+live-gated**: the transcript persists past park (unlike the task files),
+so a parked session still shows its final/achieved goal. The per-session
+SSE diff-emits a `goal` event on the slow cadence (a goal changes
+per-turn, not per-keystroke; nobody is blocked waiting on this card).
+
+**No audit rows (and why that's correct).** This is a pure read-side
+transcript derivation — no hook, no detached process, no state/marker
+file, no tab-state input — identical in kind to the context-saturation
+probe, which also adds no audit rows. The source is already recorded (the
+transcript path in the audit `sessions` row), so "why did the goal card
+show X" is answerable from the transcript itself. One caveat: like
+`context_probe`, the scan only sees the transcript **tail** — an active
+goal stays in-window because the checker re-stamps it each turn, but a
+goal that goes many turns without a re-stamp could scroll out and the card
+would blank (the goal is still active in the TUI; only the mirror loses
+sight of it).
+
 ## Web dictation (mic → Deepgram → the textarea, live)
 
 A mic button on the **composer** and on the **new-session form's first-prompt

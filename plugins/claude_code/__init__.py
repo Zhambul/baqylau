@@ -76,6 +76,15 @@ def context(transcript_path, main=False):
     return transcript.context_probe(transcript_path, main=main)
 
 
+def goal(transcript_path):
+    """The active-`/goal` provider (plugins.goal fan-out) — the session's
+    pending autonomous goal from a Claude transcript's tail, as {condition,
+    met}; None for files this parser doesn't speak / no active goal. See
+    transcript.goal_probe."""
+    from plugins.claude_code import transcript
+    return transcript.goal_probe(transcript_path)
+
+
 def conversation(sid, pos=0):
     """The main-thread conversation provider (plugins.conversation fan-out)
     for the dashboard's merged mirror stream. See transcript.conversation."""

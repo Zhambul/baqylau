@@ -341,6 +341,24 @@ def context(transcript_path, main=False):
     return None
 
 
+def goal(transcript_path):
+    """Active-`/goal` fan-out (path-keyed like context — the dashboard's rows
+    already hold each transcript path): the first plugin that recognizes the
+    file returns {"condition", "met"} for the session's pending autonomous goal
+    (Claude Code's `/goal` built-in), or None when there's no active goal / no
+    plugin speaks the file. Read-side like context() (no hook fires for /goal),
+    same exception contract as census()/activity(): the callers are read-side
+    dashboards, not hooks."""
+    for p in all_plugins():
+        fn = getattr(p, "goal", None)
+        if fn is None:
+            continue
+        got = fn(transcript_path)
+        if got is not None:
+            return got
+    return None
+
+
 def conversation(sid, pos=0):
     """Main-thread conversation records from byte `pos` for the dashboard's
     merged mirror stream: (records, new_pos) from the first plugin that
