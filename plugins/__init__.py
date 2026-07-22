@@ -135,6 +135,24 @@ def session_title(transcript_path):
     return ""
 
 
+def title_and_rename(transcript_path):
+    """(title, tail_rename) fan-out (path-keyed like session_title): the display
+    title plus the `agent-name` /rename record STILL inside the transcript's
+    title tail-window ('' when the rename scrolled out, or was never set). The
+    first plugin that RECOGNIZES the file answers; ('', '') when none does. The
+    dashboard reconciles its durable web-rename override against tail_rename so a
+    rename that fell out of the 64KB tail no longer 'rolls back' to the auto
+    ai-title (docs/dashboard.md, *Web rename*)."""
+    for p in all_plugins():
+        fn = getattr(p, "title_and_rename", None)
+        if fn is None:
+            continue
+        title, named = fn(transcript_path)
+        if title or named:
+            return title, named
+    return "", ""
+
+
 def set_session_title(transcript_path, name):
     """Session-rename fan-out (path-keyed like session_title — the write half
     of that read): the first plugin that OWNS the file appends its naming

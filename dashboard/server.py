@@ -420,6 +420,15 @@ _TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, title): a title
 #                   transcript heads per tick
 
 
+def _rename_override(tpath):
+    """The durable web-rename override for a transcript (prefs `renamed-title`,
+    keyed by the .jsonl stem), or '' when absent / not a session transcript."""
+    base = os.path.basename(tpath or "")
+    if not base.endswith(".jsonl"):
+        return ""
+    return prefs.renamed_title(base[:-len(".jsonl")])
+
+
 def session_title(tpath):
     if not tpath:
         return ""
@@ -430,7 +439,17 @@ def session_title(tpath):
     hit = _TITLES.get(tpath)
     if hit and hit[0] == size:
         return hit[1]
-    title = plugins.session_title(tpath) or ""
+    title, tail_named = plugins.title_and_rename(tpath)
+    title = title or ""
+    if not tail_named:
+        # The web-rename `agent-name` record can scroll out of the transcript's
+        # 64KB title tail-window in a long session while Claude Code keeps
+        # re-emitting `ai-title` near EOF — the rename would visually "roll back"
+        # to the auto title (the confirmed bug). The durable override stands in
+        # until a FRESH in-tail rename (which sets tail_named) supersedes it.
+        override = _rename_override(tpath)
+        if override:
+            title = override
     _TITLES[tpath] = (size, title)
     return title
 
@@ -2316,10 +2335,21 @@ class Handler(BaseHTTPRequestHandler):
                          {"win": win, "chars": len(name), "ok": False,
                           "reason": "unsupported"})
             return self._json({"error": "unsupported session"}, 409)
+        # DURABLE OVERRIDE: the transcript `agent-name` append is the canonical
+        # channel (it reaches `claude --resume`), but that single record scrolls
+        # out of session_title's 64KB tail-window in a long session and the
+        # rename appears to "roll back" to the auto ai-title. Stash a durable,
+        # tail-window-proof override keyed by the transcript stem so the DASHBOARD
+        # title never reverts (docs/dashboard.md, *Web rename*). Best-effort like
+        # every prefs write — a failure just falls back to the transcript read.
+        stem = os.path.basename(tpath)
+        stem = stem[:-len(".jsonl")] if stem.endswith(".jsonl") else stem
+        stored = prefs.set_renamed_title(stem, name)
+        override_ok = isinstance(stored, dict) and stored.get(stem) == name
         tab_retitled = bool(fe.set_tab_title(win, name)) if (fe and win) else False
         A.state_file(log, sdb, "web-rename",
                      {"win": win, "chars": len(name), "ok": True, "tab": tab,
-                      "tab_retitled": tab_retitled})
+                      "tab_retitled": tab_retitled, "override": override_ok})
         return self._json({"ok": True, "title": name,
                            "tab_retitled": tab_retitled})
 

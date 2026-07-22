@@ -1119,6 +1119,12 @@ def test_prefs_mutate_map_accumulates_atomically(monkeypatch, tmp_path):
     assert prefs.set_notify_muted("s2", True) == {"s1": True, "s2": True}
     assert prefs.set_notify_muted("s1", False) == {"s2": True}   # un-mute deletes
     assert prefs.notify_muted("s2") is True and prefs.notify_muted("s1") is False
+    # the web-rename override rides mutate_map too — sticky, per-sid, no delete
+    assert prefs.set_renamed_title("sidA", "picked") == {"sidA": "picked"}
+    assert prefs.set_renamed_title("sidB", "other") == {"sidA": "picked",
+                                                         "sidB": "other"}
+    assert prefs.renamed_title("sidA") == "picked"
+    assert prefs.renamed_title("nope") == ""       # never renamed
     # degraded (unopenable store — dirname is a FILE): still returns the
     # intended map, never raises
     afile = tmp_path / "afile"
@@ -2920,6 +2926,35 @@ def test_post_rename_updates_session_payload_title(dash, monkeypatch,
     assert _get_json(dash + "/api/session/ren8")["title"] == "auto"
     _post(dash + "/api/session/ren8/rename", {"name": "picked by hand"})
     assert _get_json(dash + "/api/session/ren8")["title"] == "picked by hand"
+
+
+def test_post_rename_override_survives_tail_window_rollback(dash, monkeypatch,
+                                                           tmp_path):
+    # THE ROLLBACK FIX: the /rename `agent-name` scrolls out of session_title's
+    # 64KB tail-window in a long session while fresh ai-title rows sit near EOF,
+    # so the transcript ladder reverts to the auto title. The durable override
+    # (prefs `renamed-title`) is what keeps the DASHBOARD title from rolling back.
+    from plugins.claude_code import transcript as TR
+    _inject_fe(monkeypatch, _FakeFE())
+    monkeypatch.setenv("KITTY_WINDOW_ID", "77")
+    tp = _rename_transcript(tmp_path, "ren9",
+                            {"type": "ai-title", "aiTitle": "auto"})
+    A.session_start({"session_id": "ren9", "cwd": "/w", "transcript_path": tp})
+    code, _ = _post(dash + "/api/session/ren9/rename", {"name": "kept name"})
+    assert code == 200
+    # simulate time passing: append enough fresh ai-title rows to push the
+    # appended agent-name past the tail-window (the real-world rollback trigger)
+    with open(tp, "a") as fh:
+        filler = json.dumps({"type": "ai-title", "aiTitle": "auto"}) + "\n"
+        while os.path.getsize(tp) <= TR.TITLE_TAIL_B:
+            fh.write(filler)
+    # the transcript layer has "rolled back" — the rename is out of the tail
+    assert TR.title_and_rename(tp)[1] == ""
+    # ...but the dashboard still shows the rename, sourced from the durable override
+    assert _get_json(dash + "/api/session/ren9")["title"] == "kept name"
+    # and a FRESH in-tail rename still supersedes the override (last rename wins)
+    _post(dash + "/api/session/ren9/rename", {"name": "renamed again"})
+    assert _get_json(dash + "/api/session/ren9")["title"] == "renamed again"
 
 
 def test_post_guard_rejections(dash):

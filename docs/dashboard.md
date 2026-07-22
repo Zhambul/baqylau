@@ -1302,14 +1302,26 @@ Deliberate choices, and why:
   `RENAME_MAX` (120); empty-after-cleaning is 400. A name starting with `-`
   may be eaten by the kitten CLI as a flag (rc≠0 → `tab_retitled: false`);
   the JSONL rename still lands.
-- **Display decay is accepted:** once the rename record scrolls more than
-  `TITLE_TAIL_B` (64KB) behind EOF, the bounded tail scan falls back to the
-  newest `ai-title` (the parser's documented one accepted gap) while the
-  `--resume` picker (a full read) keeps the custom name. Renaming again
-  re-appends at EOF and wins again.
+- **A durable override defeats the tail-window rollback.** The `agent-name`
+  record is written ONCE, but Claude Code keeps re-emitting `ai-title` near
+  EOF every few turns; once the rename scrolls more than `TITLE_TAIL_B`
+  (64KB) behind EOF, the bounded tail scan no longer sees it and
+  `session_title` reverts to the newest `ai-title` — the rename *appears to
+  roll back* (the confirmed bug; this WAS a documented "accepted gap"). So the
+  rename ALSO stashes a durable, tail-window-proof override in the global
+  prefs store (`dashboard/prefs.py` `renamed-title`, `{stem: name}`, keyed by
+  the transcript's `.jsonl` stem — adopt/fork-proof, survives park). The
+  dashboard's `session_title` wrapper reconciles via
+  `plugins.title_and_rename(tpath)` → `(display_title, tail_rename)`: it
+  prefers the override ONLY when `tail_rename` is empty (the rename scrolled
+  out), so a FRESH in-tail rename — a terminal `/rename`, or renaming again —
+  still supersedes it (last rename wins). The transcript append stays the
+  canonical channel the `--resume` picker (a full read) reads; the override is
+  purely the dashboard-display belt so ITS title never reverts.
 
 Every post-validation attempt is a **`web-rename`** `state_files` row
-(`{win, chars, ok, tab, tab_retitled, reason?}`); an append failure is also
+(`{win, chars, ok, tab, tab_retitled, override?, reason?}` — `override` is
+whether the durable prefs override was recorded); an append failure is also
 an `A.error`. The per-session SSE stream gained a **`title`** event (slow
 cadence, on change, like `ctx`/`git`) — which also means a fresh AUTO
 ai-title now live-updates an open session header, not just renames.

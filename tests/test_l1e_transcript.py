@@ -733,6 +733,45 @@ def test_set_session_title_writer(tmp_path):
     assert TR.set_session_title(str(d / "notes.txt"), "x") is None
 
 
+def test_title_and_rename_reports_tail_rename(tmp_path):
+    """title_and_rename returns (display_title, tail_rename): the second value is
+    the `agent-name` still inside the 64KB title tail-window, so the dashboard can
+    tell a CURRENT rename from one that scrolled out."""
+    d = tmp_path / "projects" / "-w-proj"
+    d.mkdir(parents=True)
+    # rename present near EOF -> it wins AND is reported as the tail rename
+    p = d / "sid-1.jsonl"
+    p.write_text(_l({"type": "ai-title", "aiTitle": "auto"}) + "\n"
+                 + _l({"type": "agent-name", "agentName": "picked"}) + "\n")
+    assert TR.title_and_rename(str(p)) == ("picked", "picked")
+    # only an ai-title -> title is the auto name, tail rename is '' (nothing to
+    # reconcile means the dashboard override may stand in)
+    q = d / "sid-2.jsonl"
+    q.write_text(_l({"type": "ai-title", "aiTitle": "auto"}) + "\n")
+    assert TR.title_and_rename(str(q)) == ("auto", "")
+
+
+def test_title_and_rename_rename_scrolled_out_of_tail(tmp_path):
+    """The rollback shape: a one-time `agent-name` written EARLY, then enough
+    fresh `ai-title` re-emissions to push it past the 64KB tail-window. The
+    ladder can no longer see the rename (tail_rename == '') and falls to the auto
+    title — which is exactly why the dashboard keeps a durable override."""
+    d = tmp_path / "projects" / "-w-proj"
+    d.mkdir(parents=True)
+    p = d / "sid-3.jsonl"
+    lines = [_l({"type": "agent-name", "agentName": "picked"})]
+    # pad past TITLE_TAIL_B with fresh ai-title rows (each near EOF, as Claude
+    # Code re-emits them every few turns)
+    filler = _l({"type": "ai-title", "aiTitle": "auto"})
+    while sum(len(x) + 1 for x in lines) <= TR.TITLE_TAIL_B:
+        lines.append(filler)
+    p.write_text("\n".join(lines) + "\n")
+    assert os.path.getsize(str(p)) > TR.TITLE_TAIL_B
+    title, tail_named = TR.title_and_rename(str(p))
+    assert title == "auto"        # the rename rolled back at the transcript layer
+    assert tail_named == ""       # the durable override is what saves the display
+
+
 def test_agent_name_record_has_one_owner():
     """The `agent-name` naming-record shape is transcript.py's (styleguide
     single-owner table) — reader AND writer; a second encoding anywhere in

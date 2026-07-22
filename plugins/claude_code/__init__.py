@@ -49,6 +49,15 @@ def session_title(transcript_path):
     return transcript.session_title(transcript_path)
 
 
+def title_and_rename(transcript_path):
+    """The title+tail-rename provider (plugins.title_and_rename fan-out) — the
+    display title AND whether an `agent-name` /rename is still in the transcript's
+    title tail-window, so the dashboard can reconcile its durable web-rename
+    override. See transcript.title_and_rename."""
+    from plugins.claude_code import transcript
+    return transcript.title_and_rename(transcript_path)
+
+
 def set_session_title(transcript_path, name):
     """The session-rename provider (plugins.set_session_title fan-out) — append
     the `agent-name` naming record to a Claude session transcript; None for

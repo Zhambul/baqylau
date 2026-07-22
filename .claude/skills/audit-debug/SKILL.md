@@ -115,6 +115,23 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the notifier isn't polling at all). The reverse — an alert you DIDN'T want — is the
   per-session mute (the 🔕 toggle) or a lower `CLAUDE_DASH_NOTIFY_DELAY_S`.
 
+- **A web/`/rename` reverts after a while — the session shows its auto title
+  again** (docs/session-naming-findings.md *fallback ladder*, docs/dashboard.md
+  *Web rename*): the rename is a ONE-TIME `agent-name` transcript record, but
+  `session_title` reads only the last `TITLE_TAIL_B` (64KB) and Claude Code keeps
+  re-emitting `ai-title` near EOF — so in a long session the rename scrolls out of
+  the window and rung 1 drops to the auto title. Confirm from the `web-rename`
+  `state_files` row: `ok:true` = the rename DID land; its `override` field (added
+  2026-07-22) tells whether the durable, tail-window-proof override was recorded
+  in the prefs store (`renamed-title` map in `~/.claude/baqylau-dash-prefs.db`,
+  keyed by the transcript `.jsonl` stem). `override:true` and a still-reverting
+  DASHBOARD title means the reconcile mis-fired (`plugins.title_and_rename`
+  should return the override when the tail has no `agent-name`); an OLDER rename
+  row with NO `override` field is a pre-fix rename (re-rename to seed the
+  override). The kitty TAB is a separate channel (`set_tab_title` sticky, lost
+  only across a resume relaunch); the `--resume` picker does a full read and keeps
+  the name regardless.
+
 - **A message sent from the web composer stays a GREY stand-in and never turns
   into the normal gold bubble** (docs/dashboard.md *Optimistic composer bubble*):
   the greyed `.msg.prompt.pending` bubble is client-only DOM, reconciled to the

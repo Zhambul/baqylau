@@ -312,17 +312,12 @@ def _command_label(s):
     return ("%s %s" % (name, args)).strip()[:200] if args else name[:200]
 
 
-def session_title(path):
-    """Best-effort display TITLE for a session transcript — what the kitty tab
-    (Claude Code's OSC title) and the `claude --resume` picker show: the last
-    `agent-name` (a /rename custom name — never clobbered by auto titles), else
-    the last `ai-title`, else the LAST `summary` record in the head window,
-    else the first line of the first REAL user prompt (isMeta rows and
-    `<command-*>`/`<local-command-*>` wrappers are plumbing, not prompts), else
-    — for a short slash-command session with none of the above — the `/command`
-    that started it (docs/session-naming-findings.md, *Fallbacks*). '' when
-    unreadable / nothing found."""
-    named, ai = _title_records(path)
+def _title_from_ladder(path, named, ai):
+    """The display title given the tail's (named, ai): the /rename `agent-name`
+    beats everything, then `ai-title`, then the head-window summary / first real
+    prompt / opening `/command` fallbacks. Split out of session_title so
+    title_and_rename() can reuse the SAME ladder without a second _title_records
+    read (styleguide single-owner: the ladder lives here, once)."""
     if named or ai:
         return named or ai
     summary, prompt, cmd = "", "", ""
@@ -352,6 +347,35 @@ def session_title(path):
     except OSError:
         return ""
     return summary or prompt or cmd
+
+
+def session_title(path):
+    """Best-effort display TITLE for a session transcript — what the kitty tab
+    (Claude Code's OSC title) and the `claude --resume` picker show: the last
+    `agent-name` (a /rename custom name — never clobbered by auto titles), else
+    the last `ai-title`, else the LAST `summary` record in the head window,
+    else the first line of the first REAL user prompt (isMeta rows and
+    `<command-*>`/`<local-command-*>` wrappers are plumbing, not prompts), else
+    — for a short slash-command session with none of the above — the `/command`
+    that started it (docs/session-naming-findings.md, *Fallbacks*). '' when
+    unreadable / nothing found."""
+    named, ai = _title_records(path)
+    return _title_from_ladder(path, named, ai)
+
+
+def title_and_rename(path):
+    """(session_title, tail_rename): the display title AND the `agent-name`
+    /rename record STILL PRESENT in the transcript's title tail-window ('' when
+    it has none — never renamed, OR the rename has scrolled out beyond
+    TITLE_TAIL_B in a long session while Claude Code kept re-emitting `ai-title`
+    near EOF). The dashboard reconciles its DURABLE web-rename override against
+    the second value: a rename that fell out of the tail no longer 'rolls back'
+    to the auto ai-title, yet a FRESH in-tail rename (a terminal /rename, a
+    re-rename) still supersedes the stored override (docs/session-naming-findings.md,
+    *Fallbacks*; docs/dashboard.md, *Web rename*). One _title_records read — the
+    ladder is shared with session_title()."""
+    named, ai = _title_records(path)
+    return _title_from_ladder(path, named, ai), named
 
 
 def set_session_title(path, name):

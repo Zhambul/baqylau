@@ -65,6 +65,22 @@ best-effort bounded read (never a full multi-MB transcript scan):
 
 1. `agent-name` — the `/rename` custom name (last one wins; beats everything).
 2. `ai-title` — Claude Code's auto title (last one; near EOF, tail-window read).
+
+> **The tail-window rollback, and the durable override.** Both 1 and 2 are read
+> from the LAST `TITLE_TAIL_B` (64KB) only. But `agent-name` is written ONCE while
+> Claude Code re-emits `ai-title` near EOF every few turns — so in a long session
+> the rename scrolls past the 64KB window and rung 1 finds nothing, dropping to the
+> auto `ai-title`: the rename *appears to roll back* (confirmed 2026-07-22; this was
+> previously filed as "the one accepted gap"). This is a display-only decay — the
+> `--resume` picker does a full read and keeps the custom name. The **dashboard**
+> closes it with a durable override (`dashboard/prefs.py` `renamed-title`, keyed by
+> the transcript `.jsonl` stem): `plugins.title_and_rename()` returns `(title,
+> tail_rename)`, and the dashboard prefers the override ONLY when `tail_rename` is
+> empty, so a fresh in-tail rename (terminal `/rename`, or renaming again) still
+> wins (docs/dashboard.md *Web rename*). Widening the window / a full backward scan
+> was rejected: an UN-renamed session has no `agent-name` anywhere, so proving its
+> absence costs a full multi-MB read on the hot list-render path — the O(1) override
+> is both cheaper and rollback-proof.
 3. `summary` — the last `summary` record in the head window (prepended on resume).
 4. First REAL user prompt — first line of the first non-`isMeta` user turn whose
    content does NOT start with `<` (`<command-*>`/`<local-command-*>` wrappers are

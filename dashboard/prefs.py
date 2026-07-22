@@ -155,3 +155,34 @@ def set_notify_muted(sid, muted):
         else:
             d.pop(str(sid), None)
     return mutate_map(NOTIFY_MUTE_KEY, _apply)
+
+
+# --- web-rename override (the durable rename that can't "roll back") ------------
+# The name the user set via the web rename button (docs/dashboard.md, *Web
+# rename*), stored under one kv key as a {session_id: name} map, keyed by the
+# TRANSCRIPT STEM sid (basename minus .jsonl — set_session_title's own sessionId,
+# adopt/fork-proof). The rename's canonical channel is still the transcript's
+# `agent-name` append, but that single record scrolls out of session_title's
+# 64KB tail-window in a long session while Claude Code keeps re-emitting
+# `ai-title` near EOF — so the auto title would win and the rename appear to
+# revert. This durable override is the tail-window-proof stand-in: session_title
+# prefers it ONLY when the transcript's tail no longer carries an `agent-name`
+# (a fresh in-tail rename — terminal /rename or a re-rename — still wins, so
+# "last rename wins" holds). Never deleted (a rename is sticky); a re-rename
+# overwrites. Global like notify-muted — a dashboard preference, survives park.
+RENAME_KEY = "renamed-title"
+
+
+def renamed_title(sid):
+    """The durable web-rename override for `sid` (the transcript stem), or ''
+    when the session was never web-renamed / the store is unreadable."""
+    d = get(RENAME_KEY, {})
+    name = d.get(str(sid), "") if isinstance(d, dict) else ""
+    return name if isinstance(name, str) else ""
+
+
+def set_renamed_title(sid, name):
+    """Persist the web-rename override `name` for `sid`; returns the updated map.
+    Atomic read-modify-write (mutate_map) so two concurrent renames of DIFFERENT
+    sessions can't lose each other's entry; best-effort like set()."""
+    return mutate_map(RENAME_KEY, lambda d: d.__setitem__(str(sid), name))
