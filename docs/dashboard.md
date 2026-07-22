@@ -2641,9 +2641,12 @@ the typed free text) alongside the `questions` list (for each question's `header
 AND its option labels). `transcript._answer_pairs` pairs them into
 `[{q, header, values:[…]}]` (attached to the record as `qa`) — a multiSelect
 answer is split back into its separate values by `_split_answer`, which is
-LABEL-AWARE (it matches the known option labels so a label that itself contains
-`", "`, e.g. "Salt, pepper", never gets mis-split; a segment matching no label is a
-typed custom value). `opshtml.answer_html` renders one section per question — its
+LABEL-AWARE: Claude Code joins the selected option labels (in option order) and
+THEN the ONE typed custom value, so it peels KNOWN option labels off the front
+(longest-first, so a label that itself contains `", "` like "Salt, pepper" stays
+whole) and treats whatever REMAINS as a single custom value — never split further,
+because a comma inside the typed custom text ("test, test2") is not a value
+boundary. `opshtml.answer_html` renders one section per question — its
 optional header chip + question text — with EACH picked value as its own
 HIGHLIGHTED chip (`.ansv` in the `--done` hue, wrapped in `.ansvs`), mirroring the
 `question` bubble's per-question layout. It degrades to the flat recap markdown when

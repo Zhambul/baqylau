@@ -494,22 +494,22 @@ def _line_ts(s):
 
 
 def _split_answer(answer, labels):
-    """Split a ", "-joined multiSelect answer into its individual values, using
-    the question's known option `labels` to avoid mis-splitting a label that
-    itself contains ", " (e.g. "Salt, pepper"). Greedy longest-label-prefix
-    match from the front; a segment matching no label is a TYPED custom answer,
-    taken up to the next ", ". Returns the list of values (order preserved)."""
+    """Split a ", "-joined multiSelect answer into its individual values. Claude
+    Code joins the selected option labels (in option order) and THEN the ONE
+    typed custom value, if any. So peel KNOWN option `labels` off the front
+    (longest-first, so a label that itself contains ", " like "Salt, pepper"
+    stays whole) and treat whatever REMAINS as a single custom value — NEVER
+    split further, because a comma inside the typed custom text ("test, test2")
+    is not a value boundary. Order preserved."""
     labs = sorted((l for l in labels if l), key=len, reverse=True)
     s, out = answer, []
     while s:
         lab = next((l for l in labs if s == l or s.startswith(l + ", ")), None)
-        if lab is not None:
-            out.append(lab)
-            s = s[len(lab):]
-        else:                                  # a custom segment (no label match)
-            i = s.find(", ")
-            out.append(s if i < 0 else s[:i])
-            s = "" if i < 0 else s[i:]
+        if lab is None:
+            out.append(s)                      # the remainder is ONE custom value
+            break
+        out.append(lab)
+        s = s[len(lab):]
         s = s[2:] if s.startswith(", ") else s
     return out
 

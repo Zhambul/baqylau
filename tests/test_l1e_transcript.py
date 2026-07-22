@@ -314,6 +314,23 @@ def test_conversation_answer_carries_qa_pairs(tmp_path):
          "values": ["Fries", "Salt, pepper", "extra"]}]
 
 
+def test_split_answer_label_aware():
+    # a multiSelect answer = selected option labels (in option order) + the ONE
+    # typed custom value, ", "-joined. peel KNOWN labels off the front; the
+    # REMAINDER is a single custom value, even when it contains commas.
+    labels = ["Coffee", "Dark chocolate", "Chips", "Fruit"]
+    # the reported bug: a custom "test, test2 same line" is ONE value, not two
+    assert TR._split_answer("Coffee, test, test2 same line", labels) == \
+        ["Coffee", "test, test2 same line"]
+    # a label that itself contains ", " stays whole, custom trailing kept whole
+    assert TR._split_answer("Fries, Salt, pepper, x, y", ["Fries", "Salt, pepper"]) == \
+        ["Fries", "Salt, pepper", "x, y"]
+    # all-labels, no custom
+    assert TR._split_answer("Coffee, Fruit", labels) == ["Coffee", "Fruit"]
+    # pure custom (no option selected)
+    assert TR._split_answer("just, my, words", labels) == ["just, my, words"]
+
+
 def test_conversation_surfaces_declined_question(tmp_path):
     # A DECLINED question still records the question (the assistant tool_use is
     # written regardless), just with no `answer` recap — the transcript honestly
