@@ -927,7 +927,7 @@ function showSession(sid, tab) {
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
               memory: null, noteTrail: null, noteFocus: null,
-              loadingOlder: false, queue: [],
+              loadingOlder: false, queue: [], pending: [],
               filter: { kind: "all" } };          // cleared per session (new S.ses)
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
@@ -1184,6 +1184,7 @@ function appendItems(items) {
     applyFilterTo(b.root);
   }
   drainQueue(items);
+  drainPending(items);
   enforceWindow();
   while (st.childElementCount > 3000) {
     let last = st.lastElementChild;
@@ -1561,6 +1562,58 @@ function drainQueue(items) {
     if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
   }
   if (hit) { renderQueue(); saveQueue(ses); }
+}
+
+/* ---------- optimistic prompt bubbles (the composer's own send) ---------- */
+// A sent message reaches the transcript only once Claude Code writes its user
+// prompt record and the server pushes the `msgs` SSE event — a visible gap
+// after the paste lands. To close it, send() prepends a GREYED stand-in bubble
+// (.msg.prompt.pending) the instant it POSTs; drainPending removes it when the
+// matching REAL prompt arrives (the server-rendered bubble takes its place), or
+// send() removes it directly on failure / when the send was queued (the ⧗ chip
+// owns that case). DOM-only + in-memory (ses.pending) — a reload replays from
+// the real transcript, so nothing is persisted and stale stand-ins can't leak.
+
+// Plain-text bubble mirroring opshtml.msg_html's .msg.prompt shape, minus the
+// rewind ↶ (a not-yet-delivered prompt isn't re-runnable). textContent, never
+// innerHTML — the transient body never interprets markup.
+function pendingBubble(text) {
+  const d = el("div", "msg prompt pending");
+  d.append(el("span", "who", "you"));
+  const md = el("div", "md");
+  const p = el("p");
+  text.split("\n").forEach((line, i) => {
+    if (i) p.append(el("br"));
+    p.append(document.createTextNode(line));
+  });
+  md.append(p);
+  d.append(md);
+  return d;
+}
+
+function removePending(pend) {
+  const ses = S.ses;
+  if (!ses || !ses.pending) return;
+  const i = ses.pending.indexOf(pend);
+  if (i >= 0) ses.pending.splice(i, 1);
+  if (pend && pend.node) pend.node.remove();
+}
+
+function drainPending(items) {
+  const ses = S.ses;
+  if (!ses || !ses.pending || !ses.pending.length) return;
+  for (const it of items) {
+    if (it.t !== "msg" || it.kind !== "prompt") continue;
+    const real = (it.text || "").trim();
+    // exact match, or (attachments prepend leading @path mentions +\n) the
+    // real text ends with the typed suffix — server._with_attachments order
+    const i = ses.pending.findIndex(p =>
+      real === p.text || real.endsWith("\n" + p.text));
+    if (i >= 0) {
+      const [p] = ses.pending.splice(i, 1);
+      if (p.node) p.node.remove();
+    }
+  }
 }
 
 /* ---------- the ask card (AskUserQuestion from the web) ---------- */
@@ -2547,10 +2600,26 @@ function buildComposer() {
     const msg = { text };
     if (atts.length) msg.attachments = atts;
     if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }
+    // optimistic: show the message immediately (greyed) so there's no gap
+    // before its real transcript prompt arrives over SSE — drainPending swaps
+    // in the real bubble when it lands (see the optimistic-bubbles section).
+    // Only for typed text (empty send = attachments only: nothing to preview).
+    let pend = null;
+    if (text) {
+      const node = pendingBubble(text);
+      const w = ses.stream.querySelector(".waiting");
+      if (w) w.remove();
+      ses.stream.insertBefore(node, ses.stream.firstChild);
+      pend = { text, node };
+      ses.pending.push(pend);
+    }
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg)
       .then(d => {
         ta.value = ""; autoGrow(ta); tray.clear();
         if (d && d.queued) {
+          // queued mid-turn — the ⧗ chip owns this until delivery; drop the
+          // stand-in so the two representations don't double up
+          if (pend) removePending(pend);
           ses.queue.push({ text });
           renderQueue();
           saveQueue(ses);
@@ -2562,6 +2631,7 @@ function buildComposer() {
       .catch(e => {
         // send-start cleared the stash optimistically; the box keeps its text,
         // so re-persist it — a reload mustn't lose an unsent message
+        if (pend) removePending(pend);   // the send didn't land — no stand-in
         toast("ask", "send failed", (e && e.error) || "");
         saveComposerDraft(ses, sid);
       })

@@ -1013,6 +1013,11 @@ body.modal-open { overflow: hidden; }
 }
 .msg.prompt { border-left-color: var(--gold); position: relative; }
 .msg.prompt .who { color: var(--gold); }
+/* optimistic stand-in shown the instant the composer sends, before the real
+   transcript prompt arrives over SSE (app.js pendingBubble/drainPending) —
+   greyed to read as not-yet-delivered; swapped for the real bubble on arrival */
+.msg.prompt.pending { opacity: .5; border-left-color: var(--dim2); }
+.msg.prompt.pending .who { color: var(--dim); }
 
 /* full web rewind (docs/dashboard.md, *Web rewind*): every prompt bubble is a
    checkpoint — ↶ reveals on hover (or all at once in picking mode, the idle

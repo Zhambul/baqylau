@@ -683,6 +683,24 @@ queue, and is lost (perturbing the dialog too). `post_message` now checks
 pointing the user at the ask/plan card above; the composer keeps its text. Once
 the dialog resolves, the send goes through normally.
 
+## Optimistic composer bubble
+
+A composer send only reaches the transcript once Claude Code writes the user
+prompt record and the server pushes the `msgs` SSE event — a visible lag after
+the paste lands (longer still if the turn is busy). To close that gap, `send()`
+prepends a GREYED stand-in bubble (`.msg.prompt.pending`, `pendingBubble` —
+plain `textContent`, no markdown, no rewind ↶) into the stream the instant it
+POSTs, tracked in `ses.pending`. When the matching real prompt arrives,
+`drainPending` (called beside `drainQueue` in `appendItems`) removes the
+stand-in and the server-rendered bubble takes its place — normal color, full
+markdown, rewindable. Matching is on the raw prompt text (exact, or — since
+attachments prepend leading `@path` mentions + a newline — the real text ends
+with the typed suffix). The stand-in is DOM-only and never persisted (a reload
+replays from the real transcript), so a stale one can't leak. `send()` also
+removes it directly on a failed POST (nothing was sent) and on a `queued`
+verdict (the ⧗ chip owns that case — no double representation). Attachment-only
+sends (empty text) get no stand-in: there's nothing to preview.
+
 ## New-session prefs (`GET`/`POST /api/ns-prefs`)
 
 The new-session form pre-selects the **last-used directory, model, and
