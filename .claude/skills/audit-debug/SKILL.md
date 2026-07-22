@@ -158,9 +158,13 @@ New always-audited swallow sites (previously silent — their absence used to ma
     POST never reached `post_stop`; now distinguish WHY: a **`web-reject`** row
     for the `/…/stop` path = the guard bounced it (missing header / cross-origin
     / read-only — read its `why`); a **`web-clientfail gesture:close`** row = the
-    fetch itself failed/aborted client-side; NEITHER (only the `web-hint`) = the
-    POST never left the page — a client rendering/wiring bug, classically the
-    LAUNCH TAG-RACE (a just-launched session rendered `live:true` with a blank
+    fetch itself failed/aborted client-side — INCLUDING the connection-pool-
+    starvation case (a plain fetch queued behind the page's SSE `EventSource`
+    streams on the HTTP/1.1 origin, hung with no resolve/reject): the ✕ close now
+    rides `fetch(keepalive:true)` + a `CLOSE_POST_MS` timeout, so that hang aborts
+    → `web-clientfail kind:transport` instead of only a silent 20s `web-hint …
+    stale`. NEITHER (only the `web-hint`) = the POST never left the page — a
+    client rendering/wiring bug, classically the LAUNCH TAG-RACE (a just-launched session rendered `live:true` with a blank
     `kitty_window_id`, so the composer locked and the ✕ close button never
     rendered until a reload; fixed by showSession's meta re-fetch, docs/
     dashboard.md *The launch tag-race*). Also check whether a SessionEnd/park

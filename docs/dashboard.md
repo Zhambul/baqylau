@@ -1666,6 +1666,20 @@ for the `/stop` path = guard-bounced; a `web-clientfail gesture:close` = the
 fetch itself failed/aborted; neither, only the `web-hint` = the POST never left
 the page (a rendering/wiring bug, e.g. the launch tag-race below).
 
+**Close robustness (keepalive + timeout).** A subtler stuck close had no reject
+at all — the `/stop` fetch hung *pending forever*: on this HTTP/1.1 origin the
+~6-connections/origin browser cap is consumed by the page's long-lived SSE
+`EventSource` streams (`/events` + `/events/session` + agent), so a plain fetch
+for the close can QUEUE behind them and never send — no resolve, no reject, so no
+`.catch`, no `web-clientfail`, just the client's 20s `web-hint … stale` and no
+server row of any kind. The ✕ close POST now (a) rides `fetch(keepalive:true)` —
+the browser's keepalive/sendBeacon pool, which the SSE streams don't starve — and
+(b) carries a `CLOSE_POST_MS` timeout (< the 20s watchdog) so if it STILL can't
+complete it aborts → rejects → fires the `web-clientfail gesture:close` beacon
+and a retryable "close failed" toast instead of hanging silently. So the last
+invisible case ("only a `web-hint`, no reject") is now both mitigated and, if it
+recurs, audited.
+
 **The launch tag-race (why a just-launched session's controls were dead).** A
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged
 `claude_session=<sid>` for a moment, so `/api/session` momentarily reports

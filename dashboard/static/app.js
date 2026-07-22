@@ -59,6 +59,11 @@ const ARM_MS = 4000;   // two-step-confirm window (card ✕ / header ✕ / compa
 // race*). Bounded — a truly headless session never tags a window.
 const LAUNCH_RESOLVE_MS = 1000;
 const LAUNCH_RESOLVE_TRIES = 12;
+// The ✕ close POST goes through the keepalive pool with a timeout (< the 20s
+// optPending watchdog) so a connection-pool-starved /stop rejects visibly and
+// retryably instead of hanging silently (docs/dashboard.md *The launch tag-race*
+// / close robustness).
+const CLOSE_POST_MS = 12000;
 
 // iPad detection — gates the message boxes' Enter behavior AND every
 // non-user-initiated .focus() (view-open, form-open, post-send refocus:
@@ -90,13 +95,35 @@ function frag(...kids) { const f = document.createDocumentFragment(); kids.forEa
 // custom X-Claude-Dash header the server's _post_guard demands (both force a
 // CORS preflight a cross-origin page can't pass). Resolves to the parsed JSON
 // on success, rejects with the server's {error} on a 4xx/5xx.
-function postJSON(url, body) {
-  return fetch(url, {
+// opts (optional): { keepalive, timeout }.
+//   keepalive — send via the browser's keepalive pool (the sendBeacon infra),
+//     which is NOT starved by the page's long-lived SSE EventSource streams. On
+//     an HTTP/1.1 origin (this server) the ~6-connections/origin cap is eaten by
+//     /events + /events/session (+ agent) — a plain fetch for a control POST can
+//     then QUEUE behind them and never send, hanging with no resolve AND no
+//     reject (so no .catch, no web-clientfail — an invisible stuck close, the
+//     reported bug). Use for the tiny control POSTs (NOT uploads/messages — the
+//     keepalive quota is 64KB across all inflight such requests).
+//   timeout — abort (→ reject) after N ms so a hung request becomes a VISIBLE,
+//     retryable, auditable failure (web-clientfail kind:transport) instead of a
+//     silent pending forever.
+function postJSON(url, body, opts) {
+  opts = opts || {};
+  const init = {
     method: "POST",
     headers: { "Content-Type": "application/json", "X-Claude-Dash": "1" },
     body: JSON.stringify(body || {}),
-  }).then(r => r.json().then(
-    d => r.ok ? d : Promise.reject(d || { error: "request failed" })));
+  };
+  if (opts.keepalive) init.keepalive = true;
+  let timer = null;
+  if (opts.timeout && typeof AbortController !== "undefined") {
+    const ctl = new AbortController();
+    init.signal = ctl.signal;
+    timer = setTimeout(() => ctl.abort(), opts.timeout);
+  }
+  return fetch(url, init).then(r => r.json().then(
+    d => r.ok ? d : Promise.reject(d || { error: "request failed" })))
+    .finally(() => { if (timer) clearTimeout(timer); });
 }
 
 // This page's opaque identity — stamped on every ask-draft write so the SSE
@@ -877,7 +904,8 @@ function cardClose(sid) {
     btn.textContent = "closing…";
     const a = btn.closest(".scard");
     if (a) a.classList.add("closing");
-    postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
+    postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {},
+             { keepalive: true, timeout: CLOSE_POST_MS })
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
         S.closing.delete(sid);
@@ -4386,7 +4414,8 @@ function renderSessionChrome(tab) {
       // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
       S.closing.add(sid);
       S.closePend[sid] = optPending(sid, "close");
-      postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {})
+      postJSON("/api/session/" + encodeURIComponent(sid) + "/stop", {},
+               { keepalive: true, timeout: CLOSE_POST_MS })
         .then(() => {
           toast("done", "session closed", "terminal tab closed");
           // the session just ended — back to the list, unless the user
