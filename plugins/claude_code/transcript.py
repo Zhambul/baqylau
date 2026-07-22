@@ -493,33 +493,63 @@ def _line_ts(s):
         return None
 
 
+def _split_answer(answer, labels):
+    """Split a ", "-joined multiSelect answer into its individual values, using
+    the question's known option `labels` to avoid mis-splitting a label that
+    itself contains ", " (e.g. "Salt, pepper"). Greedy longest-label-prefix
+    match from the front; a segment matching no label is a TYPED custom answer,
+    taken up to the next ", ". Returns the list of values (order preserved)."""
+    labs = sorted((l for l in labels if l), key=len, reverse=True)
+    s, out = answer, []
+    while s:
+        lab = next((l for l in labs if s == l or s.startswith(l + ", ")), None)
+        if lab is not None:
+            out.append(lab)
+            s = s[len(lab):]
+        else:                                  # a custom segment (no label match)
+            i = s.find(", ")
+            out.append(s if i < 0 else s[:i])
+            s = "" if i < 0 else s[i:]
+        s = s[2:] if s.startswith(", ") else s
+    return out
+
+
 def _answer_pairs(tur):
-    """Pair each answered AskUserQuestion with the answer the user picked, for
+    """Pair each answered AskUserQuestion with the value(s) the user picked, for
     the dashboard's STRUCTURED `answer` bubble (docs/dashboard.md, *Web ask*).
     Claude Code's toolUseResult carries `answers` as a {question_text:
     answer_string} map (answer = the chosen label, ", "-joined labels for
     multiSelect, or the typed free text) and `questions` as the tool_input list
-    — used only for each question's optional header chip. Returns
-    [{q, header, answer}] in the map's (question) order, or [] when `answers`
+    — for each question's optional header AND its option labels (to split a
+    multiSelect answer back into separate values, label-aware). Returns
+    [{q, header, values:[…]}] in the map's (question) order, or [] when `answers`
     isn't that map (an older/other shape → the flat recap renders instead).
     Pure data — opshtml.answer_html does the HTML (escape-first there)."""
     answers = tur.get("answers") if isinstance(tur, dict) else None
     if not isinstance(answers, dict):
         return []
-    headers = {}
+    meta = {}                                  # question -> (header, multi, labels)
     qs = tur.get("questions")
     if isinstance(qs, list):
         for q in qs:
             if isinstance(q, dict) and isinstance(q.get("question"), str):
-                headers[q["question"]] = (q.get("header") or "").strip()
+                labels = [o.get("label") or "" for o in (q.get("options") or [])
+                          if isinstance(o, dict)]
+                meta[q["question"]] = ((q.get("header") or "").strip(),
+                                       bool(q.get("multiSelect")), labels)
     pairs = []
     for q_text, ans in answers.items():
         if not isinstance(q_text, str):
             continue
-        val = ans if isinstance(ans, str) else str(ans)
-        pairs.append({"q": q_text.strip(),
-                      "header": headers.get(q_text, ""),
-                      "answer": val.strip()})
+        val = (ans if isinstance(ans, str) else str(ans)).strip()
+        header, multi, labels = meta.get(q_text, ("", False, []))
+        if not val:
+            values = []
+        elif multi:
+            values = _split_answer(val, labels)
+        else:
+            values = [val]                     # single-select: one value, as-is
+        pairs.append({"q": q_text.strip(), "header": header, "values": values})
     return pairs
 
 

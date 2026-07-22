@@ -599,10 +599,11 @@ def md_html(text):
 def answer_html(pairs):
     """The STRUCTURED AskUserQuestion answer bubble body: one section per
     answered question (its optional header chip + question text) with the CHOSEN
-    answer HIGHLIGHTED — mirrors the question bubble's per-question layout, the
-    answer standing out in the --done hue instead of the flat one-line recap
+    value(s) HIGHLIGHTED — mirrors the question bubble's per-question layout, each
+    picked value its OWN chip in the --done hue (a multiSelect answer reads as
+    separate values, not one lumped string) instead of the flat one-line recap
     (docs/dashboard.md, *Web ask*). `pairs` is transcript._answer_pairs output
-    ([{q, header, answer}]). Returns None when there's nothing structured to show
+    ([{q, header, values:[…]}]). Returns None when there's nothing structured to show
     (→ msg_html falls back to the flat recap markdown). Escape-first, like every
     leaf here — the neutralize() analog."""
     rows = []
@@ -610,8 +611,9 @@ def answer_html(pairs):
         if not isinstance(p, dict):
             continue
         q = (p.get("q") or "").strip()
-        ans = (p.get("answer") or "").strip()
-        if not q and not ans:
+        values = [v.strip() for v in (p.get("values") or [])
+                  if isinstance(v, str) and v.strip()]
+        if not q and not values:
             continue
         head = ""
         hdr = (p.get("header") or "").strip()
@@ -619,10 +621,11 @@ def answer_html(pairs):
             head += "<span class=\"anshdr\">%s</span>" % html.escape(hdr, quote=False)
         if q:
             head += "<span class=\"ansqt\">%s</span>" % html.escape(q, quote=False)
-        val = ("<span class=\"ansv\">%s</span>" % html.escape(ans, quote=False)
-               if ans else "<span class=\"ansv none\">—</span>")
-        rows.append("<div class=\"ansq\"><div class=\"ansqh\">%s</div>%s</div>"
-                    % (head, val))
+        chips = "".join("<span class=\"ansv\">%s</span>"
+                        % html.escape(v, quote=False) for v in values) \
+            or "<span class=\"ansv none\">—</span>"
+        rows.append("<div class=\"ansq\"><div class=\"ansqh\">%s</div>"
+                    "<div class=\"ansvs\">%s</div></div>" % (head, chips))
     return "<div class=\"ansqa\">%s</div>" % "".join(rows) if rows else None
 
 

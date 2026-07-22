@@ -1093,9 +1093,10 @@ body.modal-open { overflow: hidden; }
   text-transform: uppercase; letter-spacing: .08em; flex: none;
 }
 .ansqt { color: var(--text-soft); font: 550 12.5px/1.45 var(--sans); }
+/* one chip per picked value (multiSelect → several side by side, wrapping) */
+.ansvs { display: flex; flex-wrap: wrap; gap: 6px; }
 .ansv {
-  align-self: flex-start; max-width: 100%;
-  padding: 4px 11px; border-radius: 8px;
+  max-width: 100%; padding: 4px 11px; border-radius: 8px;
   background: color-mix(in srgb, var(--done) 16%, var(--bg));
   color: var(--done); font: 600 12.5px/1.4 var(--sans); word-break: break-word;
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--done) 45%, transparent);

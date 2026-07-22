@@ -2628,14 +2628,19 @@ one line — make each question and answer its own section"). Claude Code's reca
 string ("Your questions have been answered: …") crammed every Q="A" onto one line.
 The `toolUseResult` sidecar, though, carries `answers` as a `{question_text:
 answer_string}` map (the chosen label, `", "`-joined labels for multiSelect, or
-the typed free text) alongside the `questions` list (for each question's `header`).
-`transcript._answer_pairs` pairs them into `[{q, header, answer}]` (attached to the
-record as `qa`), and `opshtml.answer_html` renders one section per question — its
-optional header chip + question text — with the PICKED answer HIGHLIGHTED (`.ansv`,
-the `--done` hue), mirroring the `question` bubble's per-question layout. It
-degrades to the flat recap markdown when the sidecar isn't that map (an older shape
-/ no pairs) — so the old rendering is the fallback, never lost. Escape-first like
-every `md_html` leaf. Pure read-model: no new hook, stream, or state.
+the typed free text) alongside the `questions` list (for each question's `header`
+AND its option labels). `transcript._answer_pairs` pairs them into
+`[{q, header, values:[…]}]` (attached to the record as `qa`) — a multiSelect
+answer is split back into its separate values by `_split_answer`, which is
+LABEL-AWARE (it matches the known option labels so a label that itself contains
+`", "`, e.g. "Salt, pepper", never gets mis-split; a segment matching no label is a
+typed custom value). `opshtml.answer_html` renders one section per question — its
+optional header chip + question text — with EACH picked value as its own
+HIGHLIGHTED chip (`.ansv` in the `--done` hue, wrapped in `.ansvs`), mirroring the
+`question` bubble's per-question layout. It degrades to the flat recap markdown when
+the sidecar isn't that map (an older shape / no pairs) — so the old rendering is the
+fallback, never lost. Escape-first like every `md_html` leaf. Pure read-model: no
+new hook, stream, or state.
 
 **The QUESTION surfaces too** (added 2026-07-20, "I want questions also to be in
 the transcript"). The answer alone was half the record — the transcript showed
