@@ -2107,12 +2107,17 @@ class Handler(BaseHTTPRequestHandler):
             return
         sid = body.get("sid")
         sid = sid if isinstance(sid, str) and _sid(sid) else ""
+        # A rejected upload files its row under the uploader's session when we
+        # have a sid, else the global stream (a log-less staging upload).
+        ulog = P.mirror_log(sid) if sid else ""
         name = body.get("name")
         mime = body.get("mime") or ""
         data_b64 = body.get("data")
         if not isinstance(name, str) or not isinstance(data_b64, str) \
                 or not isinstance(mime, str):
-            return self._json({"error": "name, mime, data required"}, 400)
+            return self._reject_input(
+                "web-upload", "bad fields", "name, mime, data required",
+                {"name": name, "mime": mime}, log=ulog)
         # basename only — strip any path component a hostile name carries, and
         # fall back to a neutral stem so an empty/dotfile name can't produce a
         # bare-uuid or hidden file.
@@ -2121,11 +2126,15 @@ class Handler(BaseHTTPRequestHandler):
         try:
             raw = base64.b64decode(data_b64, validate=True)
         except (binascii.Error, ValueError):
-            return self._json({"error": "invalid base64"}, 400)
+            return self._reject_input("web-upload", "bad base64",
+                                      "invalid base64", {"name": safe}, log=ulog)
         if not raw:
-            return self._json({"error": "empty file"}, 400)
+            return self._reject_input("web-upload", "empty file", "empty file",
+                                      {"name": safe}, log=ulog)
         if len(raw) > UPLOAD_MAX:
-            return self._json({"error": "file too large"}, 413)
+            return self._reject_input("web-upload", "too large",
+                                      "file too large", {"bytes": len(raw)},
+                                      code=413, log=ulog)
         is_image = mime in IMAGE_MIMES
         # audit target: the uploader's session log if we have a sid, else the
         # shared staging bucket keyed on the log-less "staging" slug.
@@ -2203,12 +2212,15 @@ class Handler(BaseHTTPRequestHandler):
         if text is None:
             text = ""
         if not isinstance(text, str):
-            return self._json({"error": "empty text"}, 400)
+            return self._reject_input("web-send", "bad text", "empty text",
+                                      {"type": type(text).__name__},
+                                      log=P.mirror_log(sid))
         # attachments (vetted @-paths) may stand in for text — a screenshot with
         # no words is a valid message; an empty message with neither is not.
         attachments = self._attachment_paths(body)
         if not text.strip() and not attachments:
-            return self._json({"error": "empty text"}, 400)
+            return self._reject_input("web-send", "empty text", "empty text",
+                                      {"chars": len(text)}, log=P.mirror_log(sid))
         text = self._with_attachments(text, attachments)
         clear_draft = bool(body.get("clear_draft"))
         row = API.session_row(sid) or {}
@@ -2432,10 +2444,14 @@ class Handler(BaseHTTPRequestHandler):
             return
         name = body.get("name")
         if not isinstance(name, str):
-            return self._json({"error": "empty name"}, 400)
+            return self._reject_input("web-rename", "bad name", "empty name",
+                                      {"type": type(name).__name__},
+                                      log=P.mirror_log(sid))
         name = _NAME_CTRL.sub(" ", name).strip()[:RENAME_MAX].strip()
         if not name:
-            return self._json({"error": "empty name"}, 400)
+            return self._reject_input("web-rename", "empty name", "empty name",
+                                      {"raw": body.get("name")},
+                                      log=P.mirror_log(sid))
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
@@ -2526,10 +2542,17 @@ class Handler(BaseHTTPRequestHandler):
         # ⇆ now downgrades too when no account has the current model free.
         cur_model = (plugins.context(row.get("transcript_path") or "")
                      or {}).get("model") or ""
-        target = plugins.migration_target(cur, cur_model, manual=True)
+        # Capture the picker's FULL reasoning (per-account rung/eff5h/limit-hit/
+        # reject) so a manual-migrate REFUSAL is reconstructible from the DB —
+        # the same subtle gap the automatic path closed with `relimit-pick`
+        # (docs/relimit.md *Audit trail*); a bare "no target" is undebuggable.
+        pick = {}
+        target = plugins.migration_target(cur, cur_model, manual=True,
+                                          explain=pick)
         if target is None:
             A.state_file(log, sdb, "web-migrate",
-                         {"ok": False, "reason": "no target", "from": cur})
+                         {"ok": False, "reason": "no target", "from": cur,
+                          "pick": pick})
             return self._json({"error": "no other account available"}, 409)
         # target["model"] is the downgrade rung (or "" for a same-model migrate);
         # pick_target already resolved same-vs-downgrade, so forward it verbatim.
@@ -2542,7 +2565,7 @@ class Handler(BaseHTTPRequestHandler):
         A.state_file(log, sdb, "web-migrate",
                      {"ok": ok, "from": cur, "to": target["slug"],
                       "model": target["model"], "eff": target["eff"],
-                      "cwd": row.get("cwd") or ""})
+                      "cwd": row.get("cwd") or "", "pick": pick})
         if not ok:                       # spawn failure already audited by SP
             return self._json({"error": "migrator spawn failed"}, 502)
         return self._json({"ok": True, "to": target["slug"]})
@@ -2644,9 +2667,13 @@ class Handler(BaseHTTPRequestHandler):
         text = body.get("text")
         mode = body.get("mode") or "conversation"
         if not isinstance(text, str) or not text.strip():
-            return self._json({"error": "empty text"}, 400)
+            return self._reject_input("web-rewind-to", "empty text",
+                                      "empty text",
+                                      {"type": type(text).__name__},
+                                      log=P.mirror_log(sid))
         if mode not in rewindmenu.MODE_LABELS:
-            return self._json({"error": "bad mode"}, 400)
+            return self._reject_input("web-rewind-to", "bad mode", "bad mode",
+                                      {"mode": mode}, log=P.mirror_log(sid))
         try:
             ups = max(0, int(body.get("ups") or 0))
         except (TypeError, ValueError):
@@ -2720,9 +2747,12 @@ class Handler(BaseHTTPRequestHandler):
         answers = body.get("answers")
         questions = pending.get("questions") or []
         if not isinstance(answers, list) or len(answers) != len(questions):
-            return self._json({"error": "answers must match the %d question%s"
-                               % (len(questions),
-                                  "" if len(questions) == 1 else "s")}, 400)
+            return self._reject_input(
+                "ask-draft", "answer count",
+                "answers must match the %d question%s"
+                % (len(questions), "" if len(questions) == 1 else "s"),
+                {"n_answers": len(answers) if isinstance(answers, list) else None,
+                 "n_questions": len(questions)}, log=P.mirror_log(sid))
         # normalize each answer to a dict FIRST: `answers` is only validated for
         # length above, so a non-dict element (adversarial/malformed body) must
         # not reach `.get()`. The old inline `if isinstance(a, dict)` on the
@@ -2769,7 +2799,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         text = body.get("text")
         if not isinstance(text, str):
-            return self._json({"error": "text must be a string"}, 400)
+            return self._reject_input("composer-draft", "bad text",
+                                      "text must be a string",
+                                      {"type": type(text).__name__},
+                                      log=P.mirror_log(sid))
         origin = str(body.get("origin") or "")
         seq = body.get("seq")
         seq = seq if isinstance(seq, (int, float)) else 0
@@ -2822,7 +2855,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         items = body.get("items")
         if not isinstance(items, list):
-            return self._json({"error": "items must be a list"}, 400)
+            return self._reject_input("composer-queue", "bad items",
+                                      "items must be a list",
+                                      {"type": type(items).__name__},
+                                      log=P.mirror_log(sid))
         # str() the filter side too, not just the value side: a non-string
         # `text` (e.g. a number in a malformed body) makes `(it.get("text") or
         # "").strip()` raise AttributeError → 500.
@@ -2875,10 +2911,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         phase = str(body.get("phase") or "")
         if phase not in ("shown", "reconciled", "dropped", "stale"):
-            return self._json({"error": "bad phase"}, 400)
+            return self._reject_input("web-hint", "bad phase", "bad phase",
+                                      {"phase": phase}, log=P.mirror_log(sid))
         op = str(body.get("op") or "composer")
         if op not in ("composer", "close", "answer", "plan"):
-            return self._json({"error": "bad op"}, 400)
+            return self._reject_input("web-hint", "bad op", "bad op",
+                                      {"op": op}, log=P.mirror_log(sid))
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
@@ -3051,9 +3089,12 @@ class Handler(BaseHTTPRequestHandler):
         questions = pending.get("questions") or []
         if not chat and (not isinstance(answers, list)
                          or len(answers) != len(questions)):
-            return self._json({"error": "answers must match the %d question%s"
-                               % (len(questions),
-                                  "" if len(questions) == 1 else "s")}, 400)
+            return self._reject_input(
+                "web-answer", "answer count",
+                "answers must match the %d question%s"
+                % (len(questions), "" if len(questions) == 1 else "s"),
+                {"n_answers": len(answers) if isinstance(answers, list) else None,
+                 "n_questions": len(questions)}, log=log, path=sdb)
         fe = _frontend()
         if fe is None:
             A.error(log, "dashboard answer (no terminal)", {"sid": sid})
@@ -3179,8 +3220,10 @@ class Handler(BaseHTTPRequestHandler):
             run = (plandialog.decide,
                    (fe, win, str(body["digit"]), body["label"]))
         else:
-            return self._json({"error": "need digit+label, feedback, or "
-                               "dismiss"}, 400)
+            return self._reject_input(
+                "web-plan", "no action",
+                "need digit+label, feedback, or dismiss",
+                {"keys": sorted(body)}, log=log, path=sdb)
         try:
             run[0](*run[1])
         except plandialog.PlanError as e:
@@ -3287,7 +3330,8 @@ class Handler(BaseHTTPRequestHandler):
             A.error(log, "dashboard interrupt (escape-recheck spawn)",
                     {"win": win})
 
-    def _reject_input(self, action, why, message, detail, code=400):
+    def _reject_input(self, action, why, message, detail, code=400,
+                      log="", path=""):
         """A control-plane INPUT-validation reject (the client sent a bad
         field). Audited as an `ok:False` state_files row under the handler's own
         `action` vocabulary, carrying the reason (`why`) and the EXACT received
@@ -3302,9 +3346,17 @@ class Handler(BaseHTTPRequestHandler):
         its bad-rate reject; the reject sites that mis-used A.error now share it.
         Distinct from `_reject` (the low-level guard rejection that closes the
         connection because it hasn't read the body — the input body is already
-        consumed by `_post_guard` here, so no desync to guard against). Returns
-        the response so callers stay `return self._reject_input(...)`."""
-        A.state_file("", "", action,
+        consumed by `_post_guard` here, so no desync to guard against).
+
+        `log`/`path` file the row under a SESSION (the session-scoped POSTs —
+        web-send/web-rename/web-answer/…, so a rejected attempt lands in THAT
+        session's audit timeline, not just the global stream); default '' keeps
+        the GLOBAL row the session-less endpoints (web-launch/notify-mute/
+        hide-dir/dictate) already relied on. Without this every empty-message /
+        empty-name / bad-payload reject was a silent 4xx — the same class of
+        blind spot `_reject` closed for guard rejections. Returns the response
+        so callers stay `return self._reject_input(...)`."""
+        A.state_file(log, path, action,
                      dict({"ok": False, "why": why},
                           **{k: repr(v) for k, v in detail.items()}))
         return self._json({"error": message}, code)

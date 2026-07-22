@@ -1325,6 +1325,59 @@ def test_http_copy_and_view(dash):
     assert {"gid": "missing", "ok": False} in views
 
 
+def _sf_rows_full(action):
+    """(session_id, content) for a state_files action, oldest-first — the
+    session-filing check the plain _state_rows can't make."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [(s, json.loads(c)) for (s, c) in con.execute(
+            "SELECT session_id, content FROM state_files WHERE action=? "
+            "ORDER BY ts", (action,))]
+    finally:
+        con.close()
+
+
+def test_input_validation_rejects_are_audited(dash):
+    """Every control-plane INPUT reject (a bad/empty body field) leaves an
+    `ok:False` state_files row under the handler's OWN action, FILED UNDER THE
+    SESSION — closing the silent-4xx class (`_reject_input`'s reason for being,
+    now reached from the session-scoped handlers too, not just the session-less
+    ones). One representative bad body per handler."""
+    A.session_start({"session_id": "rj9", "cwd": "/w", "transcript_path": ""})
+
+    def bad(path, body):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + path, body)
+        assert 400 <= e.value.code < 500
+
+    base = "/api/session/rj9/"
+    bad(base + "message", {"text": "   "})                  # whitespace only
+    bad(base + "rename", {"name": "   "})                   # empty after strip
+    bad(base + "rewind-to", {"text": "x", "mode": "nope"})  # bad mode
+    bad(base + "composer-draft", {"text": 5})               # not a string
+    bad(base + "composer-queue", {"items": "x"})            # not a list
+    bad(base + "hint-audit", {"phase": "bogus"})            # bad phase
+    bad("/api/upload", {"sid": "rj9"})                      # missing name/data
+    # ask-draft's answer-count check needs a pending stash to reach it
+    S.kv_set(P.mirror_log("rj9"), "ask-pending",
+             {"tool_use_id": "tuZ", "questions": [{"question": "q"}]})
+    bad(base + "ask-draft", {"tool_use_id": "tuZ", "answers": []})  # wrong count
+    checks = {"web-send": "empty text", "web-rename": "empty name",
+              "web-rewind-to": "bad mode", "composer-draft": "bad text",
+              "composer-queue": "bad items", "web-hint": "bad phase",
+              "web-upload": "bad fields", "ask-draft": "answer count"}
+    for action, why in checks.items():
+        hit = [(s, c) for (s, c) in _sf_rows_full(action)
+               if c.get("ok") is False and c.get("why") == why]
+        assert hit, "no audited reject for %s (%s)" % (action, why)
+        assert hit[-1][0] == "rj9", \
+            "%s reject not filed under sid: %r" % (action, hit[-1][0])
+
+
 def test_http_monitors_endpoint(dash, tmp_path):
     """The monitors tab's data path: plugins.monitors merges the MAIN transcript
     (Monitor tool_use + its 'Monitor started (task X)' result + queue-operation
@@ -2737,8 +2790,10 @@ def test_hint_audit_records_op_lifecycle(dash, monkeypatch):
 
 
 def test_hint_audit_guards_bad_op_and_phase(dash, monkeypatch):
-    """A bad phase or op is a 400 (nothing recorded); the beacon is behind the
-    control-plane POST guard like every write (missing header → 403)."""
+    """A bad phase or op is a 400 that now leaves an `ok:False` web-hint reject
+    row (via `_reject_input`, filed under the session — no longer a silent 4xx);
+    the beacon is behind the control-plane POST guard like every write (missing
+    header → 403, a `web-reject` row, NOT a web-hint one)."""
     A.session_start({"session_id": "wh2", "cwd": "/w", "transcript_path": ""})
     O.emit(P.mirror_log("wh2"), O.label("hi", (1, 2, 3)))
     with pytest.raises(urllib.error.HTTPError) as e:
@@ -2752,7 +2807,11 @@ def test_hint_audit_guards_bad_op_and_phase(dash, monkeypatch):
         _post(dash + "/api/session/wh2/hint-audit",
               {"phase": "shown"}, header=None)
     assert e.value.code == 403
-    assert _hint_rows("wh2") == []
+    # the two bad-body 400s each left an audited reject; the guard 403 did NOT
+    # write a web-hint row (it's a web-reject).
+    rows = _hint_rows("wh2")
+    assert rows == [{"ok": False, "why": "bad phase", "phase": "'bogus'"},
+                    {"ok": False, "why": "bad op", "op": "'nonsense'"}]
 
 
 def _client_rows(sid):
@@ -5098,11 +5157,21 @@ def test_post_migrate_spawns_the_manual_migrator(dash, monkeypatch, tmp_path):
     # current model; the ladder downgrade path is covered in test_l2_relimit)
     assert argv[1:] == ["migs1", "c2", "c2", "/w", "manual", ""]
     assert kw["purpose"] == "relimit:c2 (web)"
+    # the success row carries the pick trace (chosen target + reasoning)
+    migs = [c for (s, c) in _sf_rows_full("web-migrate") if s == "migs1"]
+    assert migs[-1]["ok"] is True and migs[-1]["pick"]["chosen"]["slug"] == "c2"
     # no other account in the registry → 409, nothing spawned
     tsv.write_text("c1\toboard\tsvc-1\n")
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/migs1/migrate", {})
     assert e.value.code == 409 and len(spawned) == 1
+    # the REFUSAL is now reconstructible — a `pick` trace naming every account
+    # weighed and why (the subtle gap the automatic `relimit-pick` closed, now
+    # on the manual ⇆ path too), not a bare "no target".
+    migs = [c for (s, c) in _sf_rows_full("web-migrate") if s == "migs1"]
+    assert migs[-1]["ok"] is False and migs[-1]["reason"] == "no target"
+    assert migs[-1]["pick"]["chosen"] is None
+    assert any(cand["slug"] == "c1" for cand in migs[-1]["pick"]["candidates"])
     # a sid this machine has never seen → 404, nothing spawned (the migrator
     # can't tell "parked" from "never existed" — an unknown sid would launch
     # a doomed --resume tab)

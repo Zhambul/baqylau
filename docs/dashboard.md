@@ -1220,10 +1220,16 @@ subscription account: the server picks the target
 limit-hit excluded, NO 90% ceiling for a manual click) and spawns the same
 detached migrator the automatic rate-limit path uses, in `mode=manual` (bare
 `--resume`, no auto-continue nudge). Audited as a `web-migrate` state_files
-row; `409` when no other account qualifies, `404` for a sid this machine has
-never seen (the migrator's park check can't tell "parked" from "never
-existed"). Full mechanics + the manual/auto differences: docs/relimit.md
-*Manual migrate*. No-confirm stays (the click IS the intent — docs/relimit.md
+row carrying a **`pick`** sub-object — `pick_target`'s full decision trace
+(`branch`/`cur_model`/per-account `candidates` with each rung/`eff5h`/limit-hit
+scope/reject reason/`chosen`), threaded through `plugins.migration_target(…,
+explain=)`. This makes a manual-migrate REFUSAL reconstructible from the DB —
+the manual twin of the automatic path's `relimit-pick` row, closing the same
+subtle gap the first rate-limit-migration investigation hit (a bare "no target"
+that couldn't be explained). `409` when no other account qualifies (the `pick`
+trace says why each was refused), `404` for a sid this machine has never seen
+(the migrator's park check can't tell "parked" from "never existed"). Full
+mechanics + the manual/auto differences: docs/relimit.md *Manual migrate*. No-confirm stays (the click IS the intent — docs/relimit.md
 *Manual migrate*), but the button DISABLES for the round-trip (`lockDuring` in
 app.js): "no confirm" means one deliberate click is enough, not that a
 double-tap during the ~1s POST should spawn TWO racing migrators (each closing
@@ -1649,18 +1655,29 @@ report is answerable from the DB.
 
 **Input-validation rejects are NOT `A.error`s.** A client that sends a bad
 field (a partial/non-existent `cwd`, a typo'd `model`/`effort`, a malformed
-`resume`, an unknown `account`, a bad quick-`command`, a bad `hide-dir` key)
-gets a 400/4xx and an `ok:False` `state_files` row under the handler's own
-action (`web-launch` / `web-command` / `hide-dir`) carrying `why:"<reason>"`
-plus the offending field `repr()`'d — the same shape `web-dictate` already
-used for its `bad-rate` reject, driven by the shared `Handler._reject` helper.
-Deliberately NOT an `errors` row: these are expected client-input 4xx, not
-swallowed exceptions (their traceback would be a bare `NoneType: None`), and
-`errwatch` surfaces every `session_id=''` `errors` row as a `⚠ global:` chip in
-EVERY session's scorebar — so a stray "ba" typed into the new-session form must
-not light a warning light that never clears. Genuine server-side failures (no
-terminal, launch/grant returned false) stay `A.error` — those ARE bugs worth
-the light.
+`resume`, an unknown `account`, a bad quick-`command`, a bad `hide-dir` key —
+AND an empty message, an empty rename, a bad upload, a bad rewind `mode`, a
+non-string composer draft, a non-list composer queue, a bad `hint-audit`
+phase/op, a wrong-count ask answer or draft, an actionless plan decision) gets a
+400/4xx and an `ok:False` `state_files` row under the handler's own action
+(`web-launch` / `web-command` / `hide-dir` / `web-send` / `web-rename` /
+`web-upload` / `web-rewind-to` / `composer-draft` / `composer-queue` /
+`web-hint` / `web-answer` / `ask-draft` / `web-plan`) carrying `why:"<reason>"`
+plus the offending field
+`repr()`'d — the shared `Handler._reject_input` helper. It takes an optional
+`log`/`path`, so a SESSION-scoped reject files under THAT session's timeline
+(not just the global stream) — without which every empty-message / empty-name /
+bad-payload reject was a silent 4xx, the exact class the `web-reject` guard fix
+closed one layer down. Deliberately NOT an `errors` row: these are expected
+client-input 4xx, not swallowed exceptions (their traceback would be a bare
+`NoneType: None`), and `errwatch` surfaces every `session_id=''` `errors` row as
+a `⚠ global:` chip in EVERY session's scorebar — so a stray "ba" typed into the
+new-session form must not light a warning light that never clears. Genuine
+server-side failures (no terminal, launch/grant returned false) stay `A.error` —
+those ARE bugs worth the light. (The stash-race 409s — `no pending question` /
+`ask expired` on the ask/plan cards — deliberately stay row-less: they fire
+legitimately when the dialog was resolved AT THE TERMINAL, and the
+`ask-pending`/`plan-pending` stash lifecycle already records that.)
 
 **Guard rejections ARE audited now (`web-reject`).** The above is the
 INPUT-validation layer (a handler ran and disliked a field). BENEATH it,

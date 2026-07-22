@@ -166,13 +166,17 @@ def launch_argv(words, cmd="claude"):
     return account.launch_argv(words, cmd)
 
 
-def migration_target(cur_slug, cur_model, manual=False):
+def migration_target(cur_slug, cur_model, manual=False, explain=None):
     """The migration-target provider (plugins.migration_target fan-out) — see
     account.pick_target, the owner of the model-downgrade ladder
     (docs/relimit.md). Both the automatic rate-limit path and the manual
     (web-button) migrate run the SAME ladder from `cur_model`; a manual migrate
     only relaxes the % headroom ceiling (an explicit click outranks the refuge
-    rule)."""
+    rule). `explain`, when a dict, is filled with pick_target's full decision
+    trace (branch/cur_model/candidates/chosen) so a manual-migrate REFUSAL is
+    reconstructible from the audit — the same trace the automatic path records
+    as `relimit-pick` (docs/relimit.md *Audit trail*)."""
     from plugins.claude_code import account
     return account.pick_target(
-        cur_slug, cur_model, ceiling=None if manual else account.TARGET_MAX_PCT)
+        cur_slug, cur_model, ceiling=None if manual else account.TARGET_MAX_PCT,
+        explain=explain)
