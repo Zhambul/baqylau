@@ -917,3 +917,16 @@ def test_goal_probe_bare_set_command_without_attachment(tmp_path):
     p = tmp_path / "g.jsonl"
     p.write_text(_l(_goal_cmd("do the thing")) + "\n", encoding="utf-8")
     assert TR.goal_probe(str(p)) == {"condition": "do the thing", "met": False}
+
+
+def test_goal_probe_ignores_list_content_quoting_the_command(tmp_path):
+    # A user record whose `content` is a LIST of blocks that merely QUOTES the
+    # `<command-name>/goal</command-name>` literal (e.g. a transcript discussing
+    # /goal, like this repo's own) must not crash or read as a command.
+    p = tmp_path / "g.jsonl"
+    p.write_text(_l({"type": "user", "message": {"content": [
+        {"type": "text",
+         "text": "see <command-name>/goal</command-name> <command-args>x"
+                 "</command-args> in the output"}]}}) + "\n",
+                 encoding="utf-8")
+    assert TR.goal_probe(str(p)) is None

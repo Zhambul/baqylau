@@ -506,7 +506,13 @@ def goal_probe(path):
                 return {"condition": cond, "met": bool(att.get("met"))}
         if is_cmd:
             msg = o.get("message") or {}
-            m = _GOAL_ARGS.search(msg.get("content") or "")
+            content = msg.get("content")
+            if not isinstance(content, str):
+                # a real /goal command record carries a plain string; the byte
+                # prefilter can also hit the literal inside a LIST content (e.g.
+                # this very transcript quoting it) — not a command, skip it
+                continue
+            m = _GOAL_ARGS.search(content)
             args = (m.group(1).strip() if m else "")
             low = args.lower()
             if low == "status":
