@@ -116,29 +116,52 @@ TARGET_MAX_PCT = 90   # a candidate at/above this effective 5h usage is no
                       # refuge — migrating there would hit the wall again
 
 
-def _rank(per, model, cur_slug, skip_cur, now, ceiling):
+def _hit_brief(hit):
+    """A compact limit-hit stamp for the pick trace (docs/relimit.md *Audit
+    trail*): scope + reset, enough to see WHY a rung was barred without carrying
+    the whole message. None when no stamp."""
+    if not hit:
+        return None
+    return {"model": hit.get("model"), "slug": hit.get("slug"),
+            "resets_at": hit.get("resets_at")}
+
+
+def _rank(per, model, cur_slug, skip_cur, now, ceiling, trace=None):
     """The best-headroom (lowest effective 5h) registry account that can run
     `model` (a family word), or None. Skips the current account when `skip_cur`
     (the same-model rung — you never migrate a model to the account that just
     ran out of it), any account an active limit-hit bars for `model`
-    (core.sessionapi.model_available), and any account at/above the % ceiling."""
+    (core.sessionapi.model_available), and any account at/above the % ceiling.
+    When `trace` is a list, append one record per account it considered (rung,
+    slug, effective 5h, limit-hit scope, and the reject reason or None) — the
+    pick-reasoning the audit records (pick_target's `explain`)."""
     best = None
     for a in registry():
-        if skip_cur and a["slug"] == cur_slug:
-            continue
-        ent = per.get(a["slug"]) or {}
-        if not API.model_available(ent.get("limit_hit"), model, now):
-            continue
+        slug = a["slug"]
+        ent = per.get(slug) or {}
+        hit = ent.get("limit_hit")
         eff = API.effective_five_hour(ent.get("usage"), now)
-        if ceiling is not None and eff >= ceiling:
+        if skip_cur and slug == cur_slug:
+            reject = "current account (just ran out of this model)"
+        elif not API.model_available(hit, model, now):
+            reject = "limit-hit bars this rung"
+        elif ceiling is not None and eff >= ceiling:
+            reject = "over %d%% 5h ceiling" % ceiling
+        else:
+            reject = None
+        if trace is not None:
+            trace.append({"rung": model, "slug": slug, "eff5h": eff,
+                          "limit_hit": _hit_brief(hit), "reject": reject})
+        if reject is not None:
             continue
         if best is None or eff < best["eff"]:
-            best = {"slug": a["slug"], "alias": a["alias"],
+            best = {"slug": slug, "alias": a["alias"],
                     "model": model, "eff": eff}
     return best
 
 
-def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PCT):
+def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PCT,
+                explain=None):
     """The migration target for a rate-limited session, walking the model
     downgrade ladder (docs/relimit.md *Model-downgrade ladder*). `cur_model` is
     the limited/current model family (model.family vocabulary). For each rung of
@@ -162,31 +185,66 @@ def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PC
     fall back to today's behavior — keep the current model, migrate to the
     least-used OTHER account with NO active limit-hit at all (we can't prove the
     kept model survives a model-scoped stamp, so any active stamp disqualifies),
-    and return `model=""` so the caller resumes bare (no `--model`)."""
+    and return `model=""` so the caller resumes bare (no `--model`).
+
+    When `explain` is a dict, it is filled with the FULL decision trace — the
+    resolved `cur_model`, which `branch` ran (`ladder` vs `fallback` — the tell
+    that `cur_model` was unknown, so the coarse "any active limit-hit
+    disqualifies" rule applied), the `ceiling`, the per-account `candidates`
+    (rung / eff5h / limit-hit scope / reject reason), and the `chosen` target —
+    so a refusal is reconstructible from the audit DB, never re-derived by hand
+    (docs/relimit.md *Audit trail*). Purely additive: the return is unchanged."""
     per = API.account_usage(cache=cache)
     # Accept EITHER a family word (relimit's limit_model/session_model already
     # collapse to one) OR a raw model id (the dashboard passes what it reads off
     # the transcript) — family() is idempotent on a family word.
     cur_model = M.family(cur_model)
     ladder = M.ladder_from(cur_model)
+    trace = [] if explain is not None else None
+    if explain is not None:
+        explain.update({"cur_slug": cur_slug, "cur_model": cur_model,
+                        "ladder": list(ladder),
+                        "branch": "ladder" if ladder else "fallback",
+                        "ceiling": ceiling, "candidates": trace, "chosen": None})
     if ladder:
         for i, model in enumerate(ladder):
-            best = _rank(per, model, cur_slug, i == 0, now, ceiling)
+            best = _rank(per, model, cur_slug, i == 0, now, ceiling, trace)
             if best is not None:
                 if best["model"] == cur_model:   # top rung — no downgrade
                     best["model"] = ""           # resume bare (proven path)
+                if explain is not None:
+                    explain["chosen"] = {"slug": best["slug"], "eff5h": best["eff"],
+                                         "model": best["model"] or cur_model}
                 return best
         return None
     best = None
     for a in registry():
-        if a["slug"] == cur_slug:
-            continue
-        ent = per.get(a["slug"]) or {}
-        if API.limit_hit_active(ent.get("limit_hit"), now):
-            continue
+        slug = a["slug"]
+        ent = per.get(slug) or {}
+        hit = ent.get("limit_hit")
         eff = API.effective_five_hour(ent.get("usage"), now)
-        if ceiling is not None and eff >= ceiling:
+        if slug == cur_slug:
+            reject = "current account"
+        elif API.limit_hit_active(hit, now):
+            # The fallback branch is COARSER than the ladder on purpose: with an
+            # unknown cur_model it can't prove the kept model survives a
+            # model-scoped stamp, so ANY active limit-hit disqualifies (even one
+            # scoped to a DIFFERENT model). The trace records this so the
+            # over-refusal is visible (docs/relimit.md).
+            reject = "any active limit-hit (fallback branch: cur_model unknown)"
+        elif ceiling is not None and eff >= ceiling:
+            reject = "over %d%% 5h ceiling" % ceiling
+        else:
+            reject = None
+        if trace is not None:
+            trace.append({"rung": "keep(%s)" % (cur_model or "?"), "slug": slug,
+                          "eff5h": eff, "limit_hit": _hit_brief(hit),
+                          "reject": reject})
+        if reject is not None:
             continue
         if best is None or eff < best["eff"]:
-            best = {"slug": a["slug"], "alias": a["alias"], "model": "", "eff": eff}
+            best = {"slug": slug, "alias": a["alias"], "model": "", "eff": eff}
+    if explain is not None and best is not None:
+        explain["chosen"] = {"slug": best["slug"], "eff5h": best["eff"],
+                             "model": cur_model or ""}
     return best

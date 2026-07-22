@@ -258,6 +258,17 @@ def test_no_fallback_account_never_migrates(run_hook, rl_env, hosted,
     assert any("no fallback account" in d
                for d in oracle.decisions(rl_env, s.sid, handler=RL))
     assert oracle.spawns(rl_env, s.sid) == []
+    # The refusal must leave a reconstructible trace: a relimit-pick row naming
+    # the branch + every account weighed and why it was rejected (docs/relimit.md
+    # *Audit trail*) — so a future triage never has to re-derive it by hand.
+    picks = [json.loads(r[2]) for r in oracle.state_files(rl_env, s.sid)
+             if r[1] == "relimit-pick"]
+    assert len(picks) == 1
+    pick = picks[0]
+    assert pick["chosen"] is None
+    assert pick["cur_slug"] == "c1"
+    assert any(c["slug"] == "c1" and "current account" in (c["reject"] or "")
+               for c in pick["candidates"])
 
 
 # ------------------------------------------------------- migrator exit paths
@@ -492,6 +503,48 @@ def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):
              "c3": {"usage": u(10), "limit_hit": wide()}}
     monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", "fable", ceiling=None) is None
+
+
+def test_pick_target_explain_records_the_reasoning(monkeypatch, tmp_path):
+    """The `explain` trace makes a refusal reconstructible from the audit DB —
+    the reported no-migrate-with-idle-c2 bug (docs/relimit.md *Audit trail*): an
+    account-wide limit whose running model couldn't be read falls into the
+    FALLBACK branch, whose coarse "any active limit-hit disqualifies" rule bars
+    an account whose stamp is scoped to a DIFFERENT model — one the LADDER would
+    happily use. The trace must show both."""
+    from core import sessionapi as API
+    from plugins.claude_code import account as ACC
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
+    now = time.time()
+    # c2 is nearly idle but carries a still-active FABLE-scoped stamp.
+    fresh = {"c1": {"usage": {"five_hour": 100, "five_hour_reset": now + 1000,
+                              "ts": now}, "limit_hit": None},
+             "c2": {"usage": {"five_hour": 4, "five_hour_reset": now + 1000,
+                              "ts": now},
+                    "limit_hit": {"ts": now, "resets_at": None, "model": "fable",
+                                  "slug": "c2"}}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+
+    # cur_model unknown → fallback branch → c2 refused over its fable stamp.
+    e = {}
+    assert ACC.pick_target("c1", None, explain=e) is None
+    assert e["branch"] == "fallback"
+    assert e["cur_model"] is None
+    assert e["chosen"] is None
+    c2 = next(c for c in e["candidates"] if c["slug"] == "c2")
+    assert "limit-hit" in c2["reject"]
+    assert c2["limit_hit"]["model"] == "fable"
+    assert c2["eff5h"] == 4          # the trace proves c2 had headroom
+
+    # ...but had the model resolved (ladder branch), c2 IS a valid Opus rung —
+    # the fable cap doesn't bar Opus — which is exactly what the fallback missed.
+    e2 = {}
+    t = ACC.pick_target("c1", "fable", explain=e2)
+    assert e2["branch"] == "ladder"
+    assert t["slug"] == "c2" and t["model"] == "opus"
+    assert e2["chosen"] == {"slug": "c2", "eff5h": 4, "model": "opus"}
 
 
 def test_model_available_single_owner():

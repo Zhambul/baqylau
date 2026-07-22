@@ -205,12 +205,25 @@ def main():
     # the session's actually-running model read from its transcript (an
     # account-wide limit names no model). None/unreadable → pick_target keeps the
     # current model (bare resume), today's behavior.
-    cur_model = model or M.family(M.session_model(d.get("transcript_path") or ""))
-    target = ACC.pick_target(acc.get("slug") or "", cur_model)
+    sess_model = M.session_model(d.get("transcript_path") or "")
+    cur_model = model or M.family(sess_model)
+    explain = {}
+    target = ACC.pick_target(acc.get("slug") or "", cur_model, explain=explain)
+    # Record the FULL picker reasoning — which branch ran, cur_model + how it
+    # resolved, and every account it weighed (rung / effective 5h / limit-hit
+    # scope / why rejected) — so a refusal is pinpointed from the DB instead of
+    # re-derived by hand. `branch=fallback` is the tell that the running model
+    # was unknown, so the coarse "any active limit-hit disqualifies" rule barred
+    # an account a model-scoped stamp would have left usable for another rung
+    # (docs/relimit.md *Audit trail*).
+    A.state_file(LOG, "", "relimit-pick",
+                 {"limit_model": model, "session_model": sess_model, **explain})
     if target is None:
         return A.hook_event(
-            d, decision="rate_limit: stamped; no fallback account under %d%% "
-                        "effective 5h — not migrating" % ACC.TARGET_MAX_PCT)
+            d, decision="rate_limit: stamped; no fallback account (cur_model=%s, "
+                        "%s branch, ceiling %d%%) — not migrating (see "
+                        "relimit-pick)"
+                        % (cur_model, explain.get("branch"), ACC.TARGET_MAX_PCT))
     # pick_target returns model="" for a same-model migration (resume bare, the
     # proven path) and a family word only for a real downgrade rung.
     mig_model = target["model"]

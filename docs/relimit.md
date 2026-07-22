@@ -275,8 +275,25 @@ gains a copy step; today one would be dead code.
 
 - hook decisions: `hook_events` handler `claude-relimit.py` — every skip path
   names itself (`stamped; no hosted tab …`, `cooldown`, `migration off`,
-  `no fallback account`), the go path records target + effective % + `migrating
-  to <slug> … downgrading <cur>→<rung>` when a rung was dropped + migrator pid.
+  `no fallback account (cur_model=… <branch> branch …)`), the go path records
+  target + effective % + `migrating to <slug> … downgrading <cur>→<rung>` when a
+  rung was dropped + migrator pid.
+- **pick reasoning: a `state_files` row `relimit-pick`** — the FULL `pick_target`
+  trace (its `explain` out-param), emitted on EVERY decided migration (go or
+  refuse) so a refusal is reconstructible from the DB instead of re-derived by
+  hand. It carries `limit_model` (the message's scope, null=account-wide),
+  `session_model` (the raw model read off the transcript — **null here is the
+  tell** that the running model couldn't be resolved), `cur_model` (the resolved
+  ladder start), `branch` (`ladder` when `cur_model` is a known rung, else
+  `fallback` — and the fallback branch is deliberately COARSER: it disqualifies
+  ANY account with an active limit-hit, even one scoped to a DIFFERENT model,
+  because it can't prove the kept model survives), `ceiling`, `chosen` (the
+  target or null), and `candidates` — one record per account weighed at each
+  rung (`rung` / `slug` / `eff5h` / `limit_hit` scope / `reject` reason or null).
+  This is what pinpoints the reported *"idle account, still didn't migrate"*
+  case: a `fallback` branch (session_model null) rejecting a near-idle account
+  over a stale model-scoped stamp the ladder branch would have used for a lower
+  rung.
 - spawn: a `spawns` row (purpose `relimit:<slug>`); stream: a `streams` row
   kind `relimit` whose `end_reason` is the migrator's outcome and whose ctx
   carries the chosen `model`; launch: a `state_files` row `relimit-launch` with
