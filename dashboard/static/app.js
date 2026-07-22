@@ -1058,6 +1058,11 @@ function connectSession(sid) {
     if (!S.ses) return;
     applyComposerQueue(d.queue);
   });
+  es.addEventListener("suggestion", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses) return;
+    applySuggestion(d.suggestion);
+  });
   es.addEventListener("plan", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -2427,6 +2432,32 @@ function applyComposerDraft(draft) {
   if (ta.value === text) return;
   ta.value = text;
   autoGrow(ta);
+  syncSuggestion(ta);   // draft filled/emptied the box → toggle the ghost placeholder
+}
+
+// A live input-box ghost suggestion arrived over SSE — the faint "suggested
+// answer" Claude Code pre-fills when a turn settles (docs/dashboard.md, *Web
+// ghost suggestion*). We surface it as the composer's grey placeholder, shown
+// only while the box is empty, accepted with → / Tab (the composer keydown) and
+// replaced the instant the user types (a non-empty textarea hides its
+// placeholder natively). Mirror only: accepting fills the WEB box; nothing is
+// written back to the TUI.
+function applySuggestion(text) {
+  const ses = S.ses;
+  if (!ses) return;
+  if (ses.meta) ses.meta.suggestion = text || null;
+  if (ses.composer) syncSuggestion(ses.composer);
+}
+
+// Borrow the placeholder slot for the ghost suggestion while the box is empty;
+// restore the composer's own default placeholder otherwise (or when there's no
+// suggestion). Idempotent — safe to call on every input/build/SSE update.
+function syncSuggestion(ta) {
+  const ses = S.ses;
+  const sug = ses && ses.meta && ses.meta.suggestion;
+  const ghost = !!(sug && !ta.value);
+  ta.placeholder = ghost ? sug : (ta.dataset.defph || "");
+  ta.classList.toggle("hasghost", ghost);
 }
 
 /* ---------- composer attachments (images/screenshots + files) ----------
@@ -2611,6 +2642,9 @@ function buildComposer() {
       : gone ? "this session's transcript is gone — it can't be resumed"
       : (meta.live ? "no terminal window — can't message a headless session"
                    : "session is not live");
+  // remember the composer's OWN placeholder — a live ghost suggestion borrows
+  // the placeholder slot while the box is empty, and this is what it restores
+  ta.dataset.defph = ta.placeholder;
   const btn = el("button", "csend", canResume ? "resume & send" : "send");
   btn.disabled = !usable;
   ses.composer = ta;
@@ -2621,6 +2655,7 @@ function buildComposer() {
     ta.value = meta.composer_draft.text;
     requestAnimationFrame(() => { if (ses.composer === ta) autoGrow(ta); });
   }
+  syncSuggestion(ta);   // show a live ghost suggestion (if any) into the empty box
   const dic = dictation(ta, () => meta.cwd || "");
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
   // attachments: staged under this session's id (live) or its own id for a
@@ -2723,9 +2758,21 @@ function buildComposer() {
   const sm = slashMenu(ta, wrap,
     () => cmdsFor(meta.cwd, ses, "cmds"),
     { enterSends: !IS_IPAD });
-  ta.oninput = () => { autoGrow(ta); saveComposerDraft(ses, sid); };
+  ta.oninput = () => { autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta); };
   ta.onkeydown = (e) => {
     if (sm.key(e)) return;
+    // → / Tab on an EMPTY box accepts the ghost suggestion as real input (the
+    // native "right-arrow to accept" affordance) — fills the WEB box only, then
+    // send works normally. Typing instead just replaces it (a non-empty box
+    // hides the placeholder). Skipped once the box holds text, so it never
+    // steals → from caret movement / Tab from the "/" menu (both non-empty).
+    if ((e.key === "ArrowRight" || e.key === "Tab") && !ta.value
+        && ses.meta && ses.meta.suggestion) {
+      e.preventDefault();
+      ta.value = ses.meta.suggestion;
+      autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+      return;
+    }
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;

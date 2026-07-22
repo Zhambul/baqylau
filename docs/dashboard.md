@@ -730,6 +730,53 @@ enough to correlate with the session's `web-send` row without storing content).
 `leaveSession` disarms the watchdog so a deliberate navigate-away doesn't
 false-fire `stale`. See the audit-debug skill's stuck-grey-bubble shape.
 
+## Web ghost suggestion (the TUI's "suggested answer", mirrored)
+
+**Claude Code pre-fills a greyish *suggested answer* in its input box when a
+turn settles** (e.g. `apply the MODULES filesystem-scan fix`) — right-arrow
+accepts it as real input, typing anything replaces it. The web composer now
+mirrors it: the suggestion shows as the textarea's grey placeholder, `→` / Tab
+accepts it into the box, and typing dismisses it — the same feel as the
+terminal.
+
+**Why screen-scrape.** The suggestion is pure TUI state — Claude Code fires
+**no hook** for its own input-box suggestion, and it never touches the
+transcript (it isn't sent yet). So the only source is the live screen. The
+probe (`dashboard/suggestion.py`, sibling of `askdialog.py`/`plandialog.py`)
+captures the viewport WITH ANSI (`fe.get_text(win, ansi=True)` — a new `ansi`
+flag on the frontend `get_text`, `--ansi` / the raw-socket `ansi` payload
+field) and reads the input box, which sits between the two grey divider rules
+(`\x1b[38:2:136:136:136m─…`) at the bottom. On the `❯` prompt line, a **ghost
+suggestion is rendered with the faint SGR attribute** (`\x1b[22;2m`, param
+`2` = dim); REAL typed/queued input is normal weight. So the tell is *all the
+input content is faint* — `parse()` returns the faint text (wrapped lines
+joined, whitespace-normalized) or `None` when the box is empty or holds
+non-faint (real) input. `parse()` is a pure function over the screen string,
+unit-tested (`tests/test_l0_dashboard.py`); `probe()` wraps it with the
+get-text call and audit-before-swallow (`A.error` on any failure).
+
+**Live-only, ephemeral, gated.** There is no kv and no persistence — a parked
+session has no TUI, hence no suggestion. `sse_session` probes on the SLOW
+cadence and emits a `suggestion` SSE event only on change, but only when a
+suggestion could plausibly be there: the tab is **settled** (`_SUGGEST_TABS` —
+green *done* or grey *idle*; a busy/asking tab never shows one), there is no
+pending ask/plan modal, and the web composer box is empty (`_composer_draft`
+None) — otherwise we don't screen-scrape at all (nothing to surface, and a
+probe would fight a draft the user is editing elsewhere). The live window is
+resolved through the memoized `claude_session=<sid>` map (`_live_windows`),
+never a reused start-time id.
+
+**Frontend: placeholder + accept key.** `applySuggestion` stores the value on
+`ses.meta.suggestion`; `syncSuggestion(ta)` borrows the placeholder slot while
+the box is empty (`.cinput.hasghost::placeholder` — italic + a touch brighter,
+so it reads as a suggestion vs. the static "message this…" hint) and restores
+the composer's own default placeholder (`ta.dataset.defph`) otherwise. The
+keydown accepts `→` / Tab **only on an empty box with a suggestion** — it fills
+`ta.value` (a normal `saveComposerDraft` follows), so it never steals `→` from
+caret movement or Tab from the "/" menu (both non-empty). It is a **mirror +
+client-side accept**: accepting fills the WEB box only, nothing is written back
+to the TUI — a subsequent send pastes over whatever the input holds, as always.
+
 ## New-session prefs (`GET`/`POST /api/ns-prefs`)
 
 The new-session form pre-selects the **last-used directory, model, and

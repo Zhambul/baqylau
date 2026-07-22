@@ -63,7 +63,7 @@ from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
 from dashboard import askdialog, confirmdialog, dictate, notehtml, opshtml, \
-    plandialog, prefs, rewindmenu
+    plandialog, prefs, rewindmenu, suggestion
 from plugins.claude_code import memory as MEM
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
@@ -1009,6 +1009,31 @@ def _composer_draft(sid):
     if not isinstance(draft, dict) or not (draft.get("text") or "").strip():
         return None
     return draft
+
+
+# the tab states where Claude has SETTLED and its input box may hold a ghost
+# suggestion — green (done, your turn) and grey (idle). A busy/asking tab never
+# shows one, so we don't screen-scrape then.
+_SUGGEST_TABS = (tabs.AWAITING_RESPONSE, tabs.IDLE)
+
+
+def _suggestion(sid):
+    """The greyish input-box ghost suggestion for a LIVE session — the faint
+    pre-filled 'suggested answer' Claude Code shows when a turn settles, read
+    straight off the TUI screen (no hook fires for it; docs/dashboard.md, *Web
+    ghost suggestion*). None when no frontend/live window resolves, there is no
+    suggestion, or the input holds real (non-faint) text. The CALLER gates on a
+    settled tab + no pending ask/plan + empty web draft so we only screen-scrape
+    when a suggestion could plausibly be there — this just resolves the
+    authoritative live window (the memoized claude_session=<sid> map, never a
+    reused start-time id) and probes it."""
+    fe = _frontend()
+    if fe is None:
+        return None
+    win = (_live_windows() or {}).get(sid)
+    if not win:
+        return None
+    return suggestion.probe(fe, win, sid)
 
 
 def _composer_queue(sid):
@@ -3335,7 +3360,7 @@ class Handler(BaseHTTPRequestHandler):
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
                 "composer_queue": None, "monitors": None, "jobs": None,
-                "memory": None}
+                "memory": None, "suggestion": None}
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
@@ -3512,6 +3537,23 @@ class Handler(BaseHTTPRequestHandler):
             if plan != prev["plan"]:
                 prev["plan"] = plan
                 if not self._sse("plan", {"plan": plan}):
+                    return
+            # the greyish input-box ghost suggestion (docs/dashboard.md, *Web
+            # ghost suggestion*) — the faint "suggested answer" the TUI
+            # pre-fills when a turn settles. Screen-scraped (no hook fires for
+            # it), so gated hard AND throttled to the slow cadence: only when
+            # the tab is settled (done/idle), no modal dialog is pending, and
+            # the web composer box is empty (else there's nothing to surface, or
+            # the probe would fight a draft the user is editing elsewhere).
+            if n % SLOW_EVERY == 0:
+                sug = (_suggestion(sid)
+                       if (tab in _SUGGEST_TABS and ask is None and plan is None
+                           and prev["composer_draft"] is None) else None)
+            else:
+                sug = prev["suggestion"]
+            if sug != prev["suggestion"]:
+                prev["suggestion"] = sug
+                if not self._sse("suggestion", {"suggestion": sug}):
                     return
             now = time.monotonic()
             if now - beat > HEARTBEAT_S:

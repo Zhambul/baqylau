@@ -232,9 +232,11 @@ class Frontend:
         base for a relative restore scroll. False on failure."""
         return False
 
-    def get_text(self, win_id, extent="screen"):
+    def get_text(self, win_id, extent="screen", ansi=False):
         """The window's VISIBLE text (the scrolled-to viewport, not the live
-        screen), or None. The renderer's scroll-position anchor."""
+        screen), or None. The renderer's scroll-position anchor. `ansi=True`
+        keeps the SGR formatting escapes (the dashboard's ghost-suggestion
+        probe detects the faint input line by them)."""
         return None
 
     # --- geometry -------------------------------------------------------------

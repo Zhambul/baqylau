@@ -4972,3 +4972,50 @@ def test_group_dir_resolves_worktree_owner(tmp_path):
     plain = tmp_path / "plain"
     assert DS._group_dir(str(plain)) == str(plain)       # non-checkout -> itself
     assert DS._group_dir("") == ""
+
+
+# --------------------------------------------------- suggestion (ghost) probe
+# Pure parse over an ANSI get-text capture: the faint (SGR 2) input line
+# between the grey divider rules is Claude Code's greyish "suggested answer"
+# ghost text (docs/dashboard.md, *Web ghost suggestion*); real (normal-weight)
+# input is NOT surfaced. Fixtures mirror the live capture (window 291): the
+# input box is `❯` + NBSP + content, framed by `─` rules.
+from dashboard import suggestion as SUG   # noqa: E402
+
+_RULE = "\x1b[m\x1b[38:2:136:136:136m" + "─" * 100
+
+
+def _screen(input_line):
+    return ("\x1b[m  some prior turn output\n"
+            + _RULE + "\n" + input_line + "\n" + _RULE + "\n"
+            + "\x1b[m  \x1b[36m[Opus 4.8]\x1b[38:2:153:153:153m │ status line\n")
+
+
+def test_suggestion_parse_faint_ghost():
+    s = _screen("\x1b[m❯\xa0\x1b[22;2mapply the MODULES filesystem-scan fix")
+    assert SUG.parse(s) == "apply the MODULES filesystem-scan fix"
+
+
+def test_suggestion_parse_real_input_is_none():
+    # normal-weight text on the input line is the user's own line, not a ghost
+    assert SUG.parse(_screen("\x1b[m❯\xa0hello there this is typed")) is None
+
+
+def test_suggestion_parse_empty_box_is_none():
+    assert SUG.parse(_screen("\x1b[m❯\xa0")) is None
+
+
+def test_suggestion_parse_no_box_is_none():
+    assert SUG.parse("just\noutput\nlines") is None
+    assert SUG.parse("") is None
+    assert SUG.parse(None) is None
+
+
+def test_suggestion_parse_wrapped_ghost_joins_lines():
+    # a long suggestion wraps onto a continuation line inside the box; both
+    # faint lines join into one whitespace-normalized string
+    s = (_RULE + "\n"
+         + "\x1b[m❯\xa0\x1b[22;2mapply the MODULES filesystem-scan fix and\n"
+         + "\x1b[m  \x1b[22;2mthen re-run the suite\n"
+         + _RULE + "\n")
+    assert SUG.parse(s) == "apply the MODULES filesystem-scan fix and then re-run the suite"

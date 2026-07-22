@@ -708,6 +708,10 @@ body.in-session #accounts { display: none; }
 }
 .cinput:focus { outline: none; box-shadow: inset 0 0 0 1px var(--hair2); }
 .cinput::placeholder { color: var(--dim2); }
+/* a live ghost suggestion (the TUI's faint "suggested answer") reuses the
+   placeholder slot — italic sets it apart from the static "message this…" hint;
+   → / Tab accepts it (docs/dashboard.md, *Web ghost suggestion*) */
+.cinput.hasghost::placeholder { color: var(--dim); font-style: italic; }
 .cinput:disabled { color: var(--dim); background: transparent; box-shadow: var(--card); }
 .csend {
   flex: none; background: var(--panel2); color: var(--text-soft); border: none;

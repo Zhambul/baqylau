@@ -75,15 +75,19 @@ def kitten_run(kitten, listen, *args):
         return 1
 
 
-def kitten_get_text(kitten, listen, win_id, extent="screen"):
+def kitten_get_text(kitten, listen, win_id, extent="screen", ansi=False):
     """`kitten @ get-text` for a window, or None on failure. extent="screen" is
     the VISIBLE viewport — verified live: a window scrolled up returns the
     scrolled-to rows, not the live screen's bottom — which is what lets the
-    mirror renderer restore the exact scroll position across a reflow."""
+    mirror renderer restore the exact scroll position across a reflow.
+    `ansi=True` adds `--ansi` so the SGR formatting escapes survive."""
     try:
-        r = subprocess.run([kitten, "@", "--to", listen, "get-text",
-                            "--match", f"id:{win_id}", "--extent", extent],
-                           capture_output=True, timeout=KITTEN_QUERY_TIMEOUT_S)
+        argv = [kitten, "@", "--to", listen, "get-text",
+                "--match", f"id:{win_id}", "--extent", extent]
+        if ansi:
+            argv.append("--ansi")
+        r = subprocess.run(argv, capture_output=True,
+                           timeout=KITTEN_QUERY_TIMEOUT_S)
         return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else None
     except Exception:
         return None
@@ -497,15 +501,17 @@ class KittyFrontend(Frontend):
         return self._run("scroll-window", "--match", f"id:{win_id}",
                          "end") == 0
 
-    def get_text(self, win_id, extent="screen"):
+    def get_text(self, win_id, extent="screen", ansi=False):
         # Raw socket first (~0.4ms; it runs on every click-to-view toggle),
-        # kitten subprocess as the fallback.
-        r = self._rc_raw("get-text",
-                         {"match": "id:%s" % win_id, "extent": extent},
-                         want_response=True)
+        # kitten subprocess as the fallback. `ansi=True` keeps the SGR escapes
+        # (the ghost-suggestion probe reads the faint input line by them).
+        payload = {"match": "id:%s" % win_id, "extent": extent}
+        if ansi:
+            payload["ansi"] = True
+        r = self._rc_raw("get-text", payload, want_response=True)
         if isinstance(r, dict) and r.get("ok") and isinstance(r.get("data"), str):
             return r["data"]
-        return kitten_get_text(self.kitten, self.listen, win_id, extent)
+        return kitten_get_text(self.kitten, self.listen, win_id, extent, ansi)
 
     def resize_pane(self, var, axis, increment):
         return self._run("resize-window", "--match", f"var:{var[0]}={var[1]}",
