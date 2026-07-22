@@ -840,6 +840,20 @@ ANOMALY_SECTIONS = [
     ("optimistic web action never reconciled (stuck greyed UI: web-hint stale)",
      "SELECT ts, content FROM state_files WHERE session_id=? "
      "AND action='web-hint' AND json_extract(content, '$.phase')='stale'", 1),
+    # A `web-stop` ATTEMPT with no paired `done` — post_stop entered close_tab
+    # and it never returned (an unbounded kitten socket connect, a stuck close).
+    # This is the SERVER-SIDE counterpart the `web-hint op=close … stale`
+    # anomaly above tells you to look for: the tab won't close from the
+    # dashboard and the client's greyed 'closing…' hangs to its 20s watchdog.
+    # (Before the attempt row existed, the only web-stop row was written AFTER
+    # close_tab, so a hung close left NOTHING here and the diagnosis dead-ended.)
+    ("dashboard close entered but never completed (web-stop attempt, no done)",
+     "SELECT a.ts, a.content FROM state_files a WHERE a.session_id=? "
+     "AND a.action='web-stop' AND json_extract(a.content, '$.phase')='attempt' "
+     "AND NOT EXISTS (SELECT 1 FROM state_files d WHERE d.session_id=a.session_id "
+     "  AND d.action='web-stop' AND json_extract(d.content, '$.phase')='done' "
+     "  AND json_extract(d.content, '$.win')=json_extract(a.content, '$.win') "
+     "  AND d.ts >= a.ts)", 1),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions

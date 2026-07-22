@@ -3302,6 +3302,22 @@ def test_post_new_session_model_effort(dash, monkeypatch, tmp_path):
     assert len(fe.launched) == n
 
 
+def _stop_rows(sid):
+    """The `web-stop` state_files rows (the close attempt/done pair), ts-ordered.
+    Same spool-drain dance as _hint_rows."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()
+    con = sqlite3.connect(A.db_path())
+    try:
+        return [json.loads(c) for (c,) in con.execute(
+            "SELECT content FROM state_files WHERE session_id=? "
+            "AND action='web-stop' ORDER BY ts", (sid,))]
+    finally:
+        con.close()
+
+
 def test_post_stop_closes_tab(dash, monkeypatch):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
@@ -3310,6 +3326,29 @@ def test_post_stop_closes_tab(dash, monkeypatch):
     code, body = _post(dash + "/api/session/stop1/stop", {})
     assert code == 200 and json.loads(body) == {"ok": True}
     assert fe.closed == ["55"]
+    # the close is audited as an attempt BEFORE close_tab then a done outcome —
+    # so a close_tab that hangs leaves a lone `attempt` (the stuck-close signal)
+    rows = _stop_rows("stop1")
+    assert [r.get("phase") for r in rows] == ["attempt", "done"]
+    assert rows[0]["win"] == "55" and rows[1] == {"win": "55", "phase": "done",
+                                                  "ok": True}
+
+
+def test_post_stop_failed_close_still_audits_attempt(dash, monkeypatch):
+    # A close that FAILS (close_tab → False) must still leave the attempt row
+    # plus a done(ok:false): the gap this closes is a close that vanishes from
+    # the audit, not just one that succeeds.
+    fe = _FakeFE()
+    monkeypatch.setattr(fe, "close_tab", lambda win: False)
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "60")
+    A.session_start({"session_id": "stopf", "cwd": "/w", "transcript_path": ""})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/stopf/stop", {})
+    assert e.value.code == 502
+    rows = _stop_rows("stopf")
+    assert [r.get("phase") for r in rows] == ["attempt", "done"]
+    assert rows[1]["ok"] is False
 
 
 def test_post_stop_refuses_stale_window(dash, monkeypatch):

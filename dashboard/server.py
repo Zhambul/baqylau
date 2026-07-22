@@ -2278,8 +2278,15 @@ class Handler(BaseHTTPRequestHandler):
         the normal end-of-session lifecycle (mirror park, audit close) runs on
         its own — verified empirically 2026-07-18 (docs/dashboard.md). 409
         when the session has no window (headless — nothing to close); 503
-        when no terminal resolves. Every attempt is a `web-stop` state_files
-        row, failures also an A.error."""
+        when no terminal resolves.
+
+        Every attempt is a `web-stop` state_files row carrying a `phase`:
+        `attempt` is written BEFORE the (potentially blocking) close_tab, `done`
+        after with the `ok` outcome — a lone `attempt` with no paired `done` is
+        the stuck-close signal (close_tab hung on an unbounded kitten socket
+        connect, or the thread never returned), which the client only shows as a
+        `web-hint op=close … stale` beacon. The early no-terminal / no-window
+        rejections are terminal `done` rows. Failures also an A.error."""
         body = self._post_guard()
         if body is None:
             return
@@ -2289,7 +2296,8 @@ class Handler(BaseHTTPRequestHandler):
         fe = _frontend()
         if fe is None:
             A.error(log, "dashboard stop (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-stop", {"win": "", "ok": False})
+            A.state_file(log, sdb, "web-stop",
+                         {"win": "", "phase": "done", "ok": False})
             return self._json({"error": "no terminal available"}, 503)
         # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
         # NOT the audit row's stale start-time id. Closing by a reused stale id
@@ -2297,10 +2305,17 @@ class Handler(BaseHTTPRequestHandler):
         # smoke-test session's reused window id closed the user's own tab).
         win = fe.window_for_session(sid) or ""
         if not win:
-            A.state_file(log, sdb, "web-stop", {"win": "", "ok": False})
+            A.state_file(log, sdb, "web-stop",
+                         {"win": "", "phase": "done", "ok": False})
             return self._json({"error": "session has no live window"}, 409)
+        # Audit the ATTEMPT before close_tab: a kitten close that HANGS (an
+        # unbounded socket connect) or otherwise never returns must not vanish
+        # from the audit — the `web-stop attempt` is the only trace the server
+        # ever tried. Same "row before the risky op" discipline as
+        # stream_start/stream_end (an attempt with no `done` == the anomaly).
+        A.state_file(log, sdb, "web-stop", {"win": win, "phase": "attempt"})
         ok = bool(fe.close_tab(win))
-        A.state_file(log, sdb, "web-stop", {"win": win, "ok": ok})
+        A.state_file(log, sdb, "web-stop", {"win": win, "phase": "done", "ok": ok})
         if not ok:
             A.error(log, "dashboard stop (close failed)",
                     {"sid": sid, "win": win})

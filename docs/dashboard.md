@@ -1621,7 +1621,14 @@ log/path are empty) followed by its watcher's one `web-launch-wake`
 (`{sid, win, cwd, ok, waited_s}` — found: `waited_s` IS the launch→appearance
 latency, the dashboard's own share of "launching felt slow" reconstructible
 next to the `web-launch` row; timeout: `ok` false, sid empty),
-`web-stop` (`{win, ok}`) and `web-interrupt` (`{win, ok, tab}` —
+`web-stop` (`{win, phase, ok}` — `phase` is `attempt`, written BEFORE the
+potentially-blocking `close_tab`, then `done` with the `ok` outcome; a lone
+`attempt` with no paired `done` means `close_tab` HUNG and never returned — an
+unbounded kitten socket connect — so the tab won't close and the client's greyed
+'closing…' hangs to its 20s watchdog, the "dashboard close entered but never
+completed" anomaly; before the attempt row existed a hung close left NO
+server-side trace, only the client's `web-hint op=close … stale`) and
+`web-interrupt` (`{win, ok, tab}` —
 the tab state at press time says what the Escape landed on). Failure paths
 (no window, no terminal, send/launch/close/key returned false) also write an
 `A.error` per the audit-before-swallow rule, so a "my message never arrived"
