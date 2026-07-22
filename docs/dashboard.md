@@ -692,6 +692,26 @@ change (slow cadence, convenience state like the draft), `buildQueueBar` seeds
 empty list deletes the stash. This is display persistence only — the message
 itself lives in the TUI's queue regardless; the chip just stops vanishing.
 
+`drainQueue` matches a delivered prompt against a chip **tolerantly** — exact
+text, or (attachments prepend leading `@path` mentions + `\n`) the delivered
+prompt ends with the queued suffix — the same match `drainPending` uses, so a
+queued message *with attachments* (delivered as `@path\n<text>`) still drains
+instead of sticking.
+
+**Delivered chips are also reconciled server-side, or a persisted chip stuck
+forever.** `drainQueue` only reconciles NEW stream items, never the
+already-loaded backlog. So if the client that persisted a chip closed or
+reloaded *before* its message was delivered, every later page load re-seeded the
+chip from the kv (`buildQueueBar`), found the delivered prompt already sitting in
+the backlog, and had no fresh item to drain it against — a ⧗ chip stuck forever
+even though Claude Code received and answered the message (the "still shows as
+queued after it was delivered" report). `_composer_queue` now drops any chip
+whose prompt already appears among the transcript's delivered prompts
+(`_delivered_prompts` / `_chip_delivered`, the same tolerant match) before it
+ever seeds the page. Read-only — the server can't rewrite the kv (`mode=ro`), so
+the stale rows are pruned by the client's next `saveQueue` once this filtered
+list seeds it.
+
 **Sends into an open modal are refused.** A message pasted while an
 AskUserQuestion / ExitPlanMode dialog is up goes INTO the dialog, not the
 queue, and is lost (perturbing the dialog too). `post_message` now checks

@@ -988,6 +988,45 @@ def test_composer_queue_tolerates_non_string_text(dash, monkeypatch):
     assert [it["text"] for it in q["items"]] == ["5", "real"]
 
 
+def test_composer_queue_reconciles_delivered_chips(dash, monkeypatch, tmp_path):
+    """A ⧗ chip whose message has ALREADY been delivered is reconciled out of
+    the snapshot server-side (docs/dashboard.md, *Web composer queue*; the "still
+    shows as queued after it was delivered" report). The client-side drain only
+    matches NEW stream items, so a chip persisted by a client that then closed /
+    reloaded before delivery re-seeded from the kv forever — buildQueueBar found
+    the delivered prompt already in the backlog with no fresh item to drain it.
+    `_composer_queue` now drops any chip whose prompt appears among the
+    transcript's delivered prompts (exact, or the tolerant attachment-prefix
+    match `@path\\n<text>`), while a still-pending chip survives."""
+    tr = tmp_path / "cq.jsonl"
+    tr.write_text("".join(json.dumps(o) + "\n" for o in [
+        # two DELIVERED queued messages (the TUI's queued_command attachment,
+        # surfaced as prompts) — one plain, one with a leading @path mention.
+        {"type": "attachment", "attachment": {
+            "type": "queued_command", "commandMode": "prompt",
+            "prompt": "deliver me"}},
+        {"type": "attachment", "attachment": {
+            "type": "queued_command", "commandMode": "prompt",
+            "prompt": "@img.png\nwith attach"}},
+    ]), encoding="utf-8")
+    A.session_start({"session_id": "cq3", "cwd": "/w",
+                     "transcript_path": str(tr)})
+    log = P.mirror_log("cq3")
+    O.emit(log, O.label("hi", (1, 2, 3)))     # materialize the state DB
+    S.kv_set(log, "composer-queue", {"items": [
+        {"text": "deliver me"},        # exact match -> reconciled out
+        {"text": "with attach"},       # @path-prefix match -> reconciled out
+        {"text": "still pending"},     # not delivered -> survives
+    ], "origin": "devA"})
+    q = _get_json(dash + "/api/session/cq3")["composer_queue"]
+    assert [it["text"] for it in q["items"]] == ["still pending"]
+    assert q["origin"] == "devA"         # unrelated fields preserved
+    # and when EVERY chip has been delivered, the payload collapses to None
+    S.kv_set(log, "composer-queue", {"items": [{"text": "deliver me"}],
+                                     "origin": "devA"})
+    assert _get_json(dash + "/api/session/cq3")["composer_queue"] is None
+
+
 def test_ns_prefs_roundtrip(dash):
     """The new-session form's last-used {cwd, model, effort} live on the backend
     now (docs/dashboard.md, *New-session prefs*) so a launch on one device

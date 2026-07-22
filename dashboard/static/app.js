@@ -1567,7 +1567,11 @@ function drainQueue(items) {
   let hit = false;
   for (const it of items) {
     if (it.t !== "msg" || it.kind !== "prompt") continue;
-    const i = ses.queue.findIndex(m => m.text === (it.text || "").trim());
+    const real = (it.text || "").trim();
+    // exact match, or (attachments prepend leading @path mentions +\n) the real
+    // text ends with the queued suffix — same tolerant match as drainPending,
+    // since a queued message with attachments arrives as `@path\n<text>`.
+    const i = ses.queue.findIndex(m => real === m.text || real.endsWith("\n" + m.text));
     if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
   }
   if (hit) { renderQueue(); saveQueue(ses); }

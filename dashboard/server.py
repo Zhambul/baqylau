@@ -1036,21 +1036,59 @@ def _suggestion(sid):
     return suggestion.probe(fe, win, sid)
 
 
+def _delivered_prompts(sid):
+    """The trimmed text of every prompt already DELIVERED into sid's transcript
+    (kind == "prompt" from the main-thread conversation, which surfaces the
+    TUI's delivered `queued_command` attachment among plain replies). The
+    reconciliation source for the composer queue's ⧗ chips."""
+    got = plugins.conversation(sid, 0)
+    recs = got[0] if got else []
+    return [(r.get("text") or "").strip() for r in recs
+            if r.get("kind") == "prompt" and (r.get("text") or "").strip()]
+
+
+def _chip_delivered(text, delivered):
+    """True when a queued ⧗ chip's text matches a delivered prompt — exact, or
+    (attachments prepend leading `@path` mentions + '\\n') the delivered prompt
+    ends with the typed suffix (app.js drainPending uses the same tolerant
+    match, since a queued message with attachments arrives as `@path\\n<text>`)."""
+    c = (text or "").strip()
+    return bool(c) and any(d == c or d.endswith("\n" + c) for d in delivered)
+
+
 def _composer_queue(sid):
     """The still-PENDING queued messages (the `composer-queue` kv — the ⧗ chips
     the composer shows for messages typed mid-turn that the TUI queued and has
     not yet delivered). Browser memory alone lost these on a reload (the "gone
     even from the queue after refresh" report, 2026-07-19), so the page mirrors
     its chip list here; a delivered message is reconciled out client-side when
-    its prompt lands in the stream. Read-only (kv_at). {"items": [{text}, …],
-    "origin": …} or None when empty (docs/dashboard.md, *Web composer queue*)."""
+    its prompt lands in the stream.
+
+    But that client-side drain only reconciles NEW stream items — never the
+    already-loaded history — so a chip persisted here by a client that then
+    closed / reloaded BEFORE its message was delivered re-seeded from the kv
+    FOREVER (buildQueueBar restores it, the delivered prompt is already in the
+    backlog, and no fresh item ever arrives to drain it — the "queued chip stuck
+    after the message was delivered" report). So reconcile against the transcript
+    HERE too: drop any chip whose prompt already landed. Read-only (kv_at / a
+    transcript parse) — the kv itself isn't rewritten (mode=ro); the client's
+    next saveQueue prunes the stale rows once this filtered list seeds it.
+    {"items": [{text}, …], "origin": …} or None when empty (docs/dashboard.md,
+    *Web composer queue*)."""
     sdb = API.state_db_for(sid)
     if not sdb:
         return None
     q = API.kv_at(sdb, "composer-queue")
-    if not isinstance(q, dict) or not (q.get("items") or []):
+    items = q.get("items") if isinstance(q, dict) else None
+    if not items:
         return None
-    return q
+    delivered = _delivered_prompts(sid)
+    kept = [it for it in items if not _chip_delivered((it or {}).get("text"), delivered)]
+    if not kept:
+        return None
+    out = dict(q)
+    out["items"] = kept
+    return out
 
 
 def _session_tasks(sid):
