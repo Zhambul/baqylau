@@ -38,6 +38,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime
@@ -78,6 +79,19 @@ def _audit_once(func, context):
         return
     _AUDITED.add(func)
     A.error("", func=func, context=context)
+
+
+def _expected_net_error(e):
+    """True for the EXPECTED 'endpoint or credential unavailable' outcomes this
+    optional read degrades on silently (the module header's fail-silent
+    contract): the machine offline / endpoint unreachable (urllib URLError,
+    incl. a wrapped DNS gaierror) and an auth/refresh rejection (its HTTPError
+    subclass — a rotated/stale token 4xx). These are ENVIRONMENTAL, not code
+    bugs, so they degrade to "no model windows" WITHOUT lighting the ⚠ warning
+    light in every session forever. A genuinely unexpected exception (a
+    KeyError / JSON-shape change in OUR handling) still audits, keeping the
+    light meaningful. HTTPError subclasses URLError, so this covers both."""
+    return isinstance(e, urllib.error.URLError)
 
 
 def enabled():
@@ -201,7 +215,8 @@ def _access_token(service):
     try:
         new = _refresh(rt)
     except Exception as e:
-        _audit_once("model_usage._refresh", {"service": service, "err": str(e)})
+        if not _expected_net_error(e):   # offline / rejected token is expected
+            _audit_once("model_usage._refresh", {"service": service, "err": str(e)})
         return None
     if not new:
         return None
@@ -317,7 +332,8 @@ def windows_by_slug(cache=None):
                 continue
             out.setdefault(slug, {}).update(mw)
         except Exception as e:
-            _audit_once("model_usage.windows_by_slug",
-                        {"service": service, "err": str(e)})
+            if not _expected_net_error(e):   # offline / dead endpoint is expected
+                _audit_once("model_usage.windows_by_slug",
+                            {"service": service, "err": str(e)})
     _CACHE.update(ts=now, val=out)
     return out

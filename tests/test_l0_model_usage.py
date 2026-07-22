@@ -6,6 +6,7 @@
 # No network, no keychain — every external call is stubbed.
 import sys
 import time
+import urllib.error
 
 import pytest
 
@@ -168,6 +169,34 @@ def test_access_token_expired_no_refresh_token(monkeypatch):
     assert MU._access_token("svc") is None               # nothing to refresh with
 
 
+def test_access_token_refresh_rejected_not_audited(monkeypatch):
+    """A rotated/stale refresh token 4xx (HTTPError, a URLError subclass) is an
+    expected outcome: degrade to None WITHOUT lighting the ⚠ warning light."""
+    monkeypatch.setattr(MU, "_sec_read", lambda svc: {
+        "accessToken": "x", "refreshToken": "RT-stale",
+        "expiresAt": int((time.time() - 10) * 1000)})
+    def rejected(rt):
+        raise urllib.error.HTTPError(MU.TOKEN_URL, 400, "Bad Request", {}, None)
+    monkeypatch.setattr(MU, "_refresh", rejected)
+    audited = []
+    monkeypatch.setattr(MU, "_audit_once", lambda f, c: audited.append(f))
+    assert MU._access_token("svc") is None
+    assert audited == []                                 # expected — no ⚠
+
+
+def test_access_token_refresh_unexpected_audited(monkeypatch):
+    """A non-network exception in the refresh path STILL audits."""
+    monkeypatch.setattr(MU, "_sec_read", lambda svc: {
+        "accessToken": "x", "refreshToken": "RT",
+        "expiresAt": int((time.time() - 10) * 1000)})
+    monkeypatch.setattr(MU, "_refresh",
+                        lambda rt: (_ for _ in ()).throw(ValueError("bug")))
+    audited = []
+    monkeypatch.setattr(MU, "_audit_once", lambda f, c: audited.append(f))
+    assert MU._access_token("svc") is None
+    assert audited == ["model_usage._refresh"]
+
+
 # ------------------------------------------------------------ orchestration
 
 def test_windows_by_slug_end_to_end(monkeypatch):
@@ -205,6 +234,33 @@ def test_windows_by_slug_fetch_error_degrades(monkeypatch):
         raise urllib_error()
     monkeypatch.setattr(MU, "_get", boom)
     assert MU.windows_by_slug() == {}                    # fail-silent, no raise
+
+
+def test_windows_by_slug_expected_net_error_not_audited(monkeypatch):
+    """An offline / dead endpoint (URLError) degrades silently AND does NOT
+    write an audit `errors` row — it must not light the ⚠ warning light in
+    every session forever (global-errors skill, 2026-07-22)."""
+    audited = []
+    monkeypatch.setattr(MU, "_audit_once", lambda f, c: audited.append(f))
+    monkeypatch.setattr(MU, "_login_services", lambda: ["svc"])
+    monkeypatch.setattr(MU, "_access_token", lambda svc: "T")
+    monkeypatch.setattr(MU, "_get",
+                        lambda url, tok: (_ for _ in ()).throw(urllib_error()))
+    assert MU.windows_by_slug() == {}
+    assert audited == []                                 # expected — no ⚠
+
+
+def test_windows_by_slug_unexpected_error_audited(monkeypatch):
+    """A genuinely unexpected exception (our JSON-shape handling, not the
+    network) STILL audits — the warning light stays meaningful."""
+    audited = []
+    monkeypatch.setattr(MU, "_audit_once", lambda f, c: audited.append(f))
+    monkeypatch.setattr(MU, "_login_services", lambda: ["svc"])
+    monkeypatch.setattr(MU, "_access_token", lambda svc: "T")
+    monkeypatch.setattr(MU, "_get",
+                        lambda url, tok: (_ for _ in ()).throw(KeyError("shape")))
+    assert MU.windows_by_slug() == {}
+    assert audited == ["model_usage.windows_by_slug"]
 
 
 def test_windows_by_slug_cached(monkeypatch):

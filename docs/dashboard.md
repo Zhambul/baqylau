@@ -2298,8 +2298,16 @@ Design details (docs/relimit.md borrows the same account vocabulary):
   failure degrades to "no model windows", and its `errors` row is written at
   most once per process (a 60s poll against a down endpoint would otherwise
   trickle a row a minute, which errwatch surfaces as a `⚠` in every session's
-  mirror). The number is live from an undocumented endpoint — not
-  reconstructible from the DB, unlike the tokenless snapshot.
+  mirror). But an **EXPECTED transient is not audited at all** — a machine
+  offline / unreachable endpoint (`urllib.error.URLError`, incl. a wrapped DNS
+  `gaierror`) or a rotated/stale-token refresh rejection (its `HTTPError` 4xx
+  subclass) is the environmental "endpoint or credential unavailable" outcome
+  this optional read is DESIGNED to degrade on, so `_expected_net_error` skips
+  the `_audit_once` and it never lights the `⚠` warning light; only a genuinely
+  unexpected exception (a `KeyError`/JSON-shape change in our own handling)
+  audits, keeping the light meaningful (global-errors skill, 2026-07-22). The
+  number is live from an undocumented endpoint — not reconstructible from the
+  DB, unlike the tokenless snapshot.
 
 **The "limit hit" pill.** The frozen usage bar UNDERSTATES a blocked account:
 Claude Code's status line reports `used_percentage` from the API's utilization
