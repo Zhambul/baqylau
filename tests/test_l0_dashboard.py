@@ -974,6 +974,37 @@ def test_composer_draft_stale_seq_ignored(dash, monkeypatch):
         == "typed again"
 
 
+def test_composer_draft_stale_seq_atomic_under_concurrency(dash, monkeypatch):
+    """The seq guard must hold when the racing writes land in two CONCURRENT
+    server threads, not just in order (the ThreadingHTTPServer TOCTOU: a queued
+    send's clear lost to its own in-flight debounced save because the guard's
+    read and its write straddled the peer thread's write, 2026-07-22). The
+    higher-seq CLEAR must always win regardless of which thread commits last —
+    the compare-and-set is one BEGIN IMMEDIATE, so the lower-seq save can never
+    resurrect the just-sent draft."""
+    monkeypatch.setenv("KITTY_WINDOW_ID", "59")
+    A.session_start({"session_id": "cdc1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cdc1")
+    O.emit(log, O.label("hi", (1, 2, 3)))
+    url = dash + "/api/session/cdc1/composer-draft"
+    # Fire the two racing writes together many times: a lower-seq SAVE (the
+    # debounced draft) and a higher-seq CLEAR (the send). The clear must win
+    # every round. Under the old read-then-write guard the save would sometimes
+    # commit last and stick; the atomic CAS makes the invariant deterministic.
+    for i in range(40):
+        base = 1000 + i * 10
+        # prime a stored draft older than both so neither is rejected on read
+        _post(url, {"text": "old", "origin": "d", "seq": base})
+        def fire(seq, text):
+            _post(url, {"text": text, "origin": "d", "seq": seq})
+        save = threading.Thread(target=fire, args=(base + 1, "resurrect"))
+        clear = threading.Thread(target=fire, args=(base + 2, ""))
+        save.start(); clear.start()
+        save.join(); clear.join()
+        assert _get_json(dash + "/api/session/cdc1")["composer_draft"] is None, \
+            "round %d: the lower-seq save resurrected a cleared draft" % i
+
+
 def test_composer_queue_persist_payload_and_sse(dash, monkeypatch):
     """The pending ⧗ queued-message chips survive a reload (docs/dashboard.md,
     *Web composer queue*; the "gone even from the queue after refresh" report):

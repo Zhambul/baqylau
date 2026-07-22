@@ -602,6 +602,45 @@ def kv_set_at(path, key, obj):
         conn.close()
 
 
+def kv_cas_seq_at(path, key, obj):
+    """Atomic compare-and-set for a seq-guarded kv row (the composer-draft
+    stale-write guard): inside ONE BEGIN IMMEDIATE transaction, read the stored
+    row's `seq` and write `obj` only if its `seq` is not OLDER than what's
+    stored — otherwise leave the stored value untouched. The read-check-write
+    is a single transaction so two concurrent dashboard threads can't each pass
+    a separate read and then race the write, with the lower-seq write landing
+    last and resurrecting a just-cleared draft (the ThreadingHTTPServer TOCTOU
+    the old read-then-kv_set_at guard missed — a queued send's clear lost to its
+    own in-flight debounced save, 2026-07-22). mode=rw (never creates the DB).
+    Returns "written", "stale" (rejected as older), or None (DB unreachable)."""
+    try:
+        conn = sqlite3.connect("file:%s?mode=rw" % path, uri=True, timeout=5.0)
+    except Exception:
+        return None
+    try:
+        with immediate(conn):
+            row = conn.execute("SELECT val FROM kv WHERE key=?",
+                               (key,)).fetchone()
+            prev_seq = 0
+            if row:
+                try:
+                    prev = json.loads(row[0])
+                    prev_seq = (prev.get("seq") if isinstance(prev, dict) else 0) or 0
+                except Exception:
+                    prev_seq = 0
+            seq = (obj.get("seq") if isinstance(obj, dict) else 0) or 0
+            if seq and prev_seq and seq < prev_seq:
+                return "stale"
+            conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
+                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                         (key, json.dumps(obj, ensure_ascii=False)))
+        return "written"
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def ops_at(path, after_id=0):
     """(last_id, [op, ...]) over an explicit DB path, read-only — the historical
     twin of ops_after() (which serves the live session through the cached writer

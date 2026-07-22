@@ -2650,25 +2650,27 @@ class Handler(BaseHTTPRequestHandler):
         row = API.session_row(sid) or {}
         log = row.get("log") or P.mirror_log(sid)
         sdb = API.state_db_for(sid) or P.state_db(log)
-        # STALE-WRITE GUARD: a debounced save and the clear-on-send race over a
-        # slow tunnel and can arrive out of order — an old save landing after
-        # the clear would resurrect a just-sent draft (the "draft didn't clear"
-        # report, 2026-07-19). Each write carries a wall-clock `seq`; a write
-        # older than what's stored is dropped so the newest state stands. The
-        # CLEAR keeps an empty-text TOMBSTONE (not a delete) so its seq survives
-        # to reject a later straggler; _composer_draft reads a tombstone as None.
-        prev = API.kv_at(sdb, "composer-draft")
-        prev_seq = (prev.get("seq") if isinstance(prev, dict) else 0) or 0
-        if seq and prev_seq and seq < prev_seq:
-            A.state_file(log, sdb, "composer-draft",
-                         {"action": "stale", "seq": seq, "have": prev_seq,
-                          "origin": origin})
-            return self._json({"ok": True, "stale": True})
-        # a whitespace-only box is a CLEAR: store a canonical empty-text
-        # tombstone (keeps the seq to reject a later straggler; reads as None)
+        # STALE-WRITE GUARD: a debounced save and the clear-on-send race — over a
+        # slow tunnel AND, since the dashboard is a ThreadingHTTPServer, in two
+        # concurrent worker threads — and can arrive out of order; an old save
+        # landing after the clear would resurrect a just-sent draft (the "draft
+        # didn't clear" report, 2026-07-19; the concurrent-thread variant that
+        # slipped a lower-seq save past a separate read-then-write, 2026-07-22).
+        # Each write carries a wall-clock `seq`; a write older than what's stored
+        # is dropped so the newest state stands. The compare-and-set is ATOMIC
+        # (one BEGIN IMMEDIATE — read-check-write can't be interleaved), or the
+        # guard's read and its write straddle a peer thread's write. A CLEAR
+        # stores a whitespace-only box as an empty-text TOMBSTONE (not a delete)
+        # so its seq survives to reject a later straggler; _composer_draft reads
+        # a tombstone as None.
         draft = {"text": text if text.strip() else "", "origin": origin,
                  "seq": seq}
-        if not ST.kv_set_at(sdb, "composer-draft", draft):
+        res = ST.kv_cas_seq_at(sdb, "composer-draft", draft)
+        if res == "stale":
+            A.state_file(log, sdb, "composer-draft",
+                         {"action": "stale", "seq": seq, "origin": origin})
+            return self._json({"ok": True, "stale": True})
+        if res is None:
             A.error(log, "dashboard composer-draft (write failed)", {"sid": sid})
             return self._json({"error": "draft not saved"}, 500)
         A.state_file(log, sdb, "composer-draft",

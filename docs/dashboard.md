@@ -673,6 +673,22 @@ whose `seq` is older than what's stored (a `composer-draft` state_files row
 delete) so its `seq` survives to reject a later straggler. Writes without a
 `seq` (seq 0) skip the guard — last-writer-wins, as before.
 
+The seq compare-and-set is **atomic** — one `BEGIN IMMEDIATE` transaction
+(`ST.kv_cas_seq_at`, the seq-guarded sibling of `kv_set_at`), NOT a read
+(`kv_at`) followed by a separate write. The dashboard is a
+`ThreadingHTTPServer`, so the racing save and clear can land in two CONCURRENT
+worker threads, not just out of order over the tunnel; with the guard's read
+and its write in separate statements, both threads read the same older stored
+row, both pass the `seq < stored` check, and then race the write — the
+lower-seq save committing LAST resurrects the just-sent draft. This is exactly
+what happened to a *queued* send (added 2026-07-22, from a "queued a message,
+the box cleared, but coming back the message was in the queue AND the box
+again" report): the debounced save (a lower `seq`) and the clear-on-send (a
+higher `seq`) hit the server together and BOTH audited as writes — the tell of
+a passed read on both — with the stale save landing last. Folding the check and
+the write into one BEGIN-IMMEDIATE transaction serializes the two threads, so a
+lower-seq write can never straddle a higher-seq one.
+
 ## Web composer queue (`POST /api/session/<sid>/composer-queue`)
 
 A message sent while a turn is running lands in Claude Code's OWN message queue
