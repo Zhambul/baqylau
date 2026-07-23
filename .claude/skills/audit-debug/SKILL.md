@@ -679,11 +679,23 @@ New always-audited swallow sites (previously silent — their absence used to ma
   window, or a transient blank/partial `get_text`, bailed instantly with
   step:open on a genuinely-open, never-answered ask; session 0247ebb2,
   2026-07-21), and the bail now records the SCREEN it saw: the `dashboard
-  answer (open)` `errors` row carries a `screen` field (last ~2000 chars of
-  `get_text`) — read it to tell the causes apart (dialog-too-tall so the
-  `☐`/`☒` chip bar or the `"Enter to select"` footer fell off the visible
-  screen · a footer-string DRIFT after a Claude Code upgrade — `FOOT`/`REVIEW`
-  in `askdialog.py` no longer match · a blank/partial capture). `step:
+  answer (open)` `errors` row carries a `screen` field (`_clip_screen`: the
+  head AND tail of `get_text`, `SCREEN_CLIP`=2000 — NOT a plain `[-2000:]`
+  tail, so a wide window's on-screen chip bar at the TOP is never truncated
+  away and misread as off-screen) — read it to tell the causes apart. If the
+  `screen` shows the option rows + the `"Enter to select … Esc to cancel"`
+  footer but **NO `☐`/`☒` chip bar at all**, that IS the **chip-bar-scrolled-
+  off** shape (session 819627e5, FIXED 2026-07-23): on a narrow/short window a
+  tall dialog (wrapped multi-line option descriptions) overflows the viewport
+  and the chip bar scrolls off the TOP while the footer survives — `region()`
+  anchored ONLY on the `☐`/`☒` bar returned "" so `dialog_open` was False and
+  `drive` false-bailed `step:open` on a dialog the user was staring at. Fixed
+  by `askdialog.region` falling back to the whole screen when there's no chip
+  bar but a `FOOT`/`REVIEW` footer is present; a footer-but-no-chip-bar
+  `step:open` on a CURRENT build is the regression. Other causes: a
+  footer-string DRIFT after a Claude Code upgrade (`FOOT`/`REVIEW` in
+  `askdialog.py` no longer match — the `screen` shows a footer whose text
+  differs) · a blank/partial capture (empty/tiny `screen`). `step:
   question`/`review` bails carry the same `screen` field now.
   But `step: open` with the tab showing "User declined to answer questions"
   and the user insisting they answered on the web is the **Esc-gesture-declined

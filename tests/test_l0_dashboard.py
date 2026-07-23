@@ -3048,6 +3048,30 @@ def test_ask_current_question_longest_match():
     assert ad.current_question("☐ x\nReview your answers\nPick a color", qs) is None
 
 
+def test_ask_dialog_open_when_chip_bar_scrolled_off():
+    # On a NARROW/SHORT window a tall dialog overflows the viewport and the
+    # ☐/☒ chip bar scrolls off the top while the footer survives — get_text
+    # returns only the visible screen. A chip-bar-only anchor returned "" and
+    # false-bailed step:open on a genuinely-open dialog (session 819627e5).
+    from dashboard import askdialog as ad
+    # exactly what the errors-row `screen` capture showed: options + footer,
+    # no ☐/☒ anywhere.
+    off_screen = ("     approval.\n  3. Just diagnose\n  4. Type something.\n"
+                  "──────────────────────────────\n  5. Chat about this\n\n"
+                  "Enter to select · Tab/Arrow \nkeys to navigate · Esc to \ncancel\n")
+    assert "☐" not in off_screen and "☒" not in off_screen
+    assert ad.dialog_open(off_screen)                 # footer fallback anchors
+    # the option/action rows are still parseable from the wider region
+    labels = [r["label"] for r in ad.rows(off_screen)]
+    assert "Type something." in labels and ad.CHAT_LABEL in labels
+    # the chip-bar path stays primary (excludes transcript above the bar)
+    with_bar = "prose above\n☐ Q1  ☒ Q2\n1. red\nEnter to select"
+    assert ad.region(with_bar).startswith("☐ Q1")
+    # a screen with neither chip bar nor footer is genuinely no-dialog
+    assert not ad.dialog_open("just some transcript text\nno dialog here")
+    assert ad.region("just some transcript text") == ""
+
+
 def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
     # fixed vocabulary: unknown command, missing/dirty model arg (a shell
     # metacharacter must never reach the terminal), unknown effort level,

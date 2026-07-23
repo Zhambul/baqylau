@@ -1945,11 +1945,32 @@ into a fresh kitty window, or a transient blank/partial `get_text` — bailed
 immediately with `step: open` on an ask that was genuinely up and never
 answered (session `0247ebb2`, 2026-07-21). It now polls like the rest. And
 every `AskError` carries the SCREEN it saw (`e.screen`); `post_answer` folds
-the last ~2000 chars into the `dashboard answer (<step>)` audit `errors` row's
-`screen` field, because the bail otherwise records only its outcome — a
+it (via `_clip_screen`) into the `dashboard answer (<step>)` audit `errors`
+row's `screen` field, because the bail otherwise records only its outcome — a
 step:open can't be told apart after the fact (dialog too tall for the visible
 screen · a `FOOT`/`REVIEW` footer-string drift after a Claude Code upgrade · a
-blank capture) without the pixels.
+blank capture) without the pixels. `_clip_screen` keeps BOTH ends of a long
+capture (head + tail, `SCREEN_CLIP` = 2000) rather than a plain `[-2000:]`
+tail: a step:open's discriminator is whether the ☐/☒ chip bar is at the TOP,
+so a wide window whose visible screen exceeds the cap must not have that top
+truncated away and misread as 'off-screen'.
+
+**The dialog-open detector tolerates the chip bar scrolling off-screen
+(2026-07-23).** `dialog_open`/`review_open` isolate the dialog via
+`askdialog.region`, which anchors on the LAST `☐`/`☒` header-chip bar and
+returns "" when there's none. On a NARROW/SHORT window a tall dialog (several
+options with wrapped multi-line descriptions) overflows the visible viewport,
+so the chip bar scrolls off the TOP while the footer survives at the bottom —
+`get_text` returns only the visible screen, so the bar is simply absent. The
+chip-bar-only anchor then returned "" and `drive` false-bailed `step: open` on
+a genuinely-open dialog the user was staring at (session `819627e5`,
+2026-07-23: a narrow window, the `screen` capture showed options 1–5 + the
+`Enter to select … Esc to cancel` footer but no chip bar). `region` now falls
+back to the WHOLE screen when there's no chip bar but a dialog footer
+(`FOOT`/`REVIEW`) is present — so open-detection AND row/question parsing still
+work; the chip-bar path stays primary (it cleanly excludes the transcript
+whenever the bar IS visible). A `step: open` whose `screen` shows a footer but
+no chip bar on a current build means the fallback regressed.
 
 **The key model was overhauled in v2.1.215 (re-measured 2026-07-19).**
 The original v2.1.214 model was *digit-driven* — a digit selected a

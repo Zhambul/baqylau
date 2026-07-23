@@ -111,6 +111,23 @@ def extra_origins(raw):
     return {o.strip() for o in (raw or "").split(",") if o.strip()}
 
 
+SCREEN_CLIP = 2000     # cap on a bail's captured screen in an audit errors row
+
+
+def _clip_screen(scr, cap=SCREEN_CLIP):
+    """Bound a captured `get_text` screen for the audit `errors` context while
+    keeping BOTH diagnostic ends. A plain `scr[-cap:]` kept only the TAIL, but a
+    `step:open` bail's discriminator — is the ☐/☒ header-chip bar present at the
+    TOP? — lives at the HEAD (dialog-too-tall vs footer-drift vs blank capture,
+    docs/dashboard.md *Web ask*): a WIDE window whose visible screen exceeds
+    `cap` would have an on-screen chip bar truncated away and read as
+    'off-screen'. Keep the head and the tail with a marker between."""
+    if not scr or len(scr) <= cap:
+        return scr
+    half = cap // 2
+    return scr[:half] + "\n…[%d chars elided]…\n" % (len(scr) - cap) + scr[-half:]
+
+
 ALLOWED_ORIGINS = ({"http://%s:%d" % (HOST, PORT), "http://localhost:%d" % PORT}
                    | extra_origins(os.environ.get("CLAUDE_DASH_ORIGINS")))
 # CLAUDE_DASH_READONLY=1 switches the control plane off entirely (every POST
@@ -3117,7 +3134,7 @@ class Handler(BaseHTTPRequestHandler):
         except askdialog.AskError as e:
             ctx = {"sid": sid, "win": win, "chat": chat, "detail": str(e)}
             if e.screen is not None:      # the pixels the failing step saw
-                ctx["screen"] = e.screen[-2000:]
+                ctx["screen"] = _clip_screen(e.screen)
             A.error(log, "dashboard answer (%s)" % e.step, ctx)
             A.state_file(log, sdb, "web-answer",
                          {"win": win, "ok": False, "chat": chat,

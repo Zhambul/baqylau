@@ -101,7 +101,19 @@ class AskError(Exception):
 
 def region(screen):
     """The dialog region: from the LAST header-chip bar (the only ☐/☒ on a
-    kitty screen) to the end. "" when no dialog is on screen."""
+    kitty screen) to the end. "" when no dialog is on screen.
+
+    FALLBACK: on a NARROW/SHORT window a tall dialog (several options with
+    wrapped multi-line descriptions) overflows the visible viewport and the
+    ☐/☒ chip bar scrolls off the TOP while the footer survives at the bottom
+    — get_text only returns the visible screen, so the chip bar is simply
+    absent. A chip-bar-only anchor then returns "" and the driver false-bails
+    step:open on a genuinely-open dialog (session 819627e5, 2026-07-23). So
+    when there is no chip bar but a dialog FOOTER is on screen (FOOT/REVIEW),
+    anchor from the screen top instead. The row/question parsers over this
+    wider region tolerate the extra transcript lines above (the numbered-option
+    and action-row patterns rarely match prose), and the chip-bar path stays
+    primary — it cleanly excludes the transcript whenever the bar IS visible."""
     if not screen:
         return ""
     lines = screen.splitlines()
@@ -109,7 +121,11 @@ def region(screen):
     for i, ln in enumerate(lines):
         if "☐" in ln or "☒" in ln:
             at = i
-    return "\n".join(lines[at:]) if at is not None else ""
+    if at is not None:
+        return "\n".join(lines[at:])
+    if FOOT in screen or REVIEW in screen:
+        return screen
+    return ""
 
 
 def dialog_open(screen):
