@@ -83,7 +83,13 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     "can't tell — assume still writing", never "no writer": returning False there
     once ended a stream mid-command during a silent phase (premature finish chip,
     tab green, output lost). Only a *missing* lsof binary disables
-    writer-liveness outright (audited once).
+    writer-liveness outright (audited once). A background command that streams
+    **zero lines** (its real output went elsewhere — a `--output <file>` flag, or
+    a silent long-poll whose 0-byte task-output file stays held open) paints a dim
+    **`(no output)`** placeholder inside the block at completion (`drain`, gated on
+    `run.lines == 0`), so a finished bg block is never a bare `▷ background` header
+    + command with a void before its finish chip — the same "nothing landed"
+    affordance the fg path shows via its PostToolUse fallback body.
   - **monitor** — writes its file in bursts with gaps (no held handle), so the
     write-holder trick fails. Instead the tailer tracks the monitor's **command
     process**: a monitor runs as `zsh -c … eval '<command>'`, a persistent process
@@ -333,7 +339,12 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
   tool. The header suffix records the monitor's lifetime (`· persistent`, or
   `· ≤<dur>` for a timeout). Header, command, streamed events, and the finish
   chip all share the `taskId` **copy-group** (`CLAUDE_STREAM_GROUP`), so the
-  block carries `⧉cmd`/`⧉out` links exactly like a background command block.
+  block carries `⧉cmd`/`⧉out` links exactly like a background command block. The
+  finish chip carries `g=GROUP` on **both** the top-level (rule-bracketed) and the
+  nested-subagent (`OUTER_RGB`, single outer gutter) paths — the nested path once
+  dropped it, orphaning a `■ background finished` chip from the `▷ background`
+  command it closes far up in scrollback (no copy affordance at the bottom of a
+  long block).
 
 ### Monitor events in the transcript
 

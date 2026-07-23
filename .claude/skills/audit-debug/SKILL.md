@@ -976,7 +976,22 @@ New always-audited swallow sites (previously silent — their absence used to ma
 - **Mirror block never closes** — the `streams` row's end_reason
   (backstop-timeout = the completion signal never came; crash = see `errors`);
   `state_files` shows whether the outcome hand-off (`state:done:<token>`) / the agent
-  record's done flag (`state:agent.<id>`) was ever written. For a MONITOR block:
+  record's done flag (`state:agent.<id>`) was ever written.
+  **A BACKGROUND block that shows the `▷ background` header + command but no
+  output, and whose `bg` stream stays OPEN indefinitely (0 `lines_emitted`, no
+  end_reason), while the tab is pinned on `awaiting-bg` (blue)** = a long-lived bg
+  command that writes its real output ELSEWHERE (a `--output <file>` flag, a poll
+  harness) and NOTHING to the task-output file baqylau tails: that 0-byte
+  task-output file is held open for write by the still-running process (its
+  stdout/stderr redirect), so `has_writer` stays True and `writer-gone` never
+  fires — correct-by-design (a running bg job legitimately keeps the tab blue),
+  NOT a stuck tailer. Confirm with `lsof` on the `tasks/<taskid>.output` path (a
+  live writer pid = the job is still running) and the bg tailer pid (tailing a
+  0-byte file). When such a job finally ENDS having streamed zero lines, the block
+  now paints a dim `(no output)` placeholder before the `■ background finished`
+  chip (`stream.py` `drain`, gated `run.lines == 0`) — a finished bg block that is
+  still a bare header + chip with no `(no output)` gut op is the pre-fix shape
+  ('no command and no output' in a report). For a MONITOR block:
   an `idle-fallback` end is now also the escape for an ambiguous process match
   (multiple token hits, no full-command hit — see CLAUDE_MONITOR_CMD); a monitor
   stream open for hours with a live tailer pid suggests the wrong-pid latch

@@ -787,6 +787,16 @@ def drain(run, pump, tail, ctx, override):
         # ignored PreToolUse's updatedInput, so the command ran unwrapped. Fall back
         # to the real output PostToolUse captured itself rather than showing nothing.
         O.emit(LOG, O.gut(override["fallback_body"], SLOT_RGB, g=GROUP))
+    elif KIND == "bg" and run.lines == 0:
+        # A background command that emitted NOTHING to the file we tail — its real
+        # output went elsewhere (a `--output <file>` flag, a silent long-poll whose
+        # 0-byte task-output file stays held open by the still-running process): paint
+        # a placeholder so a finished bg block isn't a bare command header + finish
+        # chip with a void between them (the fg path shows the same via its
+        # PostToolUse fallback above). Joins the block's ⧉ copy group + outer gutter
+        # so it renders inside the ▷ background block.
+        O.emit(LOG, O.gut(R.DIM + "(no output)" + R.RST, SLOT_RGB,
+                          outer=OUTER_RGB, g=GROUP))
     return converted
 
 
@@ -817,9 +827,12 @@ def emit_finish_chip(start, tail, override):
     # Finish chip uses this stream's slot colour (same as its gutter) so you can
     # tell which stream finished. Top-level jobs get a RULE-bracketed finish; a
     # subagent's nested job gets just the chip behind its single outer gutter bar
-    # (the subagent block already frames it), so it stays visually contained.
+    # (the subagent block already frames it), so it stays visually contained. Both
+    # carry g=GROUP so the finish chip's ⧉ copy affordance ties back to the block's
+    # header/code far up in scrollback (the nested path used to drop it, orphaning
+    # the chip from the ▷ background command it closes).
     if OUTER_RGB:
-        O.emit(LOG, O.label(chip_txt, chip_rgb, outer=OUTER_RGB))
+        O.emit(LOG, O.label(chip_txt, chip_rgb, outer=OUTER_RGB, g=GROUP))
     else:
         # g on the finish chip too: after a long stream the header's ⧉ links are
         # far up in scrollback — the chip at the bottom offers the same copy.

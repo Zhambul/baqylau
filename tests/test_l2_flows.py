@@ -503,6 +503,35 @@ def test_f4c_bg_tailer_exits_on_park_without_recreating_db(
                         allow=("slot claims without a matching release",))
 
 
+def test_f4d_background_empty_output_shows_placeholder(
+        run_hook, test_env, session, fake_kitten, writer):
+    """A background command whose tailed file stays EMPTY (its real output went
+    elsewhere — a `--output <file>` flag, a silent long-poll): the finished block
+    used to be a bare `▷ background` header + command with a void where output
+    should be, then a detached `■ background finished` chip ('no command and no
+    output' in the report). The bg tailer now paints a `(no output)` placeholder
+    inside the block when it ends having streamed zero lines, mirroring the fg
+    path's fallback."""
+    s = session.make()
+    out = os.path.join(s.cwd, "bg.log")
+    cmd = "poll.py --output result.json > %s" % out   # real output goes elsewhere
+    w = writer(out)                # holds the 0-byte file open; NOTHING is written
+    run_hook("claude-cmd-fmt.py",
+             P.post_bash(s, cmd, run_in_background=True,
+                         background_task_id="bg-" + uuid.uuid4().hex[:8]))
+    assert "▷ background" in s.ops_text()
+
+    w.terminate()                  # writer exits -> writer-gone, no output ever
+    wait_until(lambda: "writer-gone" in end_reasons(test_env, s.sid),
+               desc="bg stream ends when the writer exits")
+    wait_until(lambda: "(no output)" in s.ops_text(),
+               desc="empty bg block shows the (no output) placeholder")
+    assert "■ background finished" in s.ops_text()
+    wait_until(lambda: streams_all_ended(test_env, s.sid),
+               desc="bg-watch stream row closed")
+    oracle.assert_clean(test_env, s.sid)
+
+
 # --------------------------------------------------------------------- F5
 
 SUB_EVENTS = [
