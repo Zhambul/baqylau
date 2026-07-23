@@ -237,6 +237,41 @@ def _composing(sid):
     return bool(sid and _composer_draft(sid))
 
 
+# Per-session "a browser is LOOKING AT this session right now" presence. The
+# page POSTs /api/session/<sid>/viewing on a heartbeat, but ONLY while it is
+# visible + focused + showing that session (dashboard/static/app.js). So the
+# mere arrival of a recent beat IS the "you're watching the dashboard" signal
+# the deferred Telegram alert suppresses on — the web analog of the kitty tab
+# being frontmost. In-memory + TTL'd: this is ephemeral live-only presence
+# (like the SSE connection, it earns NO per-beat audit row — the SUPPRESS it
+# drives is what lands a notify-suppress row), and the singleton server means
+# one dict is the whole truth. A plain dict get/set is atomic enough for the
+# 1 s watcher read vs the request-thread writes (no torn state, worst case a
+# beat lands a tick late).
+VIEW_TTL_S = float(os.environ.get("CLAUDE_DASH_VIEW_TTL_S") or 20)
+_VIEWING = {}                      # sid -> monotonic deadline (last beat + TTL)
+
+
+def _mark_viewing(sid):
+    """Record a viewing heartbeat for `sid` — presence is fresh for VIEW_TTL_S."""
+    if sid:
+        _VIEWING[sid] = time.monotonic() + VIEW_TTL_S
+
+
+def _web_viewing(sid):
+    """True when a browser reported viewing `sid` within the last VIEW_TTL_S
+    (visible + focused + on that session). Read-only; also GC's the stale key."""
+    if not sid:
+        return False
+    dl = _VIEWING.get(sid)
+    if dl is None:
+        return False
+    if dl <= time.monotonic():
+        _VIEWING.pop(sid, None)
+        return False
+    return True
+
+
 class Notifier:
     """The tab-DB diff watcher + the /events fan-out. Clients register a
     Queue; the watcher thread pushes ('notify', payload) on every asking/done
@@ -326,6 +361,25 @@ class Notifier:
         except Exception:
             return None
 
+    def _watching(self, win, sid):
+        """You are LOOKING AT this session right now, so the deferred alert
+        would only nag — checked at SEND time (a focus that comes and goes
+        mid-grace must be judged at the moment we'd ping). Two channels: the
+        kitty TAB is frontmost on your screen (`fe.tab_focused` — `is_focused`,
+        so a web-spawned synthetic tab in a BACKGROUNDED kitty does NOT count,
+        verified empirically), or a BROWSER is actively viewing the session (a
+        fresh `_web_viewing` heartbeat). Returns the suppress reason string
+        (`tab-focused` / `web-viewing`) or None. Best-effort: a terminal read
+        miss / no channel degrades to None, so the alert fires as before."""
+        try:
+            if self.fe and win and self.fe.tab_focused(win):
+                return "tab-focused"
+        except Exception:
+            pass
+        if _web_viewing(sid):
+            return "web-viewing"
+        return None
+
     def _payload(self, kind, state, row):
         # a worktree session's toast names the PROJECT it groups under, not the
         # worktree dir — the SAME group_dir resolution the list page uses (the
@@ -409,13 +463,23 @@ class Notifier:
                     A.state_file("", "", "notify-suppress",
                                  {"sid": sid, "kind": "done",
                                   "reason": "terminal-input"})
-        # fire the ones that persisted past the grace window (once each)
+        # fire the ones that persisted past the grace window (once each) —
+        # unless, at THIS moment, you're looking at the session (the kitty tab
+        # is frontmost, or a browser is actively viewing it): then you don't
+        # need an off-device ping, so drop it with a notify-suppress row.
         for win in list(self.pending):
             entry = self.pending[win]
             if now - entry["armed_at"] < NOTIFY_DELAY_S:
                 continue
             del self.pending[win]
-            if not prefs.notify_muted(entry.get("sid")):
+            sid = entry.get("sid")
+            watching = self._watching(win, sid)
+            if watching:
+                A.state_file("", "", "notify-suppress",
+                             {"sid": sid, "kind": entry.get("kind"),
+                              "reason": watching})
+                continue
+            if not prefs.notify_muted(sid):
                 self._telegram(entry)
 
     def _telegram(self, entry):
@@ -2160,6 +2224,9 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "notify":
             return self.post_notify_mute(api[1])
+        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+                and api[2] == "viewing":
+            return self.post_viewing(api[1])
         if api == ["upload"]:
             return self.post_upload()
         if api == ["sessions", "new"]:
@@ -3731,6 +3798,23 @@ class Handler(BaseHTTPRequestHandler):
         prefs.set_notify_muted(sid, muted)
         A.state_file("", "", "notify-mute", {"sid": sid, "muted": muted})
         return self._json({"ok": True, "muted": muted})
+
+    def post_viewing(self, sid):
+        """Presence heartbeat: the page reports it is looking at session `sid`
+        RIGHT NOW (docs/dashboard.md *Telegram alerts*). The client sends it on
+        a timer ONLY while the page is visible + focused + showing this session,
+        so the mere arrival is the signal — it refreshes the in-memory
+        `_VIEWING` deadline (`_mark_viewing`, fresh for VIEW_TTL_S) that the
+        deferred Telegram alert checks at send time to tell 'watching the
+        dashboard' from 'walked away'. Types NOTHING and writes NO session
+        state; NOT audited per-beat (ephemeral live-only presence, like the SSE
+        connection — the SUPPRESS it drives lands the notify-suppress row).
+        Behind _post_guard like every control-plane POST; always 200 (an empty
+        `{}` body is fine — the URL's sid IS the payload)."""
+        if self._post_guard() is None:
+            return
+        _mark_viewing(sid)
+        return self._json({"ok": True})
 
     def post_hide_dir(self):
         """Hide a directory group from the list page (docs/dashboard.md *Hidden

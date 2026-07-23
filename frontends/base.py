@@ -104,6 +104,22 @@ class Frontend:
         w = self.find_window("claude_session", sid, tree)
         return str(w.get("id")) if w else None
 
+    def tab_focused(self, win, tree=None):
+        """True when the TAB containing window `win` is frontmost on the user's
+        screen RIGHT NOW — i.e. it is the active tab AND its OS window holds
+        keyboard focus. Keyed on the terminal's own `is_focused`, deliberately
+        NOT `is_active`: a tab merely selected inside a BACKGROUNDED terminal
+        (e.g. a session the web dashboard just spawned while you're on your
+        phone) is `is_active` but NOT `is_focused` — verified empirically
+        against a web-launched tab with kitty backgrounded. False when the tab
+        isn't focused, `win` isn't found, or there is no terminal channel. The
+        'are you looking at this session at the terminal' signal the deferred
+        Telegram alert suppresses on."""
+        for _o, t, w in self.iter_windows(tree):
+            if str(w.get("id")) == str(win):
+                return bool(t.get("is_focused"))
+        return False
+
     # --- pane management ------------------------------------------------------
     # Slice consumers: core/hostpane.py (goto_splits_layout/launch_pane/
     # close_pane/resize_pane — the mirror+scorebar lifecycle), split +

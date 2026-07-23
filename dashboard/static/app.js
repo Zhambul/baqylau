@@ -6465,3 +6465,31 @@ renderAttention();
 refreshAccounts();
 setInterval(refreshAccounts, ACCOUNTS_POLL_MS);
 setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);
+
+// --- viewing heartbeat --------------------------------------------------------
+// Tell the server you are LOOKING at this session RIGHT NOW, so the deferred
+// Telegram alert can suppress — the web analog of the kitty tab being frontmost
+// (docs/dashboard.md *Telegram alerts*). Sent ONLY while the page is VISIBLE +
+// FOCUSED + inside a session view (S.cur set), so the beat's mere ARRIVAL is
+// the "watching the dashboard" signal — no body needed. hasFocus() rules out a
+// visible-but-unfocused window (dashboard behind the browser you're actually
+// using); visibilityState rules out a backgrounded/minimised tab. Cadence is
+// well under the server's CLAUDE_DASH_VIEW_TTL_S (20s) so a watched session's
+// presence never lapses between beats. UN-audited (no `audit` tag → no
+// web-client rows; it would flood at this rate) and best-effort.
+const VIEW_HEARTBEAT_MS = 8000;
+function viewingBeat() {
+  if (!S.cur) return;
+  if (document.visibilityState !== "visible") return;
+  if (document.hasFocus && !document.hasFocus()) return;
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/viewing", {})
+    .catch(() => {});                              // presence is best-effort
+}
+setInterval(viewingBeat, VIEW_HEARTBEAT_MS);
+// Beat immediately when you (re)focus / reveal the page or open a session, so
+// presence is re-established at once rather than up to one interval late.
+window.addEventListener("focus", viewingBeat);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") viewingBeat();
+});
+viewingBeat();

@@ -301,7 +301,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a ~8s presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
@@ -3596,6 +3596,30 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
   Limitation by design: pure thinking with ZERO keystrokes for the whole grace
   window is indistinguishable from walking away and still fires — bump
   `CLAUDE_DASH_NOTIFY_DELAY_S` for a longer think.
+- Finally, at **send time** (not arm time — a focus that comes and goes must be
+  judged at the moment we'd actually ping), the alert is suppressed if you are
+  plainly **looking at the session right now** through either surface, dropped
+  with a `notify-suppress` row:
+  - **The kitty TAB is frontmost** (`Frontend.tab_focused` → `reason:
+    tab-focused`). Keyed on the terminal's `is_focused`, deliberately NOT
+    `is_active`: a session the dashboard just SPAWNED opens a new tab that is
+    `is_active` inside kitty, but while kitty is a BACKGROUND app (you're on
+    your phone / in a browser) that tab is **not** `is_focused` — verified
+    empirically (a plain web-launch does not raise kitty; `is_focused` flips
+    true only when kitty holds OS keyboard focus AND the tab is active, i.e.
+    it's genuinely in front of you). So a synthetic tab can never falsely
+    suppress an away alert. False (fires as before) when no terminal channel
+    resolves — a dashboard started outside kitty has no `Notifier.fe`.
+  - **A browser is actively VIEWING the session** (`reason: web-viewing`). The
+    page POSTs `POST /api/session/<sid>/viewing` on an ~8s heartbeat, but ONLY
+    while it is visible + focused + inside that session's view (`document`
+    `visibilityState`/`hasFocus`), so the beat's mere arrival is the signal; the
+    server holds it in an in-memory `_VIEWING` deadline for `CLAUDE_DASH_VIEW_TTL_S`
+    (default 20s). This is the "did the page get viewed" heartbeat the arm/cancel
+    design above deliberately avoided — added specifically so having the session
+    open + focused on the dashboard suppresses the off-device ping. It is
+    ephemeral live-only presence: NO per-beat audit row (like the SSE
+    connection), only the `notify-suppress` outcome it drives is recorded.
 - An entry that **survives** past the grace window is **sent once** (popped),
   then never re-fires for that transition. It fires **regardless** of whether a
   browser is connected — reaching you when away is the whole point.
@@ -3629,9 +3653,12 @@ so muting during the grace window still suppresses the alert.
 negative → default), `CLAUDE_DASH_NOTIFY_TELEGRAM` (`0` disables arming +
 sending entirely, the in-page toast is unaffected; default on), and
 `CLAUDE_DASH_NOTIFY_CMD` (the notify script path — `~` expanded, overridable for
-a different transport or the hermetic test's recorder), and
+a different transport or the hermetic test's recorder),
 `CLAUDE_DASH_PUBLIC_URL` (the deep-link base — the proxied origin the alert
-opens, default `https://baqylau.zhambyl.top`; trailing slash tolerated).
+opens, default `https://baqylau.zhambyl.top`; trailing slash tolerated), and
+`CLAUDE_DASH_VIEW_TTL_S` (how long a browser viewing-heartbeat keeps a session
+marked "you're watching it", default `20`; must stay above the page's ~8s beat
+cadence so a continuously-viewed session's presence never lapses).
 
 **The session strip is the persistent complement to the toasts.** Toasts are
 transient (a 7s slide-in on the transition); the strip is the standing view of

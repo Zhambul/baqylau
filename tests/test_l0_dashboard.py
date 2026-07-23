@@ -727,8 +727,13 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
 
     class FE:
+        focused = False               # flip to simulate the kitty tab in front
+
         def get_text(self, w, extent="screen", ansi=False):
             return screen["txt"]
+
+        def tab_focused(self, w, tree=None):
+            return self.focused
 
     n = DS.Notifier()
     n.fe = FE()
@@ -780,6 +785,58 @@ def test_notify_fires_when_input_box_ghost_only(monkeypatch):
     cur["states"] = {"9": done}
     n.scan()                                 # arm + fire (delay 0, ghost ignored)
     assert sent and sent[0]["sid"] == "sX"
+
+
+def test_notify_suppressed_when_kitty_tab_focused(monkeypatch):
+    """At SEND time, if the session's kitty tab is FRONTMOST on your screen
+    (`Frontend.tab_focused`), the off-device alert is dropped — you're already
+    looking at it. A dashboard-spawned tab in a backgrounded kitty is is_active
+    but NOT is_focused, so tab_focused (which keys on is_focused) never yields a
+    false suppress there; this test drives the focused=True case directly."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}   # empty box (no input suppress)
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=0)
+    n.fe.focused = True                      # kitty tab is frontmost
+    n.scan()                                 # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                 # arm + fire-time focus check → suppress
+    assert sent == []
+    assert any(a[2] == "notify-suppress"
+               and a[3].get("reason") == "tab-focused" for a in audited)
+
+
+def test_notify_suppressed_when_web_viewing(monkeypatch):
+    """At SEND time, if a browser is actively VIEWING the session (a fresh
+    /api/session/<sid>/viewing heartbeat within CLAUDE_DASH_VIEW_TTL_S), the
+    off-device alert is dropped — you're watching the dashboard."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=0)
+    DS._VIEWING.pop("sX", None)
+    DS._mark_viewing("sX")                   # a fresh viewing beat
+    try:
+        n.scan()                             # baseline
+        cur["states"] = {"9": done}
+        n.scan()                             # arm + fire-time viewing check → suppress
+        assert sent == []
+        assert any(a[2] == "notify-suppress"
+                   and a[3].get("reason") == "web-viewing" for a in audited)
+    finally:
+        DS._VIEWING.pop("sX", None)
+
+
+def test_web_viewing_presence_expires(monkeypatch):
+    """The viewing presence is TTL'd: a beat marks the sid fresh, and once the
+    deadline passes (`_web_viewing` GC's it) presence is gone — so the alert
+    reverts to firing when you stop watching."""
+    monkeypatch.setattr(DS, "VIEW_TTL_S", 20)
+    clock = [1000.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    DS._VIEWING.pop("sZ", None)
+    assert DS._web_viewing("sZ") is False
+    DS._mark_viewing("sZ")
+    assert DS._web_viewing("sZ") is True
+    clock[0] += 21                            # past the TTL
+    assert DS._web_viewing("sZ") is False
+    assert "sZ" not in DS._VIEWING            # GC'd on the miss
 
 
 def _pump_global(r, got):
@@ -2460,6 +2517,21 @@ def test_notify_mute_behind_post_guard(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/nm2/notify", {"muted": True})
     assert e.value.code == 403
+
+
+def test_viewing_heartbeat_marks_presence(dash):
+    """POST /api/session/<sid>/viewing (an empty body) marks the session as
+    being watched — `_web_viewing` flips true — so the deferred alert can
+    suppress. Behind the control-plane guard: a missing header is 403."""
+    DS._VIEWING.pop("vh1", None)
+    assert DS._web_viewing("vh1") is False
+    code, body = _post(dash + "/api/session/vh1/viewing", {})
+    assert code == 200 and json.loads(body)["ok"] is True
+    assert DS._web_viewing("vh1") is True
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/vh1/viewing", {}, header=None)
+    assert e.value.code == 403
+    DS._VIEWING.pop("vh1", None)
 
 
 class _FakeFE:

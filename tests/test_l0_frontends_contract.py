@@ -55,6 +55,7 @@ CALLS = {
     "iter_windows":       ((), ...),
     "find_window":        (("claude_session", "sid-1"), None),
     "window_for_session": (("sid-1",), None),
+    "tab_focused":        (("7",), False),
     # pane management
     "goto_splits_layout": (("7",), 1),
     "launch_pane":        ((["echo", "hi"], "vsplit"), 1),
@@ -165,6 +166,31 @@ def test_module_window_for_session_delegates_to_class(monkeypatch):
     assert fe.window_for_session("sid-1") == "7"
     assert fk.window_for_session("/bin/true", "unix:/tmp/x", "nope") is None
     assert fe.window_for_session("nope") is None
+
+
+def test_tab_focused_keys_on_is_focused_not_is_active(monkeypatch):
+    """tab_focused(win) is True only when win's TAB is is_focused (active +
+    its OS window holds keyboard focus). A tab merely is_active in a
+    backgrounded terminal — exactly a dashboard-spawned session tab while you're
+    away — is NOT focused, so it can never falsely suppress an away alert."""
+    from frontends import kitty as fk
+    tree = [{"is_focused": False, "tabs": [
+        # the FOCUSED tab (active + os-window focused): win 7
+        {"is_active": True, "is_focused": True, "windows": [{"id": 7}, {"id": 8}]},
+        # a tab that is ACTIVE but NOT focused (backgrounded kitty): win 20
+        {"is_active": True, "is_focused": False, "windows": [{"id": 20}]},
+        # a plain background tab: win 30
+        {"is_active": False, "is_focused": False, "windows": [{"id": 30}]},
+    ]}]
+    monkeypatch.setattr(fk, "kitten_ls", lambda kitten, listen: tree)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/bin/true")
+    assert fe.tab_focused(7) is True          # focused tab, first window
+    assert fe.tab_focused("8") is True        # focused tab, sibling window (str)
+    assert fe.tab_focused(20) is False        # active but NOT focused
+    assert fe.tab_focused(30) is False        # background
+    assert fe.tab_focused(999) is False       # unknown window
+    # the inert stub has no windows → always False
+    assert Frontend().tab_focused(7) is False
 
 
 def _geometry_fe(monkeypatch, tree):
