@@ -1602,8 +1602,10 @@ below) rather than pinning to whatever the resumed session used. So "continue
 where the session was" applies to the model/effort, while the account follows the
 same quota-aware logic a fresh launch does.
 
-**Space previews the recent mirror transcript.** With a row highlighted, `Space`
-toggles an inline preview panel (`.nspreview`) that fetches the session's recent
+**Space previews the recent mirror transcript — in a POPUP WINDOW.** With a row
+highlighted, `Space` opens a roomy overlay (`.nspvback`/`.nspvpanel`, up to
+960px × 88vh) STACKED ABOVE the new-session form (z-index above `.nsback`) — the
+inline panel it replaced was too cramped to read. It fetches the session's recent
 mirror tail from **`GET /api/session/<sid>/backlog`** (the newest `TAIL_BLOCKS`
 slice — the mirror tab's own on-load call) and renders it with `renderPreview` —
 the same server `{g,t,html}` items and block grouping the mirror tab uses, into a
@@ -1612,13 +1614,18 @@ peek (command/file/agent blocks collapse to a one-line summary; conversation
 messages show inline; click a header to expand). Use `backlog`, NOT
 `/history?before=N` — `/history` returns blocks *older than* a cursor, so
 `before=0` returns nothing (the "no mirror history" bug the first cut shipped).
-For the picker to be keyboard-drivable, selecting a row updates its highlight IN
-PLACE (a full repaint would recreate the row element and drop keyboard focus, so
-`Space` would land nowhere — the "space did nothing after I clicked" bug); on
-open the selected row itself is focused (not the search box, which would pop the
-iPad keyboard). The `resume.preview` audit row carries the rendered item count
-`n`, so an empty-but-successful preview is distinguishable from a rendered one in
-the DB alone (the blind spot that made the first diagnosis need an endpoint repro).
+The popup closes on `✕`, click-outside, `Space` again, or `Esc`, returning focus
+to the row; because it lives on `document.body` (not `$modal`) and the form has a
+document-level `Esc`→close, the popup owns a **capturing** keydown handler that
+`stopPropagation()`s so `Esc` dismisses the popup, not the form, and
+`closeNewSession` tears down a still-open popup (`resumePreviewCleanup`). For the
+picker to be keyboard-drivable, selecting a row updates its highlight IN PLACE (a
+full repaint would recreate the row element and drop keyboard focus, so `Space`
+would land nowhere — the "space did nothing after I clicked" bug); on open the
+selected row itself is focused (not the search box, which would pop the iPad
+keyboard). The `resume.preview` audit row carries the rendered item count `n`, so
+an empty-but-successful preview is distinguishable from a rendered one in the DB
+alone (the blind spot that made the first diagnosis need an endpoint repro).
 
 A resumed conversation **forks to a new sid** (CLAUDE.md: resume forks) — but NOT
 at launch: SessionStart fires under the OLD sid (restoring its parked DB, so that

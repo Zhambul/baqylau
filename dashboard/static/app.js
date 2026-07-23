@@ -3471,7 +3471,13 @@ function showPendingFail() {
 // SessionStart. The header "+ session" button opens it blank; a dir group's "+"
 // prefills that cwd.
 
+// The resume preview popup lives OUTSIDE $modal (on document.body, above the
+// form), so tearing down the form must also dismiss any open popup + its
+// capturing Esc handler — set by resumePicker while a popup is up, else null.
+let resumePreviewCleanup = null;
+
 function closeNewSession() {
+  if (resumePreviewCleanup) resumePreviewCleanup();
   stopDictation();               // the form's mic dies with the form
   $modal.hidden = true;
   $modal.textContent = "";
@@ -3669,11 +3675,9 @@ function resumePicker() {
   search.placeholder = "search all sessions in this directory…";
   const hint = el("div", "nsreshint", "↑↓ navigate · space previews · enter picks");
   const list = el("div", "nsreslist");
-  const preview = el("div", "nspreview");
-  preview.hidden = true;
-  root.append(search, hint, list, preview);
+  root.append(search, hint, list);
 
-  let rows = [], selSid = "", pvSid = "", lastCwd = "", qToken = 0;
+  let rows = [], selSid = "", pvSid = "", lastCwd = "", qToken = 0, pvBack = null;
   const pvCache = new Map();
 
   const paint = () => {
@@ -3727,41 +3731,79 @@ function resumePicker() {
     if (api.onSelect) api.onSelect(r);
   };
 
+  // The preview is a POPUP WINDOW over the form (a roomy, readable overlay — the
+  // inline panel was too cramped to read). It stacks above the new-session modal
+  // (.nspvback z-index > .nsback) and owns its own Escape/close so the form's
+  // document-level Esc handler doesn't fire underneath it (resumePreviewCleanup
+  // + a capturing keydown that stopPropagation()s). Closing returns focus to the
+  // row that opened it.
+  const closePreview = () => {
+    if (!pvBack) return;
+    document.removeEventListener("keydown", pvKey, true);
+    pvBack.remove();
+    pvBack = null;
+    resumePreviewCleanup = null;
+    const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
+    if (r) r.focus();
+  };
+  const pvKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closePreview(); }
+  };
+
   const showPreview = (sid) => {
-    if (!preview.hidden && pvSid === sid) {
-      preview.hidden = true; pvSid = "";
+    if (pvBack && pvSid === sid) {                  // space again on the same row closes
       clog(sid, "resume.preview", { shown: 0 });
+      closePreview();
       return;
     }
+    closePreview();                                // switching rows: replace the popup
     pvSid = sid;
-    preview.hidden = false;
+    const r = rows.find(x => x.sid === sid);
+    const title = (r && r.title) || shortSid(sid);
+    pvBack = el("div", "nspvback");
+    const panel = el("div", "nspvpanel");
+    const head = el("div", "nspvhead");
+    head.append(el("span", "nspvtitle", "preview · " + title));
+    const x = el("button", "nspvx", "✕");
+    x.title = "close (Esc)";
+    x.onclick = closePreview;
+    head.append(x);
+    const body = el("div", "nspvbody");
+    body.append(el("div", "nspreview-empty", "loading…"));
+    panel.append(head, body);
+    pvBack.append(panel);
+    pvBack.onclick = (e) => { if (e.target === pvBack) closePreview(); };
+    document.body.append(pvBack);
+    document.addEventListener("keydown", pvKey, true);   // preempt the form's Esc
+    resumePreviewCleanup = closePreview;                 // form-close safety net
+    x.focus();                                           // so Esc/tab live in the popup
+
+    const render = (items) => { if (pvSid === sid && pvBack) renderPreview(body, items); };
     if (pvCache.has(sid)) {
       const items = pvCache.get(sid);
       // record the item COUNT, not just "shown" — an empty-but-successful preview
       // ("no mirror history") is otherwise indistinguishable in the audit from a
       // rendered one (the blind spot that made the last diagnosis need a repro).
       clog(sid, "resume.preview", { shown: 1, cached: 1, n: items.length });
-      renderPreview(preview, items);
+      render(items);
       return;
     }
-    preview.textContent = "";
-    preview.append(el("div", "nspreview-empty", "loading…"));
     // the recent mirror TAIL is /backlog (the newest TAIL_BLOCKS slice, the
     // mirror tab's own on-load call) — NOT /history, which returns blocks OLDER
     // than a cursor (before=0 → nothing: the "no mirror history" bug).
     fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
-      .then(r => r.json())
+      .then(rp => rp.json())
       .then(d => {
         const items = (d && d.items) || [];
         pvCache.set(sid, items);
         clog(sid, "resume.preview", { shown: 1, cached: 0, n: items.length });
-        if (pvSid === sid && !preview.hidden) renderPreview(preview, items);
+        render(items);
       })
       .catch(() => {
         clog(sid, "resume.preview.fail", {});
-        if (pvSid !== sid) return;
-        preview.textContent = "";
-        preview.append(el("div", "nspreview-empty", "preview unavailable"));
+        if (pvSid !== sid || !pvBack) return;
+        body.textContent = "";
+        body.append(el("div", "nspreview-empty", "preview unavailable"));
       });
   };
 
@@ -3780,12 +3822,9 @@ function resumePicker() {
     } else if (e.key === " ") {
       e.preventDefault();                          // space PREVIEWS, never scrolls
       showPreview(r.sid);
-    } else if (e.key === "Escape" && !preview.hidden) {
-      e.preventDefault();
-      e.stopPropagation();                         // don't close the whole modal
-      preview.hidden = true;
-      pvSid = "";
     }
+    // Escape with the popup open is handled by the popup's own capturing handler;
+    // Escape with no popup falls through to the form's close (the expected Esc).
   };
 
   // Search is SERVER-SIDE (across the directory's whole history, not just the

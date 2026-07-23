@@ -971,12 +971,35 @@ body.modal-open { overflow: hidden; }
 .nsresago { margin-left: auto; flex: none; color: var(--dim2); font: 10.5px/1.4 var(--mono); }
 .nsresempty { padding: 10px 9px; color: var(--dim2); font: 12px/1.5 var(--mono); }
 
-/* the space-to-preview panel: a read-only recent mirror snapshot (renderPreview) */
-.nspreview {
-  margin-top: 6px; max-height: 300px; overflow-y: auto; border-radius: var(--r);
-  box-shadow: inset 0 0 0 1px var(--hair);
-  background: color-mix(in srgb, var(--bg) 92%, black); padding: 6px 8px;
+/* space-to-preview POPUP: a roomy, readable overlay above the new-session form
+   (the inline panel was too small) — a read-only recent mirror snapshot. */
+.nspvback {
+  position: fixed; inset: 0; z-index: 90;    /* above .nsback (80): over the form */
+  display: flex; align-items: center; justify-content: center;
+  padding: 5vh 4vw;
+  background: color-mix(in srgb, var(--bg) 72%, transparent);
+  backdrop-filter: blur(3px);
 }
+.nspvpanel {
+  display: flex; flex-direction: column;
+  width: min(960px, 96vw); max-height: 88vh; max-height: 88dvh;
+  background: var(--panel); box-shadow: var(--card); border-radius: var(--r);
+  overflow: hidden;                          /* the body scrolls, not the panel */
+}
+.nspvhead {
+  flex: none; display: flex; align-items: center; gap: 10px;
+  padding: 11px 14px; box-shadow: inset 0 -1px 0 var(--hair);
+}
+.nspvtitle {
+  flex: 1; min-width: 0; color: var(--text); font: 650 13px/1.4 var(--sans);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nspvx {
+  flex: none; background: transparent; border: none; color: var(--dim);
+  cursor: pointer; font-size: 14px; padding: 2px 9px; border-radius: var(--r);
+}
+.nspvx:hover { color: var(--text); box-shadow: var(--card-hover); }
+.nspvbody { flex: 1; overflow-y: auto; padding: 10px 14px; }
 .nspreview-empty { padding: 4px 2px; color: var(--dim2); font: 12px/1.5 var(--mono); }
 
 .nsactions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
