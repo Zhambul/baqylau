@@ -3601,10 +3601,20 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
   Limitation by design: pure thinking with ZERO keystrokes for the whole grace
   window is indistinguishable from walking away and still fires — bump
   `CLAUDE_DASH_NOTIFY_DELAY_S` for a longer think.
-- Finally, at **send time** (not arm time — a focus that comes and goes must be
-  judged at the moment we'd actually ping), the alert is suppressed if you are
-  plainly **looking at the session right now** through either surface, dropped
-  with a `notify-suppress` row:
+- Finally, the alert is suppressed if you are plainly **looking at the session**
+  through either surface, dropped with a `notify-suppress` row. The WHEN differs
+  by kind — a deliberate asymmetry:
+  - For a **`done`** arm the rule is **"if I've SEEN the final message, don't
+    tell me"**: a done tab's result is on screen the moment it goes green, so
+    the check runs **every scan while armed** (not just at send time). A single
+    glance ANY time during the grace cancels the alert — even one that has since
+    ended and you've moved on — because you don't need a ping about a result you
+    already read.
+  - For an **`asking`** arm the check runs only at **send time** ("are you
+    looking RIGHT NOW"). Seeing a question is not answering it, so a glance that
+    then walked away WITHOUT answering must still fire the reminder; only being
+    on it at the moment we'd ping (or answering at the terminal, above) suppresses.
+  Both use the same two "looking at it" channels:
   - **The kitty TAB is frontmost** (`Frontend.tab_focused` → `reason:
     tab-focused`). Keyed on the terminal's `is_focused`, deliberately NOT
     `is_active`: a session the dashboard just SPAWNED opens a new tab that is
@@ -3614,17 +3624,22 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
     true only when kitty holds OS keyboard focus AND the tab is active, i.e.
     it's genuinely in front of you). So a synthetic tab can never falsely
     suppress an away alert. False (fires as before) when no terminal channel
-    resolves — a dashboard started outside kitty has no `Notifier.fe`.
-  - **A browser is actively VIEWING the session** (`reason: web-viewing`). The
-    page POSTs `POST /api/session/<sid>/viewing` on an ~8s heartbeat, but ONLY
-    while it is visible + focused + inside that session's view (`document`
+    resolves — a dashboard started outside kitty has no `Notifier.fe`. The tab
+    read is one shared `ls()` per scan (passed to every armed entry's check),
+    not one `kitten @ ls` per session.
+  - **A browser is VIEWING the session** (`reason: web-viewing`). The page POSTs
+    `POST /api/session/<sid>/viewing` on an ~8s heartbeat, but ONLY while it is
+    visible + focused + inside that session's view (`document`
     `visibilityState`/`hasFocus`), so the beat's mere arrival is the signal; the
     server holds it in an in-memory `_VIEWING` deadline for `CLAUDE_DASH_VIEW_TTL_S`
-    (default 20s). This is the "did the page get viewed" heartbeat the arm/cancel
-    design above deliberately avoided — added specifically so having the session
-    open + focused on the dashboard suppresses the off-device ping. It is
-    ephemeral live-only presence: NO per-beat audit row (like the SSE
-    connection), only the `notify-suppress` outcome it drives is recorded.
+    (default 20s). Because a beat fires immediately on focus/reveal and the
+    deadline outlives the ~1 s scan, even a brief look at a done session lands a
+    beat that the next scan sees — so the "I saw it" rule catches short glances.
+    This is the "did the page get viewed" heartbeat the arm/cancel design above
+    deliberately avoided — added specifically so seeing the final message on the
+    dashboard suppresses the off-device ping. It is ephemeral live-only presence:
+    NO per-beat audit row (like the SSE connection), only the `notify-suppress`
+    outcome it drives is recorded.
 - An entry that **survives** past the grace window is **sent once** (popped),
   then never re-fires for that transition. It fires **regardless** of whether a
   browser is connected — reaching you when away is the whole point.

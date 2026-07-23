@@ -839,6 +839,51 @@ def test_web_viewing_presence_expires(monkeypatch):
     assert "sZ" not in DS._VIEWING            # GC'd on the miss
 
 
+def test_notify_done_suppressed_when_seen_earlier_then_left(monkeypatch):
+    """The user's rule: 'if I've SEEN the final message on the dashboard, no
+    notification.' A done arm is checked EVERY scan while armed (not only at
+    send time), so a single glance during the grace cancels it even after you
+    navigate away — you don't need to be pinged about a result you already read."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}   # empty box, not focused
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=999)
+    n.scan()                                  # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                  # arm — not watching yet
+    assert "9" in n.pending
+    DS._VIEWING.pop("sX", None)
+    DS._mark_viewing("sX")                    # you GLANCE at the final message
+    n.scan()                                  # per-scan 'seen it' → dropped
+    DS._VIEWING.pop("sX", None)               # the glance is over; you moved on
+    assert "9" not in n.pending
+    assert any(a[2] == "notify-suppress"
+               and a[3].get("reason") == "web-viewing" for a in audited)
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    n.scan()                                  # grace passes — still nothing fires
+    assert sent == []
+
+
+def test_notify_asking_still_fires_after_earlier_glance(monkeypatch):
+    """Deliberate asymmetry vs `done`: for an ASKING arm a mere earlier glance
+    does NOT suppress — seeing the question isn't answering it, so if you looked
+    then walked away without answering, the reminder must still fire. (Only
+    looking RIGHT NOW at send time, or answering at the terminal, suppresses an
+    ask.)"""
+    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No\nEnter to select"}
+    n, cur, asking, sent, _ = _notifier_for_asking(monkeypatch, screen, delay=999)
+    n.scan()                                  # baseline
+    cur["states"] = {"9": asking}
+    n.scan()                                  # arm
+    assert "9" in n.pending
+    DS._VIEWING.pop("sX", None)
+    DS._mark_viewing("sX")                    # you GLANCE at the ask on the dashboard
+    n.scan()                                  # NOT cancelled — asking ignores a glance
+    DS._VIEWING.pop("sX", None)               # ...and you leave without answering
+    assert "9" in n.pending
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    n.scan()                                  # send time, not looking now → fires
+    assert sent and sent[0]["sid"] == "sX"
+
+
 def _pump_global(r, got):
     """Collect (event, data) frames from a global-SSE response into `got`."""
     def pump():

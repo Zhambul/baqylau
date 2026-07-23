@@ -372,18 +372,24 @@ class Notifier:
         except Exception:
             return None
 
-    def _watching(self, win, sid):
-        """You are LOOKING AT this session right now, so the deferred alert
-        would only nag — checked at SEND time (a focus that comes and goes
-        mid-grace must be judged at the moment we'd ping). Two channels: the
-        kitty TAB is frontmost on your screen (`fe.tab_focused` — `is_focused`,
-        so a web-spawned synthetic tab in a BACKGROUNDED kitty does NOT count,
-        verified empirically), or a BROWSER is actively viewing the session (a
-        fresh `_web_viewing` heartbeat). Returns the suppress reason string
-        (`tab-focused` / `web-viewing`) or None. Best-effort: a terminal read
-        miss / no channel degrades to None, so the alert fires as before."""
+    def _watching(self, win, sid, tree=None):
+        """You are LOOKING AT this session, so the deferred alert would only
+        nag. Two channels: the kitty TAB is frontmost on your screen
+        (`fe.tab_focused` — `is_focused`, so a web-spawned synthetic tab in a
+        BACKGROUNDED kitty does NOT count, verified empirically), or a BROWSER
+        is actively viewing the session (a fresh `_web_viewing` heartbeat).
+        Returns the suppress reason (`tab-focused` / `web-viewing`) or None;
+        best-effort — a terminal read miss / no channel degrades to None.
+
+        Called from two places with different meanings (see scan): for a `done`
+        arm it runs EVERY scan while armed, so a single glance any time during
+        the grace ('I saw the final message') cancels the alert even after you
+        move on; for an `asking` arm it runs only at SEND time ('are you looking
+        RIGHT NOW'), because a glance that didn't ANSWER still needs the ping.
+        `tree` is a pre-fetched `ls()` shared across a scan's entries so the tab
+        check costs one `kitten @ ls` per scan, not one per armed session."""
         try:
-            if self.fe and win and self.fe.tab_focused(win):
+            if self.fe and win and self.fe.tab_focused(win, tree):
                 return "tab-focused"
         except Exception:
             pass
@@ -438,6 +444,13 @@ class Notifier:
         # "I'm on it" — don't nag). ended_at is the robust signal the win-vanish
         # check can miss: a stale tab row can linger, and a reused window id can
         # even re-match the armed state under a DIFFERENT session.
+        # one ls per scan, shared by every armed entry's tab-focus check (both
+        # the done 'seen it' branch below and the asking send-time check) —
+        # avoids a kitten @ ls per armed session per second. Best-effort.
+        try:
+            tree = self.fe.ls() if (self.fe and self.pending) else None
+        except Exception:
+            tree = None
         for win in list(self.pending):
             entry = self.pending[win]
             sid = entry.get("sid")
@@ -474,17 +487,34 @@ class Notifier:
                     A.state_file("", "", "notify-suppress",
                                  {"sid": sid, "kind": "done",
                                   "reason": "terminal-input"})
+                else:
+                    # "If I've SEEN the final message, no notification." A done
+                    # tab's final message is on screen the moment it goes green,
+                    # so ANY glance during the grace — the kitty tab frontmost
+                    # or a browser viewing the session — means you saw it. Check
+                    # every scan (not just at send time), so a glance that has
+                    # since ended still cancels: you don't need to be told about
+                    # a result you already read.
+                    seen = self._watching(win, sid, tree)
+                    if seen:
+                        del self.pending[win]
+                        A.state_file("", "", "notify-suppress",
+                                     {"sid": sid, "kind": "done",
+                                      "reason": seen})
         # fire the ones that persisted past the grace window (once each) —
         # unless, at THIS moment, you're looking at the session (the kitty tab
         # is frontmost, or a browser is actively viewing it): then you don't
-        # need an off-device ping, so drop it with a notify-suppress row.
+        # need an off-device ping, so drop it with a notify-suppress row. In
+        # practice this send-time check now matters for `asking` arms: a `done`
+        # arm that was ever seen was already dropped above (the 'seen it' rule),
+        # so a done arm reaching here was never looked at.
         for win in list(self.pending):
             entry = self.pending[win]
             if now - entry["armed_at"] < NOTIFY_DELAY_S:
                 continue
             del self.pending[win]
             sid = entry.get("sid")
-            watching = self._watching(win, sid)
+            watching = self._watching(win, sid, tree)
             if watching:
                 A.state_file("", "", "notify-suppress",
                              {"sid": sid, "kind": entry.get("kind"),
