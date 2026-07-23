@@ -517,6 +517,33 @@ to get the bytes onto disk and put the path in the message:
   drops the pending chips (the staged files themselves survive on disk until the
   prune) — a deliberate scope limit; the draft machinery stays text-only.
 
+**Clipboard-image guard (the spurious-screenshot fix).** Separately from the
+dashboard's own `@path` attachments (above), **Claude Code's TUI auto-attaches
+whatever image is on the macOS clipboard to a message on ANY bracketed paste —
+and when launched with an initial prompt argument, on that startup too.** Proven
+live (2026-07-23): a web resume with the prompt `"say test"` and the audit's
+`attachments:0` still arrived as `say test[Image #1]` with a PNG the user never
+attached (a screenshot on their clipboard), cached to Claude Code's own
+`image-cache/<sid>/N.png`, twice identically, with nobody at the terminal;
+`claude -p` (print mode) never does it; a raw (non-bracketed) `send-text` doesn't
+grab it but drops bytes, so it isn't a usable delivery. baqylau delivers every
+web message via bracketed paste (`paste_text`) — so every send/launch is exposed.
+It is undocumented Claude Code behaviour (v2.1.x, no opt-out flag). The fix, since
+the paste itself does the grab and can't be dodged, is to **empty an IMAGE
+clipboard right before each web send/launch** (`_clear_clipboard_image` — macOS
+`osascript`, gated on `_clip_has_image` so a TEXT clipboard is left untouched;
+best-effort, no-op off macOS). Wired ahead of every bracketed paste
+(`post_message`, `post_command`, the ask-chat send) and, when a launch carries a
+first prompt, ahead of `launch_tab` (the argv-startup grab). Each of those rows
+carries a `clip` bool (cleared? — `web-send`/`web-command`/`web-launch`). This is
+the deliberate trade-off the user chose: a screenshot the user never meant to send
+is worse than losing an image that happened to be on the clipboard at send-time
+(a text clipboard is preserved; the dashboard's own `@path` attachments are
+unaffected — they never use the clipboard). *Why not "bare launch + clear-then-
+send"?* Tried and reverted: the clear-then-send still bracketed-pastes, which
+re-triggers the grab (verified live), and it added timing-dependent delivery for
+no benefit.
+
 **Resume & send (a parked session's composer).** A parked session's composer
 is NOT disabled — everything passive works exactly like live (typing, the
 "/" menu, dictation; all free drafts), and the one send button, relabeled

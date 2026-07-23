@@ -873,6 +873,24 @@ New always-audited swallow sites (previously silent — their absence used to ma
   see docs/session-naming-findings.md — a slash-command session that ended
   before an ai-title now falls back to `/command`, but a DELETED transcript
   still has nothing to read).
+- **A web-sent/launched message carried an image the user never attached (e.g.
+  `say test[Image #1]`, a stray screenshot)** *(guard added 2026-07-23)* — this
+  is Claude Code's TUI auto-attaching whatever image is on the macOS clipboard on
+  ANY bracketed paste (and on an argv-prompt startup); NOT a baqylau attachment
+  (the `web-send`/`web-launch` row shows `attachments: 0`, no `web-upload`). The
+  fix empties an image clipboard before each bracketed paste / prompt launch
+  (`_clear_clipboard_image`, macOS-only, only when an image is present). Tell it
+  RAN: the `web-send`/`web-command`/`web-launch` row carries **`clip: true`** (it
+  found + cleared an image). `clip: false` = a text/empty clipboard (nothing to
+  clear) OR off macOS. If a stray image STILL rides a message on a current build:
+  the guard was skipped (a paste site with no `_clear_clipboard_image` before it),
+  the `osascript` clear failed (rare — the clipboard held an image, `clip` was
+  attempted but CC still attached: a race where the user re-copied an image in the
+  ~1-2s before CC's startup read), or a pre-fix server is running (restart
+  `claude-dashboard.py`). Cross-check the message's image `source` — CC's own
+  `image-cache/<sid>/N.png` = a clipboard paste, NOT the dashboard's
+  `UPLOADS_DIR` `@path` attachment (those are legit, and unaffected: they never
+  use the clipboard).
 - **Clicking a Read/Update/Write line doesn't expand (or won't collapse)** — the
   click-to-view chain is stash → toggle → reflow; check it in that order. (1) Stash:
   a `state_files` `view-stash` row (content: gid = the op's tool_use_id, tool, ops

@@ -2498,6 +2498,52 @@ def test_post_message_success(dash, monkeypatch):
     assert fe.sent == []
 
 
+def test_clear_clipboard_image_only_when_image(monkeypatch):
+    """The clipboard-image guard empties the macOS clipboard ONLY when it holds
+    an image flavor (so Claude Code can't auto-attach it to a bracketed paste,
+    docs/dashboard.md *Clipboard-image guard*) — a text-only clipboard is left
+    untouched, and it never runs off macOS."""
+    calls = []
+
+    def fake_run(argv, **kw):
+        calls.append(argv)
+        r = type("R", (), {})()
+        r.stdout = fake_run.info if argv[2:3] == ["clipboard info"] else ""
+        return r
+    monkeypatch.setattr(DS.sys, "platform", "darwin")
+    monkeypatch.setattr(DS.subprocess, "run", fake_run)
+    # an image on the clipboard → detected and cleared
+    fake_run.info = "«class PNGf», 70, «class utf8», 3"
+    calls.clear()
+    assert DS._clear_clipboard_image() is True
+    assert any('set the clipboard to ""' in " ".join(c) for c in calls)
+    # a text-only clipboard → left alone (no set-clipboard command issued)
+    fake_run.info = "«class utf8», 12"
+    calls.clear()
+    assert DS._clear_clipboard_image() is False
+    assert not any("set the clipboard" in " ".join(c) for c in calls)
+    # off macOS → never even probes
+    monkeypatch.setattr(DS.sys, "platform", "linux")
+    calls.clear()
+    assert DS._clear_clipboard_image() is False and calls == []
+
+
+def test_post_message_runs_clipboard_guard(dash, monkeypatch):
+    """A composer send empties an image clipboard BEFORE the bracketed paste (the
+    fix for the spurious-screenshot bug) and still delivers the message."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "42")
+    A.session_start({"session_id": "msgclip", "cwd": "/w", "transcript_path": ""})
+    calls = []
+    monkeypatch.setattr(DS, "_clear_clipboard_image",
+                        lambda: calls.append(1) or True)
+    code, _ = _post(dash + "/api/session/msgclip/message", {"text": "hi"})
+    assert code == 200
+    assert calls                                 # the clipboard-image guard ran
+    assert fe.pasted == [("42", "hi")]           # …and the message still delivered
+
+
 def test_post_message_reports_queued_mid_turn(dash, monkeypatch):
     # a send while the tab is busy lands in Claude Code's own message queue —
     # the response says so (`queued`), and the web-send audit row carries the

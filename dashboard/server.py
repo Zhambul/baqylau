@@ -1701,6 +1701,47 @@ def _front_app():
         return ""
 
 
+# macOS clipboard "flavor" codes that mean an IMAGE is on the board. Claude
+# Code's TUI auto-attaches whatever image the clipboard holds to a message on
+# ANY bracketed paste (and on an argv-prompt startup) — proven live: a web send
+# with a screenshot on the clipboard arrived as "text[Image #1]" with the PNG,
+# though baqylau attached nothing. There is no CC opt-out, so before any web
+# send/launch we EMPTY an image clipboard so the grab finds nothing (the user
+# chose auto-clear; a text-only clipboard is left alone). docs/dashboard.md
+# *Clipboard-image guard*.
+_CLIP_IMAGE_FLAVORS = ("PNGf", "TIFF", "8BPS", "jp2", "GIF", "JPEG", "picture")
+
+
+def _clip_has_image():
+    """True when the macOS clipboard currently holds an image flavor. Best-effort
+    (`osascript -e 'clipboard info'`); False off macOS / on any failure / on a
+    text-only clipboard — so we never clear a clipboard that has no image."""
+    if sys.platform != "darwin":
+        return False
+    try:
+        info = subprocess.run(["osascript", "-e", "clipboard info"],
+                              capture_output=True, text=True, timeout=2).stdout or ""
+    except Exception:
+        return False
+    return any(f in info for f in _CLIP_IMAGE_FLAVORS)
+
+
+def _clear_clipboard_image():
+    """If the macOS clipboard holds an IMAGE, empty it — so Claude Code can't
+    auto-attach it to a web-delivered message (docs/dashboard.md *Clipboard-image
+    guard*). Returns True iff it cleared. No-op (False) off macOS or on a
+    text-only clipboard, so a plain text clipboard is preserved; best-effort,
+    never raises into the caller."""
+    if not _clip_has_image():
+        return False
+    try:
+        subprocess.run(["osascript", "-e", 'set the clipboard to ""'],
+                       capture_output=True, timeout=2)
+        return True
+    except Exception:
+        return False
+
+
 def _steal_watch(before, terminal_app):
     """The post-launch focus watch (a daemon thread — the HTTP response never
     waits on it): record each TRANSITION of the frontmost app onto the
@@ -2359,10 +2400,15 @@ class Handler(BaseHTTPRequestHandler):
         # separate keystroke OUTSIDE the paste, so it still submits — and a
         # multi-line composer message pastes atomically instead of its internal
         # newlines submitting it early.
+        # empty an IMAGE clipboard first — a bracketed paste makes Claude Code
+        # attach whatever image is on the board (docs/dashboard.md *Clipboard-
+        # image guard*); no-op on a text clipboard / off macOS.
+        clip = _clear_clipboard_image()
         ok = bool(fe.paste_text(win, text))
         A.state_file(log, sdb, "web-send",
                      {"win": win, "chars": len(text), "ok": ok, "tab": tab,
-                      "clear_draft": clear_draft, "attachments": len(attachments)})
+                      "clear_draft": clear_draft, "attachments": len(attachments),
+                      "clip": clip})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
@@ -2425,10 +2471,11 @@ class Handler(BaseHTTPRequestHandler):
                           "ok": False, "tab": tab})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
-        ok = bool(fe.paste_text(win, text))
+        clip = _clear_clipboard_image()      # don't let a clipboard image ride
+        ok = bool(fe.paste_text(win, text))  # the slash command (see post_message)
         A.state_file(log, sdb, "web-command",
                      {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
-                      "tab": tab})
+                      "tab": tab, "clip": clip})
         if not ok:
             A.error(log, "dashboard command (send failed)",
                     {"sid": sid, "win": win, "cmd": cmd})
@@ -3229,10 +3276,11 @@ class Handler(BaseHTTPRequestHandler):
         msg = body.get("message")
         resp = {"ok": True, "chat": chat}
         if chat and isinstance(msg, str) and msg.strip():
+            clip = _clear_clipboard_image()      # clipboard-image guard, as post_message
             sent = bool(fe.paste_text(win, msg))
             A.state_file(log, sdb, "web-send",
                          {"win": win, "chars": len(msg), "ok": sent,
-                          "via": "ask-chat"})
+                          "via": "ask-chat", "clip": clip})
             if not sent:
                 A.error(log, "dashboard answer-chat message (send failed)",
                         {"sid": sid, "win": win})
@@ -3575,11 +3623,18 @@ class Handler(BaseHTTPRequestHandler):
         # has no OS app identity (the inert stub, off-mac).
         term = fe.app_id()
         before = _front_app() if term else ""
+        # a launch carrying a first prompt makes Claude Code's TUI read the
+        # clipboard at startup and attach any image to that auto-submitted
+        # message (docs/dashboard.md *Clipboard-image guard*) — empty an image
+        # clipboard first so the startup grab finds nothing. Only when there's a
+        # prompt (a bare launch auto-submits nothing, so nothing to attach to).
+        clip = _clear_clipboard_image() if prompt.strip() else False
         # launch_tab: the new window's id on success when the terminal reports
         # one (kitty prints it), bare True when it doesn't, falsy on failure.
         got = fe.launch_tab(cwd, argv)
         win = got if isinstance(got, str) else ""
-        A.state_file("", "", "web-launch", dict(opts, ok=bool(got), win=win))
+        A.state_file("", "", "web-launch",
+                     dict(opts, ok=bool(got), win=win, clip=clip))
         if not got:
             A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
             return self._json({"error": "launch failed"}, 502)
