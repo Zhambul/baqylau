@@ -3129,6 +3129,52 @@ function wireAttach(tray, ta, zone, enabled) {
   return frag(btn, input);
 }
 
+// ↑/↓ history recall for the composer — Claude Code's TUI up-arrow affordance
+// (press ↑ on an empty/edge box to pull back a previously-sent message). The
+// recall list is the session's REAL delivered prompts: every `.msg.prompt`
+// bubble in the feed carries the raw text in data-txt (opshtml.msg_html, the
+// same source the rewind picker POSTs), so history survives reloads / device
+// switches / a return to the session with no client bookkeeping, and it always
+// reflects exactly what was sent — from the composer OR the terminal. We read
+// it live off the feed on each navigation so a just-sent message is included
+// the moment its bubble lands. `ses.histIdx` is the cursor: null = the live
+// draft line (not navigating); 0..n-1 = a history entry, newest last. Entering
+// navigation stashes the live draft in `ses.histBase` so ↓ past the newest
+// restores it. Recall is EPHEMERAL — deliberately not persisted as a draft
+// (saveComposerDraft) until the user actually edits (oninput) or sends.
+// Returns true when it consumed the key (the caller then preventDefaults).
+function recallHistory(ses, ta, up) {
+  const navigating = ses.histIdx != null;
+  // Enter navigation only from an EDGE — ↑ with the caret at the very start —
+  // so the arrow keeps moving the caret inside a multi-line draft otherwise.
+  // ↓ from the live line does nothing (we're already at the newest). Once
+  // navigating, either arrow keeps navigating regardless of caret position.
+  if (!navigating) {
+    if (!up) return false;
+    if (ta.selectionStart !== 0 || ta.selectionEnd !== 0) return false;
+  }
+  const hist = [];
+  ses.stream.querySelectorAll(".msg.prompt[data-txt]").forEach(n => {
+    const t = n.getAttribute("data-txt");
+    if (t) hist.push(t);
+  });
+  if (!hist.length) return navigating;   // nothing to recall (swallow mid-nav)
+  let idx = ses.histIdx;
+  if (idx == null) { ses.histBase = ta.value; idx = hist.length; }  // just past newest
+  idx += up ? -1 : 1;
+  if (idx < 0) idx = 0;                   // clamp at the oldest
+  if (idx >= hist.length) {               // ↓ past the newest → back to live draft
+    ses.histIdx = null;
+    ta.value = ses.histBase || "";
+  } else {
+    ses.histIdx = idx;
+    ta.value = hist[idx];
+  }
+  ta.selectionStart = ta.selectionEnd = ta.value.length;   // caret to end
+  autoGrow(ta); syncSuggestion(ta);
+  return true;
+}
+
 function buildComposer() {
   const ses = S.ses;
   const meta = ses.meta || {};
@@ -3169,6 +3215,7 @@ function buildComposer() {
   const btn = el("button", "csend", canResume ? "resume & send" : "send");
   btn.disabled = !usable;
   ses.composer = ta;
+  ses.histIdx = null;   // a fresh composer starts outside history navigation
   // restore the persisted draft (a device switch / reopen / return-to-session
   // brings back the half-typed message) — only into a usable box. rAF the grow:
   // scrollHeight needs the textarea mounted, which the caller does after this.
@@ -3240,7 +3287,7 @@ function buildComposer() {
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg,
              { audit: "send", auditData: { chars: (text || "").length } })
       .then(d => {
-        ta.value = ""; autoGrow(ta); tray.clear();
+        ta.value = ""; autoGrow(ta); tray.clear(); ses.histIdx = null;
         if (d && d.queued) {
           // queued mid-turn — the pinned ⧗ queued bubble owns this until
           // delivery; drop the stand-in so the two representations don't double up
@@ -3282,7 +3329,10 @@ function buildComposer() {
   const sm = slashMenu(ta, wrap,
     () => cmdsFor(meta.cwd, ses, "cmds"),
     { enterSends: !IS_IPAD });
-  ta.oninput = () => { autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta); };
+  ta.oninput = () => {
+    ses.histIdx = null;   // typing leaves history navigation (see recallHistory)
+    autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+  };
   ta.onkeydown = (e) => {
     if (sm.key(e)) return;
     // → / Tab on an EMPTY box accepts the ghost suggestion as real input (the
@@ -3295,6 +3345,14 @@ function buildComposer() {
       e.preventDefault();
       ta.value = ses.meta.suggestion;
       autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+      return;
+    }
+    // ↑/↓ recall previously-sent prompts into the box (Claude Code's TUI
+    // history affordance). Only kicks in at the top/bottom edge of the box so
+    // it never steals arrows from caret movement inside a multi-line draft.
+    if ((e.key === "ArrowUp" || e.key === "ArrowDown")
+        && recallHistory(ses, ta, e.key === "ArrowUp")) {
+      e.preventDefault();
       return;
     }
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }

@@ -899,6 +899,38 @@ caret movement or Tab from the "/" menu (both non-empty). It is a **mirror +
 client-side accept**: accepting fills the WEB box only, nothing is written back
 to the TUI — a subsequent send pastes over whatever the input holds, as always.
 
+## Web composer history (↑/↓ recall)
+
+**Claude Code's TUI recalls a previously-sent prompt when you press ↑ on the
+input box** (successive ↑ walk further back, ↓ forward). The web composer now
+does the same: `↑` on an empty box (or with the caret at the very start of a
+multi-line draft) pulls back the most recent sent message, another `↑` goes
+older, `↓` newer, and `↓` past the newest restores whatever you were typing.
+
+**Source: the feed itself, not client bookkeeping.** The recall list is the
+session's REAL delivered prompts — every `.msg.prompt` bubble already carries
+its raw text in `data-txt` (`opshtml.msg_html`, the same lossless source the
+rewind picker POSTs). `recallHistory` (`dashboard/static/app.js`) reads them
+live off `ses.stream` on each keypress, so the list survives reloads / device
+switches / a return to the session with zero extra state, always reflects
+exactly what was sent (from the composer OR the terminal), and includes a
+just-sent message the moment its bubble lands. The window is naturally bounded
+by what's loaded (older prompts join as you "load more"). Client-built pending
+/ queued bubbles carry no `data-txt`, so they're excluded.
+
+**Navigation is edge-gated and ephemeral.** `ses.histIdx` is the cursor:
+`null` = the live draft line (not navigating), `0..n-1` = a history entry
+(newest last). Recall only *enters* from an edge — `↑` with the caret at the
+very start — so arrows still move the caret inside a multi-line draft
+otherwise; once navigating, either arrow keeps navigating regardless of caret.
+Entering stashes the live draft in `ses.histBase` so `↓` past the newest brings
+it back. Typing (`oninput`) or sending resets `histIdx` to `null` (leaves
+navigation). It runs AFTER the "/" menu's own arrow handling (`sm.key(e)`) and
+after the ghost-suggestion `→`/Tab accept, so it never steals keys from either.
+Like the ghost suggestion, it's a WEB-side affordance — a recalled message is
+not persisted as a draft (`saveComposerDraft`) until you actually edit or send
+it, and nothing is written back to the TUI.
+
 ## New-session prefs (`GET`/`POST /api/ns-prefs`)
 
 The new-session form pre-selects the **last-used directory, model, and
