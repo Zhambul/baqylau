@@ -3897,6 +3897,25 @@ keyboard resizes the layout instead of hiding the composer, and — below the
 horizontally swipable card strip *above* the stream (`order: -1`; its DOM
 position would otherwise bury the agent cards below a long stream).
 
+**Fullscreen on iPad — the ⛶ button vs. Add to Home Screen.** The header ⛶
+button (`fsbtn`, app.js *fullscreen toggle*) drives the browser Fullscreen API
+(`webkitRequestFullscreen` on iPadOS, the only spelling it ships; hidden on
+iPhone Safari, which has none). That path is real fullscreen but carries a
+gesture the page **cannot suppress**: a swipe down from the top edge exits it.
+Apple guarantees the user can always escape API-fullscreen, so there is no
+web API to block the exit — `preventDefault` on touch events never sees it
+(Safari handles the gesture in its own UI layer, above the document). The only
+swipe-*proof* fullscreen on iPad is **standalone / "Add to Home Screen" mode**:
+the `apple-mobile-web-app-capable` meta tag (+ the Android/Chrome
+`mobile-web-app-capable` twin, `apple-mobile-web-app-status-bar-style:
+black-translucent` to run content under the status bar with the existing
+safe-area insets, and `apple-mobile-web-app-title`) in `index.html`'s head make
+the home-screen icon open the dashboard chrome-less and persistently fullscreen
+with no swipe-to-exit — only the OS home-swipe, which is unavoidable and fine.
+Reached over the public origin (`CLAUDE_DASH_PUBLIC_URL`) the user does it once:
+Share → Add to Home Screen, then launch from the icon. No server route or
+manifest is involved; the meta tags are the whole mechanism.
+
 **Don't rebuild DOM that didn't change** (added 2026-07-19, from a "text
 selection vanishes after ~1s on iPad" report). iOS Safari drops an in-progress
 selection when the layout reflows, and `updateStatsRow` tore the scoreboard

@@ -8,6 +8,17 @@
      the on-screen keyboard resize the layout instead of overlaying the
      composer; viewport-fit=cover pairs with the safe-area insets in the CSS -->
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<!-- iPad/iOS "Add to Home Screen" standalone mode: opened from the home-screen
+     icon the dashboard runs chrome-less and PERSISTENTLY fullscreen — crucially
+     WITHOUT the Fullscreen-API swipe-down-to-exit gesture (which Safari won't
+     let a page suppress; the ⛶ button's requestFullscreen path always has it).
+     black-translucent runs content under the status bar, pairing with the
+     viewport-fit=cover + safe-area insets already in the CSS. The bare
+     mobile-web-app-capable is the Android/Chrome spelling of the same. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="baqylau">
 <title>baqylau</title>
 <link rel="stylesheet" href="/static/style.css">
 <!-- the baqylau shanyrak (see FAV_GLYPH in app.js — app.js overwrites this href
