@@ -114,6 +114,15 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .ghost:hover { color: var(--text); box-shadow: var(--card-hover); }
 #fsbtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
+/* the header lead lockup: the ‹ back button (installed standalone app only)
+   sits tight against the brand, so #top's space-between still spreads the two
+   groups (lead | topright) not three items. */
+.lead { display: inline-flex; align-items: center; gap: 8px; }
+.navback { font-size: 20px; padding: 0 10px; line-height: 1; box-shadow: none; }
+.navback:hover { box-shadow: var(--card-hover); }
+/* the ☀ keep-awake toggle glows gold while the wake lock is held */
+#wakebtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
+#wakebtn.on { color: var(--gold, #E9B949); box-shadow: var(--card-hover); }
 
 /* ---- global session strip (persistent complement to toasts) ----------- */
 /* Slim hairline bar under the header, on every view; hidden when nothing is

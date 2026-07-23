@@ -383,6 +383,73 @@ async function initPush() {
   if ("Notification" in window && Notification.permission === "granted") ensureSubscribed();
 }
 
+/* ---------- installed-app polish (badge · wake lock · back) ------------------
+   Extras that only make sense for the home-screen app (docs/dashboard.md
+   *Installed-app polish*). All feature-detected — a plain browser tab silently
+   gets none. IS_STANDALONE gates the ones that assume no browser chrome. */
+const IS_STANDALONE =
+  (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
+  || navigator.standalone === true;   // navigator.standalone is the iOS tell
+
+// The app-icon badge = how many LIVE sessions need you (red asking + green
+// done) — the glanceable count without opening the app. Rides the same
+// sessions snapshot the attention strip does (updateBadge is called from
+// renderAttention), and the push service worker sets it while the app is
+// closed. Cleared to nothing at 0 so the icon has no stray dot.
+function needsYouCount(sessions) {
+  return (sessions || S.sessions || []).filter(
+    r => r.live && (r.tab === "awaiting-command" || r.tab === "awaiting-response")
+  ).length;
+}
+function updateBadge(sessions) {
+  if (!("setAppBadge" in navigator)) return;
+  const n = needsYouCount(sessions);
+  try { n ? navigator.setAppBadge(n) : navigator.clearAppBadge(); } catch (_) { /* best-effort */ }
+}
+
+// Screen Wake Lock: keep the iPad awake while you watch a run (the ☀ header
+// button). The lock auto-releases when the tab hides, so re-acquire it on
+// re-show while the toggle is ON. Pure client state — no persistence, no audit.
+let wakeLock = null;
+let wakeWanted = false;
+async function acquireWake() {
+  if (!("wakeLock" in navigator) || !wakeWanted || wakeLock) return;
+  try {
+    wakeLock = await navigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => { wakeLock = null; });
+  } catch (_) { /* denied / not visible — retried on next visibility */ }
+}
+async function toggleWake() {
+  wakeWanted = !wakeWanted;
+  if (wakeWanted) { await acquireWake(); }
+  else if (wakeLock) { try { await wakeLock.release(); } catch (_) {} wakeLock = null; }
+  const b = document.getElementById("wakebtn");
+  if (b) { b.classList.toggle("on", wakeWanted); b.title = wakeWanted ? "screen stays awake" : "keep screen awake"; }
+}
+function initWakeBtn() {
+  const b = document.getElementById("wakebtn");
+  if (!b || !("wakeLock" in navigator)) return;   // unsupported → stays hidden
+  b.hidden = false;
+  b.onclick = toggleWake;
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") acquireWake();   // re-arm after hide
+  });
+}
+
+// In-app back: a standalone app has no browser back button. The router is a
+// hash SPA and every navigation pushes a history entry, so history.back()
+// works; showBack() reveals the ‹ only in standalone mode inside a session
+// view (updateHeadChrome calls it on every route change).
+function initBackBtn() {
+  const b = document.getElementById("backbtn");
+  if (!b || !IS_STANDALONE) return;
+  b.onclick = () => { if (history.length > 1) history.back(); else location.hash = "#/"; };
+}
+function showBack(inSession) {
+  const b = document.getElementById("backbtn");
+  if (b && IS_STANDALONE) b.hidden = !inSession;
+}
+
 /* ---------- persistent session strip ---------- */
 // The standing complement to the transient toasts: a slim bar under the header,
 // on every view, listing EVERY live session as a jump pill — needs-you states
@@ -468,6 +535,7 @@ function renderAttention() {
   }
   document.title = asking ? "(" + asking + ") " + BASE_TITLE : BASE_TITLE;
   if ($favicon) $favicon.href = asking ? FAVICON_ASK : FAVICON;
+  updateBadge();   // app-icon badge = red+green needs-you count (installed app)
 }
 
 /* ---------- account usage strip (top of every page) ---------- */
@@ -720,6 +788,7 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   // hide the c1/c2 account strip once we're inside a particular session
   document.body.classList.toggle("in-session", parts[0] === "s");
+  showBack(parts[0] === "s");     // the standalone-app ‹ back button (installed)
   // A user-driven navigation while a launch watch is armed flips it QUIET:
   // the watch keeps running, but resolution becomes a clickable toast instead
   // of a navigation — yanking the browser away from wherever the user went is
@@ -6782,6 +6851,8 @@ if (/[?&#]vpdiag/.test(location.search + location.hash)) {
 
 initNotifBtn();
 initPush();   // register the push service worker + (re)subscribe if already granted
+initWakeBtn();   // ☀ keep-screen-awake toggle (installed-app polish)
+initBackBtn();   // ‹ in-app back (standalone only)
 // the new-session form's last-used prefs live on the backend now (cross-device)
 // — prime the cache so the first form open reads them synchronously
 fetch("/api/ns-prefs").then(r => r.json())
@@ -6799,10 +6870,18 @@ connectGlobal();
 // speaks, and strip ?s= from the URL so a later reload/share carries a clean
 // hash link. A pre-existing hash wins (an explicit #/... in the same URL).
 (function deepLinkFromQuery() {
-  const m = /[?&]s=([^&]+)/.exec(location.search);
-  if (!m || location.hash) return;
-  history.replaceState(null, "", location.pathname);   // drop ?s=…
-  location.hash = "#/s/" + encodeURIComponent(decodeURIComponent(m[1]));
+  // ?new=1 / ?attn=1 are the manifest `shortcuts` (long-press icon on
+  // Android/desktop; iOS ignores them) — land on the list, and for `new` pop
+  // the new-session form after the router paints. `?s=<sid>` is the notif deep
+  // link. Any of them: strip the query so a later reload/share is clean.
+  const q = location.search;
+  const s = /[?&]s=([^&]+)/.exec(q);
+  if (!location.hash && (s || /[?&](new|attn)=1/.test(q)))
+    history.replaceState(null, "", location.pathname);
+  if (s && !location.hash)
+    location.hash = "#/s/" + encodeURIComponent(decodeURIComponent(s[1]));
+  else if (/[?&]new=1/.test(q))
+    setTimeout(() => openNewSession(""), 0);   // after route() paints the list
 })();
 route();
 renderAttention();

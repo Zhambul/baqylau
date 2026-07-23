@@ -3794,6 +3794,42 @@ push channel; default on — but still a no-op without the crypto backend), and
 over the PUBLIC origin, and the permission prompt must come from a user gesture
 (the button) — a plain Safari tab shows no button and never subscribes.
 
+### Installed-app polish (badge · icon · wake lock · back)
+
+Extras that only matter once the dashboard is a home-screen app (all
+feature-detected — a plain browser tab silently gets none; `IS_STANDALONE` in
+app.js, `matchMedia("(display-mode: standalone)")` ∪ `navigator.standalone`,
+gates the chrome-assuming ones):
+
+- **App-icon badge = sessions needing you.** The Badging API
+  (`navigator.setAppBadge`) puts a count on the home-screen icon = live sessions
+  in a needs-you state (red `awaiting-command` + green `awaiting-response`),
+  cleared at 0. `updateBadge` rides the SAME `sessions` snapshot the attention
+  strip does (called from `renderAttention`), so while the app is OPEN the badge
+  tracks live. While the app is CLOSED the push service worker sets it from a
+  `badge` field the server stamps into every push (`Notifier._needs_you_count`
+  over the tab DB — the same red/green `NOTIFY_STATES` vocabulary). The two can
+  briefly disagree; opening the app re-syncs from the live snapshot.
+- **Real home-screen icon + manifest.** `dashboard/static/manifest.webmanifest`
+  (linked from index.html, served off `/static/`) gives the app its name,
+  `display: standalone`, theme color, and PNG icons (`icon-{192,512}.png` +
+  a `maskable` variant); iOS uses the `apple-touch-icon.png` link (a real PNG
+  beats the screenshot iOS auto-generates without one). The icons are the gold
+  shanyrak on the `#0a0e15` canvas, rasterized from the brand SVG. **Re-add to
+  Home Screen to pick up a changed icon** — iOS caches the install-time glyph.
+  The manifest's `shortcuts` (long-press the icon → New session / Needs you) are
+  honored on Android/desktop and IGNORED by iOS; `?new=1`/`?attn=1` land on the
+  list and (for `new`) pop the new-session form (`deepLinkFromQuery`).
+- **Screen Wake Lock** — the ☀ header button (`initWakeBtn`, shown only where
+  `navigator.wakeLock` exists) holds a screen wake lock so the iPad stays awake
+  while you watch a run; it glows gold while held. The lock auto-releases when
+  the tab hides, so it's re-acquired on the next `visibilitychange` to visible
+  while the toggle is on. Pure client state — no persistence, no audit.
+- **In-app back** — a standalone app has no browser back button, so the ‹
+  header button (`initBackBtn`, standalone-only, shown by `showBack` inside a
+  session view) drives `history.back()` over the hash-router's own history
+  entries (falling back to `#/`).
+
 **The session strip is the persistent complement to the toasts.** Toasts are
 transient (a 7s slide-in on the transition); the strip is the standing view of
 every live chat, doubling as the session switcher while you're inside one. A

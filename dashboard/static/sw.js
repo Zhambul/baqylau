@@ -22,6 +22,14 @@ self.addEventListener("push", (e) => {
   const title = d.title || "baqylau";
   const body = d.body || "";
   const sid = d.sid || "";
+  // update the app-icon badge to the needs-you count carried in the push, so
+  // the icon is right even though the app is closed (the app itself keeps the
+  // badge live from the sessions snapshot while open). docs/dashboard.md
+  // *Installed-app polish*.
+  if (typeof d.badge === "number" && "setAppBadge" in self.navigator) {
+    (d.badge ? self.navigator.setAppBadge(d.badge) : self.navigator.clearAppBadge())
+      .catch(() => {});
+  }
   e.waitUntil(self.registration.showNotification(title, {
     body,
     // tag collapses repeat alerts for the same session into one banner (a

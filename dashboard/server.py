@@ -151,6 +151,15 @@ STATIC = {                         # whitelist — no path resolution on user in
     # route) so its scope is the whole origin, not just /static/ (a SW controls
     # only paths under its own URL). docs/dashboard.md *Web push*.
     "sw.js": "text/javascript; charset=utf-8",
+    # the installed-app manifest + home-screen icons (docs/dashboard.md
+    # *Installed-app polish*). The manifest is referenced from /static/ so it
+    # rides the normal static route; iOS reads the apple-touch-icon link.
+    "manifest.webmanifest": "application/manifest+json; charset=utf-8",
+    "apple-touch-icon.png": "image/png",
+    "icon-180.png": "image/png",
+    "icon-192.png": "image/png",
+    "icon-512.png": "image/png",
+    "icon-maskable-512.png": "image/png",
 }
 
 # The two tab transitions worth a toast (core/tabs.py vocabulary): red — Claude
@@ -558,6 +567,17 @@ class Notifier:
             A.error("", "dashboard telegram notify",
                     {"sid": entry.get("sid")})
 
+    def _needs_you_count(self):
+        """How many tabs are in a needs-you state (red asking + green done) right
+        now — the app-icon badge count (docs/dashboard.md *Installed-app polish*),
+        carried in the push so the service worker sets the badge while the app is
+        closed. Same source as the tab watcher; NOTIFY_STATES is the red/green
+        vocabulary."""
+        try:
+            return sum(1 for st in API.tab_states().values() if st in NOTIFY_STATES)
+        except Exception:
+            return 0
+
     def _webpush(self, entry):
         """Send the deferred alert as a Web Push to every subscribed browser
         (docs/dashboard.md, *Web push*) — the on-device iOS/desktop analog of
@@ -581,7 +601,7 @@ class Notifier:
         url = "%s/?s=%s" % (NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
         payload = {"title": title, "body": body,
                    "sid": entry.get("sid") or "", "kind": entry.get("kind"),
-                   "url": url}
+                   "url": url, "badge": self._needs_you_count()}
         threading.Thread(target=self._webpush_send, args=(subs, payload),
                          daemon=True).start()
 
@@ -603,6 +623,7 @@ class Notifier:
                          {"sid": payload.get("sid"), "kind": payload.get("kind"),
                           "action": "send", "status": res.status,
                           "ok": res.ok, "gone": res.gone,
+                          "badge": payload.get("badge"),
                           "endpoint": ep[:80]})
 
     def run(self):

@@ -1,0 +1,21 @@
+{
+  "name": "baqylau",
+  "short_name": "baqylau",
+  "description": "Observe and steer every Claude Code session",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#0a0e15",
+  "theme_color": "#0a0e15",
+  "icons": [
+    { "src": "/static/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/static/icon-maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ],
+  "shortcuts": [
+    { "name": "New session", "short_name": "New", "url": "/?new=1",
+      "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Sessions needing you", "short_name": "Needs you", "url": "/?attn=1",
+      "icons": [{ "src": "/static/icon-192.png", "sizes": "192x192" }] }
+  ]
+}
