@@ -119,6 +119,29 @@ def parse(screen):
     return re.sub(r"\s+", " ", raw).strip() or None
 
 
+def typed(screen):
+    """The REAL (non-faint) text the user has put in the input box — their own
+    typed or queued line — or None when the box is empty, absent, or holds only
+    a faint GHOST suggestion. The complement of `parse()`: text this returns is
+    exactly the content `parse()` rejects as "real input, not a ghost". Used to
+    detect the user composing a reply AT THE TERMINAL — the one trace that
+    typing into the `❯` box leaves before submitting (it moves neither the tab
+    nor the transcript), so the deferred Telegram alert can tell "still at the
+    keyboard" from "walked away" (docs/dashboard.md, *Telegram alerts*)."""
+    if not screen:
+        return None
+    region = _region(screen.splitlines())
+    if not region:
+        return None
+    chars = _faint_chars("\n".join(region))
+    # drop through the first prompt marker (the box's `❯`), as parse() does
+    text = "".join(c for c, _ in chars)
+    if PROMPT in text:
+        chars = chars[text.index(PROMPT) + 1:]
+    real = "".join(c for c, f in chars if not f and c != "\n").replace(NBSP, " ")
+    return re.sub(r"\s+", " ", real).strip() or None
+
+
 def probe(fe, win, sid=""):
     """The audited screen probe: capture the ANSI viewport and parse the ghost
     suggestion. None on any failure (audited) or when there is no suggestion."""

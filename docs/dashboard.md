@@ -3580,6 +3580,19 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
   permission / plan prompt has no `☐`/`☒` header chip) and when no terminal
   channel resolves, so both keep the plain grace-window behaviour. The drop is
   audited as a `notify-suppress` `state_files` row (`reason: dialog-activity`).
+- It is ALSO cancelled while you're **continuing the conversation AT THE
+  TERMINAL**. A green `awaiting-response` is your turn; you typing a reply into
+  the session's `❯` input box moves neither the tab off green nor the transcript
+  until you submit (submitting flips it to busy, which the state-change cancel
+  already catches), so none of the checks above see it. Its trace is REAL
+  (non-faint) content in the input box: a settled tab pre-fills only a FAINT
+  ghost suggestion, so the notifier reads the window's input line
+  (`suggestion.typed` over the ANSI `get_text`, the same faint-SGR technique the
+  *Web ghost suggestion* uses — a ghost is dim, your typed/queued text is normal
+  weight) and **drops the arm the moment any real text is there** — you're on
+  it. It stays armed for an empty box, a ghost-only box, or when no terminal
+  channel resolves, so those keep the plain grace-window behaviour. The drop is
+  audited as a `notify-suppress` `state_files` row (`reason: terminal-input`).
   Limitation by design: pure thinking with ZERO keystrokes for the whole grace
   window is indistinguishable from walking away and still fires — bump
   `CLAUDE_DASH_NOTIFY_DELAY_S` for a longer think.

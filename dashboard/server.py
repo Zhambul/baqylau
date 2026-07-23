@@ -309,6 +309,23 @@ class Notifier:
         except Exception:
             return None
 
+    def _input_typed(self, win):
+        """The REAL (non-faint) text the user has typed into the terminal input
+        box on window `win`, or None. The 'done'-arm analog of _dialog_region:
+        a green tab you're replying to AT THE TERMINAL leaves no other trace
+        (typing into the `❯` box moves neither the tab off green nor the
+        transcript until you submit), so this is what tells 'still composing in
+        the kitty tab' from 'walked away'. None on no terminal channel / read
+        miss / empty-or-ghost box → those keep the plain grace-window behaviour.
+        Needs the ANSI capture (faint-SGR detection), unlike _dialog_region."""
+        fe = self.fe
+        if not (fe and win):
+            return None
+        try:
+            return suggestion.typed(fe.get_text(win, ansi=True) or "")
+        except Exception:
+            return None
+
     def _payload(self, kind, state, row):
         # a worktree session's toast names the PROJECT it groups under, not the
         # worktree dir — the SAME group_dir resolution the list page uses (the
@@ -379,6 +396,19 @@ class Notifier:
                         A.state_file("", "", "notify-suppress",
                                      {"sid": sid, "kind": "asking",
                                       "reason": "dialog-activity"})
+            # A green `done` tab is your turn; you replying AT THE TERMINAL —
+            # typing a message into the `❯` input box — likewise moves neither
+            # the tab off green nor the transcript until you submit, so the
+            # checks above miss it. Its trace is REAL (non-faint) content in the
+            # input box (a settled tab pre-fills only a FAINT ghost suggestion,
+            # which `suggestion.typed` ignores). Drop the arm the moment any is
+            # there: you're continuing the conversation in the kitty tab.
+            elif entry.get("kind") == "done":
+                if self._input_typed(win):
+                    del self.pending[win]
+                    A.state_file("", "", "notify-suppress",
+                                 {"sid": sid, "kind": "done",
+                                  "reason": "terminal-input"})
         # fire the ones that persisted past the grace window (once each)
         for win in list(self.pending):
             entry = self.pending[win]

@@ -710,6 +710,78 @@ def test_notify_fires_when_dialog_untouched(monkeypatch):
     assert sent and sent[0]["sid"] == "sX"
 
 
+def _notifier_for_done(monkeypatch, screen, delay=999):
+    """A Notifier wired hermetically to one green 'done' tab on window '9': a
+    fake ANSI-capable frontend returning `screen["txt"]` and every home-touching
+    dependency stubbed. Returns (n, cur, done, sent, audited)."""
+    win = "9"
+    done = next(s for s, k in DS.NOTIFY_STATES.items() if k == "done")
+    cur = {"states": {}}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
+    monkeypatch.setattr(DS, "_session_ended", lambda sid: False)
+    monkeypatch.setattr(DS, "_composing", lambda sid: False)
+    monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", delay)
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+
+    class FE:
+        def get_text(self, w, extent="screen", ansi=False):
+            return screen["txt"]
+
+    n = DS.Notifier()
+    n.fe = FE()
+    n.winmap = {win: {"sid": "sX"}}
+    n._payload = lambda kind, state, row: {
+        "kind": kind, "state": state, "sid": row["sid"]}
+    sent = []
+    n._telegram = lambda entry: sent.append(entry)
+    n.push = lambda ev, pl: None
+    return n, cur, done, sent, audited
+
+
+_DONE_RULE = "\x1b[38:2:136:136:136m" + "─" * 100
+
+
+def _done_screen(input_line):
+    return (_DONE_RULE + "\n" + input_line + "\n" + _DONE_RULE + "\n"
+            + "\x1b[m  status line\n")
+
+
+def test_notify_suppressed_when_replying_at_terminal(monkeypatch):
+    """A green 'done' tab whose `❯` input box gains REAL (non-faint) text drops
+    the armed Telegram alert: you typing a reply at the keyboard moves neither
+    the tab off green nor the transcript, so the input-box content is the only
+    'I'm continuing the conversation in the kitty tab' signal."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0\x1b[22;2mghost suggestion")}
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen)
+    n.scan()                                 # baseline (prev is None)
+    cur["states"] = {"9": done}
+    n.scan()                                 # arm (box holds only a ghost)
+    assert "9" in n.pending
+    screen["txt"] = _done_screen("\x1b[m❯\xa0my typed reply")
+    n.scan()                                 # real input → suppressed
+    assert "9" not in n.pending and sent == []
+    assert any(a[2] == "notify-suppress"
+               and a[3].get("reason") == "terminal-input" for a in audited)
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    n.scan()                                 # nothing left to fire
+    assert sent == []
+
+
+def test_notify_fires_when_input_box_ghost_only(monkeypatch):
+    """The 'done' guard is precise: a box holding only a FAINT ghost suggestion
+    (you never touched the keyboard) still fires after the grace window — the
+    pre-filled suggestion must never look like the user replying."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0\x1b[22;2mghost suggestion")}
+    n, cur, done, sent, _ = _notifier_for_done(monkeypatch, screen, delay=0)
+    n.scan()                                 # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                 # arm + fire (delay 0, ghost ignored)
+    assert sent and sent[0]["sid"] == "sX"
+
+
 def _pump_global(r, got):
     """Collect (event, data) frames from a global-SSE response into `got`."""
     def pump():
@@ -5754,3 +5826,23 @@ def test_suggestion_parse_wrapped_ghost_joins_lines():
          + "\x1b[m  \x1b[22;2mthen re-run the suite\n"
          + _RULE + "\n")
     assert SUG.parse(s) == "apply the MODULES filesystem-scan fix and then re-run the suite"
+
+
+# suggestion.typed is the COMPLEMENT of parse: the REAL (non-faint) input-box
+# text — the tell that the user is composing a reply AT THE TERMINAL, the signal
+# the deferred Telegram alert's 'done' arm suppresses on.
+def test_suggestion_typed_real_input():
+    assert SUG.typed(_screen("\x1b[m❯\xa0hello there this is typed")) \
+        == "hello there this is typed"
+
+
+def test_suggestion_typed_ghost_only_is_none():
+    # a faint ghost suggestion is NOT the user typing — typed() ignores it
+    assert SUG.typed(_screen("\x1b[m❯\xa0\x1b[22;2mapply the fix")) is None
+
+
+def test_suggestion_typed_empty_and_no_box_is_none():
+    assert SUG.typed(_screen("\x1b[m❯\xa0")) is None
+    assert SUG.typed("just\noutput\nlines") is None
+    assert SUG.typed("") is None
+    assert SUG.typed(None) is None
