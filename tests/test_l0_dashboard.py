@@ -2667,12 +2667,8 @@ def test_post_message_rejects_attachment_outside_uploads(dash, monkeypatch, tmp_
 
 
 def test_post_new_session_prompt_carries_attachment(dash, monkeypatch):
-    """The first prompt (incl. @-mention attachments) rides the DEFERRED
-    clear-then-send delivery, NOT the launch argv — the launch is bare so Claude
-    Code's TUI can't grab the clipboard at startup (docs/dashboard.md
-    *First-prompt delivery*). Here we assert the attachment never reaches the
-    command line; the delivery mechanics (the @-mention pasted verbatim) are
-    covered by test_deliver_first_prompt_clears_then_sends."""
+    """The new-session launch prompt gets the @-mentions prepended too (covers
+    the form AND the parked resume-&-send path)."""
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     _, body = _post(dash + "/api/upload",
@@ -2682,8 +2678,7 @@ def test_post_new_session_prompt_carries_attachment(dash, monkeypatch):
                     {"cwd": str(REPO), "prompt": "start", "attachments": [path]})
     assert code == 200
     (cwd, argv) = fe.launched[-1]
-    assert argv[4:] == []                        # bare launch — nothing after $0
-    assert path not in " ".join(str(w) for w in argv)
+    assert ("@%s\nstart" % path) in " ".join(str(w) for w in argv)
 
 
 def test_post_upload_control_plane_guarded(dash):
@@ -3420,63 +3415,22 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
                        {"cwd": str(tmp_path), "prompt": "do the thing"})
     assert code == 200 and json.loads(body) == {"ok": True, "win": ""}
     # claude runs through the user's interactive login shell (kitty's own env
-    # has no user PATH / aliases). The tab is launched BARE — the first prompt is
-    # NOT an argv word (that made Claude Code's TUI grab the macOS clipboard at
-    # startup, docs/dashboard.md *First-prompt delivery*); it is delivered after
-    # launch via the clear-then-send path (_deliver_first_prompt), tested below.
+    # has no user PATH / aliases); the prompt is a POSITIONAL arg, never
+    # interpolated into the fixed command string.
     cwd, argv = fe.launched[0]
     assert cwd == str(tmp_path)
     sh, flags, script, dollar0 = argv[:4]
     from plugins.claude_code import account as ACCT
     assert os.path.basename(sh) in ACCT.LAUNCH_SHELLS
     assert flags == "-lic" and script == 'claude "$@"' and dollar0 == "claude"
-    assert argv[4:] == []                       # bare: no prompt on the command line
-    # neither a hostile prompt reaches the shell — it never touches argv at all
+    assert argv[4:] == ["do the thing"]
+    # no prompt → no positional args after the $0 placeholder
+    _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert fe.launched[-1][1][4:] == []
+    # a hostile prompt stays one argv word — nothing for the shell to parse
     evil = '"; rm -rf ~; echo "'
     _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "prompt": evil})
-    assert fe.launched[-1][1][4:] == []
-
-
-def test_deliver_first_prompt_clears_then_sends(monkeypatch):
-    """The first prompt is delivered by killing whatever the freshly-booted TUI
-    pre-loaded into its input (Ctrl+U/Ctrl+K — a clipboard image, a ghost
-    suggestion, a stale draft) and then pasting EXACTLY our text: the fix for
-    Claude Code's argv-startup clipboard grab (docs/dashboard.md *First-prompt
-    delivery*). A `web-launch-prompt` row records the outcome."""
-    fe = _FakeFE()
-    monkeypatch.setattr(DS, "_frontend", lambda: fe)
-    monkeypatch.setattr(DS, "PROMPT_SETTLE_S", 0)
-    monkeypatch.setattr(DS.API, "tab_states", lambda: {"77": "idle"})
-    rows = []
-    real = DS.A.state_file
-    monkeypatch.setattr(DS.A, "state_file",
-                        lambda log, p, a, c="": (rows.append((a, c))
-                                                 if a == "web-launch-prompt" else None)
-                        or real(log, p, a, c))
-    DS._deliver_first_prompt("77", "sid-x", "@/up/x.png\nsay test")
-    # cleared both directions, THEN pasted our exact text (bracketed paste + CR)
-    assert ("77", ("ctrl+u",)) in fe.keyed and ("77", ("ctrl+k",)) in fe.keyed
-    assert fe.pasted == [("77", "@/up/x.png\nsay test")]
-    assert rows and rows[-1][1]["ok"] is True and rows[-1][1]["why"] == ""
-
-
-def test_deliver_first_prompt_skips_a_modal(monkeypatch):
-    """A RED tab (awaiting-command — a trust/permission/ask modal is up) must NOT
-    receive the paste (it would land IN the dialog); delivery is skipped and the
-    row records why."""
-    fe = _FakeFE()
-    monkeypatch.setattr(DS, "_frontend", lambda: fe)
-    monkeypatch.setattr(DS, "PROMPT_SETTLE_S", 0)
-    monkeypatch.setattr(DS.API, "tab_states", lambda: {"88": DS.tabs.AWAITING_COMMAND})
-    rows = []
-    real = DS.A.state_file
-    monkeypatch.setattr(DS.A, "state_file",
-                        lambda log, p, a, c="": (rows.append(c)
-                                                 if a == "web-launch-prompt" else None)
-                        or real(log, p, a, c))
-    DS._deliver_first_prompt("88", "sid-y", "say test")
-    assert fe.pasted == [] and fe.keyed == []    # nothing typed into the modal
-    assert rows and rows[-1]["ok"] is False and rows[-1]["why"] == "modal open"
+    assert fe.launched[-1][1][4:] == [evil]
 
 
 class _WatchAudit:
@@ -3505,9 +3459,6 @@ def _fast_launch_wake(monkeypatch):
     wake tests below re-raise it themselves."""
     monkeypatch.setattr(DS, "LAUNCHWAKE_MAX_S", 0.2)
     monkeypatch.setattr(DS, "LAUNCHWAKE_POLL_S", 0.01)
-    # a launch carrying a first prompt hands off to _deliver_first_prompt, whose
-    # settle sleep would otherwise linger in a daemon thread across later tests
-    monkeypatch.setattr(DS, "PROMPT_SETTLE_S", 0)
 
 
 def _watch_rig(monkeypatch, fronts, bundle="app.term"):
@@ -3657,12 +3608,12 @@ def test_readonly_kills_control_plane(dash, monkeypatch, tmp_path):
 def test_post_new_session_model_effort(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    # flags ride as "$@" words; the prompt is NOT on the command line (bare
-    # launch — delivered post-launch, docs/dashboard.md *First-prompt delivery*)
+    # flags ride as "$@" words AHEAD of the prompt
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "model": "opus", "effort": "high",
            "prompt": "go"})
-    assert fe.launched[-1][1][4:] == ["--model", "opus", "--effort", "high"]
+    assert fe.launched[-1][1][4:] == ["--model", "opus",
+                                     "--effort", "high", "go"]
     # either alone
     _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "effort": "low"})
     assert fe.launched[-1][1][4:] == ["--effort", "low"]
@@ -5333,7 +5284,7 @@ def test_post_new_session_resume_continue(dash, monkeypatch, tmp_path):
     sid = "85065b28-d9ea-4861-b209-bbc871e57357"
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "resume": sid, "prompt": "go on"})
-    assert fe.launched[-1][1][4:] == ["--resume", sid]   # bare — prompt deferred
+    assert fe.launched[-1][1][4:] == ["--resume", sid, "go on"]
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "continue": True, "model": "opus"})
     assert fe.launched[-1][1][4:] == ["--continue", "--model", "opus"]
@@ -5366,10 +5317,9 @@ def test_post_new_session_refuses_resume_of_live_session(dash, monkeypatch,
               {"cwd": str(tmp_path), "resume": sid, "prompt": "hi"})
     assert e.value.code == 409
     assert fe.launched == []                   # nothing was launched
-    # a fresh (non-resume) launch in the same dir is unaffected (bare — the
-    # prompt is delivered post-launch, not on the command line)
+    # a fresh (non-resume) launch in the same dir is unaffected
     _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "prompt": "new"})
-    assert fe.launched and fe.launched[-1][1][4:] == []
+    assert fe.launched and fe.launched[-1][1][-1] == "new"
 
 
 def test_post_new_session_refuses_resume_of_missing_transcript(dash, monkeypatch,
@@ -5398,12 +5348,12 @@ def test_post_new_session_refuses_resume_of_missing_transcript(dash, monkeypatch
     A.session_start({"session_id": ok_sid, "cwd": str(tmp_path), "transcript_path": tp})
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "resume": ok_sid, "prompt": "go"})
-    assert fe.launched and fe.launched[-1][1][4:] == ["--resume", ok_sid]  # bare
+    assert fe.launched and fe.launched[-1][1][4:] == ["--resume", ok_sid, "go"]
     # an UNKNOWN sid (no row) is NOT pre-rejected — the CLI decides
     unk = "9c1e2f34-aaaa-4bbb-8ccc-0123456789ad"
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "resume": unk, "prompt": "x"})
-    assert fe.launched[-1][1][4:] == ["--resume", unk]   # bare — prompt deferred
+    assert fe.launched[-1][1][4:] == ["--resume", unk, "x"]
 
 
 def test_launch_argv_falls_back_to_zsh(monkeypatch):

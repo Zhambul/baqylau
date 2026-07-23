@@ -1744,54 +1744,15 @@ def _steal_watch(before, terminal_app):
 LAUNCHWAKE_POLL_S = 0.15           # sessions-head poll cadence after a launch
 LAUNCHWAKE_MAX_S = 15.0            # claude boot measured ~2s; 15s covers a cold
 #                                    machine without leaving a zombie poller
-PROMPT_SETTLE_S = 1.2              # after SessionStart, let the TUI reach its
-#                                   input before the first-prompt clear-then-send
 
 
-def _deliver_first_prompt(win, sid, prompt):
-    """Deliver a launch's first prompt through the CLEAR-then-send path — the
-    fix for Claude Code's argv-startup clipboard grab (docs/dashboard.md
-    *First-prompt delivery*): launched bare, the tab now gets `Ctrl+U`/`Ctrl+K`
-    (kill anything the TUI pre-loaded into its input — a clipboard image, a grey
-    ghost suggestion, a stale draft) and then EXACTLY our text as a bracketed
-    paste + CR, the same immune channel the live composer uses. Targets the
-    launched window id (`win`, fork-proof) or resolves the live pane by sid.
-    Skipped on a RED tab (awaiting-command — a trust/permission/ask modal: a
-    paste there would land IN the dialog). One `web-launch-prompt` state_files
-    row records the outcome (ok / why-not) next to the `web-launch` row."""
-    fe = _frontend()
-    if fe is None:
-        return
-    time.sleep(PROMPT_SETTLE_S)            # let the freshly-booted TUI settle
-    target = win or (fe.window_for_session(sid) if sid else "") or ""
-    tab = API.tab_states().get(target) or ""
-    why = ("" if target and tab != tabs.AWAITING_COMMAND
-           else ("no window" if not target else "modal open"))
-    ok = False
-    if not why:
-        try:
-            fe.send_key(target, "ctrl+u")
-            fe.send_key(target, "ctrl+k")
-            time.sleep(DRAFT_CLEAR_GAP_S)
-            ok = bool(fe.paste_text(target, prompt))
-        except Exception:
-            A.error("", "dashboard first-prompt delivery", {"sid": sid, "win": target})
-    if not ok and not why:
-        why = "send failed"
-    A.state_file("", "", "web-launch-prompt",
-                 {"sid": sid, "win": target, "chars": len(prompt),
-                  "ok": ok, "tab": tab, "why": why})
-
-
-def _launch_wake(win, cwd, t0, prompt=""):
+def _launch_wake(win, cwd, t0):
     """The post-launch appearance watch (a daemon thread — the HTTP response
     never waits on it). Ends with ONE `web-launch-wake` state_files row either
     way: found (`sid`, `waited_s` = launch→appearance latency, the dashboard's
     own share of it reconstructible next to the `web-launch` row) or timeout
     (`sid` empty). The `wake` push happens only on found — a timeout has
-    nothing to hurry the loops for. On found, when the launch carried a first
-    `prompt`, it is DELIVERED here via the clear-then-send path (bare launch +
-    _deliver_first_prompt — the clipboard-grab fix)."""
+    nothing to hurry the loops for."""
     deadline = t0 + LAUNCHWAKE_MAX_S
     sid = ""
     while not sid and time.time() < deadline:
@@ -1812,8 +1773,6 @@ def _launch_wake(win, cwd, t0, prompt=""):
     A.state_file("", "", "web-launch-wake",
                  {"sid": sid, "win": win, "cwd": cwd, "ok": bool(sid),
                   "waited_s": round(time.time() - t0, 3)})
-    if sid and prompt.strip():
-        _deliver_first_prompt(win, sid, prompt)
 
 
 # --- the HTTP handler ------------------------------------------------------------------
@@ -3555,30 +3514,21 @@ class Handler(BaseHTTPRequestHandler):
                                 {"account": acct})
         prompt = body.get("prompt")
         prompt = prompt if isinstance(prompt, str) else ""
-        # attachments ride the first prompt as leading @-mentions, same as the
+        # attachments ride the launch prompt as leading @-mentions, same as the
         # live composer (covers the new-session form AND the parked "resume &
         # send" path, which both route through here). With no typed prompt, the
-        # mentions alone are a valid first message.
+        # mentions alone are a valid initial prompt.
         attachments = self._attachment_paths(body)
         prompt = self._with_attachments(prompt, attachments)
-        # The first prompt is DELIVERED AFTER LAUNCH via the clear-then-send path
-        # (_launch_wake below), NOT as a `[prompt]` argv word. Passing it on the
-        # command line makes Claude Code's interactive TUI read the macOS
-        # clipboard at startup and auto-attach whatever image is on it to that
-        # first, auto-submitted message ("say test[Image #1]" — proven: a web
-        # launch with attachments:0 still attached a clipboard screenshot; print
-        # mode never does; the live composer's send-text delivery never does).
-        # Launching bare + sending exactly our text sidesteps that grab entirely
-        # (docs/dashboard.md *First-prompt delivery*).
         words = ((["--resume", resume] if resume else [])
                  + (["--continue"] if cont else [])
                  + (["--model", model] if model else [])
-                 + (["--effort", effort] if effort else []))
+                 + (["--effort", effort] if effort else [])
+                 + ([prompt] if prompt.strip() else []))
         argv = launch_argv(words, cmd)
         opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
                 "resume": resume or "", "cont": bool(cont),
-                "account": acct or "", "attachments": len(attachments),
-                "deferred_prompt": bool(prompt.strip())}
+                "account": acct or "", "attachments": len(attachments)}
         fe = _frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
@@ -3636,8 +3586,7 @@ class Handler(BaseHTTPRequestHandler):
         # the SSE wake watch (see the block above the Handler class): hurry
         # the launched session's appearance to every connected page — and hand
         # the launching page its sid — the moment SessionStart lands.
-        threading.Thread(target=_launch_wake,
-                         args=(win, cwd, time.time(), prompt),
+        threading.Thread(target=_launch_wake, args=(win, cwd, time.time()),
                          daemon=True, name="web-launch-wake").start()
         if before and before != term:
             threading.Thread(target=_steal_watch, args=(before, term),
