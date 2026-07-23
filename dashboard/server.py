@@ -193,6 +193,11 @@ NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
 # channel arms the pending alert, and each fires only if its own switch is on.
 # Effectively off anyway when the crypto backend is missing (webpush.enabled()).
 NOTIFY_WEBPUSH = (os.environ.get("CLAUDE_DASH_NOTIFY_WEBPUSH") or "1") != "0"
+# Push SUPERSEDES Telegram by default (no duplicate alert on the one phone that
+# gets both): Telegram fires only as the FALLBACK when nothing is
+# push-subscribed. Set `_ALWAYS`=1 to send BOTH channels every time (the old
+# behaviour — e.g. Telegram on a device that isn't the push one).
+NOTIFY_TELEGRAM_ALWAYS = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS") or "") == "1"
 # The reused `notify` skill script (Telegram bot). Overridable for a different
 # transport / for the hermetic test's recorder; ~ is expanded.
 NOTIFY_CMD = os.path.expanduser(
@@ -536,10 +541,15 @@ class Notifier:
                               "reason": watching})
                 continue
             if not prefs.notify_muted(sid):
-                if NOTIFY_TELEGRAM:
+                # Push SUPERSEDES Telegram so a device that gets both doesn't
+                # get the SAME alert twice: if any browser is push-subscribed,
+                # the push lands on that phone and Telegram is skipped. Telegram
+                # is the FALLBACK — it fires only when no push subscription
+                # exists (push never set up, or all subs pruned as gone). The
+                # `_ALWAYS` knob forces both back on (docs/dashboard.md).
+                pushed = self._webpush(entry) if NOTIFY_WEBPUSH else False
+                if NOTIFY_TELEGRAM and (not pushed or NOTIFY_TELEGRAM_ALWAYS):
                     self._telegram(entry)
-                if NOTIFY_WEBPUSH:
-                    self._webpush(entry)
 
     def _telegram(self, entry):
         """Send the deferred alert via the reused `notify` skill (Telegram),
@@ -585,12 +595,16 @@ class Notifier:
         a detached daemon thread: the crypto + network round-trips per
         subscription must never stall the 1 s watcher. Best-effort + audited;
         a subscription the push service reports GONE (404/410) is pruned. No-op
-        when the crypto backend is missing or nobody has subscribed."""
+        when the crypto backend is missing or nobody has subscribed.
+
+        Returns True iff it DISPATCHED to at least one subscription — the signal
+        the caller uses to skip the duplicate Telegram alert (push supersedes
+        Telegram)."""
         if not webpush.enabled():
-            return
+            return False
         subs = prefs.push_subscriptions()
         if not subs:
-            return
+            return False
         asking = entry.get("kind") == "asking"
         proj = entry.get("project") or entry.get("sid") or "session"
         title = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
@@ -604,6 +618,7 @@ class Notifier:
                    "url": url, "badge": self._needs_you_count()}
         threading.Thread(target=self._webpush_send, args=(subs, payload),
                          daemon=True).start()
+        return True
 
     def _webpush_send(self, subs, payload):
         """The detached fan-out body: deliver `payload` to each subscription,

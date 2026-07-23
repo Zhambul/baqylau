@@ -697,6 +697,7 @@ def _notifier_for_asking(monkeypatch, screen, delay=999):
         "kind": kind, "state": state, "sid": row["sid"]}
     sent = []
     n._telegram = lambda entry: sent.append(entry)
+    n._webpush = lambda entry: False   # no push subscribed → Telegram is the path
     n.push = lambda ev, pl: None
     return n, cur, asking, sent, audited
 
@@ -732,6 +733,33 @@ def test_notify_fires_when_dialog_untouched(monkeypatch):
     assert sent and sent[0]["sid"] == "sX"
 
 
+def test_push_supersedes_telegram(monkeypatch):
+    """When a browser is push-subscribed, the deferred alert goes out as push
+    and Telegram is SKIPPED — no duplicate on the one phone that gets both."""
+    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No"}
+    n, cur, asking, sent, _ = _notifier_for_asking(monkeypatch, screen, delay=0)
+    pushed = []
+    n._webpush = lambda entry: (pushed.append(entry), True)[1]   # push dispatched
+    n.scan()                                 # baseline
+    cur["states"] = {"9": asking}
+    n.scan()                                 # arm + fire (delay 0)
+    assert len(pushed) == 1 and sent == []   # push fired, Telegram skipped
+
+
+def test_telegram_always_sends_both(monkeypatch):
+    """CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS forces BOTH channels even when a push
+    subscription exists (the opt-out of the supersede)."""
+    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No"}
+    n, cur, asking, sent, _ = _notifier_for_asking(monkeypatch, screen, delay=0)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM_ALWAYS", True)
+    pushed = []
+    n._webpush = lambda entry: (pushed.append(entry), True)[1]
+    n.scan()
+    cur["states"] = {"9": asking}
+    n.scan()
+    assert len(pushed) == 1 and len(sent) == 1   # both channels fired
+
+
 def _notifier_for_done(monkeypatch, screen, delay=999):
     """A Notifier wired hermetically to one green 'done' tab on window '9': a
     fake ANSI-capable frontend returning `screen["txt"]` and every home-touching
@@ -764,6 +792,7 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
         "kind": kind, "state": state, "sid": row["sid"]}
     sent = []
     n._telegram = lambda entry: sent.append(entry)
+    n._webpush = lambda entry: False   # no push subscribed → Telegram is the path
     n.push = lambda ev, pl: None
     return n, cur, done, sent, audited
 

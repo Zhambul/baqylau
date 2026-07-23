@@ -107,7 +107,11 @@ New always-audited swallow sites (previously silent — their absence used to ma
   for the sid: PRESENT = it fired (a missing Telegram message past that is the notify
   script's own transport, outside this audit — or a paired `errors` row func
   `dashboard telegram notify` if the Popen raised). ABSENT = it never armed/fired — check,
-  in order: the session's `notify-muted` state (a `notify-mute` `state_files` row, or the
+  in order: **push SUPERSEDED it** (since 2026-07-24 push is preferred — if any browser is
+  push-subscribed, the alert went out as a `web-push` `action:send` row for the same
+  sid/kind and Telegram was deliberately skipped; this is the #1 reason Telegram "stopped"
+  after enabling push — `CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS=1` forces both); the session's
+  `notify-muted` state (a `notify-mute` `state_files` row, or the
   `notify-muted` map in `~/.claude/baqylau-dash-prefs.db`); `CLAUDE_DASH_NOTIFY_TELEGRAM=0`
   (master off); whether you REACTED within the delay (the tab left red/green — an arm is
   cancelled the moment the state moves, so a quickly-answered/closed session correctly

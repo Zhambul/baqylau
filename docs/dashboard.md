@@ -3750,7 +3750,19 @@ on-device analog of the Telegram alert, twinned with it at the **same deferred
 fire point**: the same red `asking` / green `done` transitions, the same grace
 window + arm-cancel + all the suppress logic, the same per-session 🔕 mute
 (checked at send time). Either channel arms the pending alert (`NOTIFY_TELEGRAM
-or NOTIFY_WEBPUSH`); each fires only if its own switch is on.
+or NOTIFY_WEBPUSH`).
+
+**Push SUPERSEDES Telegram** so the one phone that gets both doesn't receive the
+SAME alert twice: at send time, if any browser is push-subscribed the push is
+sent and Telegram is SKIPPED; Telegram is the FALLBACK, firing only when nothing
+is push-subscribed (push never set up, or every subscription was pruned as gone).
+`_webpush` returns whether it dispatched, and that gates the Telegram send.
+Consequence: once you enable push on your device, the Telegram alerts stop.
+`CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS=1` forces BOTH every time (the old
+behaviour — e.g. you want Telegram on a *different* device than the push one).
+A subtle edge: if subscriptions exist but the push send later fails, Telegram is
+NOT a backup for that one alert — but a `gone` subscription self-prunes, so the
+next alert falls back to Telegram.
 
 The pieces:
 
@@ -3786,8 +3798,10 @@ The pieces:
   unsubscribe are their own `web-push` rows (`action: subscribe`/`unsubscribe`).
 
 **Env knob**: `CLAUDE_DASH_NOTIFY_WEBPUSH` (`0` disables arming + sending on the
-push channel; default on — but still a no-op without the crypto backend), and
-`CLAUDE_DASH_VAPID_SUB` (the VAPID `sub` contact claim, default a `mailto:`).
+push channel; default on — but still a no-op without the crypto backend),
+`CLAUDE_DASH_VAPID_SUB` (the VAPID `sub` contact claim, default a `mailto:`), and
+`CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS` (`1` sends BOTH push AND Telegram every time
+instead of push-supersedes-Telegram — see the dedup note above).
 
 **iOS caveat**: this works only from the **installed** home-screen app (iOS
 16.4+ exposes `Notification`/`PushManager` only in a standalone web app), reached
