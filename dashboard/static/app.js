@@ -3137,11 +3137,15 @@ function wireAttach(tray, ta, zone, enabled) {
 // switches / a return to the session with no client bookkeeping, and it always
 // reflects exactly what was sent — from the composer OR the terminal. We read
 // it live off the feed on each navigation so a just-sent message is included
-// the moment its bubble lands. `ses.histIdx` is the cursor: null = the live
-// draft line (not navigating); 0..n-1 = a history entry, newest last. Entering
-// navigation stashes the live draft in `ses.histBase` so ↓ past the newest
-// restores it. Recall is EPHEMERAL — deliberately not persisted as a draft
-// (saveComposerDraft) until the user actually edits (oninput) or sends.
+// the moment its bubble lands. The feed is newest-TOP (appendItems inserts
+// `afterbegin`), so document order is newest→oldest: index 0 is the MOST RECENT
+// prompt, n-1 the oldest. `ses.histIdx` is the cursor: null = the live draft
+// line (not navigating), -1 stashed as the pre-nav sentinel; 0..n-1 = a history
+// entry. ↑ walks toward older (higher index), ↓ toward newer (lower); ↓ below 0
+// returns to the live draft (stashed in `ses.histBase`). Recall is EPHEMERAL —
+// deliberately not persisted as a draft (saveComposerDraft) until the user
+// actually edits (oninput) or sends. Every move drops a `composer.recall`
+// clog beacon (a `web-client` audit row) so the feature is fully audit-covered.
 // Returns true when it consumed the key (the caller then preventDefaults).
 function recallHistory(ses, ta, up) {
   const navigating = ses.histIdx != null;
@@ -3160,18 +3164,23 @@ function recallHistory(ses, ta, up) {
   });
   if (!hist.length) return navigating;   // nothing to recall (swallow mid-nav)
   let idx = ses.histIdx;
-  if (idx == null) { ses.histBase = ta.value; idx = hist.length; }  // just past newest
-  idx += up ? -1 : 1;
-  if (idx < 0) idx = 0;                   // clamp at the oldest
-  if (idx >= hist.length) {               // ↓ past the newest → back to live draft
+  if (idx == null) { ses.histBase = ta.value; idx = -1; }  // -1 = the live draft line
+  idx += up ? 1 : -1;                     // ↑ = older (higher index), ↓ = newer
+  if (idx >= hist.length) idx = hist.length - 1;   // clamp at the oldest
+  let entry;
+  if (idx < 0) {                          // ↓ below the newest → back to the live draft
     ses.histIdx = null;
     ta.value = ses.histBase || "";
+    entry = "draft";
   } else {
     ses.histIdx = idx;
     ta.value = hist[idx];
+    entry = idx;
   }
   ta.selectionStart = ta.selectionEnd = ta.value.length;   // caret to end
   autoGrow(ta); syncSuggestion(ta);
+  clog(S.cur || "", "composer.recall",
+       { dir: up ? "up" : "down", idx: entry, n: hist.length });
   return true;
 }
 

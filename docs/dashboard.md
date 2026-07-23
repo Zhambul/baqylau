@@ -918,18 +918,30 @@ just-sent message the moment its bubble lands. The window is naturally bounded
 by what's loaded (older prompts join as you "load more"). Client-built pending
 / queued bubbles carry no `data-txt`, so they're excluded.
 
+**The feed is newest-TOP** (`appendItems` inserts `afterbegin`), so document
+order is newest→oldest: index 0 is the MOST RECENT prompt, `n-1` the oldest.
+`↑` walks toward older (higher index), `↓` toward newer (lower). Getting this
+inverted made the first `↑` jump to the *oldest* message instead of the most
+recent — the direction is derived from the feed's insert order, not assumed.
+
 **Navigation is edge-gated and ephemeral.** `ses.histIdx` is the cursor:
-`null` = the live draft line (not navigating), `0..n-1` = a history entry
-(newest last). Recall only *enters* from an edge — `↑` with the caret at the
-very start — so arrows still move the caret inside a multi-line draft
-otherwise; once navigating, either arrow keeps navigating regardless of caret.
-Entering stashes the live draft in `ses.histBase` so `↓` past the newest brings
-it back. Typing (`oninput`) or sending resets `histIdx` to `null` (leaves
-navigation). It runs AFTER the "/" menu's own arrow handling (`sm.key(e)`) and
-after the ghost-suggestion `→`/Tab accept, so it never steals keys from either.
-Like the ghost suggestion, it's a WEB-side affordance — a recalled message is
-not persisted as a draft (`saveComposerDraft`) until you actually edit or send
-it, and nothing is written back to the TUI.
+`null` = the live draft line (not navigating), `0..n-1` = a history entry.
+Recall only *enters* from an edge — `↑` with the caret at the very start — so
+arrows still move the caret inside a multi-line draft otherwise; once
+navigating, either arrow keeps navigating regardless of caret. Entering stashes
+the live draft in `ses.histBase` so `↓` below the newest brings it back. Typing
+(`oninput`) or sending resets `histIdx` to `null` (leaves navigation). It runs
+AFTER the "/" menu's own arrow handling (`sm.key(e)`) and after the
+ghost-suggestion `→`/Tab accept, so it never steals keys from either. Like the
+ghost suggestion, it's a WEB-side affordance — a recalled message is not
+persisted as a draft (`saveComposerDraft`) until you actually edit or send it,
+and nothing is written back to the TUI.
+
+**Audit.** Every recall move drops a `composer.recall` clog beacon
+(`{dir: up|down, idx, n}`) on the frontend-audit channel — one `web-client`
+state_files row scoped to the session (*Frontend audit (clientlog)*), so the
+feature is fully covered: you can see exactly how far back a session's composer
+walked its history and when.
 
 ## New-session prefs (`GET`/`POST /api/ns-prefs`)
 
@@ -1876,6 +1888,11 @@ become audit rows.
     with the wrong model/effort" report is reconstructible), and `resume.preview`
     (`shown`/`cached`/rendered item count `n` — `n:0` IS the "no mirror history"
     empty preview) / `resume.preview.fail`.
+  - **Composer history recall** (*Web composer history* above): `composer.recall`
+    (`dir` up|down, `idx` = the recalled entry index or `"draft"`, `n` = the
+    history size) — a purely client-side ↑/↓ affordance the server never sees,
+    so the browser is its only witness (a "↑ gave the wrong message" report is
+    answerable from the `dir`/`idx`/`n` trail).
   The audit itself is SELF-GUARDING — `clog`/`flushClog` swallow their own
   exceptions and a re-entrancy flag stops a throw-in-a-flush from looping back
   through the `js.error` handler (the one channel that must never raise the very

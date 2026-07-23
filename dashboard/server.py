@@ -3088,7 +3088,9 @@ class Handler(BaseHTTPRequestHandler):
         `events` — a list of `{t, sid, ev, …scalars}`. `ev` is a dotted name:
         `<gesture>.begin`/`.ok`/`.fail` for a tagged control POST (close | send |
         command | interrupt | rename | migrate | rewind | rewind-to | answer |
-        plan | new | resume-send), `close.reconciled`; `sse.open`/`sse.drop` per
+        plan | new | resume-send), `close.reconciled`; `composer.recall` (an ↑/↓
+        history-recall move in the composer — *Web composer history*);
+        `sse.open`/`sse.drop` per
         stream; `js.error`/`js.reject` (uncaught); `boot`/`hello`/`stale` (page +
         build lifecycle — a `boot.build` ≠ `hello.boot` mismatch = stale cached
         JS); `meta.stuck`/`meta.resolved`/`meta.fail` (session-view load + the
