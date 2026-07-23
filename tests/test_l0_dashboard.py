@@ -5305,6 +5305,69 @@ def test_statusline_shim_captures_and_delegates(tmp_path, monkeypatch):
     assert SL.run([], raw) == 0                                 # bare shim → 0
 
 
+def _set_started(sid, ts, ended=None):
+    """Stamp a controlled started_at (and optional ended_at) onto a seeded
+    session row — session_start records wall-clock, but the heatmap/punch/window
+    buckets need deterministic timestamps."""
+    import sqlite3
+    conn = sqlite3.connect(A.db_path())
+    conn.execute("UPDATE sessions SET started_at=?, ended_at=? WHERE session_id=?",
+                 (ts, ended, sid))
+    conn.commit()
+    conn.close()
+
+
+def test_stats_payload_aggregates_cross_session(dash, monkeypatch):
+    """GET /api/stats: whole-corpus aggregates (stats_payload over
+    sessionapi.activity_stats). Sessions are the unit; per-project grouping,
+    per-window pulse counts, daily heatmap buckets, and the day×hour punch card
+    all fold from the audit sessions/otel/errors tables."""
+    monkeypatch.setattr(DS, "STATS_TTL_S", 0)          # defeat the wall-clock memo
+    now = time.time()
+    # three sessions in /proj/alpha (one 40d old → outside the 7d/30d windows),
+    # one in /proj/beta; one alpha session still open (no ended_at).
+    seed = [("stA1", "/proj/alpha", now - 1 * 3600, now),         # today, ended
+            ("stA2", "/proj/alpha", now - 2 * 86400, None),       # 2d ago, active
+            ("stA3", "/proj/alpha", now - 40 * 86400, now),       # 40d ago, ended
+            ("stB1", "/proj/beta",  now - 1 * 86400, now)]        # 1d ago, ended
+    for sid, cwd, st, en in seed:
+        A.session_start({"session_id": sid, "cwd": cwd, "transcript_path": ""})
+        _set_started(sid, st, en)
+    # tokens + cost land on one alpha session
+    A.otel("stA1", [{"metric": "token", "query_source": "main", "type": "input",
+                     "value": 1000},
+                    {"metric": "token", "query_source": "main", "type": "output",
+                     "value": 500},
+                    {"metric": "cost", "query_source": "main", "type": "", "value": 0.25}])
+    A.error("stB1", "boom", {"where": "test"})          # one error under beta
+
+    d = _get_json(dash + "/api/stats")
+    assert d["total_sessions"] == 4
+    # windows: all=4, 30d=3 (drops the 40d-old alpha), 7d=3
+    assert d["windows"]["all"]["sessions"] == 4
+    assert d["windows"]["30d"]["sessions"] == 3
+    assert d["windows"]["7d"]["sessions"] == 3
+    # active = sessions with no ended_at (stA2 in every window that includes it)
+    assert d["windows"]["7d"]["active"] == 1
+    assert d["windows"]["all"]["ended"] == 3
+    # token/cost totals (summed across the otel rows)
+    assert d["windows"]["all"]["tokens"] == 1500
+    assert abs(d["windows"]["all"]["cost"] - 0.25) < 1e-9
+    assert d["windows"]["all"]["errors"] == 1
+    # per-project grouping (basename of the group_dir); alpha has 3, beta 1
+    by = {p["name"]: p for p in d["projects"]}
+    assert by["alpha"]["sessions"] == 3 and by["beta"]["sessions"] == 1
+    assert by["alpha"]["tokens"] == 1500 and abs(by["alpha"]["cost"] - 0.25) < 1e-9
+    assert by["beta"]["errors"] == 1
+    # top-projects bar list in the pulse window, ranked by sessions
+    top = d["windows"]["all"]["projects"]
+    assert top[0]["name"] == "alpha" and top[0]["sessions"] == 3
+    # heatmap daily buckets + punch-card triples are well-formed
+    assert d["daily"] and all(len(x) == 2 and x[1] >= 1 for x in d["daily"])
+    assert d["punch"] and all(0 <= dow <= 6 and 0 <= hr <= 23 and n >= 1
+                              for dow, hr, n in d["punch"])
+
+
 def test_accounts_payload_aggregates_usage(dash, monkeypatch, tmp_path):
     # /api/accounts returns the registry + newest usage per account slug
     monkeypatch.setattr(DS.plugins, "accounts", lambda: [

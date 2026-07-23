@@ -790,3 +790,63 @@ def session(sid):
             "tab": tab_state(win) if win else "",
             "account": account(sid), "usage": usage(sid),
             "costs": costs(sid)}
+
+
+# --- cross-session aggregates (the dashboard Stats / Insights page) ---------------
+
+def activity_stats(heatmap_days=371):
+    """Whole-corpus activity aggregates for the dashboard's GitHub-Insights-style
+    Stats page (dashboard.stats_payload → GET /api/stats). Computed with a handful
+    of GROUP BYs over the audit `sessions`/`otel`/`errors` tables — the DURABLE
+    cross-session record (per-session state DBs get parked; the audit is the only
+    all-history source). The unit is a session (the "commit" analog).
+
+    Returns raw arrays; the client does the heatmap bucketing and per-window prose,
+    and the server composer (stats_payload) does the per-project grouping. Unlike
+    the sid-keyed reads here, this deliberately does NO sid_chain resolution: these
+    are whole-corpus SUM/COUNTs where each row/datapoint is already counted exactly
+    once — a forked sid's tokens are attributed under whichever `sessions` row
+    adopt.py wrote (the fork's own or its predecessor's), which is correct for a
+    corpus total. All reads are mode=ro; a missing audit DB yields empty arrays.
+
+      {
+        "generated_at": epoch,
+        "total_sessions": n,
+        "daily":   [["YYYY-MM-DD", count], ...],   # last heatmap_days, localtime
+        "punch":   [[dow, hour, count], ...],        # dow 0=Sun; <=168 triples
+        "sessions": [{sid, start_cwd, started_at, ended_at, tokens, cost, errors}, ...],
+      }
+    """
+    db = audit_db()
+    now = time.time()
+    scwd = "start_cwd" if _sessions_has_start_cwd(db) else "cwd"
+    # per-session token + cost totals in TWO grouped passes folded in Python —
+    # one query each instead of one per session (the otel table is indexed on
+    # (session_id, ts), so these are cheap).
+    tok, cost = {}, {}
+    for sid, n in _rows(db, "SELECT session_id, SUM(value) FROM otel"
+                            " WHERE metric='token' GROUP BY session_id"):
+        tok[sid] = n or 0
+    for sid, usd in _rows(db, "SELECT session_id, SUM(value) FROM otel"
+                              " WHERE metric='cost' GROUP BY session_id"):
+        cost[sid] = usd or 0.0
+    err = {}
+    for sid, n in _rows(db, "SELECT session_id, COUNT(*) FROM errors"
+                            " GROUP BY session_id"):
+        err[sid] = n or 0
+    rows = [{"sid": sid, "start_cwd": sc or "", "started_at": st, "ended_at": en,
+             "tokens": tok.get(sid, 0), "cost": cost.get(sid, 0.0),
+             "errors": err.get(sid, 0)}
+            for sid, sc, st, en in _rows(
+                db, "SELECT session_id, " + scwd + ", started_at, ended_at"
+                    " FROM sessions ORDER BY started_at DESC")]
+    cut = now - heatmap_days * 86400
+    daily = [[d, c] for d, c in _rows(
+        db, "SELECT date(started_at,'unixepoch','localtime') d, COUNT(*)"
+            " FROM sessions WHERE started_at >= ? GROUP BY d ORDER BY d", (cut,))]
+    punch = [[int(dow), int(hr), c] for dow, hr, c in _rows(
+        db, "SELECT strftime('%w', started_at, 'unixepoch', 'localtime') dow,"
+            " strftime('%H', started_at, 'unixepoch', 'localtime') hr, COUNT(*)"
+            " FROM sessions WHERE started_at IS NOT NULL GROUP BY dow, hr")]
+    return {"generated_at": now, "total_sessions": len(rows),
+            "daily": daily, "punch": punch, "sessions": rows}

@@ -77,6 +77,12 @@ GLOBAL_TICK_S = 1.0                # sessions-list SSE + notification watcher ca
 SLOW_EVERY = 5                     # slow re-resolves (chain, win map), in ticks
 HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
+STATS_TTL_S = 30                   # /api/stats memo: the Stats page aggregates the
+#                                    WHOLE audit history, so a short WALL-CLOCK memo
+#                                    (distinct from the per-state-DB _db_sig memos —
+#                                    this keys on time) makes re-opening cheap without
+#                                    serving hours-stale numbers.
+STATS_TOP_PROJECTS = 8             # top-N projects in each Pulse window's bar list
 RESUMABLE_MAX = 25                 # new-session resume picker: rows shown per dir
 RESUMABLE_SCAN = 2000              # …and how deep it discovers to search history
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
@@ -1112,6 +1118,81 @@ def accounts_payload():
     return out
 
 
+_STATS_AGG = {"t": 0.0, "v": None}   # wall-clock memo for stats_payload (STATS_TTL_S)
+
+
+def stats_payload():
+    """The GitHub-Insights-style cross-session Stats page (GET /api/stats): the
+    contribution heatmap (sessions/day), a per-window Pulse summary, the day×hour
+    punch card, and per-project cards. Everything is computed SERVER-side (single-
+    owner rule; the JS only renders) from core.sessionapi.activity_stats (the audit
+    tables). A read-only aggregate — no writes, no audit rows (like accounts_payload,
+    ctx saturation, and the goal probe). Memo-cached for STATS_TTL_S so re-opening
+    the page doesn't re-scan the whole history.
+
+    Sessions group under the SAME key the list page uses — start_cwd (the frozen
+    original cwd), symlink-canonicalised and resolved to its linked-worktree owner
+    (_group_dir) — so worktrees fold under their main checkout. Pulse windows
+    (7d/30d/all) and per-project sparkline series are folded from the same rows in
+    one pass; the heatmap buckets are left client-side so the scale self-normalises
+    without a round-trip."""
+    now = time.time()
+    if _STATS_AGG["v"] is not None and now - _STATS_AGG["t"] < STATS_TTL_S:
+        return _STATS_AGG["v"]
+    agg = API.activity_stats()
+    rows = agg["sessions"]
+    # resolve each row's grouping key ONCE (canon_cwd is a realpath syscall,
+    # _group_dir a cached .git walk) and reuse it for both the project cards and
+    # every pulse window.
+    for r in rows:
+        r["_key"] = _group_dir(canon_cwd(r.get("start_cwd") or "")) or ""
+    projects = {}
+    for r in rows:
+        key = r["_key"]
+        p = projects.get(key)
+        if p is None:
+            p = projects[key] = {"dir": key, "name": os.path.basename(key) or key,
+                                 "sessions": 0, "tokens": 0, "cost": 0.0,
+                                 "errors": 0, "last_active": 0, "_daily": {}}
+        p["sessions"] += 1
+        p["tokens"] += r.get("tokens") or 0
+        p["cost"] += r.get("cost") or 0.0
+        p["errors"] += r.get("errors") or 0
+        st = r.get("started_at") or 0
+        p["last_active"] = max(p["last_active"], st)
+        if st:
+            d = time.strftime("%Y-%m-%d", time.localtime(st))
+            p["_daily"][d] = p["_daily"].get(d, 0) + 1
+    proj_list = sorted(projects.values(),
+                       key=lambda p: p["sessions"], reverse=True)
+    for p in proj_list:
+        p["spark"] = sorted([d, n] for d, n in p.pop("_daily").items())
+    windows = {}
+    for name, days in (("7d", 7), ("30d", 30), ("all", None)):
+        cut = 0 if days is None else now - days * 86400
+        wr = [r for r in rows if (r.get("started_at") or 0) >= cut]
+        by_proj = {}
+        for r in wr:
+            by_proj[r["_key"]] = by_proj.get(r["_key"], 0) + 1
+        top = sorted(by_proj.items(), key=lambda kv: kv[1],
+                     reverse=True)[:STATS_TOP_PROJECTS]
+        windows[name] = {
+            "sessions": len(wr),
+            "ended": sum(1 for r in wr if r.get("ended_at")),
+            "active": sum(1 for r in wr if not r.get("ended_at")),
+            "tokens": sum(r.get("tokens") or 0 for r in wr),
+            "cost": sum(r.get("cost") or 0.0 for r in wr),
+            "errors": sum(r.get("errors") or 0 for r in wr),
+            "projects": [{"dir": k, "name": os.path.basename(k) or k,
+                          "sessions": n} for k, n in top],
+        }
+    out = {"generated_at": now, "total_sessions": agg["total_sessions"],
+           "daily": agg["daily"], "punch": agg["punch"],
+           "windows": windows, "projects": proj_list}
+    _STATS_AGG["t"], _STATS_AGG["v"] = now, out
+    return out
+
+
 def visible_agents(agents):
     """Drop HIDDEN-agent bookkeeping rows: a SubagentStop with no
     SubagentStart (Claude Code's hidden auxiliary agents — the subagent
@@ -2120,6 +2201,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json([_wire_row(r) for r in sessions_payload()])
         if api == ["accounts"]:
             return self._json(accounts_payload())
+        if api == ["stats"]:
+            # the GitHub-Insights-style Stats page: cross-session heatmap /
+            # pulse / punch card / per-project cards, all server-computed +
+            # memo-cached (stats_payload). Read-only, no audit rows.
+            return self._json(stats_payload())
         if api == ["dictate"]:
             # feature probe: the page renders mic buttons iff a Deepgram key
             # is configured (docs/dashboard.md *Web dictation*) — no key

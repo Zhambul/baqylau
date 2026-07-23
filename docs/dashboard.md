@@ -286,6 +286,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*); backs the new-session picker and the top usage strip |
+| `/api/stats` | the **Stats / Insights** page (`stats_payload` over `sessionapi.activity_stats`): `{total_sessions, daily:[[day,n]], punch:[[dow,hour,n]], windows:{7d,30d,all}, projects:[…]}` — cross-session aggregates for the contribution heatmap, day×hour punch card, per-window Pulse summary, and per-project cards; server-computed + memo-cached (`STATS_TTL_S`), read-only (no audit rows) (*Stats / Insights* below) |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/resumable?cwd=<dir>&limit=25&q=<text>` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); `q` filters by title+sid across the directory's WHOLE history (discovery scans up to `RESUMABLE_SCAN`, not just the newest — the client can't); blank/unknown cwd → `[]` |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML); leaves a `web-view` `state_files` row (`gid`/`ok`) — the web twin of the terminal ⧉view toggle's audit |
@@ -2538,6 +2539,45 @@ the new-session form dictates too), `{ok, rate, cwd, keyterms}` on success
 `A.error("dashboard dictate (grant failed)")`. "Mic button missing or dead"
 triages as: `/api/dictate` says available? → `web-dictate` rows → dictate
 errors (the audit-debug skill's bug shape).
+
+## Stats / Insights (`GET /api/stats`)
+
+The header's **📊 stats** button routes to `#/stats` — a GitHub-Insights-inspired
+cross-session, over-time view (the list page only shows *current* sessions).
+The unit is a **session** (one audit `sessions` row = one "commit"). Four panels:
+
+- **Pulse** — a period toggle (`7d` / `30d` / `all time`, client-side over
+  precomputed windows) driving KPI tiles (sessions · active · ended · tokens ·
+  cost · errors) plus a top-projects ranked bar list.
+- **Contributions** — the green calendar heatmap: weeks as columns, 7 day-rows,
+  one cell per day, 5 self-normalized intensity buckets (0 + quartiles of the
+  nonzero days, so the scale adapts to your own volume). Month + Mon/Wed/Fri
+  labels, a *less→more* legend, per-cell tooltip.
+- **When you work** — the day×hour punch card: a 7×24 grid of bubbles whose
+  RADIUS ∝ sessions started in that slot (size encoding, GitHub's punch card).
+- **Projects** — one card per project (grouped exactly like the list — `start_cwd`
+  canonicalised + resolved to its worktree owner via `_group_dir`), each with a
+  90-day sparkline and token/cost/error counters.
+
+**Data + optimization.** Everything is computed SERVER-side (single-owner rule;
+the JS only renders SVG/DOM — no chart library) by `stats_payload()` over
+`core.sessionapi.activity_stats()`, which runs a handful of indexed `GROUP BY`s
+against the audit `sessions`/`otel`/`errors` tables (the DURABLE cross-session
+record — per-session state DBs get parked). Daily counts and the punch card are
+SQLite `date(…,'localtime')` / `strftime('%w'/'%H',…)` buckets; per-session
+tokens/cost come from two grouped `otel` passes folded in Python (not one query
+per session). The whole payload is memo-cached for `STATS_TTL_S` (wall-clock,
+distinct from the per-state-DB `_db_sig` memos) so re-opening the page is free.
+Heatmap bucketing is deliberately left client-side so the scale self-normalizes
+without a round-trip. Like `accounts_payload`, ctx saturation, and the goal probe,
+it is a **read-only aggregate — it adds no audit rows** (nothing to record: it
+neither writes state nor drives the terminal). No `sid_chain` resolution: these
+are whole-corpus SUM/COUNTs where each row/datapoint is already counted once (a
+forked sid's tokens land under whichever `sessions` row `adopt.py` wrote).
+
+The stats view shares `#view` with the list, so `renderList()` bails on the
+`#/stats` route (`onStats()`) — otherwise a live `sessions` SSE tick would repaint
+the list over the stats page.
 
 ## Accounts & usage
 
