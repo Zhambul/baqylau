@@ -923,6 +923,61 @@ body.modal-open { overflow: hidden; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .nsdropitem:hover, .nsdropitem.sel { background: var(--panel2); }
+
+/* new-session: fresh toggle + resume picker (app.js resumePicker) ---------- */
+/* fresh/resume switch — a hidden checkbox styled as a slider; the label text
+   (freshTxt) flips between "fresh conversation" / "resume a conversation" */
+.nsswitch { display: inline-flex; align-items: center; gap: 9px; cursor: pointer; }
+.nsswitch input { position: absolute; opacity: 0; width: 0; height: 0; }
+.nsslider {
+  position: relative; flex: none; width: 34px; height: 18px; border-radius: 999px;
+  background: var(--panel2); box-shadow: inset 0 0 0 1px var(--hair);
+  transition: background .15s;
+}
+.nsslider::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px;
+  border-radius: 50%; background: var(--dim); transition: transform .15s, background .15s;
+}
+.nsswitch input:checked + .nsslider {
+  background: color-mix(in srgb, var(--green) 55%, var(--panel2));
+}
+.nsswitch input:checked + .nsslider::after { transform: translateX(16px); background: var(--text); }
+.nsswitch input:focus-visible + .nsslider { box-shadow: inset 0 0 0 1px var(--hair2); }
+.nsswitchtxt { color: var(--text-soft); font: 12.5px/1.5 var(--mono); }
+
+/* resume picker: search box + scrollable list + inline preview */
+.nsressearch { margin-bottom: 6px; }
+.nsreslist {
+  max-height: 260px; overflow-y: auto; border-radius: var(--r);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  background: color-mix(in srgb, var(--bg) 88%, black);
+}
+.nsresrow { padding: 7px 9px; cursor: pointer; border-bottom: 1px solid var(--hair); }
+.nsresrow:last-child { border-bottom: none; }
+.nsresrow:hover, .nsresrow:focus { outline: none; background: var(--panel2); }
+.nsresrow.sel { background: var(--panel2); box-shadow: inset 2px 0 0 var(--blue); }
+.nsrestitle {
+  color: var(--text); font: 12.5px/1.4 var(--mono);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nsresrow.live .nsrestitle { color: var(--text-soft); }
+.nsresmeta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 3px; }
+.nsreschip {
+  color: var(--dim); font: 10.5px/1.4 var(--mono);
+  padding: 0 5px; border-radius: 999px; box-shadow: inset 0 0 0 1px var(--hair);
+}
+.nsreschip.live { color: var(--green); box-shadow: inset 0 0 0 1px var(--hair2); }
+.nsresago { margin-left: auto; flex: none; color: var(--dim2); font: 10.5px/1.4 var(--mono); }
+.nsresempty { padding: 10px 9px; color: var(--dim2); font: 12px/1.5 var(--mono); }
+
+/* the space-to-preview panel: a read-only recent mirror snapshot (renderPreview) */
+.nspreview {
+  margin-top: 6px; max-height: 300px; overflow-y: auto; border-radius: var(--r);
+  box-shadow: inset 0 0 0 1px var(--hair);
+  background: color-mix(in srgb, var(--bg) 92%, black); padding: 6px 8px;
+}
+.nspreview-empty { padding: 4px 2px; color: var(--dim2); font: 12px/1.5 var(--mono); }
+
 .nsactions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
 .nsbtn {
   background: transparent; color: var(--dim); border: none; cursor: pointer;
@@ -1408,6 +1463,8 @@ html { touch-action: manipulation; }
   .tabs a { padding: 10px 15px; }
   .msg.prompt.queued .qx { padding: 6px 8px; font-size: 13px; }
   .cmi, .nsdropitem { padding: 9px 8px; }
+  .nsressearch { font-size: 16px; }             /* no auto-zoom on focus */
+  .nsresrow { padding: 11px 10px; }             /* bigger tap target for a resume pick */
   .askopt { padding: 10px 11px; }
   .msg.prompt .rw { padding: 5px 10px; }
 }

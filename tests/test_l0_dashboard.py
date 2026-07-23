@@ -552,6 +552,43 @@ def test_sessions_last_active_fallback_chain(dash, tmp_path):
     assert rows["dla4"]["last_active"] == rows["dla4"]["started_at"] > 0
 
 
+def test_resumable_endpoint_dir_scoped_enriched(dash, monkeypatch):
+    """GET /api/resumable is the new-session resume picker's source: the
+    directory's recent sessions, each enriched with the model/effort/account it
+    ran under (docs/dashboard.md *Resume picker*). Directory-scoped (canon
+    cwd), capped at RESUMABLE_MAX, `limit` clamped, blank cwd → []."""
+    # a known account registry so the label resolves without the real
+    # accounts.tsv (plugins.accounts reads ~/.config otherwise)
+    monkeypatch.setattr(DS.plugins, "accounts",
+                        lambda: [{"slug": "acc1", "label": "Account One",
+                                  "alias": "acc1"}])
+    A.session_start({"session_id": "rz1", "cwd": "/proj", "transcript_path": ""})
+    A.session_start({"session_id": "rz2", "cwd": "/proj", "transcript_path": ""})
+    # rz2 ran under acc1 — the account kv the statusline stashes; writing it also
+    # creates the state DB _session_slug reads
+    S.kv_set(P.mirror_log("rz2"), "account", {"slug": "acc1"})
+    A.session_start({"session_id": "rz3", "cwd": "/other", "transcript_path": ""})
+
+    rows = _get_json(dash + "/api/resumable?cwd=/proj")
+    sids = [r["sid"] for r in rows]
+    assert set(sids) == {"rz1", "rz2"}              # /other excluded (dir-scoped)
+    for r in rows:
+        assert set(r) >= {"sid", "title", "last_active", "live",
+                          "model", "effort", "account"}
+        assert set(r["account"]) == {"slug", "label"}
+    by = {r["sid"]: r for r in rows}
+    assert by["rz2"]["account"] == {"slug": "acc1", "label": "Account One"}
+    # no stashed account → the empty-slug default
+    assert by["rz1"]["account"] == {"slug": "", "label": "default"}
+
+    # limit is clamped to [1, RESUMABLE_MAX]
+    assert len(_get_json(dash + "/api/resumable?cwd=/proj&limit=1")) == 1
+    assert len(_get_json(dash + "/api/resumable?cwd=/proj&limit=999")) == 2
+    # a blank/unknown dir has nothing to resume
+    assert _get_json(dash + "/api/resumable") == []
+    assert _get_json(dash + "/api/resumable?cwd=/nope") == []
+
+
 def test_http_backlog_endpoint(dash):
     """/backlog is the gzip-able GET twin of the SSE fresh-connect payload —
     the same merged_backlog output ({last, mpos, oldest, items}); the page

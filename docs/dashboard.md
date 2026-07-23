@@ -287,6 +287,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
+| `/api/resumable?cwd=<dir>&limit=25` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's recent sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); blank/unknown cwd → `[]` |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML); leaves a `web-view` `state_files` row (`gid`/`ok`) — the web twin of the terminal ⧉view toggle's audit |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`); leaves a `web-copy` `state_files` row (`gid`/`what`/`chars`) — the web twin of the terminal `copy` row (the dashboard calls `collect()` directly, bypassing `claude-copy.py`'s audit) |
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
@@ -337,8 +338,8 @@ required for a remote page to pick up new JS/CSS; a normal reload suffices.
 The dashboard was born read-only; these POST endpoints deliberately break
 that charter so you can drive a session from the browser: **message a running
 session**, **interrupt its turn** (an Escape key press), **close one** (its
-whole tab), **launch a new one** (fresh, `--continue`, or `--resume`), and
-**rename one**. All but one reach
+whole tab), **launch a new one** (fresh or `--resume`, *Resume picker* below),
+and **rename one**. All but one reach
 the TERMINAL through the `Frontend` interface (`send_text` / `send_key` /
 `launch_tab`, over
 the same silenced `kitten @` machinery the tab painter uses), and Claude Code's
@@ -554,7 +555,7 @@ a resume-launch when it thinks a session is parked, but a STALE page — e.g.
 after the dashboard restarts and the browser's SSE drops, so its live/parked
 snapshot freezes — can misjudge a live session; this is the server-side
 backstop (the observed bug: a restart mid-session, then messaging spawned a
-duplicate tab per send). Fresh and `--continue` launches are unaffected.
+duplicate tab per send). Fresh launches are unaffected.
 Headless-live sessions (live, no window) stay disabled —
 they aren't asleep, resume is the wrong medicine — and their mic button is
 now honestly `disabled` (dim, inert) instead of a live-looking button that
@@ -918,7 +919,9 @@ rather than per-session — `dashboard/prefs.py` is its single owner, unlike the
 per-session `core/state.py` kv (and unlike the `/tmp` `DASH_DB` lock, it is
 durable), and it CREATES its DB on demand (a global prefs DB has no
 session-alive meaning, so a reader making it is fine — the opposite of the
-per-session rule).
+per-session rule). These remembered defaults seed a FRESH launch; selecting a
+row in the resume picker overrides the model/effort with that session's own
+(*Resume picker* above), while the account always re-load-balances.
 
 ## Web quick commands (`POST /api/session/<sid>/command`)
 
@@ -1555,21 +1558,53 @@ picker keeps load-balancing — setting the resumed model re-runs `autoAcct`,
 so the account is still auto-picked by weekly-quota perishability, skipping any
 account the resumed model is limit-blocked on (*Default account* below).
 
-**Resume / continue.** The new-session form's "start from" picker maps to the
-CLI's own conversation-pickup flags: `continue` → `claude --continue` (the
-directory's most recent conversation), `resume: <sid>` → `claude --resume
-<sid>` — the resume options are the chosen directory's known sessions from the
-current snapshot (title + age), rebuilt as the directory field changes. The
-server validates `resume` against `_SID_OK` (one clean argv word, the same
-alphabet as the sid routes) and rejects `resume`+`continue` together (400,
-like the CLI); both ride as positional `"$@"` words ahead of
-`--model`/`--effort`/prompt, so the injection story is unchanged. A resumed
-conversation **forks to a new sid** (CLAUDE.md: resume forks) — but NOT at
-launch: SessionStart fires under the OLD sid (restoring its parked DB, so
-that sid flips parked→live), and the fork happens at the first event after.
-The adopt machinery handles the state hand-off as always; the jump watch must
-target the OLD sid (see below — "new sid in the cwd" alone shipped broken
-once).
+**Resume picker.** The new-session form's conversation source is a **fresh
+toggle** (`start`: "fresh conversation" ⇄ "resume a conversation", default fresh
+for `+ session`, default resume when reached via a card's `↻ resume`) plus, when
+resuming, a searchable/scrollable **resume picker** (`resumePicker`, app.js). It
+replaces the old three-way "start from" dropdown: there is **no `--continue`** —
+resuming the most-recent row IS "continue" (the picker auto-selects the newest
+row on load, and `↻ resume` preselects its own session). Only `claude --resume
+<sid>` is emitted; `body.resume` still validates against `_SID_OK` (one clean
+argv word) and rides as a positional `"$@"` word ahead of `--model`/`--effort`/
+prompt, so the injection story is unchanged (the endpoint still ACCEPTS a
+`continue` bool for compatibility, but the form never sends it, and
+`resume`+`continue` together still 400s).
+
+The picker's rows come from **`GET /api/resumable?cwd=<dir>&limit=25`**
+(`resumable_payload`) — the directory's recent sessions (canon-cwd-scoped,
+newest-first, capped at `RESUMABLE_MAX`), each enriched with what a row shows:
+`title`, `last_active`, `live`, the transcript-tail `model`, the SAVED `effort`
+(resolved per the session's OWN account config dir, like `session_payload`), and
+the `account` `{slug, label}` (its statusline-stashed slug). It is a read-only
+endpoint (no state writes → no audit rows, like `/api/session/<sid>`); the browser
+side is instead audited via the clientlog channel (`resume.list`/`resume.pick`/
+`resume.preview`/`resume.mode`, *Frontend audit* below). Fetched when the form
+opens / the toggle flips to resume, and re-fetched (debounced) as the directory
+field changes — superseding the old client-side `S.sessions` filter, which capped
+at ~10 and showed only title + age.
+
+**Selecting a row reuses its model + effort, but NOT its account.** On every
+pick, the form sets `model`/`effort` from that row (unless the user hand-picked
+them first — `modelPicked`/`effortPicked`), then re-runs `autoAcct` so the
+**account keeps load-balancing** by the normal scheduler (*Default account*
+below) rather than pinning to whatever the resumed session used. So "continue
+where the session was" applies to the model/effort, while the account follows the
+same quota-aware logic a fresh launch does.
+
+**Space previews the recent mirror transcript.** With a row highlighted, `Space`
+toggles an inline preview panel (`.nspreview`) that fetches the session's recent
+mirror tail (`GET /api/session/<sid>/history?blocks=12`) and renders it with
+`renderPreview` — the same server `{g,t,html}` items and block grouping the
+mirror tab uses, into a throwaway container (never `S.ses`), blocks expanded. It
+lets you confirm WHICH conversation a row is before resuming it, without leaving
+the form.
+
+A resumed conversation **forks to a new sid** (CLAUDE.md: resume forks) — but NOT
+at launch: SessionStart fires under the OLD sid (restoring its parked DB, so that
+sid flips parked→live), and the fork happens at the first event after. The adopt
+machinery handles the state hand-off as always; the jump watch must target the
+OLD sid (see below — "new sid in the cwd" alone shipped broken once).
 
 **Jump to the new session — and the wait it rides on.** The launch response
 carries no session id — none exists yet (the session appears through its own
@@ -1772,6 +1807,14 @@ become audit rows.
   - **Launch story** (the client half of `web-launch`/`web-launch-wake`):
     `launch.arm` → `launch.hit` (appeared, with latency) / `launch.timeout`
     (never showed up in time).
+  - **Resume picker** (the read-only `/api/resumable` + `/history` gestures leave
+    no server row, so the browser is the only witness — *Resume picker* above):
+    `resume.mode` (`fresh` toggled), `resume.list` (`cwd` + row count `n` +
+    preselection — a "picker was empty / didn't show my session" report is
+    answerable from this) / `resume.list.fail`, `resume.pick` (the chosen sid +
+    the `model`/`effort`/`account` it CARRIED — so a "resumed with the wrong
+    model/effort" report is reconstructible), and `resume.preview`
+    (`shown`/`cached`) / `resume.preview.fail`.
   The audit itself is SELF-GUARDING — `clog`/`flushClog` swallow their own
   exceptions and a re-entrancy flag stops a throw-in-a-flush from looping back
   through the `js.error` handler (the one channel that must never raise the very

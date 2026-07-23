@@ -77,6 +77,7 @@ GLOBAL_TICK_S = 1.0                # sessions-list SSE + notification watcher ca
 SLOW_EVERY = 5                     # slow re-resolves (chain, win map), in ticks
 HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
+RESUMABLE_MAX = 25                 # new-session resume picker: rows shown per dir
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
 # The composer-attachment upload endpoint (post_upload) carries base64-encoded
@@ -778,6 +779,56 @@ def dir_live_sessions(key):
     return [r for r in sessions_payload()
             if r.get("live")
             and (r.get("group_dir") or r.get("cwd") or "") == key]
+
+
+def resumable_payload(cwd, limit):
+    """The directory's recent resumable sessions for the new-session form's
+    resume picker (GET /api/resumable) — newest-first (API.sessions order),
+    capped at `limit` (≤ RESUMABLE_MAX), each enriched with what a picker row
+    shows: title, last_active, live, the transcript-tail model, the SAVED effort,
+    and the account (slug + label). Directory-scoped (canon-compared), the
+    server-side successor to the old client-side `S.sessions.filter(cwd).slice`
+    list — but carrying the model/effort/account the row couldn't show before, so
+    a resume launch can reuse the session's own model+effort (the account still
+    load-balances client-side, docs/dashboard.md *Resume picker*). Read-only —
+    resolves effort per the session's OWN account config dir (each account keeps
+    its own settings.json), exactly like session_payload; no state writes, so no
+    audit rows (a read endpoint, like /api/session/<sid>)."""
+    want = canon_cwd(cwd or "")
+    if not want:
+        return []
+    labels = {a.get("slug"): a.get("label") for a in plugins.accounts()}
+    live_wins = _live_windows()
+    out = []
+    for row in API.sessions(SESSIONS_LIMIT):
+        if canon_cwd(row.get("cwd") or "") != want:
+            continue
+        sid = row["sid"]
+        sdb = P.state_db(row["log"])
+        if not os.path.isfile(sdb):
+            sdb = P.parked_db(row["log"])
+        # demote a state-DB-live session whose window is gone (same correction
+        # sessions_payload applies) — a resume of a truly-live session 409s
+        # anyway, but the row marks it so the picker can flag/skip it.
+        if (row.get("live") and live_wins is not None
+                and row.get("kitty_window_id") and sid not in live_wins
+                and not _within_live_grace(row)):
+            row["live"] = False
+        ctx = session_ctx(row.get("transcript_path") or "", main=True)
+        slug = _session_slug(sid)
+        out.append({
+            "sid": sid,
+            "title": session_title(row.get("transcript_path") or ""),
+            "last_active": _last_active(row, sdb),
+            "live": bool(row.get("live")),
+            "model": (ctx or {}).get("model") or "",
+            "effort": plugins.effort_default(want, slug),
+            "account": {"slug": slug,
+                        "label": labels.get(slug) or (slug or "default")},
+        })
+        if len(out) >= limit:
+            break
+    return out
 
 
 def _wire_row(r):
@@ -1835,6 +1886,15 @@ class Handler(BaseHTTPRequestHandler):
             # launch on one device pre-selects on the next (docs/dashboard.md,
             # *New-session prefs*). {} when nothing launched yet.
             return self._json(prefs.get("new-session", {}))
+        if api == ["resumable"]:
+            # the new-session resume picker's rows for one directory (fetched on
+            # open + on dir change): recent sessions in `cwd`, each with the
+            # model/effort/account it ran under (docs/dashboard.md *Resume
+            # picker*). `limit` is clamped to [1, RESUMABLE_MAX]; a blank/unknown
+            # dir yields [] (nothing to resume). Read-only, no audit rows.
+            cwd = _qstr(url, "cwd")
+            limit = min(RESUMABLE_MAX, max(1, _qint(url, "limit") or RESUMABLE_MAX))
+            return self._json(resumable_payload(cwd, limit))
         if api == ["dirs", "hidden"]:
             # the {group_key: hidden_at_epoch} map the ✕ built (docs/dashboard.md
             # *Hidden directories*); the page seeds S.hidden from this on load —

@@ -1354,6 +1354,7 @@ function connectSession(sid) {
 // inline.
 const KEEP_OPEN = 5;
 const HISTORY_FETCH = 40;      // blocks per lazy-backlog /history page
+const PREVIEW_BLOCKS = 12;     // recent mirror blocks in the resume-picker preview
 
 function enforceWindow() {
   const blocks = [...S.ses.blocks.values()];
@@ -1493,6 +1494,36 @@ function appendOlder(items) {
   if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
   else st.append(frag);
   updateFilterCount();
+}
+
+// Render a self-contained mirror snapshot into an ARBITRARY container (the
+// resume-picker's preview panel), not the live #stream. Same server items
+// ({g,t,html}, oldest->newest) and same block grouping as appendOlder, but into
+// a throwaway local map (never S.ses) and with blocks OPEN — a read-only peek at
+// a conversation's recent mirror transcript, so no folding/filters/eviction.
+function renderPreview(container, items) {
+  container.textContent = "";
+  const local = new Map();                        // g -> block, this render only
+  for (const it of items) {
+    if (!it.g) {
+      const tmp = el("div");
+      tmp.innerHTML = it.html;
+      const elem = tmp.firstElementChild;
+      if (elem) container.append(elem);
+      continue;
+    }
+    let b = local.get(it.g);
+    if (!b) {
+      b = createBlock();
+      b.root.dataset.open = "1";                  // previews render expanded
+      local.set(it.g, b);
+      container.append(b.root);
+    }
+    fillBlock(b, it);
+    refineBlockKind(b, it);
+  }
+  if (!container.childElementCount)
+    container.append(el("div", "nspreview-empty", "no mirror history"));
 }
 
 // The "load older" affordance: a button pinned at the BOTTOM of the feed (a
@@ -3619,6 +3650,171 @@ function suggest(input, all) {
   return { el: menu, key };
 }
 
+// The new-session resume picker (docs/dashboard.md *Resume picker*): a search
+// box + a scrollable list of a directory's recent sessions (GET /api/resumable,
+// up to RESUMABLE_MAX), each row carrying the session's model/effort/account. It
+// replaces the old three-way "start from" dropdown's resume entries — no
+// `--continue`, resuming the most-recent row IS "continue". Keyboard: ArrowDown
+// from the search box drops into the list, ↑/↓ move between rows, Enter selects,
+// and SPACE toggles an inline mirror-transcript preview of the highlighted row
+// (renderPreview over /history). `onSelect(row)` fires on every selection so the
+// caller can reuse the picked session's model+effort. `value()` is the chosen
+// sid ("" = nothing picked).
+function resumePicker() {
+  const root = el("div", "nsresume");
+  const search = el("input", "nsinput nsressearch");
+  search.type = "text";
+  search.spellcheck = false;
+  search.placeholder = "search recent sessions…";
+  const list = el("div", "nsreslist");
+  const preview = el("div", "nspreview");
+  preview.hidden = true;
+  root.append(search, list, preview);
+
+  let rows = [], selSid = "", pvSid = "", filter = "";
+  const pvCache = new Map();
+  const match = (r) => !filter
+    || (r.title || "").toLowerCase().includes(filter)
+    || (r.sid || "").toLowerCase().includes(filter);
+
+  const paint = () => {
+    list.textContent = "";
+    const vis = rows.filter(match);
+    if (!vis.length) {
+      list.append(el("div", "nsresempty",
+        rows.length ? "no match" : "no sessions to resume here"));
+      return;
+    }
+    for (const r of vis) {
+      const row = el("div", "nsresrow"
+        + (r.sid === selSid ? " sel" : "") + (r.live ? " live" : ""));
+      row.tabIndex = 0;
+      row.dataset.sid = r.sid;
+      row.append(el("div", "nsrestitle", r.title || shortSid(r.sid)));
+      const meta = el("div", "nsresmeta");
+      const fam = shortModel(r.model);
+      if (fam) meta.append(el("span", "nsreschip", fam));
+      if (r.effort) meta.append(el("span", "nsreschip", r.effort));
+      if (r.account && r.account.label)
+        meta.append(el("span", "nsreschip", r.account.label));
+      if (r.live) meta.append(el("span", "nsreschip live", "live"));
+      const when = lastActive(r) ? ago(lastActive(r)) : "";
+      if (when) meta.append(el("span", "nsresago", when));
+      row.append(meta);
+      row.onclick = () => choose(r.sid);
+      row.onkeydown = (e) => rowKey(e, r);
+      list.append(row);
+    }
+  };
+
+  const choose = (sid) => {
+    selSid = sid;
+    paint();
+    const r = rows.find(x => x.sid === sid);
+    if (!r) return;
+    // audit the pick so a "resumed with the wrong model/effort/account" report
+    // is reconstructible from the DB (docs/dashboard.md *Resume picker*): the sid
+    // chosen + the model/effort/account it CARRIED (what onSelect reuses).
+    clog(sid, "resume.pick", {
+      model: r.model || "", effort: r.effort || "",
+      account: (r.account && r.account.slug) || "", live: !!r.live });
+    if (api.onSelect) api.onSelect(r);
+  };
+
+  const showPreview = (sid) => {
+    if (!preview.hidden && pvSid === sid) {
+      preview.hidden = true; pvSid = "";
+      clog(sid, "resume.preview", { shown: 0 });
+      return;
+    }
+    pvSid = sid;
+    preview.hidden = false;
+    clog(sid, "resume.preview", { shown: 1, cached: pvCache.has(sid) ? 1 : 0 });
+    if (pvCache.has(sid)) { renderPreview(preview, pvCache.get(sid)); return; }
+    preview.textContent = "";
+    preview.append(el("div", "nspreview-empty", "loading…"));
+    fetch("/api/session/" + encodeURIComponent(sid) + "/history?blocks=" + PREVIEW_BLOCKS)
+      .then(r => r.json())
+      .then(d => {
+        const items = (d && d.items) || [];
+        pvCache.set(sid, items);
+        if (pvSid === sid && !preview.hidden) renderPreview(preview, items);
+      })
+      .catch(() => {
+        clog(sid, "resume.preview.fail", {});
+        if (pvSid !== sid) return;
+        preview.textContent = "";
+        preview.append(el("div", "nspreview-empty", "preview unavailable"));
+      });
+  };
+
+  const rowKey = (e, r) => {
+    const rowEl = e.currentTarget;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (rowEl.nextElementSibling) rowEl.nextElementSibling.focus();
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (rowEl.previousElementSibling) rowEl.previousElementSibling.focus();
+      else search.focus();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      choose(r.sid);
+    } else if (e.key === " ") {
+      e.preventDefault();                          // space PREVIEWS, never scrolls
+      showPreview(r.sid);
+    } else if (e.key === "Escape" && !preview.hidden) {
+      e.preventDefault();
+      e.stopPropagation();                         // don't close the whole modal
+      preview.hidden = true;
+      pvSid = "";
+    }
+  };
+
+  search.oninput = () => { filter = search.value.trim().toLowerCase(); paint(); };
+  search.onkeydown = (e) => {
+    const first = list.querySelector(".nsresrow");
+    if (e.key === "ArrowDown" && first) { e.preventDefault(); first.focus(); }
+    else if (e.key === "Enter" && first) { e.preventDefault(); choose(first.dataset.sid); }
+  };
+
+  const api = {
+    el: root,
+    onSelect: null,
+    value: () => selSid,
+    focus: () => search.focus(),
+    // (re)load the directory's rows; `preferSid` preselects a specific session
+    // (the ↻ resume target), else the current pick if still present, else the
+    // most-recent row — so the default resume IS "continue the most recent".
+    refresh(cwd, preferSid) {
+      pvSid = "";
+      preview.hidden = true;
+      list.textContent = "";
+      list.append(el("div", "nsresempty", "loading…"));
+      fetch("/api/resumable?cwd=" + encodeURIComponent(cwd || ""))
+        .then(r => r.json())
+        .then(data => {
+          rows = Array.isArray(data) ? data : [];
+          // audit the load — a "picker was empty / didn't show my session"
+          // report is answerable from the DB (cwd + row count + preselection).
+          clog("", "resume.list", {
+            cwd: cwd || "", n: rows.length, prefer: preferSid || "" });
+          const want = (preferSid && rows.some(x => x.sid === preferSid)) ? preferSid
+            : (selSid && rows.some(x => x.sid === selSid)) ? selSid
+              : (rows[0] ? rows[0].sid : "");
+          selSid = "";
+          if (want) choose(want);                  // choose → onSelect + repaint
+          else paint();
+        })
+        .catch(() => {
+          clog("", "resume.list.fail", { cwd: cwd || "" });
+          rows = []; selSid = ""; paint();
+        });
+    },
+  };
+  return api;
+}
+
 function openNewSession(prefillCwd, resumeSid) {
   $modal.textContent = "";
   const last = nsLast();
@@ -3640,32 +3836,48 @@ function openNewSession(prefillCwd, resumeSid) {
   const sug = suggest(dir, [...new Set(S.sessions.map(r => r.cwd).filter(Boolean))]);
   dirRow.append(dir, sug.el);
 
-  // start from: a fresh conversation (default), `claude --continue` (the
-  // directory's most recent conversation), or `claude --resume <sid>` — the
-  // resume options are this directory's known sessions from the snapshot,
-  // rebuilt when the directory changes. A resumed conversation forks to a
-  // new sid; the adopt machinery and the jump watch handle that on their own.
-  const startRow = el("div", "nsfield");
-  startRow.append(el("span", "nslabel", "start from"));
-  const start = dropdown();
-  startRow.append(start.el);
-  const fillStart = () => {
-    const cwd = dir.value.trim();
-    const items = [["", "a fresh conversation"],
-                   ["continue", "continue the most recent conversation"]];
-    for (const row of S.sessions.filter(r => r.cwd === cwd).slice(0, 15))
-      items.push(["resume:" + row.sid,
-                  "resume · " + (row.title || shortSid(row.sid))
-                  + (lastActive(row) ? " · " + ago(lastActive(row)) : "")]);
-    start.fill(items);
+  // conversation: FRESH (a new conversation, the default) or RESUME one of this
+  // directory's recent sessions. The old three-way "start from" dropdown is split
+  // into a fresh toggle + a searchable, scrollable resume picker (resumePicker,
+  // docs/dashboard.md *Resume picker*): there is no `--continue` — resuming the
+  // most-recent row IS "continue". A resumed conversation forks to a new sid; the
+  // adopt machinery and the jump watch handle that on their own. The picker rows
+  // carry each session's model/effort/account (GET /api/resumable); selecting one
+  // reuses its model+effort (the account still load-balances via autoAcct).
+  const picker = resumePicker();
+  const resumeRow = el("div", "nsfield nsresumerow");
+  resumeRow.append(el("span", "nslabel", "resume"), picker.el);
+
+  const freshRow = el("div", "nsfield");
+  freshRow.append(el("span", "nslabel", "start"));
+  const freshWrap = el("label", "nsswitch");
+  const fresh = el("input");
+  fresh.type = "checkbox";
+  fresh.checked = !resumeSid;                 // ↻ resume opens straight to the picker
+  const freshTxt = el("span", "nsswitchtxt");
+  freshWrap.append(fresh, el("span", "nsslider"), freshTxt);
+  freshRow.append(freshWrap);
+  let pickerLoaded = false;
+  const syncFresh = () => {
+    freshTxt.textContent = fresh.checked
+      ? "fresh conversation" : "resume a conversation";
+    resumeRow.style.display = fresh.checked ? "none" : "";
+    clog("", "resume.mode", { fresh: fresh.checked ? 1 : 0 });
+    if (!fresh.checked && !pickerLoaded) {
+      pickerLoaded = true;
+      picker.refresh(dir.value.trim(), resumeSid || "");
+    }
   };
-  fillStart();
-  dir.oninput = fillStart;
-  if (resumeSid) {
-    const v = "resume:" + resumeSid;
-    if (!start.has(v)) start.add(v, "resume · " + shortSid(resumeSid));
-    start.value = v;
-  }
+  fresh.onchange = syncFresh;
+  // reload the picker when the directory changes (debounced) — only while
+  // resuming; suggest() keeps its own separate input listener (addEventListener).
+  let dirTimer = 0;
+  dir.oninput = () => {
+    if (fresh.checked) return;
+    clearTimeout(dirTimer);
+    pickerLoaded = true;
+    dirTimer = setTimeout(() => picker.refresh(dir.value.trim(), ""), 250);
+  };
 
   // model + effort side by side — concrete values only, no "default" entry
   // (the user always launches with explicit flags; the remembered last-used
@@ -3746,19 +3958,21 @@ function openNewSession(prefillCwd, resumeSid) {
   fetch("/api/accounts").then(r => r.json())
     .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
 
-  // Resuming should continue where the SESSION was, not where the launcher
-  // last was: preselect the resumed session's own model (its transcript-tail
-  // model, from ctx) and effort (its last-applied /effort level), overriding
-  // the global last-used ns-prefs defaults set above. Async (a /api/session
-  // fetch) and yielding to a hand pick made while it was in flight; the
-  // account still load-balances (autoAcct re-runs against the chosen model).
-  if (resumeSid)
-    fetch("/api/session/" + encodeURIComponent(resumeSid)).then(r => r.json())
-      .then(d => {
-        const fam = (shortModel(d.ctx && d.ctx.model) || "").split("-")[0];
-        if (!modelPicked && fam && model.has(fam)) { model.value = fam; autoAcct(); }
-        if (!effortPicked && d.effort && effort.has(d.effort)) effort.value = d.effort;
-      }).catch(() => {});
+  // Resuming should continue where the SESSION was, not where the launcher last
+  // was: on every resume-row selection, reuse that session's own model (its
+  // transcript-tail model from /api/resumable) and effort (its last-applied
+  // /effort level), overriding the global last-used ns-prefs defaults set above —
+  // unless the user has already hand-picked (modelPicked/effortPicked). The
+  // account is DELIBERATELY not reused: autoAcct re-runs against the chosen model
+  // so the launch still load-balances (docs/dashboard.md *Resume picker*).
+  picker.onSelect = (r) => {
+    const fam = (shortModel(r.model) || "").split("-")[0];
+    if (!modelPicked && fam && model.has(fam)) model.value = fam;
+    if (!effortPicked && r.effort && effort.has(r.effort)) effort.value = r.effort;
+    autoAcct();
+  };
+  syncFresh();                       // initial visibility + (if resuming) load
+
   const split = el("div", "nssplit");
   split.append(modelRow, effortRow);
   const split2 = el("div", "nssplit");
@@ -3803,14 +4017,19 @@ function openNewSession(prefillCwd, resumeSid) {
     pdic.stop();         // the visible (validated) prompt is what launches
     const cwd = dir.value.trim();
     if (!cwd) { dir.focus(); return; }
+    // resuming needs a chosen conversation (no `--continue` fallback): if the
+    // fresh toggle is off but nothing is selected, don't silently start fresh.
+    const resumeSel = fresh.checked ? "" : picker.value();
+    if (!fresh.checked && !resumeSel)
+      return toast("ask", "pick a session",
+                   "choose a conversation to resume, or switch to fresh");
     if (nsTray.pending())
       return toast("ask", "attachment still uploading", "one moment…");
     submit.disabled = true;
     const body = { cwd };
     const atts = nsTray.paths();
     if (atts.length) body.attachments = atts;
-    if (start.value === "continue") body.continue = true;
-    else if (start.value.startsWith("resume:")) body.resume = start.value.slice(7);
+    if (resumeSel) body.resume = resumeSel;
     if (acct.value) body.account = acct.value;
     if (model.value) body.model = model.value;
     if (effort.value) body.effort = effort.value;
@@ -3828,7 +4047,7 @@ function openNewSession(prefillCwd, resumeSid) {
         nsRemember({ cwd, model: model.value, effort: effort.value });
         armJump(cwd, body.resume, {
           win: (d && d.win) || "",
-          show: { mode: body.continue ? "continue" : body.resume ? "resume" : "new",
+          show: { mode: body.resume ? "resume" : "new",
                   model: model.value, effort: effort.value,
                   account: acct.value, prompt: body.prompt || "" },
         });
@@ -3853,7 +4072,7 @@ function openNewSession(prefillCwd, resumeSid) {
     if (e.key === "Enter") { e.preventDefault(); go(); }
   };
 
-  panel.append(dirRow, startRow, split2, split, promptRow, actions);
+  panel.append(dirRow, freshRow, resumeRow, split2, split, promptRow, actions);
   const back = el("div", "nsback");
   back.onclick = (e) => { if (e.target === back) closeNewSession(); };
   back.append(panel);
@@ -3862,9 +4081,13 @@ function openNewSession(prefillCwd, resumeSid) {
   document.body.classList.add("modal-open");      // scroll-lock the page behind
   // a known directory (remembered/prefilled) means the next thing you type is
   // the prompt — focusing the dir field there just pops its suggestion look.
+  // Resuming (fresh off) → focus the picker's search so ↑/↓ pick immediately.
   // Not on an iPad: the unasked-for keyboard covers half the form (and focus
   // triggers Safari's page auto-zoom — see style.css touch section)
-  if (!IS_IPAD) (dir.value.trim() ? prompt : dir).focus();
+  if (!IS_IPAD) {
+    if (!fresh.checked) picker.focus();
+    else (dir.value.trim() ? prompt : dir).focus();
+  }
 }
 
 $newbtn.onclick = () => openNewSession("");
