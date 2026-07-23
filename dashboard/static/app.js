@@ -3742,6 +3742,7 @@ function resumePicker() {
     document.removeEventListener("keydown", pvKey, true);
     pvBack.remove();
     pvBack = null;
+    pvSid = "";
     resumePreviewCleanup = null;
     const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
     if (r) r.focus();
@@ -3859,8 +3860,7 @@ function resumePicker() {
     refresh(cwd, preferSid, q, andFocus) {
       lastCwd = cwd || "";
       q = (q || "").trim();
-      pvSid = "";
-      preview.hidden = true;
+      closePreview();                            // a reload dismisses any open popup
       list.textContent = "";
       list.append(el("div", "nsresempty", "loading…"));
       const tok = ++qToken;                        // ignore a stale fetch's result
