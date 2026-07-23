@@ -1204,6 +1204,24 @@ to not-live (and its control plane disabled). When no frontend resolves (map is
 can't verify. This is also why the control-plane writes below resolve the
 **live** window rather than the stored id.
 
+**An empty `ls` is can't-tell, not "no live tabs" (why cards flashed "gone").**
+`kitten_ls` swallows EVERY failure — a timeout, an rc≠0, a transient socket
+hiccup — into an empty list and never raises (`frontends/kitty.py`), so a failed
+scan is indistinguishable from a genuinely empty desktop and the `except`
+guarding `_live_windows` can never catch it. Trusting an empty result as
+authoritative meant one socket hiccup returned `{}` (not `None`), which — since
+`{} is not None` — passed the demotion guard and flipped EVERY running session
+to not-live; a session that is live-but-not-parked renders **gone** on its card
+(`row.parked ? "parked" : "gone"`), so all cards momentarily flashed "gone"
+while the sessions were working, self-healing on the next `_LIVE_TTL` tick once
+kitty answered. Because a running dashboard implies kitty HAS windows, an empty
+tree is virtually always a failed `ls` — so `_live_windows` now maps an
+empty/failed `ls()` to `None` (can't-tell, keep the state-DB signal), reserving
+`{}` for a real non-empty tree that carries no `claude_session` tags. (The same
+transient failure IS audited on the tab-status side as a `kitten @ failed rc=N`
+transition — the read-side dashboard demotion leaves no audit row of its own,
+so that transition is the correlating tell.)
+
 **Startup grace (why a brand-new session must NOT be demoted).** The demotion
 above has a race at the START of a session: the audit `sessions` row (carrying
 `kitty_window_id`) is written a beat BEFORE the pane is tagged

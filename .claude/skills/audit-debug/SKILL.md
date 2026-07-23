@@ -1104,6 +1104,25 @@ New always-audited swallow sites (previously silent — their absence used to ma
   already-hijacked live session: re-tag its host window
   (`kitten @ set-user-vars -m id:<win> claude_session=<sid>`) and toggle the
   mirror — the history is intact.
+- **A session card MOMENTARILY flashed "gone" on the dashboard, then healed on
+  its own, while the session kept working** *(empty-`ls` can't-tell, fixed
+  2026-07-24)* — a card shows **gone** when it's `live:false && parked:false`
+  (`app.js`: `row.parked ? "parked" : "gone"`). `live` is decided by
+  `_live_windows()` scanning kitty for `claude_session` tags. `kitten_ls`
+  swallows EVERY transient failure (timeout / rc≠0 / socket hiccup) into an
+  empty list and NEVER raises (`frontends/kitty.py`), so a failed scan returned
+  `{}` (not `None`) — `{} is not None` passed the demotion guard and flipped
+  every running session to not-live for one `_LIVE_TTL` (5s) tick, then healed.
+  There is NO audit row for this read-side demotion; the CORRELATING TELL is a
+  **`tab_transitions` `kitten @ failed rc=N — state row unchanged`** row near the
+  flash moment (the SAME socket hiccup, audited on the tab-status side) — and
+  the `sessions` row stays perfectly live throughout (no SessionEnd, no park, no
+  hijack, single session on the window). Distinguish from the nested-claude pane
+  hijack above (persistent limbo, not a momentary flash; there a DIFFERENT sid's
+  `pane_events` closed this one's mirror). On a current build `_live_windows`
+  maps an empty/failed `ls()` to `None` (can't-tell → keep the state-DB signal),
+  reserving `{}` for a real non-empty tree with no tags — so a momentary flash
+  recurring on a current build means that empty→None guard regressed.
 - **Mirror came back empty after `--resume`/`--continue`** — the `state_files` DB-fate
   row next to the SessionStart tells you what happened to the history: `restore-history`
   = it WAS restored (an empty pane then points at the renderer — check `spawns`/`errors`,

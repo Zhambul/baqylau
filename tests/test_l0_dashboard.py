@@ -632,18 +632,40 @@ def test_live_windows_memoized_by_ttl(monkeypatch):
     design — control-plane POSTs never touch this map, they re-scan via
     fe.window_for_session at action time."""
     calls = []
+    win = {"id": 7, "user_vars": {"claude_session": "sX"}}
     class FE:
-        def iter_windows(self):
+        def ls(self):
             calls.append(1)
-            yield None, None, {"id": 7, "user_vars": {"claude_session": "sX"}}
+            return [{"tabs": [{"windows": [win]}]}]
+        def iter_windows(self, tree=None):
+            for osw in tree or self.ls():
+                for t in osw.get("tabs", []):
+                    for w in t.get("windows", []):
+                        yield osw, t, w
     monkeypatch.setattr(DS, "_frontend", lambda: FE())
     monkeypatch.setattr(DS, "_LIVE_WINS", {"ts": -1e9, "val": None})
     assert DS._live_windows() == {"sX": "7"}
     assert DS._live_windows() == {"sX": "7"}      # within TTL → memo, no scan
-    assert len(calls) == 1
+    assert len(calls) == 1                        # ONE ls per TTL (tree reused)
     DS._LIVE_WINS["ts"] -= DS._LIVE_TTL + 1       # age the memo past the TTL
     assert DS._live_windows() == {"sX": "7"}
     assert len(calls) == 2
+
+
+def test_live_windows_empty_ls_is_cant_tell(monkeypatch):
+    """A transient `kitten @ ls` failure surfaces as an EMPTY tree (kitten_ls
+    swallows every failure into [] and never raises), which must be treated as
+    can't-tell (None), NOT as an authoritative 'no live tabs'. Trusting {} on a
+    hiccup demoted every running session to not-live, flashing its dashboard
+    card to 'gone' while it was working."""
+    class FE:
+        def ls(self):
+            return []                     # the swallowed-failure signature
+        def iter_windows(self, tree=None):
+            raise AssertionError("must not iterate an empty tree")
+    monkeypatch.setattr(DS, "_frontend", lambda: FE())
+    monkeypatch.setattr(DS, "_LIVE_WINS", {"ts": -1e9, "val": None})
+    assert DS._live_windows() is None            # not {} → no wrongful demotion
 
 
 def _notifier_for_asking(monkeypatch, screen, delay=999):

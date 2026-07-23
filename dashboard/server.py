@@ -1794,15 +1794,24 @@ def _live_windows():
     """{sid: window_id} for every kitty pane CURRENTLY tagged
     claude_session=<sid> — the authoritative 'which sessions have an OPEN tab'.
     One `kitten @ ls`, memoized for _LIVE_TTL. None when no frontend resolves
-    (can't tell → callers keep the state-DB liveness signal rather than wrongly
-    marking sessions dead).
+    OR the `ls` came back EMPTY (can't tell → callers keep the state-DB liveness
+    signal rather than wrongly marking sessions dead).
 
     Why this exists: the audit row's kitty_window_id is a START-TIME snapshot,
     and 'the state DB file exists' only means the session was never PARKED — a
     tab closed WITHOUT a SessionEnd (crash / kill -9, or a leaked test DB)
     leaves both intact, so the session shows live with a window id that kitty
     has since reused for an unrelated tab. Keying on the live user-var tag is
-    the only collision-proof truth."""
+    the only collision-proof truth.
+
+    Why an EMPTY ls is treated as can't-tell, not authoritative: kitten_ls
+    swallows EVERY failure (a timeout, rc≠0, a transient socket hiccup) into an
+    empty list — indistinguishable from a genuinely empty desktop, and it never
+    raises, so the `except` below can't catch it. But a running dashboard
+    implies kitty HAS windows, so an empty tree is virtually always a failed
+    `ls`, not an empty one. Trusting `{}` demoted every running session to
+    not-live on one hiccup, flashing the cards to 'gone' (a session that is
+    live-but-not-parked renders 'gone' — app.js). So an empty tree → None."""
     now = time.monotonic()
     if now - _LIVE_WINS["ts"] < _LIVE_TTL:
         return _LIVE_WINS["val"]
@@ -1810,11 +1819,13 @@ def _live_windows():
     val = None
     if fe is not None:
         try:
-            val = {}
-            for _osw, _tab, w in fe.iter_windows():
-                sid = (w.get("user_vars") or {}).get("claude_session")
-                if sid and w.get("id") is not None:
-                    val.setdefault(sid, str(w["id"]))
+            tree = fe.ls()
+            if tree:                       # empty/failed ls → None (can't tell)
+                val = {}
+                for _osw, _tab, w in fe.iter_windows(tree):
+                    sid = (w.get("user_vars") or {}).get("claude_session")
+                    if sid and w.get("id") is not None:
+                        val.setdefault(sid, str(w["id"]))
         except Exception:
             val = None
     _LIVE_WINS["ts"], _LIVE_WINS["val"] = now, val
