@@ -299,7 +299,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e]` in a new tab at `cwd` (`Frontend.launch_tab`) — the first `prompt` is NOT on the command line; it is delivered AFTER launch via the clear-then-send path (*First-prompt delivery* below), so Claude Code's TUI can't grab the clipboard at startup; `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` watch (which both hurries the SSE and delivers the first prompt); 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
@@ -1069,14 +1069,44 @@ readable.
 `_MODEL_OK` (one clean argv word — an alias like `opus` or a full id like
 `claude-fable-5`; the form offers the aliases, the API takes any id) and
 `effort` against `EFFORTS` (the CLI's `low`…`max` levels), then
-`Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?,
-prompt?]))` opens a new tab — the flags are just more positional `"$@"` words
-ahead of the prompt, so the injection story is unchanged; the session then appears through its
+`Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?]))` opens a
+new tab — the flags are positional `"$@"` words, so the injection story is
+unchanged; the first `prompt` is deliberately NOT an argv word (it would make
+Claude Code's TUI grab the clipboard at startup — *First-prompt delivery* below),
+delivered post-launch instead; the session then appears through its
 own `SessionStart` (no synthetic row). `kitten @ launch` prints the new
 window's id, which `kitten_launch_tab` captures (the ONE launch call whose
 stdout isn't silenced) and the response passes through as `win` — the page's
 exact match key for the session that boots there, where a cwd heuristic is
 ambiguous under two same-directory launches.
+
+**First-prompt delivery (and why it is NOT an argv word).** A launch's first
+prompt is delivered AFTER the tab is up, via the clear-then-send path
+(`_deliver_first_prompt`, called from `_launch_wake`), NOT as a `[prompt]` word
+on the `claude` command line. Why: **Claude Code's interactive TUI reads the
+macOS clipboard at startup when it is given an initial prompt, and auto-attaches
+whatever image is on it to that first, auto-submitted message** — proven, not
+guessed: a web resume with the audit's `attachments:0` and the prompt `"say
+test"` still arrived as `say test[Image #1]` with a PNG (a screenshot the user
+had on the clipboard), cached to Claude Code's own `image-cache/<sid>/1.png`,
+**twice identically**, with nobody at the terminal; `claude -p` (print mode) with
+the same clipboard image attaches nothing; and the live composer's `send-text`
+delivery never attaches an image. It is undocumented Claude Code behaviour (v2.1.x
+— no docs/changelog entry, no disable flag), so baqylau sidesteps it: launch bare,
+then once `_launch_wake` sees the session (SessionStart), after a `PROMPT_SETTLE_S`
+settle, **kill the input line (`Ctrl+U`/`Ctrl+K` — removing anything the TUI
+pre-loaded: a clipboard image, a grey ghost suggestion, a stale draft) and paste
+EXACTLY our text** (bracketed paste + CR, `post_message`'s proven channel).
+Targets the launched window id (`win`, fork-proof; falls back to
+`window_for_session(sid)`), skips a RED tab (`awaiting-command` — a
+trust/permission/ask modal, where a paste would land IN the dialog), and records
+one **`web-launch-prompt`** `state_files` row (`ok`/`why`/`chars`/`tab`) next to
+the `web-launch` row. This covers ALL first-prompt launches — fresh, resume, and
+the parked "resume & send" — since all three route through `post_new_session`; the
+prompt was never resume-specific (the `[prompt]` word was appended unconditionally).
+The trade-off vs argv: delivery is now timing-dependent (best-effort after boot,
+auditable) rather than guaranteed by the CLI — acceptable next to silently sending
+a screenshot the user never attached.
 
 **Web launches must not steal macOS focus (and why there is no bounce-back).**
 The user is *in the browser* — but a web launch used to make macOS activate
@@ -1137,10 +1167,11 @@ row names the second it happened. **The argv is NOT a bare `["claude"]`**
 kitty has no user PATH (`~/.local/bin` absent → command-not-found → the tab
 flashes and closes while `kitten @ launch` still exits 0; this shipped once)
 and no shell aliases (`claude` here IS an alias). `launch_argv` therefore runs
-`$SHELL -lic 'claude "$@"' claude <prompt?>` — the user's interactive login
+`$SHELL -lic 'claude "$@"' claude <flags?>` — the user's interactive login
 shell, i.e. exactly what typing `claude` in a fresh tab does (profile PATH, rc
 aliases). Injection safety is preserved: the command string is FIXED and the
-prompt rides as a positional `"$@"` arg, never interpolated. Non-POSIX `$SHELL`
+flags ride as positional `"$@"` args, never interpolated (the first prompt no
+longer rides here at all — *First-prompt delivery* below). Non-POSIX `$SHELL`
 (fish) falls back to `/bin/zsh` (`LAUNCH_SHELLS`). The wrapper is OWNED by
 `plugins/claude_code/account.launch_argv` (reached via the `plugins.launch_argv`
 registry fan-out) — the rate-limit migration (docs/relimit.md) composes the
@@ -1610,9 +1641,10 @@ replaces the old three-way "start from" dropdown: there is **no `--continue`** �
 resuming the most-recent row IS "continue" (the picker auto-selects the newest
 row on load, and `↻ resume` preselects its own session). Only `claude --resume
 <sid>` is emitted; `body.resume` still validates against `_SID_OK` (one clean
-argv word) and rides as a positional `"$@"` word ahead of `--model`/`--effort`/
-prompt, so the injection story is unchanged (the endpoint still ACCEPTS a
-`continue` bool for compatibility, but the form never sends it, and
+argv word) and rides as a positional `"$@"` word ahead of `--model`/`--effort`
+(the first prompt is NOT an argv word — it's delivered post-launch, *First-prompt
+delivery* below), so the injection story is unchanged (the endpoint still ACCEPTS
+a `continue` bool for compatibility, but the form never sends it, and
 `resume`+`continue` together still 400s).
 
 The picker's rows come from **`GET /api/resumable?cwd=<dir>&limit=25&q=<text>`**
