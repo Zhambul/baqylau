@@ -250,6 +250,21 @@ def test_windows_by_slug_expected_net_error_not_audited(monkeypatch):
     assert audited == []                                 # expected — no ⚠
 
 
+def test_windows_by_slug_remote_disconnect_not_audited(monkeypatch):
+    """A peer that drops the connection mid-request (http.client.
+    RemoteDisconnected — a ConnectionResetError, NOT wrapped in URLError) is an
+    environmental transient: degrade silently, no ⚠ (global-errors, 2026-07-23)."""
+    import http.client
+    audited = []
+    monkeypatch.setattr(MU, "_audit_once", lambda f, c: audited.append(f))
+    monkeypatch.setattr(MU, "_login_services", lambda: ["svc"])
+    monkeypatch.setattr(MU, "_access_token", lambda svc: "T")
+    monkeypatch.setattr(MU, "_get", lambda url, tok: (_ for _ in ()).throw(
+        http.client.RemoteDisconnected("Remote end closed connection")))
+    assert MU.windows_by_slug() == {}
+    assert audited == []                                 # expected — no ⚠
+
+
 def test_windows_by_slug_unexpected_error_audited(monkeypatch):
     """A genuinely unexpected exception (our JSON-shape handling, not the
     network) STILL audits — the warning light stays meaningful."""

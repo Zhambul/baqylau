@@ -85,13 +85,18 @@ def _expected_net_error(e):
     """True for the EXPECTED 'endpoint or credential unavailable' outcomes this
     optional read degrades on silently (the module header's fail-silent
     contract): the machine offline / endpoint unreachable (urllib URLError,
-    incl. a wrapped DNS gaierror) and an auth/refresh rejection (its HTTPError
-    subclass — a rotated/stale token 4xx). These are ENVIRONMENTAL, not code
-    bugs, so they degrade to "no model windows" WITHOUT lighting the ⚠ warning
-    light in every session forever. A genuinely unexpected exception (a
-    KeyError / JSON-shape change in OUR handling) still audits, keeping the
-    light meaningful. HTTPError subclasses URLError, so this covers both."""
-    return isinstance(e, urllib.error.URLError)
+    incl. a wrapped DNS gaierror), an auth/refresh rejection (its HTTPError
+    subclass — a rotated/stale token 4xx), and a connection the peer drops or
+    times out MID-request (ConnectionError / TimeoutError — e.g.
+    http.client.RemoteDisconnected 'Remote end closed connection without
+    response', which subclasses ConnectionResetError and propagates RAW,
+    unwrapped by URLError; likewise a socket read timeout). These are all
+    ENVIRONMENTAL, not code bugs, so they degrade to "no model windows"
+    WITHOUT lighting the ⚠ warning light in every session forever. A genuinely
+    unexpected exception (a KeyError / JSON-shape change in OUR handling) still
+    audits, keeping the light meaningful. HTTPError subclasses URLError, so the
+    first arm covers both of those."""
+    return isinstance(e, (urllib.error.URLError, ConnectionError, TimeoutError))
 
 
 def enabled():
