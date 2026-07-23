@@ -42,7 +42,8 @@ Read each signature and classify it:
 - **`traceback` is a real stack** (`Traceback (most recent call last): … / SomeError: …`)
   → a genuinely swallowed exception. This is a **bug to FIX** — find the
   `except` block whose `A.error(..., func=...)` matches and fix the cause. The
-  `context` dict carries the args that were in hand.
+  `context` dict carries the args that were in hand. (Fixing stops *new* rows; it
+  does NOT empty the already-recorded ones — clear those per §4.)
 - **`traceback` is `NoneType: None`** → the row was written by a bare
   `A.error(...)` OUTSIDE any `except` block: a *deliberate degrade-audit* of a
   code path someone wanted to keep debuggable. Now read the code at that `func`
@@ -103,13 +104,51 @@ if the change also touched a module it imports (this one is scorebar-side —
 errwatch is not imported by the dashboard server, so no restart is needed for
 the ignore to take effect there).
 
-## 4. Wire-up rules (same-commit, per CLAUDE.md)
+## 4. Empty the count after a FIX (handled ≠ gone)
+
+**Handling an error does NOT empty the `errors` table.** The audit is
+append-only, and the scorebar `⚠ N` chip is a COUNT of **all-time** rows
+(`errwatch.poll`: `SELECT COUNT(*) … WHERE session_id IN (<sid>, '')`, minus
+`IGNORE_FUNCS`) — not a count of rows *since* some checkpoint. So the two
+dispositions clear the light differently:
+
+- **IGNORE** (§3) clears the chip on its own — `IGNORE_FUNCS` is subtracted from
+  the COUNT, so those rows stop counting the moment the poller re-execs. Nothing
+  else to do.
+- **FIX** does NOT clear the chip on its own — fixing the root cause only stops
+  *new* rows; the rows already recorded stay in the table and keep counting. A
+  **per-session** fixed signature ages out naturally (a fresh session's chip
+  counts only its own sid plus global, so it starts at 0), but a **GLOBAL**
+  (`session_id=''`) fixed signature keeps lighting ⚠ in *every* session forever
+  until its rows are removed.
+
+So after you FIX a **global** signature, delete its now-resolved rows to clear
+the light — the sanctioned `sql-write` fixup path, surgical (by `func` under
+`session_id=''`), never a blanket wipe:
+
+```sh
+python3 bin/claude-audit.py sql-write \
+  "DELETE FROM errors WHERE session_id='' AND func IN ('<fixed.func>', …)"
+# verify the non-ignored global count is now 0 (adjust the ignore list to match):
+python3 bin/claude-audit.py sql \
+  "SELECT COUNT(*) FROM errors WHERE session_id='' AND func NOT IN ('model_usage._slug_for')"
+```
+
+The chip re-polls every ~5s, so it drops without a restart. Delete ONLY
+signatures you have **confirmed resolved** (their traceback is captured in your
+investigation above) — never a live signature, and never the IGNORE_FUNCS rows
+(those are kept on purpose for debuggability, §3). Don't delete per-session rows
+to chase a number; they don't follow you into new sessions.
+
+## 5. Wire-up rules (same-commit, per CLAUDE.md)
 
 - Editing `IGNORE_FUNCS` is the whole change for an ignore — no new audit rows,
   no schema change. Update the comment so the "why benign" is on record.
 - If instead you FIX a real error, follow the normal audit-coverage rules
-  (`.claude/skills/audit-debug/SKILL.md`) and keep the `A.error` call — the fix
-  is proven by the signature no longer appearing, not by deleting the audit.
+  (`.claude/skills/audit-debug/SKILL.md`) and keep the `A.error` **call site**
+  (so a recurrence re-audits) — the fix is proven by no NEW rows appearing, not
+  by gutting the call. The already-recorded rows are separate: they don't vanish,
+  and for a **global** signature you clear them per §4 to drop the count.
 - A new benign signature that recurs across many sessions is a smell that the
   degrade-audit should have been an expected-outcome return in the first place;
   consider whether the call site should stop calling `A.error` at all.
