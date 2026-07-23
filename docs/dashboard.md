@@ -3665,6 +3665,62 @@ opens, default `https://baqylau.zhambyl.top`; trailing slash tolerated), and
 marked "you're watching it", default `20`; must stay above the page's ~8s beat
 cadence so a continuously-viewed session's presence never lapses).
 
+### Web push (on-device, esp. the installed iPad app)
+
+The **in-page toast** and the desktop **`osNotify`** (`new Notification()`) both
+only fire while a page is OPEN — useless for the main mobile case: an installed
+iPad home-screen app (*Mobile / iPad*, *Add to Home Screen*) that's CLOSED when a
+session needs you. iOS delivers a system notification to a closed/backgrounded
+web app **only** via **Web Push** — a service worker the SERVER wakes — and does
+NOT support the `new Notification()` constructor there at all. So Web Push is the
+on-device analog of the Telegram alert, twinned with it at the **same deferred
+fire point**: the same red `asking` / green `done` transitions, the same grace
+window + arm-cancel + all the suppress logic, the same per-session 🔕 mute
+(checked at send time). Either channel arms the pending alert (`NOTIFY_TELEGRAM
+or NOTIFY_WEBPUSH`); each fires only if its own switch is on.
+
+The pieces:
+
+- **VAPID identity + payload crypto** — `dashboard/webpush.py`, built on the
+  stdlib + `cryptography` (already present; `pywebpush` is NOT — hence the
+  hand-rolled RFC 8291 aes128gcm encryption + RFC 8292 ES256 VAPID JWT). If
+  `cryptography` is missing the whole feature degrades OFF (`enabled()` False) —
+  never a crash. The **VAPID keypair is generated once and persisted** in the
+  durable prefs store (`vapid-keypair` kv); rotating it would silently orphan
+  every existing subscription, so it must stay stable. `send()` never raises — it
+  returns a `Result` the caller acts on (`ok` / `gone` (404/410 → prune) / soft
+  failure).
+- **The service worker** — `dashboard/static/sw.js`, served at the **root**
+  `/sw.js` (its own server route, NOT `/static/`) so its scope is the whole
+  origin. It caches nothing and intercepts no fetch (the dashboard is a live SSE
+  app, not an offline one); it only turns a `push` into `showNotification` and a
+  `notificationclick` into focus-or-open of the `?s=<sid>` deep link (the same
+  query-param link the Telegram alert uses).
+- **Subscription lifecycle** — the header's existing **enable-notifications**
+  button grant (or a silent re-subscribe on load when permission is already
+  granted, `initPush` in app.js) registers the SW, calls
+  `pushManager.subscribe({userVisibleOnly, applicationServerKey})` with the
+  server's VAPID public key (from `GET /api/push/config`), and POSTs the
+  subscription to `POST /api/push/subscribe`. Stored (upserted by endpoint) in
+  the durable global prefs store (`push-subs` kv — per-DEVICE, not per-session).
+  `POST /api/push/unsubscribe` (and a server-side prune on a `gone` send) drops
+  it.
+- **The send** — `Notifier._webpush` builds the `{title, body, sid, kind, url}`
+  payload and fans it out to every stored subscription on a **detached daemon
+  thread** (`_webpush_send`) so the crypto + network round-trips never stall the
+  1 s watcher; each outcome is a `web-push` `state_files` row (`action: send`
+  with `status`/`ok`/`gone`), a `gone` subscription is pruned. Subscribe /
+  unsubscribe are their own `web-push` rows (`action: subscribe`/`unsubscribe`).
+
+**Env knob**: `CLAUDE_DASH_NOTIFY_WEBPUSH` (`0` disables arming + sending on the
+push channel; default on — but still a no-op without the crypto backend), and
+`CLAUDE_DASH_VAPID_SUB` (the VAPID `sub` contact claim, default a `mailto:`).
+
+**iOS caveat**: this works only from the **installed** home-screen app (iOS
+16.4+ exposes `Notification`/`PushManager` only in a standalone web app), reached
+over the PUBLIC origin, and the permission prompt must come from a user gesture
+(the button) — a plain Safari tab shows no button and never subscribes.
+
 **The session strip is the persistent complement to the toasts.** Toasts are
 transient (a 7s slide-in on the transition); the strip is the standing view of
 every live chat, doubling as the session switcher while you're inside one. A

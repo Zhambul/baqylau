@@ -157,6 +157,40 @@ def set_notify_muted(sid, muted):
     return mutate_map(NOTIFY_MUTE_KEY, _apply)
 
 
+# --- web-push subscriptions (the on-device iOS/desktop notification channel) ----
+# Every browser that opted into Web Push (docs/dashboard.md, *Web push*) stores
+# its push subscription here under one kv key, as {endpoint: subscription-json}
+# — keyed by the endpoint URL so a re-subscribe from the same browser upserts in
+# place instead of piling up duplicates. Global like the other dashboard prefs:
+# a subscription is a per-DEVICE fact, not per-session, and the send honors the
+# per-session 🔕 mute at fire time (same as the Telegram alert). A dead
+# subscription (the push service returns 404/410) is pruned by remove_push_sub.
+PUSH_SUBS_KEY = "push-subs"
+
+
+def push_subscriptions():
+    """The list of stored push subscriptions (subscription-JSON dicts); [] when
+    none / unreadable."""
+    d = get(PUSH_SUBS_KEY, {})
+    return list(d.values()) if isinstance(d, dict) else []
+
+
+def add_push_subscription(sub):
+    """Upsert one subscription (its wire JSON: {endpoint, keys:{p256dh, auth}}),
+    keyed by endpoint so a repeat subscribe from the same browser replaces its
+    prior entry. Returns the updated map; best-effort like set()."""
+    ep = sub.get("endpoint") if isinstance(sub, dict) else None
+    if not ep:
+        return get(PUSH_SUBS_KEY, {})
+    return mutate_map(PUSH_SUBS_KEY, lambda d: d.__setitem__(str(ep), sub))
+
+
+def remove_push_subscription(endpoint):
+    """Drop the subscription for `endpoint` (an unsubscribe, or a prune after the
+    push service reports it gone). Returns the updated map; best-effort."""
+    return mutate_map(PUSH_SUBS_KEY, lambda d: d.pop(str(endpoint), None))
+
+
 # --- web-rename override (the durable rename that can't "roll back") ------------
 # The name the user set via the web rename button (docs/dashboard.md, *Web
 # rename*), stored under one kv key as a {session_id: name} map, keyed by the

@@ -63,7 +63,7 @@ from core import tabs
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
 from dashboard import askdialog, confirmdialog, dictate, notehtml, opshtml, \
-    plandialog, prefs, rewindmenu, suggestion
+    plandialog, prefs, rewindmenu, suggestion, webpush
 from plugins.claude_code import memory as MEM
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
@@ -141,6 +141,10 @@ STATIC = {                         # whitelist — no path resolution on user in
     "index.html": "text/html; charset=utf-8",
     "app.js": "text/javascript; charset=utf-8",
     "style.css": "text/css; charset=utf-8",
+    # the Web Push service worker — served from the ROOT path (/sw.js, its own
+    # route) so its scope is the whole origin, not just /static/ (a SW controls
+    # only paths under its own URL). docs/dashboard.md *Web push*.
+    "sw.js": "text/javascript; charset=utf-8",
 }
 
 # The two tab transitions worth a toast (core/tabs.py vocabulary): red — Claude
@@ -167,6 +171,13 @@ NOTIFY_DELAY_S = _notify_delay()
 # Master switch: "0" disables arming + sending entirely (the in-page toast is
 # unaffected). Default on.
 NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
+# The ON-DEVICE Web Push channel (docs/dashboard.md, *Web push*): the same
+# deferred, grace-windowed, mute-honoring alert as Telegram, delivered to every
+# subscribed browser (an installed iOS home-screen app, a desktop page) as a
+# real system notification. Layered on — INDEPENDENT of — Telegram: either
+# channel arms the pending alert, and each fires only if its own switch is on.
+# Effectively off anyway when the crypto backend is missing (webpush.enabled()).
+NOTIFY_WEBPUSH = (os.environ.get("CLAUDE_DASH_NOTIFY_WEBPUSH") or "1") != "0"
 # The reused `notify` skill script (Telegram bot). Overridable for a different
 # transport / for the hermetic test's recorder; ~ is expanded.
 NOTIFY_CMD = os.path.expanduser(
@@ -417,7 +428,7 @@ class Notifier:
                 continue
             payload = self._payload(kind, state, row)
             self.push("notify", payload)   # immediate in-page toast + OS notif
-            if NOTIFY_TELEGRAM:             # arm the deferred off-device alert
+            if NOTIFY_TELEGRAM or NOTIFY_WEBPUSH:   # arm the deferred off-device
                 self.pending[win] = dict(payload, armed_at=now, state=state)
         # cancel the ones you reacted to / are already handling, all before the
         # delay: the tab left its armed state (answered → busy, or the win
@@ -480,7 +491,10 @@ class Notifier:
                               "reason": watching})
                 continue
             if not prefs.notify_muted(sid):
-                self._telegram(entry)
+                if NOTIFY_TELEGRAM:
+                    self._telegram(entry)
+                if NOTIFY_WEBPUSH:
+                    self._webpush(entry)
 
     def _telegram(self, entry):
         """Send the deferred alert via the reused `notify` skill (Telegram),
@@ -507,6 +521,53 @@ class Notifier:
         except Exception:
             A.error("", "dashboard telegram notify",
                     {"sid": entry.get("sid")})
+
+    def _webpush(self, entry):
+        """Send the deferred alert as a Web Push to every subscribed browser
+        (docs/dashboard.md, *Web push*) — the on-device iOS/desktop analog of
+        the Telegram ping, twinned with it at the same fire point. Fanned out on
+        a detached daemon thread: the crypto + network round-trips per
+        subscription must never stall the 1 s watcher. Best-effort + audited;
+        a subscription the push service reports GONE (404/410) is pruned. No-op
+        when the crypto backend is missing or nobody has subscribed."""
+        if not webpush.enabled():
+            return
+        subs = prefs.push_subscriptions()
+        if not subs:
+            return
+        asking = entry.get("kind") == "asking"
+        proj = entry.get("project") or entry.get("sid") or "session"
+        title = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
+        body = entry.get("title") or (
+            "Claude is asking a question" if asking else "finished — your turn")
+        # same ?s=<sid> deep link the Telegram alert uses (the app translates it
+        # to the #/s/<sid> route) — a #fragment wouldn't survive some clients.
+        url = "%s/?s=%s" % (NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
+        payload = {"title": title, "body": body,
+                   "sid": entry.get("sid") or "", "kind": entry.get("kind"),
+                   "url": url}
+        threading.Thread(target=self._webpush_send, args=(subs, payload),
+                         daemon=True).start()
+
+    def _webpush_send(self, subs, payload):
+        """The detached fan-out body: deliver `payload` to each subscription,
+        audit the outcome, and prune the dead ones. Runs off the watcher thread;
+        never raises."""
+        for sub in subs:
+            try:
+                res = webpush.send(sub, payload)
+            except Exception:
+                A.error("", "dashboard webpush send",
+                        {"sid": payload.get("sid")})
+                continue
+            ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
+            if res.gone:
+                prefs.remove_push_subscription(ep)
+            A.state_file("", "", "web-push",
+                         {"sid": payload.get("sid"), "kind": payload.get("kind"),
+                          "action": "send", "status": res.status,
+                          "ok": res.ok, "gone": res.gone,
+                          "endpoint": ep[:80]})
 
     def run(self):
         n = 0
@@ -1996,6 +2057,11 @@ class Handler(BaseHTTPRequestHandler):
             return self.static("index.html")
         if parts[0] == "static" and len(parts) == 2:
             return self.static(parts[1])
+        if parts == ["sw.js"]:
+            # the push service worker, served at the root so its scope is the
+            # whole origin (docs/dashboard.md *Web push*) — not under /static/,
+            # which would scope it to /static/.
+            return self.static("sw.js")
         if parts[0] == "events":
             if len(parts) == 1:
                 return self.sse_global()
@@ -2043,6 +2109,15 @@ class Handler(BaseHTTPRequestHandler):
             cwd = _qstr(url, "cwd")
             limit = min(RESUMABLE_MAX, max(1, _qint(url, "limit") or RESUMABLE_MAX))
             return self._json(resumable_payload(cwd, limit, _qstr(url, "q")))
+        if api == ["push", "config"]:
+            # the Web Push feature probe (docs/dashboard.md *Web push*): the page
+            # offers the notification opt-in + subscribes only when push is
+            # possible AND has an application-server key. `enabled` false (no
+            # crypto backend / no key) keeps the feature invisible, never a dead
+            # button. The public key is not a secret.
+            key = webpush.public_key()
+            return self._json({"enabled": bool(webpush.enabled() and key),
+                               "key": key})
         if api == ["dirs", "hidden"]:
             # the {group_key: hidden_at_epoch} map the ✕ built (docs/dashboard.md
             # *Hidden directories*); the page seeds S.hidden from this on load —
@@ -2237,6 +2312,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.post_hide_dir()
         if api == ["dictate", "token"]:
             return self.post_dictate_token()
+        if api == ["push", "subscribe"]:
+            return self.post_push_subscribe()
+        if api == ["push", "unsubscribe"]:
+            return self.post_push_unsubscribe()
         if api == ["clientlog"]:
             return self.post_client_log()
         return self._json({"error": "not found"}, 404)
@@ -3860,6 +3939,46 @@ class Handler(BaseHTTPRequestHandler):
         m = prefs.hide_dir(key, ts)
         A.state_file("", "", "hide-dir", {"key": key, "hidden_at": ts})
         return self._json({"ok": True, "hidden": m})
+
+    def post_push_subscribe(self):
+        """Register a browser's Web Push subscription (docs/dashboard.md *Web
+        push*). Body: {subscription: {endpoint, keys:{p256dh, auth}}} — the exact
+        PushSubscription.toJSON() the browser produced. Stored (upserted by
+        endpoint) in the durable global prefs store; the Notifier fans a push out
+        to every stored subscription on the deferred asking/done alert, honoring
+        the per-session 🔕 mute. Behind _post_guard like every control-plane POST,
+        though it writes only the dashboard's OWN prefs. Audited as a `web-push`
+        state_files row (action subscribe)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        sub = body.get("subscription")
+        ep = sub.get("endpoint") if isinstance(sub, dict) else None
+        keys = sub.get("keys") if isinstance(sub, dict) else None
+        if not (isinstance(ep, str) and ep.startswith("https://")
+                and isinstance(keys, dict) and keys.get("p256dh") and keys.get("auth")):
+            return self._reject_input("web-push", "bad subscription",
+                                      "subscription must carry endpoint + keys",
+                                      {"has_ep": bool(ep)})
+        prefs.add_push_subscription(sub)
+        A.state_file("", "", "web-push", {"action": "subscribe", "endpoint": ep[:80]})
+        return self._json({"ok": True})
+
+    def post_push_unsubscribe(self):
+        """Drop a browser's Web Push subscription (docs/dashboard.md *Web push*)
+        — the opt-out twin of subscribe. Body: {endpoint}. Idempotent (a missing
+        endpoint just no-ops). Audited as a `web-push` state_files row (action
+        unsubscribe)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        ep = body.get("endpoint")
+        if not isinstance(ep, str) or not ep:
+            return self._reject_input("web-push", "bad endpoint",
+                                      "endpoint required", {})
+        prefs.remove_push_subscription(ep)
+        A.state_file("", "", "web-push", {"action": "unsubscribe", "endpoint": ep[:80]})
+        return self._json({"ok": True})
 
     def post_dictate_token(self):
         """Mint a short-lived Deepgram grant for the browser's DIRECT wss

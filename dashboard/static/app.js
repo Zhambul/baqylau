@@ -317,8 +317,67 @@ function initNotifBtn() {
   if (Notification.permission === "default") {
     $notifbtn.hidden = false;
     $notifbtn.onclick = () =>
-      Notification.requestPermission().then(() => { $notifbtn.hidden = true; });
+      Notification.requestPermission().then((perm) => {
+        $notifbtn.hidden = true;
+        // the same grant opts this device into on-device Web Push (the only
+        // path that reaches an iPad when the app is closed) — the request had
+        // to come from this user gesture on iOS anyway.
+        if (perm === "granted") ensureSubscribed();
+      });
   }
+}
+
+/* ---------- web push (on-device notifications, esp. the iPad home-screen app) ---
+   osNotify above only fires while a page is OPEN — useless for the main case, an
+   installed iPad app that's closed when a session needs you. Real system
+   notifications there require Web Push: a service worker the SERVER can wake
+   (dashboard/webpush.py sends; this registers the worker + manages the
+   subscription). iOS exposes Notification/PushManager ONLY in an installed
+   standalone app, so on a plain Safari tab this all no-ops. docs/dashboard.md
+   *Web push*. */
+let swReg = null;
+
+function urlB64ToUint8(b64) {
+  // a VAPID public key arrives as pad-stripped base64url; PushManager's
+  // applicationServerKey wants raw bytes.
+  const pad = "=".repeat((4 - (b64.length % 4)) % 4);
+  const s = (b64 + pad).replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(s);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+async function ensureSubscribed() {
+  if (!swReg || !("Notification" in window) || Notification.permission !== "granted") return;
+  let cfg;
+  try { cfg = await fetch("/api/push/config").then((r) => r.json()); } catch (_) { return; }
+  if (!cfg || !cfg.enabled || !cfg.key) return;      // feature off / no server key
+  try {
+    let sub = await swReg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await swReg.pushManager.subscribe({
+        userVisibleOnly: true,                       // required on iOS/Chrome
+        applicationServerKey: urlB64ToUint8(cfg.key),
+      });
+    }
+    await postJSON("/api/push/subscribe", { subscription: sub.toJSON() },
+                   { audit: "push-sub" });
+  } catch (e) {
+    clog("", "push.fail", { error: String((e && e.message) || e) });
+  }
+}
+
+async function initPush() {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) return;
+  try {
+    await navigator.serviceWorker.register("/sw.js");
+    swReg = await navigator.serviceWorker.ready;
+  } catch (_) { return; }
+  // a returning device whose permission is already granted: refresh the
+  // subscription silently (endpoints rotate, and the server may have restarted
+  // with a fresh subscription store) — no button, no gesture needed.
+  if ("Notification" in window && Notification.permission === "granted") ensureSubscribed();
 }
 
 /* ---------- persistent session strip ---------- */
@@ -6463,6 +6522,7 @@ if (/[?&#]vpdiag/.test(location.search + location.hash)) {
 /* ---------- boot ---------- */
 
 initNotifBtn();
+initPush();   // register the push service worker + (re)subscribe if already granted
 // the new-session form's last-used prefs live on the backend now (cross-device)
 // — prime the cache so the first form open reads them synchronously
 fetch("/api/ns-prefs").then(r => r.json())
