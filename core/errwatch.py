@@ -86,6 +86,16 @@ IGNORE_FUNCS = frozenset({
     # tie-breaker can't separate them — an expected outcome, not a failure (see
     # the _slug_for docstring). Investigated 2026-07-21.
     "model_usage._slug_for",
+    # "dashboard serve (lock denied)" is the dashboard singleton guard working as
+    # designed: a second `serve` that loses the paths.DASH_DB pid-lock exits 1
+    # (split._maybe_autostart_dashboard's docstring documents this as harmless).
+    # It's an expected return path, NOT a swallowed exception or a crash — the
+    # dashboard streams all end 'stopped'. It recurs heavily only because the
+    # launchd KeepAlive supervisor (top.zhambyl.baqylau-dashboard, no
+    # ThrottleInterval → 10s default respawn), the hook-side
+    # CLAUDE_DASHBOARD_AUTOSTART, and manual restarts all race over the one
+    # singleton during each restart's handoff window. Investigated 2026-07-24.
+    "dashboard serve (lock denied)",
 })
 
 
