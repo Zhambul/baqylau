@@ -589,6 +589,23 @@ def test_resumable_endpoint_dir_scoped_enriched(dash, monkeypatch):
     assert _get_json(dash + "/api/resumable?cwd=/nope") == []
 
 
+def test_resumable_search_across_history(dash):
+    """?q= searches the directory's WHOLE history (title + sid), not just the
+    loaded rows — the fix for 'search does not search all history'. Here we match
+    on the sid substring (a title needs a transcript); a miss returns []."""
+    A.session_start({"session_id": "srch-alpha-1", "cwd": "/s",
+                     "transcript_path": ""})
+    A.session_start({"session_id": "srch-beta-2", "cwd": "/s",
+                     "transcript_path": ""})
+    A.session_start({"session_id": "other-gamma", "cwd": "/s",
+                     "transcript_path": ""})
+    got = {r["sid"] for r in _get_json(dash + "/api/resumable?cwd=/s&q=srch")}
+    assert got == {"srch-alpha-1", "srch-beta-2"}          # both srch-* match
+    one = [r["sid"] for r in _get_json(dash + "/api/resumable?cwd=/s&q=beta")]
+    assert one == ["srch-beta-2"]                          # narrowed to one
+    assert _get_json(dash + "/api/resumable?cwd=/s&q=nomatch") == []  # a miss
+
+
 def test_http_backlog_endpoint(dash):
     """/backlog is the gzip-able GET twin of the SSE fresh-connect payload —
     the same merged_backlog output ({last, mpos, oldest, items}); the page

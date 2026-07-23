@@ -78,6 +78,7 @@ SLOW_EVERY = 5                     # slow re-resolves (chain, win map), in ticks
 HEARTBEAT_S = 15.0                 # SSE keep-alive comment cadence
 SESSIONS_LIMIT = 50                # discovery depth for the list + the win map
 RESUMABLE_MAX = 25                 # new-session resume picker: rows shown per dir
+RESUMABLE_SCAN = 2000              # …and how deep it discovers to search history
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
 # The composer-attachment upload endpoint (post_upload) carries base64-encoded
@@ -781,29 +782,41 @@ def dir_live_sessions(key):
             and (r.get("group_dir") or r.get("cwd") or "") == key]
 
 
-def resumable_payload(cwd, limit):
-    """The directory's recent resumable sessions for the new-session form's
-    resume picker (GET /api/resumable) — newest-first (API.sessions order),
-    capped at `limit` (≤ RESUMABLE_MAX), each enriched with what a picker row
-    shows: title, last_active, live, the transcript-tail model, the SAVED effort,
-    and the account (slug + label). Directory-scoped (canon-compared), the
-    server-side successor to the old client-side `S.sessions.filter(cwd).slice`
-    list — but carrying the model/effort/account the row couldn't show before, so
-    a resume launch can reuse the session's own model+effort (the account still
-    load-balances client-side, docs/dashboard.md *Resume picker*). Read-only —
-    resolves effort per the session's OWN account config dir (each account keeps
-    its own settings.json), exactly like session_payload; no state writes, so no
-    audit rows (a read endpoint, like /api/session/<sid>)."""
+def resumable_payload(cwd, limit, q=""):
+    """The directory's resumable sessions for the new-session form's resume
+    picker (GET /api/resumable) — newest-first (API.sessions order), capped at
+    `limit` (≤ RESUMABLE_MAX), each enriched with what a picker row shows: title,
+    last_active, live, the transcript-tail model, the SAVED effort, and the
+    account (slug + label). Directory-scoped (canon-compared).
+
+    `q` searches the directory's WHOLE history (title + sid, case-insensitive),
+    not just the newest rows — the client can't (it only holds ≤limit rows), so
+    an old session is only findable through the server. Discovery therefore scans
+    up to RESUMABLE_SCAN sessions (cheap — one audit query + a canon cache);
+    enrichment (the per-row transcript/settings reads) is the real cost, so we
+    stop after `limit` matches. A stale directory (not in the newest
+    SESSIONS_LIMIT globally) is still found for the same reason.
+
+    Read-only — resolves effort per the session's OWN account config dir (each
+    account keeps its own settings.json), exactly like session_payload; no state
+    writes, so no audit rows (a read endpoint, like /api/session/<sid>). The
+    browser side is audited via the clientlog channel instead."""
     want = canon_cwd(cwd or "")
     if not want:
         return []
+    ql = (q or "").strip().lower()
     labels = {a.get("slug"): a.get("label") for a in plugins.accounts()}
     live_wins = _live_windows()
+    canon = {}                                   # memo: realpath is a syscall/row
     out = []
-    for row in API.sessions(SESSIONS_LIMIT):
-        if canon_cwd(row.get("cwd") or "") != want:
+    for row in API.sessions(RESUMABLE_SCAN):
+        rc = row.get("cwd") or ""
+        if canon.setdefault(rc, canon_cwd(rc)) != want:
             continue
         sid = row["sid"]
+        title = session_title(row.get("transcript_path") or "")
+        if ql and ql not in (title or "").lower() and ql not in sid.lower():
+            continue
         sdb = P.state_db(row["log"])
         if not os.path.isfile(sdb):
             sdb = P.parked_db(row["log"])
@@ -818,7 +831,7 @@ def resumable_payload(cwd, limit):
         slug = _session_slug(sid)
         out.append({
             "sid": sid,
-            "title": session_title(row.get("transcript_path") or ""),
+            "title": title,
             "last_active": _last_active(row, sdb),
             "live": bool(row.get("live")),
             "model": (ctx or {}).get("model") or "",
@@ -1888,13 +1901,13 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(prefs.get("new-session", {}))
         if api == ["resumable"]:
             # the new-session resume picker's rows for one directory (fetched on
-            # open + on dir change): recent sessions in `cwd`, each with the
-            # model/effort/account it ran under (docs/dashboard.md *Resume
-            # picker*). `limit` is clamped to [1, RESUMABLE_MAX]; a blank/unknown
-            # dir yields [] (nothing to resume). Read-only, no audit rows.
+            # open, dir change, and search): recent sessions in `cwd`, each with
+            # the model/effort/account it ran under; `q` searches the directory's
+            # whole history (docs/dashboard.md *Resume picker*). `limit` clamped to
+            # [1, RESUMABLE_MAX]; a blank/unknown dir yields []. Read-only.
             cwd = _qstr(url, "cwd")
             limit = min(RESUMABLE_MAX, max(1, _qint(url, "limit") or RESUMABLE_MAX))
-            return self._json(resumable_payload(cwd, limit))
+            return self._json(resumable_payload(cwd, limit, _qstr(url, "q")))
         if api == ["dirs", "hidden"]:
             # the {group_key: hidden_at_epoch} map the ✕ built (docs/dashboard.md
             # *Hidden directories*); the page seeds S.hidden from this on load —

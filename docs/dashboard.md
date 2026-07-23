@@ -287,7 +287,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*); backs the new-session picker and the top usage strip |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
-| `/api/resumable?cwd=<dir>&limit=25` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's recent sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); blank/unknown cwd → `[]` |
+| `/api/resumable?cwd=<dir>&limit=25&q=<text>` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); `q` filters by title+sid across the directory's WHOLE history (discovery scans up to `RESUMABLE_SCAN`, not just the newest — the client can't); blank/unknown cwd → `[]` |
 | `/api/session/<sid>/view/<gid>` | rendered click-to-view stash (HTML); leaves a `web-view` `state_files` row (`gid`/`ok`) — the web twin of the terminal ⧉view toggle's audit |
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`); leaves a `web-copy` `state_files` row (`gid`/`what`/`chars`) — the web twin of the terminal `copy` row (the dashboard calls `collect()` directly, bypassing `claude-copy.py`'s audit) |
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
@@ -1571,18 +1571,28 @@ prompt, so the injection story is unchanged (the endpoint still ACCEPTS a
 `continue` bool for compatibility, but the form never sends it, and
 `resume`+`continue` together still 400s).
 
-The picker's rows come from **`GET /api/resumable?cwd=<dir>&limit=25`**
-(`resumable_payload`) — the directory's recent sessions (canon-cwd-scoped,
-newest-first, capped at `RESUMABLE_MAX`), each enriched with what a row shows:
-`title`, `last_active`, `live`, the transcript-tail `model`, the SAVED `effort`
-(resolved per the session's OWN account config dir, like `session_payload`), and
-the `account` `{slug, label}` (its statusline-stashed slug). It is a read-only
+The picker's rows come from **`GET /api/resumable?cwd=<dir>&limit=25&q=<text>`**
+(`resumable_payload`) — the directory's sessions (canon-cwd-scoped, newest-first,
+capped at `RESUMABLE_MAX`), each enriched with what a row shows: `title`,
+`last_active`, `live`, the transcript-tail `model`, the SAVED `effort` (resolved
+per the session's OWN account config dir, like `session_payload`), and the
+`account` `{slug, label}` (its statusline-stashed slug). It is a read-only
 endpoint (no state writes → no audit rows, like `/api/session/<sid>`); the browser
 side is instead audited via the clientlog channel (`resume.list`/`resume.pick`/
 `resume.preview`/`resume.mode`, *Frontend audit* below). Fetched when the form
 opens / the toggle flips to resume, and re-fetched (debounced) as the directory
-field changes — superseding the old client-side `S.sessions` filter, which capped
-at ~10 and showed only title + age.
+field changes.
+
+**Search is SERVER-SIDE, across the directory's whole history.** The old form's
+resume list was a client-side filter over the `S.sessions` snapshot — capped at
+~10 rows, so an older session was simply unreachable (the audit's `resume.list`
+`n:10` for a 162-session directory is exactly that bug). The picker's search box
+instead refetches `/api/resumable` with `?q=` (debounced), and the server scans up
+to `RESUMABLE_SCAN` sessions — enough to reach a stale directory that isn't in the
+newest `SESSIONS_LIMIT` globally — matching `q` against title + sid and returning
+the first `limit`. Discovery is one cheap audit query (+ a per-call canon-cwd
+memo, since `realpath` is a syscall per row); the per-row transcript/settings
+reads are the real cost, so only matched rows up to `limit` are enriched.
 
 **Selecting a row reuses its model + effort, but NOT its account.** On every
 pick, the form sets `model`/`effort` from that row (unless the user hand-picked
@@ -1594,11 +1604,21 @@ same quota-aware logic a fresh launch does.
 
 **Space previews the recent mirror transcript.** With a row highlighted, `Space`
 toggles an inline preview panel (`.nspreview`) that fetches the session's recent
-mirror tail (`GET /api/session/<sid>/history?blocks=12`) and renders it with
-`renderPreview` — the same server `{g,t,html}` items and block grouping the
-mirror tab uses, into a throwaway container (never `S.ses`), blocks expanded. It
-lets you confirm WHICH conversation a row is before resuming it, without leaving
-the form.
+mirror tail from **`GET /api/session/<sid>/backlog`** (the newest `TAIL_BLOCKS`
+slice — the mirror tab's own on-load call) and renders it with `renderPreview` —
+the same server `{g,t,html}` items and block grouping the mirror tab uses, into a
+throwaway container (never `S.ses`), blocks FOLDED so it's a compact scannable
+peek (command/file/agent blocks collapse to a one-line summary; conversation
+messages show inline; click a header to expand). Use `backlog`, NOT
+`/history?before=N` — `/history` returns blocks *older than* a cursor, so
+`before=0` returns nothing (the "no mirror history" bug the first cut shipped).
+For the picker to be keyboard-drivable, selecting a row updates its highlight IN
+PLACE (a full repaint would recreate the row element and drop keyboard focus, so
+`Space` would land nowhere — the "space did nothing after I clicked" bug); on
+open the selected row itself is focused (not the search box, which would pop the
+iPad keyboard). The `resume.preview` audit row carries the rendered item count
+`n`, so an empty-but-successful preview is distinguishable from a rendered one in
+the DB alone (the blind spot that made the first diagnosis need an endpoint repro).
 
 A resumed conversation **forks to a new sid** (CLAUDE.md: resume forks) — but NOT
 at launch: SessionStart fires under the OLD sid (restoring its parked DB, so that
@@ -1807,14 +1827,16 @@ become audit rows.
   - **Launch story** (the client half of `web-launch`/`web-launch-wake`):
     `launch.arm` → `launch.hit` (appeared, with latency) / `launch.timeout`
     (never showed up in time).
-  - **Resume picker** (the read-only `/api/resumable` + `/history` gestures leave
+  - **Resume picker** (the read-only `/api/resumable` + `/backlog` gestures leave
     no server row, so the browser is the only witness — *Resume picker* above):
-    `resume.mode` (`fresh` toggled), `resume.list` (`cwd` + row count `n` +
-    preselection — a "picker was empty / didn't show my session" report is
-    answerable from this) / `resume.list.fail`, `resume.pick` (the chosen sid +
-    the `model`/`effort`/`account` it CARRIED — so a "resumed with the wrong
-    model/effort" report is reconstructible), and `resume.preview`
-    (`shown`/`cached`) / `resume.preview.fail`.
+    `resume.mode` (`fresh` toggled), `resume.list` (`cwd` + search `q` + row count
+    `n` + preselection — a "picker was empty / search didn't find my session"
+    report is answerable from this: the `n:10` for a 162-session dir is what
+    exposed the client-side-filter scope bug) / `resume.list.fail`, `resume.pick`
+    (the chosen sid + the `model`/`effort`/`account` it CARRIED — so a "resumed
+    with the wrong model/effort" report is reconstructible), and `resume.preview`
+    (`shown`/`cached`/rendered item count `n` — `n:0` IS the "no mirror history"
+    empty preview) / `resume.preview.fail`.
   The audit itself is SELF-GUARDING — `clog`/`flushClog` swallow their own
   exceptions and a re-entrancy flag stops a throw-in-a-flush from looping back
   through the `js.error` handler (the one channel that must never raise the very

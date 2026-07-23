@@ -1354,7 +1354,6 @@ function connectSession(sid) {
 // inline.
 const KEEP_OPEN = 5;
 const HISTORY_FETCH = 40;      // blocks per lazy-backlog /history page
-const PREVIEW_BLOCKS = 12;     // recent mirror blocks in the resume-picker preview
 
 function enforceWindow() {
   const blocks = [...S.ses.blocks.values()];
@@ -1499,8 +1498,10 @@ function appendOlder(items) {
 // Render a self-contained mirror snapshot into an ARBITRARY container (the
 // resume-picker's preview panel), not the live #stream. Same server items
 // ({g,t,html}, oldest->newest) and same block grouping as appendOlder, but into
-// a throwaway local map (never S.ses) and with blocks OPEN — a read-only peek at
-// a conversation's recent mirror transcript, so no folding/filters/eviction.
+// a throwaway local map (never S.ses), no filters/eviction. Blocks render FOLDED
+// (like history) — a compact scannable peek: command/file/agent blocks collapse
+// to their one-line summary, while conversation messages (ungrouped items) show
+// inline in full; a click on any block header expands it.
 function renderPreview(container, items) {
   container.textContent = "";
   const local = new Map();                        // g -> block, this render only
@@ -1515,7 +1516,7 @@ function renderPreview(container, items) {
     let b = local.get(it.g);
     if (!b) {
       b = createBlock();
-      b.root.dataset.open = "1";                  // previews render expanded
+      b.root.dataset.open = "0";                  // previews start folded (compact)
       local.set(it.g, b);
       container.append(b.root);
     }
@@ -3665,27 +3666,24 @@ function resumePicker() {
   const search = el("input", "nsinput nsressearch");
   search.type = "text";
   search.spellcheck = false;
-  search.placeholder = "search recent sessions…";
+  search.placeholder = "search all sessions in this directory…";
+  const hint = el("div", "nsreshint", "↑↓ navigate · space previews · enter picks");
   const list = el("div", "nsreslist");
   const preview = el("div", "nspreview");
   preview.hidden = true;
-  root.append(search, list, preview);
+  root.append(search, hint, list, preview);
 
-  let rows = [], selSid = "", pvSid = "", filter = "";
+  let rows = [], selSid = "", pvSid = "", lastCwd = "", qToken = 0;
   const pvCache = new Map();
-  const match = (r) => !filter
-    || (r.title || "").toLowerCase().includes(filter)
-    || (r.sid || "").toLowerCase().includes(filter);
 
   const paint = () => {
     list.textContent = "";
-    const vis = rows.filter(match);
-    if (!vis.length) {
+    if (!rows.length) {
       list.append(el("div", "nsresempty",
-        rows.length ? "no match" : "no sessions to resume here"));
+        search.value.trim() ? "no match" : "no sessions to resume here"));
       return;
     }
-    for (const r of vis) {
+    for (const r of rows) {
       const row = el("div", "nsresrow"
         + (r.sid === selSid ? " sel" : "") + (r.live ? " live" : ""));
       row.tabIndex = 0;
@@ -3701,15 +3699,23 @@ function resumePicker() {
       const when = lastActive(r) ? ago(lastActive(r)) : "";
       if (when) meta.append(el("span", "nsresago", when));
       row.append(meta);
-      row.onclick = () => choose(r.sid);
+      row.onclick = () => { choose(r.sid); row.focus(); };
       row.onkeydown = (e) => rowKey(e, r);
       list.append(row);
     }
   };
 
+  // update ONLY the selected-row highlight, in place — a full paint() would
+  // recreate the row elements and DROP keyboard focus, so space (preview) and
+  // the arrow keys would land nowhere after a pick (the "space did nothing" bug).
+  const applySel = () => {
+    for (const row of list.querySelectorAll(".nsresrow"))
+      row.classList.toggle("sel", row.dataset.sid === selSid);
+  };
+
   const choose = (sid) => {
     selSid = sid;
-    paint();
+    applySel();
     const r = rows.find(x => x.sid === sid);
     if (!r) return;
     // audit the pick so a "resumed with the wrong model/effort/account" report
@@ -3729,15 +3735,26 @@ function resumePicker() {
     }
     pvSid = sid;
     preview.hidden = false;
-    clog(sid, "resume.preview", { shown: 1, cached: pvCache.has(sid) ? 1 : 0 });
-    if (pvCache.has(sid)) { renderPreview(preview, pvCache.get(sid)); return; }
+    if (pvCache.has(sid)) {
+      const items = pvCache.get(sid);
+      // record the item COUNT, not just "shown" — an empty-but-successful preview
+      // ("no mirror history") is otherwise indistinguishable in the audit from a
+      // rendered one (the blind spot that made the last diagnosis need a repro).
+      clog(sid, "resume.preview", { shown: 1, cached: 1, n: items.length });
+      renderPreview(preview, items);
+      return;
+    }
     preview.textContent = "";
     preview.append(el("div", "nspreview-empty", "loading…"));
-    fetch("/api/session/" + encodeURIComponent(sid) + "/history?blocks=" + PREVIEW_BLOCKS)
+    // the recent mirror TAIL is /backlog (the newest TAIL_BLOCKS slice, the
+    // mirror tab's own on-load call) — NOT /history, which returns blocks OLDER
+    // than a cursor (before=0 → nothing: the "no mirror history" bug).
+    fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
       .then(r => r.json())
       .then(d => {
         const items = (d && d.items) || [];
         pvCache.set(sid, items);
+        clog(sid, "resume.preview", { shown: 1, cached: 0, n: items.length });
         if (pvSid === sid && !preview.hidden) renderPreview(preview, items);
       })
       .catch(() => {
@@ -3771,7 +3788,14 @@ function resumePicker() {
     }
   };
 
-  search.oninput = () => { filter = search.value.trim().toLowerCase(); paint(); };
+  // Search is SERVER-SIDE (across the directory's whole history, not just the
+  // loaded rows — the client-side filter over ≤RESUMABLE_MAX rows couldn't reach
+  // an old session): debounced refetch with ?q=, preserving the selection.
+  let qTimer = 0;
+  search.oninput = () => {
+    clearTimeout(qTimer);
+    qTimer = setTimeout(() => api.refresh(lastCwd, "", search.value.trim()), 200);
+  };
   search.onkeydown = (e) => {
     const first = list.querySelector(".nsresrow");
     if (e.key === "ArrowDown" && first) { e.preventDefault(); first.focus(); }
@@ -3782,32 +3806,46 @@ function resumePicker() {
     el: root,
     onSelect: null,
     value: () => selSid,
-    focus: () => search.focus(),
-    // (re)load the directory's rows; `preferSid` preselects a specific session
-    // (the ↻ resume target), else the current pick if still present, else the
-    // most-recent row — so the default resume IS "continue the most recent".
-    refresh(cwd, preferSid) {
+    // focus the current row (arrows/space work at once) — never the search box,
+    // which would pop the iPad keyboard; the search is a click away.
+    focus() {
+      const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
+      if (r) r.focus();
+    },
+    // (re)load the directory's rows (optionally filtered by `q`); `preferSid`
+    // preselects a specific session (the ↻ resume target), else the current pick
+    // if still present, else — for the UNFILTERED list only — the most-recent row
+    // (so the default resume IS "continue the most recent"). `andFocus` focuses
+    // the selected row after the load (the initial resume-open).
+    refresh(cwd, preferSid, q, andFocus) {
+      lastCwd = cwd || "";
+      q = (q || "").trim();
       pvSid = "";
       preview.hidden = true;
       list.textContent = "";
       list.append(el("div", "nsresempty", "loading…"));
-      fetch("/api/resumable?cwd=" + encodeURIComponent(cwd || ""))
+      const tok = ++qToken;                        // ignore a stale fetch's result
+      fetch("/api/resumable?cwd=" + encodeURIComponent(cwd || "")
+            + (q ? "&q=" + encodeURIComponent(q) : ""))
         .then(r => r.json())
         .then(data => {
+          if (tok !== qToken) return;              // a newer search superseded this
           rows = Array.isArray(data) ? data : [];
           // audit the load — a "picker was empty / didn't show my session"
-          // report is answerable from the DB (cwd + row count + preselection).
+          // report is answerable from the DB (cwd + query + row count).
           clog("", "resume.list", {
-            cwd: cwd || "", n: rows.length, prefer: preferSid || "" });
+            cwd: cwd || "", q, n: rows.length, prefer: preferSid || "" });
           const want = (preferSid && rows.some(x => x.sid === preferSid)) ? preferSid
             : (selSid && rows.some(x => x.sid === selSid)) ? selSid
-              : (rows[0] ? rows[0].sid : "");
+              : (!q && rows[0] ? rows[0].sid : "");   // auto-pick newest only unfiltered
           selSid = "";
-          if (want) choose(want);                  // choose → onSelect + repaint
-          else paint();
+          paint();
+          if (want) choose(want);                  // applySel + onSelect, no repaint
+          if (andFocus) api.focus();
         })
         .catch(() => {
-          clog("", "resume.list.fail", { cwd: cwd || "" });
+          if (tok !== qToken) return;
+          clog("", "resume.list.fail", { cwd: cwd || "", q });
           rows = []; selSid = ""; paint();
         });
     },
@@ -3863,10 +3901,11 @@ function openNewSession(prefillCwd, resumeSid) {
       ? "fresh conversation" : "resume a conversation";
     resumeRow.style.display = fresh.checked ? "none" : "";
     clog("", "resume.mode", { fresh: fresh.checked ? 1 : 0 });
-    if (!fresh.checked && !pickerLoaded) {
+    if (fresh.checked) return;
+    if (!pickerLoaded) {                 // first reveal: load + focus a row
       pickerLoaded = true;
-      picker.refresh(dir.value.trim(), resumeSid || "");
-    }
+      picker.refresh(dir.value.trim(), resumeSid || "", "", true);
+    } else picker.focus();              // re-reveal: focus the existing selection
   };
   fresh.onchange = syncFresh;
   // reload the picker when the directory changes (debounced) — only while
@@ -3876,7 +3915,7 @@ function openNewSession(prefillCwd, resumeSid) {
     if (fresh.checked) return;
     clearTimeout(dirTimer);
     pickerLoaded = true;
-    dirTimer = setTimeout(() => picker.refresh(dir.value.trim(), ""), 250);
+    dirTimer = setTimeout(() => picker.refresh(dir.value.trim(), "", "", false), 250);
   };
 
   // model + effort side by side — concrete values only, no "default" entry
@@ -4081,13 +4120,11 @@ function openNewSession(prefillCwd, resumeSid) {
   document.body.classList.add("modal-open");      // scroll-lock the page behind
   // a known directory (remembered/prefilled) means the next thing you type is
   // the prompt — focusing the dir field there just pops its suggestion look.
-  // Resuming (fresh off) → focus the picker's search so ↑/↓ pick immediately.
   // Not on an iPad: the unasked-for keyboard covers half the form (and focus
-  // triggers Safari's page auto-zoom — see style.css touch section)
-  if (!IS_IPAD) {
-    if (!fresh.checked) picker.focus();
-    else (dir.value.trim() ? prompt : dir).focus();
-  }
+  // triggers Safari's page auto-zoom — see style.css touch section). Resuming
+  // (fresh off) focuses the picker ROW instead — done by refresh(andFocus) once
+  // the rows land, so ↑/↓/space work at once without popping the keyboard.
+  if (!IS_IPAD && fresh.checked) (dir.value.trim() ? prompt : dir).focus();
 }
 
 $newbtn.onclick = () => openNewSession("");
