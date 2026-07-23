@@ -886,7 +886,9 @@ turn settles** (e.g. `apply the MODULES filesystem-scan fix`) — right-arrow
 accepts it as real input, typing anything replaces it. The web composer now
 mirrors it: the suggestion shows as the textarea's grey placeholder, `→` / Tab
 accepts it into the box, and typing dismisses it — the same feel as the
-terminal.
+terminal. On an **iPad** (`IS_IPAD`) the on-screen keyboard has no `→` / Tab, so
+the composer also renders a **"use hint" button** (built only on iPad, hidden
+until a ghost is live) that inserts the suggestion on tap.
 
 **Why screen-scrape.** The suggestion is pure TUI state — Claude Code fires
 **no hook** for its own input-box suggestion, and it never touches the
@@ -918,11 +920,14 @@ never a reused start-time id.
 **Frontend: placeholder + accept key.** `applySuggestion` stores the value on
 `ses.meta.suggestion`; `syncSuggestion(ta)` borrows the placeholder slot while
 the box is empty (`.cinput.hasghost::placeholder` — italic + a touch brighter,
-so it reads as a suggestion vs. the static "message this…" hint) and restores
-the composer's own default placeholder (`ta.dataset.defph`) otherwise. The
-keydown accepts `→` / Tab **only on an empty box with a suggestion** — it fills
-`ta.value` (a normal `saveComposerDraft` follows), so it never steals `→` from
-caret movement or Tab from the "/" menu (both non-empty). It is a **mirror +
+so it reads as a suggestion vs. the static "message this…" hint), toggles the
+iPad "use hint" button (`ses.hintBtn`, shown only while a ghost is live), and
+restores the composer's own default placeholder (`ta.dataset.defph`) otherwise.
+The keydown and the iPad button share one body, `acceptSuggestion(ses, ta, sid)`,
+which fills the box **only on an empty box with a suggestion** — a normal
+`saveComposerDraft` follows, so `→` is never stolen from caret movement or Tab
+from the "/" menu (both non-empty), and the button is a no-op once you type. It
+is a **mirror +
 client-side accept**: accepting fills the WEB box only, nothing is written back
 to the TUI — a subsequent send pastes over whatever the input holds, as always.
 

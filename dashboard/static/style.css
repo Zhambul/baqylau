@@ -753,6 +753,16 @@ body.in-session #accounts { display: none; }
 .csend:hover:not(:disabled) { color: var(--text); box-shadow: inset 0 0 0 1px var(--hair2); }
 .csend:disabled { color: var(--dim2); cursor: default; }
 
+/* iPad "use hint" button — accepts the ghost suggestion into the box (no → / Tab
+   on the on-screen keyboard). Same chrome as .csend but italic/dim, echoing the
+   faint ghost placeholder it inserts; [hidden] keeps it out unless a ghost lives */
+.chint {
+  flex: none; background: var(--panel2); color: var(--dim); border: none;
+  cursor: pointer; box-shadow: inset 0 0 0 1px var(--hair);
+  border-radius: var(--r); padding: 8px 14px; font: italic 600 12px/1 var(--sans);
+}
+.chint:hover { color: var(--text-soft); box-shadow: inset 0 0 0 1px var(--hair2); }
+
 /* ---- dictation mic (composer + new-session prompt) ----------------------- */
 /* hidden until GET /api/dictate reports a configured key; .wait while the
    token/mic pipeline spins up; .rec (pulsing --ask red) while listening */
@@ -1481,7 +1491,8 @@ html { touch-action: manipulation; }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
   .ghost, .fchip, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
-  .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn, .cattach {
+  .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn, .cattach,
+  .chint {
     min-height: 36px;
   }
   .tabs a { padding: 10px 15px; }

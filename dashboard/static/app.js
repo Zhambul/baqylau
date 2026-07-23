@@ -2959,10 +2959,10 @@ function applyComposerDraft(draft) {
 // A live input-box ghost suggestion arrived over SSE — the faint "suggested
 // answer" Claude Code pre-fills when a turn settles (docs/dashboard.md, *Web
 // ghost suggestion*). We surface it as the composer's grey placeholder, shown
-// only while the box is empty, accepted with → / Tab (the composer keydown) and
-// replaced the instant the user types (a non-empty textarea hides its
-// placeholder natively). Mirror only: accepting fills the WEB box; nothing is
-// written back to the TUI.
+// only while the box is empty, accepted with → / Tab (the composer keydown), the
+// iPad "use hint" button (no → / Tab on the on-screen keyboard), or replaced the
+// instant the user types (a non-empty textarea hides its placeholder natively).
+// Mirror only: accepting fills the WEB box; nothing is written back to the TUI.
 function applySuggestion(text) {
   const ses = S.ses;
   if (!ses) return;
@@ -2970,15 +2970,27 @@ function applySuggestion(text) {
   if (ses.composer) syncSuggestion(ses.composer);
 }
 
+// Accept the live ghost suggestion INTO the box (the shared body behind the
+// → / Tab keydown and the iPad "use hint" button). No-op unless the box is empty
+// and a suggestion is live; returns whether it filled the box.
+function acceptSuggestion(ses, ta, sid) {
+  if (ta.value || !(ses.meta && ses.meta.suggestion)) return false;
+  ta.value = ses.meta.suggestion;
+  autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+  return true;
+}
+
 // Borrow the placeholder slot for the ghost suggestion while the box is empty;
 // restore the composer's own default placeholder otherwise (or when there's no
-// suggestion). Idempotent — safe to call on every input/build/SSE update.
+// suggestion). Also toggles the iPad "use hint" button, shown only while a ghost
+// is live. Idempotent — safe to call on every input/build/SSE update.
 function syncSuggestion(ta) {
   const ses = S.ses;
   const sug = ses && ses.meta && ses.meta.suggestion;
   const ghost = !!(sug && !ta.value);
   ta.placeholder = ghost ? sug : (ta.dataset.defph || "");
   ta.classList.toggle("hasghost", ghost);
+  if (ses && ses.hintBtn) ses.hintBtn.hidden = !ghost;
 }
 
 /* ---------- composer attachments (images/screenshots + files) ----------
@@ -3232,6 +3244,17 @@ function buildComposer() {
     ta.value = meta.composer_draft.text;
     requestAnimationFrame(() => { if (ses.composer === ta) autoGrow(ta); });
   }
+  // iPad "use hint" button — the on-screen keyboard has no → / Tab, so this is
+  // the ONLY way to accept a ghost suggestion there. Desktop keeps → / Tab and
+  // never builds it. Hidden until syncSuggestion sees a live ghost + empty box.
+  const hintBtn = IS_IPAD ? el("button", "chint", "use hint") : null;
+  if (hintBtn) {
+    hintBtn.type = "button";
+    hintBtn.hidden = true;
+    hintBtn.title = "insert the suggested reply";
+    hintBtn.onclick = () => { if (acceptSuggestion(ses, ta, sid)) ta.focus(); };
+    ses.hintBtn = hintBtn;
+  }
   syncSuggestion(ta);   // show a live ghost suggestion (if any) into the empty box
   const dic = dictation(ta, () => meta.cwd || "");
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
@@ -3352,8 +3375,7 @@ function buildComposer() {
     if ((e.key === "ArrowRight" || e.key === "Tab") && !ta.value
         && ses.meta && ses.meta.suggestion) {
       e.preventDefault();
-      ta.value = ses.meta.suggestion;
-      autoGrow(ta); saveComposerDraft(ses, sid); syncSuggestion(ta);
+      acceptSuggestion(ses, ta, sid);
       return;
     }
     // ↑/↓ recall previously-sent prompts into the box (Claude Code's TUI
@@ -3368,10 +3390,13 @@ function buildComposer() {
   };
   btn.onclick = send;
   // order: [attachment strip (full-width, wraps to top)], textarea, 📎 attach,
-  // 🎤 mic, send — the attach sits next to the mic, not stranded past send
+  // 🎤 mic, [use hint · iPad only], send — the attach sits next to the mic, not
+  // stranded past send; the hint button rides just before send when present
   wrap.append(tray.strip, ta);
   if (attachBtn) wrap.append(attachBtn);
-  wrap.append(dic.btn, btn);
+  wrap.append(dic.btn);
+  if (hintBtn) wrap.append(hintBtn);
+  wrap.append(btn);
   return wrap;
 }
 
