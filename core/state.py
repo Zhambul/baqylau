@@ -482,6 +482,21 @@ def _ro(path):
         return None
 
 
+def _rw(path):
+    """Fresh READ-WRITE connection to an explicit state-DB path; None when the
+    file is missing/unopenable. The write twin of _ro (mode=rw never CREATES —
+    the file's existence is the session-alive signal): the shared open for the
+    parked-history kv writers below, which run on request-handler threads where
+    the cached live-path connection is bound to the wrong thread. Un-cached, same
+    fresh-open contract as _ro; callers guard on None and own their own commit."""
+    if not path or not os.path.isfile(path):
+        return None
+    try:
+        return sqlite3.connect("file:%s?mode=rw" % path, uri=True, timeout=5.0)
+    except Exception:
+        return None
+
+
 def stats_at(path):
     """stats() over an explicit DB path (live or parked), read-only. {} when
     missing/unreadable — same silent-probe contract as tabs.sq()."""
@@ -563,10 +578,8 @@ def kv_del_at(path, key):
     thread that created it, so a call from another thread silently no-ops
     inside its swallow. mode=rw (never creates — the file's existence is the
     session-alive signal). True when the row is gone, else False."""
-    try:
-        conn = sqlite3.connect("file:%s?mode=rw" % path, uri=True,
-                               timeout=5.0)
-    except Exception:
+    conn = _rw(path)
+    if conn is None:
         return False
     try:
         conn.execute("DELETE FROM kv WHERE key=?", (key,))
@@ -585,10 +598,8 @@ def kv_set_at(path, key, obj):
     thread that created it, so a call from another thread silently no-ops
     inside its swallow. mode=rw (never creates — the file's existence is the
     session-alive signal). True on write, else False."""
-    try:
-        conn = sqlite3.connect("file:%s?mode=rw" % path, uri=True,
-                               timeout=5.0)
-    except Exception:
+    conn = _rw(path)
+    if conn is None:
         return False
     try:
         conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
@@ -613,9 +624,8 @@ def kv_cas_seq_at(path, key, obj):
     the old read-then-kv_set_at guard missed — a queued send's clear lost to its
     own in-flight debounced save, 2026-07-22). mode=rw (never creates the DB).
     Returns "written", "stale" (rejected as older), or None (DB unreachable)."""
-    try:
-        conn = sqlite3.connect("file:%s?mode=rw" % path, uri=True, timeout=5.0)
-    except Exception:
+    conn = _rw(path)
+    if conn is None:
         return None
     try:
         with immediate(conn):
