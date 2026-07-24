@@ -747,8 +747,15 @@ function connectGlobal() {
     // deferred push (+ Telegram escalation), so no more cross-device buzz — the
     // idle iPad no longer pops an OS notification while you work on the Mac
     // (docs/dashboard.md *Device routing*).
-    if (document.visibilityState !== "visible") return;
-    if (document.hasFocus && !document.hasFocus()) return;
+    const vis = document.visibilityState === "visible";
+    const focus = !document.hasFocus || document.hasFocus();
+    const shown = vis && focus;
+    // Audit whether THIS device received the toast and whether it showed it —
+    // the frontend side of "did device X get notified" (a gated recv explains a
+    // missing toast: you weren't looking at this device).
+    clog(d.sid || "", "notify.recv",
+         { kind: d.kind, shown: shown, vis: vis, focus: focus });
+    if (!shown) return;
     const asking = d.kind === "asking";
     const t1 = (d.project || d.sid) + (asking ? " needs you" : " is done");
     const t2 = d.title || (asking ? "Claude is asking a question" : "finished — your turn");
@@ -818,6 +825,9 @@ clog("", "boot", {
   build: ((document.currentScript && document.currentScript.src || "")
           .match(/[?&]v=([^&]+)/) || [, ""])[1],
   plat: (navigator.platform || "").slice(0, 24),
+  // dlabel maps this device's routing id (the batch-level `device`) to a
+  // human platform once per load, so a notify-route `target` is legible.
+  dlabel: DEVICE_LABEL,
   online: navigator.onLine !== false,
   w: screen.width, h: screen.height, dpr: window.devicePixelRatio || 1 });
 
@@ -2429,7 +2439,11 @@ function flushClog(useBeacon) {
   clogBusy = true;
   try {
     const batch = CLOG.splice(0, CLOG.length);
-    const payload = { client: CLIENT_ID, conn: connInfo(), events: batch };
+    // `device` (the stable per-DEVICE id) rides every batch so ANY frontend
+    // audit row is attributable to a device — the frontend side of the
+    // notification device-routing evidence (docs/dashboard.md *Device routing*).
+    const payload = { client: CLIENT_ID, device: DEVICE_ID, conn: connInfo(),
+                      events: batch };
     if (useBeacon && navigator.sendBeacon) {
       try {
         navigator.sendBeacon("/api/clientlog",

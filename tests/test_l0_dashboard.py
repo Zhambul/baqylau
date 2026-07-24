@@ -736,7 +736,7 @@ def _notifier_for_asking(monkeypatch, screen, delay=999):
     n._payload = lambda kind, state, row: {
         "kind": kind, "state": state, "sid": row["sid"]}
     sent = []
-    n._telegram = lambda entry: sent.append(entry)
+    n._telegram = lambda entry, *a: sent.append(entry)
     n._webpush = lambda entry: False   # no push subscribed → Telegram is the path
     n.push = lambda ev, pl: None
     return n, cur, asking, sent, audited
@@ -800,7 +800,7 @@ def test_device_push_first_then_telegram_escalation(monkeypatch):
     clock = [0.0]
     n = _escalation_notifier(monkeypatch, clock)
     sent, pushed = [], []
-    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_telegram", lambda e, *a: sent.append(e))
     monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
@@ -823,7 +823,7 @@ def test_escalation_cancelled_when_you_act(monkeypatch):
     clock = [0.0]
     n = _escalation_notifier(monkeypatch, clock)
     sent, pushed = [], []
-    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_telegram", lambda e, *a: sent.append(e))
     monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
@@ -843,14 +843,14 @@ def test_no_device_falls_back_to_telegram_immediately(monkeypatch):
     clock = [0.0]
     n = _escalation_notifier(monkeypatch, clock)
     sent = []
-    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_telegram", lambda e, reason=None: sent.append(reason))
     monkeypatch.setattr(n, "_webpush", lambda e: False)
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()
     states["7"] = "awaiting-response"
     n.scan()                                     # no device → Telegram now
-    assert len(sent) == 1 and "7" not in n.pending
+    assert sent == ["no-device"] and "7" not in n.pending   # reason audited
 
 
 def test_telegram_always_sends_both_at_stage1(monkeypatch):
@@ -860,14 +860,14 @@ def test_telegram_always_sends_both_at_stage1(monkeypatch):
     n = _escalation_notifier(monkeypatch, clock)
     monkeypatch.setattr(DS, "NOTIFY_TELEGRAM_ALWAYS", True)
     sent, pushed = [], []
-    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_telegram", lambda e, reason=None: sent.append(reason))
     monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()
     states["7"] = "awaiting-response"
     n.scan()                                     # both fire at once, no escalation
-    assert len(pushed) == 1 and len(sent) == 1 and "7" not in n.pending
+    assert len(pushed) == 1 and sent == ["always"] and "7" not in n.pending
 
 
 def test_mru_push_targets_picks_most_recent_device(monkeypatch):
@@ -883,20 +883,94 @@ def test_mru_push_targets_picks_most_recent_device(monkeypatch):
     DS._mark_device("ipad")
     clock[0] = 200
     DS._mark_device("mac")                       # mac is now most-recent
-    assert [s["endpoint"] for s in DS._mru_push_targets()] == ["https://push/mac"]
+    targets, decision = DS._mru_push_targets()
+    assert [s["endpoint"] for s in targets] == ["https://push/mac"]
+    # the decision dict feeds the notify-route audit: chosen device + every
+    # candidate's presence age, so "wrong device buzzed" is answerable
+    assert decision["target"] == "mac" and decision["legacy"] is False
+    ages = {c["device"]: c["age_s"] for c in decision["candidates"]}
+    assert ages["mac"] == 0.0 and ages["ipad"] == 100.0
     clock[0] = 300
     DS._mark_device("ipad")                      # ...and now the iPad
-    assert [s["endpoint"] for s in DS._mru_push_targets()] == ["https://push/ipad"]
+    assert [s["endpoint"] for s in DS._mru_push_targets()[0]] == ["https://push/ipad"]
     DS._DEVICE_SEEN.clear()
 
 
 def test_mru_push_targets_legacy_untagged_sends_all(monkeypatch):
     """A subscription with no device tag (a client from before device routing)
-    can't be routed, so it degrades to send-all — nothing silently lost."""
+    can't be routed, so it degrades to send-all (decision `legacy:True`) —
+    nothing silently lost."""
     subs = [{"endpoint": "https://push/x", "keys": {}},
             {"endpoint": "https://push/y", "keys": {}}]
     monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
-    assert DS._mru_push_targets() == subs
+    targets, decision = DS._mru_push_targets()
+    assert targets == subs and decision["legacy"] is True and decision["target"] is None
+
+
+def test_webpush_audits_route_decision(monkeypatch):
+    """_webpush emits a `notify-route` row naming the chosen device + every
+    candidate's presence age — so a 'wrong device buzzed' is answerable from the
+    DB (the whole point of the audit-coverage pass)."""
+    monkeypatch.setattr(DS.webpush, "enabled", lambda: True)
+    subs = [{"endpoint": "https://p/mac", "keys": {}, "device": "mac", "label": "macOS"},
+            {"endpoint": "https://p/ipad", "keys": {}, "device": "ipad", "label": "iPad"}]
+    monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
+    DS._DEVICE_SEEN.clear()
+    DS._mark_device("mac")                       # mac is the MRU device
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    n = DS.Notifier()
+    n._webpush_send = lambda *a: None            # don't actually hit the network
+    ok = n._webpush({"sid": "s7", "kind": "done", "title": "t", "project": "p"})
+    assert ok is True
+    routes = [a[3] for a in audited if a[2] == "notify-route"]
+    assert len(routes) == 1
+    assert routes[0]["target"] == "mac" and routes[0]["sid"] == "s7"
+    ages = {c["device"]: c["age_s"] for c in routes[0]["candidates"]}
+    assert set(ages) == {"mac", "ipad"} and ages["mac"] == 0.0
+    DS._DEVICE_SEEN.clear()
+
+
+def test_webpush_send_row_carries_device(monkeypatch):
+    """Each `web-push` `send` row names the target `device`, the on-device analog
+    of the route decision — so a delivery is attributable to a device."""
+    class R:
+        ok, gone, status = True, False, 201
+    monkeypatch.setattr(DS.webpush, "send", lambda sub, payload: R())
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    n = DS.Notifier()
+    n._webpush_send([{"endpoint": "https://p/mac", "keys": {}, "device": "mac"}],
+                    {"sid": "s7", "kind": "done", "badge": 1})
+    sends = [a[3] for a in audited if a[2] == "web-push" and a[3].get("action") == "send"]
+    assert len(sends) == 1 and sends[0]["device"] == "mac"
+    assert sends[0]["ok"] is True and sends[0]["endpoint"] == "https://p/mac"
+
+
+def test_notify_lifecycle_audit_rows(monkeypatch):
+    """The deferred lifecycle is fully audited: `notify-arm` (phase arm) on the
+    transition, `notify-arm` (phase escalate) when the on-device push arms the
+    Telegram nudge, and `telegram-notify` with the `reason` that explains WHY
+    Telegram fired (escalation)."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
+    sent, pushed = [], []
+    monkeypatch.setattr(n, "_telegram",
+                        lambda e, reason=None: sent.append((e, reason)))
+    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append((a[2], a[3])))
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                     # baseline
+    states["7"] = "awaiting-response"
+    n.scan()                                     # arm + stage1 push + escalate-armed
+    arms = [c for act, c in audited if act == "notify-arm"]
+    assert any(c.get("phase") == "arm" for c in arms)
+    assert any(c.get("phase") == "escalate" for c in arms)
+    clock[0] = 301
+    n.scan()                                     # escalation → telegram
+    assert sent and sent[-1][1] == "escalation"
 
 
 def _notifier_for_done(monkeypatch, screen, delay=999):
@@ -930,7 +1004,7 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
     n._payload = lambda kind, state, row: {
         "kind": kind, "state": state, "sid": row["sid"]}
     sent = []
-    n._telegram = lambda entry: sent.append(entry)
+    n._telegram = lambda entry, *a: sent.append(entry)
     n._webpush = lambda entry: False   # no push subscribed → Telegram is the path
     n.push = lambda ev, pl: None
     return n, cur, done, sent, audited
@@ -2579,7 +2653,7 @@ def test_notifier_telegram_deferred_arm_cancel_fire(monkeypatch, tmp_path):
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     sent = []
     n = DS.Notifier()
-    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    monkeypatch.setattr(n, "_telegram", lambda entry, *a: sent.append(entry))
     n.winmap = {
         "7": {"sid": "s7", "cwd": "/w/proj", "transcript_path": "/w/t.jsonl"},
         "8": {"sid": "s8", "cwd": "/w/proj2", "transcript_path": "/w/t2.jsonl"}}
@@ -2613,7 +2687,7 @@ def test_notifier_telegram_dropped_when_session_closed(monkeypatch, tmp_path):
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     sent = []
     n = DS.Notifier()
-    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    monkeypatch.setattr(n, "_telegram", lambda entry, *a: sent.append(entry))
     n.winmap = {"9": {"sid": "s9", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
     A.session_start({"session_id": "s9", "cwd": "/w/p", "transcript_path": ""})
     states = {"9": "working"}
@@ -2646,7 +2720,7 @@ def test_notifier_telegram_suppressed_while_composing(monkeypatch, tmp_path):
     monkeypatch.setattr(DS, "_composer_draft", lambda sid: draft.get(sid))
     sent = []
     n = DS.Notifier()
-    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    monkeypatch.setattr(n, "_telegram", lambda entry, *a: sent.append(entry))
     n.winmap = {"7": {"sid": "s7", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
@@ -2673,7 +2747,7 @@ def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     sent = []
     n = DS.Notifier()
-    monkeypatch.setattr(n, "_telegram", lambda entry: sent.append(entry))
+    monkeypatch.setattr(n, "_telegram", lambda entry, *a: sent.append(entry))
     n.winmap = {"7": {"sid": "s7", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
@@ -2689,7 +2763,7 @@ def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
 
     # master switch off -> nothing even arms
     n2 = DS.Notifier()
-    monkeypatch.setattr(n2, "_telegram", lambda entry: sent.append(entry))
+    monkeypatch.setattr(n2, "_telegram", lambda entry, *a: sent.append(entry))
     n2.winmap = n.winmap
     monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", False)
     states["7"] = "working"
@@ -3352,6 +3426,7 @@ def test_client_log_records_frontend_audit_batch(dash, monkeypatch):
     O.emit(P.mirror_log("cl1"), O.label("hi", (1, 2, 3)))   # materialize state DB
     body = {
         "client": "abc123",
+        "device": "dev-abc",
         "conn": {"online": True, "view": "session", "es": 2, "conn": 1},
         "events": [
             {"t": 1000, "sid": "cl1", "ev": "close.begin", "via": "header", "es": 2},
@@ -3377,6 +3452,8 @@ def test_client_log_records_frontend_audit_batch(dash, monkeypatch):
     assert [r["ev"] for r in rows] == [
         "close.begin", "close.fail", "sse.drop", "js.error", "meta.stuck"]
     assert rows[0]["via"] == "header" and rows[0]["client"] == "abc123"
+    # device attribution (the frontend side of notification device-routing)
+    assert rows[0]["device"] == "dev-abc"
     assert rows[0]["t"] == 1000
     assert rows[0]["conn"] == {"online": True, "view": "session", "es": 2, "conn": 1}
     assert rows[1]["kind"] == "transport" and rows[1]["aborted"] is True
@@ -3387,8 +3464,8 @@ def test_client_log_records_frontend_audit_batch(dash, monkeypatch):
     less = {r["ev"]: r for r in _client_rows("")}
     assert less["boot"]["origin"] == "https://baqylau.zhambyl.top"
     assert less["boot"]["build"] == "b1"
-    assert less["stale"] == {"ev": "stale", "client": "abc123", "t": 1400,
-                             "was": "b1", "now": "b2",
+    assert less["stale"] == {"ev": "stale", "client": "abc123", "device": "dev-abc",
+                             "t": 1400, "was": "b1", "now": "b2",
                              "conn": {"online": True, "view": "session",
                                       "es": 2, "conn": 1}}
     assert less["launch.hit"]["ms"] == 2200 and less["launch.hit"]["quiet"] is False

@@ -347,20 +347,35 @@ def _device_seen(device):
 
 def _mru_push_targets():
     """The push subscriptions of the MOST-RECENTLY-USED device — the on-device
-    alert goes here, not to every subscription. Groups all subscriptions by
-    their stored `device` id and returns the group whose device has the newest
-    presence beat (`_device_seen`). Degrades safely: with NO device tags at all
-    (legacy subscriptions from before device routing) it returns every sub, so
-    nothing is silently lost; a subscribed device that never beat sorts as -inf
-    (still selectable — it's the last device you had, just no beat this run)."""
+    alert goes here, not to every subscription — PLUS a decision dict for the
+    audit (`notify-route`), so a "wrong device buzzed" is answerable from the DB:
+    the chosen device and every candidate with its presence age. Groups all
+    subscriptions by their stored `device` id and picks the group whose device
+    has the newest presence beat (`_device_seen`). Degrades safely: with NO
+    device tags at all (legacy subs from before device routing) it returns every
+    sub (`legacy:True`), so nothing is silently lost; a subscribed device that
+    never beat this run has `age_s:None` (still selectable — it's the last device
+    you had). Returns (targets, decision)."""
     subs = prefs.push_subscriptions()
+    now = time.monotonic()
+
+    def cand(s):
+        dev = s.get("device") if isinstance(s, dict) else None
+        seen = _device_seen(dev)
+        return {"device": dev, "label": (s.get("label") if isinstance(s, dict) else None),
+                "age_s": (None if seen == float("-inf") else round(now - seen, 1))}
+
     if not subs:
-        return []
+        return [], {"target": None, "legacy": False, "n_subs": 0, "candidates": []}
     tagged = [s for s in subs if isinstance(s, dict) and s.get("device")]
-    if not tagged:
-        return subs                    # legacy: no device ids → can't route, send all
+    if not tagged:                     # legacy: no device ids → can't route, send all
+        return subs, {"target": None, "legacy": True, "n_subs": len(subs),
+                      "candidates": [cand(s) for s in subs]}
     best = max((s.get("device") for s in tagged), key=_device_seen)
-    return [s for s in tagged if s.get("device") == best]
+    targets = [s for s in tagged if s.get("device") == best]
+    return targets, {"target": best, "target_label": targets[0].get("label"),
+                     "legacy": False, "n_subs": len(subs),
+                     "candidates": [cand(s) for s in tagged]}
 
 
 class Notifier:
@@ -516,6 +531,14 @@ class Notifier:
             self.push("notify", payload)   # immediate in-page toast + OS notif
             if NOTIFY_TELEGRAM or NOTIFY_WEBPUSH:   # arm the deferred off-device
                 self.pending[win] = dict(payload, armed_at=now, state=state)
+                # ANCHOR the deferred lifecycle: every armed alert ends in
+                # exactly one of suppress / route+send (+escalate) / telegram,
+                # all keyed back to this `notify-arm` row (a silent disappearance
+                # instead = you reacted, the tab moved off red/green — see the
+                # paired tab_transitions row).
+                A.state_file("", "", "notify-arm",
+                             {"sid": payload.get("sid"), "kind": kind,
+                              "phase": "arm", "delay_s": NOTIFY_DELAY_S})
         # cancel the ones you reacted to / are already handling, all before the
         # delay: the tab left its armed state (answered → busy, or the win
         # vanished = tab gone), the session ENDED (you closed / quit it — moved
@@ -620,22 +643,29 @@ class Notifier:
             if escalating:                         # stage 2: the Telegram nudge
                 del self.pending[win]
                 if NOTIFY_TELEGRAM:
-                    self._telegram(entry)
+                    self._telegram(entry, "escalation")
                 continue
             # stage 1: on-device push to the most-recently-used device
             pushed = self._webpush(entry) if NOTIFY_WEBPUSH else False
             if pushed and not NOTIFY_TELEGRAM_ALWAYS:
                 entry["notified"] = now            # arm the escalation, keep pending
                 entry["escalate_at"] = now + ESCALATE_S
+                A.state_file("", "", "notify-arm",
+                             {"sid": sid, "kind": entry.get("kind"),
+                              "phase": "escalate", "in_s": ESCALATE_S})
                 continue
             del self.pending[win]
             if NOTIFY_TELEGRAM:                     # no device to push to, or _ALWAYS
-                self._telegram(entry)
+                self._telegram(entry, "always" if pushed else "no-device")
 
-    def _telegram(self, entry):
+    def _telegram(self, entry, reason=None):
         """Send the deferred alert via the reused `notify` skill (Telegram),
         detached so a slow round-trip never stalls the 1 s watcher. Best-effort
-        + audited; never raises into the loop."""
+        + audited; never raises into the loop. `reason` (in the audit row) says
+        WHY Telegram fired: `escalation` (the 5-min nudge after an on-device push
+        you ignored), `no-device` (nobody was push-subscribed — the immediate
+        fallback), or `always` (`_ALWAYS` forced both) — so a Telegram alert is
+        never an unexplained duplicate."""
         asking = entry.get("kind") == "asking"
         proj = entry.get("project") or entry.get("sid") or "session"
         head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
@@ -653,7 +683,8 @@ class Notifier:
                 stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL, start_new_session=True)
             A.state_file("", "", "telegram-notify",
-                         {"sid": entry.get("sid"), "kind": entry.get("kind")})
+                         {"sid": entry.get("sid"), "kind": entry.get("kind"),
+                          "reason": reason})
         except Exception:
             A.error("", "dashboard telegram notify",
                     {"sid": entry.get("sid")})
@@ -681,10 +712,18 @@ class Notifier:
 
         Returns True iff it DISPATCHED to at least one subscription — the signal
         the caller uses to hold Telegram back to the escalation nudge (device
-        first, Telegram only if you keep ignoring it)."""
+        first, Telegram only if you keep ignoring it). Audits the ROUTING
+        DECISION (`notify-route`) — the chosen device + every candidate's
+        presence age — so "the wrong device buzzed" is answerable from the DB."""
         if not webpush.enabled():
             return False
-        subs = _mru_push_targets()
+        subs, decision = _mru_push_targets()
+        # The routing decision is audited whenever there was ANYTHING to weigh
+        # (at least one subscription) — even the no-target edge — so a missing
+        # push is never a mystery. No subs at all = nothing to route, no row.
+        if decision.get("n_subs"):
+            A.state_file("", "", "notify-route",
+                         dict(decision, sid=entry.get("sid"), kind=entry.get("kind")))
         if not subs:
             return False
         asking = entry.get("kind") == "asking"
@@ -704,8 +743,9 @@ class Notifier:
 
     def _webpush_send(self, subs, payload):
         """The detached fan-out body: deliver `payload` to each subscription,
-        audit the outcome, and prune the dead ones. Runs off the watcher thread;
-        never raises."""
+        audit the outcome (with the target `device` — the on-device analog of
+        the route decision), and prune the dead ones. Runs off the watcher
+        thread; never raises."""
         for sub in subs:
             try:
                 res = webpush.send(sub, payload)
@@ -714,6 +754,7 @@ class Notifier:
                         {"sid": payload.get("sid")})
                 continue
             ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
+            dev = sub.get("device") if isinstance(sub, dict) else None
             if res.gone:
                 prefs.remove_push_subscription(ep)
             A.state_file("", "", "web-push",
@@ -721,7 +762,7 @@ class Notifier:
                           "action": "send", "status": res.status,
                           "ok": res.ok, "gone": res.gone,
                           "badge": payload.get("badge"),
-                          "endpoint": ep[:80]})
+                          "device": dev, "endpoint": ep[:80]})
 
     def run(self):
         n = 0
@@ -3588,6 +3629,7 @@ class Handler(BaseHTTPRequestHandler):
         if not isinstance(events, list):
             return self._json({"error": "bad events"}, 400)
         client = str(body.get("client") or "")[:40]
+        device = str(body.get("device") or "")[:40]
         conn = body.get("conn") if isinstance(body.get("conn"), dict) else None
         conn = self._clip_scalars(conn) if conn else None
         for e in events[:CLIENTLOG_MAX]:
@@ -3604,11 +3646,13 @@ class Handler(BaseHTTPRequestHandler):
             content = {"ev": ev}
             if client:
                 content["client"] = client
+            if device:
+                content["device"] = device
             ts = e.get("t")
             if isinstance(ts, (int, float)):
                 content["t"] = int(ts)
             for k, v in self._clip_scalars(e).items():
-                if k not in ("ev", "sid", "t", "client"):
+                if k not in ("ev", "sid", "t", "client", "device"):
                     content[k] = v
             if conn:
                 content["conn"] = conn

@@ -353,7 +353,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
-| `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
+| `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "device", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); every row carries this browser's `device` id (device-attributable — the frontend side of notification *Device routing*); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a ~8s heartbeat while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
@@ -1974,6 +1974,13 @@ become audit rows.
   - **Uncaught JS**: `js.error` / `js.reject` — a handler throwing used to be a
     silent product bug (this is what caught the real can't-close cause, an
     uninitialized `S.closePend` throwing before `closeSession` ran).
+  - **Notification delivery**: `notify.recv` (`kind`, `shown`, `vis`, `focus`) —
+    whether THIS device received the immediate toast SSE and whether it showed it
+    (only the focused+visible device does). The frontend bracket around the
+    backend `notify-route`/`notify-arm` device-routing rows: a "I didn't see the
+    toast on this device" is explained by a `shown:false` recv (you weren't
+    looking here). Every clientlog batch also carries this browser's `device` id,
+    so `notify.recv` — like all `web-client` rows — is device-attributable.
   - **Page + build lifecycle**: one `boot` per load (origin — `127.0.0.1` vs the
     tunnel — + device + viewport + the LOADED build id from the `?v=` on this
     `app.js`); `hello` (the server build the page first connected to); `stale`
@@ -3858,6 +3865,32 @@ This, plus the immediate toast now firing **only on the focused device** (the
 a notification to the device you're working on and leaves the others quiet. A
 subtle edge: if the stage-1 push send later fails, Telegram isn't a backup for
 THAT alert — but a `gone` subscription self-prunes, so the next one re-routes.
+
+**Audit coverage (every routing decision is reconstructible).** The whole
+deferred lifecycle leaves `state_files` rows so a "wrong / missing / duplicate
+notification" is answerable from the DB after the fact — the routing is NOT a
+black box:
+- `notify-arm` (`phase:arm`, `delay_s`) on the transition — the lifecycle
+  anchor; a silent disappearance instead = you reacted (the tab moved, see the
+  paired `tab_transitions` row).
+- `notify-suppress` (`reason:` dialog-activity / terminal-input / tab-focused /
+  web-viewing) when a look/reaction dropped it (as before).
+- `notify-route` — the DEVICE-SELECTION decision at stage 1: `{target,
+  target_label, candidates:[{device, label, age_s}], n_subs, legacy}`. This is
+  the "why did the iPad and not the Mac get it" evidence: the chosen device AND
+  every candidate's presence age at decision time.
+- `web-push` `action:send` now carries the target `device` (per delivery).
+- `notify-arm` (`phase:escalate`, `in_s`) when the on-device push arms the
+  Telegram escalation; `telegram-notify` carries `reason:` **escalation** (the
+  5-min nudge) / **no-device** (immediate fallback) / **always** — so a Telegram
+  alert is never an unexplained duplicate.
+- On the FRONTEND (`web-client` rows, *Frontend audit* below): every batch
+  carries this browser's `device` id (so any row is device-attributable), a
+  once-per-load `boot` maps `device`→`dlabel` (human platform), and a
+  `notify.recv` event records whether THIS device received the toast and whether
+  it showed it (`shown`/`vis`/`focus`) — a gated recv explains a toast you never
+  saw (you weren't looking at this device). Together the backend `notify-route`
+  and the frontend `notify.recv` bracket a notification end to end.
 
 The pieces:
 
