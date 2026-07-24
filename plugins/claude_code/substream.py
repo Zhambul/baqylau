@@ -266,17 +266,18 @@ def spawn_tailer(kind, taskid, cmd="", group=None):
     sig = ST.monitor_sig(cmd) if kind == "monitor" else ""
     outer = ",".join(str(x) for x in SUB_RGB)
     env = HK.stream_env(cmd=cmd, group=group)
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, streamer, kind, taskid, LOG, str(slot), sig, outer],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-        claude_slots.set_owner(marker, proc.pid)
-        A.spawn(LOG, proc.pid, [streamer, kind, taskid, str(slot)],
-                purpose=f"stream:{kind} (nested under agent {AGENT[:8]})")
-    except Exception:
-        A.error(LOG, "spawn_tailer", {"kind": kind, "taskid": taskid, "agent": AGENT})
+    # Detach mechanics + spawn/error audit live in core.spawn (the one owner),
+    # reached via hookkit.spawn_streamer; audit_argv drops the sig/outer noise
+    # the spawns row never recorded here. None = missing script / spawn failure
+    # (already audited) — roll back our own slot claim.
+    proc = HK.spawn_streamer(
+        "claude-stream.py", [kind, taskid, LOG, str(slot), sig, outer], LOG,
+        env=env, purpose=f"stream:{kind} (nested under agent {AGENT[:8]})",
+        audit_argv=[kind, taskid, str(slot)])
+    if proc is None:
         claude_slots.release(kind, LOG, slot, os.getpid())
+        return
+    claude_slots.set_owner(marker, proc.pid)
 
 
 def take_subfg(tid):
@@ -313,19 +314,19 @@ def spawn_fg_tailer(tid, rec, cmd=""):
     env = HK.stream_env(src=rec["src"], done=rec["done"], cmd=cmd, group=tid,
                         own=bool(rec.get("own")),
                         skip_existing=bool(rec.get("append")))
-    try:
-        proc = subprocess.Popen(
-            [sys.executable, streamer, "fg", "subfg-" + tid, LOG, str(slot), "", outer],
-            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL, start_new_session=True, env=env)
-        claude_slots.set_owner(marker, proc.pid)
-        A.spawn(LOG, proc.pid, [streamer, "fg", "subfg-" + tid, str(slot)],
-                purpose=f"stream:fg live (subagent {AGENT[:8]} foreground cmd)")
-        return proc
-    except Exception:
-        A.error(LOG, "spawn_fg_tailer", {"tid": tid, "agent": AGENT})
+    # Detach mechanics + spawn/error audit live in core.spawn (the one owner),
+    # reached via hookkit.spawn_streamer; audit_argv drops the empty-sig/outer
+    # noise the spawns row never recorded here. None = missing script / spawn
+    # failure (already audited) — roll back our own slot claim.
+    proc = HK.spawn_streamer(
+        "claude-stream.py", ["fg", "subfg-" + tid, LOG, str(slot), "", outer], LOG,
+        env=env, purpose=f"stream:fg live (subagent {AGENT[:8]} foreground cmd)",
+        audit_argv=["fg", "subfg-" + tid, str(slot)])
+    if proc is None:
         claude_slots.release("fg", LOG, slot, os.getpid())
         return None
+    claude_slots.set_owner(marker, proc.pid)
+    return proc
 
 
 def restore_checkpoint():
