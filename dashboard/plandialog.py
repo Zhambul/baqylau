@@ -25,6 +25,8 @@
 import re
 import time
 
+from dashboard import screendrive
+
 POLL_S = 0.15
 STEP_TIMEOUT_S = 2.5
 SUBMIT_TIMEOUT_S = 4.0   # a decision → dialog gone (the tool round-trips)
@@ -35,14 +37,10 @@ FEEDBACK_LABEL = "Tell Claude what to change"
 _ROW = re.compile(r"^\s*(?P<cur>❯\s+)?(?P<digit>\d+)\.\s+(?P<label>.+?)\s*$")
 
 
-class PlanError(Exception):
+class PlanError(screendrive.StepError):
     """A step's expected screen state never appeared. .step names it for the
     audit row. The dialog is left EXACTLY as it was — never Escape-closed
     (Escape REJECTS the plan)."""
-
-    def __init__(self, step, detail=""):
-        super().__init__(step + ((": " + detail) if detail else ""))
-        self.step = step
 
 
 def region(screen):
@@ -69,17 +67,6 @@ def rows(screen):
                         "cursor": bool(m.group("cur")),
                         "feedback": label.startswith(FEEDBACK_LABEL)})
     return out
-
-
-def _wait(fe, win, pred, timeout, sleep):
-    deadline = time.monotonic() + timeout
-    screen = fe.get_text(win) or ""
-    while not pred(screen):
-        if time.monotonic() >= deadline:
-            return screen, False
-        sleep(POLL_S)
-        screen = fe.get_text(win) or ""
-    return screen, True
 
 
 def _open_rows(fe, win):
@@ -110,8 +97,8 @@ def decide(fe, win, digit, label, sleep=time.sleep):
     if row["feedback"]:
         raise PlanError("option", "the feedback row takes text, not a click")
     fe.send_key(win, str(digit))
-    _, ok = _wait(fe, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S,
-                  sleep)
+    _, ok = screendrive.poll_until(
+        fe, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after the decision")
     return {"decided": label}
@@ -133,8 +120,8 @@ def feedback(fe, win, text, sleep=time.sleep):
     sleep(POLL_S)
     if not fe.send_text(win, text):
         raise PlanError("feedback", "text not delivered")
-    _, ok = _wait(fe, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S,
-                  sleep)
+    _, ok = screendrive.poll_until(
+        fe, win, lambda s: not dialog_open(s), SUBMIT_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after the feedback")
     return {"feedback": True}
@@ -144,8 +131,8 @@ def dismiss(fe, win, sleep=time.sleep):
     """Esc — reject the plan and keep planning (the TUI's own dismiss)."""
     _open_rows(fe, win)
     fe.send_key(win, "escape")
-    _, ok = _wait(fe, win, lambda s: not dialog_open(s), STEP_TIMEOUT_S,
-                  sleep)
+    _, ok = screendrive.poll_until(
+        fe, win, lambda s: not dialog_open(s), STEP_TIMEOUT_S, sleep)
     if not ok:
         raise PlanError("submit", "dialog still open after Escape")
     return {"dismissed": True}

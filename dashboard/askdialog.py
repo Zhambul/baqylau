@@ -56,6 +56,8 @@
 import re
 import time
 
+from dashboard import screendrive
+
 POLL_S = 0.15          # screen re-read beat while waiting for a dialog state
 STEP_TIMEOUT_S = 2.5   # a key press → its screen effect visible
 KEY_GAP_S = 0.12       # beat between successive blind key presses
@@ -81,7 +83,7 @@ _ACTION_ROW = re.compile(r"^\s*(?P<cur>❯\s+)?"
                          r"(?P<label>Next|Submit|Chat about this)\s*$")
 
 
-class AskError(Exception):
+class AskError(screendrive.StepError):
     """A step's expected screen state never appeared. .step names it for the
     audit row. The dialog is left EXACTLY as it was — never Escape-closed,
     because Escape declines the whole question set (the opposite of
@@ -92,11 +94,6 @@ class AskError(Exception):
     OUTCOME, so without the pixels a step:open ("no dialog") can't be told
     apart after the fact — dialog-too-tall vs a footer-string drift after a
     Claude Code upgrade vs a blank/partial capture all look identical."""
-
-    def __init__(self, step, detail="", screen=None):
-        super().__init__(step + ((": " + detail) if detail else ""))
-        self.step = step
-        self.screen = screen
 
 
 def region(screen):
@@ -187,17 +184,6 @@ def current_question(screen, questions):
     return best
 
 
-def _wait(fe, win, pred, timeout, sleep):
-    deadline = time.monotonic() + timeout
-    screen = fe.get_text(win) or ""
-    while not pred(screen):
-        if time.monotonic() >= deadline:
-            return screen, False
-        sleep(POLL_S)
-        screen = fe.get_text(win) or ""
-    return screen, True
-
-
 def _cursor_row(screen):
     return next((r for r in rows(screen) if r["cursor"]), None)
 
@@ -283,7 +269,7 @@ def _advance_multi(fe, win, questions, i, sleep):
     _cursor_to(fe, win, lambda r: r["label"] in ("Next", "Submit"), sleep,
                "advance row")
     fe.send_key(win, "enter")
-    screen, ok = _wait(fe, win,
+    screen, ok = screendrive.poll_until(fe, win,
                        lambda s: current_question(s, questions) != i
                        or review_open(s)
                        or not dialog_open(s),
@@ -331,7 +317,7 @@ def _answer_question(fe, win, questions, i, ans, sleep):
                           if r["label"].startswith(other[:24]))
             if not checked:
                 fe.send_key(win, "enter")
-            _, ok = _wait(
+            _, ok = screendrive.poll_until(
                 fe, win,
                 lambda s: any(r["check"] for r in rows(s)
                               if r["label"].startswith(other[:24])),
@@ -368,7 +354,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     # transient blank/partial get_text bailed immediately with step:open even
     # though the dialog was genuinely up (session 0247ebb2, 2026-07-21: a still
     # -open, never-answered ask failed here on a freshly-resumed window).
-    screen, ok = _wait(fe, win,
+    screen, ok = screendrive.poll_until(fe, win,
                        lambda s: dialog_open(s) or review_open(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:
@@ -379,7 +365,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
         _cursor_to(fe, win, lambda r: r["label"] == CHAT_LABEL, sleep,
                    "Chat row")
         fe.send_key(win, "enter")
-        _, ok = _wait(fe, win,
+        _, ok = screendrive.poll_until(fe, win,
                       lambda s: not dialog_open(s) and not review_open(s),
                       STEP_TIMEOUT_S, sleep)
         if not ok:
@@ -418,7 +404,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
         _answer_question(fe, win, questions, i, answers[i], sleep)
         # confirm the answer advanced the pane before looking for the next one
         # (single-select auto-advance has no explicit verify of its own)
-        screen, ok = _wait(fe, win,
+        screen, ok = screendrive.poll_until(fe, win,
                            lambda s, i=i: current_question(s, questions) != i
                            or review_open(s) or not dialog_open(s),
                            STEP_TIMEOUT_S, sleep)
@@ -434,7 +420,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
     # Submit below budgets SUBMIT_TIMEOUT_S for, so this dual-purpose wait needs
     # that longer budget too (a single single-select whose round-trip took
     # 2.5-4.0 s spuriously raised "neither review pane nor submit happened").
-    screen, ok = _wait(fe, win,
+    screen, ok = screendrive.poll_until(fe, win,
                        lambda s: review_open(s)
                        or (not dialog_open(s) and not review_open(s)),
                        SUBMIT_TIMEOUT_S, sleep)
@@ -445,7 +431,7 @@ def drive(fe, win, questions, answers, chat=False, sleep=time.sleep):
         _cursor_to(fe, win, lambda r: r["label"] == SUBMIT_LABEL, sleep,
                    "Submit answers")
         fe.send_key(win, "enter")
-        _, ok = _wait(fe, win,
+        _, ok = screendrive.poll_until(fe, win,
                       lambda s: not dialog_open(s) and not review_open(s),
                       SUBMIT_TIMEOUT_S, sleep)
         if not ok:

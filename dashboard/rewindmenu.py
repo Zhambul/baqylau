@@ -31,6 +31,8 @@
 import re
 import time
 
+from dashboard import screendrive
+
 # One entry per selectable restore option: the requested `mode` (the POST
 # body's vocabulary) → the menu label it must match. Labels are matched
 # case-insensitively on the parsed confirm menu, so a menu that lacks the
@@ -119,26 +121,9 @@ def confirm_options(screen):
     return out
 
 
-class MenuError(Exception):
+class MenuError(screendrive.StepError):
     """A step's expected screen state never appeared. .step names it for the
     audit row; the driver has already pressed Escape to close any open menu."""
-
-    def __init__(self, step, detail=""):
-        super().__init__(step + ((": " + detail) if detail else ""))
-        self.step = step
-
-
-def _wait(fe, win, pred, timeout, sleep):
-    """Poll the window's screen until pred(screen) or timeout; returns the
-    last screen either way plus whether pred held."""
-    deadline = time.monotonic() + timeout
-    screen = fe.get_text(win) or ""
-    while not pred(screen):
-        if time.monotonic() >= deadline:
-            return screen, False
-        sleep(POLL_S)
-        screen = fe.get_text(win) or ""
-    return screen, True
 
 
 def _bail(fe, win, sleep):
@@ -191,7 +176,7 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
     sleep(POLL_S)
     if not fe.send_text(win, "/rewind"):
         raise MenuError("send", "/rewind not delivered")
-    screen, ok = _wait(fe, win, menu_open, OPEN_TIMEOUT_S, sleep)
+    screen, ok = screendrive.poll_until(fe, win, menu_open, OPEN_TIMEOUT_S, sleep)
     if not ok:
         _bail(fe, win, sleep)
         raise MenuError("open", "checkpoint menu never appeared")
@@ -211,7 +196,7 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
             raise MenuError("find", "checkpoint not found: %r" %
                             first_line(target)[:80])
     fe.send_key(win, "enter")
-    screen, ok = _wait(fe, win, confirm_open, STEP_TIMEOUT_S, sleep)
+    screen, ok = screendrive.poll_until(fe, win, confirm_open, STEP_TIMEOUT_S, sleep)
     if not ok:
         _bail(fe, win, sleep)
         raise MenuError("confirm", "confirm menu never appeared")
@@ -234,7 +219,7 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
             " — no code changes to revert at that checkpoint"
             if unchanged else ""))
     fe.send_key(win, digit)
-    screen, ok = _wait(fe, win, lambda s: not menu_region(s),
+    screen, ok = screendrive.poll_until(fe, win, lambda s: not menu_region(s),
                        STEP_TIMEOUT_S, sleep)
     if not ok:
         _bail(fe, win, sleep)
