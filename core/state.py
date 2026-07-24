@@ -281,6 +281,15 @@ def counter_get(conn, key, default=0):
     return row[0] if row else default
 
 
+def _mark_activity(conn):
+    """Stamp session 'start' once (first write) and advance the change counter 'v'
+    (the scorebar's repaint signal). Runs INSIDE the caller's transaction — the
+    tail shared by incr() and transcript_fold()."""
+    conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
+                 (int(time.time()),))
+    counter_add(conn, "v")
+
+
 def next_group(log):
     """A session-unique monotonic block id, for ⧉ copy groups on blocks that lack a
     natural tool_use_id (messages, prompts, results, file ops, headers). Atomic across
@@ -403,9 +412,7 @@ def incr(log, tool=None, file=None, **deltas):
                 counter_add(conn, "tool:" + tool)
             if file:
                 conn.execute("INSERT OR IGNORE INTO files(path) VALUES(?)", (file,))
-            conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
-                         (int(time.time()),))
-            counter_add(conn, "v")
+            _mark_activity(conn)
         return stats(log)
     except Exception:
         return {}
@@ -711,9 +718,7 @@ def transcript_fold(log, fold):
                              "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
                              (json.dumps(new_prev, ensure_ascii=False),))
             counter_set(conn, "txpos", new_pos)
-            conn.execute("INSERT OR IGNORE INTO counters(key, val) VALUES('start', ?)",
-                         (int(time.time()),))
-            counter_add(conn, "v")
+            _mark_activity(conn)
     return stats(log)
 
 
