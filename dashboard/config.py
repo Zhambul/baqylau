@@ -118,17 +118,19 @@ NOTIFY_STATES = {tabs.AWAITING_COMMAND: "asking", tabs.AWAITING_RESPONSE: "done"
 # STILL in that state after the grace window — i.e. you didn't react (answer,
 # resume the turn, or close the session) in time. Browser-independent: it fires
 # whether or not a page is open, since reaching you when away is the point.
-def _notify_delay():
-    """CLAUDE_DASH_NOTIFY_DELAY_S → grace seconds before a Telegram alert fires
-    (default 60). A bad / negative value falls back to the default."""
+def _float_env(name, default):
+    """Read a float env knob `name`, falling back to `default` on a missing /
+    empty / unparseable / negative value (zero is allowed)."""
     try:
-        v = float(os.environ.get("CLAUDE_DASH_NOTIFY_DELAY_S") or 60)
+        v = float(os.environ.get(name) or default)
     except ValueError:
-        return 60.0
-    return v if v >= 0 else 60.0
+        return float(default)
+    return v if v >= 0 else float(default)
 
 
-NOTIFY_DELAY_S = _notify_delay()
+# CLAUDE_DASH_NOTIFY_DELAY_S → grace seconds before a Telegram alert fires
+# (default 60). A bad / negative value falls back to the default.
+NOTIFY_DELAY_S = _float_env("CLAUDE_DASH_NOTIFY_DELAY_S", 60)
 # Master switch: "0" disables arming + sending entirely (the in-page toast is
 # unaffected). Default on.
 NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
@@ -147,17 +149,9 @@ NOTIFY_WEBPUSH = (os.environ.get("CLAUDE_DASH_NOTIFY_WEBPUSH") or "1") != "0"
 # arm in the cancel loop first). So the order is device-first, Telegram-if-
 # ignored — not the old "either/or". Telegram is ALSO the immediate fallback
 # when there's no device to push to at all (nobody subscribed).
-def _escalate_delay():
-    """CLAUDE_DASH_ESCALATE_S → seconds after the on-device push before Telegram
-    nudges (default 300 = 5 min). Bad / negative → the default."""
-    try:
-        v = float(os.environ.get("CLAUDE_DASH_ESCALATE_S") or 300)
-    except ValueError:
-        return 300.0
-    return v if v >= 0 else 300.0
-
-
-ESCALATE_S = _escalate_delay()
+# CLAUDE_DASH_ESCALATE_S → seconds after the on-device push before Telegram
+# nudges (default 300 = 5 min). Bad / negative → the default.
+ESCALATE_S = _float_env("CLAUDE_DASH_ESCALATE_S", 300)
 # Force BOTH channels at the FIRST send (device push AND Telegram together, no
 # escalation wait) — the opt-out of the device-first/escalate model, e.g. you
 # always want the Telegram copy too. Default off.
