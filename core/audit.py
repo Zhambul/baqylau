@@ -854,6 +854,14 @@ ANOMALY_SECTIONS = [
      "  AND d.action='web-stop' AND json_extract(d.content, '$.phase')='done' "
      "  AND json_extract(d.content, '$.win')=json_extract(a.content, '$.win') "
      "  AND d.ts >= a.ts)", 1),
+    # A dashboard STOP (interrupt) whose verify never saw the working spinner
+    # clear — the synthesized Escape (only ~2/3 reliable) never reached the TUI,
+    # so the turn kept running. `stopped:false` is the endpoint reporting the
+    # miss (a 502 to the page); its presence IS the "stop did nothing" bug.
+    ("web interrupt never landed (web-interrupt stopped:false — the Esc missed)",
+     "SELECT ts, content FROM state_files WHERE session_id=? "
+     "AND action='web-interrupt' "
+     "AND json_extract(content, '$.stopped')=0", 1),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions

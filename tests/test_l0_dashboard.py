@@ -4373,6 +4373,66 @@ def test_post_interrupt_magenta_spawns_escape_recheck(dash, monkeypatch,
     assert len(spawned) == 1
 
 
+def _last_state_file(sid, action):
+    """The newest `action` state_files row for `sid`, decoded. Forces the audit
+    drain first (a dashboard request thread SPOOLS its write — see
+    _clientfail_rows)."""
+    import sqlite3
+    A._CONN = None
+    A._FAILED = False
+    A._connect()                     # drains spool.jsonl into the DB
+    con = sqlite3.connect(A.db_path())
+    try:
+        rows = con.execute(
+            "SELECT content FROM state_files WHERE session_id=? AND action=? "
+            "ORDER BY ts DESC LIMIT 1", (sid, action)).fetchall()
+    finally:
+        con.close()
+    return json.loads(rows[0][0]) if rows else None
+
+
+def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
+    # a single synthesized Escape is only ~2/3 reliable, so a BUSY-tab interrupt
+    # is VERIFIED against Claude Code's working spinner ("esc to interrupt") and
+    # re-pressed while it is still up. First probe: spinner still shown (the Esc
+    # missed) -> re-press; second probe: gone -> stopped, no further Escapes.
+    fe = _FakeFE()
+    fe.screens = ["✳ Working… (3s · esc to interrupt)", "❯ "]
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "78")
+    A.session_start({"session_id": "intrv", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"78": "thinking"})
+    code, body = _post(dash + "/api/session/intrv/interrupt", {})
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking"}
+    assert fe.keyed == [("78", ("escape",)), ("78", ("escape",))]  # one re-press
+    row = _last_state_file("intrv", "web-interrupt")
+    assert row["attempts"] == 2 and row["stopped"] is True
+
+
+def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
+    # the spinner NEVER clears (every retry sees "esc to interrupt") = the Esc
+    # never reached the TUI (the stuck-turn bug). Report a 502 and spawn NO
+    # escape-recheck — flipping the tab green would MASK a live turn.
+    fe = _FakeFE()
+    fe.screens = ["✳ Working… (9s · esc to interrupt)"]   # sticks: always working
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
+    spawned = []
+    monkeypatch.setattr(DS.SP, "spawn_detached",
+                        lambda path, argv, log, env=None, purpose="", **kw:
+                        spawned.append(argv) or None)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "79")
+    A.session_start({"session_id": "intrn", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"79": "thinking"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/intrn/interrupt", {})
+    assert e.value.code == 502
+    assert spawned == []                          # no masking escape-recheck
+    row = _last_state_file("intrn", "web-interrupt")
+    assert row["stopped"] is False and row["attempts"] == DS.config.INTERRUPT_TRIES + 1
+
+
 def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     # IDLE double-Esc = the rewind menu: TYPES /rewind (documented identical
     # to double-Esc, and deterministic where synthesized double-press key

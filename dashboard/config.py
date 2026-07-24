@@ -204,6 +204,24 @@ DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 #                                    every gap, which is why THAT path types
 #                                    /rewind instead — see post_rewind)
 
+# Interrupt verification (post_interrupt / _escape_press). A single synthesized
+# Escape via `kitten @ send-key` is only ~2/3 reliable (kitty reports no
+# per-window delivery), so a blind press silently misses — a fresh web-launched
+# turn ran to completion despite ok:true (2026-07-24, session a16a181f). A
+# BUSY-tab interrupt is now VERIFIED against Claude Code's working spinner
+# (WORKING_MARKERS) and re-pressed WHILE it is still up — but never on an idle
+# box (a stray Esc there could open /rewind). INTERRUPT_RETRY_S sits well above
+# DOUBLE_ESC_GAP_S so two spaced retries never read as a double-Esc (a lone
+# late Esc at an idle prompt is a harmless no-op).
+INTERRUPT_TRIES = 3                # verification passes (up to 2 re-presses)
+INTERRUPT_RETRY_S = 0.4            # settle before each re-probe / re-press
+WORKING_MARKERS = ("esc to interrupt",)   # lowercased substrings Claude Code
+#                                    renders in its working-spinner status line
+#                                    while a turn runs; their ABSENCE from the
+#                                    viewport = the turn stopped (interrupted or
+#                                    idle). Screen-scraped like the ghost
+#                                    suggestion — no hook fires for the spinner.
+
 _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 
 # This process's identity, sent as the global SSE `hello` event. A page that

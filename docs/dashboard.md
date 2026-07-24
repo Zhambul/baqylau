@@ -1381,12 +1381,34 @@ only, no confirm — it matches pressing Esc in the terminal) and as the
 **Esc key** on the session view itself: a document-level fallback that fires
 only when no overlay (modal, slash menu, filter, dropdown) claimed the
 Escape, so muscle memory from the terminal carries over to the browser.
-When the Escape lands on a MAGENTA tab (`thinking`/`working`) the endpoint
-also spawns the **`escape-recheck`** tab dispatch (detached
-`claude-tab-status.py escape-recheck <log> <transcript> <press-size>`, env
-carrying the window id): an Esc that kills a turn mid-think leaves no
-signal anywhere (the interrupt-watch KNOWN GAP — docs/tab-colors.md), so
-the tab would sit magenta and the dashboard would keep showing busy; a web
+
+**Verified re-press.** A single synthesized Escape via `send-key` is only
+**~2/3 reliable** (the same measurement that made the idle rewind path type
+`/rewind` instead of pressing keys — see *Rewind* below), and kitty confirms
+no delivery, so a blind press silently missed: a fresh web-launched session's
+turn ran to completion (~53 s) despite `ok:true`, and the `escape-recheck`
+below then flipped the tab green and *masked* it (2026-07-24, session
+`a16a181f`). So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint
+now VERIFIES the interrupt landed: it screen-scrapes Claude Code's working
+spinner (the `esc to interrupt` hint — `WORKING_MARKERS`, read off
+`Frontend.get_text` like the ghost suggestion, since no hook fires for the
+spinner) and RE-PRESSES Escape *while that hint is still up* — up to
+`INTERRUPT_TRIES` passes, `INTERRUPT_RETRY_S` apart (well above
+`DOUBLE_ESC_GAP_S`, so two spaced retries never read as a double-Esc, and a
+lone late Esc at an already-idle box is a harmless no-op). The `web-interrupt`
+row carries `attempts` and `stopped` (True = verified stopped · False = spinner
+still up after every retry — the Esc never landed · None = idle press or the
+screen couldn't be read). When `stopped` is **False** the endpoint returns
+`502` and spawns **no** `escape-recheck` — flipping the tab green would mask a
+turn that is demonstrably still running (exactly how the failure hid) — so the
+page toasts a real failure instead of a phantom success.
+
+When the (verified or unverifiable) Escape lands on a MAGENTA tab
+(`thinking`/`working`) the endpoint also spawns the **`escape-recheck`** tab
+dispatch (detached `claude-tab-status.py escape-recheck <log> <transcript>
+<press-size>`, env carrying the window id): an Esc that kills a turn mid-think
+leaves no signal anywhere (the interrupt-watch KNOWN GAP — docs/tab-colors.md),
+so the tab would sit magenta and the dashboard would keep showing busy; a web
 interrupt is itself an event, so the recheck flips the dead magenta green
 unless any real signal (tab-state movement, or a new `"type":"user"`
 transcript record past the press-time size) appears within its 2s grace.

@@ -1314,8 +1314,45 @@ class _PostMixin:
         except OSError:
             tsize = -1
         ok = bool(fe.send_key(win, "escape"))
-        A.state_file(log, sdb, action, {"win": win, "ok": ok, "tab": tab})
-        if ok and tab in (tabs.THINKING, tabs.WORKING):
+        # VERIFY the turn actually stopped. A single synthesized Escape is only
+        # ~2/3 reliable (kitten reports no per-window delivery), so a blind
+        # press silently missed and the turn ran to completion (2026-07-24,
+        # a16a181f). On a busy tab, re-press WHILE Claude Code's working spinner
+        # is still up — but only while it is, so an already-idle box never gets
+        # a stray Esc (which could open /rewind). `stopped`: True = verified
+        # stopped, False = spinner still up after every retry (the interrupt did
+        # NOT land), None = idle press or unreadable screen (can't verify).
+        attempts, stopped = 1, None
+        if ok and tab in QUEUE_TABS:
+            for _ in range(config.INTERRUPT_TRIES):
+                working = self._turn_working(fe, win)
+                if working is None:        # screen unreadable — stop probing
+                    break
+                if not working:            # spinner gone -> the Esc landed
+                    stopped = True
+                    break
+                stopped = False            # still working -> hasn't landed yet
+                time.sleep(config.INTERRUPT_RETRY_S)
+                if fe.send_key(win, "escape"):
+                    attempts += 1
+        A.state_file(log, sdb, action,
+                     {"win": win, "ok": ok, "tab": tab,
+                      "attempts": attempts, "stopped": stopped})
+        if not ok:
+            A.error(log, "dashboard %s (send failed)" % verb,
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        if stopped is False:
+            # Every retry saw the spinner still up — the Escape never reached
+            # the TUI (the stuck-turn bug). Do NOT spawn the escape-recheck:
+            # flipping the tab green would MASK a turn that is still running
+            # (which is exactly how the failure hid before). Surface it so the
+            # page toasts a failure instead of a phantom success.
+            A.error(log, "dashboard %s (not stopped)" % verb,
+                    {"sid": sid, "win": win, "attempts": attempts})
+            return self._json({"error": "interrupt not confirmed", "tab": tab},
+                              502)
+        if tab in (tabs.THINKING, tabs.WORKING):
             # An Esc killed mid-think leaves NO signal anywhere (the known
             # interrupt-watch gap) — but a WEB interrupt is itself an event,
             # so spawn the escape-recheck: flip the dead magenta green unless
@@ -1323,11 +1360,25 @@ class _PostMixin:
             # within its grace. Detached + audited (A.spawn); its verdict
             # lands as tab_transitions rows under DISPATCH escape-recheck.
             self._spawn_escape_recheck(fe, win, log, tpath, tsize)
-        if not ok:
-            A.error(log, "dashboard %s (send failed)" % verb,
-                    {"sid": sid, "win": win})
-            return self._json({"error": "send failed"}, 502)
         return self._json({"ok": True, "tab": tab})
+
+    def _turn_working(self, fe, win):
+        """True if `win` still shows Claude Code's working spinner (the
+        WORKING_MARKERS hint it renders while a turn runs), False if that hint
+        is gone (interrupted or idle), None when the screen can't be read
+        (get_text failure / empty / the user scrolled the spinner out of the
+        viewport). The one version-tolerant signal that a web interrupt
+        actually landed — screen-scraped like the ghost suggestion, since no
+        hook fires for the spinner. Never raises (audit-before-swallow)."""
+        try:
+            screen = fe.get_text(win) or ""
+        except Exception:
+            A.error("", "dashboard interrupt (probe)", {"win": win})
+            return None
+        if not screen:
+            return None
+        low = screen.lower()
+        return any(m in low for m in config.WORKING_MARKERS)
 
     def _spawn_escape_recheck(self, fe, win, log, tpath, tsize):
         """Detached `claude-tab-status.py escape-recheck <log> <transcript>
