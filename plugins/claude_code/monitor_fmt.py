@@ -51,6 +51,20 @@ def _cmd_op(ti, rgb, grp):
     return None
 
 
+def _emit_header_block(log, text, rgb, ti, grp, trailer, opsrc):
+    """Emit the monitor's opening block — blank + rule + coloured header, the
+    SUBJECT command/ws line when present, then the caller's TRAILER ops — under
+    the producer-source stamp. The failed and live paths differ only in the
+    header colour (`rgb`, also the subject-line tint) and the trailer (a failed
+    call closes inline with an error chip + rule; a live one just opens a rule)."""
+    cmd_op = _cmd_op(ti, rgb, grp)
+    ops = [O.blank(), O.rule(), O.label(text, rgb, g=grp)]
+    if cmd_op is not None:
+        ops.append(cmd_op)
+    ops += trailer
+    O.emit(log, *ops, src=opsrc)
+
+
 def main():
     d, LOG = H.read_payload()
     if d is None:
@@ -95,12 +109,8 @@ def main():
         # block inline instead, showing the command + the error on the chip.
         err = " ".join((d.get("error") or "").split())
         chip = "■ monitor failed" + ((" · " + err[:80]) if err else "")
-        cmd_op = _cmd_op(ti, CYAN_FAIL_HDR, grp)
-        ops = [O.blank(), O.rule(), O.label(text, CYAN_FAIL_HDR, g=grp)]
-        if cmd_op is not None:
-            ops.append(cmd_op)
-        ops += [O.label(chip, O.RED, g=grp), O.rule()]
-        O.emit(LOG, *ops, src=opsrc)
+        _emit_header_block(LOG, text, CYAN_FAIL_HDR, ti, grp,
+                           [O.label(chip, O.RED, g=grp), O.rule()], opsrc)
         A.hook_event(d, decision="monitor failed / no taskId: block closed inline")
         return
 
@@ -110,12 +120,7 @@ def main():
     slot, marker = claude_slots.claim("monitor", LOG)
     head_rgb = claude_slots.color("monitor", slot)
 
-    cmd_op = _cmd_op(ti, head_rgb, grp)
-    ops = [O.blank(), O.rule(), O.label(text, head_rgb, g=grp)]
-    if cmd_op is not None:
-        ops.append(cmd_op)
-    ops.append(O.rule())
-    O.emit(LOG, *ops, src=opsrc)
+    _emit_header_block(LOG, text, head_rgb, ti, grp, [O.rule()], opsrc)
 
     # Base env via the ONE CLAUDE_STREAM_* builder (hookkit.stream_env) so the
     # tailer's event/finish ops join the header's copy-group. The FULL command
