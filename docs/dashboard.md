@@ -1771,8 +1771,10 @@ document-level `Esc`→close, the popup owns a **capturing** keydown handler tha
 picker to be keyboard-drivable, selecting a row updates its highlight IN PLACE (a
 full repaint would recreate the row element and drop keyboard focus, so `Space`
 would land nowhere — the "space did nothing after I clicked" bug); on open the
-selected row itself is focused (not the search box, which would pop the iPad
-keyboard). The `resume.preview` audit row carries the rendered item count `n`, so
+**search box** is focused so a query can be typed with no extra click — EXCEPT a
+`↻ resume` deep-link (which preselects a specific row and focuses IT, ready to
+Enter) and an iPad (where focusing an input pops the on-screen keyboard, so it
+falls back to the selected row — `focusSearch`). The `resume.preview` audit row carries the rendered item count `n`, so
 an empty-but-successful preview is distinguishable from a rendered one in the DB
 alone (the blind spot that made the first diagnosis need an endpoint repro).
 
