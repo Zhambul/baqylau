@@ -30,29 +30,42 @@ def _rename_override(tpath):
     return prefs.renamed_title(base[:-len(".jsonl")])
 
 
-def session_title(tpath):
+def _size_cached(cache, tpath, compute, empty=None):
+    """Read-through a (path, size) memo (a read/cache.py BoundedLRU): `empty`
+    for a falsy path or an unstatable file, the cached value while the file's
+    size is unchanged, else `compute()` (a zero-arg callable) stored under the
+    new size. The one owner of the getsize/OSError guard + size-match hit that
+    session_title/session_ctx/session_goal share."""
     if not tpath:
-        return ""
+        return empty
     try:
         size = os.path.getsize(tpath)
     except OSError:
-        return ""
-    hit = _TITLES.get(tpath)
+        return empty
+    hit = cache.get(tpath)
     if hit and hit[0] == size:
         return hit[1]
-    title, tail_named = plugins.title_and_rename(tpath)
-    title = title or ""
-    if not tail_named:
-        # The web-rename `agent-name` record can scroll out of the transcript's
-        # 64KB title tail-window in a long session while Claude Code keeps
-        # re-emitting `ai-title` near EOF — the rename would visually "roll back"
-        # to the auto title (the confirmed bug). The durable override stands in
-        # until a FRESH in-tail rename (which sets tail_named) supersedes it.
-        override = _rename_override(tpath)
-        if override:
-            title = override
-    _TITLES[tpath] = (size, title)
-    return title
+    v = compute()
+    cache[tpath] = (size, v)
+    return v
+
+
+def session_title(tpath):
+    def compute():
+        title, tail_named = plugins.title_and_rename(tpath)
+        title = title or ""
+        if not tail_named:
+            # The web-rename `agent-name` record can scroll out of the
+            # transcript's 64KB title tail-window in a long session while Claude
+            # Code keeps re-emitting `ai-title` near EOF — the rename would
+            # visually "roll back" to the auto title (the confirmed bug). The
+            # durable override stands in until a FRESH in-tail rename (which
+            # sets tail_named) supersedes it.
+            override = _rename_override(tpath)
+            if override:
+                title = override
+        return title
+    return _size_cached(_TITLES, tpath, compute, empty="")
 
 
 _GIT = API.BoundedLRU(MEMO_CAP)   # cwd -> the _git_resolve result (None = not a
@@ -134,6 +147,18 @@ def _git_resolve(cwd):
     return None
 
 
+def _resolve_git(cwd):
+    """The _git_resolve result for cwd behind the _GIT memo, shared by git_info
+    and _group_dir. The stored sentinel is `False` = 'not yet resolved', kept
+    DISTINCT from a legitimately cached None/{} so a genuine no-checkout result
+    is cached (not re-resolved every call)."""
+    hit = _GIT.get(cwd, False)
+    if hit is False:
+        hit = _git_resolve(cwd)
+        _GIT[cwd] = hit
+    return hit
+
+
 def canon_cwd(cwd):
     """Resolve a session cwd's symlinks, so the list groups one PROJECT under
     one entry. The 2026-07-19 baqylau rename left ~/code/personal/kitty as a
@@ -163,10 +188,7 @@ def git_info(cwd):
     checkout (or its worktree was removed)."""
     if not cwd:
         return None
-    hit = _GIT.get(cwd, False)
-    if hit is False:
-        hit = _git_resolve(cwd)
-        _GIT[cwd] = hit
+    hit = _resolve_git(cwd)
     if not hit:
         return None
     gitdir, wt, root = hit
@@ -195,10 +217,7 @@ def _group_dir(cwd):
     subprocess, which grouping doesn't need."""
     if not cwd:
         return cwd
-    hit = _GIT.get(cwd, False)
-    if hit is False:
-        hit = _git_resolve(cwd)
-        _GIT[cwd] = hit
+    hit = _resolve_git(cwd)
     root = hit[2] if hit else None
     return root or cwd
 
@@ -215,18 +234,7 @@ _CTX = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, ctx): same
 def session_ctx(tpath, main=False):
     """plugins.context() (the {used, window, pct, model} saturation of the
     file's last turn) behind the (path, size) cache; None when unknown."""
-    if not tpath:
-        return None
-    try:
-        size = os.path.getsize(tpath)
-    except OSError:
-        return None
-    hit = _CTX.get(tpath)
-    if hit and hit[0] == size:
-        return hit[1]
-    ctx = plugins.context(tpath, main=main)
-    _CTX[tpath] = (size, ctx)
-    return ctx
+    return _size_cached(_CTX, tpath, lambda: plugins.context(tpath, main=main))
 
 
 _GOAL = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, goal): same
@@ -239,18 +247,7 @@ def session_goal(tpath):
     """plugins.goal() (the session's active `/goal` as {condition, met}, the
     pinned goal card's source) behind the (path, size) cache; None when there's
     no active goal / unknown."""
-    if not tpath:
-        return None
-    try:
-        size = os.path.getsize(tpath)
-    except OSError:
-        return None
-    hit = _GOAL.get(tpath)
-    if hit and hit[0] == size:
-        return hit[1]
-    g = plugins.goal(tpath)
-    _GOAL[tpath] = (size, g)
-    return g
+    return _size_cached(_GOAL, tpath, lambda: plugins.goal(tpath))
 
 
 def _session_slug(sid):
