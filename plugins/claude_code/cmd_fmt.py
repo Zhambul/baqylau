@@ -32,6 +32,15 @@ LBL_BG   = O.ORANGE   # background header chip / foreground "interrupted"
 LBL_FAIL = O.RED      # a failed tool (PostToolUseFailure)
 
 
+def _combined_output(tr):
+    """A Bash tool_response's stdout+stderr as one rstripped block (stderr on its
+    own line after stdout). `tr` is the tool_response: a dict on success, or a raw
+    value we stringify."""
+    out = tr.get("stdout", "") if isinstance(tr, dict) else str(tr)
+    err = tr.get("stderr", "") if isinstance(tr, dict) else ""
+    return (out + (("\n" + err) if err else "")).rstrip("\n")
+
+
 def _spawn_stream(kind, taskid, slot, src=None, skip_existing=False, group=None,
                   cmd=None, pos0=None):
     # Launch claude-stream.py detached so it keeps tailing the job's output file
@@ -105,9 +114,7 @@ def main():
     if not live and not H.is_failure(d):
         lexer, path, reader = CT.read_command(cmd)
         if lexer:
-            out = tr.get("stdout", "") if isinstance(tr, dict) else str(tr)
-            err = tr.get("stderr", "") if isinstance(tr, dict) else ""
-            output = (out + (("\n" + err) if err else "")).rstrip("\n")
+            output = _combined_output(tr)
             if output.strip():
                 return _render_read(d, cmd, output, lexer, path, reader)
     _render_finished(d, tr, cmd, live, done)
@@ -207,9 +214,7 @@ def _render_finished(d, tr, cmd, live, done):
         else:
             chip_txt, col = "■ failed · " + dur, LBL_FAIL
     else:
-        out = tr.get("stdout", "") if isinstance(tr, dict) else str(tr)
-        err = tr.get("stderr", "") if isinstance(tr, dict) else ""
-        body = (out + (("\n" + err) if err else "")).rstrip("\n")
+        body = _combined_output(tr)
         chip_txt, col = "■ finished · " + dur, LBL_FG
 
     # One colour for the whole block — header, gutter, and finish chip all use it
