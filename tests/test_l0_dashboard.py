@@ -567,6 +567,31 @@ def test_sessions_last_active_fallback_chain(dash, tmp_path):
     assert rows["dla4"]["last_active"] == rows["dla4"]["started_at"] > 0
 
 
+def test_stats_active_counts_only_live_sessions(dash):
+    """Stats Pulse `active` is GENUINE liveness (sessions_payload's live), NOT
+    `ended_at IS NULL`. A session that died without a clean SessionEnd keeps
+    ended_at=NULL in the audit corpus forever (Claude Code fires no hook on
+    cancel/kill/crash, and a reboot wipes /tmp), and must NOT inflate the active
+    tally past what the list page shows (docs/dashboard.md *Stats / Insights*).
+    active + ended therefore no longer partitions sessions — a stranded row is
+    neither."""
+    # two genuinely-live sessions: an audit row + a live /tmp state DB
+    for sid in ("sa1", "sa2"):
+        A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+        S.incr(P.mirror_log(sid), commands=1)      # creates the live state DB
+    # a stranded session: audit row, ended_at NULL, but NO live state DB
+    A.session_start({"session_id": "sast", "cwd": "/w", "transcript_path": ""})
+    # a cleanly-ended session (SessionEnd sets ended_at; no live state DB)
+    A.session_start({"session_id": "sadone", "cwd": "/w", "transcript_path": ""})
+    A.session_end({"session_id": "sadone"}, "other")
+
+    DS._STATS_AGG["v"] = None                       # bypass the wall-clock memo
+    win = _get_json(dash + "/api/stats")["windows"]["all"]
+    assert win["sessions"] == 4
+    assert win["active"] == 2      # only the two live ones, NOT the stranded row
+    assert win["ended"] == 1       # only the clean SessionEnd
+
+
 def test_resumable_endpoint_dir_scoped_enriched(dash, monkeypatch):
     """GET /api/resumable is the new-session resume picker's source: the
     directory's recent sessions, each enriched with the model/effort/account it
@@ -5377,6 +5402,10 @@ def test_stats_payload_aggregates_cross_session(dash, monkeypatch):
     for sid, cwd, st, en in seed:
         A.session_start({"session_id": sid, "cwd": cwd, "transcript_path": ""})
         _set_started(sid, st, en)
+    # stA2 is GENUINELY live (a /tmp state DB), not merely ended_at=NULL — the
+    # pulse `active` counts real liveness (sessions_payload), so an open row
+    # without a live DB (a stranded crash/kill) would NOT count.
+    S.incr(P.mirror_log("stA2"), commands=1)
     # tokens + cost land on one alpha session
     A.otel("stA1", [{"metric": "token", "query_source": "main", "type": "input",
                      "value": 1000},
@@ -5391,8 +5420,10 @@ def test_stats_payload_aggregates_cross_session(dash, monkeypatch):
     assert d["windows"]["all"]["sessions"] == 4
     assert d["windows"]["30d"]["sessions"] == 3
     assert d["windows"]["7d"]["sessions"] == 3
-    # active = sessions with no ended_at (stA2 in every window that includes it)
+    # active = genuinely-live sessions (stA2 in every window that includes it)
     assert d["windows"]["7d"]["active"] == 1
+    assert d["windows"]["30d"]["active"] == 1
+    assert d["windows"]["all"]["active"] == 1
     assert d["windows"]["all"]["ended"] == 3
     # token/cost totals (summed across the otel rows)
     assert d["windows"]["all"]["tokens"] == 1500

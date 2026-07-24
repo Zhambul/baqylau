@@ -1177,6 +1177,15 @@ def stats_payload():
         return _STATS_AGG["v"]
     agg = API.activity_stats()
     rows = agg["sessions"]
+    # "active" is GENUINE liveness, not `ended_at IS NULL`. Claude Code fires no
+    # hook on cancel/kill/crash and a reboot wipes /tmp, so a session that died
+    # without a clean SessionEnd keeps ended_at=NULL in the audit corpus forever
+    # — counting those as active inflated the tally far past the list page's
+    # count (docs/dashboard.md *Stats / Insights*). Reuse the list page's OWN
+    # window-corrected liveness (sessions_payload, exactly as dir_live_sessions
+    # does) so the two views can't disagree. A live session is always recent, so
+    # the SESSIONS_LIMIT discovery depth always covers it.
+    live_sids = {r["sid"] for r in sessions_payload() if r.get("live")}
     # resolve each row's grouping key ONCE (canon_cwd is a realpath syscall,
     # _group_dir a cached .git walk) and reuse it for both the project cards and
     # every pulse window.
@@ -1215,7 +1224,7 @@ def stats_payload():
         windows[name] = {
             "sessions": len(wr),
             "ended": sum(1 for r in wr if r.get("ended_at")),
-            "active": sum(1 for r in wr if not r.get("ended_at")),
+            "active": sum(1 for r in wr if r["sid"] in live_sids),
             "tokens": sum(r.get("tokens") or 0 for r in wr),
             "cost": sum(r.get("cost") or 0.0 for r in wr),
             "errors": sum(r.get("errors") or 0 for r in wr),

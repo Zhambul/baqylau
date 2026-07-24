@@ -2604,7 +2604,17 @@ The unit is a **session** (one audit `sessions` row = one "commit"). Four panels
 
 - **Pulse** — a period toggle (`7d` / `30d` / `all time`, client-side over
   precomputed windows) driving KPI tiles (sessions · active · ended · tokens ·
-  cost · errors) plus a top-projects ranked bar list.
+  cost · errors) plus a top-projects ranked bar list. **active** is GENUINE
+  liveness, NOT `ended_at IS NULL`: since Claude Code fires no hook on
+  cancel/kill/crash and a reboot wipes `/tmp`, a session that died without a
+  clean SessionEnd keeps `ended_at=NULL` in the audit corpus forever, so
+  counting those as active over-reported it wildly (13 "active" against 4 truly
+  running). `stats_payload` reuses the list page's OWN window-corrected
+  liveness (`sessions_payload`, exactly as `dir_live_sessions` does — a live
+  session is always recent, so `SESSIONS_LIMIT` discovery always covers it), so
+  the Stats "active" and the list page can't disagree. Consequently **active +
+  ended no longer partitions sessions** — a stranded `ended_at=NULL` row that
+  isn't actually live is neither (the three tiles are rendered independently).
 - **Contributions** — the green calendar heatmap: weeks as columns, 7 day-rows,
   one cell per day, 5 self-normalized intensity buckets (0 + quartiles of the
   nonzero days, so the scale adapts to your own volume). Month + Mon/Wed/Fri
