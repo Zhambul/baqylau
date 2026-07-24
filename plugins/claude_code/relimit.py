@@ -3,6 +3,13 @@
 # Entry point: bin/claude-relimit.py (hook mode via the dispatcher; argv mode =
 # the detached migrator).
 #
+# Also the owner of the `logged-out` account stamp: the SAME StopFailure handler
+# sees error="authentication_failed" (a LOGGED-OUT account — its OAuth login was
+# revoked/expired) and stamps the account's `logged-out` kv (the dashboard's ⚠
+# account badge + the migration target-skip), distinct from rate_limit and never
+# migrated (a successor inherits the same dead login). docs/relimit.md
+# *Logged-out accounts*.
+#
 # When the ACCOUNT's rate limit blocks a main-session turn, Claude Code fires a
 # StopFailure whose payload carries error="rate_limit" (verified 2026-07-19 —
 # the synthetic "You've hit your session limit · resets …" assistant message
@@ -151,9 +158,30 @@ def main():
         return H.ignore(d, "not StopFailure (relimit acts on turn death only)")
     if d.get("agent_id"):
         return H.ignore(d, "agent_id (a subagent's API error is stop_fmt's job)")
-    if (d.get("error") or "") != "rate_limit":
-        return H.ignore(d, "StopFailure error=%r (not rate_limit)"
-                        % (d.get("error") or ""))
+    err = d.get("error") or ""
+    # An account that has been LOGGED OUT (its OAuth login revoked/expired) dies
+    # on a StopFailure carrying error="authentication_failed" and the CLI's
+    # "Please run /login · API Error: 401 OAuth access token has been revoked."
+    # message — NOT rate_limit, and it fires no SessionEnd. Stamp the account's
+    # `logged-out` kv: the dashboard's account pill keys on it (a ⚠ warn badge,
+    # sessionapi.logged_out_active) and the migration target picker skips a
+    # logged-out account (account._rank). The stamp is cleared READ-SIDE the
+    # moment a FRESHER usage snapshot for that slug appears — a successful
+    # `/login` session (sessionapi.logged_out_active compares timestamps), so a
+    # re-login clears it with no dedicated hook. Never migrate here: a successor
+    # would inherit the same dead login (docs/relimit.md *Logged-out accounts*).
+    if err == "authentication_failed":
+        if not os.path.isfile(St.db_path(LOG)):
+            return A.hook_event(
+                d, decision="auth_failed: no live state DB (unhosted) — skip")
+        out = {"slug": ACC.current().get("slug") or "", "ts": time.time(),
+               "msg": (d.get("last_assistant_message") or "")[:200]}
+        St.kv_set(LOG, "logged-out", out)
+        A.state_file(LOG, "", "logged-out", out)
+        return A.hook_event(
+            d, decision="auth_failed: stamped logged-out (slug=%r)" % out["slug"])
+    if err != "rate_limit":
+        return H.ignore(d, "StopFailure error=%r (not rate_limit)" % err)
     sid = d.get("session_id") or ""
     # Write ONLY when the state DB already exists (the mirror created it at
     # SessionStart) — never create it: the DB's file-existence is the

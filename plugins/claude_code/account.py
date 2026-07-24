@@ -143,6 +143,8 @@ def _rank(per, model, cur_slug, skip_cur, now, ceiling, trace=None):
         eff = API.effective_five_hour(ent.get("usage"), now)
         if skip_cur and slug == cur_slug:
             reject = "current account (just ran out of this model)"
+        elif API.logged_out_active(ent.get("logged_out"), ent.get("usage")):
+            reject = "logged out (login revoked — a resume would die on auth)"
         elif not API.model_available(hit, model, now):
             reject = "limit-hit bars this rung"
         elif ceiling is not None and eff >= ceiling:
@@ -225,6 +227,8 @@ def pick_target(cur_slug, cur_model, now=None, cache=None, ceiling=TARGET_MAX_PC
         eff = API.effective_five_hour(ent.get("usage"), now)
         if slug == cur_slug:
             reject = "current account"
+        elif API.logged_out_active(ent.get("logged_out"), ent.get("usage")):
+            reject = "logged out (login revoked — a resume would die on auth)"
         elif API.limit_hit_active(hit, now):
             # The fallback branch is COARSER than the ladder on purpose: with an
             # unknown cur_model it can't prove the kept model survives a

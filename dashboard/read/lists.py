@@ -249,6 +249,13 @@ def accounts_payload():
             pct = (mw or {}).get("seven_day_%s" % hit["model"])
             if isinstance(pct, (int, float)) and pct < 100:
                 active = False                   # live window says the cap cleared
+        # LOGGED OUT (the account's OAuth login was revoked/expired — a session
+        # on it died on error='authentication_failed', relimit's `logged-out`
+        # stamp). Server-computed via sessionapi.logged_out_active, which clears
+        # it the moment a fresher usage snapshot for the slug appears (a re-login
+        # `/login` session) — docs/dashboard.md *Logged-out accounts*.
+        lo = ent.get("logged_out")
+        logged_out = API.logged_out_active(lo, ent.get("usage"))
         out.append(dict(
             a, usage=API.effective_usage(usage),
             five_hour_eff=API.effective_five_hour(ent.get("usage")),
@@ -258,7 +265,9 @@ def accounts_payload():
             # *Default account*). Server-computed; the page never re-derives them.
             sched_score=API.sched_score(usage),
             sched_ok=API.sched_ok(ent.get("usage")),
-            limit_hit=hit if active else None))
+            limit_hit=hit if active else None,
+            logged_out=logged_out,
+            logged_out_msg=(lo or {}).get("msg") if logged_out else None))
     return out
 
 

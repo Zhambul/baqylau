@@ -171,6 +171,67 @@ disqualifies — we can't prove the kept model survives a scoped one). The `ceil
 is `TARGET_MAX_PCT` for the automatic path and `None` for a manual click (which
 outranks the % refuge rule but still runs the same ladder).
 
+## Logged-out accounts
+
+The SAME `StopFailure` handler (`relimit.main`) also owns the **logged-out**
+signal — a sibling of the rate-limit stamp, reached through the same event.
+
+When an account's OAuth login is **revoked or expired** (you logged out, or the
+token was invalidated server-side), a main-session turn dies on a `StopFailure`
+carrying `error="authentication_failed"` and the CLI's synthetic message
+`"Please run /login · API Error: 401 OAuth access token has been revoked."`
+(verified 2026-07-24 from the audit — session `bb1f7d72`). It is **not**
+`rate_limit`, it fires **no** `SessionEnd`, and there is nothing to migrate to
+(a `--resume` under any *other* account is fine, but re-running under the SAME
+dead login just dies again). So the handler:
+
+1. Requires the live state DB to already exist (same rule as the rate-limit and
+   status-line paths — never create one from a stamp; a headless/daemon session
+   with no DB is skipped with a decision row).
+2. Stamps `logged-out` = `{slug, ts, msg}` into the state DB kv (slug from
+   `account.current()`), audited as a `state_files` row (`action='logged-out'`).
+3. Returns — **no migration** (the successor would inherit the same dead login).
+
+**Why detection is event-driven, not a probe.** A tempting alternative is to
+*probe* each account's token validity from the dashboard. It was investigated
+and rejected (2026-07-24):
+
+- The switcher runs an account on its **setup-token** (`CLAUDE_CODE_OAUTH_TOKEN`,
+  keychain `Claude Code Subscription: claude-<slug>`), but Claude Code
+  interactively uses a **separate** full-scope OAuth login
+  (`Claude Code-credentials-<sha256(CLAUDE_CONFIG_DIR)[:8]>`). The setup-token can
+  read as valid while the login the session actually uses is revoked — probing
+  the wrong one is a false negative.
+- Even probing the right login is unreliable: `model_usage.py` keeps its OWN
+  rotated copy of the access token, and an already-minted access token stays
+  valid until it expires (~8h) *after* the refresh token is revoked — so
+  `GET /api/oauth/usage` can return `200` for an account you've already logged
+  out of. Only *minting a new token from the refresh grant* is authoritative,
+  and that is **actively dangerous**: the refresh call can rotate the refresh
+  token and orphan Claude Code's keychain copy — logging the account out.
+
+The `authentication_failed` StopFailure Claude Code already fires is precise,
+free, and touches no credentials — the house-style event signal.
+
+**Clearing (a re-login).** Being logged out has no reset epoch, so the stamp is
+cleared **read-side**: `sessionapi.logged_out_active(stamp, usage)` reports it
+active only while the stamp is at least as fresh as the account's freshest
+status-line `usage` snapshot. Within the dead session the status line was
+captured at the prompt *before* the turn died (older `ts`); a later successful
+session — and a `/login` **is** a session — captures a newer snapshot that
+supersedes the stamp. So logging back in clears the flag automatically, with no
+dedicated hook and no write.
+
+**Where it surfaces.** `sessionapi.account_usage` files the `logged-out` stamp
+per slug (freshest wins, under the stamp's OWN slug — same reasoning as
+`limit-hit`); `dashboard/read/lists.py accounts_payload` serves `logged_out`
+(bool) + `logged_out_msg`; the dashboard's account strip paints a filled red
+`⚠ logged out` badge (docs/dashboard.md *Logged-out accounts*), the new-session
+picker never auto-selects a logged-out account and marks it in the dropdown, and
+the **migration target picker skips it** (`account._rank` and the keep-model
+fallback both reject on `logged_out_active`, so an auto-migrate from a
+*rate-limited* account never lands on a logged-out one).
+
 ## The migrator half (relimit.migrate) — close, wait, relaunch
 
 A short detached process under `core.tail.stream_lifecycle(kind="relimit")`;

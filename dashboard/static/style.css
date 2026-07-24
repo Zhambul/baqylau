@@ -504,6 +504,16 @@ body.in-session #accounts { display: none; }
   border-radius: 3px; padding: 2px 5px; white-space: nowrap;
 }
 
+/* the account is LOGGED OUT (its OAuth login was revoked — a session on it died
+   on error=authentication_failed; cleared on the next successful session). A
+   filled red badge, louder than the outline limit-hit chip: a launch here dies
+   immediately, so it's the account's headline state. */
+.acct .uauth {
+  color: #fff; font: 600 10px/1 var(--mono);
+  background: var(--red, #b5484d);
+  border-radius: 3px; padding: 2px 5px; white-space: nowrap;
+}
+
 /* which account a session runs under (in its header) */
 .acctchip {
   display: inline-flex; align-items: baseline; gap: 6px;

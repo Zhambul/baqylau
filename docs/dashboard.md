@@ -365,7 +365,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
-| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*); backs the new-session picker and the top usage strip |
+| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `five_hour_eff`, `sched_score` (weekly-quota perishability), and `sched_ok` (5h safety gate) for the new-session default-account picker (*Default account*), plus `limit_hit` (active rate-limit stamp else null) and `logged_out`/`logged_out_msg` (the account's login was revoked — *Logged-out accounts*); backs the new-session picker and the top usage strip |
 | `/api/stats` | the **Stats / Insights** page (`stats_payload` over `sessionapi.activity_stats`): `{total_sessions, daily:[[day,n]], punch:[[dow,hour,n]], windows:{7d,30d,all}, projects:[…]}` — cross-session aggregates for the contribution heatmap, day×hour punch card, per-window Pulse summary, and per-project cards; server-computed + memo-cached (`STATS_TTL_S`), read-only (no audit rows) (*Stats / Insights* below) |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/resumable?cwd=<dir>&limit=25&q=<text>` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); `q` filters by title+sid across the directory's WHOLE history (discovery scans up to `RESUMABLE_SCAN`, not just the newest — the client can't); blank/unknown cwd → `[]` |
@@ -2916,6 +2916,35 @@ while the stamp in the same (renamed) state DB still describes the old one —
 grouping by the session's account put c2's `limit hit` chip on c1's pill and
 left the actually-blocked account looking clean (and, worse, let
 `account.pick_target` — same aggregation — consider migrating back onto it).
+
+### Logged-out accounts
+
+An account whose OAuth login has been **revoked or expired** (you logged out, or
+the token was invalidated server-side) is flagged on its pill with a filled red
+`⚠ logged out` badge — louder than the outline `limit hit` chip because a launch
+there dies immediately, so it is the account's headline state. The badge's
+tooltip is the CLI's own message (`"Please run /login · … OAuth access token has
+been revoked."`).
+
+Same as the limit-hit chip, the truth comes from an **event, not a probe**: a
+main-session turn under a logged-out account dies on a `StopFailure` carrying
+`error="authentication_failed"`, which `relimit` stamps as a per-account
+`logged-out` kv (docs/relimit.md *Logged-out accounts* — including why probing
+the account's token is both unreliable and dangerous). `accounts_payload` serves
+it as `logged_out` (bool, via `sessionapi.logged_out_active`) + `logged_out_msg`.
+Because a logged-out account may have no fresh usage snapshot, `renderAccounts`
+shows a pill when it has usage **or** a logged-out flag (it otherwise hides
+usage-less accounts).
+
+**Clears on re-login, no hook.** Logging back in is itself a session; its
+status-line `usage` snapshot is newer than the stamp, and `logged_out_active`
+(ts-vs-freshest-usage) drops the flag the moment that newer snapshot lands.
+
+**Not auto-selected.** The new-session picker never auto-selects a logged-out
+account (`autoAcct` filters them out, falling back to the full list only if ALL
+are logged out) and marks each with `· ⚠ logged out` in the dropdown. The
+rate-limit **migration** picker skips them too (docs/relimit.md), so an
+auto-migrate off a rate-limited account never lands on a dead login.
 
 ## Context saturation (the ctx bars)
 

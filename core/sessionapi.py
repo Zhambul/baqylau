@@ -279,26 +279,28 @@ def _session_db(row):
 
 
 def account_usage(limit=50, cache=None):
-    """{slug: {"usage": …, "limit_hit": …}} — per account, the FRESHEST
-    status-line usage snapshot and the freshest rate-limit-hit stamp across
-    the recent sessions (newest `ts` wins; each snapshot came from a session
-    running under that account's own token, so this is per-account by
-    construction — no API call, no token). Slugs are whatever the sessions
-    recorded ('' = the plain-claude default account); the caller joins its own
-    registry. `cache` is an optional db_cached() memo dict."""
+    """{slug: {"usage": …, "limit_hit": …, "logged_out": …}} — per account, the
+    FRESHEST status-line usage snapshot, the freshest rate-limit-hit stamp, and
+    the freshest logged-out stamp across the recent sessions (newest `ts` wins;
+    each snapshot came from a session running under that account's own token, so
+    this is per-account by construction — no API call, no token). Slugs are
+    whatever the sessions recorded ('' = the plain-claude default account); the
+    caller joins its own registry. `cache` is an optional db_cached() memo
+    dict."""
     def read(p):
         return (S.kv_at(p, "account") or {}, S.kv_at(p, "usage"),
-                S.kv_at(p, "limit-hit"))
+                S.kv_at(p, "limit-hit"), S.kv_at(p, "logged-out"))
     def file_under(best, slug, key, val):
-        ent = best.setdefault(slug, {"usage": None, "limit_hit": None})
+        ent = best.setdefault(slug, {"usage": None, "limit_hit": None,
+                                     "logged_out": None})
         if val and (ent[key] is None
                     or (val.get("ts") or 0) > (ent[key].get("ts") or 0)):
             ent[key] = val
     best = {}
     for row in sessions(limit):
         sdb = _session_db(row)
-        acc, usage, hit = (db_cached(cache, sdb, read) if cache is not None
-                           else read(sdb))
+        acc, usage, hit, lo = (db_cached(cache, sdb, read) if cache is not None
+                               else read(sdb))
         slug = acc.get("slug") or ""
         file_under(best, slug, "usage", usage)
         # The hit is filed under ITS OWN slug (relimit stamps it), not the
@@ -309,6 +311,9 @@ def account_usage(limit=50, cache=None):
         # block from the target picker (which could then migrate BACK onto it).
         file_under(best, hit.get("slug", slug) if hit else slug,
                    "limit_hit", hit)
+        # logged-out is filed under its own stamped slug for the same reason.
+        file_under(best, lo.get("slug", slug) if lo else slug,
+                   "logged_out", lo)
     return best
 
 
@@ -437,6 +442,23 @@ def limit_hit_active(hit, now=None):
         return reset > now
     span = SEVEN_DAY_S if hit.get("model") else FIVE_HOUR_S
     return (hit.get("ts") or 0) + span > now
+
+
+def logged_out_active(stamp, usage):
+    """True while a `logged-out` stamp still describes the account's current
+    state — i.e. no SUCCESSFUL session has run under it since. Unlike a
+    rate-limit, being logged out has no reset epoch; the clear signal is a
+    re-login, which (being a `/login` session) captures a fresh status-line
+    `usage` snapshot. So the stamp is active exactly while it is at least as
+    fresh as the account's freshest usage snapshot: within the dead session the
+    status line was captured at the prompt BEFORE the turn died on auth (older
+    ts), and any later working session's snapshot is newer (clears it). No
+    snapshot at all (never captured) → the stamp stands. relimit stamps it on a
+    StopFailure error='authentication_failed'; account._rank and the dashboard
+    pill gate on this (docs/relimit.md *Logged-out accounts*)."""
+    if not stamp:
+        return False
+    return (stamp.get("ts") or 0) >= ((usage or {}).get("ts") or 0)
 
 
 def model_available(hit, model, now=None):

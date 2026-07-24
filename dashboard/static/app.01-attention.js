@@ -281,9 +281,18 @@ function acctPill(a) {
   const pill = el("div", "acct");
   const name = a.slug ? a.slug + " · " + a.label : a.label;
   pill.append(el("span", "aname", name));
+  // LOGGED OUT: the account's OAuth login was revoked/expired — a session on it
+  // died on error='authentication_failed' (server flag a.logged_out, cleared on
+  // the next successful session). Warn outright and up front: the usage bars are
+  // stale, and a launch here dies immediately. (docs/dashboard.md.)
+  if (a.logged_out) {
+    const chip = el("span", "uauth", "⚠ logged out");
+    chip.title = a.logged_out_msg || "run /login — the account's login was revoked";
+    pill.append(chip);
+  }
   const wins = usageWindows(u);
   if (!wins.length) {
-    pill.append(el("span", "adim", "no usage yet"));
+    if (!a.logged_out) pill.append(el("span", "adim", "no usage yet"));
     return pill;
   }
   const bar = (label, pct, resetKey) => {
@@ -337,9 +346,11 @@ function resetAgo(epochS) {
 
 function renderAccounts(list) {
   if (!$accounts) return;
-  const withUsage = (list || []).filter(a => a.usage);
-  $accounts.hidden = !withUsage.length;
+  // show an account with a usage snapshot OR a logged-out warning (a dead
+  // account may have no fresh usage, but the ⚠ still needs to surface)
+  const shown = (list || []).filter(a => a.usage || a.logged_out);
+  $accounts.hidden = !shown.length;
   $accounts.textContent = "";
-  for (const a of withUsage) $accounts.append(acctPill(a));
+  for (const a of shown) $accounts.append(acctPill(a));
 }
 

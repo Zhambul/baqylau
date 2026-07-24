@@ -1124,6 +1124,17 @@ ANOMALY_SECTIONS = [
     # the session (OTEL landed) yet the LIVE state DB has no tk_read/tokens counter.
     # core/state._connect now revalidates by st_ino, so a non-empty row here is that
     # regression (or the receiver holding an fd on a *.keep path — check `lsof`).
+    # A session that DIED because its account was LOGGED OUT: relimit stamped a
+    # `logged-out` state_file off a StopFailure error='authentication_failed'
+    # (the CLI's "Please run /login · … OAuth access token has been revoked").
+    # Not a code bug — the account's OAuth login was revoked/expired — but the
+    # tell for "the session ended and the dashboard flagged the account ⚠ logged
+    # out (and the migration picker skips it)". content = {slug, ts, msg}; the
+    # flag clears read-side once a fresher usage snapshot for the slug lands (a
+    # re-login session — sessionapi.logged_out_active). docs/relimit.md.
+    ("session died logged out (account login revoked — authentication_failed)",
+     "SELECT ts, content FROM state_files WHERE session_id=? "
+     "AND action='logged-out'", 1),
     # A rate-limit migration (plugins/claude_code/relimit.py, docs/relimit.md)
     # that didn't complete: the `relimit` stream's end_reason names which leg
     # failed — 'close-failed'/'close-timeout' (the old tab wouldn't close or

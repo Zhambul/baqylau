@@ -22,9 +22,17 @@ RL = "claude-relimit.py"
 LIMIT_MSG = "You've hit your session limit · resets 2:40am (Asia/Makassar)"
 
 
+AUTH_MSG = "Please run /login · API Error: 401 OAuth access token has been revoked."
+
+
 def rate_limit_payload(s):
     return dict(P.stop(s, failure=True), error="rate_limit",
                 last_assistant_message=LIMIT_MSG)
+
+
+def auth_failed_payload(s):
+    return dict(P.stop(s, failure=True), error="authentication_failed",
+                last_assistant_message=AUTH_MSG)
 
 
 @pytest.fixture
@@ -142,6 +150,49 @@ def test_ignores_non_rate_limit_failures(run_hook, rl_env, hosted):
     assert any("agent_id" in d for d in decs)
     assert kv(s, "limit-hit") is None
     assert oracle.spawns(rl_env, s.sid) == []
+
+
+# ------------------------------------------------------- logged-out accounts
+
+def test_authentication_failed_stamps_logged_out(run_hook, rl_env, hosted):
+    """StopFailure(authentication_failed) — a LOGGED-OUT account — stamps the
+    `logged-out` kv + state_file for the dashboard's ⚠ badge, and NEVER migrates
+    (a successor would inherit the same dead login). docs/relimit.md."""
+    s = hosted()
+    run_hook(RL, auth_failed_payload(s), env=rl_env)
+    lo = kv(s, "logged-out")
+    assert lo["slug"] == "c1" and lo["msg"] == AUTH_MSG
+    assert kv(s, "limit-hit") is None                 # not a rate-limit
+    assert kv(s, "relimit-attempt") is None           # never migrated
+    assert oracle.spawns(rl_env, s.sid) == []         # no detached migrator
+    decs = oracle.decisions(rl_env, s.sid, handler=RL)
+    assert any("auth_failed: stamped logged-out" in d for d in decs), decs
+    rows = [r for r in oracle.state_files(rl_env, s.sid) if r[1] == "logged-out"]
+    assert rows and json.loads(rows[-1][2])["slug"] == "c1"
+
+
+def test_authentication_failed_needs_a_live_state_db(run_hook, rl_env, session):
+    """No state DB (unhosted/daemon session) → skip, and NEVER create one from a
+    stamp (the DB's existence is the session-alive signal — same rule as the
+    rate-limit path)."""
+    s = session.make()
+    run_hook(RL, auth_failed_payload(s), env=rl_env)
+    decs = oracle.decisions(rl_env, s.sid, handler=RL)
+    assert any("auth_failed: no live state DB" in d for d in decs), decs
+    assert not os.path.exists(s.state_db)
+
+
+def test_logged_out_active_clears_on_a_fresher_usage_snapshot():
+    """The read-side clear: a `logged-out` stamp is active while it is at least
+    as fresh as the account's freshest usage snapshot; a later successful
+    session's snapshot (a re-login) clears it (core.sessionapi)."""
+    from core import sessionapi as API
+    now = time.time()
+    stamp = {"slug": "c2", "ts": now}
+    assert API.logged_out_active(stamp, None) is True          # never captured
+    assert API.logged_out_active(stamp, {"ts": now - 10}) is True   # older usage
+    assert API.logged_out_active(stamp, {"ts": now + 10}) is False  # re-login
+    assert API.logged_out_active(None, {"ts": now}) is False        # no stamp
 
 
 def test_kill_switch_stamps_but_never_migrates(run_hook, rl_env, hosted,
@@ -449,6 +500,30 @@ def test_pick_target_prefers_least_used_and_skips_limited(monkeypatch,
     fresh["c3"]["usage"]["five_hour_reset"] = now - 10
     assert ACC.pick_target("c1", None) == {"slug": "c3", "alias": "c3",
                                            "model": "", "eff": 0}
+
+
+def test_pick_target_skips_a_logged_out_account(monkeypatch, tmp_path):
+    """A logged-out account (login revoked) is never a migration target — a
+    resume there dies on auth (account._rank via sessionapi.logged_out_active).
+    A re-login (fresher usage snapshot) makes it eligible again."""
+    from core import sessionapi as API
+    from plugins.claude_code import account as ACC
+    tsv = tmp_path / "accounts.tsv"
+    tsv.write_text("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\nc3\tspare\tsvc-3\n")
+    monkeypatch.setattr(ACC, "ACCOUNTS_TSV", str(tsv))
+    now = time.time()
+    fresh = {"c2": {"usage": {"five_hour": 20, "five_hour_reset": now + 1000,
+                              "ts": now}, "limit_hit": None, "logged_out": None},
+             "c3": {"usage": {"five_hour": 60, "five_hour_reset": now + 1000,
+                              "ts": now}, "limit_hit": None, "logged_out": None}}
+    monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
+    assert ACC.pick_target("c1", None)["slug"] == "c2"      # least-used wins
+    # c2 logged out (stamp at least as fresh as its usage) → skipped
+    fresh["c2"]["logged_out"] = {"slug": "c2", "ts": now}
+    assert ACC.pick_target("c1", None)["slug"] == "c3"
+    # a re-login (fresher usage snapshot) clears the skip
+    fresh["c2"]["usage"]["ts"] = now + 5
+    assert ACC.pick_target("c1", None)["slug"] == "c2"
 
 
 def test_pick_target_walks_the_model_ladder(monkeypatch, tmp_path):

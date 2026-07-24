@@ -703,9 +703,13 @@ function openNewSession(prefillCwd, resumeSid) {
     a.limit_hit && (!a.limit_hit.model || a.limit_hit.model === model.value);
   const autoAcct = () => {
     if (acctPicked || !acctList.length) return;
-    const open = acctList.filter(a => !limitBlocks(a));
+    // never auto-select a logged-out account (its login is revoked — a launch
+    // there dies on auth); fall back to the full list only if ALL are logged out
+    const live = acctList.filter(a => !a.logged_out);
+    const base = live.length ? live : acctList;
+    const open = base.filter(a => !limitBlocks(a));
     const safe = open.filter(a => a.sched_ok);
-    const pool = safe.length ? safe : (open.length ? open : acctList);
+    const pool = safe.length ? safe : (open.length ? open : base);
     acct.value = pool.reduce((b, a) => schedScore(a) > schedScore(b) ? a : b).slug;
   };
   model.onpick = () => { modelPicked = true; autoAcct(); };
@@ -720,7 +724,8 @@ function openNewSession(prefillCwd, resumeSid) {
         ? "  (" + wins.map(k => windowLabel(k) + " " + a.usage[k] + "%").join(" · ") + ")"
         : "";
       const lim = a.limit_hit ? "  · " + limitLabel(a.limit_hit) : "";
-      return [a.slug, a.slug + " · " + a.label + usage + lim];
+      const out = a.logged_out ? "  · ⚠ logged out" : "";
+      return [a.slug, a.slug + " · " + a.label + usage + lim + out];
     }));
     autoAcct();
   };

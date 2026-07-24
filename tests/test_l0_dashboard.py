@@ -5779,6 +5779,32 @@ def test_accounts_payload_files_limit_hit_under_its_own_slug(dash, monkeypatch):
     assert by["c1"]["usage"]["five_hour"] == 10    # usage stays with the session
 
 
+def test_accounts_payload_flags_a_logged_out_account(dash, monkeypatch):
+    # A session on c1 died on error='authentication_failed' → relimit's
+    # `logged-out` stamp. The payload flags the account (the dashboard's ⚠ badge
+    # + the new-session auto-select skip); a FRESHER usage snapshot (a re-login
+    # `/login` session) clears it. docs/dashboard.md *Logged-out accounts*.
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c1", "label": "oboard", "alias": "c1"}])
+    A.session_start({"session_id": "accs_lo", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("accs_lo")
+    now = time.time()
+    S.kv_set(log, "account", {"slug": "c1", "label": "oboard"})
+    # the dead session captured usage at the prompt BEFORE the turn died on auth
+    S.kv_set(log, "usage", {"five_hour": 10, "five_hour_reset": now + 8000,
+                            "ts": now})
+    S.kv_set(log, "logged-out", {"slug": "c1", "ts": now + 1, "msg": "run /login"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c1"]["logged_out"] is True
+    assert by["c1"]["logged_out_msg"] == "run /login"
+    # a re-login: a fresher usage snapshot supersedes the stamp → flag clears
+    S.kv_set(log, "usage", {"five_hour": 10, "five_hour_reset": now + 8000,
+                            "ts": now + 5})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    assert by["c1"]["logged_out"] is False
+    assert by["c1"]["logged_out_msg"] is None
+
+
 def test_accounts_payload_merges_model_windows(dash, monkeypatch):
     # The per-model weekly windows (plugins.model_windows — the OAuth /usage
     # fetch) are MERGED into each account's usage alongside the tokenless 5h/7d
