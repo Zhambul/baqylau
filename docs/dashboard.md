@@ -1283,7 +1283,12 @@ imperceptible staleness window.
 A state-DB-live session that ever had a window but isn't in that map is demoted
 to not-live (and its control plane disabled). When no frontend resolves (map is
 `None`) the state-DB signal is kept as-is — we don't mark sessions dead we
-can't verify. This is also why the control-plane writes below resolve the
+can't verify. The four-condition check has a SINGLE owner,
+`launch.demote_if_dead`, called by all three read payloads (the list, the
+session detail, and the resume picker) so they can't drift; the session-detail
+call passes a separate `target` dict because its liveness comes from
+`API.session` while the window id + `started_at` come from the audit
+`session_row`. This is also why the control-plane writes below resolve the
 **live** window rather than the stored id.
 
 **An empty `ls` is can't-tell, not "no live tabs" (why cards flashed "gone").**

@@ -112,6 +112,35 @@ def _live_windows():
     return val
 
 
+def demote_if_dead(row, live_wins, sid=None, target=None):
+    """The SINGLE owner of the 'a state-DB-live session whose kitty window is
+    gone is not really live' correction the list / session-detail / resume read
+    payloads all apply. Clear the `live` flag when ALL four hold: the session
+    claims live, we can actually enumerate windows (`live_wins is not None` —
+    an empty/failed `ls` is can't-tell, keep the state-DB signal), it EVER had
+    a window (a headless/daemon session legitimately has none), that window is
+    no longer tagged `claude_session=<sid>` (`sid not in live_wins`), and it is
+    PAST the just-started grace (`_within_live_grace` — a fresh launch's pane
+    isn't tagged yet). Otherwise a tab closed without a SessionEnd (crash /
+    kill -9, or a leaked DB) leaves the state DB intact and the session
+    masquerades as running with a since-reused window id (docs/dashboard.md
+    *Liveness = an OPEN tab*).
+
+    `row` is the window/grace source (`kitty_window_id` + `started_at`); `sid`
+    defaults to `row["sid"]`. `target` is the dict whose `live` is read and
+    cleared — it defaults to `row` (the list/resume rows carry both), but the
+    session-detail payload passes a SEPARATE target because its liveness comes
+    from `API.session` while the window/started_at come from the audit
+    `session_row` (which carries no `live` key)."""
+    if sid is None:
+        sid = row.get("sid")
+    if target is None:
+        target = row
+    if (target.get("live") and live_wins is not None
+            and row.get("kitty_window_id") and sid not in live_wins
+            and not _within_live_grace(row)):
+        target["live"] = False
+
 
 def launch_argv(words, cmd="claude"):
     """The argv a web new-session launches — the interactive-login-shell

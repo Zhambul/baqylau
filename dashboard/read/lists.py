@@ -14,7 +14,6 @@ from core import sessionapi as API
 from dashboard import config
 from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS)
 from dashboard.control import launch
-from dashboard.control.launch import _within_live_grace
 from dashboard.read.cache import MEMO_CAP, _db_cached
 from dashboard.read.meta import (canon_cwd, git_info, session_ctx,
                                  session_title, _group_dir, _session_slug)
@@ -76,15 +75,9 @@ def sessions_payload():
         sdb = P.state_db(row["log"])
         if not os.path.isfile(sdb):
             sdb = P.parked_db(row["log"])
-        # demote a state-DB-live session whose window is gone. Only when we can
-        # actually enumerate windows (live_wins is not None) and the session
-        # ever HAD a window (a headless/daemon session legitimately has none) —
-        # and NOT within the just-started grace (a fresh launch's pane isn't
-        # tagged yet; _within_live_grace).
-        if (row.get("live") and live_wins is not None
-                and row.get("kitty_window_id") and row["sid"] not in live_wins
-                and not _within_live_grace(row)):
-            row["live"] = False
+        # demote a state-DB-live session whose window is gone (launch.demote_if_dead
+        # is the single owner of the check; docs/dashboard.md *Liveness*).
+        launch.demote_if_dead(row, live_wins)
         # Reconcile the window id to the SAME live-RESOLVED value session_payload
         # serves (from _live_windows), so the two endpoints never disagree. The
         # list used to return the RAW start-time audit id while /api/session
@@ -170,12 +163,9 @@ def resumable_payload(cwd, limit, q=""):
         if not os.path.isfile(sdb):
             sdb = P.parked_db(row["log"])
         # demote a state-DB-live session whose window is gone (same correction
-        # sessions_payload applies) — a resume of a truly-live session 409s
-        # anyway, but the row marks it so the picker can flag/skip it.
-        if (row.get("live") and live_wins is not None
-                and row.get("kitty_window_id") and sid not in live_wins
-                and not _within_live_grace(row)):
-            row["live"] = False
+        # sessions_payload applies, launch.demote_if_dead) — a resume of a truly-
+        # live session 409s anyway, but the row marks it so the picker can flag it.
+        launch.demote_if_dead(row, live_wins, sid)
         ctx = session_ctx(row.get("transcript_path") or "", main=True)
         slug = _session_slug(sid)
         out.append({

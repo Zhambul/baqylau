@@ -11,7 +11,6 @@ from core import sessionapi as API
 from core import tabs
 from dashboard import opshtml, prefs, suggestion
 from dashboard.control import launch
-from dashboard.control.launch import _within_live_grace
 from dashboard.read.meta import (canon_cwd, git_info, session_ctx, session_goal,
                                  session_title, _session_slug)
 from plugins.claude_code import memory as MEM
@@ -126,10 +125,10 @@ def session_payload(sid):
     # whose window is gone (closed without a SessionEnd) is demoted to not-live.
     live_wins = launch._live_windows()
     row = API.session_row(sid) or {}
-    if (data.get("live") and live_wins is not None
-            and row.get("kitty_window_id") and sid not in live_wins
-            and not _within_live_grace(row)):
-        data["live"] = False
+    # the live flag lives on `data` (API.session), but the window id + grace
+    # come from the audit `row` (session_row carries no `live` key) — so the
+    # shared demotion reads/clears `data` while checking `row`'s window.
+    launch.demote_if_dead(row, live_wins, sid, target=data)
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
     data["ask"] = _ask_wire(sid, _ask_pending(sid)) if data.get("live") else None
     data["ask_draft"] = _ask_draft(sid, data["ask"]) if data.get("ask") else None
