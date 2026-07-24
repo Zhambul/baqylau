@@ -1586,7 +1586,10 @@ New always-audited swallow sites (previously silent — their absence used to ma
   kind `relimit` names the failed leg via `end_reason`: `close-failed` /
   `close-timeout` (the tab wouldn't close or SessionEnd never parked the state
   DB — the migrator then deliberately does NOT launch), `window-gone` (tab
-  vanished while the DB stayed live — bailed), `launch-failed` (kitten refused
+  vanished while the DB stayed live — bailed; **AUTO only** — a `mode=manual`
+  migrate deliberately launches over a stranded-live DB instead, the
+  logged-out-account recovery, so it never shows `window-gone`),
+  `launch-failed` (kitten refused
   the tab; the `relimit-launch` state_files row has `ok: false`). A `launched`
   end with no later SessionStart under the sid = the relaunch died inside the
   login shell (bad alias, keychain prompt, `claude` not on PATH) — the canned

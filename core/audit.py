@@ -1128,7 +1128,8 @@ ANOMALY_SECTIONS = [
     # that didn't complete: the `relimit` stream's end_reason names which leg
     # failed — 'close-failed'/'close-timeout' (the old tab wouldn't close or
     # its SessionEnd never parked the state DB), 'window-gone' (tab vanished
-    # while the session stayed live), 'launch-failed' (kitten refused the
+    # while the session stayed live — AUTO only; a manual ⇆ launches over a
+    # stranded-live DB instead), 'launch-failed' (kitten refused the
     # resume tab). 'launched' is the ONLY healthy end, and even then the
     # --resume must fire a SessionStart under this (old) sid within the launch
     # window — a 'launched' row with no later SessionStart means the relaunch

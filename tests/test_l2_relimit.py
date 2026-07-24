@@ -293,6 +293,20 @@ def test_migrator_bails_when_window_gone_but_session_live(run_hook, rl_env,
     assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["window-gone"]
 
 
+def test_manual_migrate_launches_when_window_gone_but_session_live(
+        run_hook, rl_env, hosted, fake_kitten):
+    """A MANUAL ⇆ over a stranded-live session (no tab, DB never parked — a
+    logged-out account dies on authentication_failed with NO SessionEnd) does
+    NOT bail like the auto race-guard: explicit intent, no tab to fight over, so
+    it announces and launches straight over the live DB (the --resume reuses it
+    and the fork adopts it)."""
+    s = hosted()                                     # live DB, no tab in ls
+    run_hook(RL, {}, argv=(s.log, s.sid, "c2", "c2", s.cwd, "manual"), env=rl_env)
+    assert [r[1] for r in relimit_streams(rl_env, s.sid)] == ["launched"]
+    assert any("--type=tab" in c for c in fake_kitten.calls("launch"))
+    assert "migrating to c2 (web)" in s.ops_text()
+
+
 def test_migrator_launches_straight_from_a_parked_session(run_hook, rl_env,
                                                           hosted, fake_kitten,
                                                           session):

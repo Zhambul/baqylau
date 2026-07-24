@@ -299,13 +299,26 @@ def migrate(log, sid, slug, alias, cwd, mode="auto", model=""):
                     return
                 time.sleep(POLL_S)
         elif not St.parked(log):
-            # No tab yet a live state DB: a state this migrator doesn't
-            # understand (the window vanished between the hook's check and
-            # now, but the session didn't end) — bail rather than launch a
-            # duplicate over a possibly-running session.
-            A.error(log, "relimit window gone but session live", {"sid": sid})
-            run.end("window-gone")
-            return
+            # No tab yet a live (unparked) state DB. For the AUTO hand-off this
+            # is a race — the window vanished between the hook's window check and
+            # now, but the session didn't end — so bail rather than launch a
+            # duplicate over a possibly-running session (something else owns its
+            # fate). A MANUAL ⇆, though, is explicit intent to migrate THIS
+            # session and there is no interactive tab left to fight over: a
+            # session whose ACCOUNT logged out dies on an authentication_failed
+            # StopFailure that fires NO SessionEnd (relimit ignores it — not a
+            # rate limit), so its state DB is stranded LIVE and could never be
+            # migrated if we bailed here (reported: "couldn't migrate out of a
+            # logged-out account"). Launching is safe — the --resume reuses the
+            # live DB (decide_log_fate → reuse-live-db) and the fork adopts it,
+            # exactly as the parked path's restore-history would. Announce here
+            # (the DB exists, so unlike the parked path a paint op can't recreate
+            # one), then fall through to the launch below.
+            if mode != "manual":
+                A.error(log, "relimit window gone but session live", {"sid": sid})
+                run.end("window-gone")
+                return
+            O.emit(log, O.label("⇆ migrating to %s (web)" % slug, O.AMBER))
         # `--model` (a downgrade rung) precedes the positional nudge; the auto
         # nudge names the new model so the resumed turn knows why it changed.
         nudge = NUDGE + (

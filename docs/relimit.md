@@ -184,7 +184,8 @@ every exit path is a distinct `end_reason` (the anomalies query keys on them):
    two sessions fighting over one state DB (`close-timeout` on giving up,
    and crucially NO launch happens then). A window already gone with the DB
    already parked skips straight to launch; gone-but-live is `window-gone`
-   (bail — something else owns that session's fate).
+   (bail — something else owns that session's fate). **AUTO only:** a
+   `mode=manual` migrate does NOT bail on gone-but-live — see *Manual migrate*.
 3. **Launch the resume tab**: `Frontend.launch_tab(cwd,
    account.launch_argv(["--resume", <sid>] + ["--model", <model>]? + [NUDGE]?,
    <alias>))` — byte-for-byte the dashboard's resume-&-send web launch (same
@@ -222,6 +223,17 @@ ways manual intent implies:
   must not be recreated by a paint op.
 - **Immediate, no confirmation** (user decision — like `■ stop`): the click
   IS the intent, and the worst case is a tab swap you watch happen.
+- **Migrates a stranded-live session** (no tab, DB never parked): the auto
+  path bails here (`window-gone`) — that gone-but-live state is a race after
+  its own moment-ago window check, so "something else owns its fate". A manual
+  ⇆ does the opposite: it announces and **launches straight over the live DB**.
+  This is the logged-out-account recovery — an account that is logged out dies
+  on an `authentication_failed` StopFailure that relimit ignores (not a rate
+  limit), so NO SessionEnd fires and the state DB is left LIVE forever with the
+  tab gone; the manual ⇆ is the only way out, and bailing made it impossible
+  (reported 2026-07-24). Safe because the `--resume` reuses the live DB
+  (`decide_log_fate → reuse-live-db`) and the fork adopts it, exactly as the
+  parked path's `restore-history` would.
 
 Everything else is shared: same close→park-wait→launch legs, same `relimit`
 stream end_reasons (the `relimit-launch` row carries `mode` and `model`), same
