@@ -2502,6 +2502,44 @@ def test_merged_backlog_interleaves_by_timestamp(dash, tmp_path):
     assert last >= 2 and mpos > 0
 
 
+def test_merge_live_interleaves_delta_by_timestamp(dash, tmp_path):
+    # The LIVE SSE delta merge (merge_live) is the increment-side twin of the
+    # backlog merge. Regression guard for "messages come after commands": a
+    # turn's TEXT (emitted just before its command's PreToolUse) must sort
+    # BEFORE the command op even though the two land in one SSE tick — the loop
+    # used to emit ops then a separate msgs event, prepending the text ABOVE the
+    # command in the newest-top feed. A later comment (post-result) sorts AFTER.
+    from datetime import datetime, timezone
+    tp = str(tmp_path / "live.jsonl")
+    A.session_start({"session_id": "live1", "cwd": "/w", "transcript_path": tp})
+    log = P.mirror_log("live1")
+    O.emit(log, O.label("cmd A", (1, 2, 3), g="a1"))
+    sdb = DS.API.state_db_for("live1")
+    _, ops = DS.API.ops_at(sdb, 0)
+    tcmd = ops[0]["_ts"]
+    assert tcmd
+
+    def iso(e):
+        return datetime.fromtimestamp(e, tz=timezone.utc).isoformat()
+
+    # "before cmd" precedes the command in time; "after cmd" follows it.
+    with open(tp, "w") as fh:
+        fh.write(_jl(
+            {"type": "assistant", "timestamp": iso(tcmd - 1),
+             "message": {"id": "m1", "content": [
+                 {"type": "text", "text": "before cmd"}]}},
+            {"type": "assistant", "timestamp": iso(tcmd + 1),
+             "message": {"id": "m2", "content": [
+                 {"type": "text", "text": "after cmd"}]}}))
+    recs, _pos = plugins.conversation("live1", 0)
+    items = DS.merge_live(ops, recs, "live1")
+    kinds = ["message" if it.get("t") == "msg" else "op" for it in items]
+    assert kinds == ["message", "op", "message"]
+    assert "before cmd" in items[0]["html"]
+    assert "cmd A" in items[1]["html"]
+    assert "after cmd" in items[2]["html"]
+
+
 # ------------------------------------------------------- lazy backlog + history
 
 def _blocks(sid, n):

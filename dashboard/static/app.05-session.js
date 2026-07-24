@@ -100,6 +100,10 @@ function connectSession(sid) {
   const es = new EventSource("/events/session/" + encodeURIComponent(sid)
                              + "?after=" + S.ses.lastId + "&mpos=" + S.ses.mpos);
   S.ses.es = es;
+  // ops AND main-thread conversation arrive on this ONE event, already
+  // interleaved oldest->newest by ts server-side (merge_live) — sending them as
+  // two arrival-order events prepended a turn's text ABOVE its command in the
+  // newest-top feed (the "messages come after commands" inversion).
   es.addEventListener("ops", (e) => {
     const d = JSON.parse(e.data);
     if (d.last <= S.ses.lastId && !d.items.length) return;
@@ -108,12 +112,6 @@ function connectSession(sid) {
     // the initial (fresh-connection) backlog carries `oldest` — the smallest
     // op id painted; >0 means older blocks exist to lazy-load downward.
     if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
-    appendItems(d.items);
-  });
-  es.addEventListener("msgs", (e) => {
-    const d = JSON.parse(e.data);
-    if (d.mpos <= S.ses.mpos) return;
-    S.ses.mpos = d.mpos;
     appendItems(d.items);
   });
   es.addEventListener("stats", (e) => { if (!S.ses) return; S.ses.stats = JSON.parse(e.data); updateStatsRow(); });

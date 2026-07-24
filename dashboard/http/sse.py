@@ -10,7 +10,6 @@ import plugins
 from core import paths as P
 from core import sessionapi as API
 from core.noaudit import load_audit
-from dashboard import opshtml
 from dashboard import config
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.notify.notifier import NOTIFIER
@@ -18,7 +17,7 @@ from dashboard.read.lists import (sessions_payload,
                                   _row_key, _wire_row)
 from dashboard.read.meta import (git_info, session_ctx, session_goal,
                                  session_title, _session_slug)
-from dashboard.read.mirror import (merged_backlog, _conv_items, _enrich_entries)
+from dashboard.read.mirror import (merged_backlog, merge_live, _enrich_entries)
 from dashboard.read.session import (agents_ctx, agents_model_effort,
                                     visible_agents, _ask_draft,
                                     _ask_pending, _ask_wire, _composer_draft, _composer_queue,
@@ -87,13 +86,15 @@ class _SseMixin:
             NOTIFIER.unregister(q)
 
     def sse_session(self, sid, after, mpos=0):
-        """One session's live stream: `ops` (rendered HTML), `msgs` (the
-        main-thread conversation from byte cursor `mpos`), `stats`, `agents`,
-        `tab`, `costs`, `running` (the live slot ribbon), `errors` (the ⚠
-        swallowed-error count) — each sent only on change. A FRESH connection
-        (after=0, mpos=0) gets the anchor-merged backlog as its first ops
-        event; a reconnect resumes both cursors and appends in arrival
-        order (interleave is a backfill affordance, not a live guarantee)."""
+        """One session's live stream: `ops` (rendered HTML — ops AND the
+        main-thread conversation from byte cursor `mpos`, interleaved by ts via
+        merge_live so a turn's text keeps its place relative to its command),
+        `stats`, `agents`, `tab`, `costs`, `running` (the live slot ribbon),
+        `errors` (the ⚠ swallowed-error count) — each sent only on change. A
+        FRESH connection (after=0, mpos=0) gets the ts-merged backlog as its
+        first ops event; a reconnect resumes both cursors. The delta merge is
+        the increment-side twin of the backlog merge, so live and reload agree
+        (they diverged once — see docs/dashboard.md, the ts-interleave note)."""
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
@@ -113,19 +114,22 @@ class _SseMixin:
         n, beat = 0, time.monotonic()
         while True:
             sdb = API.state_db_for(sid)
-            if sdb:
-                last2, ops = API.ops_at(sdb, last)
-                if ops:
-                    last = last2
-                    if not self._sse("ops", {"last": last,
-                                             "items": opshtml.op_items(ops, key)}):
-                        return
+            last2, ops = API.ops_at(sdb, last) if sdb else (last, [])
+            # Poll BOTH cursors, then interleave the delta by ts into ONE event
+            # (merge_live) — emitting ops and msgs as two separate arrival-order
+            # events prepended a turn's preceding text ABOVE its command in the
+            # newest-top feed (the "messages come after commands" inversion; the
+            # backlog path already ts-merges, so only the live tick was wrong).
             got = plugins.conversation(sid, mpos)
+            recs = []
             if got:
-                recs, mpos = got
-                if recs and not self._sse("msgs", {"mpos": mpos,
-                                                   "items": _conv_items(recs)}):
+                recs, mpos = got            # advance the transcript cursor always
+            if ops or recs:
+                if not self._sse("ops", {"last": last2, "mpos": mpos,
+                                         "items": merge_live(ops, recs, key)}):
                     return
+                last = last2
+            if recs:
                 st = API.stats_at(sdb)
                 if st != prev["stats"]:
                     prev["stats"] = st

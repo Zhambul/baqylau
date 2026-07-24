@@ -104,8 +104,9 @@ from dashboard.read.session import (  # noqa: F401  -- facade re-export
     _plan_pending, _session_tasks, _stamp_agent_cost, _suggestion, _SUGGEST_TABS,
 )
 from dashboard.read.mirror import (  # noqa: F401  -- facade re-export
-    history, merged_backlog, note_payload, ops_payload, view_payload,
-    HISTORY_BLOCKS, _conv_items, _enrich_entries, _heal_stash, _mdify,
+    history, merge_live, merged_backlog, note_payload, ops_payload,
+    view_payload, HISTORY_BLOCKS, _conv_items, _enrich_entries, _heal_stash,
+    _mdify,
 )
 
 

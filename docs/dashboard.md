@@ -3311,12 +3311,22 @@ the same tool block.
 without a timestamp is placed after its anchor's LAST op. Pre-first-tool
 messages (anchor None, no ts) lead the stream; messages whose anchor never
 painted an op keep their relative order at the tail. This works for ALL
-history, parked sessions included. Live updates need neither key: the
-per-session SSE tails the transcript by byte cursor (`mpos`, resumed across
-reconnects like the ops `after` cursor) and appends `msgs` events in arrival
-order — interleave is a backfill affordance, not a live-ordering guarantee.
-`/api/session/<sid>/ops` stays PURE ops (the mirror-parity endpoint); the merge
-exists only in the SSE backlog.
+history, parked sessions included. **Live updates share the same ts merge.**
+The per-session SSE loop polls BOTH cursors each tick — new ops (`after`) and
+new transcript records (`mpos`, resumed across reconnects like the ops cursor)
+— then interleaves the delta through `merge_live()` (mirror.py) and emits it as
+ONE `ops` event carrying both cursors. `merge_live` is `_merge_order`'s
+increment-side twin: a two-pointer merge over the two already-ts-ordered inputs,
+a record placed before the next op only when its ts is STRICTLY less (so an op
+with equal ts sorts first, matching `place`'s `ots <= ts`). This closed the
+"messages come after commands" inversion: the loop used to emit ops and a
+separate `msgs` event in arrival order (ops first), which the newest-top feed
+prepended so a turn's preceding text landed ABOVE its command — visible only
+live, since a reload re-ran the backlog ts-merge and read right. `op_items` is
+stateless per-op (the same per-op render the backlog window uses), so
+interleaving single ops with conv items is identical to a batch render. The old
+`msgs` event is gone; `/api/session/<sid>/ops` stays PURE ops (the mirror-parity
+endpoint).
 
 **The `tab` event re-resolves the window mid-stream.** `sse_session` resolves
 the session's `kitty_window_id` at connect, but a RESUME moves the session to

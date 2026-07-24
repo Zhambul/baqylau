@@ -95,6 +95,39 @@ def _conv_items(recs):
     return out
 
 
+def merge_live(ops, recs, key=""):
+    """A LIVE SSE delta of new ops + new conversation recs -> ONE oldest->newest
+    item list, interleaved by ts — the increment-side twin of _merge_order's
+    placement rule. Without it the SSE loop emits ops and msgs as two separate
+    events (ops first) that the client prepends in ARRIVAL order, so a message
+    that preceded its command in the turn lands newer-than (above) the command
+    in the newest-top feed — the "messages come after commands" inversion that
+    only the live path shows (a reload re-runs the ts-merge and reads right).
+
+    Both inputs are already ts-ordered (ops by id == emit time, recs in
+    transcript order), so a two-pointer merge suffices. A rec is emitted before
+    the next op only when its ts is STRICTLY less (op with ts == rec.ts sorts
+    first — the rec lands AFTER it, matching _merge_order.place's `ots <= ts`).
+    A ts-less op/rec (pre-migration edge; live always stamps both) falls to the
+    tail in arrival order. op_items is stateless per-op — the same per-op render
+    the backlog window uses — so interleaving single ops with conv items is
+    identical to a batch render."""
+    items, i, j = [], 0, 0
+    while i < len(ops) and j < len(recs):
+        ot, rt = ops[i].get("_ts"), recs[j].get("ts")
+        if rt is not None and (ot is None or rt < ot):
+            items.extend(_conv_items([recs[j]]))
+            j += 1
+        else:
+            items.extend(opshtml.op_items([ops[i]], key))
+            i += 1
+    for op in ops[i:]:
+        items.extend(opshtml.op_items([op], key))
+    if j < len(recs):
+        items.extend(_conv_items(recs[j:]))
+    return items
+
+
 TAIL_BLOCKS = 80       # initial backlog: how many stream BLOCKS to paint at once
 HISTORY_BLOCKS = 40    # /history default page size (blocks), when ?blocks absent
 
