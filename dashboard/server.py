@@ -4025,7 +4025,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def post_notify_mute(self, sid):
         """Opt a session in/out of the deferred Telegram alert (docs/dashboard.md
-        *Telegram alerts*) — the header 🔔/🔕 toggle. Body: `muted` (bool).
+        *Telegram alerts*) — the header ◉/○ toggle. Body: `muted` (bool).
         Writes the durable global prefs store (dashboard/prefs.py), NOT any
         session/terminal state, so it works live AND parked. Behind _post_guard
         like every control-plane POST; audited as a `notify-mute` state_files row
@@ -4109,7 +4109,7 @@ class Handler(BaseHTTPRequestHandler):
         PushSubscription.toJSON() the browser produced. Stored (upserted by
         endpoint) in the durable global prefs store; the Notifier fans a push out
         to every stored subscription on the deferred asking/done alert, honoring
-        the per-session 🔕 mute. Behind _post_guard like every control-plane POST,
+        the per-session ○ mute. Behind _post_guard like every control-plane POST,
         though it writes only the dashboard's OWN prefs. Audited as a `web-push`
         state_files row (action subscribe)."""
         body = self._post_guard()

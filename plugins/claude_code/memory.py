@@ -24,12 +24,12 @@ from core import state as ST
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
 KEY = "memory"                      # the state-DB kv stash the Memory tab reads
-MARK = "\U0001f9e0"                 # 🧠 — the distinct memory marker baked into the mirror one-liner
+MARK = "\u2756"                     # ❖ — the distinct memory marker baked into the mirror one-liner
 
 _DEFAULT_ROOT = "~/wiki/01"
 
 # The feature is SCOPED to one project: the memory wiki (~/wiki/01) is shared
-# across all of code/01, but a session only gets the 🧠 marker / Memory tab /
+# across all of code/01, but a session only gets the ❖ marker / Memory tab /
 # note viewer when it is working inside aggregator-adapters (the project whose
 # .claude/ wires up the wiki). BAQYLAU_MEMORY_PROJECT overrides it — the
 # hermetic-test seam only, not a user knob.

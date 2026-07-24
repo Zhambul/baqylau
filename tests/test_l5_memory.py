@@ -164,7 +164,7 @@ def _mem_env(test_env, vault, project):
 
 def test_file_fmt_marks_and_records_a_memory_op(run_hook, test_env, session, tmp_path):
     """The real claude-file-fmt.py hook: a Write under the vault, from an IN-SCOPE
-    session, paints the 🧠 marker AND stashes the note into the `memory` kv."""
+    session, paints the ❖ marker AND stashes the note into the `memory` kv."""
     s = session.make()
     vault = tmp_path / "wiki" / "01"
     (vault / "platform" / "concepts").mkdir(parents=True)
@@ -177,14 +177,14 @@ def test_file_fmt_marks_and_records_a_memory_op(run_hook, test_env, session, tmp
     files = (ST.kv_get(s.log, "memory") or {}).get("files")
     assert files and files[0]["path"] == note and files[0]["verb"] == "Write"
     assert files[0]["agent"] is None                  # main agent
-    assert MEM.MARK in s.ops_text()                   # 🧠 in the mirror one-liner
+    assert MEM.MARK in s.ops_text()                   # ❖ in the mirror one-liner
     # the emitted line op carries the web-filter mem tag
     assert any(op.get("mem") for op in s.ops() if op.get("t") == "line")
 
 
 def test_file_fmt_scope_gate_off_project(run_hook, test_env, session, tmp_path):
     """The SAME wiki write from a session OUTSIDE the enabled project is a plain
-    file op — no 🧠 marker, no `memory` kv (the feature is scoped)."""
+    file op — no ❖ marker, no `memory` kv (the feature is scoped)."""
     s = session.make()
     vault = tmp_path / "wiki" / "01"
     (vault / "platform").mkdir(parents=True)

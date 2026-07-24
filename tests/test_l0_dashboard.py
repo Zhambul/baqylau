@@ -2524,7 +2524,7 @@ def test_notifier_telegram_suppressed_while_composing(monkeypatch, tmp_path):
 
 
 def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
-    """A muted session (the 🔕 opt-out) never fires even when it sits red past
+    """A muted session (the ◉/○ opt-out) never fires even when it sits red past
     the delay — the mute is checked at SEND time. And CLAUDE_DASH_NOTIFY_TELEGRAM
     off (DS.NOTIFY_TELEGRAM False) arms nothing at all."""
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))

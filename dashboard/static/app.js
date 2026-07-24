@@ -292,7 +292,7 @@ const TAB_LABEL = {
 /* The "running now" ribbon: glyph + short label per live `live`-table slot kind
    (sessionapi.running() — fg command, bg jobs, monitors, streaming agents). */
 const RUN_GLYPH = {
-  "fg": ["⚙", "fg"], "bg": ["⏳", "bg"], "monitor": ["👁", "monitor"],
+  "fg": ["⚙", "fg"], "bg": ["◷", "bg"], "monitor": ["◉", "monitor"],
   "sub.pid": ["◇", "agent"], "codex": ["◆", "codex"],
 };
 const RUN_ORDER = ["fg", "bg", "monitor", "sub.pid", "codex"];
@@ -1990,7 +1990,7 @@ function refineBlockKind(b, it) {
 
 function ungroupedKind(it, elem) {
   if (it.t === "msg") return "messages";
-  // memory-wiki file ops carry data-mem (🧠) — their own kind, checked before
+  // memory-wiki file ops carry data-mem (❖) — their own kind, checked before
   // the generic files test (a memory op is also a data-v file op).
   if (elem.matches("[data-mem]") || elem.querySelector("[data-mem]")) return "memory";
   // file-op one-liners carry the click-to-view id as data-v (.opl / gut ops)
@@ -2545,7 +2545,7 @@ function renderGoal() {
   const met = !!goal.met;
   const card = el("div", "goalcard" + (met ? " met" : ""));
   const head = el("div", "goalhead");
-  head.append(el("span", "goalmark", met ? "✓" : "🎯"));
+  head.append(el("span", "goalmark", met ? "✓" : "◎"));
   head.append(el("span", "goaltitle", "goal"));
   head.append(el("span", "goalstate", met ? "achieved" : "active"));
   card.append(head);
@@ -3380,7 +3380,7 @@ function syncSuggestion(ta) {
 }
 
 /* ---------- composer attachments (images/screenshots + files) ----------
-   The browser captures a file (paste of a screenshot, a drag-drop, or the 📎
+   The browser captures a file (paste of a screenshot, a drag-drop, or the attach
    picker), uploads its bytes to /api/upload, and the server stages it on disk
    and hands back an absolute path. On send, those paths ride the message as
    leading `@path` mentions — the TUI-native way to attach a file — so Claude
@@ -3430,7 +3430,7 @@ function attachTray(getSid, onChange) {
         img.src = it.url;
         chip.append(img);
       } else {
-        chip.append(el("span", "attach-icon", "📄"));
+        chip.append(el("span", "attach-icon", "▤"));
       }
       chip.append(el("span", "attach-name", it.name));
       const x = el("button", "attach-x", "✕");
@@ -3478,12 +3478,12 @@ function attachTray(getSid, onChange) {
   };
 }
 
-// Wire the 📎 picker, clipboard paste (screenshots), and drag-drop onto a tray.
+// Wire the attach picker, clipboard paste (screenshots), and drag-drop onto a tray.
 // `ta` is the paste target (textarea); `zone` the drop target (composer wrap /
 // prompt box); enabled() gates every path (a parked/headless box takes none).
 // Returns the picker button to place in the UI (the hidden <input> rides with
 // it in a fragment).
-// a paperclip glyph as an inline SVG (not the 📎 emoji): the emoji's own
+// a paperclip glyph as an inline SVG (not an emoji): the emoji's own
 // line-box metrics made the button a different height than the SVG mic beside
 // it, so its icon sat misaligned — an SVG sized exactly like `.micbtn svg`
 // (15px) lines up and matches the mic's monochrome style.
@@ -3775,8 +3775,8 @@ function buildComposer() {
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
   btn.onclick = send;
-  // order: [attachment strip (full-width, wraps to top)], textarea, 📎 attach,
-  // 🎤 mic, [use hint · iPad only], send — the attach sits next to the mic, not
+  // order: [attachment strip (full-width, wraps to top)], textarea, attach,
+  // mic, [use hint · iPad only], send — the attach sits next to the mic, not
   // stranded past send; the hint button rides just before send when present
   wrap.append(tray.strip, ta);
   if (attachBtn) wrap.append(attachBtn);
@@ -5010,7 +5010,7 @@ function setModelBtn(btn) {
 // through); bare "effort" when unknown.
 function setEffortBtn(btn) {
   const meta = (S.ses && S.ses.meta) || {};
-  btn.textContent = "⚡ " + (meta.effort || "effort") + " ▾";
+  btn.textContent = "✧ " + (meta.effort || "effort") + " ▾";
 }
 
 /* ---------- full web rewind (docs/dashboard.md, *Web rewind*) ---------- */
@@ -5333,14 +5333,14 @@ function renderSessionChrome(tab) {
   mig.title = "migrate this session to another account";
   mig.onclick = () => lockDuring(mig, migrateSession);
   act.append(mig);
-  // 🔔 alerts / 🔕 muted: opt this session in/out of the DEFERRED Telegram
+  // ◉ alerts / ○ muted: opt this session in/out of the DEFERRED Telegram
   // alert (docs/dashboard.md *Telegram alerts*) — the off-device notification
   // that fires when a chat sits red/green unattended past the grace window.
   // Deliberately OUTSIDE the live gate (like rename): the opt-out is a
   // dashboard pref, not session state, so it works live AND parked.
   const notif = el("button", "sstop actses");
   const paintNotif = (muted) => {
-    notif.textContent = muted ? "🔕 muted" : "🔔 alerts";
+    notif.textContent = muted ? "○ muted" : "◉ alerts";
     notif.title = muted
       ? "Telegram alerts muted for this session — click to unmute"
       : "Telegram alerts on — click to mute this session";
@@ -5547,10 +5547,10 @@ function renderSessionChrome(tab) {
   // eager streams count (monitor_count) so the tab shows before the tab is opened
   ses.monTab = mk("monitors", "monitors",
                   ses.monitors ? ses.monitors.length : (meta.monitor_count || 0));
-  // ⏳ background jobs — actual list length once fetched, else the cheap eager count
+  // ◷ background jobs — actual list length once fetched, else the cheap eager count
   ses.jobTab = mk("jobs", "jobs",
                   ses.jobs ? ses.jobs.length : (meta.job_count || 0));
-  // 🧠 memory-wiki notes touched — actual list length once fetched, else the
+  // ❖ memory-wiki notes touched — actual list length once fetched, else the
   // cheap eager count. SCOPED: only sessions inside the enabled project
   // (aggregator-adapters, meta.memory_scope) get the tab at all.
   if (meta.memory_scope)
@@ -5745,7 +5745,7 @@ function renderAgentScoreboard(sr, focus) {
   // renderSessionChrome rebuilds on the way back). Skip during an inline rename.
   if (ses.projEl && !ses.projEl.querySelector("input"))
     ses.projEl.textContent =
-      (rec.kind === "teammate" ? "👥 " : "◇ ") + (rec.desc || focus.aid);
+      (rec.kind === "teammate" ? "◈ " : "◇ ") + (rec.desc || focus.aid);
   const back = el("a", "backses", "← session");
   back.href = "#/s/" + encodeURIComponent(S.cur);   // the mirror = the main agent
   sr.append(back);
@@ -5859,7 +5859,7 @@ function agentCard(a) {
   card.dataset.st = stcls;              // state tint keyed off agent status
   card.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
   const name = a.desc || a.agent_id;      // the Task description IS the name
-  card.append(el("div", "aid", (a.kind === "teammate" ? "👥 " : "◇ ") + name));
+  card.append(el("div", "aid", (a.kind === "teammate" ? "◈ " : "◇ ") + name));
   if (a.desc) card.append(el("div", "desc", a.agent_id));
   const m = el("div", "meta");
   m.append(el("span", stcls, sttxt));
@@ -6137,7 +6137,7 @@ function jobCard(j) {
   card.dataset.st = stcls;
   card.href = "#/s/" + encodeURIComponent(S.cur) + "/j/" + encodeURIComponent(j.task);
   const name = firstLine(j.command) || j.task;
-  card.append(el("div", "aid", "⏳ " + name));
+  card.append(el("div", "aid", "◷ " + name));
   card.append(el("div", "desc", j.task));
   const meta = el("div", "meta");
   meta.append(el("span", stcls, sttxt));
@@ -6342,13 +6342,13 @@ function renderNoteView() {
   ses.body.append(wrap);
 }
 
-/* The note breadcrumb — 🧠 memory (back to the grid) › note › followed note … */
+/* The note breadcrumb — ❖ memory (back to the grid) › note › followed note … */
 function noteCrumbs(trail) {
   const nav = el("div", "crumbs");
   const back = el("a", "crumb");
   back.href = "#/s/" + encodeURIComponent(S.cur) + "/memory";
   back.title = "back to the memory list";
-  back.append(el("span", "cg", "🧠"), document.createTextNode(" memory"));
+  back.append(el("span", "cg", "❖"), document.createTextNode(" memory"));
   back.onclick = (e) => {
     e.preventDefault();
     S.ses.noteTrail = []; S.ses.noteFocus = null; paintMemory();
@@ -6358,7 +6358,7 @@ function noteCrumbs(trail) {
     nav.append(el("span", "csep", "›"));
     if (i === trail.length - 1) {
       const cur = el("span", "crumb cur");
-      cur.append(el("span", "cg", "🧠"), document.createTextNode(" " + (d.name || "?")));
+      cur.append(el("span", "cg", "❖"), document.createTextNode(" " + (d.name || "?")));
       nav.append(cur);
     } else {
       const a = el("a", "crumb");
@@ -6400,15 +6400,15 @@ function repaintJobDetail() {
   scheduleJobPoll();
 }
 
-/* The job breadcrumb — ⏳ jobs (back to the list) › this job. */
+/* The job breadcrumb — ◷ jobs (back to the list) › this job. */
 function jobCrumbs(sid, j) {
   const nav = el("div", "crumbs");
   const back = el("a", "crumb");
   back.href = "#/s/" + encodeURIComponent(sid) + "/jobs";
   back.title = "back to the jobs list";
-  back.append(el("span", "cg", "⏳"), document.createTextNode(" jobs"));
+  back.append(el("span", "cg", "◷"), document.createTextNode(" jobs"));
   const cur = el("span", "crumb cur");
-  cur.append(el("span", "cg", "⏳"),
+  cur.append(el("span", "cg", "◷"),
              document.createTextNode(" " + (firstLine(j.command) || j.task)));
   nav.append(back, el("span", "csep", "›"), cur);
   return nav;
@@ -6418,7 +6418,7 @@ function renderJobDetail(container, j) {
   const [sttxt, stcls] = jobStatus(j);
   const info = el("div", "mdetail");
   const h = el("div", "mdhead");
-  h.append(el("span", "k k-job", "⏳ background"), el("span", stcls, sttxt));
+  h.append(el("span", "k k-job", "◷ background"), el("span", stcls, sttxt));
   info.append(h);
   if (j.command) {
     info.append(el("div", "lbl", "command"));
@@ -6503,7 +6503,7 @@ function showAgent(sid, aid) {
    (the hierarchy is one level deep — a session's flat agent list): the main
    agent is a link back to its mirror (#/s/<sid>), labelled by the session's
    title; the current subagent is the highlighted end node. Icons: ◆ the main
-   agent, ◇/👥 the subagent. Clicking the main node is how you go back. */
+   agent, ◇/◈ the subagent. Clicking the main node is how you go back. */
 function agentCrumbs(sid, aid, rec) {
   const nav = el("div", "crumbs");
   const meta = (S.ses && S.ses.meta) || {};
@@ -6513,7 +6513,7 @@ function agentCrumbs(sid, aid, rec) {
   main.title = "back to the main agent";
   main.append(el("span", "cg", "◆"), document.createTextNode(" " + sesName));
   const cur = el("span", "crumb cur");
-  cur.append(el("span", "cg", rec && rec.kind === "teammate" ? "👥" : "◇"),
+  cur.append(el("span", "cg", rec && rec.kind === "teammate" ? "◈" : "◇"),
              document.createTextNode(" " + ((rec && rec.desc) || aid)));
   nav.append(main, el("span", "csep", "›"), cur);
   return nav;

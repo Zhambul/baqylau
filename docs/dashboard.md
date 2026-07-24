@@ -25,6 +25,37 @@ dashboard/static/           the single-page app (vanilla JS/CSS, no build step)
 `./bin/claude-dashboard.py` (default verb `open`) starts the server if needed
 and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
 
+## No emoji: the glyph vocabulary
+
+**The UI carries NO emoji** — every marker is a monochrome text glyph, styled by
+CSS like the rest of the page. This is a deliberate rule, not taste-of-the-day:
+a colour-emoji font paints its own colours (ignoring the theme, and unreadable
+against the dark/light washes both themes use), brings its own line-box metrics
+(the attach button's paperclip is an inline SVG for exactly this reason — the
+emoji made the button a different height than the mic beside it, see *Web
+attachments*), and renders differently per platform, so the terminal-flavoured
+look of the page fell apart on a phone. The vocabulary in use:
+
+| glyph | meaning | glyph | meaning |
+|---|---|---|---|
+| `◆` | main agent | `◇` | subagent |
+| `◈` | teammate / account chip | `◉` | monitors · alerts on |
+| `○` | alerts muted | `◷` | background job |
+| `❖` | memory-wiki note | `◎` | active goal (`✓` once met) |
+| `✦` | model | `✧` | effort |
+| `⊜` | compact | `⊘` | cancel |
+| `■` | stop | `⇆` | migrate |
+| `✎` | rename | `↶` | rewind |
+| `▦` | stats | `▤` | attached file |
+| `⧗` | queued message | `⧉` | copy |
+| `⚠` | errors | `⋔` / `⎇` | worktree / branch |
+
+The one place emoji survive is the OFF-device alert (the Telegram message and
+the Web Push notification titles, `🔴 needs you` / `🟢 is done`, server.py) —
+those render in someone else's UI (a chat client, an OS notification centre)
+where a colour dot is the only styling available, and none of the reasons above
+apply. Anything painted BY this app stays emoji-free.
+
 ## Placement: a fourth dependency tier
 
 `dashboard/` sits ABOVE core/plugins/frontends: it imports `core/`, the
@@ -476,7 +507,7 @@ still believes the tab is cancelable.
 **Web attachments (images/screenshots + files).** The composer and the
 new-session prompt accept attachments the way the Claude Code TUI does — paste a
 screenshot (`onpaste` over `clipboardData.items` of kind `file`), drag-drop
-files onto the composer/prompt box, or the 📎 picker. Claude Code has NO CLI
+files onto the composer/prompt box, or the attach (paperclip) picker. Claude Code has NO CLI
 flag or stdin channel for images, so the mechanism reuses its ONE native path:
 an `@path` mention in the message text, which Claude Code itself resolves and
 attaches (an image becomes an image content block). The dashboard's job is only
@@ -513,7 +544,7 @@ to get the bytes onto disk and put the path in the message:
   left and there's no text, the send is a 400.
 - The browser shows pending attachments as removable chips above the input
   (image thumbnail from a local `URL.createObjectURL`, no server round-trip;
-  📄 + filename otherwise); an in-flight upload dims the chip and a send waits on
+  ▤ + filename otherwise); an in-flight upload dims the chip and a send waits on
   it. Attachments are NOT persisted into the `composer-draft` kv, so a reload
   drops the pending chips (the staged files themselves survive on disk until the
   prune) — a deliberate scope limit; the draft machinery stays text-only.
@@ -1004,7 +1035,7 @@ row in the resume picker overrides the model/effort with that session's own
 
 The scoreboard's SECOND action row (its own line under
 stop/cancel/rewind/close — live-with-window sessions only, like the buttons
-above it): **⊜ compact**, **✦ model ▾**, **⚡ effort ▾**. Each just types one
+above it): **⊜ compact**, **✦ model ▾**, **✧ effort ▾**. Each just types one
 of the TUI's OWN slash commands into the session's window — `/compact`,
 `/model <alias>`, `/effort <level>`. The TUI stays authoritative, same
 philosophy as the "/" menu: the web never re-implements compaction or model
@@ -1081,7 +1112,7 @@ Python side is the authority). Both labels stay CURRENT: an applied web
 switch updates them optimistically (`applyQuickSwitch` — for model a
 `pendingModel` override that holds until the ctx probe's family confirms it
 on the next assistant turn; the probe's model is stale until then). The
-effort label (`⚡ high ▾`) shows the SAVED effort level — session meta
+effort label (`✧ high ▾`) shows the SAVED effort level — session meta
 `effort` + the SSE `effort` event, backed by the
 `plugins.effort_default(cwd, slug)` fan-out over
 `model.settings_field("effortLevel", start=cwd, config=…)`, where `slug` is
@@ -2384,7 +2415,7 @@ into an **autonomous mode**: Claude works across turns toward a stated
 completion condition until an internal checker confirms it, at which
 point the goal auto-clears. The dashboard mirrors the active goal as a
 **goal card pinned at the very top of the mirror tab — above the tasks
-card** (`buildGoalCard`/`renderGoal` in app.js, `.goalcard`): a 🎯 mark,
+card** (`buildGoalCard`/`renderGoal` in app.js, `.goalcard`): a ◎ mark,
 the condition text, and an amber **active** state while working; once the
 checker reports the condition met the card flips to a green ✓ **achieved**
 before it clears. The card hides when there is no active goal. Read-only
@@ -2542,7 +2573,7 @@ errors (the audit-debug skill's bug shape).
 
 ## Stats / Insights (`GET /api/stats`)
 
-The header's **📊 stats** button routes to `#/stats` — a GitHub-Insights-inspired
+The header's **▦ stats** button routes to `#/stats` — a GitHub-Insights-inspired
 cross-session, over-time view (the list page only shows *current* sessions).
 The unit is a **session** (one audit `sessions` row = one "commit"). Four panels:
 
@@ -3497,7 +3528,7 @@ A session-view tab **`memory`** (between `jobs` and `errors`) lists the
 `[[wikilinks]]`). A Read/Write/Edit whose path falls under that root is a MEMORY op
 — recall (Read), persist (Write), or revise (Update/Edit). `plugins/claude_code/
 memory.py` is the single owner of that vocabulary (the root, the project scope, the
-`is_memory` test, the project gate, the mirror 🧠 `MARK`, the `memory` kv, and the
+`is_memory` test, the project gate, the mirror ❖ `MARK`, the `memory` kv, and the
 read-side vault helpers).
 
 **Scoped to one project.** The wiki (`~/wiki/01`) is shared across all of
@@ -3511,7 +3542,7 @@ back to the mirror). A worktree under the project (`…/.claude/worktrees/<x>`) 
 scope.
 
 **Mirror side.** When `file_fmt.py` (main agent) or `substream_render.py` (a
-subagent) renders a file op under the root, it appends 🧠 (`memory.MARK`) to the
+subagent) renders a file op under the root, it appends ❖ (`memory.MARK`) to the
 one-liner and tags the op `mem` (`ops.line`/`ops.gut`), which `opshtml` surfaces as
 `data-mem` so the page sorts it into its own **`memory`** stream-kind filter
 (*Stream kind filters* below), distinct from generic `files`.
@@ -3538,7 +3569,7 @@ bubbles use) and adds `[[wikilink]]` linkification: links are protected as
 control-byte sentinels BEFORE `md_html` and restored as `data-note` anchors AFTER
 (so a stem's `_`/`*` can't be eaten by emphasis and nothing raw reaches the page);
 a stem that doesn't resolve gets a `dead` class (the wiki keeps dangling links on
-purpose). Clicking a `[[link]]` fetches the target and pushes a breadcrumb (🧠
+purpose). Clicking a `[[link]]` fetches the target and pushes a breadcrumb (❖
 memory › note › followed note …) so you can walk the vault beyond the touched set
 and back out. A **Backlinks** section lists the notes whose text links to this one
 (`memory.backlinks`, same index), each itself clickable. Each wikilink/backlink
@@ -3573,7 +3604,7 @@ exact chip text, which drifts. Blocks default to `commands` and upgrade to
 nested job, or a block-opening chip that starts with a who-prefix rather than a
 main-session command glyph `▶▷◉■` — subagent/teammate/codex chips lead with
 their label/`codex`). Ungrouped items classify by item type: `msg` items are
-`messages`, memory-wiki file ops (they carry `data-mem` — the 🧠 marker, checked
+`messages`, memory-wiki file ops (they carry `data-mem` — the ❖ marker, checked
 first) are `memory`, other file-op one-liners (they carry a `data-v` click-to-view
 id) are `files`, the rest `commands`. On a CURRENT session the `agents` chip mostly
 matches nothing: agent/codex stream ops are producer-source-stamped and never
@@ -3715,7 +3746,7 @@ Telegram's auto-linker drops a URL fragment — a `#`-link would open the
 dashboard root on the phone, not the session. The page translates `?s=<sid>`
 back into the hash route on load (`deepLinkFromQuery` in app.js).
 
-**Per-session opt-out.** The header's **🔔 alerts / 🔕 muted** button
+**Per-session opt-out.** The header's **◉ alerts / ○ muted** button
 (`renderSessionChrome`, beside ✎ rename / ⇆ migrate) toggles
 `POST /api/session/<sid>/notify` `{"muted": bool}`, which flips the session's
 entry in the durable global prefs store (`dashboard/prefs.notify_muted` /
@@ -3748,7 +3779,7 @@ web app **only** via **Web Push** — a service worker the SERVER wakes — and 
 NOT support the `new Notification()` constructor there at all. So Web Push is the
 on-device analog of the Telegram alert, twinned with it at the **same deferred
 fire point**: the same red `asking` / green `done` transitions, the same grace
-window + arm-cancel + all the suppress logic, the same per-session 🔕 mute
+window + arm-cancel + all the suppress logic, the same per-session ○ mute
 (checked at send time). Either channel arms the pending alert (`NOTIFY_TELEGRAM
 or NOTIFY_WEBPUSH`).
 
@@ -3893,7 +3924,7 @@ finds a transcript the audit never saw.
 
 The session header carries a compact ribbon under the stats row — one chip per
 thing EXECUTING under the session right now: the foreground command tailer
-(`⚙ fg`), background jobs (`⏳ bg`), monitors (`👁 monitor`), and streaming
+(`⚙ fg`), background jobs (`◷ bg`), monitors (`◉ monitor`), and streaming
 subagents/teammates (`◇ agent`), each tinted by kind. It is fed by the state
 DB's `live` slot table (`core/slots.py`), the same ground truth the tab
 tracker's blue-while-busy signal reads — NOT the audit `streams` table (which
@@ -3912,7 +3943,7 @@ just open the drill-down timeline — it **swaps the top scoreboard to that agen
 own numbers**. `showAgent` sets `ses.agentFocus = {aid, data}`
 and repaints the header; `updateStatsRow` branches on `agentFocus` and calls
 `renderAgentScoreboard` instead of the session totals — the prominent header
-**name** (`ses.projEl`) becomes the subagent's (`◇ ‹desc›` / `👥` for a teammate),
+**name** (`ses.projEl`) becomes the subagent's (`◇ ‹desc›` / `◈` for a teammate),
 and the stats row shows status, `model·effort`, event count, `⏱` duration, the
 `Σ` token rollup, and `≈` cost, with the ctx row showing the agent's own ctx bar
 and a leading **← session** link that restores the session view (it points at

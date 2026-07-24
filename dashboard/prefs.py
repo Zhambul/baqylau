@@ -129,7 +129,7 @@ def hide_dir(key, ts):
     return mutate_map(HIDDEN_KEY, lambda d: d.__setitem__(str(key), float(ts)))
 
 
-# --- notification mute (the session header's 🔕 opt-out) ------------------------
+# --- notification mute (the session header's ◉/○ opt-out) ------------------------
 # The set of sessions the user opted OUT of the deferred Telegram alert
 # (docs/dashboard.md, *Telegram alerts*), stored under one kv key as a
 # {session_id: True} map. Global like hidden-dirs — the mute is a dashboard
@@ -163,7 +163,7 @@ def set_notify_muted(sid, muted):
 # — keyed by the endpoint URL so a re-subscribe from the same browser upserts in
 # place instead of piling up duplicates. Global like the other dashboard prefs:
 # a subscription is a per-DEVICE fact, not per-session, and the send honors the
-# per-session 🔕 mute at fire time (same as the Telegram alert). A dead
+# per-session ○ mute at fire time (same as the Telegram alert). A dead
 # subscription (the push service returns 404/410) is pruned by remove_push_sub.
 PUSH_SUBS_KEY = "push-subs"
 

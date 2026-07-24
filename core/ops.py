@@ -159,7 +159,7 @@ def line(s, view=None, mem=False):
     # /view click); the producer bakes the matching OSC 8 hyperlink into `s`.
     # mem: this file op touched a memory-wiki note (plugins.claude_code.memory) —
     # a web-only classification hint the dashboard uses to sort it into its own
-    # `memory` filter kind; the terminal renderer ignores it (the 🧠 MARK is
+    # `memory` filter kind; the terminal renderer ignores it (the ❖ MARK is
     # already baked into `s`).
     o = {"t": "line", "s": s}
     if view:
