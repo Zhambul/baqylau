@@ -4344,11 +4344,21 @@ function resumePicker() {
       const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
       if (r) r.focus();
     },
+    // focus the SEARCH box so you can type a query the instant the picker
+    // reveals (the plain "resume a conversation" untoggle) — but NOT on an
+    // iPad, where focusing an input pops the on-screen keyboard over the list
+    // (the same reason focus() lands on a row); there we fall back to a row.
+    focusSearch() {
+      if (IS_IPAD) return api.focus();
+      search.focus();
+      search.select();
+    },
     // (re)load the directory's rows (optionally filtered by `q`); `preferSid`
     // preselects a specific session (the ↻ resume target), else the current pick
     // if still present, else — for the UNFILTERED list only — the most-recent row
     // (so the default resume IS "continue the most recent"). `andFocus` focuses
-    // the selected row after the load (the initial resume-open).
+    // after the load (the initial resume-open): "search" → the query box (type
+    // to search at once), any other truthy value → the selected row.
     refresh(cwd, preferSid, q, andFocus) {
       lastCwd = cwd || "";
       q = (q || "").trim();
@@ -4372,7 +4382,10 @@ function resumePicker() {
           selSid = "";
           paint();
           if (want) choose(want);                  // applySel + onSelect, no repaint
-          if (andFocus) api.focus();
+          // andFocus === "search" focuses the query box (type-to-search at once);
+          // any other truthy value focuses the selected row.
+          if (andFocus === "search") api.focusSearch();
+          else if (andFocus) api.focus();
         })
         .catch(() => {
           if (tok !== qToken) return;
@@ -4433,9 +4446,13 @@ function openNewSession(prefillCwd, resumeSid) {
     resumeRow.style.display = fresh.checked ? "none" : "";
     clog("", "resume.mode", { fresh: fresh.checked ? 1 : 0 });
     if (fresh.checked) return;
-    if (!pickerLoaded) {                 // first reveal: load + focus a row
+    if (!pickerLoaded) {                 // first reveal: load, then focus
       pickerLoaded = true;
-      picker.refresh(dir.value.trim(), resumeSid || "", "", true);
+      // a ↻ resume deep-link preselects a specific row (focus IT, ready to
+      // Enter); a plain untoggle focuses the search box so you can type a
+      // query with no extra click (focusSearch falls back to a row on iPad).
+      picker.refresh(dir.value.trim(), resumeSid || "", "",
+                     resumeSid ? true : "search");
     } else picker.focus();              // re-reveal: focus the existing selection
   };
   fresh.onchange = syncFresh;
