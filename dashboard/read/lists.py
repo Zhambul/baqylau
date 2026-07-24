@@ -11,8 +11,8 @@ import time
 import plugins
 from core import paths as P
 from core import sessionapi as API
-from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS,
-                              STATS_TTL_S)
+from dashboard import config
+from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS)
 from dashboard.control import launch
 from dashboard.control.launch import _within_live_grace
 from dashboard.read.cache import MEMO_CAP, _db_cached
@@ -262,7 +262,7 @@ def accounts_payload():
     return out
 
 
-_STATS_AGG = {"t": 0.0, "v": None}   # wall-clock memo for stats_payload (STATS_TTL_S)
+_STATS_AGG = {"t": 0.0, "v": None}   # wall-clock memo for stats_payload (config.STATS_TTL_S)
 
 
 def stats_payload():
@@ -271,7 +271,7 @@ def stats_payload():
     punch card, and per-project cards. Everything is computed SERVER-side (single-
     owner rule; the JS only renders) from core.sessionapi.activity_stats (the audit
     tables). A read-only aggregate — no writes, no audit rows (like accounts_payload,
-    ctx saturation, and the goal probe). Memo-cached for STATS_TTL_S so re-opening
+    ctx saturation, and the goal probe). Memo-cached for config.STATS_TTL_S so re-opening
     the page doesn't re-scan the whole history.
 
     Sessions group under the SAME key the list page uses — start_cwd (the frozen
@@ -281,7 +281,7 @@ def stats_payload():
     one pass; the heatmap buckets are left client-side so the scale self-normalises
     without a round-trip."""
     now = time.time()
-    if _STATS_AGG["v"] is not None and now - _STATS_AGG["t"] < STATS_TTL_S:
+    if _STATS_AGG["v"] is not None and now - _STATS_AGG["t"] < config.STATS_TTL_S:
         return _STATS_AGG["v"]
     agg = API.activity_stats()
     rows = agg["sessions"]

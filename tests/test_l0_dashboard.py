@@ -1091,7 +1091,7 @@ def test_web_viewing_presence_expires(monkeypatch):
     """The viewing presence is TTL'd: a beat marks the sid fresh, and once the
     deadline passes (`_web_viewing` GC's it) presence is gone — so the alert
     reverts to firing when you stop watching."""
-    monkeypatch.setattr(DS, "VIEW_TTL_S", 20)
+    monkeypatch.setattr(DS.presence, "VIEW_TTL_S", 20)
     clock = [1000.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     DS._VIEWING.pop("sZ", None)
@@ -1173,7 +1173,7 @@ def test_global_sse_diff_is_paused_blind(dash, monkeypatch):
     NOTHING (no snapshot, no delta); a real change must — and its row still
     carries the exact paused value (only the DIFF is paused-blind)."""
     import time
-    monkeypatch.setattr(DS, "GLOBAL_TICK_S", 0.05)
+    monkeypatch.setattr(DS.config, "GLOBAL_TICK_S", 0.05)
     A.session_start({"session_id": "dashg", "cwd": "/w", "transcript_path": ""})
     log = P.mirror_log("dashg")
     S.incr(log, commands=1)
@@ -1205,7 +1205,7 @@ def test_global_sse_delta_and_resync(dash, monkeypatch):
     `sessions` resync — a delta can't express insertion. Wire rows are
     stripped of the server-side paths (`transcript_path`, `log`) on both the
     SSE and /api/sessions."""
-    monkeypatch.setattr(DS, "GLOBAL_TICK_S", 0.05)
+    monkeypatch.setattr(DS.config, "GLOBAL_TICK_S", 0.05)
     A.session_start({"session_id": "dashd1", "cwd": "/w",
                      "transcript_path": "/w/t1.jsonl"})
     A.session_start({"session_id": "dashd2", "cwd": "/w",
@@ -1679,7 +1679,7 @@ def test_hide_dir_behind_post_guard(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"}, header=None)
     assert e.value.code == 403
-    monkeypatch.setattr(DS, "READONLY", True)
+    monkeypatch.setattr(DS.config, "READONLY", True)
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/dirs/hide", {"cwd": "/w/proj"})
     assert e.value.code == 403
@@ -2822,7 +2822,7 @@ def test_notify_mute_behind_post_guard(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/nm2/notify", {"muted": True}, header=None)
     assert e.value.code == 403
-    monkeypatch.setattr(DS, "READONLY", True)
+    monkeypatch.setattr(DS.config, "READONLY", True)
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/nm2/notify", {"muted": True})
     assert e.value.code == 403
@@ -3018,7 +3018,7 @@ def test_post_message_runs_clipboard_guard(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "42")
     A.session_start({"session_id": "msgclip", "cwd": "/w", "transcript_path": ""})
     calls = []
-    monkeypatch.setattr(DS, "_clear_clipboard_image",
+    monkeypatch.setattr(DS.launch, "_clear_clipboard_image",
                         lambda: calls.append(1) or True)
     code, _ = _post(dash + "/api/session/msgclip/message", {"text": "hi"})
     assert code == 200
@@ -3919,7 +3919,7 @@ def test_post_guard_accepts_beacon_by_allowlisted_origin(dash, monkeypatch):
     # X-Claude-Dash, so a HEADERLESS POST is accepted when it carries a present,
     # allowlisted Origin — a cross-origin page can forge neither, so the Origin
     # allowlist is the CSRF gate (docs/dashboard.md *Frontend audit (clientlog)*).
-    monkeypatch.setattr(DS, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {dash})
+    monkeypatch.setattr(DS.config, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {dash})
     ep = dash + "/api/session/beacon1/hint-audit"
     body = {"op": "close", "phase": "shown"}
     code, _ = _post(ep, body, header=None, origin=dash)   # the sendBeacon shape
@@ -4119,7 +4119,7 @@ def test_proxied_origin_allowed(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     ext = "https://dash.zhambyl.top"
-    monkeypatch.setattr(DS, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {ext})
+    monkeypatch.setattr(DS.config, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {ext})
     code, body = _post(dash + "/api/sessions/new",
                        {"cwd": str(tmp_path)}, origin=ext)
     assert code == 200 and json.loads(body) == {"ok": True, "win": ""}
@@ -4128,7 +4128,7 @@ def test_proxied_origin_allowed(dash, monkeypatch, tmp_path):
 def test_readonly_kills_control_plane(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS, "READONLY", True)
+    monkeypatch.setattr(DS.config, "READONLY", True)
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
     assert e.value.code == 403
@@ -4368,7 +4368,7 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     # cancel leaves the tab stuck thinking — same experiment)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS, "DOUBLE_ESC_GAP_S", 0)
+    monkeypatch.setattr(DS.config, "DOUBLE_ESC_GAP_S", 0)
     spawned = []
     monkeypatch.setattr(DS.SP, "spawn_detached",
                         lambda path, argv, log, env=None, purpose="", **kw:
@@ -4378,7 +4378,7 @@ def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "working"})
     # the cancel restores the session's last user prompt — returned so the
     # page can prefill its composer
-    monkeypatch.setattr(DS, "_last_prompt", lambda sid: "the cancelled message")
+    monkeypatch.setattr(DS.session, "_last_prompt", lambda sid: "the cancelled message")
     code, body = _post(dash + "/api/session/rew2/rewind", {})
     assert code == 200
     assert json.loads(body) == {"ok": True, "tab": "working",
@@ -5473,7 +5473,7 @@ def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     # (paste_text) — a raw send here drops leading bytes (the measured mangle)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS, "DRAFT_CLEAR_GAP_S", 0)
+    monkeypatch.setattr(DS.config, "DRAFT_CLEAR_GAP_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "71")
     A.session_start({"session_id": "cd1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/cd1/message",
@@ -5596,7 +5596,7 @@ def test_stats_payload_aggregates_cross_session(dash, monkeypatch):
     sessionapi.activity_stats). Sessions are the unit; per-project grouping,
     per-window pulse counts, daily heatmap buckets, and the day×hour punch card
     all fold from the audit sessions/otel/errors tables."""
-    monkeypatch.setattr(DS, "STATS_TTL_S", 0)          # defeat the wall-clock memo
+    monkeypatch.setattr(DS.config, "STATS_TTL_S", 0)          # defeat the wall-clock memo
     now = time.time()
     # three sessions in /proj/alpha (one 40d old → outside the 7d/30d windows),
     # one in /proj/beta; one alpha session still open (no ended_at).
