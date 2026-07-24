@@ -251,3 +251,11 @@ def session_goal(tpath):
     g = plugins.goal(tpath)
     _GOAL[tpath] = (size, g)
     return g
+
+
+def _session_slug(sid):
+    """The session's subscription-account slug from its statusline stash
+    ('' for the default account / no stash) — resolves WHICH user-level
+    settings the effort read consults."""
+    sdb = API.state_db_for(sid)
+    return ((API.kv_at(sdb, "account") or {}).get("slug") or "") if sdb else ""
