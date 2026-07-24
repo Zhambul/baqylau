@@ -444,7 +444,7 @@ def dash(monkeypatch, tmp_path):
     # path (that would demote test sessions to not-live when the suite runs
     # inside a live kitty session). None = "can't enumerate → keep the state-DB
     # liveness signal"; a demotion test overrides this with a controlled map.
-    monkeypatch.setattr(DS, "_live_windows", lambda: None)
+    monkeypatch.setattr(DS.launch, "_live_windows", lambda: None)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), DS.Handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -682,13 +682,13 @@ def test_live_windows_memoized_by_ttl(monkeypatch):
                 for t in osw.get("tabs", []):
                     for w in t.get("windows", []):
                         yield osw, t, w
-    monkeypatch.setattr(DS, "_frontend", lambda: FE())
-    monkeypatch.setattr(DS, "_LIVE_WINS", {"ts": -1e9, "val": None})
-    assert DS._live_windows() == {"sX": "7"}
-    assert DS._live_windows() == {"sX": "7"}      # within TTL → memo, no scan
+    monkeypatch.setattr(DS.launch, "_frontend", lambda: FE())
+    monkeypatch.setattr(DS.launch, "_LIVE_WINS", {"ts": -1e9, "val": None})
+    assert DS.launch._live_windows() == {"sX": "7"}
+    assert DS.launch._live_windows() == {"sX": "7"}      # within TTL → memo, no scan
     assert len(calls) == 1                        # ONE ls per TTL (tree reused)
-    DS._LIVE_WINS["ts"] -= DS._LIVE_TTL + 1       # age the memo past the TTL
-    assert DS._live_windows() == {"sX": "7"}
+    DS.launch._LIVE_WINS["ts"] -= DS.launch._LIVE_TTL + 1       # age the memo past the TTL
+    assert DS.launch._live_windows() == {"sX": "7"}
     assert len(calls) == 2
 
 
@@ -703,9 +703,9 @@ def test_live_windows_empty_ls_is_cant_tell(monkeypatch):
             return []                     # the swallowed-failure signature
         def iter_windows(self, tree=None):
             raise AssertionError("must not iterate an empty tree")
-    monkeypatch.setattr(DS, "_frontend", lambda: FE())
-    monkeypatch.setattr(DS, "_LIVE_WINS", {"ts": -1e9, "val": None})
-    assert DS._live_windows() is None            # not {} → no wrongful demotion
+    monkeypatch.setattr(DS.launch, "_frontend", lambda: FE())
+    monkeypatch.setattr(DS.launch, "_LIVE_WINS", {"ts": -1e9, "val": None})
+    assert DS.launch._live_windows() is None            # not {} → no wrongful demotion
 
 
 def _notifier_for_asking(monkeypatch, screen, delay=999):
@@ -3988,8 +3988,8 @@ def _fast_launch_wake(monkeypatch):
     at the product's 15s budget one would outlive its test and keep polling the
     shared audit DB while later tests run. Clamp the budget module-wide; the
     wake tests below re-raise it themselves."""
-    monkeypatch.setattr(DS, "LAUNCHWAKE_MAX_S", 0.2)
-    monkeypatch.setattr(DS, "LAUNCHWAKE_POLL_S", 0.01)
+    monkeypatch.setattr(DS.launch, "LAUNCHWAKE_MAX_S", 0.2)
+    monkeypatch.setattr(DS.launch, "LAUNCHWAKE_POLL_S", 0.01)
 
 
 def _watch_rig(monkeypatch, fronts, bundle="app.term"):
@@ -4000,11 +4000,11 @@ def _watch_rig(monkeypatch, fronts, bundle="app.term"):
     fe = _FakeFE()
     fe.bundle_id = bundle
     seq = list(fronts)
-    monkeypatch.setattr(DS, "_front_app",
+    monkeypatch.setattr(DS.launch, "_front_app",
                         lambda: seq.pop(0) if len(seq) > 1 else seq[0])
-    monkeypatch.setattr(DS, "STEALWATCH_POLL_S", 0.005)
-    aud = _WatchAudit(DS.A)
-    monkeypatch.setattr(DS, "A", aud)
+    monkeypatch.setattr(DS.launch, "STEALWATCH_POLL_S", 0.005)
+    aud = _WatchAudit(DS.launch.A)
+    monkeypatch.setattr(DS.launch, "A", aud)
     return fe, aud.rows
 
 
@@ -4045,7 +4045,7 @@ def test_new_session_watch_off_without_app_id(dash, monkeypatch, tmp_path):
     fe = _FakeFE()                                     # bundle_id stays ""
     _inject_fe(monkeypatch, fe)
     probed = []
-    monkeypatch.setattr(DS, "_front_app", lambda: probed.append(1) or "x")
+    monkeypatch.setattr(DS.launch, "_front_app", lambda: probed.append(1) or "x")
     code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
     assert code == 200 and probed == []
 
@@ -4058,9 +4058,9 @@ def test_launch_wake_pushes_and_audits(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     fe.launch_ok = "88"                     # kitty printed the new window's id
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS, "LAUNCHWAKE_MAX_S", 5.0)
-    aud = _WatchAudit(DS.A, "web-launch-wake")
-    monkeypatch.setattr(DS, "A", aud)
+    monkeypatch.setattr(DS.launch, "LAUNCHWAKE_MAX_S", 5.0)
+    aud = _WatchAudit(DS.launch.A, "web-launch-wake")
+    monkeypatch.setattr(DS.launch, "A", aud)
     # prime core.audit's process-wide sqlite conn from THIS thread: the first
     # audit write binds the conn to its creating thread, and if the POST
     # handler's thread claims it, the session_start below silently degrades
@@ -4093,8 +4093,8 @@ def test_launch_wake_timeout_audits_without_push(dash, monkeypatch, tmp_path):
     # would have nothing for the page to jump to
     fe = _FakeFE()                          # launch_ok True → no window id
     _inject_fe(monkeypatch, fe)
-    aud = _WatchAudit(DS.A, "web-launch-wake")
-    monkeypatch.setattr(DS, "A", aud)
+    aud = _WatchAudit(DS.launch.A, "web-launch-wake")
+    monkeypatch.setattr(DS.launch, "A", aud)
     q = DS.NOTIFIER.register()
     try:
         code, body = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
@@ -4247,13 +4247,13 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     log = P.mirror_log("ghost")
     O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
     # window enumeration returns a map WITHOUT this sid → tab is closed
-    monkeypatch.setattr(DS, "_live_windows", lambda: {"other": "99"})
+    monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"other": "99"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
     assert row["live"] is False                # demoted — the requirement
     ov = _get_json(dash + "/api/session/ghost")
     assert ov["live"] is False and ov["kitty_window_id"] == ""
     # when the tab IS open (sid in the map) it stays live and controllable
-    monkeypatch.setattr(DS, "_live_windows", lambda: {"ghost": "11"})
+    monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"ghost": "11"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
     assert row["live"] is True
     ov = _get_json(dash + "/api/session/ghost")
@@ -4272,7 +4272,7 @@ def test_fresh_session_within_grace_stays_live(dash, monkeypatch):
     O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
     # window map WITHOUT this sid — the pane hasn't been tagged yet — but the
     # session started just now, so the grace keeps it live and controllable
-    monkeypatch.setattr(DS, "_live_windows", lambda: {"other": "99"})
+    monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"other": "99"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "fresh")
     assert row["live"] is True                 # inside the grace — not demoted
     ov = _get_json(dash + "/api/session/fresh")

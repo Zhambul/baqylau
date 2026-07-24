@@ -208,3 +208,21 @@ _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 # reconnects and sees a DIFFERENT boot id knows the server restarted under it
 # and its loaded JS may be stale (the client toasts "refresh").
 BOOT_ID = str(int(time.time() * 1000))
+
+
+# --- control-plane validation vocabulary (the /command, rename, new-session
+# endpoints) --------------------------------------------------------------------
+EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort levels
+_MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
+                                               # clean argv word, nothing else
+# The scoreboard's quick-command row (post_command, docs/dashboard.md *Web
+# quick commands*): model args are _MODEL_OK's one-clean-word alphabet plus
+# the CLI's literal `[1m]` context suffix (`/model sonnet[1m]`); effort args
+# are the same EFFORTS levels the launch form validates.
+_MODEL_ARG_OK = re.compile(r"^[A-Za-z0-9._-]+(\[1m\])?$")
+RENAME_MAX = 120     # rename display cap — picker/tab truncate anyway; a
+                     # protocol-abuse guard on the appended record, not a format limit
+_NAME_CTRL = re.compile(r"[\x00-\x1f\x7f]+")   # control bytes never enter a name:
+                                               # it goes VERBATIM to set-tab-title
+                                               # and the picker — the OSC/CSI
+                                               # injection class neutralize() exists for
