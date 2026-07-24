@@ -2083,16 +2083,30 @@ previously invisible server-side, exactly the blind spot this channel closes.
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged
 `claude_session=<sid>` for a moment, so `/api/session` momentarily reports
 `live:true` with a BLANK `kitty_window_id` (`session_payload` resolves the
-window through `_live_windows`, empty until the pane is tagged — unlike the
-sessions LIST, which carries the RAW audit id immediately). The client gates the
-composer AND the `✕ close` button on `meta.live && meta.kitty_window_id`, and
+window through `_live_windows`, empty until the pane is tagged). The client gates
+the composer AND the `✕ close` button on `meta.live && meta.kitty_window_id`, and
 that partial meta fails BOTH the send gate (`live && window`) and the resume
 gate (`!live`) — so the box locked and the close button never rendered until a
-manual reload (the reported bug). The global-poll heal (`updateHeadFromList`) is
-meant to repair it but is fragile across the raw-vs-resolved window-id spaces, so
-`showSession` now re-fetches meta directly (bounded, `LAUNCH_RESOLVE_TRIES` ×
-`LAUNCH_RESOLVE_MS`) until the window resolves — authoritative and
-self-healing, no reload needed.
+manual reload (the reported bug). `showSession` re-fetches meta directly
+(bounded, `LAUNCH_RESOLVE_TRIES` × `LAUNCH_RESOLVE_MS`) until the window
+resolves — authoritative and self-healing, no reload needed.
+
+**Both endpoints serve the SAME window id (the action-row flicker fix,
+2026-07-24).** The sessions LIST used to carry the RAW start-time audit
+`kitty_window_id` while `/api/session` served the live-RESOLVED one — two
+different id-spaces for the same field. The client's `updateHeadFromList`
+compares the list snapshot's window against the open session's `meta` window
+(gated on `row.live`) and rebuilds the header on a change; across the tag-race
+those two disagreed (`""` resolved vs a raw id), so it read a spurious "window
+moved" and rebuilt the header EVERY list tick, fighting `loadMeta` and flickering
+the action-buttons row on/off 2–3× until the pane tagged. Fixed at the source:
+`sessions_payload` now reconciles a LIVE row's `kitty_window_id` to the same
+`_live_windows` resolution `session_payload` uses (blank until tagged, then the
+same id) — so the two endpoints agree, the compare is apples-to-apples, and the
+row appears exactly once when the window resolves. The demotion check still runs
+on the RAW id first (it needs "this row ever claimed a window"); a not-live row
+keeps its raw id (never compared). It also gates the list card's own `✕ close`
+correctly — it now shows only once the window is really tagged, not prematurely.
 
 ## Web ask (`POST /api/session/<sid>/answer`) — AskUserQuestion from the browser
 

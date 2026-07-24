@@ -380,10 +380,15 @@ function updateHeadFromList() {
   // on a real change — not every per-tick tab change (that reflows the header
   // each second) — and not while drilled into a subagent (renderSessionChrome
   // clears agentFocus; the ← session rebuild picks it up on the way back) or mid
-  // inline-rename. The window compare is gated on row.live: meta's
-  // kitty_window_id is the live-RESOLVED id (blank until the pane is tagged)
-  // while the list row's is the RAW audit id, so an unconditional compare would
-  // spuriously rebuild a parked session's header (blank vs a stale raw id).
+  // inline-rename. The window compare is gated on row.live: for a LIVE row the
+  // list now serves the SAME live-RESOLVED kitty_window_id meta does (aligned in
+  // sessions_payload — both blank until the pane is tagged, then the same id),
+  // so this compare is apples-to-apples and only a REAL window move (or the
+  // tag-race resolving blank→id, once) rebuilds the header. It used to serve the
+  // RAW audit id, so the two disagreed across the tag-race and this fought
+  // loadMeta every tick, flickering the action row (fixed 2026-07-24). A parked
+  // row still carries the raw id, but winMoved is gated on row.live so it's
+  // never compared.
   const m = S.ses.meta;
   const winMoved = row.live
     && (m && m.kitty_window_id || "") !== (row.kitty_window_id || "");

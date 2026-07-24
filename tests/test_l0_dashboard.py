@@ -4294,8 +4294,13 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"ghost": "11"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
     assert row["live"] is True
+    # the LIST serves the SAME live-RESOLVED window id as /api/session (not the
+    # raw audit id): the two endpoints must agree or the client's
+    # updateHeadFromList thrashes the header (the action-row flicker fix)
+    assert row["kitty_window_id"] == "11"
     ov = _get_json(dash + "/api/session/ghost")
     assert ov["live"] is True and ov["kitty_window_id"] == "11"
+    assert row["kitty_window_id"] == ov["kitty_window_id"]
 
 
 def test_fresh_session_within_grace_stays_live(dash, monkeypatch):
@@ -4313,6 +4318,11 @@ def test_fresh_session_within_grace_stays_live(dash, monkeypatch):
     monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"other": "99"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "fresh")
     assert row["live"] is True                 # inside the grace — not demoted
+    # mid-tag-race the list's window id is "" (live-resolved, pane not tagged yet)
+    # — the SAME blank /api/session serves, NOT the raw start-time id from the env
+    # (KITTY_WINDOW_ID=12). Serving the raw id here is what fought loadMeta and
+    # flickered the action row every list tick (fixed 2026-07-24).
+    assert row["kitty_window_id"] == ""
     ov = _get_json(dash + "/api/session/fresh")
     # live (no parked flash), but the control plane's window resolves from the
     # live tag map — still "" until the pane is actually tagged (kitty_window_id

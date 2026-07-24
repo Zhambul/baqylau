@@ -85,6 +85,20 @@ def sessions_payload():
                 and row.get("kitty_window_id") and row["sid"] not in live_wins
                 and not _within_live_grace(row)):
             row["live"] = False
+        # Reconcile the window id to the SAME live-RESOLVED value session_payload
+        # serves (from _live_windows), so the two endpoints never disagree. The
+        # list used to return the RAW start-time audit id while /api/session
+        # returns the resolved id (blank until the pane is tagged claude_session=
+        # <sid>) — two different id-spaces. The client's updateHeadFromList
+        # compared them, so during a launch's tag-race the mismatch read as a
+        # spurious "window moved" and rebuilt the header every list tick,
+        # FLICKERING the action-buttons row on/off 2–3× (reported 2026-07-24).
+        # For a live row the resolved id (or "" mid-tag-race) IS the current
+        # window — it also gates the card ✕ close correctly (only once tagged).
+        # A not-live row keeps its raw id (the client never compares a parked
+        # window, and the demotion check above needed the raw id to run first).
+        if row.get("live"):
+            row["kitty_window_id"] = (live_wins or {}).get(row["sid"], "")
         st = _db_cached(_STATS, sdb, API.stats_at)
         row["stats"] = st
         row["tab"] = tabstates.get(str(row.get("kitty_window_id") or "")) or ""
