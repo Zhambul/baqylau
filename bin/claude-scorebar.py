@@ -169,22 +169,11 @@ def session_id():
 
 
 
-def compose(w, mparts, st, nerr=0):
-    """The scoreboard rows for width w, as styled strings: [session-id, messages,
-    session-stats, tokens, tools]. Row 0 is the always-on ⬡ session id; row 1 is the
-    ✉ message census `mparts` (always shown — defaults to '0 msgs'); row 2 is the ▪
-    activity summary (commands + active time); row 3 is the Σ token breakdown
-    (input/output/cache/write + an all-in total) with the `≈ $` cost last; row 4 is
-    the unique-file count + the ± line-diff + the tool tallies.
-    Segments drop from the tail until the plain text fits.
-    `st` is the caller's ONE St.stats(LOG) snapshot for this tick — atomic from
-    the state DB, read once and shared, so all five rows agree (no torn reads)."""
-    now = time.time()
-
-    # Row 0: session id + the account this chat runs under + its 5h/7d usage.
-    # The id is always kept (truncated only if the pane is too narrow); the
-    # account and usage extras append after it and tail-drop first (usage
-    # before account) when they don't fit — so a narrow pane still shows the id.
+def _row_sid(w):
+    """Row 0: session id + the account this chat runs under + its 5h/7d usage.
+    The id is always kept (truncated only if the pane is too narrow); the
+    account and usage extras append after it and tail-drop first (usage
+    before account) when they don't fit — so a narrow pane still shows the id."""
     acc = St.kv_get(LOG, "account") or {}
     usage = St.kv_get(LOG, "usage") or {}
     accs = ((acc.get("slug") + " · " + acc.get("label", "")) if acc.get("slug")
@@ -216,17 +205,19 @@ def compose(w, mparts, st, nerr=0):
     line_sid = R.DIM + " ⬡ " + R.RST + VAL + sid_shown + R.RST
     for _p, styled in extras:
         line_sid += SEP + styled
+    return line_sid
 
-    # Row 1: message census — never blank; default to a 0 count when there's nothing.
+
+def _row_msg(w, mparts):
+    """Row 1: message census — never blank; default to a 0 count when there's nothing."""
     if not mparts:
         mparts = [("msgs", "0 msgs")]
     fit_parts(mparts, w - PREFIX_W)                  # " ✉ " prefix; keep >= 1
-    line_msg = R.DIM + " ✉ " + R.RST + SEP.join(style(k, t) for k, t in mparts)
+    return R.DIM + " ✉ " + R.RST + SEP.join(style(k, t) for k, t in mparts)
 
-    if not isinstance(st, dict):
-        st = {}
-    parts, tools = O.scoreboard_parts(st, now)
 
+def _row_activity(w, parts, nerr):
+    """Row 2: the ▪ activity summary (commands + active time), plus a leading ⚠ chip."""
     # ⚠ audit warning light — the session's swallowed-error count (core.errwatch,
     # polled at its own slow cadence and memoized by main()). Only when > 0, and
     # FIRST on the ▪ row so a narrow pane's tail-drop never sheds the warning.
@@ -237,24 +228,28 @@ def compose(w, mparts, st, nerr=0):
     row = ""
     for i, (kind, text) in enumerate(parts):
         row += ("" if i == 0 else joiner(parts[i - 1][0], kind)) + style(kind, text)
-    line_sess = R.DIM + " ▪ " + R.RST + row if parts else R.DIM + " ▪ session" + R.RST
+    return R.DIM + " ▪ " + R.RST + row if parts else R.DIM + " ▪ session" + R.RST
 
-    # Row 3: Σ token breakdown + cost — total-first so a narrow pane keeps the
-    # headline; the `≈ $` cost rides this row now (spend derives from tokens) and
-    # goes LAST so tail-drop sheds it before the token breakdown.
+
+def _row_tokens(w, st):
+    """Row 3: Σ token breakdown + cost — total-first so a narrow pane keeps the
+    headline; the `≈ $` cost rides this row now (spend derives from tokens) and
+    goes LAST so tail-drop sheds it before the token breakdown."""
     tparts = O.token_parts(st)
     cost = float(st.get("cost") or 0)
     if cost > 0:
         tparts.append(("cost", "≈ " + O.fmt_usd(cost)))
     fit_parts(tparts, w - PREFIX_W)                  # " Σ " prefix; keep the total
-    line_tok = R.DIM + " Σ " + R.RST + SEP.join(style(k, t) for k, t in tparts) \
+    return R.DIM + " Σ " + R.RST + SEP.join(style(k, t) for k, t in tparts) \
             if tparts else ""
 
-    # Row 4: file/line stats + tool tallies. The unique-file count and the ± line-diff
-    # lead (relocated here from the ▪ row so every file/tool figure sits together),
-    # then the top tool tallies. `files` is a UNIQUE-path set; the tool counts are
-    # operations — so "5 files · Edit 18" reads as 18 edits across 5 distinct files.
-    # The leads are kept when the row must drop segments to fit (tools pop first).
+
+def _row_files(w, st, tools):
+    """Row 4: file/line stats + tool tallies. The unique-file count and the ± line-diff
+    lead (relocated here from the ▪ row so every file/tool figure sits together),
+    then the top tool tallies. `files` is a UNIQUE-path set; the tool counts are
+    operations — so "5 files · Edit 18" reads as 18 edits across 5 distinct files.
+    The leads are kept when the row must drop segments to fit (tools pop first)."""
     files = int(st.get("files") or 0)
     add, rem = int(st.get("added") or 0), int(st.get("removed") or 0)
     lead = []                                        # (plain, styled) — priority segs
@@ -275,8 +270,28 @@ def compose(w, mparts, st, nerr=0):
               text=lambda kv: f"{kv[0]} {kv[1]}")
     segs = [s for _, s in lead] \
             + [SLATE + k + " " + VAL + str(v) + R.RST for k, v in tools]
-    line_tools = "   " + SEP.join(segs) if segs else ""
-    return [line_sid, line_msg, line_sess, line_tok, line_tools]
+    return "   " + SEP.join(segs) if segs else ""
+
+
+def compose(w, mparts, st, nerr=0):
+    """The scoreboard rows for width w, as styled strings: [session-id, messages,
+    session-stats, tokens, tools]. Row 0 is the always-on ⬡ session id; row 1 is the
+    ✉ message census `mparts` (always shown — defaults to '0 msgs'); row 2 is the ▪
+    activity summary (commands + active time); row 3 is the Σ token breakdown
+    (input/output/cache/write + an all-in total) with the `≈ $` cost last; row 4 is
+    the unique-file count + the ± line-diff + the tool tallies.
+    Segments drop from the tail until the plain text fits.
+    `st` is the caller's ONE St.stats(LOG) snapshot for this tick — atomic from
+    the state DB, read once and shared, so all five rows agree (no torn reads)."""
+    now = time.time()
+    if not isinstance(st, dict):
+        st = {}
+    # ONE scoreboard_parts snapshot per tick: `parts` feeds the ▪ activity row,
+    # `tools` feeds the file/tool row — computed once here so the two rows can't
+    # disagree (and tools isn't recomputed off a possibly-mutated source).
+    parts, tools = O.scoreboard_parts(st, now)
+    return [_row_sid(w), _row_msg(w, mparts), _row_activity(w, parts, nerr),
+            _row_tokens(w, st), _row_files(w, st, tools)]
 
 
 width = PS.make_width(FIXED_WIDTH)
