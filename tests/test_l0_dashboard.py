@@ -410,7 +410,7 @@ def test_tool_html_presenter_error_degrades_to_none(monkeypatch):
     # propagate out of the timeline enrichment.
     def boom(*a, **k):
         raise ValueError("bad shape")
-    monkeypatch.setattr(opshtml, "_read_html", boom)
+    monkeypatch.setattr(opshtml.tools, "_read_html", boom)
     assert opshtml.tool_html("Read", {"file_path": "x.py"}) is None
 
 
