@@ -109,6 +109,66 @@ def usage_fold(mid, fields, prev):
     return deltas, ({"id": mid, "f": list(fields)} if mid else prev)
 
 
+def _assistant_usage_lines(path, pos, reset_on_shrink=False):
+    """THE shared transcript-fold read/parse core of both accountants (fold_usage
+    and bump_transcript's inner fold — they drifted apart once and the read+parse
+    loop's fix had to be made twice). Reads the new COMPLETE-line region of a JSONL
+    transcript from byte offset `pos`, trims the partial trailing line, json-parses
+    each line, and keeps the records that are a dict with type=="assistant" AND a
+    dict `message.usage`.
+
+    Returns (records, new_pos, reset) — the kept parsed record dicts in file order,
+    the advanced cursor (pos + end + 1), and whether a shrink-reset happened — OR
+    None when there is nothing to fold (unreadable, no growth, or only a partial
+    tail). `records` may be empty while `new_pos` still advances (a run of
+    non-assistant lines must not be re-read forever), so the position CANNOT ride
+    the record stream — hence the tuple, not a bare generator.
+
+    Only the mechanical read+trim+parse+filter is shared; each caller keeps its own
+    policy on top: fold_usage folds every kept record (agent transcripts ARE their
+    own sidechain turns) while bump_transcript skips isSidechain records and splits
+    per-component. `reset_on_shrink` is bump_transcript's rotated/replaced-transcript
+    restart (re-read from 0, and the caller must drop its dedup carry — the returned
+    `reset`); fold_usage leaves it False (an agent transcript that shrank is not
+    re-guessed). Best-effort: never raises — any read error yields None. The
+    message/usage extraction is the guarded `isinstance(m, dict)` form (a truthy
+    non-dict `message` is skipped, not crashed on); assistant records always carry a
+    dict message, so this is identical to both originals for real transcripts."""
+    reset = False
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return None
+    if reset_on_shrink and size < pos:      # transcript rotated/replaced — restart
+        pos = 0
+        reset = True
+    if size <= pos:                         # nothing new (or rotated shorter — don't guess)
+        return None
+    try:
+        with open(path, "rb") as f:
+            f.seek(pos)
+            chunk = f.read(size - pos)
+    except OSError:
+        return None
+    end = chunk.rfind(b"\n")
+    if end < 0:                             # no complete line yet
+        return None
+    recs = []
+    for ln in chunk[:end].split(b"\n"):
+        try:
+            o = json.loads(ln)
+        except Exception:
+            continue
+        if not isinstance(o, dict) or o.get("type") != "assistant":
+            continue
+        m = o.get("message")
+        u = m.get("usage") if isinstance(m, dict) else None
+        if not isinstance(u, dict):
+            continue
+        recs.append(o)
+    return recs, pos + end + 1, reset
+
+
 def fold_usage(path, pos=0, usage_last=None):
     """Fold an agent transcript's assistant-message token usage from byte offset
     `pos` to the last COMPLETE line, deduped by message.id (via usage_fold, carry
@@ -122,36 +182,16 @@ def fold_usage(path, pos=0, usage_last=None):
     against the transcript's TRUE total (claude-subagent-fmt.py). Unlike
     bump_transcript, it does NOT skip isSidechain lines — an agent's own transcript
     IS its (sidechain) turns, exactly what the streamer folds."""
-    try:
-        size = os.path.getsize(path)
-    except OSError:
+    got = _assistant_usage_lines(path, pos)
+    if not got:
         return 0, 0, 0, 0, 0, usage_last, pos
-    if size <= pos:                         # nothing new (or rotated shorter — don't guess)
-        return 0, 0, 0, 0, 0, usage_last, pos
-    try:
-        with open(path, "rb") as f:
-            f.seek(pos)
-            chunk = f.read(size - pos)
-    except OSError:
-        return 0, 0, 0, 0, 0, usage_last, pos
-    end = chunk.rfind(b"\n")
-    if end < 0:                             # no complete line yet
-        return 0, 0, 0, 0, 0, usage_last, pos
+    recs, new_pos, _ = got
     ti = to = tc = tcr = t1h = 0
-    for ln in chunk[:end].split(b"\n"):
-        try:
-            o = json.loads(ln)
-        except Exception:
-            continue
-        if not isinstance(o, dict) or o.get("type") != "assistant":
-            continue
-        u = (o.get("message") or {}).get("usage")
-        if not isinstance(u, dict):
-            continue
-        d, usage_last = usage_fold((o.get("message") or {}).get("id"),
-                                   usage_fields(u), usage_last)
+    for o in recs:
+        m = o.get("message") or {}
+        d, usage_last = usage_fold(m.get("id"), usage_fields(m.get("usage")), usage_last)
         ti += d[0]; to += d[1]; tc += d[2]; tcr += d[3]; t1h += d[4]
-    return ti, to, tc, tcr, t1h, usage_last, pos + end + 1
+    return ti, to, tc, tcr, t1h, usage_last, new_pos
 
 
 def bump_transcript(log, transcript):
@@ -182,24 +222,12 @@ def bump_transcript(log, transcript):
     moved = {}                              # what fold counted, for the audit below
 
     def fold(pos, prev):
-        try:
-            size = os.path.getsize(transcript)
-        except OSError:
+        got = _assistant_usage_lines(transcript, pos, reset_on_shrink=True)
+        if not got:
             return None
-        if size < pos:                      # transcript rotated/replaced — restart
-            pos = 0
+        recs, new_pos, reset = got
+        if reset:
             prev = None                     # ids from the old file mustn't dedup the new one
-        if size <= pos:
-            return None
-        try:
-            with open(transcript, "rb") as tf:
-                tf.seek(pos)
-                chunk = tf.read(size - pos)
-        except OSError:
-            return None
-        end = chunk.rfind(b"\n")
-        if end < 0:                         # no complete new line yet — keep cursor
-            return None
         tok, usd = 0, 0.0
         # Per-category token split for the scoreboard's Σ breakdown row, from the
         # SAME usage_fields cost_usd prices — the arithmetic is O.split_tokens
@@ -215,18 +243,11 @@ def bump_transcript(log, transcript):
             c1h += f[4]
 
         rows = {}                           # message id -> last usage line seen for it
-        for ln in chunk[:end].split(b"\n"):
-            try:
-                o = json.loads(ln)
-            except Exception:
-                continue
-            if not isinstance(o, dict) or o.get("type") != "assistant" or o.get("isSidechain"):
+        for o in recs:
+            if o.get("isSidechain"):        # subagent turns — their own streamer bumps them
                 continue
             m = o.get("message") or {}
-            u = m.get("usage") if isinstance(m, dict) else None
-            if not isinstance(u, dict):
-                continue
-            fields = usage_fields(u)
+            fields = usage_fields(m.get("usage"))
             mid = m.get("id")
             if not mid:                     # no id to dedup on — count the line as-is
                 tok += fields[0] + fields[1]
@@ -256,9 +277,9 @@ def bump_transcript(log, transcript):
         # rides the audit row (re-pricing evidence), not comps: it is a pricing
         # input, not a fifth Σ-row display category, so no tk_create_1h counter
         # exists.
-        moved.update(tok=tok, usd=usd, txpos=pos + end + 1, txlast=prev,
+        moved.update(tok=tok, usd=usd, txpos=new_pos, txlast=prev,
                      comps=comps, c1h=c1h)
-        return pos + end + 1, prev, tok, usd, comps
+        return new_pos, prev, tok, usd, comps
 
     try:
         st = S.transcript_fold(log, fold)
