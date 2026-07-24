@@ -330,11 +330,6 @@ def bump(log, tool=None, file=None, meta=None, **deltas):
     return st
 
 
-def stats_now(log):
-    """Current scoreboard stats dict (old sidecar shape) from the state DB."""
-    return S.stats(log)
-
-
 def kfmt(n):
     """Compact token count: 124000 -> "124k", 1200000 -> "1.2M"."""
     # Branch on the ROUNDED value: 999_500..999_999 rounds to 1.0M, so it must
