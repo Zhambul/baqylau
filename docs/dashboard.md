@@ -1382,29 +1382,9 @@ only, no confirm — it matches pressing Esc in the terminal) and as the
 only when no overlay (modal, slash menu, filter, dropdown) claimed the
 Escape, so muscle memory from the terminal carries over to the browser.
 
-**Verified re-press.** A single synthesized Escape via `send-key` is only
-**~2/3 reliable** (the same measurement that made the idle rewind path type
-`/rewind` instead of pressing keys — see *Rewind* below), and kitty confirms
-no delivery, so a blind press silently missed: a fresh web-launched session's
-turn ran to completion (~53 s) despite `ok:true`, and the `escape-recheck`
-below then flipped the tab green and *masked* it (2026-07-24, session
-`a16a181f`). So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint
-now VERIFIES the interrupt landed: it screen-scrapes Claude Code's live
-output-rate footer (`out: NNN tok/s`, present only while the turn is generating
-— `WORKING_MARKERS`, read off `Frontend.get_text` like the ghost suggestion,
-since no hook fires for it; measured 2026-07-24 — the animated spinner glyph /
-gerund was too version-fragile and collided with agent-activity lines, the rate
-footer is a fixed literal) and RE-PRESSES Escape *while that footer is still up*
-— up to
-`INTERRUPT_TRIES` passes, `INTERRUPT_RETRY_S` apart (well above
-`DOUBLE_ESC_GAP_S`, so two spaced retries never read as a double-Esc, and a
-lone late Esc at an already-idle box is a harmless no-op). The `web-interrupt`
-row carries `attempts` and `stopped` (True = verified stopped · False = spinner
-still up after every retry — the Esc never landed · None = idle press or the
-screen couldn't be read). When `stopped` is **False** the endpoint returns
-`502` and spawns **no** `escape-recheck` — flipping the tab green would mask a
-turn that is demonstrably still running (exactly how the failure hid) — so the
-page toasts a real failure instead of a phantom success.
+**Root cause of "STOP does nothing" (2026-07-24).** A single Escape does **not** reliably stop a busy turn here, for two compounding reasons: (1) `send-key` reports no per-window delivery and synthesized keys are only **~2/3 reliable** (the same measurement that made the idle rewind path type `/rewind` instead of pressing keys — see *Rewind*); and (2) the user runs Claude Code with **`editorMode: vim`**, so the input box is modal — while a turn runs it is in INSERT mode (`-- INSERT --`), and during the **thinking** phase the first Escape only leaves INSERT mode (INSERT→NORMAL); it never reaches the interrupt handler, so the turn runs to completion. Measured directly: every real single-Esc interrupt on a `thinking` tab missed and ran to its natural `Stop` (`a16a181f`, `3d70feca`), while a mid-STREAM Esc landed; a controlled throwaway diff showed the lone Esc deleting `-- INSERT --` and changing nothing else. This also explains why the cancel-edit gesture (*Rewind*) sends **two** Escapes and is "3/3 reliable" — the first exits INSERT, the second interrupts.
+
+**Robust verified re-press.** So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint presses Escape, then RE-PRESSES *while the turn is still LIVE*, up to `INTERRUPT_TRIES` times. Liveness is **not** a marker string — spinner glyphs animate, gerunds vary, and the thinking level changes how long each phase lasts, so no fixed literal (`esc to interrupt`, `tok/s`, …) is robust. Instead it is **whether the screen is still CHANGING**: two `Frontend.get_text` captures `INTERRUPT_RETRY_S` apart (well above `DOUBLE_ESC_GAP_S`, so re-presses never read as a double-Esc) — a running turn always ticks its spinner / elapsed-timer / stream within that window at *every* thinking level, a stopped one is static. It stops the instant the screen goes static (dead), so an already-idle box never gets a stray Esc. The `web-interrupt` row carries `attempts`, `stopped` (True = verified static/dead · False = still animating after every re-press, the Esc never landed · None = idle press / unreadable) and `probes` — the per-capture phase snapshots. When `stopped` is **False** the endpoint returns `502` and spawns **no** `escape-recheck` (flipping the tab green would mask a live turn, exactly how the failure hid), so the page toasts a real failure. Every capture is also folded into an **`interrupt-probe`** `state_files` row (`insert`/`toks`/`spin` flags + a tail per capture point) — the durable ground truth for diagnosing a recurrence across thinking levels.
 
 When the (verified or unverifiable) Escape lands on a MAGENTA tab
 (`thinking`/`working`) the endpoint also spawns the **`escape-recheck`** tab

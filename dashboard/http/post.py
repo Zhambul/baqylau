@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 import plugins
 from core import paths as P
 from core import sessionapi as API
+from core.render import strip_ansi
 from core import spawn as SP
 from core import state as ST
 from core import tabs
@@ -39,6 +40,12 @@ from dashboard.notify.presence import _mark_device, _mark_viewing
 from dashboard.read import session as rsession
 
 A = load_audit()
+
+# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
+# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
+# `interrupt-probe` capture's phase; the interrupt's liveness decision is
+# screen-delta, so this pattern's version-fragility is harmless.
+_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
 
 
 class _PostMixin:
@@ -1313,41 +1320,55 @@ class _PostMixin:
             tsize = os.path.getsize(tpath) if tpath else -1
         except OSError:
             tsize = -1
+        # ROBUST verified interrupt (docs/dashboard.md *Interrupt*). A single
+        # synthesized Escape does NOT reliably stop a busy turn here: kitty
+        # reports no per-window delivery (~2/3 reliable), AND with vim editorMode
+        # (the user's `editorMode: vim`) the FIRST Escape during the thinking
+        # phase only leaves INSERT mode — it never reaches the interrupt handler,
+        # so the turn runs to completion (measured 2026-07-24: every real
+        # single-Esc interrupt on a `thinking` tab missed — a16a181f / 3d70feca —
+        # while a mid-STREAM Esc landed; the throwaway diff showed the lone Esc
+        # deleting `-- INSERT --` and nothing else). So press Escape, then WHILE
+        # the turn is still LIVE, press again. Liveness is NOT a marker string
+        # (spinner glyphs animate, gerunds vary, thinking levels differ) — it is
+        # whether the screen is still CHANGING between two captures INTERRUPT_
+        # RETRY_S apart: a running turn always ticks its spinner/elapsed-timer/
+        # stream, a stopped one is static. Stop the instant it goes static, so an
+        # idle box never gets a stray Esc. Every capture is folded into an
+        # `interrupt-probe` audit row — the ground truth for any recurrence.
+        # `stopped`: True = verified static (dead), False = still animating after
+        # every re-press (the Esc never landed), None = idle press / unreadable.
+        pre = self._screen(fe, win)
         ok = bool(fe.send_key(win, "escape"))
-        # VERIFY the turn actually stopped. A single synthesized Escape is only
-        # ~2/3 reliable (kitten reports no per-window delivery), so a blind
-        # press silently missed and the turn ran to completion (2026-07-24,
-        # a16a181f). On a busy tab, re-press WHILE Claude Code's working spinner
-        # is still up — but only while it is, so an already-idle box never gets
-        # a stray Esc (which could open /rewind). `stopped`: True = verified
-        # stopped, False = spinner still up after every retry (the interrupt did
-        # NOT land), None = idle press or unreadable screen (can't verify).
         attempts, stopped = 1, None
+        probes = [self._phase(pre, "pre-esc")]
         if ok and tab in QUEUE_TABS:
             for _ in range(config.INTERRUPT_TRIES):
-                working = self._turn_working(fe, win)
-                if working is None:        # screen unreadable — stop probing
+                a = self._screen(fe, win)
+                time.sleep(config.INTERRUPT_RETRY_S)
+                b = self._screen(fe, win)
+                probes.append(self._phase(b, "post-esc%d" % attempts))
+                if a is None or b is None:   # can't read the screen — stop
                     break
-                if not working:            # spinner gone -> the Esc landed
+                if a == b:                   # static -> the turn is dead
                     stopped = True
                     break
-                stopped = False            # still working -> hasn't landed yet
-                time.sleep(config.INTERRUPT_RETRY_S)
+                stopped = False              # still animating -> still live
                 if fe.send_key(win, "escape"):
                     attempts += 1
         A.state_file(log, sdb, action,
                      {"win": win, "ok": ok, "tab": tab,
-                      "attempts": attempts, "stopped": stopped})
+                      "attempts": attempts, "stopped": stopped, "probes": probes})
         if not ok:
             A.error(log, "dashboard %s (send failed)" % verb,
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
         if stopped is False:
-            # Every retry saw the spinner still up — the Escape never reached
-            # the TUI (the stuck-turn bug). Do NOT spawn the escape-recheck:
-            # flipping the tab green would MASK a turn that is still running
-            # (which is exactly how the failure hid before). Surface it so the
-            # page toasts a failure instead of a phantom success.
+            # The screen kept animating after every re-press — the turn never
+            # stopped. Do NOT spawn the escape-recheck: flipping the tab green
+            # would MASK a turn that is still running (exactly how the failure
+            # hid). Surface it so the page toasts a failure, not a phantom
+            # success — and the `interrupt-probe` row says which phase it was.
             A.error(log, "dashboard %s (not stopped)" % verb,
                     {"sid": sid, "win": win, "attempts": attempts})
             return self._json({"error": "interrupt not confirmed", "tab": tab},
@@ -1362,23 +1383,31 @@ class _PostMixin:
             self._spawn_escape_recheck(fe, win, log, tpath, tsize)
         return self._json({"ok": True, "tab": tab})
 
-    def _turn_working(self, fe, win):
-        """True if `win` still shows Claude Code's working spinner (the
-        WORKING_MARKERS hint it renders while a turn runs), False if that hint
-        is gone (interrupted or idle), None when the screen can't be read
-        (get_text failure / empty / the user scrolled the spinner out of the
-        viewport). The one version-tolerant signal that a web interrupt
-        actually landed — screen-scraped like the ghost suggestion, since no
-        hook fires for the spinner. Never raises (audit-before-swallow)."""
+    def _screen(self, fe, win):
+        """The window's ANSI-stripped visible text, or None (unreadable/empty).
+        The unit of the interrupt's screen-DELTA liveness check and its audit
+        probe. Never raises (audit-before-swallow)."""
         try:
-            screen = fe.get_text(win) or ""
+            raw = fe.get_text(win)
         except Exception:
             A.error("", "dashboard interrupt (probe)", {"win": win})
             return None
-        if not screen:
-            return None
-        low = screen.lower()
-        return any(m in low for m in config.WORKING_MARKERS)
+        return strip_ansi(raw) if raw else None
+
+    def _phase(self, screen, at):
+        """Diagnostic snapshot of `screen` at capture point `at` for the
+        `interrupt-probe` audit row: the phase flags (`insert` = vim `--
+        INSERT --`, `toks` = the `out: N tok/s` stream footer, `spin` = a
+        thinking-spinner gerund) plus a short tail. These label the ground truth
+        for a recurrence — they do NOT drive the liveness decision (screen-delta
+        does), so their marker-fragility is harmless."""
+        if screen is None:
+            return {"at": at, "read": False}
+        return {"at": at,
+                "insert": "-- INSERT --" in screen,
+                "toks": "tok/s" in screen,
+                "spin": bool(_SPIN_RE.search(screen)),
+                "tail": screen[-240:]}
 
     def _spawn_escape_recheck(self, fe, win, log, tpath, tsize):
         """Detached `claude-tab-status.py escape-recheck <log> <transcript>

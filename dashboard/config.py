@@ -213,26 +213,25 @@ DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 # box (a stray Esc there could open /rewind). INTERRUPT_RETRY_S sits well above
 # DOUBLE_ESC_GAP_S so two spaced retries never read as a double-Esc (a lone
 # late Esc at an idle prompt is a harmless no-op).
-INTERRUPT_TRIES = 3                # verification passes (up to 2 re-presses)
-INTERRUPT_RETRY_S = 0.4            # settle before each re-probe / re-press
-WORKING_MARKERS = ("tok/s",)      # lowercased substrings Claude Code renders
-#                                    while a turn is ACTIVELY producing output —
-#                                    the live output-rate footer `out: NNN tok/s`
-#                                    (measured 2026-07-24: it appears only while
-#                                    generating, is absent when idle/stopped, and
-#                                    unlike the animated spinner glyph / gerund
-#                                    it is a FIXED literal that never collides
-#                                    with an agent-activity line's `↓ Nk tokens`).
-#                                    Their ABSENCE from the viewport = the turn is
-#                                    not streaming (interrupted, idle, or the rare
-#                                    pre-first-token thinking window — then we
-#                                    can't confirm and just don't retry). Screen-
-#                                    scraped like the ghost suggestion — no hook
-#                                    fires for it. Version-fragile: if Claude Code
-#                                    drops the rate footer, re-measure a live
-#                                    working window (docs/CONTRIBUTING-style note
-#                                    in CLAUDE.md, *Experimenting with live
-#                                    sessions*) and update this literal.
+INTERRUPT_TRIES = 4                # re-press passes on a still-live turn (a vim
+#                                    editorMode thinking-phase Esc only exits
+#                                    INSERT, so ≥2 presses are needed; extra
+#                                    headroom for the ~2/3 send-key reliability)
+INTERRUPT_RETRY_S = 0.5           # gap between the TWO screen captures whose
+#                                    equality decides "is the turn still live"
+#                                    (also the beat between re-presses — well
+#                                    above DOUBLE_ESC_GAP_S so two never read as
+#                                    a double-Esc). A running Claude Code turn
+#                                    animates its spinner/elapsed-timer/stream
+#                                    within this window at EVERY thinking level;
+#                                    a stopped one is static. This screen-DELTA
+#                                    liveness deliberately replaces the earlier
+#                                    marker-string match (`esc to interrupt` /
+#                                    `tok/s`): glyphs animate, gerunds vary, and
+#                                    the thinking vs streaming phases differ, so
+#                                    no fixed literal is robust — but "the screen
+#                                    is still changing" is (docs/dashboard.md
+#                                    *Interrupt*, CLAUDE.md *Experimenting*).
 
 _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 

@@ -4392,13 +4392,16 @@ def _last_state_file(sid, action):
 
 
 def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
-    # a single synthesized Escape is only ~2/3 reliable, so a BUSY-tab interrupt
-    # is VERIFIED against Claude Code's live output-rate footer ("out: N tok/s",
-    # present only while generating) and re-pressed while it is still up. First
-    # probe: still streaming (the Esc missed) -> re-press; second probe: the
-    # rate footer is gone -> stopped, no further Escapes.
+    # a single Escape does not reliably stop a busy turn (vim editorMode's first
+    # Esc only leaves INSERT mode; send-key is ~2/3 reliable), so a BUSY-tab
+    # interrupt re-presses WHILE the turn is still LIVE — where "live" = the
+    # screen is still CHANGING between two captures (robust across thinking
+    # levels; no fragile marker string). Iter 1: two captures differ (still
+    # animating -> the Esc missed) -> re-press; iter 2: two identical captures
+    # (static -> dead) -> stopped, no further Escapes.
     fe = _FakeFE()
-    fe.screens = ["✳ Moseying… │ out: 313.5 tok/s", "❯ \n  [Opus 4.8] │ dir"]
+    #             pre        i1a          i1b(changed)   i2a       i2b(same)
+    fe.screens = ["✻ Alpha…", "✻ Alpha…", "✻ Bravo…", "❯ idle", "❯ idle"]
     _inject_fe(monkeypatch, fe)
     monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "78")
@@ -4409,14 +4412,15 @@ def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
     assert fe.keyed == [("78", ("escape",)), ("78", ("escape",))]  # one re-press
     row = _last_state_file("intrv", "web-interrupt")
     assert row["attempts"] == 2 and row["stopped"] is True
+    assert row["probes"][0]["at"] == "pre-esc"     # ground-truth capture present
 
 
 def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
-    # the rate footer NEVER clears (every retry still sees "out: N tok/s") = the
-    # Esc never reached the TUI (the stuck-turn bug). Report a 502 and spawn NO
-    # escape-recheck — flipping the tab green would MASK a live turn.
+    # the screen NEVER goes static (every capture differs = the turn keeps
+    # animating) = the Esc never landed (the stuck-turn bug). Report a 502 and
+    # spawn NO escape-recheck — flipping the tab green would MASK a live turn.
     fe = _FakeFE()
-    fe.screens = ["✳ Cogitating… │ out: 88.0 tok/s"]   # sticks: always streaming
+    fe.screens = ["scr%d" % i for i in range(9)]   # every capture distinct = live
     _inject_fe(monkeypatch, fe)
     monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
     spawned = []
