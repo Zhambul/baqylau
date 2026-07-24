@@ -24,6 +24,42 @@ def all_plugins():
     return [claude_code, codex, otel]
 
 
+def _first(method, *args, default=None, truthy=False, **kwargs):
+    """FIRST-plugin-wins fan-out primitive: iterate all_plugins(), skip those
+    missing `method`, call it, and return the first usable answer; `default`
+    when none does. `truthy=False` (the norm) accepts the first result that is
+    `not None` — '' / [] / () ARE answers; `truthy=True` accepts the first
+    TRUTHY result — the empty default is then never an answer. Exceptions
+    propagate (the fan-out callers are read-side tools, not hooks); the
+    per-function docstrings own the exact contract."""
+    for p in all_plugins():
+        fn = getattr(p, method, None)
+        if fn is None:
+            continue
+        got = fn(*args, **kwargs)
+        if (bool(got) if truthy else got is not None):
+            return got
+    return default
+
+
+def _concat_unique(method, key, *args):
+    """CONCAT-and-dedup fan-out primitive: concatenate every plugin's
+    `method(*args)` (each a list, or None), preserving first-seen order and
+    dropping later items whose `key(item)` already appeared. Plugins missing
+    the method are skipped. Same read-side exception contract as _first()."""
+    out, seen = [], set()
+    for p in all_plugins():
+        fn = getattr(p, method, None)
+        if fn is None:
+            continue
+        for item in fn(*args) or []:
+            k = key(item)
+            if k not in seen:
+                seen.add(k)
+                out.append(item)
+    return out
+
+
 def on_session_start(log, cwd, sid):
     """SessionStart fan-out: each plugin may attach its watchers to the
     starting host session (codex spawns its discovery watcher). A plugin
@@ -70,14 +106,7 @@ def activity(sid, agent_id=None):
     propagate, same contract as census(): the callers are read-side tools
     (dashboards/CLIs), not hooks, and swallowing here would hide which
     provider broke."""
-    for p in all_plugins():
-        fn = getattr(p, "activity", None)
-        if fn is None:
-            continue
-        got = fn(sid, agent_id)
-        if got is not None:
-            return got
-    return None
+    return _first("activity", sid, agent_id)
 
 
 def activity_since(sid, agent_id, pos):
@@ -90,14 +119,7 @@ def activity_since(sid, agent_id, pos):
     so a codex run's drill-down stays fetch-once — the fan-out simply finds no
     activity_since on that plugin and moves on. Same exception contract as
     activity(): the callers are read-side tools, not hooks."""
-    for p in all_plugins():
-        fn = getattr(p, "activity_since", None)
-        if fn is None:
-            continue
-        got = fn(sid, agent_id, pos)
-        if got is not None:
-            return got
-    return None
+    return _first("activity_since", sid, agent_id, pos)
 
 
 def monitors(sid):
@@ -109,14 +131,7 @@ def monitors(sid):
     Monitor tool is a Claude Code concept), so the fan-out finds no provider on
     it and moves on. Same exception contract as activity(): the callers are
     read-side tools, not hooks."""
-    for p in all_plugins():
-        fn = getattr(p, "monitors", None)
-        if fn is None:
-            continue
-        got = fn(sid)
-        if got is not None:
-            return got
-    return None
+    return _first("monitors", sid)
 
 
 def session_title(transcript_path):
@@ -125,14 +140,7 @@ def session_title(transcript_path):
     already holds each row's path — 50 session_row() round-trips per poll
     would be waste). First non-empty wins; '' when no plugin recognizes the
     file. Same exception contract as census()/activity()."""
-    for p in all_plugins():
-        fn = getattr(p, "session_title", None)
-        if fn is None:
-            continue
-        got = fn(transcript_path)
-        if got:
-            return got
-    return ""
+    return _first("session_title", transcript_path, default="", truthy=True)
 
 
 def title_and_rename(transcript_path):
@@ -160,14 +168,7 @@ def set_session_title(transcript_path, name):
     dashboard then 409s — e.g. a codex rollout, which must never receive a
     Claude `agent-name` record). Exceptions (OSError from the append)
     propagate — the caller is the dashboard's control plane, not a hook."""
-    for p in all_plugins():
-        fn = getattr(p, "set_session_title", None)
-        if fn is None:
-            continue
-        got = fn(transcript_path, name)
-        if got is not None:
-            return got
-    return None
+    return _first("set_session_title", transcript_path, name)
 
 
 def accounts():
@@ -177,16 +178,7 @@ def accounts():
     login duplicates one of these). Concatenated across plugins,
     first slug wins (claude_code is the only provider). Same exception contract
     as census()/activity(): the caller is the read-side dashboard, not a hook."""
-    out, seen = [], set()
-    for p in all_plugins():
-        fn = getattr(p, "accounts", None)
-        if fn is None:
-            continue
-        for a in fn() or []:
-            if a.get("slug") not in seen:
-                seen.add(a.get("slug"))
-                out.append(a)
-    return out
+    return _concat_unique("accounts", lambda a: a.get("slug"))
 
 
 def model_windows(cache=None):
@@ -213,14 +205,7 @@ def account_alias(slug):
     """Validate a chosen account slug → its launch command word, or None when
     unknown (the dashboard then 400s). First plugin that recognizes the slug
     wins. See plugins.claude_code.account.alias_for."""
-    for p in all_plugins():
-        fn = getattr(p, "account_alias", None)
-        if fn is None:
-            continue
-        got = fn(slug)
-        if got is not None:
-            return got
-    return None
+    return _first("account_alias", slug)
 
 
 def migration_target(cur_slug, cur_model, manual=False, explain=None):
@@ -240,14 +225,7 @@ def migration_target(cur_slug, cur_model, manual=False, explain=None):
     `relimit-pick` row). First plugin that recognizes the request wins. Same
     exception contract as census()/activity(): the caller is the dashboard's
     control plane, not a hook."""
-    for p in all_plugins():
-        fn = getattr(p, "migration_target", None)
-        if fn is None:
-            continue
-        got = fn(cur_slug, cur_model, manual, explain=explain)
-        if got is not None:
-            return got
-    return None
+    return _first("migration_target", cur_slug, cur_model, manual, explain=explain)
 
 
 def launch_argv(words, cmd="claude"):
@@ -257,14 +235,7 @@ def launch_argv(words, cmd="claude"):
     provides one wins; the bare command as a last resort (a frontend exec'ing
     it directly loses aliases/PATH, but nothing better exists without a
     provider)."""
-    for p in all_plugins():
-        fn = getattr(p, "launch_argv", None)
-        if fn is None:
-            continue
-        got = fn(words, cmd)
-        if got is not None:
-            return got
-    return [cmd, *words]
+    return _first("launch_argv", words, cmd, default=[cmd, *words])
 
 
 def slash_commands(cwd):
@@ -274,16 +245,7 @@ def slash_commands(cwd):
     name wins (claude_code is the only provider today). Same exception
     contract as census()/activity(): the caller is the read-side dashboard,
     not a hook."""
-    out, seen = [], set()
-    for p in all_plugins():
-        fn = getattr(p, "slash_commands", None)
-        if fn is None:
-            continue
-        for c in fn(cwd) or []:
-            if c.get("name") not in seen:
-                seen.add(c.get("name"))
-                out.append(c)
-    return out
+    return _concat_unique("slash_commands", lambda c: c.get("name"), cwd)
 
 
 def config_dirs(cwd):
@@ -293,16 +255,7 @@ def config_dirs(cwd):
     over these — the dashboard's per-project dictation keyterms rides it
     (docs/dashboard.md *Web dictation*). Same exception contract as
     census()/activity(): the caller is the read-side dashboard, not a hook."""
-    out, seen = [], set()
-    for p in all_plugins():
-        fn = getattr(p, "config_dirs", None)
-        if fn is None:
-            continue
-        for d in fn(cwd) or []:
-            if d not in seen:
-                seen.add(d)
-                out.append(d)
-    return out
+    return _concat_unique("config_dirs", lambda d: d, cwd)
 
 
 def effort_default(cwd, slug=""):
@@ -315,14 +268,7 @@ def effort_default(cwd, slug=""):
     but every `/effort <level>` saves itself as the settings default, so the
     saved value IS the last applied one. Same exception contract as
     census()/activity(): the caller is the read-side dashboard, not a hook."""
-    for p in all_plugins():
-        fn = getattr(p, "effort_default", None)
-        if fn is None:
-            continue
-        got = fn(cwd, slug)
-        if got:
-            return got
-    return ""
+    return _first("effort_default", cwd, slug, default="", truthy=True)
 
 
 def context(transcript_path, main=False):
@@ -334,14 +280,7 @@ def context(transcript_path, main=False):
     main=True marks a HOST session's main transcript (the claude_code provider
     skips sidechain records there). Same exception contract as
     census()/activity(): the callers are read-side dashboards, not hooks."""
-    for p in all_plugins():
-        fn = getattr(p, "context", None)
-        if fn is None:
-            continue
-        got = fn(transcript_path, main)
-        if got is not None:
-            return got
-    return None
+    return _first("context", transcript_path, main)
 
 
 def goal(transcript_path):
@@ -352,14 +291,7 @@ def goal(transcript_path):
     plugin speaks the file. Read-side like context() (no hook fires for /goal),
     same exception contract as census()/activity(): the callers are read-side
     dashboards, not hooks."""
-    for p in all_plugins():
-        fn = getattr(p, "goal", None)
-        if fn is None:
-            continue
-        got = fn(transcript_path)
-        if got is not None:
-            return got
-    return None
+    return _first("goal", transcript_path)
 
 
 def conversation(sid, pos=0):
@@ -368,14 +300,7 @@ def conversation(sid, pos=0):
     recognizes the sid, None otherwise. Records carry the tool_use `anchor`
     the dashboard interleaves on (docs/dashboard.md). Same exception contract
     as census()/activity()."""
-    for p in all_plugins():
-        fn = getattr(p, "conversation", None)
-        if fn is None:
-            continue
-        got = fn(sid, pos)
-        if got is not None:
-            return got
-    return None
+    return _first("conversation", sid, pos)
 
 
 def ask_preamble(sid, tool_use_id):
@@ -383,11 +308,4 @@ def ask_preamble(sid, tool_use_id):
     question, shown on the dashboard's ask card): the string from the first
     plugin that recognizes the sid, None otherwise. "" when the plugin owns the
     sid but found no prose. Same exception contract as conversation()."""
-    for p in all_plugins():
-        fn = getattr(p, "ask_preamble", None)
-        if fn is None:
-            continue
-        got = fn(sid, tool_use_id)
-        if got is not None:
-            return got
-    return None
+    return _first("ask_preamble", sid, tool_use_id)
