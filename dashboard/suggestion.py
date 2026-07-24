@@ -92,23 +92,32 @@ def _region(lines):
     return lines[start:end]
 
 
+def _box_content(screen):
+    """The input box's post-prompt `[(char, faint)]` list — the shared
+    intermediate of `parse()` and `typed()`: the box region's visible chars with
+    their SGR faint state, dropped through the first prompt marker (the box's
+    `❯`). [] when there is no input box on screen. The two callers differ only
+    in the faint predicate they filter this list with (and parse()'s all-faint
+    validity check)."""
+    if not screen:
+        return []
+    region = _region(screen.splitlines())
+    if not region:
+        return []
+    chars = _faint_chars("\n".join(region))
+    # drop through the first prompt marker (the box's `❯`)
+    text = "".join(c for c, _ in chars)
+    if PROMPT in text:
+        chars = chars[text.index(PROMPT) + 1:]
+    return chars
+
+
 def parse(screen):
     """The greyish suggested-answer text from an ANSI screen capture, or None.
     None means: no input box, an empty box, or REAL input (any non-whitespace
     content that is NOT faint — the user's own typed/queued line, never a
     ghost). A non-None result is the faint suggestion, whitespace-normalized."""
-    if not screen:
-        return None
-    region = _region(screen.splitlines())
-    if not region:
-        return None
-    chars = _faint_chars("\n".join(region))
-    # drop a single leading prompt marker, then leading whitespace/NBSP
-    text = "".join(c for c, _ in chars)
-    if PROMPT in text:
-        # trim through the first prompt marker (the box's `❯`)
-        cut = text.index(PROMPT) + 1
-        chars = chars[cut:]
+    chars = _box_content(screen)
     # is every non-whitespace visible char faint? and is there any at all?
     body = [(c, f) for c, f in chars if c not in _WS and c != "\n"]
     if not body:
@@ -128,16 +137,7 @@ def typed(screen):
     typing into the `❯` box leaves before submitting (it moves neither the tab
     nor the transcript), so the deferred Telegram alert can tell "still at the
     keyboard" from "walked away" (docs/dashboard.md, *Telegram alerts*)."""
-    if not screen:
-        return None
-    region = _region(screen.splitlines())
-    if not region:
-        return None
-    chars = _faint_chars("\n".join(region))
-    # drop through the first prompt marker (the box's `❯`), as parse() does
-    text = "".join(c for c, _ in chars)
-    if PROMPT in text:
-        chars = chars[text.index(PROMPT) + 1:]
+    chars = _box_content(screen)
     real = "".join(c for c, f in chars if not f and c != "\n").replace(NBSP, " ")
     return re.sub(r"\s+", " ", real).strip() or None
 
