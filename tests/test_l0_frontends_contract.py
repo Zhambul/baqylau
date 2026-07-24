@@ -149,25 +149,6 @@ def test_get_honours_claude_frontend(monkeypatch):
     assert type(frontends.get()) is KittyFrontend            # unset → kitty
 
 
-def test_module_window_for_session_delegates_to_class(monkeypatch):
-    """The module-level window_for_session (kept only for the now-deleted
-    claude_kitty compat shim — see frontends/kitty.py) must be the SAME
-    scan as Frontend.window_for_session — one implementation, identical
-    answers on the same tree."""
-    from frontends import kitty as fk
-    tree = [{"tabs": [{"windows": [
-        {"id": 3, "user_vars": {"claude_mirror": "sid-1"}},
-        {"id": 7, "user_vars": {"claude_session": "sid-1"}},
-        {"id": 9, "user_vars": {}},
-    ]}]}]
-    monkeypatch.setattr(fk, "kitten_ls", lambda kitten, listen: tree)
-    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/bin/true")
-    assert fk.window_for_session("/bin/true", "unix:/tmp/x", "sid-1") == "7"
-    assert fe.window_for_session("sid-1") == "7"
-    assert fk.window_for_session("/bin/true", "unix:/tmp/x", "nope") is None
-    assert fe.window_for_session("nope") is None
-
-
 def test_tab_focused_keys_on_is_focused_not_is_active(monkeypatch):
     """tab_focused(win) is True only when win's TAB is is_focused (active +
     its OS window holds keyboard focus). A tab merely is_active in a

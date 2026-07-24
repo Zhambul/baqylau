@@ -216,14 +216,6 @@ def iter_windows(ls):
                 yield osw, t, w
 
 
-def window_for_session(kitten, listen, sid):
-    """Kitty window id (str) of the Claude pane carrying claude_session=<sid>
-    (tagged by claude-split.py at SessionStart), or None. Kept only for the
-    (deleted) claude_kitty compat shim — in-repo callers use Frontend.window_for_session;
-    this delegates to that one scan implementation."""
-    return KittyFrontend(listen=listen, kitten=kitten).window_for_session(sid)
-
-
 def set_tab_color(kitten, listen, win, active_bg, active_fg, inactive_bg,
                   inactive_fg=INACTIVE_FG):
     """Set (or with all-"NONE", clear) the colour of the tab containing `win`.
