@@ -212,9 +212,9 @@ def _render(op, w):
         links = ""
         g = op.get("g")
         if g:
-            rendered, lw = _copy_links(g, op.get("lk"))
+            link_txt, lw = _copy_links(g, op.get("lk"))
             if avail >= lw + 24:                       # keep a useful chip width; a very
-                links = rendered                       # narrow pane just drops the links
+                links = link_txt                       # narrow pane just drops the links
                 avail -= lw
         chip = R.label(fit(R.neutralize(op.get("s", "")), max(1, avail)),
                        op["c"]) + links
