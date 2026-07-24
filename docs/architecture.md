@@ -21,7 +21,11 @@ dashboard/   the web dashboard, a CONSUMER package (docs/dashboard.md) —
              renderers do); nothing imports it back except its bin/ entry and
              the tests. The bin/ renderers already sit at this height;
              dashboard/ is that tier made importable so the server is testable
-             in-process.
+             in-process. Decomposed into sub-packages (docs/dashboard.md):
+             config / read (the read model) / notify / control / http (the HTTP
+             layer, Handler split into base+get+post+sse mixins) / opshtml (the
+             web presenter); server.py is a thin re-export facade. Internal
+             dependency direction: config <- read/control/notify <- http.
 bin/         every executable ENTRY script (`bin/claude-*.py`): the assembly
              layer. They may import anything. Their FILENAMES are load-bearing:
              they name the audit DB's handler/script vocabulary

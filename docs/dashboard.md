@@ -17,10 +17,36 @@ produce the resulting state. See *Control plane (web writes)* below.
 
 ```
 bin/claude-dashboard.py     the CLI: serve | start | stop | status | open
-dashboard/server.py         HTTP + SSE + the notification watcher
-dashboard/opshtml.py        paint ops -> HTML (the web presenter)
-dashboard/static/           the single-page app (vanilla JS/CSS, no build step)
+dashboard/server.py         PUBLIC FACADE — re-exports the surface bin/ + tests
+                            reach through `dashboard.server`; behaviour lives in:
+dashboard/config.py         constants + env knobs (the one owner of the tunables)
+dashboard/read/             the read model: meta (per-session title/git/ctx/goal)
+                            · cache · lists (sessions/resumable/accounts/stats)
+                            · session (one session's detail + ask/plan/composer
+                            cards) · mirror (op-stream -> HTML backlog/history)
+dashboard/notify/           presence signals (presence.py) + the tab-diff Notifier
+                            / toast / off-device-alert fan-out (notifier.py)
+dashboard/control/          launch.py — the terminal-facing control machinery
+                            (Frontend resolver, live-window map, launch argv,
+                            macOS focus/appearance watches)
+dashboard/http/             the HTTP layer: base (send/SSE/guard/static + query
+                            parsers) · get (GET read plane) · post (POST control
+                            plane, route registry) · sse (the SSE streams) ·
+                            handler (Handler = base+mixins, + serve())
+dashboard/opshtml/          paint ops -> HTML (the web presenter), split by concern:
+                            ansi · ops · markdown · tools
+dashboard/static/           the single-page app (vanilla JS/CSS, no build step) —
+                            app.NN-*.js parts loaded in order (classic scripts,
+                            one shared global scope; app.12-init.js runs last)
 ```
+
+The dashboard was decomposed from two monoliths (a ~4800-line `server.py` and a
+~900-line `opshtml.py`) into the packages above; `server.py` is now a thin
+facade. Dependency direction (nothing imports the dashboard back): `config` <-
+everything; `read` / `control` / `notify` import core+plugins+frontends+config;
+`http` imports all of the above; `server` re-exports `http`. Patchable knobs and
+cross-module helpers the handlers call are read MODULE-QUALIFIED (`config.X`,
+`launch.X`, `presence.X`) so a test patches the one owning module.
 
 `./bin/claude-dashboard.py` (default verb `open`) starts the server if needed
 and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
