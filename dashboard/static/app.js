@@ -94,10 +94,24 @@ const IS_IPAD = /iPad/.test(navigator.userAgent)
 
 /* ---------- tiny DOM + fmt helpers ---------- */
 
+// NO EMOJI (docs/dashboard.md, *No emoji*): a few of the symbols this UI paints
+// are EMOJI-CAPABLE codepoints (⚠ ⚙ ✉ ⏱ ▶ …) — text glyphs by default, but a
+// browser whose page fonts lack one falls back to the colour-emoji font (the ☀
+// wake button did exactly that, which is why its sun is now an inline SVG).
+// U+FE0E (variation selector-15) is the standard "render as text" request; every
+// string that becomes page text goes through tp(), so no glyph can turn colour.
+// Twin of opshtml.text_presentation (mirror-op text takes that path instead).
+const EMOJI_CAPABLE =
+  /[\u203c\u2049\u2194\u21a9\u21aa\u2328\u23f1\u23f2\u25aa\u25ab\u25b6\u25c0\u2600\u2601\u260e\u2611\u2618\u2699\u26a0\u26d3\u2702\u2709\u2714\u2716\u2733\u2734\u2744\u2747\u27a1](?![\ufe0e\ufe0f])/g;
+function tp(s) { return s.replace(EMOJI_CAPABLE, "$&\ufe0e"); }
+// every text node the app builds goes through tp() — el() below and this, the
+// document.createTextNode replacement (glyph + label pairs are built that way)
+function tnode(s) { return document.createTextNode(typeof s === "string" ? tp(s) : s); }
+
 function el(tag, cls, text) {
   const n = document.createElement(tag);
   if (cls) n.className = cls;
-  if (text !== undefined) n.textContent = text;
+  if (text !== undefined) n.textContent = typeof text === "string" ? tp(text) : text;
   return n;
 }
 function frag(...kids) { const f = document.createDocumentFragment(); kids.forEach(k => k && f.append(k)); return f; }
@@ -1348,7 +1362,7 @@ function sessionCard(row) {
   const r = el("div", "row");
   const badge = el("span", "badge");
   badge.dataset.tab = row.tab || "";
-  badge.append(el("span", "st"), document.createTextNode(TAB_LABEL[row.tab || ""] || row.tab));
+  badge.append(el("span", "st"), tnode(TAB_LABEL[row.tab || ""] || row.tab));
   r.append(badge);
   if (st.commands) r.append(seg(st.commands + " cmds"));
   const tok = (st.tk_in | 0) + (st.tk_out | 0) + (st.tk_read | 0) + (st.tk_create | 0);
@@ -2224,7 +2238,7 @@ function renderQueue() {
     const d = el("div", "msg prompt queued");
     d.title = "queued in the terminal — delivers when this turn ends";
     const who = el("span", "who");
-    who.append(document.createTextNode("you"), el("span", "qbadge", "⧗ queued"));
+    who.append(tnode("you"), el("span", "qbadge", "⧗ queued"));
     d.append(who);
     const x = el("button", "qx", "✕");
     x.title = "remove this queued marker (the message stays queued in the terminal)";
@@ -2444,7 +2458,7 @@ function promptMd(text) {
   const p = el("p");
   (text || "").split("\n").forEach((line, i) => {
     if (i) p.append(el("br"));
-    p.append(document.createTextNode(line));
+    p.append(tnode(line));
   });
   md.append(p);
   return md;
@@ -5189,7 +5203,7 @@ function setBadge(badge, tab) {
   badge.removeAttribute("data-st");     // drop any focused-subagent status stamp
   badge.dataset.tab = tab;
   badge.replaceChildren(el("span", "st"),
-                        document.createTextNode(TAB_LABEL[tab] || tab || "no tab"));
+                        tnode(TAB_LABEL[tab] || tab || "no tab"));
   // the whole session header (the web scoreboard) washes with the state hue
   const head = badge.closest(".shead");
   if (head) { head.removeAttribute("data-st"); head.dataset.tab = tab; }
@@ -5204,7 +5218,7 @@ function setBadgeAgent(badge, sttxt, stcls) {
   if (!badge) return;
   badge.removeAttribute("data-tab");
   badge.dataset.st = stcls;
-  badge.replaceChildren(el("span", "st"), document.createTextNode(sttxt));
+  badge.replaceChildren(el("span", "st"), tnode(sttxt));
   const head = badge.closest(".shead");
   if (head) { head.removeAttribute("data-tab"); head.dataset.st = stcls; }
 }
@@ -5221,7 +5235,7 @@ function startRenameHeader() {
   inp.value = (ses.meta && ses.meta.title) || "";
   inp.maxLength = 120;                  // mirrors the server's RENAME_MAX
   let done = false;
-  const restore = (txt) => span.replaceChildren(document.createTextNode(txt));
+  const restore = (txt) => span.replaceChildren(tnode(txt));
   const cancel = () => { if (!done) { done = true; restore(old); } };
   const submit = () => {
     if (done) return;
@@ -5302,7 +5316,7 @@ function renderSessionChrome(tab) {
   const acc = meta.account || {};
   if (acc.slug || acc.label) {
     const chip = el("span", "acctchip");
-    chip.append(el("span", "ag", "◈"), document.createTextNode(
+    chip.append(el("span", "ag", "◈"), tnode(
       " " + (acc.slug ? acc.slug + " · " + acc.label : acc.label)));
     const u = meta.usage;
     if (u) {
@@ -5536,7 +5550,7 @@ function renderSessionChrome(tab) {
   const mk = (key, label, count) => {
     const a = el("a", key === tab ? "on" : "");
     a.href = "#/s/" + encodeURIComponent(S.cur) + (key === "mirror" ? "" : "/" + key);
-    a.append(document.createTextNode(label));
+    a.append(tnode(label));
     if (count) a.append(el("span", "count", String(count)));
     tabs.append(a);
     return a;
@@ -5661,7 +5675,7 @@ function updateStatsRow() {
   const st = ses.stats || {};
   const add = (label, value, cls) => {
     const s = el("span");
-    if (label) s.append(document.createTextNode(label + " "));
+    if (label) s.append(tnode(label + " "));
     s.append(el("span", cls || "v", value));
     sr.append(s);
   };
@@ -5751,7 +5765,7 @@ function renderAgentScoreboard(sr, focus) {
   sr.append(back);
   const add = (label, value, cls) => {
     const s = el("span");
-    if (label) s.append(document.createTextNode(label + " "));
+    if (label) s.append(tnode(label + " "));
     s.append(el("span", cls || "v", value));
     sr.append(s);
   };
@@ -5825,7 +5839,7 @@ function updateRunning() {
     for (let i = 0; i < rows.length; i++) {
       any = true;
       const chip = el("span", "rchip rk-" + kind.replace(".", "-"));
-      chip.append(el("span", "rg", glyph), document.createTextNode(" " + label));
+      chip.append(el("span", "rg", glyph), tnode(" " + label));
       rr.append(chip);
     }
   }
@@ -6049,10 +6063,10 @@ function monitorCrumbs(sid, m) {
   const back = el("a", "crumb");
   back.href = "#/s/" + encodeURIComponent(sid) + "/monitors";
   back.title = "back to the monitors list";
-  back.append(el("span", "cg", "◉"), document.createTextNode(" monitors"));
+  back.append(el("span", "cg", "◉"), tnode(" monitors"));
   const cur = el("span", "crumb cur");
   cur.append(el("span", "cg", "◉"),
-             document.createTextNode(" " + (m.description || m.command || m.task)));
+             tnode(" " + (m.description || m.command || m.task)));
   nav.append(back, el("span", "csep", "›"), cur);
   return nav;
 }
@@ -6348,7 +6362,7 @@ function noteCrumbs(trail) {
   const back = el("a", "crumb");
   back.href = "#/s/" + encodeURIComponent(S.cur) + "/memory";
   back.title = "back to the memory list";
-  back.append(el("span", "cg", "❖"), document.createTextNode(" memory"));
+  back.append(el("span", "cg", "❖"), tnode(" memory"));
   back.onclick = (e) => {
     e.preventDefault();
     S.ses.noteTrail = []; S.ses.noteFocus = null; paintMemory();
@@ -6358,12 +6372,12 @@ function noteCrumbs(trail) {
     nav.append(el("span", "csep", "›"));
     if (i === trail.length - 1) {
       const cur = el("span", "crumb cur");
-      cur.append(el("span", "cg", "❖"), document.createTextNode(" " + (d.name || "?")));
+      cur.append(el("span", "cg", "❖"), tnode(" " + (d.name || "?")));
       nav.append(cur);
     } else {
       const a = el("a", "crumb");
       a.href = "javascript:void 0";
-      a.append(document.createTextNode(d.name || "?"));
+      a.append(tnode(d.name || "?"));
       a.onclick = (e) => { e.preventDefault(); S.ses.noteTrail = trail.slice(0, i + 1); paintMemory(); };
       nav.append(a);
     }
@@ -6406,10 +6420,10 @@ function jobCrumbs(sid, j) {
   const back = el("a", "crumb");
   back.href = "#/s/" + encodeURIComponent(sid) + "/jobs";
   back.title = "back to the jobs list";
-  back.append(el("span", "cg", "◷"), document.createTextNode(" jobs"));
+  back.append(el("span", "cg", "◷"), tnode(" jobs"));
   const cur = el("span", "crumb cur");
   cur.append(el("span", "cg", "◷"),
-             document.createTextNode(" " + (firstLine(j.command) || j.task)));
+             tnode(" " + (firstLine(j.command) || j.task)));
   nav.append(back, el("span", "csep", "›"), cur);
   return nav;
 }
@@ -6511,10 +6525,10 @@ function agentCrumbs(sid, aid, rec) {
   const main = el("a", "crumb");
   main.href = "#/s/" + encodeURIComponent(sid);       // the mirror = the main agent
   main.title = "back to the main agent";
-  main.append(el("span", "cg", "◆"), document.createTextNode(" " + sesName));
+  main.append(el("span", "cg", "◆"), tnode(" " + sesName));
   const cur = el("span", "crumb cur");
   cur.append(el("span", "cg", rec && rec.kind === "teammate" ? "◈" : "◇"),
-             document.createTextNode(" " + ((rec && rec.desc) || aid)));
+             tnode(" " + ((rec && rec.desc) || aid)));
   nav.append(main, el("span", "csep", "›"), cur);
   return nav;
 }
@@ -6616,7 +6630,7 @@ function timelineHead(d, title) {
   const h = el("div", "tlhead");
   const add = (label, value) => {
     const s = el("span");
-    s.append(document.createTextNode(label + " "));
+    s.append(tnode(label + " "));
     s.append(el("span", "v", value));
     h.append(s);
   };
@@ -6708,7 +6722,7 @@ function timelineEntry(ent) {
 
   hd.append(el("span", "k " + kcls, ktxt));
   const sspan = el("span", "sum");
-  sspan.append(document.createTextNode(sum || ""));
+  sspan.append(tnode(sum || ""));
   hd.append(sspan);
   box.dataset.open = open ? "1" : "0";
   // tool entries carry their tool_use id so a later `resolve` SSE event (a

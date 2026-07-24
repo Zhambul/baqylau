@@ -72,6 +72,21 @@ def test_ansi_html_osc8_unsafe_scheme_is_plain_text():
         assert "javascript:" not in h and "<script>" not in h
 
 
+def test_text_presentation_pins_emoji_capable_glyphs():
+    # docs/dashboard.md *No emoji*: the terminal's own vocabulary contains
+    # EMOJI-CAPABLE codepoints (⚠ ▶ ✉ …) that a browser missing the text glyph
+    # renders from the COLOUR-emoji font. The presenter appends U+FE0E so they
+    # stay monochrome — without touching the producers' audited strings.
+    h = opshtml.ansi_html("⚠ audit: claude-cmd-fmt.py: ValueError: boom")
+    assert h.startswith("⚠︎ audit:")
+    # idempotent (a re-render never stacks selectors) and never touches a glyph
+    # that has no emoji form (the app's own ◷ ❖ ◈ … vocabulary)
+    assert opshtml.text_presentation(h) == h
+    assert opshtml.text_presentation("◷ ❖ ◈ ◉ ✦ ⧉ ✕ 1 2 #") == "◷ ❖ ◈ ◉ ✦ ⧉ ✕ 1 2 #"
+    # and it reaches the other text leaves, not just op text
+    assert "▶︎" in opshtml.md_html("▶ run it")
+
+
 def test_label_copy_links_default_and_custom():
     d = opshtml.op_html({"t": "label", "s": "hdr", "c": [1, 2, 3], "g": "gid"}, "key")
     assert 'data-cc="key/gid/cmd">⧉cmd</a>' in d

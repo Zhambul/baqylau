@@ -50,6 +50,29 @@ look of the page fell apart on a phone. The vocabulary in use:
 | `⧗` | queued message | `⧉` | copy |
 | `⚠` | errors | `⋔` / `⎇` | worktree / branch |
 
+**Picking a non-emoji glyph is only half of it — presentation is the other
+half.** A codepoint can be a plain text symbol and *still* come out as a colour
+emoji: everything in the table above is fine, but `⚠ ▶ ⚙ ✉ ⏱ ▪ ↩ ☀` carry the
+Unicode **Emoji** property with a *text* default presentation, which means the
+browser only paints them monochrome IF one of the page's fonts has the glyph —
+otherwise it falls back to the system colour-emoji font. That is exactly what
+happened to the header's keep-awake `☀` (monochrome in kitty, a colour sun in
+the browser on Apple platforms). Two mechanisms, both cheap:
+
+- **U+FE0E (VARIATION SELECTOR-15)** — the standard "render this as text"
+  request — is appended to every emoji-capable codepoint on its way to the page:
+  `opshtml.text_presentation()` at the module's escape leaf (`_esc`, so ALL op
+  text, chip glyphs, and markdown go through it) and its twin `tp()` in app.js,
+  applied inside `el()`/`tnode()` so every text node the app builds is covered.
+  It lives in the PRESENTER, not the producers: `⚠ audit: <script>: …` is
+  single-owned audited vocabulary asserted verbatim by the tests and quoted by
+  docs/audit.md, and the terminal has no problem to fix — same reason this
+  module html-escapes here rather than upstream. Both passes are idempotent.
+- **An inline SVG** where the glyph is decoration rather than vocabulary and
+  must be exact: the keep-awake sun (`#wakebtn .sunmark`) and the attach
+  paperclip (`CLIP_SVG`). `currentColor` + a CSS size means they follow the
+  theme and line up with neighbouring buttons — which the emoji never did.
+
 The one place emoji survive is the OFF-device alert (the Telegram message and
 the Web Push notification titles, `🔴 needs you` / `🟢 is done`, server.py) —
 those render in someone else's UI (a chat client, an OS notification centre)

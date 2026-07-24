@@ -120,8 +120,11 @@ code, pre, .mono { font-family: var(--mono); }
 .lead { display: inline-flex; align-items: center; gap: 8px; }
 .navback { font-size: 20px; padding: 0 10px; line-height: 1; box-shadow: none; }
 .navback:hover { box-shadow: var(--card-hover); }
-/* the ☀ keep-awake toggle glows gold while the wake lock is held */
+/* the keep-awake toggle glows gold while the wake lock is held. Its sun is an
+   inline SVG, not a ☀ glyph: U+2600 has the Emoji property, so Apple platforms
+   font-fall-back to the COLOUR emoji (docs/dashboard.md, *No emoji*). */
 #wakebtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
+#wakebtn .sunmark { width: 14px; height: 14px; display: block; }
 #wakebtn.on { color: var(--gold, #E9B949); box-shadow: var(--card-hover); }
 
 /* ---- global session strip (persistent complement to toasts) ----------- */

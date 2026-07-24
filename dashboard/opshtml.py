@@ -125,6 +125,40 @@ def _css(st):
 
 # SGR + OSC 8 — the exact two survivors of render.neutralize(); anything else
 # was already stripped before this pattern runs.
+# NO EMOJI (docs/dashboard.md, *No emoji*) — the text-presentation pass.
+# Several symbols the terminal producers paint are EMOJI-CAPABLE codepoints:
+# their DEFAULT presentation is text (that is how they render in kitty), but a
+# browser whose page fonts lack the glyph falls back to the system COLOUR-emoji
+# font, so the same `⚠ audit:` line the terminal shows in amber monochrome
+# sprouted a colour emoji on the page. U+FE0E (VARIATION SELECTOR-15) is the
+# standard "render this as text" request and pins them monochrome.
+#
+# It lives HERE, in the presenter, and not at the producers: these glyphs are
+# single-owned audited vocabulary (`⚠ audit: <script>: <exception>` is asserted
+# verbatim by the tests and quoted by docs/audit.md), and the terminal has no
+# problem to fix. Same reason the module html-escapes here rather than upstream.
+# The twin of this set lives in app.js (`tp()`) for the glyphs the PAGE writes.
+_VS15 = "\ufe0e"
+_EMOJI_CAPABLE = re.compile(
+    "([\u203c\u2049\u2194\u21a9\u21aa\u2328\u23f1\u23f2\u25aa\u25ab"
+    "\u25b6\u25c0\u2600\u2601\u260e\u2611\u2618\u2699\u26a0\u26d3"
+    "\u2702\u2709\u2714\u2716\u2733\u2734\u2744\u2747\u27a1])"
+    "(?![\ufe0e\ufe0f])")
+
+
+def text_presentation(s):
+    """Pin every emoji-capable symbol in `s` to its TEXT glyph (see above).
+    Idempotent — a codepoint that already carries a variation selector is left
+    alone, so re-rendering never stacks selectors."""
+    return _EMOJI_CAPABLE.sub("\\1" + _VS15, s)
+
+
+def _esc(s, quote=False):
+    """html.escape + the text-presentation pass — the escape leaf every path
+    that puts TEXT on the page goes through."""
+    return html.escape(text_presentation(s), quote=quote)
+
+
 _TOK = re.compile(r"\x1b\[[0-9;:]*m|\x1b\]8;;[^\x1b\x07]*(?:\x07|\x1b\\)")
 _CC = re.compile(r"^claude-copy:/*(.+)$")
 
@@ -142,7 +176,7 @@ def ansi_html(s):
         if not text:
             return
         css = _css(st)
-        body = html.escape(text, quote=False)
+        body = _esc(text)
         out.append("<span style=\"%s\">%s</span>" % (css, body) if css else body)
 
     for m in _TOK.finditer(s):
@@ -201,7 +235,7 @@ def _copy_links(key, g, lk):
                    % (html.escape(str(key), quote=True),
                       html.escape(str(g), quote=True),
                       html.escape(str(what), quote=True),
-                      html.escape(str(glyph), quote=False)))
+                      _esc(str(glyph))))
     return "<span class=\"cl\">" + " ".join(out) + "</span>"
 
 
@@ -411,7 +445,7 @@ def _md_inline(text):
     scheme stays literal escaped text — stashed too, so emphasis can't chew a
     URL's _ or * and the autolink pass can't re-match inside a built href;
     then bold/italic over the remaining prose, then restore the stashes."""
-    text = html.escape(text, quote=False)
+    text = _esc(text)
     codes = []
     text = _MD_CODE.sub(
         lambda m: codes.append(m.group(1)) or "\x00%d\x00" % (len(codes) - 1), text)
@@ -465,7 +499,7 @@ def _md_fence(body, lang):
                 return "<pre class=\"md-code\">%s</pre>" % ansi_html(hi)
         except Exception:
             pass                           # unknown lexer / no pygments -> plain
-    return "<pre class=\"md-code\">%s</pre>" % html.escape(body, quote=False)
+    return "<pre class=\"md-code\">%s</pre>" % _esc(body)
 
 
 def _md_para(lines):
@@ -593,7 +627,7 @@ def md_html(text):
             out.append(_md_para(para))
         return "".join(out)
     except Exception:
-        return "<p>%s</p>" % html.escape(text or "", quote=False).replace("\n", "<br>")
+        return "<p>%s</p>" % _esc(text or "").replace("\n", "<br>")
 
 
 def answer_html(pairs):
@@ -618,7 +652,7 @@ def answer_html(pairs):
         head = ""
         hdr = (p.get("header") or "").strip()
         if hdr:
-            head += "<span class=\"anshdr\">%s</span>" % html.escape(hdr, quote=False)
+            head += "<span class=\"anshdr\">%s</span>" % _esc(hdr)
         if q:
             head += "<span class=\"ansqt\">%s</span>" % html.escape(q, quote=False)
         chips = "".join("<span class=\"ansv\">%s</span>"
