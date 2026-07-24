@@ -26,8 +26,29 @@ from dashboard.read.session import (agents_ctx, agents_model_effort,
 
 A = load_audit()
 
+_UNSET = object()               # "no explicit payload" — _push_changed sends the compared value
+
 
 class _SseMixin:
+
+    def _push_changed(self, prev, key, event, value, payload=_UNSET):
+        """Push-if-changed: send `event` iff `value` differs from prev[key],
+        stamping prev BEFORE the send (exactly as the folded inline blocks did,
+        so a client-drop mid-send leaves prev advanced the same way). `payload`
+        is what goes on the wire — it defaults to `value` for the sites that
+        send the compared value verbatim; the sites that wrap the value in a
+        dict pass it explicitly (a plain literal over the already-computed
+        local, so building it every tick is side-effect free). Returns False
+        when the client dropped — the caller MUST `return` on False.
+
+        Sites whose payload is EXPENSIVE or gated (e.g. `ask`'s _ask_wire
+        transcript read, built only when the ask changed) stay INLINE — folding
+        them here would build the payload on every unchanged tick."""
+        if value != prev.get(key):
+            prev[key] = value
+            if not self._sse(event, value if payload is _UNSET else payload):
+                return False
+        return True
 
     # -- SSE loops --
     def sse_global(self):
@@ -131,10 +152,8 @@ class _SseMixin:
                 last = last2
             if recs:
                 st = API.stats_at(sdb)
-                if st != prev["stats"]:
-                    prev["stats"] = st
-                    if not self._sse("stats", st):
-                        return
+                if not self._push_changed(prev, "stats", "stats", st):
+                    return
             if n % SLOW_EVERY == 0:
                 # a resume moves the session to a NEW kitty window (the
                 # SessionStart upsert refreshes the sessions row) — re-resolve,
@@ -148,126 +167,96 @@ class _SseMixin:
                                              _session_slug(sid))
                 agents = agents_model_effort(
                     agents_ctx(visible_agents(API.agents(sid))), eff)
-                if agents != prev["agents"]:
-                    prev["agents"] = agents
-                    if not self._sse("agents", agents):
-                        return
+                if not self._push_changed(prev, "agents", "agents", agents):
+                    return
                 # the main thread's context saturation — the stats row's ctx
                 # chip, live (the transcript grew → the (path, size) cache
                 # re-probes; pushed only on change like everything else here)
                 ctx = session_ctx(row.get("transcript_path") or "", main=True)
-                if ctx != prev["ctx"]:
-                    prev["ctx"] = ctx
-                    if not self._sse("ctx", {"ctx": ctx}):
-                        return
+                if not self._push_changed(prev, "ctx", "ctx", ctx, {"ctx": ctx}):
+                    return
                 # the header's title, live — a web rename or a fresh auto
                 # ai-title shows on the slow cadence (the (path, size)-cached
                 # session_title makes the probe a getsize when nothing grew)
                 t = session_title(row.get("transcript_path") or "")
-                if t != prev["title"]:
-                    prev["title"] = t
-                    if not self._sse("title", {"title": t}):
-                        return
+                if not self._push_changed(prev, "title", "title", t, {"title": t}):
+                    return
                 # the header's git chip, live — a checkout/branch switch (or a
                 # removed worktree) shows on the slow cadence
                 git = git_info(row.get("cwd") or "")
-                if git != prev["git"]:
-                    prev["git"] = git
-                    if not self._sse("git", {"git": git}):
-                        return
+                if not self._push_changed(prev, "git", "git", git, {"git": git}):
+                    return
                 # the effort quick-button, live — a terminal-side /effort
                 # saves to settings and shows here on the slow cadence
                 # (eff resolved above, before the agent-card stamp)
-                if eff != prev["effort"]:
-                    prev["effort"] = eff
-                    if not self._sse("effort", {"effort": eff}):
-                        return
+                if not self._push_changed(prev, "effort", "effort", eff, {"effort": eff}):
+                    return
                 costs = API.costs(sid)
-                if costs != prev["costs"]:
-                    prev["costs"] = costs
-                    if not self._sse("costs", costs):
-                        return
+                if not self._push_changed(prev, "costs", "costs", costs):
+                    return
                 run = API.running(sid)
-                if run != prev["running"]:
-                    prev["running"] = run
-                    if not self._sse("running", run):
-                        return
+                if not self._push_changed(prev, "running", "running", run):
+                    return
                 # the ⚠ error badge, live: a cheap COUNT (no tracebacks) on the
                 # slow cadence, pushed only on change (full rows stay behind
                 # /errors). The web sibling of the scorebar's errwatch chip.
                 ec = API.error_count(sid)
-                if ec != prev["errors"]:
-                    prev["errors"] = ec
-                    if not self._sse("errors", {"count": ec}):
-                        return
+                if not self._push_changed(prev, "errors", "errors", ec, {"count": ec}):
+                    return
                 # the monitors tab badge, live: the cheap distinct-monitor COUNT
                 # (streams keystone, no transcript parse), pushed on change — a
                 # new Monitor launch bumps it. Full monitor detail (command,
                 # events) stays behind /monitors, fetched when the tab opens.
                 mc = API.monitor_count(sid)
-                if mc != prev["monitors"]:
-                    prev["monitors"] = mc
-                    if not self._sse("monitors", {"count": mc}):
-                        return
+                if not self._push_changed(prev, "monitors", "monitors", mc, {"count": mc}):
+                    return
                 # the jobs tab badge, live: the cheap distinct background-job
                 # COUNT (streams keystone), pushed on change — a new bg launch
                 # bumps it. Full job detail (command, output) stays behind /jobs
                 # + /copy, fetched when the tab / drill-down opens.
                 jc = API.job_count(sid)
-                if jc != prev["jobs"]:
-                    prev["jobs"] = jc
-                    if not self._sse("jobs", {"count": jc}):
-                        return
+                if not self._push_changed(prev, "jobs", "jobs", jc, {"count": jc}):
+                    return
                 # the memory tab badge, live: the distinct-note COUNT from the
                 # `memory` kv (plugins.claude_code.memory), pushed on change — a
                 # new op under ~/wiki/01 bumps it. Full note list stays behind
                 # /memory, note bodies behind /note, fetched when the tab opens.
                 memc = API.memory_count(sid)
-                if memc != prev["memory"]:
-                    prev["memory"] = memc
-                    if not self._sse("memory", {"count": memc}):
-                        return
+                if not self._push_changed(prev, "memory", "memory", memc, {"count": memc}):
+                    return
                 # the pinned tasks card, live — a task create / status flip
                 # re-stashes the `tasks` kv (task_fmt.py) and shows on the
                 # slow cadence (tasks change per-hook, not per-keystroke;
                 # nobody is blocked waiting on this card, unlike ask/plan)
                 tasks = _session_tasks(sid)
-                if tasks != prev["tasks"]:
-                    prev["tasks"] = tasks
-                    if not self._sse("tasks", {"tasks": tasks}):
-                        return
+                if not self._push_changed(prev, "tasks", "tasks", tasks, {"tasks": tasks}):
+                    return
                 # the pinned goal card, live — the active `/goal` scanned from
                 # the transcript tail (session_goal, read-side, no hook fires).
                 # Slow cadence like tasks: a goal changes per-turn, not per-
                 # keystroke, and nobody is blocked waiting on this card
                 goal = session_goal(row.get("transcript_path") or "")
-                if goal != prev["goal"]:
-                    prev["goal"] = goal
-                    if not self._sse("goal", {"goal": goal}):
-                        return
+                if not self._push_changed(prev, "goal", "goal", goal, {"goal": goal}):
+                    return
                 # the unsent composer draft — so a composer open on ANOTHER
                 # device tracks this one's edits (the writer suppresses its own
                 # echo by `origin`; the page skips the repaint while its own
                 # box has focus). Slow cadence: a draft is convenience state, no
                 # one is blocked on it (unlike the ask/plan dialogs below).
                 cdraft = _composer_draft(sid)
-                if cdraft != prev["composer_draft"]:
-                    prev["composer_draft"] = cdraft
-                    if not self._sse("composer-draft", {"draft": cdraft}):
-                        return
+                if not self._push_changed(prev, "composer_draft", "composer-draft",
+                                          cdraft, {"draft": cdraft}):
+                    return
                 # the pending queued-message chips — so a reload / another
                 # device restores what the TUI still holds unqueued (slow
                 # cadence, convenience state like the draft above)
                 cqueue = _composer_queue(sid)
-                if cqueue != prev["composer_queue"]:
-                    prev["composer_queue"] = cqueue
-                    if not self._sse("composer-queue", {"queue": cqueue}):
-                        return
-            tab = (API.tab_states().get(win) or "") if win else ""
-            if tab != prev["tab"]:
-                prev["tab"] = tab
-                if not self._sse("tab", {"tab": tab}):
+                if not self._push_changed(prev, "composer_queue", "composer-queue",
+                                          cqueue, {"queue": cqueue}):
                     return
+            tab = (API.tab_states().get(win) or "") if win else ""
+            if not self._push_changed(prev, "tab", "tab", tab, {"tab": tab}):
+                return
             # the pending modal-dialog cards (fast cadence — the dialog just
             # appeared and the user is waiting); None clears each card
             # change-detect on the RAW stash (a cheap kv read); enrich with the
@@ -283,15 +272,11 @@ class _SseMixin:
             # echo by `origin`). Only meaningful while an ask is open;
             # _ask_draft returns None once it's gone, clearing the peer.
             draft = _ask_draft(sid, ask) if ask else None
-            if draft != prev["ask_draft"]:
-                prev["ask_draft"] = draft
-                if not self._sse("ask-draft", {"draft": draft}):
-                    return
+            if not self._push_changed(prev, "ask_draft", "ask-draft", draft, {"draft": draft}):
+                return
             plan = _plan_pending(sid)
-            if plan != prev["plan"]:
-                prev["plan"] = plan
-                if not self._sse("plan", {"plan": plan}):
-                    return
+            if not self._push_changed(prev, "plan", "plan", plan, {"plan": plan}):
+                return
             # the greyish input-box ghost suggestion (docs/dashboard.md, *Web
             # ghost suggestion*) — the faint "suggested answer" the TUI
             # pre-fills when a turn settles. Screen-scraped (no hook fires for
@@ -305,10 +290,8 @@ class _SseMixin:
                            and prev["composer_draft"] is None) else None)
             else:
                 sug = prev["suggestion"]
-            if sug != prev["suggestion"]:
-                prev["suggestion"] = sug
-                if not self._sse("suggestion", {"suggestion": sug}):
-                    return
+            if not self._push_changed(prev, "suggestion", "suggestion", sug, {"suggestion": sug}):
+                return
             now = time.monotonic()
             if now - beat > HEARTBEAT_S:
                 beat = now
