@@ -16,7 +16,10 @@ opens a tab) through the `Frontend` interface, and Claude Code's own hooks then
 produce the resulting state. See *Control plane (web writes)* below.
 
 ```
-bin/claude-dashboard.py     the CLI: serve | start | stop | status | open
+bin/claude-dashboard.py     thin CLI shim — delegates to dashboard/cli.py
+dashboard/cli.py            the CLI lifecycle: serve | start | stop | status |
+                            open (holder/url/start/stop/status/open_browser +
+                            the command dispatch) — importable/testable
 dashboard/server.py         PUBLIC FACADE — re-exports the surface bin/ + tests
                             reach through `dashboard.server`; behaviour lives in:
 dashboard/config.py         constants + env knobs (the one owner of the tunables)
