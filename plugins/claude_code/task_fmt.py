@@ -31,6 +31,7 @@ import os
 from core import ops as O
 from core import state as ST
 from plugins.claude_code import hookkit as H
+from plugins.claude_code import model as M
 
 A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 
@@ -44,7 +45,7 @@ def tasks_dir(sid):
     """The session's on-disk task-list dir. Claude Code keys it by the FIRST
     uuid segment of the session id under the active config root ($CLAUDE_CONFIG_DIR
     when the subscription switcher pins one, ~/.claude otherwise)."""
-    root = os.environ.get("CLAUDE_CONFIG_DIR") or os.path.expanduser("~/.claude")
+    root = M.config_dir()
     return os.path.join(root, "tasks", "session-" + sid.split("-")[0])
 
 
