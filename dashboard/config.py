@@ -89,7 +89,9 @@ READONLY = (os.environ.get("CLAUDE_DASH_READONLY") or "") == "1"
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 STATIC = {                         # whitelist — no path resolution on user input
     "index.html": "text/html; charset=utf-8",
-    "app.js": "text/javascript; charset=utf-8",
+    # the SPA is served as the ordered app.NN-*.js parts, admitted by shape in
+    # http/base.py (_APP_PART) — no per-part whitelist entry, and no monolithic
+    # app.js anymore.
     "style.css": "text/css; charset=utf-8",
     # the Web Push service worker — served from the ROOT path (/sw.js, its own
     # route) so its scope is the whole origin, not just /static/ (a SW controls
