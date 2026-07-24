@@ -193,10 +193,28 @@ NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
 # channel arms the pending alert, and each fires only if its own switch is on.
 # Effectively off anyway when the crypto backend is missing (webpush.enabled()).
 NOTIFY_WEBPUSH = (os.environ.get("CLAUDE_DASH_NOTIFY_WEBPUSH") or "1") != "0"
-# Push SUPERSEDES Telegram by default (no duplicate alert on the one phone that
-# gets both): Telegram fires only as the FALLBACK when nothing is
-# push-subscribed. Set `_ALWAYS`=1 to send BOTH channels every time (the old
-# behaviour — e.g. Telegram on a device that isn't the push one).
+# The on-device push goes to the ONE device you most recently used (see
+# _mru_push_targets), not every subscription — so a session going done/asking
+# alerts only the device you're working on, never all of them at once. Telegram
+# then ESCALATES: it fires as a nudge only if, ESCALATE_S after that on-device
+# push, you STILL haven't acted on the session (a reaction / a look drops the
+# arm in the cancel loop first). So the order is device-first, Telegram-if-
+# ignored — not the old "either/or". Telegram is ALSO the immediate fallback
+# when there's no device to push to at all (nobody subscribed).
+def _escalate_delay():
+    """CLAUDE_DASH_ESCALATE_S → seconds after the on-device push before Telegram
+    nudges (default 300 = 5 min). Bad / negative → the default."""
+    try:
+        v = float(os.environ.get("CLAUDE_DASH_ESCALATE_S") or 300)
+    except ValueError:
+        return 300.0
+    return v if v >= 0 else 300.0
+
+
+ESCALATE_S = _escalate_delay()
+# Force BOTH channels at the FIRST send (device push AND Telegram together, no
+# escalation wait) — the opt-out of the device-first/escalate model, e.g. you
+# always want the Telegram copy too. Default off.
 NOTIFY_TELEGRAM_ALWAYS = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS") or "") == "1"
 # The reused `notify` skill script (Telegram bot). Overridable for a different
 # transport / for the hermetic test's recorder; ~ is expanded.
@@ -301,6 +319,48 @@ def _web_viewing(sid):
         _VIEWING.pop(sid, None)
         return False
     return True
+
+
+# Per-DEVICE presence: the last monotonic time each browser (a stable device id
+# minted in localStorage — app.js DEVICE_ID) reported its dashboard visible +
+# focused, via the /api/presence beat (ANY view, not just a session — so it
+# records "you were on this device" even from the list). This is how the
+# on-device push routes to the ONE device you most recently used rather than
+# fanning out to all: `_mru_push_targets` picks the subscribed device with the
+# newest beat. Never TTL-expired for that choice (we want the LAST device you
+# used even if a while ago); it's a monotonic-max pick, not a freshness gate.
+_DEVICE_SEEN = {}                  # device_id -> monotonic last-seen
+
+
+def _mark_device(device):
+    """Record a presence beat from `device` (a browser's stable id)."""
+    if device:
+        _DEVICE_SEEN[device] = time.monotonic()
+
+
+def _device_seen(device):
+    """The last-seen monotonic for `device`, or -inf (never seen / no id)."""
+    if not device:
+        return float("-inf")
+    return _DEVICE_SEEN.get(device, float("-inf"))
+
+
+def _mru_push_targets():
+    """The push subscriptions of the MOST-RECENTLY-USED device — the on-device
+    alert goes here, not to every subscription. Groups all subscriptions by
+    their stored `device` id and returns the group whose device has the newest
+    presence beat (`_device_seen`). Degrades safely: with NO device tags at all
+    (legacy subscriptions from before device routing) it returns every sub, so
+    nothing is silently lost; a subscribed device that never beat sorts as -inf
+    (still selectable — it's the last device you had, just no beat this run)."""
+    subs = prefs.push_subscriptions()
+    if not subs:
+        return []
+    tagged = [s for s in subs if isinstance(s, dict) and s.get("device")]
+    if not tagged:
+        return subs                    # legacy: no device ids → can't route, send all
+    best = max((s.get("device") for s in tagged), key=_device_seen)
+    return [s for s in tagged if s.get("device") == best]
 
 
 class Notifier:
@@ -528,28 +588,49 @@ class Notifier:
         # practice this send-time check now matters for `asking` arms: a `done`
         # arm that was ever seen was already dropped above (the 'seen it' rule),
         # so a done arm reaching here was never looked at.
+        # DEVICE-FIRST, TELEGRAM-IF-IGNORED. Two stages per armed entry:
+        #  1. after the grace window, the ON-DEVICE push goes to the one device
+        #     you most recently used (_webpush → _mru_push_targets); the entry
+        #     STAYS armed, now with an escalate_at ESCALATE_S in the future.
+        #  2. if it survives to escalate_at — you STILL did nothing with the
+        #     session (any reaction / look already dropped it in the cancel loop
+        #     above) — Telegram nudges you, in case you're away from that device.
+        # Telegram is instead the IMMEDIATE fallback when there's no device to
+        # push to (nobody subscribed); `_ALWAYS` fires both at stage 1.
         for win in list(self.pending):
             entry = self.pending[win]
-            if now - entry["armed_at"] < NOTIFY_DELAY_S:
+            escalating = entry.get("notified") is not None
+            due = entry["escalate_at"] if escalating else entry["armed_at"] + NOTIFY_DELAY_S
+            if now < due:
                 continue
-            del self.pending[win]
             sid = entry.get("sid")
+            # looking at it RIGHT NOW = you're handling it; don't ping (the done
+            # 'seen it' cancel above already caught it per-scan — this is the
+            # asking arm's send-time check, applied at both stages).
             watching = self._watching(win, sid, tree)
             if watching:
+                del self.pending[win]
                 A.state_file("", "", "notify-suppress",
                              {"sid": sid, "kind": entry.get("kind"),
                               "reason": watching})
                 continue
-            if not prefs.notify_muted(sid):
-                # Push SUPERSEDES Telegram so a device that gets both doesn't
-                # get the SAME alert twice: if any browser is push-subscribed,
-                # the push lands on that phone and Telegram is skipped. Telegram
-                # is the FALLBACK — it fires only when no push subscription
-                # exists (push never set up, or all subs pruned as gone). The
-                # `_ALWAYS` knob forces both back on (docs/dashboard.md).
-                pushed = self._webpush(entry) if NOTIFY_WEBPUSH else False
-                if NOTIFY_TELEGRAM and (not pushed or NOTIFY_TELEGRAM_ALWAYS):
+            if prefs.notify_muted(sid):
+                del self.pending[win]
+                continue
+            if escalating:                         # stage 2: the Telegram nudge
+                del self.pending[win]
+                if NOTIFY_TELEGRAM:
                     self._telegram(entry)
+                continue
+            # stage 1: on-device push to the most-recently-used device
+            pushed = self._webpush(entry) if NOTIFY_WEBPUSH else False
+            if pushed and not NOTIFY_TELEGRAM_ALWAYS:
+                entry["notified"] = now            # arm the escalation, keep pending
+                entry["escalate_at"] = now + ESCALATE_S
+                continue
+            del self.pending[win]
+            if NOTIFY_TELEGRAM:                     # no device to push to, or _ALWAYS
+                self._telegram(entry)
 
     def _telegram(self, entry):
         """Send the deferred alert via the reused `notify` skill (Telegram),
@@ -589,20 +670,21 @@ class Notifier:
             return 0
 
     def _webpush(self, entry):
-        """Send the deferred alert as a Web Push to every subscribed browser
-        (docs/dashboard.md, *Web push*) — the on-device iOS/desktop analog of
-        the Telegram ping, twinned with it at the same fire point. Fanned out on
-        a detached daemon thread: the crypto + network round-trips per
-        subscription must never stall the 1 s watcher. Best-effort + audited;
-        a subscription the push service reports GONE (404/410) is pruned. No-op
-        when the crypto backend is missing or nobody has subscribed.
+        """Send the on-device alert as a Web Push to the ONE device you most
+        recently used (`_mru_push_targets`) — NOT every subscription, so a
+        session going done/asking buzzes the device you're working on, not your
+        iPad and Mac at once (docs/dashboard.md, *Web push* / *Device routing*).
+        Dispatched on a detached daemon thread: the crypto + network round-trips
+        must never stall the 1 s watcher. Best-effort + audited; a subscription
+        the push service reports GONE (404/410) is pruned. No-op when the crypto
+        backend is missing or nobody has subscribed.
 
         Returns True iff it DISPATCHED to at least one subscription — the signal
-        the caller uses to skip the duplicate Telegram alert (push supersedes
-        Telegram)."""
+        the caller uses to hold Telegram back to the escalation nudge (device
+        first, Telegram only if you keep ignoring it)."""
         if not webpush.enabled():
             return False
-        subs = prefs.push_subscriptions()
+        subs = _mru_push_targets()
         if not subs:
             return False
         asking = entry.get("kind") == "asking"
@@ -2474,6 +2556,8 @@ class Handler(BaseHTTPRequestHandler):
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
                 and api[2] == "viewing":
             return self.post_viewing(api[1])
+        if api == ["presence"]:
+            return self.post_presence()
         if api == ["upload"]:
             return self.post_upload()
         if api == ["sessions", "new"]:
@@ -4132,8 +4216,41 @@ class Handler(BaseHTTPRequestHandler):
             return self._reject_input("web-push", "bad subscription",
                                       "subscription must carry endpoint + keys",
                                       {"has_ep": bool(ep)})
-        prefs.add_push_subscription(sub)
-        A.state_file("", "", "web-push", {"action": "subscribe", "endpoint": ep[:80]})
+        # `device` (the browser's stable localStorage id) + `label` (a friendly
+        # platform string) let the Notifier route the on-device push to the ONE
+        # device you most recently used instead of every subscription. Optional
+        # (a legacy client omits them → the sub is stored untagged, and routing
+        # degrades to send-all for it — see _mru_push_targets).
+        dev = body.get("device")
+        dev = dev if isinstance(dev, str) and dev else None
+        label = body.get("label")
+        label = label[:60] if isinstance(label, str) and label else None
+        prefs.add_push_subscription(sub, device=dev, label=label)
+        A.state_file("", "", "web-push", {"action": "subscribe", "endpoint": ep[:80],
+                                          "device": dev, "label": label})
+        return self._json({"ok": True})
+
+    def post_presence(self):
+        """Device presence heartbeat: the page reports it is visible + focused
+        RIGHT NOW on this device (docs/dashboard.md *Device routing*). The client
+        sends it on a timer + on focus/reveal, from ANY view (not just a session
+        — so 'you're on this device' is recorded even from the list). Body:
+        {device, sid?}. `device` (the browser's stable localStorage id) stamps
+        `_DEVICE_SEEN` so the on-device push routes to your most-recently-used
+        device; `sid` (present only inside a session view) ALSO refreshes the
+        `_VIEWING` deadline that suppresses the alert while you watch that
+        session — folding the old per-session viewing beat into this one. Types
+        NOTHING and writes NO session state; NOT audited per-beat (ephemeral
+        presence, like the SSE connection). Behind _post_guard; always 200."""
+        body = self._post_guard()
+        if body is None:
+            return
+        dev = body.get("device")
+        if isinstance(dev, str) and dev:
+            _mark_device(dev)
+        sid = body.get("sid")
+        if isinstance(sid, str) and sid:
+            _mark_viewing(sid)
         return self._json({"ok": True})
 
     def post_push_unsubscribe(self):

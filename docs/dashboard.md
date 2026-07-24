@@ -354,6 +354,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
+| `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a ~8s heartbeat while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a ~8s presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
@@ -3764,9 +3765,23 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
     dashboard suppresses the off-device ping. It is ephemeral live-only presence:
     NO per-beat audit row (like the SSE connection), only the `notify-suppress`
     outcome it drives is recorded.
-- An entry that **survives** past the grace window is **sent once** (popped),
-  then never re-fires for that transition. It fires **regardless** of whether a
-  browser is connected — reaching you when away is the whole point.
+- An entry that **survives** past the grace window is delivered in TWO stages —
+  **device-first, Telegram-if-ignored** (*Device routing*, below):
+  - **Stage 1 (on-device):** a Web Push to the ONE device you most recently used
+    (`_mru_push_targets`), NOT every subscription — so a session going done/asking
+    buzzes the device you're working on, never your iPad and Mac at once. The
+    entry stays armed with an `escalate_at` = now + `CLAUDE_DASH_ESCALATE_S`
+    (default 300 s / 5 min).
+  - **Stage 2 (Telegram nudge):** if it survives to `escalate_at` — you STILL did
+    nothing with the session (any reaction / look already dropped it in the
+    cancel loop, so surviving means genuine inaction) — Telegram fires, in case
+    you're away from that device.
+  - If there's **no device to push to** (nobody subscribed), Telegram is the
+    IMMEDIATE stage-1 fallback (nothing to escalate from). `NOTIFY_TELEGRAM_ALWAYS`
+    fires BOTH at stage 1 (no escalation wait). Each stage still honours the
+    per-session mute and the send-time "you're looking at it now" suppress, and
+    fires **regardless** of whether a browser is connected — reaching you when
+    away is the whole point.
 
 The send is a **detached** `subprocess.Popen` of the notify script
 (`start_new_session=True`, DEVNULL stdio, no `wait`) so a slow Telegram
@@ -3802,33 +3817,47 @@ a different transport or the hermetic test's recorder),
 opens, default `https://baqylau.zhambyl.top`; trailing slash tolerated), and
 `CLAUDE_DASH_VIEW_TTL_S` (how long a browser viewing-heartbeat keeps a session
 marked "you're watching it", default `20`; must stay above the page's ~8s beat
-cadence so a continuously-viewed session's presence never lapses).
+cadence so a continuously-viewed session's presence never lapses), and
+`CLAUDE_DASH_ESCALATE_S` (seconds after the on-device push before the Telegram
+nudge fires if you still did nothing with the session, default `300` = 5 min;
+bad / negative → default).
 
 ### Web push (on-device, esp. the installed iPad app)
 
-The **in-page toast** and the desktop **`osNotify`** (`new Notification()`) both
-only fire while a page is OPEN — useless for the main mobile case: an installed
-iPad home-screen app (*Mobile / iPad*, *Add to Home Screen*) that's CLOSED when a
+The **in-page toast** only fires while a page is OPEN and (as of *Device
+routing*) FOCUSED — useless for the main mobile case: an installed iPad
+home-screen app (*Mobile / iPad*, *Add to Home Screen*) that's CLOSED when a
 session needs you. iOS delivers a system notification to a closed/backgrounded
 web app **only** via **Web Push** — a service worker the SERVER wakes — and does
-NOT support the `new Notification()` constructor there at all. So Web Push is the
-on-device analog of the Telegram alert, twinned with it at the **same deferred
-fire point**: the same red `asking` / green `done` transitions, the same grace
-window + arm-cancel + all the suppress logic, the same per-session ○ mute
-(checked at send time). Either channel arms the pending alert (`NOTIFY_TELEGRAM
-or NOTIFY_WEBPUSH`).
+NOT support the `new Notification()` constructor there at all (the old immediate
+`osNotify` on hidden tabs was REMOVED: it buzzed every backgrounded device, the
+exact cross-device-duplicate problem *Device routing* fixes). So Web Push is the
+on-device channel, delivered at the **same deferred fire point** as the Telegram
+alert: the same red `asking` / green `done` transitions, the same grace window +
+arm-cancel + all the suppress logic, the same per-session ○ mute (checked at send
+time). Either channel arms the pending alert (`NOTIFY_TELEGRAM or NOTIFY_WEBPUSH`).
 
-**Push SUPERSEDES Telegram** so the one phone that gets both doesn't receive the
-SAME alert twice: at send time, if any browser is push-subscribed the push is
-sent and Telegram is SKIPPED; Telegram is the FALLBACK, firing only when nothing
-is push-subscribed (push never set up, or every subscription was pruned as gone).
-`_webpush` returns whether it dispatched, and that gates the Telegram send.
-Consequence: once you enable push on your device, the Telegram alerts stop.
-`CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS=1` forces BOTH every time (the old
-behaviour — e.g. you want Telegram on a *different* device than the push one).
-A subtle edge: if subscriptions exist but the push send later fails, Telegram is
-NOT a backup for that one alert — but a `gone` subscription self-prunes, so the
-next alert falls back to Telegram.
+**Device routing (device-first, Telegram-if-ignored).** The deferred alert is
+NOT fanned out to every subscription (which put the SAME alert on your iPad AND
+your Mac at once). Instead:
+- **Stage 1** sends the Web Push to the ONE device you most recently used
+  (`_mru_push_targets`): every subscription is tagged at subscribe time with a
+  stable `device` id (app.js `DEVICE_ID`, persisted in `localStorage`) + a
+  `label`; the ~8s `/api/presence` beat stamps `_DEVICE_SEEN[device]` while that
+  device's dashboard is visible + focused (from ANY view); the push goes to the
+  subscriptions of the device with the newest beat. (Legacy untagged
+  subscriptions can't be routed, so they degrade to send-all.)
+- **Stage 2** escalates to **Telegram** `CLAUDE_DASH_ESCALATE_S` later (default
+  5 min) **only if you still did nothing with the session** — the away nudge.
+- If **nothing is subscribed**, Telegram is the immediate stage-1 fallback.
+  `CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS=1` forces BOTH channels at stage 1 (no
+  escalation wait) — e.g. you always want the Telegram copy too.
+
+This, plus the immediate toast now firing **only on the focused device** (the
+`notify` SSE handler self-gates on `visibilityState`/`hasFocus`), is what routes
+a notification to the device you're working on and leaves the others quiet. A
+subtle edge: if the stage-1 push send later fails, Telegram isn't a backup for
+THAT alert — but a `gone` subscription self-prunes, so the next one re-routes.
 
 The pieces:
 
@@ -3852,9 +3881,12 @@ The pieces:
   granted, `initPush` in app.js) registers the SW, calls
   `pushManager.subscribe({userVisibleOnly, applicationServerKey})` with the
   server's VAPID public key (from `GET /api/push/config`), and POSTs the
-  subscription to `POST /api/push/subscribe`. Stored (upserted by endpoint) in
-  the durable global prefs store (`push-subs` kv — per-DEVICE, not per-session).
-  `POST /api/push/unsubscribe` (and a server-side prune on a `gone` send) drops
+  subscription — **plus this device's `DEVICE_ID` + `label`** — to
+  `POST /api/push/subscribe`. Stored (upserted by endpoint) in the durable global
+  prefs store (`push-subs` kv — per-DEVICE, not per-session), the `device`/`label`
+  saved ALONGSIDE the wire fields (`webpush.send` ignores the extras) so
+  `_mru_push_targets` can route by device. `POST /api/push/unsubscribe` (and a
+  server-side prune on a `gone` send) drops
   it.
 - **The send** — `Notifier._webpush` builds the `{title, body, sid, kind, url}`
   payload and fans it out to every stored subscription on a **detached daemon

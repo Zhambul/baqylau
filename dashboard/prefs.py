@@ -175,14 +175,22 @@ def push_subscriptions():
     return list(d.values()) if isinstance(d, dict) else []
 
 
-def add_push_subscription(sub):
+def add_push_subscription(sub, device=None, label=None):
     """Upsert one subscription (its wire JSON: {endpoint, keys:{p256dh, auth}}),
     keyed by endpoint so a repeat subscribe from the same browser replaces its
-    prior entry. Returns the updated map; best-effort like set()."""
+    prior entry. `device` (the browser's stable id) + `label` (a friendly name)
+    are stored ALONGSIDE the wire fields so the notifier can route the on-device
+    push to the most-recently-used device (webpush.send ignores the extra keys).
+    Returns the updated map; best-effort like set()."""
     ep = sub.get("endpoint") if isinstance(sub, dict) else None
     if not ep:
         return get(PUSH_SUBS_KEY, {})
-    return mutate_map(PUSH_SUBS_KEY, lambda d: d.__setitem__(str(ep), sub))
+    rec = dict(sub)
+    if device:
+        rec["device"] = str(device)
+    if label:
+        rec["label"] = str(label)
+    return mutate_map(PUSH_SUBS_KEY, lambda d: d.__setitem__(str(ep), rec))
 
 
 def remove_push_subscription(endpoint):

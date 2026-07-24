@@ -773,31 +773,130 @@ def test_notify_fires_when_dialog_untouched(monkeypatch):
     assert sent and sent[0]["sid"] == "sX"
 
 
-def test_push_supersedes_telegram(monkeypatch):
-    """When a browser is push-subscribed, the deferred alert goes out as push
-    and Telegram is SKIPPED — no duplicate on the one phone that gets both."""
-    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No"}
-    n, cur, asking, sent, _ = _notifier_for_asking(monkeypatch, screen, delay=0)
-    pushed = []
-    n._webpush = lambda entry: (pushed.append(entry), True)[1]   # push dispatched
-    n.scan()                                 # baseline
-    cur["states"] = {"9": asking}
-    n.scan()                                 # arm + fire (delay 0)
-    assert len(pushed) == 1 and sent == []   # push fired, Telegram skipped
+def _escalation_notifier(monkeypatch, clock):
+    """A bare Notifier wired for device-first/escalation timing tests: a
+    controllable monotonic `clock`, one 'done' tab on window '7', _watching off,
+    _telegram/_webpush recorded by the caller (returned as (sent, pushed))."""
+    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0.0)
+    monkeypatch.setattr(DS, "ESCALATE_S", 300.0)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS, "NOTIFY_WEBPUSH", True)
+    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM_ALWAYS", False)
+    monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    n = DS.Notifier()
+    monkeypatch.setattr(n, "_watching", lambda *a: None)
+    n._payload = lambda kind, state, row: {
+        "kind": kind, "state": state, "sid": row["sid"]}
+    n.push = lambda ev, pl: None
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w", "transcript_path": ""}}
+    return n
 
 
-def test_telegram_always_sends_both(monkeypatch):
-    """CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS forces BOTH channels even when a push
-    subscription exists (the opt-out of the supersede)."""
-    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No"}
-    n, cur, asking, sent, _ = _notifier_for_asking(monkeypatch, screen, delay=0)
+def test_device_push_first_then_telegram_escalation(monkeypatch):
+    """Device-first, Telegram-if-ignored: after the grace the ON-DEVICE push
+    fires and Telegram is held back; only if ESCALATE_S later you STILL did
+    nothing with the session does the Telegram nudge fire."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
+    sent, pushed = [], []
+    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                     # baseline
+    states["7"] = "awaiting-response"
+    n.scan()                                     # arm + stage1 device push
+    assert len(pushed) == 1 and sent == []       # pushed to device, no Telegram yet
+    assert n.pending["7"].get("notified") is not None
+    clock[0] = 299
+    n.scan()                                     # before escalate_at → still quiet
+    assert sent == []
+    clock[0] = 301
+    n.scan()                                     # escalation window passed → Telegram
+    assert len(sent) == 1 and "7" not in n.pending
+
+
+def test_escalation_cancelled_when_you_act(monkeypatch):
+    """If you act on the session (here: the tab leaves done) after the device
+    push but before the escalation, the Telegram nudge NEVER fires."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
+    sent, pushed = [], []
+    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()
+    states["7"] = "awaiting-response"
+    n.scan()                                     # stage1 device push
+    assert len(pushed) == 1 and "7" in n.pending
+    states["7"] = "working"                      # you answered / it resumed
+    clock[0] = 500
+    n.scan()                                     # cancel loop drops it, no escalation
+    assert "7" not in n.pending and sent == []
+
+
+def test_no_device_falls_back_to_telegram_immediately(monkeypatch):
+    """With nothing to push to (_webpush → False), Telegram is the IMMEDIATE
+    fallback at stage 1 — no on-device channel to escalate from."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
+    sent = []
+    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_webpush", lambda e: False)
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()
+    states["7"] = "awaiting-response"
+    n.scan()                                     # no device → Telegram now
+    assert len(sent) == 1 and "7" not in n.pending
+
+
+def test_telegram_always_sends_both_at_stage1(monkeypatch):
+    """CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS forces BOTH channels at the first send
+    (no escalation wait) — the opt-out of device-first/escalate."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
     monkeypatch.setattr(DS, "NOTIFY_TELEGRAM_ALWAYS", True)
-    pushed = []
-    n._webpush = lambda entry: (pushed.append(entry), True)[1]
+    sent, pushed = [], []
+    monkeypatch.setattr(n, "_telegram", lambda e: sent.append(e))
+    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()
-    cur["states"] = {"9": asking}
-    n.scan()
-    assert len(pushed) == 1 and len(sent) == 1   # both channels fired
+    states["7"] = "awaiting-response"
+    n.scan()                                     # both fire at once, no escalation
+    assert len(pushed) == 1 and len(sent) == 1 and "7" not in n.pending
+
+
+def test_mru_push_targets_picks_most_recent_device(monkeypatch):
+    """The on-device push goes to the subscriptions of the device with the
+    newest presence beat — not every subscription (the whole point: one device,
+    the one you're working on)."""
+    subs = [{"endpoint": "https://push/mac", "keys": {}, "device": "mac"},
+            {"endpoint": "https://push/ipad", "keys": {}, "device": "ipad"}]
+    monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
+    clock = [100.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    DS._DEVICE_SEEN.clear()
+    DS._mark_device("ipad")
+    clock[0] = 200
+    DS._mark_device("mac")                       # mac is now most-recent
+    assert [s["endpoint"] for s in DS._mru_push_targets()] == ["https://push/mac"]
+    clock[0] = 300
+    DS._mark_device("ipad")                      # ...and now the iPad
+    assert [s["endpoint"] for s in DS._mru_push_targets()] == ["https://push/ipad"]
+    DS._DEVICE_SEEN.clear()
+
+
+def test_mru_push_targets_legacy_untagged_sends_all(monkeypatch):
+    """A subscription with no device tag (a client from before device routing)
+    can't be routed, so it degrades to send-all — nothing silently lost."""
+    subs = [{"endpoint": "https://push/x", "keys": {}},
+            {"endpoint": "https://push/y", "keys": {}}]
+    monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
+    assert DS._mru_push_targets() == subs
 
 
 def _notifier_for_done(monkeypatch, screen, delay=999):
@@ -2668,6 +2767,35 @@ def test_viewing_heartbeat_marks_presence(dash):
         _post(dash + "/api/session/vh1/viewing", {}, header=None)
     assert e.value.code == 403
     DS._VIEWING.pop("vh1", None)
+
+
+def test_presence_beat_marks_device_and_viewing(dash):
+    """POST /api/presence marks BOTH device presence (for on-device push
+    routing) and, when a sid rides along, session viewing (for suppression).
+    Behind the control-plane guard: a missing header is 403."""
+    DS._DEVICE_SEEN.pop("devQ", None)
+    DS._VIEWING.pop("pv1", None)
+    code, body = _post(dash + "/api/presence", {"device": "devQ", "sid": "pv1"})
+    assert code == 200 and json.loads(body)["ok"] is True
+    assert DS._device_seen("devQ") != float("-inf")   # device recorded
+    assert DS._web_viewing("pv1") is True             # session viewing recorded
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/presence", {"device": "x"}, header=None)
+    assert e.value.code == 403
+    DS._DEVICE_SEEN.pop("devQ", None)
+    DS._VIEWING.pop("pv1", None)
+
+
+def test_add_push_subscription_stores_device_and_label(monkeypatch, tmp_path):
+    """A subscription is stored WITH its device id + label so the notifier can
+    route to the most-recently-used device (webpush.send ignores the extras)."""
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    sub = {"endpoint": "https://push/dev1", "keys": {"p256dh": "k", "auth": "a"}}
+    DS.prefs.add_push_subscription(sub, device="mac-1", label="macOS")
+    stored = DS.prefs.push_subscriptions()
+    assert len(stored) == 1
+    assert stored[0]["device"] == "mac-1" and stored[0]["label"] == "macOS"
+    assert stored[0]["endpoint"] == "https://push/dev1"   # wire fields intact
 
 
 class _FakeFE:

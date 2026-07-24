@@ -203,6 +203,27 @@ function postJSON(url, body, opts) {
 const CLIENT_ID = Math.random().toString(36).slice(2) + Date.now().toString(36);
 const ASK_DRAFT_DEBOUNCE_MS = 350;      // coalesce typing before persisting
 
+// This DEVICE's stable identity (unlike per-load CLIENT_ID) — persisted in
+// localStorage so it survives reloads and is the SAME across every tab on this
+// machine. Sent with the push subscription and the presence beat so the server
+// can route the on-device notification to the ONE device you're working on
+// (docs/dashboard.md *Device routing*). localStorage can throw (Safari private
+// mode) → fall back to a per-load id.
+const DEVICE_ID = (() => {
+  try {
+    let id = localStorage.getItem("baqylau-device");
+    if (!id) {
+      id = Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem("baqylau-device", id);
+    }
+    return id;
+  } catch (_) { return CLIENT_ID; }
+})();
+// A friendly label for this device (best-effort, capped server-side) — shown in
+// audit rows so a push endpoint is legible ("which device is that?").
+const DEVICE_LABEL = ((navigator.userAgentData && navigator.userAgentData.platform)
+  || navigator.platform || "device").slice(0, 60);
+
 // The FRONTEND audit channel (clog → POST /api/clientlog → `web-client` state_files
 // rows, docs/dashboard.md *Frontend audit (clientlog)*). The server can only ever
 // see a control POST that ACTUALLY ARRIVED; a request the browser tried but that
@@ -322,12 +343,6 @@ function toast(kind, t1, t2, onclick) {
   setTimeout(() => n.remove(), 7000);
 }
 
-function osNotify(title, body, sid) {
-  if (!("Notification" in window) || Notification.permission !== "granted") return;
-  if (!document.hidden) return;                    // in-page toast covers visible
-  const n = new Notification(title, { body, tag: "claude-" + sid });
-  n.onclick = () => { window.focus(); location.hash = "#/s/" + sid; n.close(); };
-}
 
 function initNotifBtn() {
   if (!("Notification" in window)) return;
@@ -345,9 +360,10 @@ function initNotifBtn() {
 }
 
 /* ---------- web push (on-device notifications, esp. the iPad home-screen app) ---
-   osNotify above only fires while a page is OPEN — useless for the main case, an
-   installed iPad app that's closed when a session needs you. Real system
-   notifications there require Web Push: a service worker the SERVER can wake
+   The in-page toast only fires while a page is OPEN and focused — useless for
+   the main case, an installed iPad app that's closed when a session needs you.
+   Real system notifications there require Web Push: a service worker the SERVER
+   can wake, targeted at the device you most recently used (see *Device routing*)
    (dashboard/webpush.py sends; this registers the worker + manages the
    subscription). iOS exposes Notification/PushManager ONLY in an installed
    standalone app, so on a plain Safari tab this all no-ops. docs/dashboard.md
@@ -378,7 +394,8 @@ async function ensureSubscribed() {
         applicationServerKey: urlB64ToUint8(cfg.key),
       });
     }
-    await postJSON("/api/push/subscribe", { subscription: sub.toJSON() },
+    await postJSON("/api/push/subscribe",
+                   { subscription: sub.toJSON(), device: DEVICE_ID, label: DEVICE_LABEL },
                    { audit: "push-sub" });
   } catch (e) {
     clog("", "push.fail", { error: String((e && e.message) || e) });
@@ -725,11 +742,17 @@ function connectGlobal() {
   });
   es.addEventListener("notify", (e) => {
     const d = JSON.parse(e.data);
+    // Only the device you're LOOKING AT shows the immediate in-page toast; a
+    // backgrounded / other device is reached by the server's device-targeted
+    // deferred push (+ Telegram escalation), so no more cross-device buzz — the
+    // idle iPad no longer pops an OS notification while you work on the Mac
+    // (docs/dashboard.md *Device routing*).
+    if (document.visibilityState !== "visible") return;
+    if (document.hasFocus && !document.hasFocus()) return;
     const asking = d.kind === "asking";
     const t1 = (d.project || d.sid) + (asking ? " needs you" : " is done");
     const t2 = d.title || (asking ? "Claude is asking a question" : "finished — your turn");
     toast(asking ? "ask" : "done", t1, t2, () => { location.hash = "#/s/" + d.sid; });
-    osNotify(t1, t2, d.sid);
   });
   // hello carries the server's boot id: the EventSource reconnects on a
   // server restart, and a CHANGED boot id means this open page's JS may be
@@ -6920,30 +6943,31 @@ refreshAccounts();
 setInterval(refreshAccounts, ACCOUNTS_POLL_MS);
 setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);
 
-// --- viewing heartbeat --------------------------------------------------------
-// Tell the server you are LOOKING at this session RIGHT NOW, so the deferred
-// Telegram alert can suppress — the web analog of the kitty tab being frontmost
-// (docs/dashboard.md *Telegram alerts*). Sent ONLY while the page is VISIBLE +
-// FOCUSED + inside a session view (S.cur set), so the beat's mere ARRIVAL is
-// the "watching the dashboard" signal — no body needed. hasFocus() rules out a
-// visible-but-unfocused window (dashboard behind the browser you're actually
-// using); visibilityState rules out a backgrounded/minimised tab. Cadence is
-// well under the server's CLAUDE_DASH_VIEW_TTL_S (20s) so a watched session's
-// presence never lapses between beats. UN-audited (no `audit` tag → no
-// web-client rows; it would flood at this rate) and best-effort.
+// --- presence heartbeat -------------------------------------------------------
+// Tell the server, while the page is VISIBLE + FOCUSED, (a) that THIS DEVICE is
+// in use right now (its stable DEVICE_ID), so the on-device notification routes
+// to the device you most recently used (docs/dashboard.md *Device routing*),
+// and (b) if you're inside a session, that you're LOOKING at it (S.cur), so the
+// deferred alert suppresses while you watch — the web analog of the kitty tab
+// being frontmost (*Telegram alerts*). Both ride ONE beat to /api/presence.
+// Sent from ANY view (device presence must be recorded even from the list, not
+// only a session). hasFocus() rules out a visible-but-unfocused window;
+// visibilityState rules out a backgrounded/minimised tab. Cadence is well under
+// the server's CLAUDE_DASH_VIEW_TTL_S (20s) so a watched session's presence
+// never lapses between beats. UN-audited (no `audit` tag → no web-client rows;
+// it would flood at this rate) and best-effort.
 const VIEW_HEARTBEAT_MS = 8000;
-function viewingBeat() {
-  if (!S.cur) return;
+function presenceBeat() {
   if (document.visibilityState !== "visible") return;
   if (document.hasFocus && !document.hasFocus()) return;
-  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/viewing", {})
+  postJSON("/api/presence", { device: DEVICE_ID, sid: S.cur || "" })
     .catch(() => {});                              // presence is best-effort
 }
-setInterval(viewingBeat, VIEW_HEARTBEAT_MS);
+setInterval(presenceBeat, VIEW_HEARTBEAT_MS);
 // Beat immediately when you (re)focus / reveal the page or open a session, so
 // presence is re-established at once rather than up to one interval late.
-window.addEventListener("focus", viewingBeat);
+window.addEventListener("focus", presenceBeat);
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState === "visible") viewingBeat();
+  if (document.visibilityState === "visible") presenceBeat();
 });
-viewingBeat();
+presenceBeat();
