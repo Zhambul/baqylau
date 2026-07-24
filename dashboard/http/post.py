@@ -65,82 +65,42 @@ class _PostMixin:
             except Exception:
                 pass
 
+    # The POST control plane as a REGISTRY (styleguide: tables over if/elif
+    # ladders). _SESSION_POST maps a session-scoped verb (/api/session/<sid>/<v>)
+    # to its handler; _FIXED_POST maps a full fixed path tuple to its handler.
+    # Adding an endpoint is a one-line entry — the matching (len==3 + valid sid
+    # for session verbs, exact tuple for fixed) lives once, in route_post.
+    _SESSION_POST = {
+        "message": "post_message", "command": "post_command",
+        "stop": "post_stop", "interrupt": "post_interrupt",
+        "rename": "post_rename", "migrate": "post_migrate",
+        "rewind": "post_rewind", "rewind-to": "post_rewind_to",
+        "answer": "post_answer", "ask-draft": "post_ask_draft",
+        "composer-draft": "post_composer_draft",
+        "composer-queue": "post_composer_queue",
+        "hint-audit": "post_hint_audit", "client-fail": "post_client_fail",
+        "plan-options": "post_plan_options", "plan-decision": "post_plan_decision",
+        "notify": "post_notify_mute", "viewing": "post_viewing",
+    }
+    _FIXED_POST = {
+        ("presence",): "post_presence", ("upload",): "post_upload",
+        ("sessions", "new"): "post_new_session", ("ns-prefs",): "post_ns_prefs",
+        ("dirs", "hide"): "post_hide_dir", ("dictate", "token"): "post_dictate_token",
+        ("push", "subscribe"): "post_push_subscribe",
+        ("push", "unsubscribe"): "post_push_unsubscribe",
+        ("clientlog",): "post_client_log",
+    }
+
     def route_post(self, url, parts):
         api = parts[1:] if parts[:1] == ["api"] else None
         if api is None:
             return self._json({"error": "not found"}, 404)
         if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "message":
-            return self.post_message(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "command":
-            return self.post_command(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "stop":
-            return self.post_stop(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "interrupt":
-            return self.post_interrupt(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "rename":
-            return self.post_rename(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "migrate":
-            return self.post_migrate(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "rewind":
-            return self.post_rewind(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "rewind-to":
-            return self.post_rewind_to(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "answer":
-            return self.post_answer(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "ask-draft":
-            return self.post_ask_draft(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "composer-draft":
-            return self.post_composer_draft(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "composer-queue":
-            return self.post_composer_queue(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "hint-audit":
-            return self.post_hint_audit(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "client-fail":
-            return self.post_client_fail(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "plan-options":
-            return self.post_plan_options(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "plan-decision":
-            return self.post_plan_decision(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "notify":
-            return self.post_notify_mute(api[1])
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
-                and api[2] == "viewing":
-            return self.post_viewing(api[1])
-        if api == ["presence"]:
-            return self.post_presence()
-        if api == ["upload"]:
-            return self.post_upload()
-        if api == ["sessions", "new"]:
-            return self.post_new_session()
-        if api == ["ns-prefs"]:
-            return self.post_ns_prefs()
-        if api == ["dirs", "hide"]:
-            return self.post_hide_dir()
-        if api == ["dictate", "token"]:
-            return self.post_dictate_token()
-        if api == ["push", "subscribe"]:
-            return self.post_push_subscribe()
-        if api == ["push", "unsubscribe"]:
-            return self.post_push_unsubscribe()
-        if api == ["clientlog"]:
-            return self.post_client_log()
+                and api[2] in self._SESSION_POST:
+            return getattr(self, self._SESSION_POST[api[2]])(api[1])
+        fixed = self._FIXED_POST.get(tuple(api))
+        if fixed:
+            return getattr(self, fixed)()
         return self._json({"error": "not found"}, 404)
 
     def post_upload(self):
