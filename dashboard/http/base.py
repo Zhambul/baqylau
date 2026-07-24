@@ -7,6 +7,7 @@
 import gzip
 import json
 import os
+import re
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
@@ -199,8 +200,15 @@ class _Base(BaseHTTPRequestHandler):
                           **{k: repr(v) for k, v in detail.items()}))
         return self._json({"error": message}, code)
 
+    # the SPA parts (app.NN-name.js, split from the former monolithic app.js) are
+    # admitted by SHAPE, not a per-file whitelist entry — still no user-path
+    # resolution (a strict basename pattern), just no dict bloat for the 13 parts.
+    _APP_PART = re.compile(r"^app\.[0-9]{2}-[a-z]+\.js$")
+
     def static(self, name):
         ctype = STATIC.get(name)
+        if not ctype and self._APP_PART.match(name):
+            ctype = "text/javascript; charset=utf-8"
         if not ctype:
             return self._json({"error": "not found"}, 404)
         try:
@@ -219,7 +227,12 @@ class _Base(BaseHTTPRequestHandler):
             # AND is the main document a reload always refetches, so a fresh
             # ?v=<BOOT_ID> reaches the browser and points at a URL nothing has
             # cached. See docs/dashboard.md *Cache-busting*.
-            data = data.replace(b"/static/app.js", b"/static/app.js?v=" + BOOT_ID.encode())
+            # stamp ?v= on every SPA part (app.NN-*.js) + style.css. The boot
+            # audit record reads document.currentScript.src for this same ?v=,
+            # so the LAST part (app.12-init.js, where that record now lives) must
+            # carry it too — which this covers by stamping them all.
+            data = re.sub(rb'(/static/app\.[0-9]{2}-[a-z]+\.js)',
+                          rb'\1?v=' + BOOT_ID.encode(), data)
             data = data.replace(b"/static/style.css", b"/static/style.css?v=" + BOOT_ID.encode())
         return self._send(200, data, ctype)
 

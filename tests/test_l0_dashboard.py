@@ -469,12 +469,12 @@ def test_http_root_and_static_whitelist(dash):
     assert code == 200 and body.lstrip().startswith("<!doctype html>")
     # cache-bust: the index's sub-resource URLs carry ?v=<BOOT_ID> so a restart
     # forces remote browsers/CDNs off a stale app.js/style.css
-    assert ("/static/app.js?v=" + DS.BOOT_ID) in body
+    assert ("/static/app.00-core.js?v=" + DS.BOOT_ID) in body
     assert ("/static/style.css?v=" + DS.BOOT_ID) in body
-    code, _ = _get(dash + "/static/app.js")
+    code, _ = _get(dash + "/static/app.00-core.js")
     assert code == 200
     # the ?v= is a cache key only — the file still serves with the query present
-    code, _ = _get(dash + "/static/app.js?v=" + DS.BOOT_ID)
+    code, _ = _get(dash + "/static/app.00-core.js?v=" + DS.BOOT_ID)
     assert code == 200
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(dash + "/static/secret.txt")          # not on the whitelist
@@ -491,7 +491,7 @@ def test_app_js_initializes_close_state(dash):
     the close silently does nothing. It shipped uninitialized once (found only
     once the js.error frontend-audit row pointed at app.js:878). A pure static
     check on the served bundle — no JS engine needed."""
-    code, body = _get(dash + "/static/app.js")
+    code, body = _get(dash + "/static/app.00-core.js")
     assert code == 200
     # the S state literal must declare closePend (and closing) as containers
     assert "closePend: {}" in body, "S.closePend must be initialized (see the bug)"
