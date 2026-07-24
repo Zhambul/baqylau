@@ -717,11 +717,11 @@ def _notifier_for_asking(monkeypatch, screen, delay=999):
     asking = next(s for s, k in DS.NOTIFY_STATES.items() if k == "asking")
     cur = {"states": {}}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
-    monkeypatch.setattr(DS, "_session_ended", lambda sid: False)
-    monkeypatch.setattr(DS, "_composing", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "_session_ended", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "_composing", lambda sid: False)
     monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", delay)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", delay)
     audited = []
     monkeypatch.setattr(DS.A, "state_file",
                         lambda *a, **k: audited.append(a))
@@ -757,7 +757,7 @@ def test_notify_suppressed_when_answering_dialog_at_terminal(monkeypatch):
     n.scan()                                 # region moved → suppressed
     assert "9" not in n.pending and sent == []
     assert any(a[2] == "notify-suppress" for a in audited)
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0)
     n.scan()                                 # nothing left to fire
     assert sent == []
 
@@ -777,11 +777,11 @@ def _escalation_notifier(monkeypatch, clock):
     """A bare Notifier wired for device-first/escalation timing tests: a
     controllable monotonic `clock`, one 'done' tab on window '7', _watching off,
     _telegram/_webpush recorded by the caller (returned as (sent, pushed))."""
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0.0)
-    monkeypatch.setattr(DS, "ESCALATE_S", 300.0)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr(DS, "NOTIFY_WEBPUSH", True)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM_ALWAYS", False)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)
+    monkeypatch.setattr(DS.config, "ESCALATE_S", 300.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_WEBPUSH", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM_ALWAYS", False)
     monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     n = DS.Notifier()
@@ -858,7 +858,7 @@ def test_telegram_always_sends_both_at_stage1(monkeypatch):
     (no escalation wait) — the opt-out of device-first/escalate."""
     clock = [0.0]
     n = _escalation_notifier(monkeypatch, clock)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM_ALWAYS", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM_ALWAYS", True)
     sent, pushed = [], []
     monkeypatch.setattr(n, "_telegram", lambda e, reason=None: sent.append(reason))
     monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
@@ -981,11 +981,11 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
     done = next(s for s, k in DS.NOTIFY_STATES.items() if k == "done")
     cur = {"states": {}}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
-    monkeypatch.setattr(DS, "_session_ended", lambda sid: False)
-    monkeypatch.setattr(DS, "_composing", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "_session_ended", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "_composing", lambda sid: False)
     monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", delay)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", delay)
     audited = []
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
 
@@ -1034,7 +1034,7 @@ def test_notify_suppressed_when_replying_at_terminal(monkeypatch):
     assert "9" not in n.pending and sent == []
     assert any(a[2] == "notify-suppress"
                and a[3].get("reason") == "terminal-input" for a in audited)
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0)
     n.scan()                                 # nothing left to fire
     assert sent == []
 
@@ -1121,7 +1121,7 @@ def test_notify_done_suppressed_when_seen_earlier_then_left(monkeypatch):
     assert "9" not in n.pending
     assert any(a[2] == "notify-suppress"
                and a[3].get("reason") == "web-viewing" for a in audited)
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0)
     n.scan()                                  # grace passes — still nothing fires
     assert sent == []
 
@@ -1143,7 +1143,7 @@ def test_notify_asking_still_fires_after_earlier_glance(monkeypatch):
     n.scan()                                  # NOT cancelled — asking ignores a glance
     DS._VIEWING.pop("sX", None)               # ...and you leave without answering
     assert "9" in n.pending
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0)
     n.scan()                                  # send time, not looking now → fires
     assert sent and sent[0]["sid"] == "sX"
 
@@ -2596,7 +2596,7 @@ def test_notifier_transitions(monkeypatch):
     n = DS.Notifier()
     n.winmap = {"7": {"sid": "s7", "cwd": "/w/proj",
                       "transcript_path": "/w/t.jsonl"}}
-    monkeypatch.setattr(DS, "session_title",
+    monkeypatch.setattr(DS.notifier, "session_title",
                         lambda p: "fix the flaky test" if p else "")
     q = n.register()
     seq = [{"7": "working"}, {"7": "working"}, {"7": "awaiting-command"},
@@ -2625,7 +2625,7 @@ def test_notifier_refires_after_empty_tab_table(monkeypatch):
     n = DS.Notifier()
     n.winmap = {"7": {"sid": "s7", "cwd": "/w/proj",
                       "transcript_path": "/w/t.jsonl"}}
-    monkeypatch.setattr(DS, "session_title", lambda p: "t" if p else "")
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t" if p else "")
     q = n.register()
     seq = [{"7": "working"}, {}, {"7": "awaiting-command"}]
     monkeypatch.setattr(DS.API, "tab_states", lambda: seq.pop(0))
@@ -2646,9 +2646,9 @@ def test_notifier_telegram_deferred_arm_cancel_fire(monkeypatch, tmp_path):
     CANCELLED the moment the tab leaves that state before then. Driven with a
     controllable monotonic clock so the timing is deterministic, not slept."""
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 30.0)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr(DS, "session_title", lambda p: "t" if p else "")
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 30.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t" if p else "")
     clock = [0.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     sent = []
@@ -2680,9 +2680,9 @@ def test_notifier_telegram_dropped_when_session_closed(monkeypatch, tmp_path):
     pending alert even if the tab row lingers red/green: the audit `ended_at`
     is the signal, dropped in the cancel pass so nothing fires past the delay."""
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 30.0)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr(DS, "session_title", lambda p: "t")
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 30.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t")
     clock = [0.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     sent = []
@@ -2711,13 +2711,13 @@ def test_notifier_telegram_suppressed_while_composing(monkeypatch, tmp_path):
     alert is cancelled (don't nag about a session you're already handling).
     Clearing the draft after that does NOT resurrect the popped alert."""
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 30.0)
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
-    monkeypatch.setattr(DS, "session_title", lambda p: "t")
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 30.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t")
     clock = [0.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     draft = {"s7": {"text": "half-written reply"}}   # sid -> draft (or absent)
-    monkeypatch.setattr(DS, "_composer_draft", lambda sid: draft.get(sid))
+    monkeypatch.setattr(DS.presence, "_composer_draft", lambda sid: draft.get(sid))
     sent = []
     n = DS.Notifier()
     monkeypatch.setattr(n, "_telegram", lambda entry, *a: sent.append(entry))
@@ -2741,8 +2741,8 @@ def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
     the delay — the mute is checked at SEND time. And CLAUDE_DASH_NOTIFY_TELEGRAM
     off (DS.NOTIFY_TELEGRAM False) arms nothing at all."""
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
-    monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0.0)  # fire on the next scan
-    monkeypatch.setattr(DS, "session_title", lambda p: "t")
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)  # fire on the next scan
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t")
     clock = [0.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     sent = []
@@ -2753,7 +2753,7 @@ def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
 
     # muted -> armed but never sent
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
     DS.prefs.set_notify_muted("s7", True)
     n.scan()                                   # baseline
     states["7"] = "awaiting-command"
@@ -2765,7 +2765,7 @@ def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
     n2 = DS.Notifier()
     monkeypatch.setattr(n2, "_telegram", lambda entry, *a: sent.append(entry))
     n2.winmap = n.winmap
-    monkeypatch.setattr(DS, "NOTIFY_TELEGRAM", False)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", False)
     states["7"] = "working"
     n2.scan()
     states["7"] = "awaiting-command"
@@ -2783,9 +2783,9 @@ def test_telegram_send_invokes_notify_cmd(monkeypatch, tmp_path):
         "import sys, pathlib\n"
         "pathlib.Path(%r).write_text(sys.argv[1] if len(sys.argv) > 1 else '')\n"
         % str(rec))
-    monkeypatch.setattr(DS, "NOTIFY_CMD", str(script))
+    monkeypatch.setattr(DS.config, "NOTIFY_CMD", str(script))
     # the deep link points at the PUBLIC proxied origin, not the 127.0.0.1 bind
-    monkeypatch.setattr(DS, "NOTIFY_URL_BASE", "https://dash.example")
+    monkeypatch.setattr(DS.config, "NOTIFY_URL_BASE", "https://dash.example")
     n = DS.Notifier()
     n._telegram({"kind": "done", "sid": "s9", "project": "proj", "title": "all green"})
     wait_until(rec.exists, desc="recorder ran")
@@ -2992,8 +2992,8 @@ def test_clear_clipboard_image_only_when_image(monkeypatch):
         r = type("R", (), {})()
         r.stdout = fake_run.info if argv[2:3] == ["clipboard info"] else ""
         return r
-    monkeypatch.setattr(DS.sys, "platform", "darwin")
-    monkeypatch.setattr(DS.subprocess, "run", fake_run)
+    monkeypatch.setattr(DS.launch.sys, "platform", "darwin")
+    monkeypatch.setattr(DS.launch.subprocess, "run", fake_run)
     # an image on the clipboard → detected and cleared
     fake_run.info = "«class PNGf», 70, «class utf8», 3"
     calls.clear()
@@ -3005,7 +3005,7 @@ def test_clear_clipboard_image_only_when_image(monkeypatch):
     assert DS._clear_clipboard_image() is False
     assert not any("set the clipboard" in " ".join(c) for c in calls)
     # off macOS → never even probes
-    monkeypatch.setattr(DS.sys, "platform", "linux")
+    monkeypatch.setattr(DS.launch.sys, "platform", "linux")
     calls.clear()
     assert DS._clear_clipboard_image() is False and calls == []
 

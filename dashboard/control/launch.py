@@ -271,7 +271,7 @@ def _launch_wake(win, cwd, t0):
         if not sid:
             time.sleep(LAUNCHWAKE_POLL_S)
     if sid:
-        from dashboard.server import NOTIFIER  # facade re-export of the singleton
+        from dashboard.notify.notifier import NOTIFIER  # the singleton lives here
         NOTIFIER.push("wake", {"sid": sid, "win": win, "cwd": cwd})
     A.state_file("", "", "web-launch-wake",
                  {"sid": sid, "win": win, "cwd": cwd, "ok": bool(sid),
