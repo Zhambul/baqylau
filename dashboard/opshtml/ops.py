@@ -63,6 +63,26 @@ def _code_block(text, ind="  "):
     return "<pre class=\"oc\">%s</pre>" % ansi_html(painted)
 
 
+def _wrap_outer(body, outer):
+    """Wrap `body` in the shared `og` outer div carrying the border colour, or
+    return it unchanged when the op has no `outer` — the one shape both the
+    `label` and `gut` branches paint."""
+    if outer is None:
+        return body
+    return ("<div class=\"og\" style=\"border-color:%s\">%s</div>"
+            % (_rgb(outer), body))
+
+
+def _v_attrs(op):
+    """The ` data-v`/` data-mem` attribute string a click-to-view op carries —
+    shared by the `gut` and `line` branches (html-escaped, data-mem only when
+    the op is memory-tagged)."""
+    v = op.get("v")
+    vattr = " data-v=\"%s\"" % html.escape(str(v), quote=True) if v else ""
+    vattr += " data-mem=\"1\"" if op.get("mem") else ""
+    return vattr
+
+
 def op_html(op, key=""):
     """One paint op -> one HTML block ('' for unknown/empty). `key` is the
     mirror-log key (paths.sid_from_log) the ⧉ copy links need; ops render
@@ -80,11 +100,7 @@ def op_html(op, key=""):
         if g and key:
             chip += _copy_links(key, g, op.get("lk"))
         body = "<div class=\"ol\">%s</div>" % chip
-        outer = op.get("outer")
-        if outer is not None:
-            return ("<div class=\"og\" style=\"border-color:%s\">%s</div>"
-                    % (_rgb(outer), body))
-        return body
+        return _wrap_outer(body, op.get("outer"))
     if t == "code":
         return _code_block(op.get("s", ""), op.get("ind", "  "))
     if t == "gut":
@@ -94,20 +110,12 @@ def op_html(op, key=""):
         style = "border-left-color:%s" % _rgb(op.get("c"))
         if op.get("bg") is not None:
             style += ";background:%s" % _rgb(op.get("bg"))
-        v = op.get("v")
-        vattr = " data-v=\"%s\"" % html.escape(str(v), quote=True) if v else ""
-        vattr += " data-mem=\"1\"" if op.get("mem") else ""
+        vattr = _v_attrs(op)
         body = ("<div class=\"%s\" style=\"%s\"%s><pre>%s</pre></div>"
                 % (cls, style, vattr, ansi_html(s)))
-        outer = op.get("outer")
-        if outer is not None:
-            return ("<div class=\"og\" style=\"border-color:%s\">%s</div>"
-                    % (_rgb(outer), body))
-        return body
+        return _wrap_outer(body, op.get("outer"))
     if t == "line":
-        v = op.get("v")
-        vattr = " data-v=\"%s\"" % html.escape(str(v), quote=True) if v else ""
-        vattr += " data-mem=\"1\"" if op.get("mem") else ""
+        vattr = _v_attrs(op)
         return "<pre class=\"opl\"%s>%s</pre>" % (vattr,
                                                   ansi_html(op.get("s", "")))
     return ""
