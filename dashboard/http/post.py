@@ -246,24 +246,15 @@ class _PostMixin:
                                       {"chars": len(text)}, log=P.mirror_log(sid))
         text = self._with_attachments(text, attachments)
         clear_draft = bool(body.get("clear_draft"))
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
-        fe = launch._frontend()
-        if fe is None:
-            A.error(log, "dashboard message (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-send",
-                         {"win": "", "chars": len(text), "ok": False})
-            return self._json({"error": "no terminal available"}, 503)
-        # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
-        # NOT the audit row's stale start-time id (typing into a reused id would
-        # land in an unrelated tab — see _live_windows; a fresh scan, never the
-        # TTL memo). '' ⇒ nothing to message.
-        win = fe.window_for_session(sid) or ""
-        if not win:
-            A.state_file(log, sdb, "web-send",
-                         {"win": "", "chars": len(text), "ok": False})
-            return self._json({"error": "session has no live window"}, 409)
+        # AUTHORITATIVE window (see _resolve_live_window): the pane tagged
+        # claude_session=<sid>, NOT the audit row's stale start-time id (typing
+        # into a reused id would land in an unrelated tab — a fresh scan, never
+        # the TTL memo). 503/409 each a `web-send` failure row.
+        resolved = self._resolve_live_window(
+            sid, "web-send", verb="message", extra={"chars": len(text)})
+        if resolved is None:
+            return
+        row, log, sdb, fe, win, tab = resolved
         # a message pasted while a MODAL dialog (AskUserQuestion / ExitPlanMode)
         # is up goes INTO the dialog, not the TUI message queue — it perturbs
         # the dialog and the text is lost (the "my queued message vanished mid
@@ -276,10 +267,10 @@ class _PostMixin:
             return self._json({"error": "this session has an open question — "
                                "answer it in the card above (or dismiss it) "
                                "before sending", "modal": True}, 409)
-        # the tab state AT SEND TIME decides whether this send starts a turn
-        # or lands in the TUI's message queue (QUEUE_TABS); it rides the audit
-        # row too — "my message vanished" is answerable as "it queued mid-turn"
-        tab = API.tab_states().get(win) or ""
+        # the tab state AT SEND TIME (resolved above) decides whether this send
+        # starts a turn or lands in the TUI's message queue (QUEUE_TABS); it
+        # rides the audit row too — "my message vanished" is answerable as "it
+        # queued mid-turn".
         if clear_draft:
             # kill the restored draft (both directions), settle, then paste
             fe.send_key(win, "ctrl+u")
@@ -338,25 +329,16 @@ class _PostMixin:
         else:
             return self._reject_input("web-command", "bad cmd", "unknown command",
                                 {"sid": sid, "cmd": cmd, "arg": arg})
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
-        fe = launch._frontend()
-        if fe is None:
-            A.error(log, "dashboard command (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-command",
-                         {"win": "", "cmd": cmd, "arg": arg or "",
-                          "ok": False})
-            return self._json({"error": "no terminal available"}, 503)
-        # AUTHORITATIVE window: the live claude_session=<sid> pane tag, same
-        # as post_message (a reused stale id would type into an unrelated tab)
-        win = fe.window_for_session(sid) or ""
-        if not win:
-            A.state_file(log, sdb, "web-command",
-                         {"win": "", "cmd": cmd, "arg": arg or "",
-                          "ok": False})
-            return self._json({"error": "session has no live window"}, 409)
-        tab = API.tab_states().get(win) or ""
+        # AUTHORITATIVE window (see _resolve_live_window): the live
+        # claude_session=<sid> pane tag, same as post_message (a reused stale id
+        # would type into an unrelated tab). 503/409 each a `web-command`
+        # failure row.
+        resolved = self._resolve_live_window(
+            sid, "web-command", verb="command",
+            extra={"cmd": cmd, "arg": arg or ""})
+        if resolved is None:
+            return
+        row, log, sdb, fe, win, tab = resolved
         if tab == tabs.AWAITING_COMMAND:
             A.state_file(log, sdb, "web-command",
                          {"win": win, "cmd": cmd, "arg": arg or "",
@@ -413,24 +395,16 @@ class _PostMixin:
         body = self._post_guard()
         if body is None:
             return
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
-        fe = launch._frontend()
-        if fe is None:
-            A.error(log, "dashboard stop (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-stop",
-                         {"win": "", "phase": "done", "ok": False})
-            return self._json({"error": "no terminal available"}, 503)
-        # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
-        # NOT the audit row's stale start-time id. Closing by a reused stale id
-        # would close an UNRELATED live tab — the exact bug this fixes (a leaked
-        # smoke-test session's reused window id closed the user's own tab).
-        win = fe.window_for_session(sid) or ""
-        if not win:
-            A.state_file(log, sdb, "web-stop",
-                         {"win": "", "phase": "done", "ok": False})
-            return self._json({"error": "session has no live window"}, 409)
+        # AUTHORITATIVE window (see _resolve_live_window): the pane tagged
+        # claude_session=<sid>, NOT the audit row's stale start-time id. Closing
+        # by a reused stale id would close an UNRELATED live tab (a leaked
+        # smoke-test session's reused window id once closed the user's own tab).
+        # 503/409 each a terminal `web-stop` phase=done failure row.
+        resolved = self._resolve_live_window(
+            sid, "web-stop", verb="stop", extra={"phase": "done"})
+        if resolved is None:
+            return
+        row, log, sdb, fe, win, tab = resolved
         # Audit the ATTEMPT before close_tab: a kitten close that HANGS (an
         # unbounded socket connect) or otherwise never returns must not vanish
         # from the audit — the `web-stop attempt` is the only trace the server
@@ -624,19 +598,10 @@ class _PostMixin:
         body = self._post_guard()
         if body is None:
             return
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
-        fe = launch._frontend()
-        if fe is None:
-            A.error(log, "dashboard rewind (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
-            return self._json({"error": "no terminal available"}, 503)
-        win = fe.window_for_session(sid) or ""
-        if not win:
-            A.state_file(log, sdb, "web-rewind", {"win": "", "ok": False})
-            return self._json({"error": "session has no live window"}, 409)
-        tab = API.tab_states().get(win) or ""
+        resolved = self._resolve_live_window(sid, "web-rewind", verb="rewind")
+        if resolved is None:
+            return
+        row, log, sdb, fe, win, tab = resolved
         if self._dialog_open_guard(tab, log, sdb, win, "web-rewind"):
             return
         restored = ""
@@ -707,21 +672,11 @@ class _PostMixin:
             ups = max(0, int(body.get("ups") or 0))
         except (TypeError, ValueError):
             ups = 0
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
-        fe = launch._frontend()
-        if fe is None:
-            A.error(log, "dashboard rewind-to (no terminal)", {"sid": sid})
-            A.state_file(log, sdb, "web-rewind-to",
-                         {"win": "", "ok": False, "mode": mode})
-            return self._json({"error": "no terminal available"}, 503)
-        win = fe.window_for_session(sid) or ""
-        if not win:
-            A.state_file(log, sdb, "web-rewind-to",
-                         {"win": "", "ok": False, "mode": mode})
-            return self._json({"error": "session has no live window"}, 409)
-        tab = API.tab_states().get(win) or ""
+        resolved = self._resolve_live_window(
+            sid, "web-rewind-to", verb="rewind-to", extra={"mode": mode})
+        if resolved is None:
+            return
+        row, log, sdb, fe, win, tab = resolved
         if self._dialog_open_guard(tab, log, sdb, win, "web-rewind-to"):
             return
         if tab in BUSY_TABS:
@@ -1168,6 +1123,45 @@ class _PostMixin:
             resp["message_sent"] = sent
         return self._json(resp)
 
+    def _resolve_live_window(self, sid, action, *, verb, extra=None):
+        """The shared head of the control-plane POST handlers that TYPE INTO a
+        session's window (message / command / stop / rewind / rewind-to /
+        interrupt): resolve the session row + its `log`/`sdb`, the live frontend
+        (503 + an A.error when none), the AUTHORITATIVE claude_session=<sid>
+        window (409 when none — a fresh kitten scan, never the stale start-time
+        id), and that window's tab state. Returns (row, log, sdb, fe, win, tab)
+        — or None after ALREADY sending the 503/409 response (the _plan_guard
+        'already responded' convention, its sibling below).
+
+        The failure paths write the handler's OWN `web-*` state_files row so the
+        audit content is preserved EXACTLY: `action` is that row's kind, `verb`
+        the A.error phrase ('dashboard <verb> (no terminal)'), and `extra` the
+        per-handler fields merged into the {win:'', ok:False} failure row.
+
+        post_rename / post_migrate / post_answer stay HAND-WRITTEN: rename
+        degrades (no 503/409) on BOTH a missing terminal AND a missing window,
+        migrate resolves no window and interleaves an unknown-sid 404 between
+        `log` and `sdb`, and answer's answer-count 400 must fire BEFORE the
+        terminal check — none of which this fixed shape can host without
+        changing which check responds first."""
+        extra = extra or {}
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        sdb = API.state_db_for(sid) or P.state_db(log)
+        fe = launch._frontend()
+        if fe is None:
+            A.error(log, "dashboard %s (no terminal)" % verb, {"sid": sid})
+            A.state_file(log, sdb, action, {"win": "", **extra, "ok": False})
+            self._json({"error": "no terminal available"}, 503)
+            return None
+        win = fe.window_for_session(sid) or ""
+        if not win:
+            A.state_file(log, sdb, action, {"win": "", **extra, "ok": False})
+            self._json({"error": "session has no live window"}, 409)
+            return None
+        tab = API.tab_states().get(win) or ""
+        return row, log, sdb, fe, win, tab
+
     def _plan_guard(self, sid):
         """The shared head of the two plan endpoints: guard the POST, match
         the stash, resolve the live window. Returns (body, pending, fe, win,
@@ -1292,23 +1286,14 @@ class _PostMixin:
         body = self._post_guard()
         if body is None:
             return
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
-        fe = launch._frontend()
-        if fe is None:
-            A.error(log, "dashboard %s (no terminal)" % verb, {"sid": sid})
-            A.state_file(log, sdb, action, {"win": "", "ok": False})
-            return self._json({"error": "no terminal available"}, 503)
-        # AUTHORITATIVE window: the pane currently tagged claude_session=<sid>,
-        # NOT the audit row's stale start-time id (an Escape into a reused id
-        # would interrupt an unrelated session — see _live_windows; a fresh
-        # scan, never the TTL memo).
-        win = fe.window_for_session(sid) or ""
-        if not win:
-            A.state_file(log, sdb, action, {"win": "", "ok": False})
-            return self._json({"error": "session has no live window"}, 409)
-        tab = API.tab_states().get(win) or ""
+        # AUTHORITATIVE window (see _resolve_live_window): the pane tagged
+        # claude_session=<sid>, NOT the audit row's stale start-time id (an
+        # Escape into a reused id would interrupt an unrelated session — a fresh
+        # scan, never the TTL memo). 503/409 each an `action` failure row.
+        resolved = self._resolve_live_window(sid, action, verb=verb)
+        if resolved is None:
+            return
+        row, log, sdb, fe, win, tab = resolved
         if self._dialog_open_guard(tab, log, sdb, win, action):
             return
         # Press-time transcript size — the escape-recheck's growth baseline
