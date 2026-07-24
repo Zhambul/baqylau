@@ -157,6 +157,30 @@ def set_notify_muted(sid, muted):
     return mutate_map(NOTIFY_MUTE_KEY, _apply)
 
 
+# --- global alerts toggle (the list page's ◉/○, next to "+ session") -------------
+# The ONE master switch over every dashboard notification — the cross-session
+# toasts / OS notifications AND the deferred Telegram / web-push alerts
+# (docs/dashboard.md, *Global alerts toggle*). Stored under one kv key as a bare
+# bool. GLOBAL like the other dashboard prefs: it lives at DASH_PREFS_DB
+# (~/.claude), independent of any repo checkout, so the one flag governs every
+# session — live or parked, in the main checkout or any git worktree. DEFAULT ON:
+# an absent key reads True, so a fresh install alerts until the user opts out.
+# When OFF it OVERRIDES the per-session notify_muted map (everything suppressed);
+# when ON the per-session mutes still apply.
+NOTIFY_ENABLED_KEY = "notify-enabled"
+
+
+def notify_enabled():
+    """True unless the global alerts toggle was turned OFF (default ON)."""
+    return get(NOTIFY_ENABLED_KEY, True) is not False
+
+
+def set_notify_enabled(on):
+    """Turn all dashboard alerts on/off globally; True on write (best-effort like
+    set())."""
+    return set(NOTIFY_ENABLED_KEY, bool(on))
+
+
 # --- web-push subscriptions (the on-device iOS/desktop notification channel) ----
 # Every browser that opted into Web Push (docs/dashboard.md, *Web push*) stores
 # its push subscription here under one kv key, as {endpoint: subscription-json}

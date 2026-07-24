@@ -18,6 +18,7 @@ const $notifbtn = document.getElementById("notifbtn");
 const $attn = document.getElementById("attn");
 const $favicon = document.getElementById("favicon");
 const $newbtn = document.getElementById("newbtn");
+const $notifytoggle = document.getElementById("notifytoggle");
 const $statsbtn = document.getElementById("statsbtn");
 const $modal = document.getElementById("modal");
 const $accounts = document.getElementById("accounts");

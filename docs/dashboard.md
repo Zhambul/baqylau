@@ -378,6 +378,8 @@ reflow for free and keeps the no-build rule.
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
 | `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |
 | `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `group_dir\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
+| `/api/notify-config` | `{enabled}` — the GLOBAL alerts master switch (`prefs.notify_enabled()`, default ON); the list page's `#notifytoggle` seeds its ◉/○ label from this on load (*Global alerts toggle* below) |
+| `POST /api/notify` | **control plane** (a FIXED route, distinct from `/api/session/<sid>/notify`): `{"enabled": bool}` → write the durable global `notify-enabled` pref, audit a `notify-global` `state_files` row, and push a `notify-config` SSE event so every other open page repaints; the ONE master switch over all toasts/OS notifs + Telegram/web-push, overriding per-session mutes when OFF (*Global alerts toggle* below); 400 non-bool |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
@@ -3905,6 +3907,38 @@ NOT live-gated: the opt-out is a dashboard pref, not session state, so it works
 live AND parked, and `session_payload` carries `notify_muted` so the button
 paints the right label on load. The mute is checked at SEND time (not arm time),
 so muting during the grace window still suppresses the alert.
+
+### Global alerts toggle (the master switch)
+
+The per-session opt-out silences ONE chat. The **◉ alerts / ○ alerts off**
+button on the list page's header — right after **+ session** (`#notifytoggle`,
+styled with the shared `.ghost` header class) — is the ONE master switch over
+EVERY dashboard notification: both the immediate cross-session toasts / OS
+notifications AND the deferred Telegram / web-push alerts. Default **ON**.
+
+It is gated at the single transition site in `Notifier.scan()`: when
+`prefs.notify_enabled()` is false the scan skips both the immediate
+`self.push("notify", …)` and the deferred arm, and writes a
+`notify-suppress` `state_files` row with `reason="global-off"` (so "no alerts at
+all" is answerable from the audit DB). Because it short-circuits before the arm,
+it OVERRIDES the per-session `notify_muted` check downstream — global OFF means
+everything is suppressed; global ON leaves the per-session mutes in force.
+
+The state is durable and machine-global: one bare bool under the `notify-enabled`
+key in `dashboard/prefs.py` (`notify_enabled` / `set_notify_enabled`, default ON
+so an absent key reads `True`). Being in the global prefs store
+(`core.paths.DASH_PREFS_DB`, `~/.claude`) — not per-browser, not per-checkout —
+it is **cross-device / cross-session and covers every git worktree**: the
+notifier reads the flag live, so one flip governs all sessions at once.
+
+- `POST /api/notify` `{"enabled": bool}` (a FIXED, non-session route — distinct
+  from `/api/session/<sid>/notify`) writes the pref, audits a global
+  `notify-global` `state_files` row, and pushes a `notify-config` SSE event.
+- `GET /api/notify-config` → `{"enabled": bool}` seeds the button on page load.
+- The `notify-config` SSE event repaints the button on every OTHER open page
+  (`paintNotify` in app.js), so the toggle's visual state stays in sync across
+  devices. The functional suppression is already instant cross-device (the
+  notifier gates firing server-side); the SSE event only keeps the button honest.
 
 **Env knobs** (read once at server start — a restart picks up changes):
 `CLAUDE_DASH_NOTIFY_DELAY_S` (grace seconds before firing, default `60`; bad /

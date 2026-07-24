@@ -80,6 +80,14 @@ function connectGlobal() {
     const t2 = d.title || (asking ? "Claude is asking a question" : "finished — your turn");
     toast(asking ? "ask" : "done", t1, t2, () => { location.hash = "#/s/" + d.sid; });
   });
+  es.addEventListener("notify-config", (e) => {
+    // the GLOBAL alerts toggle was flipped on ANOTHER device — repaint this
+    // page's header button so its state stays in sync everywhere (the actual
+    // suppression is already live cross-device, gated server-side by the
+    // notifier; docs/dashboard.md *Global alerts toggle*).
+    notifyOn = (JSON.parse(e.data) || {}).enabled !== false;
+    if (typeof paintNotify === "function") paintNotify();
+  });
   // hello carries the server's boot id: the EventSource reconnects on a
   // server restart, and a CHANGED boot id means this open page's JS may be
   // stale (a redeploy happened underneath) — twice a stale open page ran old

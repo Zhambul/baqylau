@@ -126,6 +126,11 @@ code, pre, .mono { font-family: var(--mono); }
 #wakebtn { font-size: 14px; padding: 3px 10px; line-height: 1.2; }
 #wakebtn .sunmark { width: 14px; height: 14px; display: block; }
 #wakebtn.on { color: var(--gold, #E9B949); box-shadow: var(--card-hover); }
+/* the global alerts master switch (◉ alerts / ○ alerts off, next to "+ session").
+   ON is the neutral default (a plain ghost); OFF dims + strikes it so a silenced
+   dashboard reads at a glance (docs/dashboard.md, *Global alerts toggle*). */
+#notifytoggle.off { color: var(--dim2); text-decoration: line-through; }
+#notifytoggle.off:hover { color: var(--dim); }
 
 /* ---- global session strip (persistent complement to toasts) ----------- */
 /* Slim hairline bar under the header, on every view; hidden when nothing is

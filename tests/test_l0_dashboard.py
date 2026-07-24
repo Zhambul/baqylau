@@ -773,6 +773,26 @@ def test_notify_fires_when_dialog_untouched(monkeypatch):
     assert sent and sent[0]["sid"] == "sX"
 
 
+def test_notify_suppressed_when_global_toggle_off(monkeypatch):
+    """The GLOBAL alerts toggle OFF (docs/dashboard.md *Global alerts toggle*)
+    suppresses EVERYTHING at the transition site: a red 'asking' tab neither
+    pushes the in-page toast NOR arms the deferred alert, and the scan stamps a
+    `notify-suppress` `reason: global-off` row — the machine-wide off switch,
+    which fires BEFORE (and thus overrides) any per-session mute."""
+    screen = {"txt": "☒ Q\n❯ 1. Yes\n  2. No\nEnter to select"}
+    n, cur, asking, sent, audited = _notifier_for_asking(monkeypatch, screen,
+                                                         delay=0)
+    monkeypatch.setattr(DS.prefs, "notify_enabled", lambda: False)
+    pushed = []
+    n.push = lambda ev, pl: pushed.append((ev, pl))
+    n.scan()                                 # baseline (prev is None)
+    cur["states"] = {"9": asking}
+    n.scan()                                 # transition — globally suppressed
+    assert n.pending == {} and pushed == [] and sent == []
+    supp = [a for a in audited if a[2] == "notify-suppress"]
+    assert supp and supp[0][3].get("reason") == "global-off"
+
+
 def _escalation_notifier(monkeypatch, clock):
     """A bare Notifier wired for device-first/escalation timing tests: a
     controllable monotonic `clock`, one 'done' tab on window '7', _watching off,
@@ -1644,6 +1664,29 @@ def test_hide_dir_prefs_roundtrip_and_validation(dash):
             _post(dash + "/api/dirs/hide", {"cwd": bad} if bad is not None else {})
         assert e.value.code == 400
     assert set(_get_json(dash + "/api/dirs/hidden")) == {"/w/proj", ""}
+
+
+def test_global_notify_toggle_roundtrip_and_validation(dash):
+    """The GLOBAL alerts master switch (docs/dashboard.md *Global alerts toggle*):
+    GET /api/notify-config defaults to {enabled: true} (an absent pref reads ON),
+    POST /api/notify {enabled: bool} persists to the durable prefs store and is
+    read back, and a non-bool `enabled` is refused (400) with the store untouched.
+    A FIXED route, distinct from the per-session /api/session/<sid>/notify."""
+    assert _get_json(dash + "/api/notify-config") == {"enabled": True}
+    code, body = _post(dash + "/api/notify", {"enabled": False})
+    assert code == 200 and json.loads(body) == {"ok": True, "enabled": False}
+    assert _get_json(dash + "/api/notify-config") == {"enabled": False}
+    # flips back on, durable through the store
+    code, body = _post(dash + "/api/notify", {"enabled": True})
+    assert code == 200 and json.loads(body)["enabled"] is True
+    assert _get_json(dash + "/api/notify-config") == {"enabled": True}
+    # a non-bool enabled is refused; the last good value (True) stands
+    for bad in ("yes", 1, None):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/notify",
+                  {"enabled": bad} if bad is not None else {})
+        assert e.value.code == 400
+    assert _get_json(dash + "/api/notify-config") == {"enabled": True}
 
 
 def test_prefs_mutate_map_accumulates_atomically(monkeypatch, tmp_path):

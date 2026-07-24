@@ -176,6 +176,15 @@ class Notifier:
             if not row:
                 continue
             payload = self._payload(kind, state, row)
+            if not prefs.notify_enabled():
+                # global alerts toggle is OFF (docs/dashboard.md, *Global alerts
+                # toggle*) — the ONE gate covers BOTH the immediate toast/OS
+                # notif AND the deferred arm below, and OVERRIDES any per-session
+                # mute. Audited so "no alerts at all" is answerable from the DB.
+                A.state_file("", "", "notify-suppress",
+                             {"sid": payload.get("sid"), "kind": kind,
+                              "reason": "global-off"})
+                continue
             self.push("notify", payload)   # immediate in-page toast + OS notif
             if config.NOTIFY_TELEGRAM or config.NOTIFY_WEBPUSH:   # arm the deferred off-device
                 self.pending[win] = dict(payload, armed_at=now, state=state)

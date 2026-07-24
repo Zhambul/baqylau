@@ -866,6 +866,38 @@ function openNewSession(prefillCwd, resumeSid) {
 $newbtn.onclick = () => openNewSession("");
 $statsbtn.onclick = () => { location.hash = "#/stats"; };
 
+/* ---------- global alerts toggle (header ◉/○, next to "+ session") ---------- */
+// The ONE master switch over EVERY dashboard notification — the cross-session
+// toasts / OS notifs AND the deferred Telegram / web-push alerts
+// (docs/dashboard.md *Global alerts toggle*). The state is server-side + durable
+// (dashboard/prefs.py `notify-enabled`), so it is cross-device / cross-session
+// and covers git worktrees; default ON. OFF overrides the per-session mutes.
+// Seeded from GET /api/notify-config on load, kept in sync across devices by the
+// `notify-config` SSE event (paintNotify is called from app.02-router.js).
+let notifyOn = true;
+function paintNotify() {
+  $notifytoggle.textContent = notifyOn ? "◉ alerts" : "○ alerts off";
+  $notifytoggle.classList.toggle("off", !notifyOn);
+  $notifytoggle.title = notifyOn
+    ? "All dashboard alerts ON — click to silence every session"
+    : "All dashboard alerts OFF — click to re-enable";
+}
+paintNotify();
+fetch("/api/notify-config").then(r => r.json())
+  .then(d => { notifyOn = d.enabled !== false; paintNotify(); })
+  .catch(() => {});
+$notifytoggle.onclick = () => {
+  const next = !notifyOn;
+  postJSON("/api/notify", { enabled: next })
+    .then(() => {
+      notifyOn = next;
+      paintNotify();
+      toast("done", next ? "alerts on" : "alerts off",
+            next ? "every session can notify" : "all sessions silenced");
+    })
+    .catch(e => toast("ask", "alerts toggle failed", (e && e.error) || ""));
+};
+
 /* ---------- fullscreen toggle ---------- */
 // Header ⛶ button: browser Fullscreen API on the whole document, with the
 // WebKit-prefixed fallback (iPadOS Safari ships only webkitRequestFullscreen).

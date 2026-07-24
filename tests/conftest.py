@@ -94,8 +94,18 @@ def _fresh_audit_conn(tmp_path):
     # and on a dev macOS box that would read the real keychain / hit the network.
     # Tests that exercise it monkeypatch the I/O seams and re-enable explicitly.
     os.environ["CLAUDE_MODEL_USAGE"] = "0"
+    # Relocate the durable global prefs DB (dashboard/prefs.py reads
+    # P.DASH_PREFS_DB fresh each call) so NO in-process test touches real
+    # ~/.claude — the `dash` server fixture already does this per-test, but the
+    # notifier scan tests construct DS.Notifier() directly, and its firing gate
+    # now reads prefs.notify_enabled(): without this the suite would depend on
+    # whether the dev machine's global alerts toggle is on.
+    from core import paths as P
+    prev_prefs = P.DASH_PREFS_DB
+    P.DASH_PREFS_DB = str(tmp_path / "dash-prefs.db")
     A._CONN, A._FAILED = None, False
     yield
+    P.DASH_PREFS_DB = prev_prefs
     try:
         if A._CONN is not None:
             A._CONN.close()

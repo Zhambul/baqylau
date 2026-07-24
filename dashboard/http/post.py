@@ -36,6 +36,7 @@ from dashboard.read.lists import (dir_live_sessions)
 from dashboard.read.mirror import (_heal_stash)
 from dashboard.read.session import (_ask_pending, _plan_pending)
 from dashboard.http.base import _sid
+from dashboard.notify.notifier import NOTIFIER
 from dashboard.notify.presence import _mark_device, _mark_viewing
 from dashboard.read import session as rsession
 
@@ -96,6 +97,7 @@ class _PostMixin:
         ("push", "subscribe"): "post_push_subscribe",
         ("push", "unsubscribe"): "post_push_unsubscribe",
         ("clientlog",): "post_client_log",
+        ("notify",): "post_notify_global",
     }
 
     def route_post(self, url, parts):
@@ -1609,6 +1611,31 @@ class _PostMixin:
         prefs.set_notify_muted(sid, muted)
         A.state_file("", "", "notify-mute", {"sid": sid, "muted": muted})
         return self._json({"ok": True, "muted": muted})
+
+    def post_notify_global(self):
+        """The GLOBAL alerts master switch (docs/dashboard.md *Global alerts
+        toggle*) — the list page's ◉/○ button next to "+ session". Body:
+        `enabled` (bool). Writes the durable global prefs store
+        (dashboard/prefs.py `notify-enabled`), NOT any session/terminal state, so
+        one flip governs EVERY session — live or parked, main checkout or any git
+        worktree — and OVERRIDES the per-session mutes when OFF. Behind
+        _post_guard like every control-plane POST; audited as a global
+        `notify-global` state_files row (empty log/path like notify-mute). Pushes
+        a `notify-config` SSE event so every OTHER open page repaints its toggle
+        (the functional suppression is already instant cross-device — the
+        notifier reads the flag live; this only syncs the button's visual state).
+        Returns the flipped state."""
+        body = self._post_guard()
+        if body is None:
+            return
+        on = body.get("enabled")
+        if not isinstance(on, bool):
+            return self._reject_input("notify-global", "bad enabled",
+                                      "enabled must be a boolean", {"enabled": on})
+        prefs.set_notify_enabled(on)
+        A.state_file("", "", "notify-global", {"enabled": on})
+        NOTIFIER.push("notify-config", {"enabled": on})
+        return self._json({"ok": True, "enabled": on})
 
     def post_viewing(self, sid):
         """Presence heartbeat: the page reports it is looking at session `sid`

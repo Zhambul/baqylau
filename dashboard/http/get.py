@@ -112,6 +112,12 @@ class _GetMixin:
             key = webpush.public_key()
             return self._json({"enabled": bool(webpush.enabled() and key),
                                "key": key})
+        if api == ["notify-config"]:
+            # the GLOBAL alerts master switch (docs/dashboard.md *Global alerts
+            # toggle*); the list page seeds its ◉/○ button from this on load.
+            # Default ON — an absent pref reads True. Live changes fan out over
+            # the `notify-config` SSE event, so this GET is only the initial seed.
+            return self._json({"enabled": prefs.notify_enabled()})
         if api == ["dirs", "hidden"]:
             # the {group_key: hidden_at_epoch} map the ✕ built (docs/dashboard.md
             # *Hidden directories*); the page seeds S.hidden from this on load —
