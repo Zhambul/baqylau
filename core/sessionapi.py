@@ -136,6 +136,43 @@ def _in_clause(n):
     return ",".join("?" * n)
 
 
+def _stream_count(sid, kind):
+    """Distinct-`task_id` COUNT over the audit `streams` keystone for ONE kind,
+    chain-aware — the shared skeleton behind job_count()/monitor_count(). Kind
+    is bound (styleguide), so `kind='bg'` becomes an equivalent `kind=?`."""
+    chain = sid_chain(sid)
+    q = ("SELECT COUNT(DISTINCT task_id) FROM streams WHERE kind=?"
+         " AND session_id IN (%s)" % _in_clause(len(chain)))
+    rows = _rows(audit_db(), q, (kind,) + tuple(chain))
+    return int(rows[0][0]) if rows else 0
+
+
+def _streams_by(sid, kinds, cols, key, fold):
+    """The shared chain→in-clause→select→merge skeleton over the audit `streams`
+    keystone, behind agents()/codex_runs()/monitor_streams()/jobs():
+    `SELECT <cols> FROM streams WHERE kind IN (<kinds>) AND session_id IN
+    (<chain>) ORDER BY started_at`, then merge the rows into a dict.
+
+    `key(row)` extracts the merge key (a falsy key SKIPS the row). `fold(out,
+    k, row)` owns the row-SHAPING — the per-reader `out.setdefault(k, {...})`
+    plus field assignment — and is called for every row in started_at order, so
+    the setdefault keeps the FIRST start while later assignments carry the
+    NEWEST end/status (the merge semantics each reader relies on). Returns the
+    merged dict `out`; readers do their own final shaping (sort / join). Kinds
+    are bound (styleguide): `kind='codex'` becomes an equivalent `kind IN (?)`."""
+    chain = sid_chain(sid)
+    q = ("SELECT %s FROM streams WHERE kind IN (%s) AND session_id IN (%s)"
+         " ORDER BY started_at"
+         % (cols, _in_clause(len(kinds)), _in_clause(len(chain))))
+    out = {}
+    for row in _rows(audit_db(), q, tuple(kinds) + tuple(chain)):
+        k = key(row)
+        if not k:
+            continue
+        fold(out, k, row)
+    return out
+
+
 # --- discovery ----------------------------------------------------------------------
 
 def sessions(limit=25):
@@ -521,14 +558,8 @@ def agents(sid):
     'parent-task-resolved (rejected)', …; an ended_at of None on the newest row
     means the streamer is still live or died uncleanly), merged with the state
     DB's agents table (desc, done, slot). Sorted by first start."""
-    chain = sid_chain(sid)
-    out = {}
-    q = ("SELECT agent_id, kind, src_path, started_at, ended_at, end_reason,"
-         " lines_emitted FROM streams WHERE kind IN ('subagent','teammate')"
-         " AND session_id IN (%s) ORDER BY started_at" % _in_clause(len(chain)))
-    for aid, kind, src, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
-        if not aid:
-            continue
+    def fold(out, aid, row):
+        _, kind, src, st, en, er, lines = row
         rec = out.setdefault(aid, {"agent_id": aid, "kind": kind,
                                    "transcript": src or "", "started_at": st})
         # A restarted (idle-teammate) agent has several stream rows: keep the
@@ -537,6 +568,10 @@ def agents(sid):
         rec["tools"] = lines
         if src:
             rec["transcript"] = src
+    out = _streams_by(sid, ("subagent", "teammate"),
+                      "agent_id, kind, src_path, started_at, ended_at,"
+                      " end_reason, lines_emitted",
+                      lambda r: r[0], fold)
     sdb = state_db_for(sid)
     if sdb:
         for aid, arec in S.agents_at(sdb).items():
@@ -570,20 +605,17 @@ def codex_runs(sid):
     provider) or a companion job .log (activity log only; no drill-down).
     A restarted run (several stream rows, one src) merges like a restarted
     teammate: first start, newest end/status."""
-    chain = sid_chain(sid)
-    out = {}
-    q = ("SELECT src_path, task_id, started_at, ended_at, end_reason,"
-         " lines_emitted FROM streams WHERE kind='codex'"
-         " AND session_id IN (%s) ORDER BY started_at" % _in_clause(len(chain)))
-    for src, task, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
-        aid = codex_aid(src)
-        if not aid:
-            continue
+    def fold(out, aid, row):
+        src, task, st, en, er, lines = row
         rec = out.setdefault(aid, {"agent_id": aid, "kind": "codex",
                                    "transcript": src or "", "started_at": st,
                                    "desc": task or ""})
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["tools"] = lines
+    out = _streams_by(sid, ("codex",),
+                      "src_path, task_id, started_at, ended_at, end_reason,"
+                      " lines_emitted",
+                      lambda r: codex_aid(r[0]), fold)
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 
@@ -596,19 +628,16 @@ def monitor_streams(sid):
     tailing, or the streamer died uncleanly). This is the STATE half of the
     monitors read-model — the transcript (plugins.monitors) owns command/events;
     streams own start/end/liveness (the same keystone agents() reads)."""
-    chain = sid_chain(sid)
-    q = ("SELECT task_id, agent_id, pid, started_at, ended_at, end_reason,"
-         " lines_emitted FROM streams WHERE kind='monitor'"
-         " AND session_id IN (%s) ORDER BY started_at" % _in_clause(len(chain)))
-    out = {}
-    for task, aid, pid, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
-        if not task:
-            continue
+    def fold(out, task, row):
+        _, aid, pid, st, en, er, lines = row
         rec = out.setdefault(task, {"started_at": st, "agent_id": aid or ""})
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["lines"], rec["pid"] = lines, pid
         rec["live"] = en is None
-    return out
+    return _streams_by(sid, ("monitor",),
+                       "task_id, agent_id, pid, started_at, ended_at,"
+                       " end_reason, lines_emitted",
+                       lambda r: r[0], fold)
 
 
 def monitor_count(sid):
@@ -616,11 +645,7 @@ def monitor_count(sid):
     plugins.monitors() for the monitors tab's badge, from the audit `streams`
     keystone alone (no transcript parse), so the per-session overview/SSE can show
     it without reading the whole transcript on every tick."""
-    chain = sid_chain(sid)
-    q = ("SELECT COUNT(DISTINCT task_id) FROM streams WHERE kind='monitor'"
-         " AND session_id IN (%s)" % _in_clause(len(chain)))
-    rows = _rows(audit_db(), q, tuple(chain))
-    return int(rows[0][0]) if rows else 0
+    return _stream_count(sid, "monitor")
 
 
 def jobs(sid):
@@ -636,18 +661,16 @@ def jobs(sid):
     being None. Sorted by first start. A converted (Ctrl+B) job's command op
     lives in its foreground group, so `command` may be blank there — the card
     falls back to the taskId."""
-    chain = sid_chain(sid)
-    q = ("SELECT task_id, pid, started_at, ended_at, end_reason, lines_emitted"
-         " FROM streams WHERE kind='bg' AND session_id IN (%s) ORDER BY started_at"
-         % _in_clause(len(chain)))
-    out = {}
-    for task, pid, st, en, er, lines in _rows(audit_db(), q, tuple(chain)):
-        if not task:
-            continue
+    def fold(out, task, row):
+        _, pid, st, en, er, lines = row
         rec = out.setdefault(task, {"task": task, "started_at": st, "command": ""})
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["lines"], rec["pid"] = lines, pid
         rec["live"] = en is None
+    out = _streams_by(sid, ("bg",),
+                      "task_id, pid, started_at, ended_at, end_reason,"
+                      " lines_emitted",
+                      lambda r: r[0], fold)
     sdb = state_db_for(sid)
     if sdb and out:
         from core import copy as CP
@@ -661,11 +684,7 @@ def job_count(sid):
     """The distinct background-job COUNT for a session (chain-aware) — the cheap
     twin of jobs() for the jobs tab's badge (audit `streams` kind='bg', no ops
     read), so the per-session overview/SSE can show it per-tick."""
-    chain = sid_chain(sid)
-    q = ("SELECT COUNT(DISTINCT task_id) FROM streams WHERE kind='bg'"
-         " AND session_id IN (%s)" % _in_clause(len(chain)))
-    rows = _rows(audit_db(), q, tuple(chain))
-    return int(rows[0][0]) if rows else 0
+    return _stream_count(sid, "bg")
 
 
 def memory(sid):
