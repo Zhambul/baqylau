@@ -215,12 +215,24 @@ DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 # late Esc at an idle prompt is a harmless no-op).
 INTERRUPT_TRIES = 3                # verification passes (up to 2 re-presses)
 INTERRUPT_RETRY_S = 0.4            # settle before each re-probe / re-press
-WORKING_MARKERS = ("esc to interrupt",)   # lowercased substrings Claude Code
-#                                    renders in its working-spinner status line
-#                                    while a turn runs; their ABSENCE from the
-#                                    viewport = the turn stopped (interrupted or
-#                                    idle). Screen-scraped like the ghost
-#                                    suggestion — no hook fires for the spinner.
+WORKING_MARKERS = ("tok/s",)      # lowercased substrings Claude Code renders
+#                                    while a turn is ACTIVELY producing output —
+#                                    the live output-rate footer `out: NNN tok/s`
+#                                    (measured 2026-07-24: it appears only while
+#                                    generating, is absent when idle/stopped, and
+#                                    unlike the animated spinner glyph / gerund
+#                                    it is a FIXED literal that never collides
+#                                    with an agent-activity line's `↓ Nk tokens`).
+#                                    Their ABSENCE from the viewport = the turn is
+#                                    not streaming (interrupted, idle, or the rare
+#                                    pre-first-token thinking window — then we
+#                                    can't confirm and just don't retry). Screen-
+#                                    scraped like the ghost suggestion — no hook
+#                                    fires for it. Version-fragile: if Claude Code
+#                                    drops the rate footer, re-measure a live
+#                                    working window (docs/CONTRIBUTING-style note
+#                                    in CLAUDE.md, *Experimenting with live
+#                                    sessions*) and update this literal.
 
 _SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 

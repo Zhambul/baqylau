@@ -4393,11 +4393,12 @@ def _last_state_file(sid, action):
 
 def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
     # a single synthesized Escape is only ~2/3 reliable, so a BUSY-tab interrupt
-    # is VERIFIED against Claude Code's working spinner ("esc to interrupt") and
-    # re-pressed while it is still up. First probe: spinner still shown (the Esc
-    # missed) -> re-press; second probe: gone -> stopped, no further Escapes.
+    # is VERIFIED against Claude Code's live output-rate footer ("out: N tok/s",
+    # present only while generating) and re-pressed while it is still up. First
+    # probe: still streaming (the Esc missed) -> re-press; second probe: the
+    # rate footer is gone -> stopped, no further Escapes.
     fe = _FakeFE()
-    fe.screens = ["✳ Working… (3s · esc to interrupt)", "❯ "]
+    fe.screens = ["✳ Moseying… │ out: 313.5 tok/s", "❯ \n  [Opus 4.8] │ dir"]
     _inject_fe(monkeypatch, fe)
     monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "78")
@@ -4411,11 +4412,11 @@ def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
 
 
 def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
-    # the spinner NEVER clears (every retry sees "esc to interrupt") = the Esc
-    # never reached the TUI (the stuck-turn bug). Report a 502 and spawn NO
+    # the rate footer NEVER clears (every retry still sees "out: N tok/s") = the
+    # Esc never reached the TUI (the stuck-turn bug). Report a 502 and spawn NO
     # escape-recheck — flipping the tab green would MASK a live turn.
     fe = _FakeFE()
-    fe.screens = ["✳ Working… (9s · esc to interrupt)"]   # sticks: always working
+    fe.screens = ["✳ Cogitating… │ out: 88.0 tok/s"]   # sticks: always streaming
     _inject_fe(monkeypatch, fe)
     monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
     spawned = []

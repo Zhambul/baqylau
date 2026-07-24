@@ -1389,10 +1389,13 @@ no delivery, so a blind press silently missed: a fresh web-launched session's
 turn ran to completion (~53 s) despite `ok:true`, and the `escape-recheck`
 below then flipped the tab green and *masked* it (2026-07-24, session
 `a16a181f`). So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint
-now VERIFIES the interrupt landed: it screen-scrapes Claude Code's working
-spinner (the `esc to interrupt` hint — `WORKING_MARKERS`, read off
-`Frontend.get_text` like the ghost suggestion, since no hook fires for the
-spinner) and RE-PRESSES Escape *while that hint is still up* — up to
+now VERIFIES the interrupt landed: it screen-scrapes Claude Code's live
+output-rate footer (`out: NNN tok/s`, present only while the turn is generating
+— `WORKING_MARKERS`, read off `Frontend.get_text` like the ghost suggestion,
+since no hook fires for it; measured 2026-07-24 — the animated spinner glyph /
+gerund was too version-fragile and collided with agent-activity lines, the rate
+footer is a fixed literal) and RE-PRESSES Escape *while that footer is still up*
+— up to
 `INTERRUPT_TRIES` passes, `INTERRUPT_RETRY_S` apart (well above
 `DOUBLE_ESC_GAP_S`, so two spaced retries never read as a double-Esc, and a
 lone late Esc at an already-idle box is a harmless no-op). The `web-interrupt`
