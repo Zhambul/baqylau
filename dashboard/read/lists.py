@@ -253,6 +253,24 @@ def accounts_payload():
             pct = (mw or {}).get("seven_day_%s" % hit["model"])
             if isinstance(pct, (int, float)) and pct < 100:
                 active = False                   # live window says the cap cleared
+        eff_usage = API.effective_usage(usage)
+        if active and not (hit or {}).get("model"):
+            # An active ACCOUNT-WIDE limit-hit ("session limit") means the 5h
+            # window is MAXED right now, but the tokenless status-line snapshot
+            # froze BELOW 100: it lags the block (~13s, the header the JSON
+            # never carries) and — the reported bug — once the session MIGRATED
+            # to another account its state DB was re-stamped to the NEW account
+            # (adopt.py), so this account's freshest snapshot is whatever a
+            # stale/older session last captured (measured: 98 min old / 25% for a
+            # migrated c2 sitting at its cap, so the bar read 25% under a "limit
+            # hit" chip). The account-wide session limit resets on the 5h window
+            # (relimit sources the stamp's resets_at from five_hour_reset), so
+            # peg the 5h bar to 100% + the limit's own reset. Presentation-only,
+            # like the model-scoped override above — the tokenless snapshot and
+            # the relimit target picker stay honest (docs/dashboard.md).
+            eff_usage = dict(eff_usage or {}, five_hour=100)
+            if hit.get("resets_at"):
+                eff_usage["five_hour_reset"] = hit["resets_at"]
         # LOGGED OUT (the account's OAuth login was revoked/expired — a session
         # on it died on error='authentication_failed', relimit's `logged-out`
         # stamp). Server-computed via sessionapi.logged_out_active, which clears
@@ -261,7 +279,7 @@ def accounts_payload():
         lo = ent.get("logged_out")
         logged_out = API.logged_out_active(lo, ent.get("usage"))
         out.append(dict(
-            a, usage=API.effective_usage(usage),
+            a, usage=eff_usage,
             five_hour_eff=API.effective_five_hour(ent.get("usage")),
             # the new-session picker's load-balancing signals: sched_score is the
             # weekly-quota perishability it ranks by, sched_ok the 5h session-

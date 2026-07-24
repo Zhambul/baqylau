@@ -2946,6 +2946,24 @@ grouping by the session's account put c2's `limit hit` chip on c1's pill and
 left the actually-blocked account looking clean (and, worse, let
 `account.pick_target` — same aggregation — consider migrating back onto it).
 
+**The 5h bar is pegged to 100% under an account-wide limit.** The frozen
+snapshot doesn't just understate by a few percent — after a rate-limit
+**migration**, the blocked account's state DB is re-stamped to the NEW account
+(adopt.py), so the OLD account's freshest snapshot is whatever a stale/older
+session last captured, which can be far below the cap (measured 2026-07-24: a
+migrated c2 sitting at its 5h session limit showed a **25%** 5h bar, 98 min old,
+*under* a "limit hit" chip — and its 5h/7d coincidentally equal at that frozen
+moment, the "why are 5h and 7d the same" report). So when an ACCOUNT-WIDE
+`limit_hit` is active (no `model` scope — the whole account is blocked),
+`accounts_payload` pegs the served `five_hour` to **100%** and aligns its reset
+to the stamp's `resets_at` (the session limit resets on the 5h window;
+`relimit` sources the stamp's `resets_at` from `five_hour_reset`). This is the
+inverse of the model-scoped mid-week-reset override above and, like it,
+DASHBOARD-PRESENTATION ONLY — the tokenless snapshot and the relimit target
+picker (`five_hour_eff`) stay honest. A MODEL-scoped stamp does NOT peg the 5h
+bar (only that model is capped; Opus/Sonnet still run on the account). The 7d
+bar is left on the snapshot (only the 5h/session limit is known-maxed).
+
 ### Logged-out accounts
 
 An account whose OAuth login has been **revoked or expired** (you logged out, or

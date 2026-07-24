@@ -1631,6 +1631,20 @@ New always-audited swallow sites (previously silent — their absence used to ma
   auto-picker skips the account only for that model — a wrong/missing scope
   traces to the stamp's `msg` field vs the parse (the `state_files`
   `limit-hit` row has both).
+- **"The account's 5h bar shows a LOW % (e.g. 25%) even though it's at its
+  limit" / "5h and 7d read the same"** — the tokenless status-line snapshot is
+  STALE. Worst after a rate-limit MIGRATION: the blocked account's state DB is
+  re-stamped to the NEW account (the `adopt` row), so the old account's freshest
+  `usage` kv is whatever a stale/older session last captured — measured 98 min
+  old / 25% while c2 sat at its cap, and 5h==7d because that one frozen snapshot
+  happened to be equal. `accounts_payload` now pegs the served `five_hour` to
+  100% whenever an ACCOUNT-WIDE `limit-hit` (no `model`) is active (presentation
+  -only; `five_hour_eff` and the relimit picker stay on the honest snapshot). So
+  a low 5h bar under a "limit hit" chip on a CURRENT build = the stamp isn't
+  active (check `limit_hit_active`: reset passed, or a model-scoped stamp which
+  deliberately does NOT peg 5h) — compare the `state_files` `limit-hit` content
+  (`resets_at`/`model`) against the account's `usage` kv `ts` (how stale) and
+  the `relimit-pick` row's `eff5h` (what the picker saw at migration time).
 - **Migration started but the session never came back** — the `streams` row
   kind `relimit` names the failed leg via `end_reason`: `close-failed` /
   `close-timeout` (the tab wouldn't close or SessionEnd never parked the state

@@ -5923,6 +5923,37 @@ def test_accounts_payload_flags_a_logged_out_account(dash, monkeypatch):
     assert by["c1"]["logged_out_msg"] is None
 
 
+def test_accounts_payload_pegs_5h_to_100_on_account_wide_limit(dash, monkeypatch):
+    # The reported bug: a c2 session hit its 5h SESSION limit and MIGRATED to c1,
+    # so c2's state DB was re-stamped to c1 and c2's freshest snapshot is a
+    # STALE, pre-limit capture (25% / 98 min old). Under an active ACCOUNT-WIDE
+    # limit-hit the 5h bar must read 100% (the truth), not the frozen snapshot —
+    # presentation-only, mirroring the model-scoped override. docs/dashboard.md.
+    monkeypatch.setattr(DS.plugins, "accounts", lambda: [
+        {"slug": "c2", "label": "claude-01", "alias": "c2"}])
+    A.session_start({"session_id": "accs_5h", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("accs_5h")
+    now = time.time()
+    S.kv_set(log, "account", {"slug": "c2", "label": "claude-01"})
+    # a stale, pre-limit snapshot: 5h and 7d both low (and coincidentally equal)
+    S.kv_set(log, "usage", {"five_hour": 25, "five_hour_reset": now + 8000,
+                            "seven_day": 25, "seven_day_reset": now + 400000,
+                            "ts": now - 5000})
+    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now, "model": None,
+                                "resets_at": now + 8000, "msg": "session limit"})
+    by = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}
+    u = by["c2"]["usage"]
+    assert u["five_hour"] == 100                    # pegged to the truth
+    assert u["five_hour_reset"] == pytest.approx(now + 8000, abs=5)  # the limit's reset
+    assert u["seven_day"] == 25                     # 7d untouched (only 5h is capped)
+    assert by["c2"]["limit_hit"]["msg"] == "session limit"  # the chip still shows
+    # a MODEL-scoped limit does NOT peg 5h (only that model is capped)
+    S.kv_set(log, "limit-hit", {"slug": "c2", "ts": now, "model": "fable",
+                                "resets_at": now + 8000, "msg": "fable limit"})
+    u = {r["slug"]: r for r in _get_json(dash + "/api/accounts")}["c2"]["usage"]
+    assert u["five_hour"] == 25                     # untouched — Opus/Sonnet still run
+
+
 def test_accounts_payload_merges_model_windows(dash, monkeypatch):
     # The per-model weekly windows (plugins.model_windows — the OAuth /usage
     # fetch) are MERGED into each account's usage alongside the tokenless 5h/7d
