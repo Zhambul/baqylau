@@ -306,6 +306,27 @@ class Notifier:
             if config.NOTIFY_TELEGRAM:                     # no device to push to, or _ALWAYS
                 self._telegram(entry, "always" if pushed else "no-device")
 
+    def _alert_text(self, entry):
+        """The alert pieces both notify channels (Telegram + Web Push) build
+        the same way from one `entry`: the 🔴/🟢 headline (project +
+        needs-you/is-done), the detail line (the session title, or a
+        kind-specific fallback), and the ?s=<sid> deep link. Returns the three
+        RAW strings only — each channel composes them differently (Telegram
+        joins them into one message; Web Push splits them across the payload's
+        title/body), so the joining/escaping stays at the call site.
+
+        ?s=<sid>, NOT the app's #/s/<sid> hash route: Telegram's auto-linker
+        drops the URL fragment, so a #-link opens the dashboard ROOT on the
+        phone, not the session. The sid rides a query param (linkified whole);
+        the page translates ?s=<sid> back into the hash route on load."""
+        asking = entry.get("kind") == "asking"
+        proj = entry.get("project") or entry.get("sid") or "session"
+        head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
+        detail = entry.get("title") or (
+            "Claude is asking a question" if asking else "finished — your turn")
+        url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
+        return head, detail, url
+
     def _telegram(self, entry, reason=None):
         """Send the deferred alert via the reused `notify` skill (Telegram),
         detached so a slow round-trip never stalls the 1 s watcher. Best-effort
@@ -314,16 +335,7 @@ class Notifier:
         you ignored), `no-device` (nobody was push-subscribed — the immediate
         fallback), or `always` (`_ALWAYS` forced both) — so a Telegram alert is
         never an unexplained duplicate."""
-        asking = entry.get("kind") == "asking"
-        proj = entry.get("project") or entry.get("sid") or "session"
-        head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
-        title = entry.get("title") or (
-            "Claude is asking a question" if asking else "finished — your turn")
-        # ?s=<sid>, NOT the app's #/s/<sid> hash route: Telegram's auto-linker
-        # drops the URL fragment, so a #-link opens the dashboard ROOT on the
-        # phone, not the session. The sid rides a query param (linkified whole);
-        # the page translates ?s=<sid> back into the hash route on load.
-        url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
+        head, title, url = self._alert_text(entry)
         msg = "%s — %s\n%s" % (head, title, url)
         try:
             subprocess.Popen(
@@ -374,14 +386,7 @@ class Notifier:
                          dict(decision, sid=entry.get("sid"), kind=entry.get("kind")))
         if not subs:
             return False
-        asking = entry.get("kind") == "asking"
-        proj = entry.get("project") or entry.get("sid") or "session"
-        title = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
-        body = entry.get("title") or (
-            "Claude is asking a question" if asking else "finished — your turn")
-        # same ?s=<sid> deep link the Telegram alert uses (the app translates it
-        # to the #/s/<sid> route) — a #fragment wouldn't survive some clients.
-        url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
+        title, body, url = self._alert_text(entry)
         payload = {"title": title, "body": body,
                    "sid": entry.get("sid") or "", "kind": entry.get("kind"),
                    "url": url, "badge": self._needs_you_count()}
