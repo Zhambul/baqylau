@@ -637,6 +637,24 @@ New always-audited swallow sites (previously silent — their absence used to ma
   session): repair the row by hand via `sql-write`, pointing it at the LATEST
   payload's path. NB the row's transcript_path missing on disk is the
   relocation, not a deleted transcript — never "clean up" such a session.
+- **ctx bar / substream ctx tag reads far too FULL (pegged red, or >100%) on a
+  brand-new model** *(a model generation missing from `KNOWN_1M`, fixed for Opus 5
+  2026-07-25)* — the ctx path deliberately writes NO audit rows, so this one is
+  triaged from the transcript, not the DB. The window is derived from the model
+  **id** (`plugins/claude_code/model.py` `context_window` → `KNOWN_1M`, substring
+  match), and `KNOWN_1M` is a hand-maintained list: a new generation whose id is
+  absent falls through to the 200k default, so a 1M model's occupancy is divided
+  by 200k — up to a 5× over-read that pegs every bar. The bare `opus`/`sonnet`
+  alias resolves to 1M, but the transcript records the PINNED id (`claude-opus-5`),
+  and that id is what the probe passes — so the alias path masks the gap. Tell:
+  `SELECT transcript_path FROM sessions WHERE session_id=?`, then
+  `tail -c 65536 <transcript> | grep -ao '"model":"[^"]*"' | tail -1` for the id
+  actually in play, and check it against
+  `python3 -c 'from plugins.claude_code import model as M; print(M.context_window("<id>"))'`.
+  200k for a model that ships 1M = add the id substring to `KNOWN_1M` (and its
+  default reasoning level to `model_default_effort`). Same failure, opposite
+  direction: `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` in the env caps every model at
+  200k on purpose — check it before blaming the table.
 - **Web rewind failed / picked the wrong checkpoint / left the session inside a
   menu** *(full web rewind, since 2026-07-18)* — pull the session's
   `web-rewind-to` `state_files` rows. `step: busy` = refused on a busy tab (by

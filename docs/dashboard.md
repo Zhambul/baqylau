@@ -3099,7 +3099,7 @@ just reads that back and shortens it (`model.short_model` — `claude-opus-4-8` 
 `opus-4.8`). Effort mirrors the substream's `EFFORT_CFG or model_default_effort()`
 resolution: the session's SAVED effort (the same `plugins.effort_default` value
 the quick-button shows, resolved once up front and reused for both), else the
-running model's default (`model.model_default_effort` — `high` for opus-4.8,
+running model's default (`model.model_default_effort` — `high` for opus-5/4.8,
 `""` for a model without adaptive reasoning, which then shows model-only). The
 one divergence from the terminal tag: a per-agent frontmatter/env effort override
 (the substream's higher-precedence source) isn't readable out-of-process here, so

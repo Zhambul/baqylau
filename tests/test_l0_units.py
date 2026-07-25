@@ -810,6 +810,35 @@ def test_context_used_is_every_input_token_the_model_saw():
     assert M.context_used("junk") == 0
 
 
+def test_context_window_pinned_ids_and_kill_switch(monkeypatch):
+    """The window comes from the model id, and the id is what the transcript
+    records — so every 1M model must resolve PINNED, not just via its alias.
+    Opus 5 (like Sonnet 5 / Fable 5) has no 200k variant at all."""
+    from plugins.claude_code import model as M
+    for m in ("claude-opus-5", "claude-opus-5-20260601", "opus", "opus[1m]",
+              "claude-sonnet-5", "claude-fable-5", "claude-opus-4-8"):
+        assert M.context_window(m) == 1_000_000, m
+    # older / unknown pinned versions stay at 200k — and "opus-5" must not
+    # swallow the differently-shaped "opus-4-5"
+    for m in ("claude-opus-4-5", "claude-opus-4-1-20250805",
+              "claude-haiku-4-5-20251001", "haiku"):
+        assert M.context_window(m) == 200_000, m
+    # precedence list: the first that resolves wins; empty entries fall through
+    assert M.context_window("", None, "claude-opus-5") == 1_000_000
+    monkeypatch.setattr(M, "DISABLE_1M", True)
+    assert M.context_window("claude-opus-5") == 200_000
+
+
+def test_model_default_effort_ladder():
+    from plugins.claude_code import model as M
+    assert M.model_default_effort("claude-opus-4-7") == "xhigh"
+    for m in ("claude-opus-5", "claude-opus-4-8", "claude-sonnet-5",
+              "claude-fable-5"):
+        assert M.model_default_effort(m) == "high", m
+    assert M.model_default_effort("claude-opus-4-1-20250805") == ""
+    assert M.model_default_effort("") == ""
+
+
 # --- plugins/otel/config.port — the ONE port resolver ----------------------------
 
 def test_otel_port_is_single_sited(monkeypatch):

@@ -51,8 +51,14 @@ for the counters these streams feed).
     `input + cache_creation + cache_read` tokens over the window (**< 30% green,
     < 60% amber, else red**; thresholds tunable via `CLAUDE_MIRROR_CTX_WARN` /
     `CLAUDE_MIRROR_CTX_CRIT`). The **window is derived from the model**, not a flag or
-    self-correct: Haiku → 200k; `[1m]` / Opus 4.6-4.8 / Sonnet 5 / Fable 5 / Sonnet 4.6
-    → 1M; older/unknown → 200k; `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` caps at 200k. The
+    self-correct: Haiku → 200k; `[1m]` / Opus 5 / Opus 4.6-4.8 / Sonnet 5 / Fable 5 /
+    Sonnet 4.6 → 1M; older/unknown → 200k; `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` caps at
+    200k. Note the list keys on **pinned ids**, not just the aliases: Opus 5 has no
+    200k variant (1M is both its default and its maximum), but `claude-opus-5` is what
+    a transcript records, and while only the bare `opus` alias was listed every Opus 5
+    turn was measured against a 200k window — a ~5× over-read on the ctx fill and on
+    the dashboard's saturation bars. A new model generation needs its id substring
+    added to `model.KNOWN_1M` (and to `model_default_effort`), not just its alias. The
     `■ <type> ended` footer closes with the same fill, upgraded to the **authoritative**
     window from the parent transcript's Task result (`resolvedModel`) when it's landed.
     A `compact_boundary` record renders an amber `<type> ⟳ compacted · pre → post
@@ -114,8 +120,9 @@ for the counters these streams feed).
     session's version (tail-read from the parent transcript), so it's precise from line
     one. **Effort is config-only** — it appears in *no* transcript — resolved in the
     documented precedence: `CLAUDE_CODE_EFFORT_LEVEL` env > agent-def frontmatter
-    `effort:` > settings `effortLevel` > the model's default (`high` on Opus 4.8/4.6 ·
-    Sonnet 5 · Sonnet 4.6 · Fable 5, `xhigh` on Opus 4.7). A **teammate's** def is found
+    `effort:` > settings `effortLevel` > the model's default (`high` on Opus 5 ·
+    Opus 4.8/4.6 · Sonnet 5 · Sonnet 4.6 · Fable 5, `xhigh` on Opus 4.7). A
+    **teammate's** def is found
     via its `meta.json` `customAgentType` (its short type — `container` — doesn't match
     the def's `name:`/filename `task-container`). The def + settings are looked up across
     **every ancestor `.claude/` dir** (`plugins/claude_code/model.py claude_dirs`, `$CLAUDE_PROJECT_DIR`

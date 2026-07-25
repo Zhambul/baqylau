@@ -100,7 +100,12 @@ def int_env(name, default):
 
 
 DISABLE_1M = bool(int_env("CLAUDE_CODE_DISABLE_1M_CONTEXT", 0))
-KNOWN_1M = ("fable-5", "sonnet-5", "opus-4-6", "opus-4-7", "opus-4-8", "sonnet-4-6")
+# Substrings of real model ids. Opus 5 (like Sonnet 5 / Fable 5) has NO 200k
+# variant — 1M is both its default and its maximum — so a PINNED `claude-opus-5`
+# must resolve here; only the bare `opus` alias below covered it before, and the
+# id is what the transcript records (the ctx bars read 5× over on a 200k window).
+KNOWN_1M = ("fable-5", "sonnet-5", "opus-5", "opus-4-6", "opus-4-7", "opus-4-8",
+            "sonnet-4-6")
 
 
 def window(model):
@@ -371,7 +376,8 @@ def model_default_effort(model):
     m = model.lower()
     if "opus-4-7" in m:
         return "xhigh"
-    if any(t in m for t in ("opus-4-8", "opus-4-6", "sonnet-5", "sonnet-4-6", "fable-5")):
+    if any(t in m for t in ("opus-5", "opus-4-8", "opus-4-6", "sonnet-5",
+                            "sonnet-4-6", "fable-5")):
         return "high"
     return ""                                # models without adaptive reasoning
 
