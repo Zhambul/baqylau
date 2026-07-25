@@ -81,6 +81,12 @@ class _GetMixin:
             # whole origin (docs/dashboard.md *Web push*) — not under /static/,
             # which would scope it to /static/.
             return self.static("sw.js")
+        if parts == ["favicon.ico"]:
+            # the raster fallback favicon, at the root path clients probe on
+            # their own when the declared SVG icon is unusable (iOS Safari has
+            # no SVG-favicon support at all). Undeclared on purpose — see
+            # config.STATIC. docs/dashboard.md *Favicon fallback*.
+            return self.static("favicon.ico")
         if parts[0] == "events":
             return self.route_events(url, parts[1:])
         if parts[0] != "api":

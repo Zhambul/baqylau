@@ -101,6 +101,16 @@ STATIC = {                         # whitelist — no path resolution on user in
     # *Installed-app polish*). The manifest is referenced from /static/ so it
     # rides the normal static route; iOS reads the apple-touch-icon link.
     "manifest.webmanifest": "application/manifest+json; charset=utf-8",
+    # the RASTER fallback favicon, served from the ROOT path (/favicon.ico, its
+    # own route) because that path is what a client AUTO-DISCOVERS when it can
+    # make no use of the declared SVG icon — iOS Safari, which supports SVG
+    # favicons in no version (macOS Safari only since 26). Deliberately NOT
+    # given a <link rel="icon"> of its own: an declared raster icon would
+    # out-rank the data-URI SVG in browsers that handle both, and the SVG is the
+    # one that carries the dynamic red asking-you badge (app.01-attention.js
+    # FAVICON_ASK). Auto-discovery is exactly fallback-only semantics.
+    # docs/dashboard.md *Favicon fallback*.
+    "favicon.ico": "image/vnd.microsoft.icon",
     "apple-touch-icon.png": "image/png",
     "icon-180.png": "image/png",
     "icon-192.png": "image/png",

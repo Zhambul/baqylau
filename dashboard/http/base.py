@@ -279,6 +279,21 @@ class _Base(BaseHTTPRequestHandler):
             data = re.sub(rb'(/static/app\.[0-9]{2}-[a-z]+\.js)',
                           rb'\1?v=' + BOOT_ID.encode(), data)
             data = data.replace(b"/static/style.css", b"/static/style.css?v=" + BOOT_ID.encode())
+            # ...and the ICONS, for the same reason: a REGENERATED icon is new
+            # bytes at an unchanged URL, so a browser that already has one shows
+            # the old glyph indefinitely (mobile Safari keeps a persistent
+            # favicon/home-screen icon cache that a hard reload does not evict —
+            # the "tab logo doesn't match the page logo" report). The manifest
+            # URL is stamped too so a changed icon list is re-read.
+            data = re.sub(rb'(/static/(?:apple-touch-icon|icon-[a-z0-9-]+)\.png)',
+                          rb'\1?v=' + BOOT_ID.encode(), data)
+            data = data.replace(b"/static/manifest.webmanifest",
+                                b"/static/manifest.webmanifest?v=" + BOOT_ID.encode())
+        if name == "manifest.webmanifest":
+            # the manifest's own icon URLs (icon-192/512, maskable) — the
+            # installed-app glyph comes from here, not from index.html.
+            data = re.sub(rb'(/static/icon-[a-z0-9-]+\.png)',
+                          rb'\1?v=' + BOOT_ID.encode(), data)
         return self._send(200, data, ctype)
 
 

@@ -493,6 +493,41 @@ def test_http_root_and_static_whitelist(dash):
     assert e.value.code == 404
 
 
+def test_favicon_ico_served_at_root_and_undeclared(dash):
+    # the RASTER fallback favicon lives at the root path clients auto-probe when
+    # the declared data-URI SVG icon is unusable (iOS Safari supports SVG
+    # favicons in no version), docs/dashboard.md *Favicon fallback*
+    with urllib.request.urlopen(dash + "/favicon.ico", timeout=10) as r:
+        assert r.status == 200
+        data = r.read()
+        assert r.headers["Content-Type"] == "image/vnd.microsoft.icon"
+    assert data[:4] == b"\x00\x00\x01\x00"          # a real ICO header
+    code, index = _get(dash + "/")
+    # deliberately NOT declared: a raster <link rel="icon"> would out-rank the
+    # SVG, which is the one carrying the dynamic red asking-you badge
+    assert "favicon.ico" not in index
+    assert 'rel="icon"' in index and "data:image/svg+xml" in index
+
+
+def test_icon_urls_are_cache_busted(dash):
+    # regenerating an icon is new bytes at an unchanged URL, and an icon cache is
+    # stickier than a resource cache (a hard reload does not evict Safari's), so
+    # the icon URLs carry ?v=<BOOT_ID> too — index.html AND the manifest's own
+    # icon list, which is where the installed-app glyph is read from
+    v = "?v=" + DS.config.BOOT_ID
+    code, index = _get(dash + "/")
+    assert ("/static/apple-touch-icon.png" + v) in index
+    assert ("/static/manifest.webmanifest" + v) in index
+    code, man = _get(dash + "/static/manifest.webmanifest")
+    assert code == 200
+    assert ("/static/icon-192.png" + v) in man
+    assert ("/static/icon-512.png" + v) in man
+    # still a valid manifest, and the stamped URL still serves the file
+    assert json.loads(man)["icons"]
+    code, _ = _get(dash + "/static/icon-192.png" + v)
+    assert code == 200
+
+
 def test_get_routing_registry_resolves(dash):
     """The read plane routes through a REGISTRY, the twin of the POST control
     plane's (_FIXED_GET / _SESSION_GET, dashboard/http/get.py) — so every entry

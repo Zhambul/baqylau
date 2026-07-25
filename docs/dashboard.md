@@ -481,6 +481,40 @@ cached. The `?v=` is a cache key only — `do_GET` parses the path (query
 stripped), so `static()` still serves the same file. A hard reload is no longer
 required for a remote page to pick up new JS/CSS; a normal reload suffices.
 
+The same stamp covers the **icons** — `apple-touch-icon.png`, the `icon-*.png`
+set, and the `manifest.webmanifest` URL in `index.html`, plus the manifest's OWN
+icon list when it is served (the installed-app glyph is read from there, not from
+`index.html`). An icon is the worst case of the problem above: REGENERATING one
+is new bytes at an UNCHANGED URL, and a browser's icon cache is far stickier than
+its resource cache — Safari keeps a persistent favicon store
+(`~/Library/Safari/Favicon Cache/favicons.db`, page-URL → cached bitmap) that a
+hard reload does NOT evict. That is the *the tab logo doesn't match the page
+logo* report: the PNG icon set had drifted from the canonical shanyrak (they were
+authored separately, never regenerated when the logo changed) and, once fixed,
+Safari still showed bitmaps it had cached weeks earlier, before the logo existed.
+
+## Favicon fallback (`/favicon.ico`)
+
+The declared tab icon is a **data-URI SVG** (`index.html`'s `<link rel="icon"
+id="favicon">`), because it is rewritten live to carry the red asking-you badge
+(`app.01-attention.js` `FAVICON`/`FAVICON_ASK`). Two clients can make no use of
+it: **iOS Safari supports SVG favicons in no version at all**, and macOS Safari
+only since 26. Their fallback is the path they probe on their own, `/favicon.ico`
+— which used to 404, leaving them with no icon (or an indefinitely-cached old
+one). So a real multi-size ICO (16/32/48/64/128/256, transparent so it reads on a
+light or dark tab bar, same shanyrak geometry as the brandmark and the SVG) is
+served at the ROOT path, its own route in `http/get.py` beside `/sw.js`.
+
+It is deliberately given **no `<link rel="icon">` of its own**: a declared raster
+icon out-ranks the data-URI SVG in browsers that handle both, which would cost
+the dynamic ask badge. Root auto-discovery is precisely fallback-only semantics —
+a client that can use the SVG never asks for the ICO.
+
+All icon assets (the SVG glyph, the ICO, the PNG set, the README logo at
+`docs/assets/logo.svg`) render the SAME shanyrak coordinates; `FAV_GLYPH` in
+`app.01-attention.js` is the reference copy. Regenerating one means regenerating
+all of them — the drift above is what happens otherwise.
+
 ## Served limits (`GET /api/limits`)
 
 A handful of server-side numbers have to be known by the PAGE too, because the
