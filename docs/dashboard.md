@@ -51,6 +51,18 @@ everything; `read` / `control` / `notify` import core+plugins+frontends+config;
 cross-module helpers the handlers call are read MODULE-QUALIFIED (`config.X`,
 `launch.X`, `presence.X`) so a test patches the one owning module.
 
+The facade's contract is exact: a name lives in `server.py` only while something
+actually reaches it through `dashboard.server`. A third of the original list was
+reached by nobody — internals that had simply moved, still reading as supported
+API. New code inside the package imports its owner directly; the facade exists
+for the historical `DS.X` handles alone, and a re-export nothing consults gets
+deleted rather than kept for symmetry. **A config KNOB is never re-exported
+flat** (`DS.config` is the only handle): every reader of a live knob reads
+`config.X`, so a flat alias is not just dead but a patch TRAP —
+`monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)` would bind a name nobody consults
+and pass while changing nothing. Pinned by
+`test_facade_re_exports_no_config_knob_flat`.
+
 `./bin/claude-dashboard.py` (default verb `open`) starts the server if needed
 and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
 

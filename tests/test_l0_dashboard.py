@@ -481,12 +481,12 @@ def test_http_root_and_static_whitelist(dash):
     assert code == 200 and body.lstrip().startswith("<!doctype html>")
     # cache-bust: the index's sub-resource URLs carry ?v=<BOOT_ID> so a restart
     # forces remote browsers/CDNs off a stale app.js/style.css
-    assert ("/static/app.00-core.js?v=" + DS.BOOT_ID) in body
-    assert ("/static/style.css?v=" + DS.BOOT_ID) in body
+    assert ("/static/app.00-core.js?v=" + DS.config.BOOT_ID) in body
+    assert ("/static/style.css?v=" + DS.config.BOOT_ID) in body
     code, _ = _get(dash + "/static/app.00-core.js")
     assert code == 200
     # the ?v= is a cache key only — the file still serves with the query present
-    code, _ = _get(dash + "/static/app.00-core.js?v=" + DS.BOOT_ID)
+    code, _ = _get(dash + "/static/app.00-core.js?v=" + DS.config.BOOT_ID)
     assert code == 200
     with pytest.raises(urllib.error.HTTPError) as e:
         _get(dash + "/static/secret.txt")          # not on the whitelist
@@ -774,7 +774,7 @@ def _notifier_for_asking(monkeypatch, screen, delay=999):
     every home-touching dependency (session-end / composer / mute / audit /
     payload) stubbed. Returns (n, cur, asking, sent, audited)."""
     win = "9"
-    asking = next(s for s, k in DS.NOTIFY_STATES.items() if k == "asking")
+    asking = next(s for s, k in DS.config.NOTIFY_STATES.items() if k == "asking")
     cur = {"states": {}}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
     monkeypatch.setattr(DS.presence, "_session_ended", lambda sid: False)
@@ -1058,7 +1058,7 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
     fake ANSI-capable frontend returning `screen["txt"]` and every home-touching
     dependency stubbed. Returns (n, cur, done, sent, audited)."""
     win = "9"
-    done = next(s for s, k in DS.NOTIFY_STATES.items() if k == "done")
+    done = next(s for s, k in DS.config.NOTIFY_STATES.items() if k == "done")
     cur = {"states": {}}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
     monkeypatch.setattr(DS.presence, "_session_ended", lambda sid: False)
@@ -2582,7 +2582,7 @@ def test_gzip_large_response_round_trips(dash):
     assert plain.headers.get("Content-Encoding") is None
     assert plain.headers.get("Vary") == "Accept-Encoding"
     ref = plain.read()
-    assert len(ref) >= DS.GZIP_MIN
+    assert len(ref) >= DS.config.GZIP_MIN
 
     gz = _req(url, {"Accept-Encoding": "gzip, deflate"})
     assert gz.headers.get("Content-Encoding") == "gzip"
@@ -2599,7 +2599,7 @@ def test_gzip_small_response_stays_plain(dash):
     r = _req(dash + "/api/session/gz2/ops?after=999999",
              {"Accept-Encoding": "gzip"})
     body = r.read()
-    assert len(body) < DS.GZIP_MIN
+    assert len(body) < DS.config.GZIP_MIN
     assert r.headers.get("Content-Encoding") is None
     assert json.loads(body)["items"] == []
 
@@ -2609,7 +2609,7 @@ def test_sse_global_says_hello_with_boot_id(dash):
     # detector: a reconnecting EventSource that sees a different boot knows
     # the server (and likely the JS it would serve) changed underneath it
     data = json.loads(_sse_event(dash + "/events", "hello"))
-    assert data.get("boot") == DS.BOOT_ID
+    assert data.get("boot") == DS.config.BOOT_ID
 
 
 def test_sse_is_never_gzipped(dash):
@@ -3124,7 +3124,7 @@ def test_notifier_telegram_suppressed_while_composing(monkeypatch, tmp_path):
 def test_notifier_telegram_muted_and_disabled(monkeypatch, tmp_path):
     """A muted session (the ◉/○ opt-out) never fires even when it sits red past
     the delay — the mute is checked at SEND time. And CLAUDE_DASH_NOTIFY_TELEGRAM
-    off (DS.NOTIFY_TELEGRAM False) arms nothing at all."""
+    off (DS.config.NOTIFY_TELEGRAM False) arms nothing at all."""
     monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)  # fire on the next scan
     monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t")
@@ -3718,7 +3718,7 @@ def test_post_upload_over_cap_rejected(dash):
     # _reject contract), so the client sees either a clean 413 or a reset —
     # both are "refused", which is the contract under test.
     raw = json.dumps({"name": "big", "mime": "image/png",
-                      "data": "A" * (DS.UPLOAD_MAX + 10)}).encode()
+                      "data": "A" * (DS.config.UPLOAD_MAX + 10)}).encode()
     with pytest.raises((urllib.error.HTTPError, urllib.error.URLError)) as e:
         _post(dash + "/api/upload", raw=raw)
     if isinstance(e.value, urllib.error.HTTPError):
@@ -3728,7 +3728,7 @@ def test_post_upload_over_cap_rejected(dash):
 def test_post_upload_admits_body_over_post_max(dash):
     # the raised cap is the whole point: a payload well past the 64 KiB
     # control-plane POST_MAX still uploads (a real screenshot is ~MBs)
-    big = _b64_png(b"\x89PNG\r\n\x1a\n" + b"x" * (DS.POST_MAX * 2))
+    big = _b64_png(b"\x89PNG\r\n\x1a\n" + b"x" * (DS.config.POST_MAX * 2))
     code, body = _post(dash + "/api/upload",
                        {"name": "big.png", "mime": "image/png", "data": big})
     assert code == 200 and os.path.isfile(json.loads(body)["path"])
@@ -4073,9 +4073,9 @@ def test_client_log_caps_guards_and_sanitizes(dash, monkeypatch):
         _post(dash + "/api/clientlog", {"events": "nope"})
     assert e.value.code == 400
     # an oversized batch is truncated to CLIENTLOG_MAX rows
-    events = [{"sid": "cl2", "ev": "spam"} for _ in range(DS.CLIENTLOG_MAX + 20)]
+    events = [{"sid": "cl2", "ev": "spam"} for _ in range(DS.config.CLIENTLOG_MAX + 20)]
     code, _ = _post(dash + "/api/clientlog", {"events": events})
-    assert code == 200 and len(_client_rows("cl2")) == DS.CLIENTLOG_MAX
+    assert code == 200 and len(_client_rows("cl2")) == DS.config.CLIENTLOG_MAX
     # junk events skipped; a long string field capped
     A.session_start({"session_id": "cl3", "cwd": "/w", "transcript_path": ""})
     O.emit(P.mirror_log("cl3"), O.label("hi", (1, 2, 3)))
@@ -4084,7 +4084,7 @@ def test_client_log_caps_guards_and_sanitizes(dash, monkeypatch):
         {"sid": "cl3", "ev": "boot", "big": "x" * 5000}]})
     rows = _client_rows("cl3")
     assert len(rows) == 1 and rows[0]["ev"] == "boot"
-    assert len(rows[0]["big"]) == DS.CLIENTLOG_STR_MAX
+    assert len(rows[0]["big"]) == DS.config.CLIENTLOG_STR_MAX
     # behind the control-plane guard
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/clientlog", {"events": []}, header=None)
@@ -4436,13 +4436,13 @@ def test_post_rename_strips_controls_and_caps(dash, monkeypatch, tmp_path):
                        {"name": "a\x1b]2;evil\x07b\nc"})
     stored = json.loads(body)["title"]
     assert stored == "a ]2;evil b c"
-    long = "x" * (DS.RENAME_MAX + 300)
+    long = "x" * (DS.config.RENAME_MAX + 300)
     code, body = _post(dash + "/api/session/ren7/rename", {"name": long})
-    assert json.loads(body)["title"] == "x" * DS.RENAME_MAX
+    assert json.loads(body)["title"] == "x" * DS.config.RENAME_MAX
     with open(tp) as fh:
         rec = json.loads(fh.read().splitlines()[-1])
-    assert rec["agentName"] == "x" * DS.RENAME_MAX
-    assert fe.titled[-1] == ("11", "x" * DS.RENAME_MAX)
+    assert rec["agentName"] == "x" * DS.config.RENAME_MAX
+    assert fe.titled[-1] == ("11", "x" * DS.config.RENAME_MAX)
 
 
 def test_post_rename_updates_session_payload_title(dash, monkeypatch,
@@ -4509,7 +4509,7 @@ def test_post_guard_accepts_beacon_by_allowlisted_origin(dash, monkeypatch):
     # X-Claude-Dash, so a HEADERLESS POST is accepted when it carries a present,
     # allowlisted Origin — a cross-origin page can forge neither, so the Origin
     # allowlist is the CSRF gate (docs/dashboard.md *Frontend audit (clientlog)*).
-    monkeypatch.setattr(DS.config, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {dash})
+    monkeypatch.setattr(DS.config, "ALLOWED_ORIGINS", DS.config.ALLOWED_ORIGINS | {dash})
     ep = dash + "/api/session/beacon1/hint-audit"
     body = {"op": "close", "phase": "shown"}
     code, _ = _post(ep, body, header=None, origin=dash)   # the sendBeacon shape
@@ -4696,11 +4696,30 @@ def test_launch_wake_timeout_audits_without_push(dash, monkeypatch, tmp_path):
         DS.NOTIFIER.unregister(q)
 
 
+def test_facade_re_exports_no_config_knob_flat():
+    """dashboard/server.py is a FACADE, and a name belongs there only while
+    something actually reaches it through `dashboard.server` — a third of the
+    original list was reached by nobody, which reads as a supported API for
+    internals that had merely moved.
+
+    A CONFIG KNOB is the case worth PINNING, because its flat alias is worse than
+    dead surface: it is a patch trap. Every reader of a live knob reads `config.X`
+    module-qualified (the styleguide's rule, which is what lets a test move it),
+    so `monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)` would bind a name nobody
+    consults — a green test that changed nothing. There is exactly one handle:
+    `DS.config`."""
+    cfg = open(os.path.join(REPO, "dashboard", "config.py")).read()
+    owned = set(re.findall(r"^(\w+)\s*=", cfg, re.M)) | set(re.findall(r"^def (\w+)", cfg, re.M))
+    assert "NOTIFY_DELAY_S" in owned and "UPLOAD_MAX" in owned    # the scan works
+    leaked = sorted(n for n in owned - {"config"} if hasattr(DS, n))
+    assert not leaked, "config knobs re-exported flat (a patch trap): %s" % leaked
+
+
 def test_extra_origins_parse():
-    assert DS.extra_origins("https://dash.zhambyl.top, https://a.b ,,") == \
+    assert DS.config.extra_origins("https://dash.zhambyl.top, https://a.b ,,") == \
         {"https://dash.zhambyl.top", "https://a.b"}
-    assert DS.extra_origins(None) == set()
-    assert DS.extra_origins("") == set()
+    assert DS.config.extra_origins(None) == set()
+    assert DS.config.extra_origins("") == set()
 
 
 def test_proxied_origin_allowed(dash, monkeypatch, tmp_path):
@@ -4709,7 +4728,7 @@ def test_proxied_origin_allowed(dash, monkeypatch, tmp_path):
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     ext = "https://dash.zhambyl.top"
-    monkeypatch.setattr(DS.config, "ALLOWED_ORIGINS", DS.ALLOWED_ORIGINS | {ext})
+    monkeypatch.setattr(DS.config, "ALLOWED_ORIGINS", DS.config.ALLOWED_ORIGINS | {ext})
     code, body = _post(dash + "/api/sessions/new",
                        {"cwd": str(tmp_path)}, origin=ext)
     assert code == 200 and json.loads(body) == {"ok": True, "win": ""}

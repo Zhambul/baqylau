@@ -5,6 +5,15 @@
 # surface that bin/ (serve) and the test suite reach through `dashboard.server`.
 # The design notes below describe the SERVER that now lives in dashboard/http/.
 #
+# A name belongs here only while something ACTUALLY reaches it through
+# `dashboard.server` — a third of the original list was reached by nobody, which
+# reads as a supported API for internals that had simply moved. New code inside
+# the package imports its owner directly (the dependency direction config ←
+# read/control/notify ← http); this file exists for the historical `DS.X` handles
+# alone, and a re-export nothing consults should be deleted, not kept "for
+# symmetry". The one thing that must NOT be re-exported flat is a KNOB — see the
+# config note below.
+#
 # A thin localhost server over the read-side session API (core/sessionapi.py)
 # and the plugins.activity() drill-down — the dashboard is a CONSUMER like the
 # pane renderers, with a browser instead of a pty. Design decisions inherited
@@ -56,22 +65,13 @@ from dashboard import askdialog, confirmdialog, plandialog, prefs, \
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 
-# Config vocabulary lives in dashboard/config.py; server.py re-exports it so the
-# historical `server.X` reads (tests, bin) keep resolving, and reads the module
-# as `config` for the knobs the notifier consults live.
-from dashboard import config  # noqa: F401  -- re-exported as DS.config for live-knob patch targets
-from dashboard.config import (  # noqa: F401  -- facade re-export of the config surface
-    ALLOWED_ORIGINS, BOOT_ID, BUSY_TABS, CLIENTLOG_FIELD_MAX, CLIENTLOG_MAX,
-    CLIENTLOG_STR_MAX, DRAFT_CLEAR_GAP_S, ESCALATE_S,
-    GLOBAL_TICK_S, GZIP_MIN, HEARTBEAT_S, HOST, IMAGE_MIMES, LOCK_KEY,
-    NOTIFY_CMD, NOTIFY_DELAY_S, NOTIFY_STATES, NOTIFY_TELEGRAM,
-    NOTIFY_TELEGRAM_ALWAYS, NOTIFY_URL_BASE, NOTIFY_WEBPUSH, POST_HEADER,
-    POST_MAX, PORT, QUEUE_TABS, READONLY, RESTORE_MATCH_CHARS,
-    RESUMABLE_MAX, RESUMABLE_SCAN,
-    SCREEN_CLIP, SESSIONS_LIMIT, SLOW_EVERY, STATIC, STATIC_DIR,
-    STATS_TOP_PROJECTS, STATS_TTL_S, TICK_S, UPLOAD_MAX, _SID_OK,
-    _clip_screen, extra_origins,
-)
+# Config vocabulary lives in dashboard/config.py, reached MODULE-QUALIFIED
+# (`DS.config.X`) — there are deliberately NO flat `DS.<KNOB>` aliases here. A
+# flat alias would be worse than dead surface: it is a patch TRAP. Every reader
+# of a live knob reads `config.X` (the styleguide's rule, so a test can move it),
+# so `monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)` would bind a name nobody
+# consults and pass while changing nothing.
+from dashboard import config  # noqa: F401  -- DS.config: the knob surface + patch target
 
 
 # --- notification watcher ----------------------------------------------------
@@ -84,6 +84,8 @@ from dashboard.notify.presence import (  # noqa: F401  -- facade re-export
     VIEW_TTL_S, _DEVICE_SEEN, _VIEWING, _composing, _device_seen, _mark_device,
     _mark_viewing, _mru_push_targets, _session_ended, _web_viewing,
 )
+# NOTE: VIEW_TTL_S is the one number here a test must patch on the OWNER
+# (`DS.presence.VIEW_TTL_S`) — this alias is a read handle, like the maps.
 
 
 # The read-side presentation model lives in dashboard/read/ (lists / session /
@@ -91,23 +93,19 @@ from dashboard.notify.presence import (  # noqa: F401  -- facade re-export
 # builders it serves plus the few the control-plane POSTs and the tests reach.
 from dashboard.read import lists, mirror, session  # noqa: F401  -- module handles for tests
 from dashboard.read.lists import (  # noqa: F401  -- facade re-export
-    accounts_payload, dir_live_sessions, resumable_payload, sessions_payload,
-    stats_payload, _row_key, _wire_row,
+    accounts_payload, dir_live_sessions, sessions_payload, stats_payload,
+    _row_key,
 )
 from dashboard.read.meta import (  # noqa: F401  -- facade re-export
-    canon_cwd, git_info, session_ctx, session_goal, session_title, _group_dir,
-    _session_slug,
+    canon_cwd, session_title, _group_dir, _session_slug,
 )
 from dashboard.read.session import (  # noqa: F401  -- facade re-export
-    agents_ctx, agents_model_effort, session_payload, visible_agents,
-    _ask_draft, _ask_pending, _ask_wire, _chip_delivered, _composer_draft,
-    _composer_queue, _delivered_prompts, _dialog_pending, _last_prompt,
-    _plan_pending, _session_tasks, _stamp_agent_cost, _suggestion, _SUGGEST_TABS,
+    session_payload, _ask_pending, _chip_delivered, _composer_draft,
+    _composer_queue, _last_prompt, _plan_pending,
 )
 from dashboard.read.mirror import (  # noqa: F401  -- facade re-export
-    history, merge_live, merged_backlog, note_payload, ops_payload,
-    view_payload, HISTORY_BLOCKS, _conv_items, _enrich_entries, _heal_stash,
-    _mdify,
+    history, merge_live, merged_backlog, view_payload, _conv_items,
+    _enrich_entries, _mdify,
 )
 
 
@@ -117,11 +115,7 @@ from dashboard.read.mirror import (  # noqa: F401  -- facade re-export
 # launch._live_windows) so a test patches the one owning module.
 from dashboard.control import launch  # noqa: F401
 from dashboard.control.launch import (  # noqa: F401  -- facade re-export
-    launch_argv, _clear_clipboard_image, _clip_has_image, _front_app,
-    _launch_wake, _steal_watch, _within_live_grace,
-)
-from dashboard.config import (  # noqa: F401  -- control-plane validation vocabulary
-    EFFORTS, RENAME_MAX, _MODEL_ARG_OK, _MODEL_OK, _NAME_CTRL,
+    launch_argv, _clear_clipboard_image, _launch_wake, _within_live_grace,
 )
 
 
