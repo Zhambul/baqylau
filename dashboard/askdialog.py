@@ -67,8 +67,12 @@ NAV_STEPS = 24         # max up/down presses to walk the cursor to a target row
 FOOT = "Enter to select"                 # question-pane open detector
 REVIEW = "Review your answers"           # review-pane detector
 CHAT_LABEL = "Chat about this"
-TYPE_LABEL = "Type something"
 SUBMIT_LABEL = "Submit answers"          # the review pane's submit row
+# NB the free-text row has no label constant on purpose: it is located by its
+# DIGIT (len(options)+1, `type_digit`), because the row's text becomes the user's
+# own typed answer the moment anything is entered — matching "Type something"
+# would stop working exactly when it mattered. A dead TYPE_LABEL constant sat
+# here from the label-matching era; don't re-add one.
 
 # option row: cursor mark? · digit. · multiSelect checkbox? · label. The label
 # capture stops before a preview side-box (2+ spaces then a box-drawing char,

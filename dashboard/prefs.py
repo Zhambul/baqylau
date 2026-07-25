@@ -233,12 +233,6 @@ def ns_drafts():
     return {str(k): _ns_entry(v) for k, v in d.items()}
 
 
-def ns_draft(cwd):
-    """The unsent prompt for ONE directory as {text, seq} ({"text": "", "seq": 0}
-    when that directory has none)."""
-    return _ns_entry(ns_drafts().get(str(cwd)))
-
-
 def set_ns_draft(cwd, text, seq):
     """Persist `text` at `seq` as the draft for directory `cwd`, DROPPING a write
     older than that directory's stored seq (the stale-write guard above — per
