@@ -1631,6 +1631,39 @@ def test_ns_prefs_roundtrip(dash):
                                                  "model": "sonnet"}
 
 
+def test_ns_draft_roundtrip_stale_guard_and_audit(dash):
+    """The new-session form's UNSENT first prompt (docs/dashboard.md,
+    *New-session draft*): GET /api/ns-draft is the empty draft until a POST
+    saves one, a blank text is a CLEAR (an empty-text tombstone, not a delete,
+    so its seq survives), a write with an older seq is DROPPED (the stale-write
+    guard that stops a debounced save from resurrecting a launched prompt), and
+    every write leaves a global `ns-draft` state_files row carrying the LENGTH,
+    never the text."""
+    assert _get_json(dash + "/api/ns-draft") == {"text": "", "seq": 0}
+    code, resp = _post(dash + "/api/ns-draft", {"text": "half typed", "seq": 10})
+    assert code == 200 and json.loads(resp)["ok"]
+    assert _get_json(dash + "/api/ns-draft") == {"text": "half typed", "seq": 10}
+    # a STALE write (older seq) is dropped, the newer draft stands
+    code, resp = _post(dash + "/api/ns-draft", {"text": "older text", "seq": 5})
+    assert code == 200 and json.loads(resp)["stale"]
+    assert _get_json(dash + "/api/ns-draft")["text"] == "half typed"
+    # a blank box clears — but keeps its seq, so a straggler can't resurrect it
+    _post(dash + "/api/ns-draft", {"text": "   ", "seq": 20})
+    assert _get_json(dash + "/api/ns-draft") == {"text": "", "seq": 20}
+    _post(dash + "/api/ns-draft", {"text": "half typed", "seq": 15})
+    assert _get_json(dash + "/api/ns-draft")["text"] == ""
+    # a non-string text is an input reject, not a stored draft
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/ns-draft", {"text": 7, "seq": 30})
+    assert e.value.code == 400
+    assert _get_json(dash + "/api/ns-draft")["seq"] == 20
+    rows = _state_rows("ns-draft")
+    assert {"action": "write", "chars": len("half typed"), "seq": 10} in rows
+    assert {"action": "stale", "seq": 5} in rows
+    assert {"action": "clear", "chars": 0, "seq": 20} in rows
+    assert not any("text" in r for r in rows)     # the prose never lands in the audit
+
+
 def test_hide_dir_prefs_roundtrip_and_validation(dash):
     """Hiding a directory from the list page (docs/dashboard.md *Hidden
     directories*): POST /api/dirs/hide stamps time.time() into the durable global

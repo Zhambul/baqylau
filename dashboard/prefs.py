@@ -4,7 +4,8 @@
 # (~/.claude), the single owner of dashboard-wide UI state that isn't tied to
 # any one session:
 #
-#   new-session  →  {cwd, model, effort}   (the launch form's last-used values)
+#   new-session        →  {cwd, model, effort}  (the launch form's last-used values)
+#   new-session-draft  →  {text, seq}           (its UNSENT first-prompt draft)
 #
 # This is DELIBERATELY unlike the per-session kv helpers in core/state.py:
 #   - it is GLOBAL (one row set per machine), not keyed by session_id;
@@ -127,6 +128,59 @@ def hide_dir(key, ts):
     time, which is what re-hides it. Atomic read-modify-write (mutate_map) so a
     second concurrent hide can't lose this stamp; best-effort like set()."""
     return mutate_map(HIDDEN_KEY, lambda d: d.__setitem__(str(key), float(ts)))
+
+
+# --- the new-session form's unsent first prompt ---------------------------------
+# The launch form's first-prompt box is a DRAFT like the composer's (docs/
+# dashboard.md, *New-session draft*): closing the form — deliberately, with Esc,
+# or by a stray click on the backdrop — must not throw the text away, and the
+# next open restores it. Stored under one kv key as {text, seq}.
+#
+# Deliberately GLOBAL and NOT keyed by directory (unlike `composer-draft`, which
+# is per-session): the form is ONE transient box, opened from the header or a
+# group's "+", and its directory can be re-picked while the prompt stays — a
+# per-cwd map would accumulate stale drafts nobody ever sees again, and would
+# lose the text the moment you corrected the directory. One draft, restored on
+# every open, cleared by the launch that consumes it.
+#
+# `seq` is the writer's wall clock, same STALE-WRITE GUARD as the composer draft
+# (dashboard/http/post.py post_composer_draft): a debounced save in flight when
+# the launch clears the box must not resurrect it by landing later. A clear is a
+# TOMBSTONE (empty text at the newer seq), never a delete, so its seq survives to
+# reject that straggler.
+NS_DRAFT_KEY = "new-session-draft"
+
+
+def ns_draft():
+    """The unsent new-session first prompt as {text, seq} ({"text": "", "seq": 0}
+    when never written / cleared / unreadable)."""
+    d = get(NS_DRAFT_KEY, {})
+    if not isinstance(d, dict):
+        return {"text": "", "seq": 0}
+    text = d.get("text")
+    seq = d.get("seq")
+    return {"text": text if isinstance(text, str) else "",
+            "seq": seq if isinstance(seq, (int, float)) else 0}
+
+
+def set_ns_draft(text, seq):
+    """Persist the new-session draft `text` at `seq`, DROPPING a write older than
+    what is stored (the stale-write guard above). Atomic read-modify-write
+    (mutate_map — one BEGIN IMMEDIATE, so the compare and the set can't straddle
+    a peer request thread's write). Returns the stored record, with `stale` True
+    when this write was rejected; best-effort like set()."""
+    keep = {}
+
+    def _apply(d):
+        cur = d.get("seq")
+        cur = cur if isinstance(cur, (int, float)) else 0
+        if seq < cur:
+            keep["stale"] = True
+            return
+        d["text"] = text
+        d["seq"] = seq
+    rec = mutate_map(NS_DRAFT_KEY, _apply)
+    return dict(rec, stale=bool(keep.get("stale")))
 
 
 # --- notification mute (the session header's ◉/○ opt-out) ------------------------

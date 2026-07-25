@@ -93,6 +93,7 @@ class _PostMixin:
     _FIXED_POST = {
         ("presence",): "post_presence", ("upload",): "post_upload",
         ("sessions", "new"): "post_new_session", ("ns-prefs",): "post_ns_prefs",
+        ("ns-draft",): "post_ns_draft",
         ("dirs", "hide"): "post_hide_dir", ("dictate", "token"): "post_dictate_token",
         ("push", "subscribe"): "post_push_subscribe",
         ("push", "unsubscribe"): "post_push_unsubscribe",
@@ -1592,6 +1593,47 @@ class _PostMixin:
             return self._json({"error": "prefs not saved"}, 500)
         # global (no session) — audited with an empty log/path like web-launch
         A.state_file("", "", "ns-prefs", dict(rec, action="write"))
+        return self._json({"ok": True})
+
+    def post_ns_draft(self):
+        """Persist the new-session form's UNSENT first prompt to the durable
+        GLOBAL prefs store (docs/dashboard.md, *New-session draft*) so closing
+        the form — Esc, cancel, a stray backdrop click, a reload, a switch to
+        another device — never throws a half-typed prompt away; the next open
+        restores it. The sibling of post_composer_draft for the one box that has
+        no session to hang a `composer-draft` kv on yet, and like it this types
+        NOTHING into any terminal — a pure state write.
+
+        Body: `text` (the current draft; empty/blank CLEARS it — the launch that
+        consumed the prompt sends that), `seq` (the writer's wall clock; a write
+        older than the stored one is DROPPED, so a debounced save in flight when
+        the launch clears can't resurrect the sent prompt — the same stale-write
+        guard the composer draft carries). Best-effort like every prefs write
+        (mutate_map degrades silently rather than raising into a request), and
+        the page never clears its own box on the response — a lost save just
+        re-saves on the next keystroke."""
+        body = self._post_guard()
+        if body is None:
+            return
+        text = body.get("text")
+        if not isinstance(text, str):
+            return self._reject_input("ns-draft", "bad text",
+                                      "text must be a string",
+                                      {"type": type(text).__name__})
+        seq = body.get("seq")
+        seq = seq if isinstance(seq, (int, float)) else 0
+        text = text if text.strip() else ""          # a blank box IS a clear
+        rec = prefs.set_ns_draft(text, seq)
+        if rec.get("stale"):
+            A.state_file("", "", "ns-draft", {"action": "stale", "seq": seq})
+            return self._json({"ok": True, "stale": True})
+        # global (no session) — audited with an empty log/path like ns-prefs.
+        # The TEXT never lands in the audit (it is the user's unsent prose, and
+        # the composer draft records only its length either): chars + seq are
+        # what a "my draft vanished / came back" report needs.
+        A.state_file("", "", "ns-draft",
+                     {"action": "write" if text else "clear",
+                      "chars": len(text), "seq": seq})
         return self._json({"ok": True})
 
     def post_notify_mute(self, sid):

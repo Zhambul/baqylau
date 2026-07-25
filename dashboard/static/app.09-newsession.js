@@ -154,6 +154,19 @@ let resumePreviewCleanup = null;
 function closeNewSession() {
   if (resumePreviewCleanup) resumePreviewCleanup();
   stopDictation();               // the form's mic dies with the form
+  // persist the half-typed prompt NOW, debounce bypassed — this is the very
+  // gesture (cancel / Esc / a stray backdrop click) that used to lose it, and
+  // the textarea is about to stop existing. A successful launch reaches here
+  // with the box already emptied, so the same flush writes the clear. Skipped
+  // when the box already matches what we last stored (opened and closed
+  // untouched): no pointless write, no audit-row noise — and any still-pending
+  // debounced save is left to fire, since it carries exactly that same text.
+  if (nsPromptBox) {
+    const now = nsPromptBox.value.trim() ? nsPromptBox.value : "";
+    if (now !== ((S.nsDraft && S.nsDraft.text) || ""))
+      saveNsDraft(nsPromptBox.value, true);
+  }
+  nsPromptBox = null;
   $modal.hidden = true;
   $modal.textContent = "";
   document.body.classList.remove("modal-open");   // release the scroll lock
@@ -260,6 +273,31 @@ const nsRemember = (p) => {
   S.nsPrefs = p;                                   // cache first, form is sync
   postJSON("/api/ns-prefs", p).catch(() => {});    // best-effort backend write
 };
+
+// The form's UNSENT first prompt is a DRAFT (docs/dashboard.md, *New-session
+// draft*) — the composer's `composer-draft` machinery for the one box that has
+// no session to hang a per-session kv on yet, so it lives in the same durable
+// GLOBAL prefs store as nsLast() (GET/POST /api/ns-draft, one draft, not one
+// per directory). Written debounced on every edit AND flushed on close: an
+// accidental Esc / backdrop click used to drop a half-typed prompt on the
+// floor, and the next open came up blank. Cleared by the launch that consumes
+// it. `nsPromptBox` is the open form's textarea (null while closed) — the
+// close flush's handle on the text, since closeNewSession tears the DOM down.
+let nsPromptBox = null;
+let nsDraftTimer = 0;
+function saveNsDraft(text, now) {
+  S.nsDraft = { text: text.trim() ? text : "", seq: Date.now() };  // cache: the
+  //                       next open seeds from here, no round-trip in the way
+  clearTimeout(nsDraftTimer);
+  // seq is stamped at DISPATCH (like saveComposerDraft): a debounced save still
+  // in flight when the launch clears the box must not resurrect the sent prompt
+  // if it arrives later over the tunnel — the server keeps only the highest seq.
+  const post = () => postJSON("/api/ns-draft",
+                              { text: S.nsDraft.text, seq: Date.now() })
+    .catch(() => {});
+  if (now) post();
+  else nsDraftTimer = setTimeout(post, ASK_DRAFT_DEBOUNCE_MS);
+}
 
 // Freeform text input + picker menu — replaces the directory field's
 // <datalist>, which Safari renders in the system style AND pops open on
@@ -761,6 +799,11 @@ function openNewSession(prefillCwd, resumeSid) {
   prompt.placeholder = IS_IPAD
     ? "what should Claude start on?"
     : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
+  // restore the unsent draft (an accidental close, a reload, another device):
+  // synchronous from the cache, then reconciled below with a fresh GET
+  const seeded = (S.nsDraft && S.nsDraft.text) || "";
+  prompt.value = seeded;
+  nsPromptBox = prompt;
   const pdic = dictation(prompt, () => dir.value.trim());
   // attachments for the initial prompt — staged under the shared "staging"
   // bucket (no sid yet); ride the launch argv as leading @-mentions
@@ -776,8 +819,23 @@ function openNewSession(prefillCwd, resumeSid) {
     () => { const c = dir.value.trim(); return cmdsFor(c, cmdCache, c); },
     { enterSends: !IS_IPAD });
   // composer UX: grow with the message, Enter launches, Shift+Enter newline
-  // (on an iPad Enter is a newline and only the launch button launches)
-  prompt.oninput = () => autoGrow(prompt);
+  // (on an iPad Enter is a newline and only the launch button launches).
+  // Every edit persists the draft (debounced) — dictation and the readline
+  // keys dispatch `input` too, so their text is saved by the same handler.
+  prompt.oninput = () => { autoGrow(prompt); saveNsDraft(prompt.value); };
+  // reconcile with the server: the cache can be stale (another device typed,
+  // or this page has been open since before that write). Never yank text out
+  // from under an edit — apply only while the box still holds exactly what we
+  // seeded, and only for a draft NEWER than our own last write.
+  fetch("/api/ns-draft").then(r => r.json()).then(d => {
+    if (!d || typeof d.text !== "string") return;
+    if (!prompt.isConnected || prompt.value !== seeded) return;
+    if (d.seq < ((S.nsDraft && S.nsDraft.seq) || 0)) return;
+    S.nsDraft = d;
+    if (d.text === seeded) return;
+    prompt.value = d.text;
+    autoGrow(prompt);
+  }).catch(() => {});
   prompt.onkeydown = (e) => {
     if (spm.key(e)) return;
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
@@ -854,6 +912,13 @@ function openNewSession(prefillCwd, resumeSid) {
   $modal.append(back);
   $modal.hidden = false;
   document.body.classList.add("modal-open");      // scroll-lock the page behind
+  if (prompt.value) {
+    autoGrow(prompt);                             // a restored multi-line draft
+    //                     shows whole (scrollHeight needs the mounted element)
+    prompt.selectionStart = prompt.selectionEnd = prompt.value.length;  // caret
+    //                     at the end — you reopened to keep TYPING, not to
+    //                     insert at the top (a fresh .value leaves it at 0)
+  }
   // a known directory (remembered/prefilled) means the next thing you type is
   // the prompt — focusing the dir field there just pops its suggestion look.
   // Not on an iPad: the unasked-for keyboard covers half the form (and focus

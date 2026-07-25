@@ -94,6 +94,12 @@ class _GetMixin:
             # launch on one device pre-selects on the next (docs/dashboard.md,
             # *New-session prefs*). {} when nothing launched yet.
             return self._json(prefs.get("new-session", {}))
+        if api == ["ns-draft"]:
+            # the new-session form's UNSENT first prompt (docs/dashboard.md,
+            # *New-session draft*) — {text, seq}, restored into the box on every
+            # form open so an accidental close (Esc / backdrop click) can't throw
+            # a half-typed prompt away. {"text": "", "seq": 0} when there is none.
+            return self._json(prefs.ns_draft())
         if api == ["resumable"]:
             # the new-session resume picker's rows for one directory (fetched on
             # open, dir change, and search): recent sessions in `cwd`, each with

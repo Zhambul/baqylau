@@ -79,6 +79,10 @@ initBackBtn();   // ‹ in-app back (standalone only)
 // — prime the cache so the first form open reads them synchronously
 fetch("/api/ns-prefs").then(r => r.json())
   .then(p => { S.nsPrefs = p || {}; }).catch(() => {});
+// …and its unsent first prompt, so a form opened before the on-open refetch
+// lands already shows the draft (nsDraftSeed reads this cache synchronously)
+fetch("/api/ns-draft").then(r => r.json())
+  .then(d => { if (d && typeof d.text === "string") S.nsDraft = d; }).catch(() => {});
 // seed the hidden-directory set before the first list paint (the SSE snapshot
 // carries the session rows, not this pref) — a failed fetch just leaves nothing
 // hidden, never a broken list

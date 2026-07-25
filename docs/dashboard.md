@@ -1086,6 +1086,64 @@ per-session rule). These remembered defaults seed a FRESH launch; selecting a
 row in the resume picker overrides the model/effort with that session's own
 (*Resume picker* above), while the account always re-load-balances.
 
+## New-session draft (`GET`/`POST /api/ns-draft`)
+
+The form's **first prompt is a draft**, exactly like the composer's message box
+(*Web composer draft*). It used to live only in the DOM: closing the form — the
+`cancel` button, Esc, or a stray click on the backdrop — tore the textarea down
+and a carefully-typed launch prompt was simply gone, and the second attempt came
+up blank (reported 2026-07-25). Now every edit persists it and every open
+restores it.
+
+**Where it lives.** The same durable **global** prefs store as *New-session
+prefs* above (`dashboard/prefs.py`, `NS_DRAFT_KEY = "new-session-draft"` →
+`{text, seq}`), not a per-session kv — the form has **no session yet**, which is
+the whole reason `composer-draft` (keyed by sid) can't hold it. It is
+consequently cross-device and reboot-proof: start typing a prompt on the phone,
+open the form on the laptop, and it is there.
+
+**One draft, not one per directory.** Deliberate: the form is a single transient
+box whose directory can be re-picked while the prompt stays put. A per-cwd map
+would strand drafts nobody ever re-opens, and — worse — would lose your text the
+moment you corrected the directory field. The cwd already has its own memory
+(the last-used pref above).
+
+**Lifecycle.**
+- *Write* — `prompt.oninput` → `saveNsDraft` (debounced `ASK_DRAFT_DEBOUNCE_MS`,
+  the composer's constant). Dictation and the ⌃W/⌃A/⌃E readline keys dispatch
+  `input` events, so their text is covered by the same one handler.
+- *Flush* — `closeNewSession` saves immediately, debounce bypassed: that gesture
+  IS the bug this fixes, and the textarea is about to stop existing. Its handle
+  on the box is the module-level `nsPromptBox` (null while the form is closed).
+  Skipped when the box already matches the cached draft (a form opened and
+  closed untouched writes nothing — and any pending debounced save carries the
+  same text anyway, so it is left to fire).
+- *Restore* — `openNewSession` seeds `prompt.value` synchronously from the
+  `S.nsDraft` cache (primed at boot, kept current by every save), puts the caret
+  at the END (you reopened to keep typing), and `autoGrow`s once mounted. It
+  then reconciles with a fresh `GET /api/ns-draft`, applying it only while the
+  box still holds exactly what was seeded (never yank text from under an edit —
+  the `applyComposerDraft` discipline) and only when the server's `seq` is not
+  older than our own last write.
+- *Clear* — a successful launch. `go()` already empties the box optimistically
+  before the POST (so the prompt never LINGERS after you hit launch), and the
+  close that follows flushes that empty box as the clear. A FAILED launch
+  restores the text and never clears, so a retry keeps everything.
+
+**Stale-write guard.** Every write carries a wall-clock `seq` stamped at
+DISPATCH, and `prefs.set_ns_draft` drops a write older than the stored one
+(atomically, inside `mutate_map`'s one `BEGIN IMMEDIATE` — the dashboard is a
+`ThreadingHTTPServer`, so the compare and the set must not straddle a peer
+thread's write). This is the `post_composer_draft` guard, for the same reason: a
+debounced save in flight when the launch clears must not resurrect the sent
+prompt by landing later over the tunnel. A clear is an empty-text **tombstone**,
+never a delete, so its `seq` survives to reject that straggler.
+
+**Audit.** `ns-draft` `state_files` rows, global (empty log/path, like
+`ns-prefs`): `action=write|clear|stale` with `chars` + `seq`. The TEXT is never
+recorded — it is the user's unsent prose, and the length is what a "my draft
+vanished / came back" report actually needs.
+
 ## Web quick commands (`POST /api/session/<sid>/command`)
 
 The scoreboard's SECOND action row (its own line under
