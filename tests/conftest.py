@@ -663,3 +663,35 @@ def reaper(test_env):
             except (ProcessLookupError, PermissionError, OSError):
                 break
             time.sleep(0.02)
+
+
+# ------------------------------------------------- no DB may land in the repo
+
+def pytest_sessionfinish(session, exitstatus):
+    """Fail the run if a test left a SQLite DB inside the repo working tree.
+
+    The suite is hermetic by construction — every DB path comes from a per-test
+    tmpdir or the fake /tmp — but a test that hands product code an UNRESOLVED
+    log gets a DB wherever the process's cwd points, which is the checkout. That
+    happened twice and nobody noticed for weeks: `*.db` is gitignored, so
+    `git status` stays clean while an 80KB `tests/.state.db` accumulates rows
+    shared by every run and every xdist worker (cross-run state is exactly what
+    a hermetic suite exists to rule out). The cause was a pane-renderer entry
+    exec'd in-process: it parses sys.argv AT IMPORT, so it read PYTEST's, and
+    `pytest tests/` became MIRROR_LOG="tests/".
+
+    Reported as a warning-with-exit-code rather than an error inside a test, so
+    it names the files no matter which test made them; core/state._connect also
+    refuses a relative path now, which is the fix, this is the tripwire."""
+    stray = []
+    for root, dirs, files in os.walk(REPO):
+        dirs[:] = [d for d in dirs
+                   if d not in (".git", "__pycache__", ".claude", "node_modules")]
+        for f in files:
+            if f.endswith((".state.db", ".state.db-wal", ".state.db-shm",
+                           ".db", ".db-wal", ".db-shm")) and f != "audit.db":
+                stray.append(os.path.relpath(os.path.join(root, f), REPO))
+    if stray:
+        print("\nSQLite DBs left inside the repo (a test used an unresolved "
+              "log — see pytest_sessionfinish): " + ", ".join(sorted(stray)))
+        session.exitstatus = 1

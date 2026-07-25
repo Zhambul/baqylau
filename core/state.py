@@ -94,6 +94,20 @@ def pid_alive(pid):
 
 
 def _connect(path):
+    # A state DB path is ALWAYS absolute: a paths.mirror_log() /tmp spelling, or a
+    # HISTORY_DIR park. A RELATIVE one means the caller never resolved its log —
+    # the way that happens is an empty/garbage MIRROR_LOG argv, whose state_db()
+    # is the bare ".state.db" — and this function CREATES what it opens, so sqlite
+    # would put a live session DB wherever the process's cwd happens to point.
+    # That is never a place a session lives, and it is somebody's working tree: a
+    # pane renderer exec'd inside pytest (whose argv it parsed at import) left a
+    # real 80KB `tests/.state.db` in the repo, unnoticed because *.db is
+    # gitignored, and the dashboard singleton's cwd is the main checkout. Refused
+    # like any other failure — None, never a raise (callers already degrade to
+    # their default, and "callers audit their own transitions" is this module's
+    # contract, so there is no row to write from here).
+    if not str(path).startswith("/"):
+        return None
     # Revalidate the cached connection against the file's CURRENT inode. A
     # SessionEnd parks the DB (moving it out to the durable HISTORY_DIR) and a
     # fresh DB is created at the same path on resume — so a long-lived caller (the

@@ -578,14 +578,30 @@ def test_stats_hides_internal_counters(tmp_path):
 # semantics each row relied on.
 
 
-def _load_scorebar():
+def _load_scorebar(log="/tmp/claude-mirror-unit.log", width=None):
+    """Exec bin/claude-scorebar.py as a module — the sanctioned assembly-layer
+    entry, which means it parses `sys.argv` AT IMPORT (the MIRROR_LOG contract).
+
+    So argv is PINNED here. Exec'd inside pytest it read PYTEST's argv, and
+    `pytest tests/` handed the renderer MIRROR_LOG="tests/": the first kv read
+    then CREATED a real `tests/.state.db` inside the repo working tree — shared by
+    every run and every xdist worker, and invisible because *.db is gitignored
+    (`tests/<file>.py.state.db` was the same bug under a different pytest
+    target). core/state._connect now refuses a relative path outright; this pin
+    is the other half, since a test that means to touch the state DB should say
+    WHICH one."""
     import importlib.util
     import os
-    spec = importlib.util.spec_from_file_location(
-        "claude_scorebar_script", os.path.join(REPO, "bin", "claude-scorebar.py"))
-    m = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(m)
-    return m
+    saved = sys.argv
+    sys.argv = ["claude-scorebar.py", str(log)] + ([str(width)] if width else [])
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "claude_scorebar_script", os.path.join(REPO, "bin", "claude-scorebar.py"))
+        m = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(m)
+        return m
+    finally:
+        sys.argv = saved
 
 
 def test_fit_parts_tail_drop_and_min_keep():
@@ -1095,11 +1111,13 @@ def test_errwatch_chip_part_shape():
     assert EW.chip_part(3) == ("warn", "⚠ 3")
 
 
-def test_scorebar_compose_warn_chip():
+def test_scorebar_compose_warn_chip(tmp_path):
     """The ▪ row leads with the ⚠ chip when nerr > 0 (so tail-drop never sheds
     the warning) and shows no trace of it when nerr == 0."""
     import re
-    m = _load_scorebar()
+    # compose() reads the state DB (the ⬡ id row's kv) — a per-test log, so the
+    # read lands in tmp and never in the repo (see _load_scorebar)
+    m = _load_scorebar(tmp_path / "claude-mirror-warn.log")
     strip = lambda s: re.sub(r"\x1b\[[0-9;]*m", "", s)        # noqa: E731
     st = {"commands": 2, "start": 1000.0}
     with_chip = strip(m.compose(80, [], dict(st), 2)[2])
@@ -2022,3 +2040,24 @@ def test_file_pointers_in_comments_resolve():
                 line = txt.count("\n", 0, m.start()) + 1
                 bad.append("%s:%d -> %s" % (rel, line, ptr))
     assert not bad, "file pointers that no longer resolve:\n  " + "\n  ".join(bad)
+
+
+def test_connect_refuses_a_relative_db_path(tmp_path, monkeypatch):
+    """core.state._connect CREATES what it opens, so a RELATIVE path would put a
+    live session's DB in whatever directory the process happens to run from — the
+    dashboard singleton's cwd is the main checkout, and an in-process pane
+    renderer's was the repo (it left a real `tests/.state.db` behind, gitignored
+    and unnoticed for weeks). A relative path means the log was never resolved, so
+    it is refused like any other failure: None, no raise, no file, and the callers
+    above it degrade to their defaults."""
+    from core import state as S
+    monkeypatch.chdir(tmp_path)
+    assert S._connect(".state.db") is None
+    assert S._connect("tests/.state.db") is None
+    assert S.kv_get("", "anything") is None          # log="" → ".state.db"
+    assert S.kv_set("", "k", {"v": 1}) is not True   # the write degrades, no file
+    assert not list(tmp_path.glob("*.state.db")), "a relative path created a DB"
+    # an absolute path still works, unchanged
+    log = str(tmp_path / "claude-mirror-abs.log")
+    assert S.kv_set(log, "k", {"v": 1})
+    assert S.kv_get(log, "k") == {"v": 1}

@@ -59,3 +59,20 @@ recorder to assert exact raw frames (`test_l0_frontends_contract.py`,
 `test_l3_tab.py`). Without it, the default dead socket path makes the raw
 attempt miss and every call falls back to the recorder — which is why the
 pre-raw-path tests keep passing unchanged.
+
+**No DB may land in the repo working tree** (2026-07-25). The suite is hermetic
+by construction — every DB path comes from a per-test tmpdir or the fake
+`CLAUDE_MIRROR_TMPDIR` — but a test that hands product code an **unresolved log**
+gets its DB wherever the process's cwd points, which is the checkout. That
+happened twice and went unnoticed for weeks, because `*.db` is gitignored: an
+80KB `tests/.state.db` sat there accumulating rows *shared by every run and every
+xdist worker*, which is precisely the cross-run coupling a hermetic suite exists
+to rule out. The cause is worth remembering: `_load_scorebar` execs
+`bin/claude-scorebar.py` in-process, and a pane-renderer entry parses `sys.argv`
+**at import** (its sanctioned assembly-layer shape) — so it read *pytest's* argv
+and `pytest tests/` became `MIRROR_LOG="tests/"` (`pytest tests/<file>.py` left
+the matching `tests/<file>.py.state.db`). Two guards now: `core/state._connect`
+refuses a RELATIVE path outright (it creates what it opens, and no session ever
+lives in a relative path — the dashboard singleton's cwd is the main checkout),
+and `conftest.pytest_sessionfinish` fails the run listing any DB found under the
+repo. A test that loads a pane entry pins argv and passes a `tmp_path` log.

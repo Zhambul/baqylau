@@ -179,6 +179,14 @@ charter fits, document the owner here, and (if cheap) add a grep test.
 - Probes on DBs whose *existence* is a signal open `mode=ro` and must never
   create the file (`state.parked()`, `tabs.sq`). Read-modify-write goes
   through `state.immediate()`.
+- **A DB path is absolute, always.** `state._connect` refuses a relative one
+  (returning None like any other failure): it CREATES what it opens, so a
+  relative path — the shape an unresolved/empty `MIRROR_LOG` produces — puts a
+  live session's DB wherever the process's cwd points. That is never where a
+  session lives and is usually somebody's working tree (it left a real
+  `tests/.state.db` in the checkout, gitignored and unnoticed; the dashboard
+  singleton's cwd is the main checkout). Derive paths from `core/paths.py`,
+  which only ever returns absolute ones.
 
 ## Magic values and deliberate divergence
 
