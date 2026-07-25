@@ -556,7 +556,9 @@ function buildFilterBar() {
 /* ---------- the "/" command menu (composer + new-session prompt) ---------- */
 // Claude-Code-style completion: a leading "/" with no whitespace yet opens a
 // menu over GET /api/commands?cwd=… (built-ins + that directory's .claude
-// commands/skills). ↑/↓ move, Tab completes, Esc closes; Enter completes —
+// commands/skills), matched by SUBSTRING (`cmdMatches`, prefix hits ranked
+// first) — the memorable middle of a name is enough, no prefix needed.
+// ↑/↓ move, Tab completes, Esc closes; Enter completes —
 // except with {enterSends: true} an EXACT token falls through to the caller's
 // send (so a fully-typed "/compact" sends on one Enter; both boxes pass
 // !IS_IPAD, since on an iPad Enter never sends). The TUI stays
@@ -573,6 +575,29 @@ function cmdsFor(cwd, cache, key) {
       .then(r => r.ok ? r.json() : [])
       .catch(() => []);
   return cache[key];
+}
+
+// how many rows the menu shows at most (it scrolls past ~9)
+const MENU_MAX = 30;
+
+// The match rule: CONTAINS, case-insensitively, over the command NAME — typing
+// the memorable middle of one is enough ("/commit" finds `gh:commit`, "/debug"
+// finds `audit-debug`), which is what the namespaced/plugin names need since
+// their prefix is the namespace you don't remember. Prefix hits still rank
+// FIRST (typing the head of a name means that name), and each group keeps the
+// server's own order — built-ins first, then nearest-first (`slashcmds.py`) —
+// so no scoring heuristic re-litigates the shadowing rules the server settled.
+// Descriptions are deliberately NOT searched: a word like "run" appears in
+// dozens of them, and a menu you complete against must stay predictable.
+function cmdMatches(cmds, tok) {
+  const q = tok.toLowerCase();
+  const pre = [], mid = [];
+  for (const c of cmds) {
+    const at = c.name.toLowerCase().indexOf(q);
+    if (at === 0) pre.push(c);            // (an empty token: every row, in order)
+    else if (at > 0) mid.push(c);
+  }
+  return pre.concat(mid);
 }
 
 // The picked command reads TINTED inside the box (Claude Code's TUI paints the
@@ -705,8 +730,7 @@ function slashMenu(ta, host, getCmds, opts) {
     getCmds().then(learn).then(cmds => {
       if (!ta.isConnected || token() !== tok) return;   // view/input moved on
       sel = 0;
-      const q = tok.toLowerCase();
-      items = cmds.filter(c => c.name.toLowerCase().startsWith(q)).slice(0, 30);
+      items = cmdMatches(cmds, tok).slice(0, MENU_MAX);
       render();
     });
   };

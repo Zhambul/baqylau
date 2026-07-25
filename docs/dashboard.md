@@ -837,7 +837,24 @@ completes, Enter completes a *partial* token but sends/launches when the
 token already IS the selection (a fully-typed `/compact` goes through on one
 Enter — both boxes pass `enterSends: !IS_IPAD`, so on an iPad Enter always
 completes and never falls through to a send), Esc closes. The menu drops BELOW its host box, never upward over
-the stats row. The list is
+the stats row.
+
+**Matching is CONTAINS, not starts-with** (`cmdMatches`): the typed token is
+found anywhere in the command NAME, case-insensitively — `/commit` finds
+`gh:commit`, `/debug` finds `audit-debug`. That is what the namespaced and
+plugin-provided names need, since the part you don't remember is exactly their
+prefix (`gh:`, `codex:`), and a prefix-only menu made those effectively
+unfindable without first recalling the namespace. Prefix hits still rank
+**first** (typing the head of a name means *that* name), and each group keeps
+the server's own order — built-ins first, then nearest-first — so the ranking
+never re-litigates the shadowing the server already settled, and no fuzzy
+scoring is involved (a subsequence matcher would surface absurd hits for
+2-character tokens and make the top row unpredictable, which matters here
+because Enter completes it). Descriptions are deliberately NOT searched: a
+word like "run" appears in dozens of them, and a menu you complete against
+must stay predictable. Capped at `MENU_MAX` rows, as before.
+
+The list is
 `plugins.slash_commands(cwd)` → `plugins/claude_code/slashcmds.py`: a curated
 `BUILTINS` snapshot of the CLI's built-in commands plus the session cwd's
 discovered custom entries — `commands/**/*.md` (subdirectory-namespaced,

@@ -3393,6 +3393,21 @@ def test_app_js_tints_the_picked_slash_command(dash):
     assert code == 200 and "ta.cmdPaint()" in comp
 
 
+def test_app_js_slash_menu_matches_on_contains(dash):
+    """The "/" menu matches a typed token ANYWHERE in a command name (`/commit`
+    finds `gh:commit`), prefix hits first — the namespaced/plugin names are
+    unfindable under a starts-with filter unless you already recall the
+    namespace. Static check on the served bundle (no JS engine in this suite):
+    the matcher is the one `cmdMatches` the menu calls, and the old prefix-only
+    filter must be gone so it can't come back alongside it."""
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    assert "function cmdMatches(" in ses
+    assert "indexOf(q)" in ses                       # contains, not startsWith
+    assert "cmdMatches(cmds, tok)" in ses            # …and the menu goes through it
+    assert "startsWith(q)" not in ses, "the prefix-only filter must be gone"
+
+
 def test_conv_items_carry_kind_and_prompt_text():
     items = DS._conv_items([
         {"kind": "prompt", "text": "do the thing"},
