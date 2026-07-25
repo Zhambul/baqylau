@@ -4254,7 +4254,7 @@ distinct-monitor `streams` COUNT (`sessionapi.monitor_count`, no transcript
 parse), pushed on change, so a new `Monitor` launch bumps it like the `errors`
 badge. The card **list** is fetched lazily on tab-open (`/api/session/<sid>/
 monitors` — one transcript parse) and, while any monitor is `live`, re-fetched on
-a light 4s client poll (`scheduleMonitorPoll`); the poll stops when none is live
+a light client poll (`scheduleMonitorPoll`, `SECONDARY_POLL_MS` — the ONE cadence both secondary tabs share); the poll stops when none is live
 or you leave the tab. (No dedicated per-event SSE increment — a monitor's live
 events already stream into the *mirror* tab as ops; the monitors tab is the
 state-and-history view.)
@@ -4304,7 +4304,7 @@ cards' `data-st` tint: `running` while live, else `finished` (a bg job's normal
 
 **Live-ness** matches the monitors tab: the badge count rides a cheap `jobs` SSE
 (`sessionapi.job_count`, distinct bg-stream count), the list is fetched lazily on
-tab-open and re-fetched on a 4s poll while any job is `live`. (A job's live output
+tab-open and re-fetched on the shared `SECONDARY_POLL_MS` poll while any job is `live`. (A job's live output
 already streams into the *mirror* tab as ops; the jobs tab is the
 state-and-history view.)
 

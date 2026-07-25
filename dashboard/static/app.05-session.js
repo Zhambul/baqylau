@@ -3,6 +3,19 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.12-init.js for the boot/init sequence.
 
+// Two SEPARATE retries that happen to share a delay — deliberately not one
+// constant. META_RETRY_MS re-fetches the session meta after a failed GET (the
+// view is unusable without it: no composer, no title, and global snapshots
+// never repair it); SES_RECONNECT_MS re-opens the per-session SSE after the
+// browser drops it. Same beat today, different failures, tunable apart.
+const META_RETRY_MS = 1500;
+const SES_RECONNECT_MS = 1500;
+// A menu that closes on blur must let the CLICK land first: the mousedown blurs
+// the textarea before the click event reaches the row, so closing synchronously
+// would swallow every pick. (The rows themselves preventDefault on mousedown;
+// this delay is what catches a click AWAY from the menu.)
+const MENU_BLUR_MS = 150;
+
 function showSession(sid, tab) {
   // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror
   if (!["mirror", "agents", "monitors", "jobs", "memory", "errors"].includes(tab)) tab = "mirror";
@@ -62,7 +75,7 @@ function showSession(sid, tab) {
       })
       .catch(() => {
         clog(sid, "meta.fail", {});   // the session-view meta GET rejected
-        if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, 1500);
+        if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, META_RETRY_MS);
       });
     loadMeta();
     // Initial stream content over a plain GET, NOT the SSE fresh-connect
@@ -224,7 +237,7 @@ function connectSession(sid) {
     sseMark("session", false, { sid });
     es.close();
     if (S.cur !== sid) return;
-    S.ses.timer = setTimeout(() => connectSession(sid), 1500);
+    S.ses.timer = setTimeout(() => connectSession(sid), SES_RECONNECT_MS);
   };
 }
 
@@ -756,8 +769,7 @@ function slashMenu(ta, host, getCmds, opts) {
     return false;
   };
   ta.addEventListener("input", refresh);
-  ta.addEventListener("blur", () => setTimeout(close, 150));   // menu clicks
-  //                     preventDefault (never blur); this catches clicks away
+  ta.addEventListener("blur", () => setTimeout(close, MENU_BLUR_MS));
   // a RESTORED draft can already hold a picked command with nothing typed since
   // (so no menu fetch would ever happen) — learn the names once, for the tint
   if (ta.value.startsWith("/")) getCmds().then(learn);

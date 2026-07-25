@@ -580,10 +580,15 @@ function resumePicker() {
   // Search is SERVER-SIDE (across the directory's whole history, not just the
   // loaded rows — the client-side filter over ≤RESUMABLE_MAX rows couldn't reach
   // an old session): debounced refetch with ?q=, preserving the selection.
+  // debounced per keystroke; the two boxes differ deliberately — search is a
+  // cheap history query you want to feel instant, a directory change reloads the
+  // whole picker (and a path is typed in bursts), so it waits a little longer.
+  const SEARCH_DEBOUNCE_MS = 200;
   let qTimer = 0;
   search.oninput = () => {
     clearTimeout(qTimer);
-    qTimer = setTimeout(() => api.refresh(lastCwd, "", search.value.trim()), 200);
+    qTimer = setTimeout(() => api.refresh(lastCwd, "", search.value.trim()),
+                        SEARCH_DEBOUNCE_MS);
   };
   search.onkeydown = (e) => {
     const first = list.querySelector(".nsresrow");
@@ -715,12 +720,14 @@ function openNewSession(prefillCwd, resumeSid) {
   fresh.onchange = syncFresh;
   // reload the picker when the directory changes (debounced) — only while
   // resuming; suggest() keeps its own separate input listener (addEventListener).
+  const DIR_DEBOUNCE_MS = 250;              // see SEARCH_DEBOUNCE_MS above
   let dirTimer = 0;
   dir.oninput = () => {
     if (fresh.checked) return;
     clearTimeout(dirTimer);
     pickerLoaded = true;
-    dirTimer = setTimeout(() => picker.refresh(dir.value.trim(), "", "", false), 250);
+    dirTimer = setTimeout(() => picker.refresh(dir.value.trim(), "", "", false),
+                          DIR_DEBOUNCE_MS);
   };
 
   // model + effort side by side — concrete values only, no "default" entry

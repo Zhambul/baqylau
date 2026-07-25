@@ -464,13 +464,18 @@ const RUN_ORDER = ["fg", "bg", "monitor", "sub.pid", "codex"];
 
 /* ---------- toasts + OS notifications ---------- */
 
+// How long a toast stays up. Long by web-notification standards on purpose: a
+// red/green transition toast is the thing you may be across the room from, and
+// re-firing it is impossible (the tab-diff already consumed the transition).
+const TOAST_MS = 7000;
+
 function toast(kind, t1, t2, onclick) {
   const n = el("div", "toast " + (kind || ""));
   n.append(el("div", "t1", t1));
   if (t2) n.append(el("div", "t2", t2));
   n.onclick = () => { n.remove(); onclick && onclick(); };
   $toasts.append(n);
-  setTimeout(() => n.remove(), 7000);
+  setTimeout(() => n.remove(), TOAST_MS);
 }
 
 

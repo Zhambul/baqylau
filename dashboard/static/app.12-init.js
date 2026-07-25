@@ -46,6 +46,9 @@ clog("", "boot", {
 
 
 if (/[?&#]vpdiag/.test(location.search + location.hash)) {
+  // an orientation flip reports the OLD viewport until the rotate settles, so
+  // the overlay re-measures once after it
+  const ROTATE_SETTLE_MS = 400;
   const box = el("div");
   box.style.cssText =
     "position:fixed;left:8px;bottom:8px;z-index:9999;padding:8px 10px;" +
@@ -64,7 +67,7 @@ if (/[?&#]vpdiag/.test(location.search + location.hash)) {
   };
   upd();
   addEventListener("resize", upd);
-  addEventListener("orientationchange", () => setTimeout(upd, 400));
+  addEventListener("orientationchange", () => setTimeout(upd, ROTATE_SETTLE_MS));
   if (window.visualViewport) window.visualViewport.addEventListener("resize", upd);
   document.body.append(box);
 }

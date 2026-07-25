@@ -717,6 +717,13 @@ function loadMonitors() {
     .catch(() => {});
 }
 
+// The secondary tabs (monitors / jobs) poll while something in them is still
+// live — ONE cadence, not two: they are the same fact (a background list the SSE
+// doesn't push, refreshed only while you're looking at it), and it was written
+// twice, in two functions 200 lines apart. Slow on purpose — these are GETs
+// outside the SSE, and the tab is only polled while focused/live.
+const SECONDARY_POLL_MS = 4000;
+
 function scheduleMonitorPoll() {
   clearMonitorPoll();
   const ses = S.ses;
@@ -724,7 +731,7 @@ function scheduleMonitorPoll() {
   const live = (ses.monitors || []).some(m => m.live);
   // keep the list / detail fresh while a monitor is still firing events
   if (live && (ses.tab === "monitors" || ses.monitorFocus))
-    ses.monPoll = setInterval(loadMonitors, 4000);
+    ses.monPoll = setInterval(loadMonitors, SECONDARY_POLL_MS);
 }
 
 function clearMonitorPoll() {
@@ -910,7 +917,7 @@ function scheduleJobPoll() {
   if (!ses) return;
   const live = (ses.jobs || []).some(j => j.live);
   if (live && (ses.tab === "jobs" || ses.jobFocus))
-    ses.jobPoll = setInterval(loadJobs, 4000);
+    ses.jobPoll = setInterval(loadJobs, SECONDARY_POLL_MS);
 }
 
 function clearJobPoll() {
