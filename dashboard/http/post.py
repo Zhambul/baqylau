@@ -246,14 +246,13 @@ class _PostMixin:
             text = ""
         if not isinstance(text, str):
             return self._reject_input("web-send", "bad text", "empty text",
-                                      {"type": type(text).__name__},
-                                      log=P.mirror_log(sid))
+                                      {"type": type(text).__name__}, sid=sid)
         # attachments (vetted @-paths) may stand in for text — a screenshot with
         # no words is a valid message; an empty message with neither is not.
         attachments = self._attachment_paths(body)
         if not text.strip() and not attachments:
             return self._reject_input("web-send", "empty text", "empty text",
-                                      {"chars": len(text)}, log=P.mirror_log(sid))
+                                      {"chars": len(text)}, sid=sid)
         text = self._with_attachments(text, attachments)
         clear_draft = bool(body.get("clear_draft"))
         # AUTHORITATIVE window (see _resolve_live_window): the pane tagged
@@ -470,13 +469,11 @@ class _PostMixin:
         name = body.get("name")
         if not isinstance(name, str):
             return self._reject_input("web-rename", "bad name", "empty name",
-                                      {"type": type(name).__name__},
-                                      log=P.mirror_log(sid))
+                                      {"type": type(name).__name__}, sid=sid)
         name = _NAME_CTRL.sub(" ", name).strip()[:RENAME_MAX].strip()
         if not name:
             return self._reject_input("web-rename", "empty name", "empty name",
-                                      {"raw": body.get("name")},
-                                      log=P.mirror_log(sid))
+                                      {"raw": body.get("name")}, sid=sid)
         row, log, sdb = self._audit_target(sid)
         tpath = row.get("transcript_path") or ""
         if not tpath or not os.path.isfile(tpath):
@@ -683,13 +680,11 @@ class _PostMixin:
         text = body.get("text")
         mode = body.get("mode") or "conversation"
         if not isinstance(text, str) or not text.strip():
-            return self._reject_input("web-rewind-to", "empty text",
-                                      "empty text",
-                                      {"type": type(text).__name__},
-                                      log=P.mirror_log(sid))
+            return self._reject_input("web-rewind-to", "empty text", "empty text",
+                                      {"type": type(text).__name__}, sid=sid)
         if mode not in rewindmenu.MODE_LABELS:
             return self._reject_input("web-rewind-to", "bad mode", "bad mode",
-                                      {"mode": mode}, log=P.mirror_log(sid))
+                                      {"mode": mode}, sid=sid)
         try:
             ups = max(0, int(body.get("ups") or 0))
         except (TypeError, ValueError):
@@ -758,7 +753,7 @@ class _PostMixin:
                 "answers must match the %d question%s"
                 % (len(questions), "" if len(questions) == 1 else "s"),
                 {"n_answers": len(answers) if isinstance(answers, list) else None,
-                 "n_questions": len(questions)}, log=P.mirror_log(sid))
+                 "n_questions": len(questions)}, sid=sid)
         # normalize each answer to a dict FIRST: `answers` is only validated for
         # length above, so a non-dict element (adversarial/malformed body) must
         # not reach `.get()`. The old inline `if isinstance(a, dict)` on the
@@ -805,8 +800,7 @@ class _PostMixin:
         if not isinstance(text, str):
             return self._reject_input("composer-draft", "bad text",
                                       "text must be a string",
-                                      {"type": type(text).__name__},
-                                      log=P.mirror_log(sid))
+                                      {"type": type(text).__name__}, sid=sid)
         origin = str(body.get("origin") or "")
         seq = body.get("seq")
         seq = seq if isinstance(seq, (int, float)) else 0
@@ -859,8 +853,7 @@ class _PostMixin:
         if not isinstance(items, list):
             return self._reject_input("composer-queue", "bad items",
                                       "items must be a list",
-                                      {"type": type(items).__name__},
-                                      log=P.mirror_log(sid))
+                                      {"type": type(items).__name__}, sid=sid)
         # str() the filter side too, not just the value side: a non-string
         # `text` (e.g. a number in a malformed body) makes `(it.get("text") or
         # "").strip()` raise AttributeError → 500.
@@ -912,11 +905,11 @@ class _PostMixin:
         phase = str(body.get("phase") or "")
         if phase not in ("shown", "reconciled", "dropped", "stale"):
             return self._reject_input("web-hint", "bad phase", "bad phase",
-                                      {"phase": phase}, log=P.mirror_log(sid))
+                                      {"phase": phase}, sid=sid)
         op = str(body.get("op") or "composer")
         if op not in ("composer", "close", "answer", "plan"):
             return self._reject_input("web-hint", "bad op", "bad op",
-                                      {"op": op}, log=P.mirror_log(sid))
+                                      {"op": op}, sid=sid)
         log, sdb = self._audit_target(sid)[1:]
         content = {"op": op, "phase": phase}
         for k in ("chars", "wait_ms"):

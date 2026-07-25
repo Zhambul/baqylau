@@ -2181,11 +2181,22 @@ phase/op, a wrong-count ask answer or draft, an actionless plan decision) gets a
 `web-upload` / `web-rewind-to` / `composer-draft` / `composer-queue` /
 `web-hint` / `web-answer` / `ask-draft` / `web-plan`) carrying `why:"<reason>"`
 plus the offending field
-`repr()`'d — the shared `Handler._reject_input` helper. It takes an optional
-`log`/`path`, so a SESSION-scoped reject files under THAT session's timeline
-(not just the global stream) — without which every empty-message / empty-name /
-bad-payload reject was a silent 4xx, the exact class the `web-reject` guard fix
-closed one layer down. Deliberately NOT an `errors` row: these are expected
+`repr()`'d — the shared `Handler._reject_input` helper. Pass it a `sid` and the
+reject files under THAT session's timeline (not just the global stream) —
+without which every empty-message / empty-name / bad-payload reject was a silent
+4xx, the exact class the `web-reject` guard fix closed one layer down. That `sid`
+resolves through `_audit_target`, the one owner, **so a handler's reject row and
+its success row land in the same place**: the 11 session-scoped sites used to
+hand over a re-derived `log=P.mirror_log(sid)` instead, and since `_audit_target`
+prefers the audit row's own `log` and `session_row` walks the adopt FORK CHAIN,
+the two disagreed for a sid whose `sessions` row wasn't written yet (a
+`--resume`/backgrounding fork before `adopt.py` catches up) — the success row
+joined the predecessor's timeline while the reject landed under a sid with no
+row at all, which is itself a canned anomaly signature. They also passed no
+`path`, so a reject carried no state-DB attribution while its sibling did. The
+explicit `log`/`path` arguments remain for the two callers that can't use `sid`:
+`post_upload`, whose sid is OPTIONAL (it resolves the target once, global `""`
+when absent), and `post_client_log`, which resolves one target per BATCHED event. Deliberately NOT an `errors` row: these are expected
 client-input 4xx, not swallowed exceptions (their traceback would be a bare
 `NoneType: None`), and `errwatch` surfaces every `session_id=''` `errors` row as
 a `⚠ global:` chip in EVERY session's scorebar — so a stray "ba" typed into the

@@ -200,7 +200,7 @@ class _Base(BaseHTTPRequestHandler):
         return row, log, API.state_db_for(sid) or P.state_db(log)
 
     def _reject_input(self, action, why, message, detail, code=400,
-                      log="", path=""):
+                      sid="", log="", path=""):
         """A control-plane INPUT-validation reject (the client sent a bad
         field). Audited as an `ok:False` state_files row under the handler's own
         `action` vocabulary, carrying the reason (`why`) and the EXACT received
@@ -217,14 +217,29 @@ class _Base(BaseHTTPRequestHandler):
         connection because it hasn't read the body — the input body is already
         consumed by `_post_guard` here, so no desync to guard against).
 
-        `log`/`path` file the row under a SESSION (the session-scoped POSTs —
+        Pass `sid` to file the row under a SESSION (the session-scoped POSTs —
         web-send/web-rename/web-answer/…, so a rejected attempt lands in THAT
-        session's audit timeline, not just the global stream); default '' keeps
+        session's audit timeline, not just the global stream); omitting it keeps
         the GLOBAL row the session-less endpoints (web-launch/notify-mute/
         hide-dir/dictate) already relied on. Without this every empty-message /
         empty-name / bad-payload reject was a silent 4xx — the same class of
         blind spot `_reject` closed for guard rejections. Returns the response
-        so callers stay `return self._reject_input(...)`."""
+        so callers stay `return self._reject_input(...)`.
+
+        `sid` resolves through `_audit_target` — the ONE owner — precisely so a
+        handler's reject row and its success row land in the SAME place. The 11
+        session-scoped sites used to pass `log=P.mirror_log(sid)`, re-deriving
+        the key instead: `_audit_target` prefers the audit row's own `log`, and
+        `session_row` walks the adopt FORK CHAIN, so for a sid whose row hasn't
+        been written yet (a `--resume`/backgrounding fork before adopt.py catches
+        up) the two disagree — the success row joined the predecessor's timeline
+        while the reject landed under a sid with no `sessions` row at all, which
+        is itself a canned anomaly signature. They also dropped `path`, so a
+        reject carried no state-DB attribution while its sibling did. `log`/
+        `path` stay as the explicit escape hatch (post_client_log resolves one
+        target per BATCHED event, and the session-LESS rows want a bare '')."""
+        if sid:
+            _row, log, path = self._audit_target(sid)
         A.state_file(log, path, action,
                      dict({"ok": False, "why": why},
                           **{k: repr(v) for k, v in detail.items()}))

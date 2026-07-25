@@ -7,6 +7,7 @@
 import gzip
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -6862,6 +6863,30 @@ def test_audit_target_triple_has_one_owner():
             if 'or P.mirror_log(sid)' in src or 'or P.mirror_log(esid)' in src]
     assert hits == ["dashboard/http/base.py", "dashboard/http/get.py",
                     "dashboard/http/sse.py"], hits
+
+
+def test_session_scoped_rejects_resolve_their_target_by_sid():
+    """A session-scoped input reject files its row through `_reject_input(...,
+    sid=sid)` — never a hand-passed `log=`. Handing it a re-derived key made a
+    handler's reject row and its SUCCESS row disagree for a forked sid (see the
+    _reject_input docstring) and dropped `path` besides. post_upload is the one
+    sanctioned `log=`/`path=` caller: its sid is OPTIONAL, so it resolves the
+    target once (global '' when absent) and passes it down."""
+    src = dict(_dash_py("dashboard/http"))["dashboard/http/post.py"]
+    assert "P.mirror_log(sid)" not in src, "a reject re-deriving the audit key"
+    calls = []
+    for m in re.finditer(r"_reject_input\(", src):     # balanced-paren scan: the
+        i, depth = m.end() - 1, 0                      # args nest 2+ deep
+        while i < len(src):
+            depth += (src[i] == "(") - (src[i] == ")")
+            i += 1
+            if not depth:
+                break
+        calls.append(src[m.start():i])
+    by_sid = [c for c in calls if "sid=sid" in c]
+    assert len(by_sid) >= 11, "the session-scoped reject sites: %d" % len(by_sid)
+    for call in calls:                      # one target channel per call, never both
+        assert not ("sid=sid" in call and "log=" in call), call
 
 
 def test_live_or_parked_state_db_has_one_owner():
