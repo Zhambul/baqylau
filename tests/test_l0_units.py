@@ -1291,6 +1291,17 @@ def test_dashboard_autostart_spawns_when_no_holder(monkeypatch):
     assert panes == [("dash-autostart", 1, "spawned")]
 
 
+def test_dashboard_cli_url_reads_the_config_owner(monkeypatch):
+    """`cli.url()` — printed by status/start/open — reads the bind address from
+    its OWNER, `dashboard.config`, module-qualified. It reached it through the
+    `dashboard.server` facade's flat aliases once, so pruning them (correctly:
+    a flat knob alias is a patch trap) broke every CLI verb that prints a URL
+    with an AttributeError, and nothing in the suite touched url() to notice."""
+    from dashboard import cli, config
+    monkeypatch.setattr(config, "PORT", 9997)
+    assert cli.url() == "http://%s:9997" % config.HOST
+
+
 # --- core.hostpane.park_db / decide_log_fate — failure-path fates ---------------
 # A silent park failure used to report "keep-history" while the live DB stayed
 # put (orphaned pollers, reuse-live-db on resume), and the three independent

@@ -41,7 +41,11 @@ def holder():
 
 
 def url():
-    return "http://%s:%d" % (_server().HOST, _server().PORT)
+    # config, not the server facade: the bind address is config.py's to own, and
+    # a lazy import keeps this module import-pure like _server() does (config is
+    # cheap, but `serve` must stay the only thing that pulls the server in).
+    from dashboard import config
+    return "http://%s:%d" % (config.HOST, config.PORT)
 
 
 def start():
