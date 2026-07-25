@@ -316,14 +316,43 @@ def test_probe_never_creates_state_db(run_hook, test_env, session, fake_kitten):
 
 # ------------------------------------------- interrupt-watch turn-over gate
 
+# The REAL record Claude Code appends on a cancel (measured) — a `type:"user"`
+# message whose content is the marker. Seeding a looser shape is what let the
+# quoted-marker false positive hide: the watcher's scan was a bare substring
+# match, so ANY line carrying the bytes passed the test suite too.
+INTERRUPT_REC = ('{"type":"user","message":{"role":"user","content":'
+                 '[{"type":"text","text":"[Request interrupted by user]"}]}}')
+# Growth that merely QUOTES the marker, byte-faithful to the live 2e9b57e4
+# transcript: a nested_memory attachment injecting a worktree CLAUDE.md that
+# DOCUMENTS the marker, trailed by the metadata records Claude Code writes with
+# it. The trailer matters — none of them is a `"type":"user"` record, so the
+# queued-prompt guard does NOT catch this, which is why the tab really flipped.
+QUOTED_MARKER = (
+    '{"type":"attachment","attachment":{"type":"nested_memory",'
+    '"path":"/p/CLAUDE.md","content":{"content":"the transcript\'s '
+    '`[Request interrupted by user]` line for plain replies"}}}\n'
+    '{"type":"last-prompt"}\n{"type":"ai-title"}\n'
+    '{"type":"mode"}\n{"type":"permission-mode"}'
+)
+# The same class from a tool_result (a grep hit / file read / audit paste). Kept
+# out of QUOTED_MARKER because a tool_result IS a `"type":"user"` record, so the
+# queued guard masks it in the drive harness — the predicate test covers it.
+QUOTED_IN_TOOL_RESULT = (
+    '{"type":"user","message":{"role":"user","content":[{"type":"tool_result",'
+    '"tool_use_id":"t1","content":"grep hit: [Request interrupted by user]"}]}}'
+)
+
+
 def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None,
-                          queued=False):
+                          queued=False, quoted_at=None):
     """Run run_interruptwatch in-process, fully sequenced (no timing races):
     tab_get returns states[i] on its i-th call (last value repeats), and the
     synthetic interrupt line is appended to the transcript during tab_get call
     number `interrupt_at` (None = never; queued=True also appends the
     immediately-delivered queued user-prompt record right after it, the way
-    Claude Code does when a message was queued at interrupt time). Returns
+    Claude Code does when a message was queued at interrupt time).
+    `quoted_at` appends transcript growth that only QUOTES the marker — which
+    must never be read as a cancel. Returns
     (resolved_state, end_reason, [audited transition reasons])."""
     import sys as _sys
     from conftest import REPO
@@ -349,9 +378,12 @@ def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None,
 
     def fake_tab_get(win):
         tick["n"] += 1
+        if quoted_at is not None and tick["n"] == quoted_at:
+            with open(transcript, "a") as f:
+                f.write(QUOTED_MARKER + "\n")
         if interrupt_at is not None and tick["n"] == interrupt_at:
             with open(transcript, "a") as f:
-                f.write('{"text":"[Request interrupted by user]"}\n')
+                f.write(INTERRUPT_REC + "\n")
                 if queued:
                     f.write('{"type":"user","message":{"content":"queued"}}\n')
         return states[min(tick["n"], len(states) - 1)]
@@ -417,6 +449,58 @@ def test_interruptwatch_queued_prompt_keeps_watching(monkeypatch, tmp_path):
     assert state is None, "flipped green over the queued prompt's turn"
     assert reason == "turn-over"          # kept watching to the genuine end
     assert any("queued prompt delivered" in r for r in reasons)
+
+
+def test_interruptwatch_ignores_a_merely_QUOTED_marker(monkeypatch, tmp_path):
+    """The false-green bug (session 2e9b57e4, three times in one session): the
+    watcher scanned raw transcript bytes for the marker, so growth that only
+    QUOTED it read as a cancel and the tab flipped green MID-TURN. The live
+    trigger was a nested_memory attachment injecting a worktree CLAUDE.md that
+    documents the marker; a tool_result carrying a grep/file read of it is the
+    same class. Neither may flip the tab: only a real cancel record counts."""
+    state, reason, _ = _drive_interruptwatch(
+        monkeypatch, tmp_path,
+        states=["thinking", "working", "working", "working", "awaiting-response"],
+        quoted_at=1)
+    assert state is None, "a quoted marker flipped the tab green mid-turn"
+    assert reason == "turn-over"        # ran on to the turn's genuine end
+
+
+def test_interruptwatch_still_flips_after_a_quoted_marker(monkeypatch, tmp_path):
+    """The quoted-marker growth must not DESENSITISE the watcher either: a real
+    cancel arriving later in the same turn still flips green (the consumed-to-
+    the-last-complete-line cursor keeps advancing past the noise)."""
+    state, reason, _ = _drive_interruptwatch(
+        monkeypatch, tmp_path,
+        states=["thinking", "working", "working", "working"],
+        quoted_at=1, interrupt_at=3)
+    assert state == "awaiting-response"
+    assert reason == "interrupt-detected-flipped-green"
+
+
+def test_is_interrupt_line_shapes():
+    """The predicate itself, over the shapes measured in real transcripts."""
+    import sys as _sys
+    from conftest import REPO
+    if REPO not in _sys.path:
+        _sys.path.insert(0, REPO)
+    from plugins.claude_code.tabstatus import is_interrupt_line as ok
+
+    # real cancels: bare-string content, text-block content, and the tool-call
+    # variant (which the old closing-bracket scan never even detected)
+    assert ok(b'{"type":"user","message":{"role":"user","content":'
+              b'"[Request interrupted by user]"}}')
+    assert ok(INTERRUPT_REC.encode())
+    assert ok(b'{"type":"user","message":{"role":"user","content":[{"type":'
+              b'"text","text":"[Request interrupted by user for tool use]"}]}}')
+    # quotes, not cancels
+    for line in QUOTED_MARKER.split("\n") + [QUOTED_IN_TOOL_RESULT]:
+        assert not ok(line.encode()), line[:60]
+    assert not ok(b'{"type":"assistant","message":{"content":[{"type":"text",'
+                  b'"text":"I saw [Request interrupted by user] in the log"}]}}')
+    # unrelated / undecidable lines
+    assert not ok(b'{"type":"user","message":{"content":"hello"}}')
+    assert not ok(b'{"type":"user","message":{"content":"[Request interr')  # torn
 
 
 def _drive_escaperecheck(monkeypatch, tmp_path, states, grow_at=None,

@@ -201,6 +201,27 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   writer-liveness recovery is faster and authoritative (defer, or it would race
   `bg-recheck` and could paint "done" over a still-live bg job); magenta or red
   has no other signal, so it flips green.
+
+  **The marker must be MATCHED AS A RECORD, never as bytes.** The watcher
+  originally scanned the raw transcript growth for the literal
+  `[Request interrupted by user]`, which false-positived on any growth that
+  merely *quoted* it — and the tab flipped green **mid-turn**. The live trigger
+  (session `2e9b57e4`, three times in one session, each corrected only by the
+  next tool call 6-20s later): a **`nested_memory` attachment** injecting a
+  worktree's `CLAUDE.md` — *this repo's own CLAUDE.md documents the marker*, so
+  every mid-turn memory load read as a cancel. Same class: a `Read` of
+  `tabstatus.py`, a grep hit, an audit-CLI paste landing as a `tool_result`.
+  The queued-prompt guard does not catch it either (the attachment's trailing
+  `last-prompt`/`ai-title`/`mode`/`permission-mode` records contain no
+  `"type":"user"`, so it reads as a plain cancel). So `is_interrupt_line()`
+  parses each appended line and requires the marker to be the **content of a
+  `type:"user"` record** — a bare string or a `text` block; an `attachment`
+  record and a `tool_result` block are quotes, not cancels. Consequences worth
+  knowing: only **complete** lines are decidable, so the cursor advances to the
+  last newline and a torn tail is re-read whole next tick (the byte scan needed
+  no framing); and the tool-call variant `[Request interrupted by user for tool
+  use]` now counts too — it is a real cancel that the old closing-bracket scan
+  never detected.
 - **Cancelling before the model has produced anything at all** (mid-thinking,
   before the turn's first hook) is the one case with **no signal whatsoever** —
   confirmed empirically: the harness silently rewinds the turn for editing, and

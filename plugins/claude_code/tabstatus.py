@@ -264,9 +264,11 @@ def ensure_interruptwatch(transcript):
     leaves the tab stuck on magenta/red otherwise. (A cancel while a command RUNS
     is covered faster by the fg tailer's writer-liveness; the watcher defers to it
     on blue.) Claude Code appends a synthetic "[Request interrupted by user]"
-    line to the session transcript the instant that happens (confirmed empirically,
-    same as the subagent-cancel case) — this watcher tails the transcript for that
-    line, for the whole turn, and flips green within ~0.5s.
+    RECORD to the session transcript the instant that happens (confirmed
+    empirically, same as the subagent-cancel case) — this watcher tails the
+    transcript for it (see is_interrupt_line: a record match, never a byte scan
+    — growth that merely QUOTES the marker is not a cancel), for the whole turn,
+    and flips green within ~0.5s.
 
     KNOWN GAP (deliberate): cancelling BEFORE the model has produced anything at all
     (mid-thinking) leaves no trace anywhere — no hook, no transcript line, nothing
@@ -369,6 +371,60 @@ def run_bgwatch(mlog):
             pass
 
 
+INTERRUPT_MARK = b"[Request interrupted by user"      # bytes: the raw-line prefilter
+INTERRUPT_MARK_S = INTERRUPT_MARK.decode()           # str: the parsed content check
+
+
+def is_interrupt_line(line):
+    """True when ONE transcript line IS Claude Code's synthetic cancel record.
+
+    The marker must be the CONTENT of a `type:"user"` record — either the bare
+    string or a text block, `[Request interrupted by user]` and the tool-call
+    variant `[… for tool use]` alike (both are real cancels; only the first was
+    ever detected, because the old scan required the closing bracket).
+
+    A bare substring scan of the transcript bytes CANNOT be used: any growth
+    that merely QUOTES the marker matched, and the tab flipped green mid-turn.
+    Live case (session 2e9b57e4, three times in one session): a `nested_memory`
+    attachment injecting a worktree's CLAUDE.md — this repo's own CLAUDE.md
+    documents the marker — so every mid-turn memory load read as a cancel. Same
+    class: a Read of THIS file, a grep hit, an audit-CLI paste landing as a
+    `tool_result`. Those are quotes, not cancels, and must not flip the tab."""
+    if INTERRUPT_MARK not in line:
+        return False
+    try:
+        rec = json.loads(line)
+    except Exception:
+        return False        # torn/unparsable line — never a decidable record
+    if not isinstance(rec, dict) or rec.get("type") != "user":
+        return False        # `attachment`, `assistant`, metadata records
+    msg = rec.get("message")
+    content = msg.get("content") if isinstance(msg, dict) else None
+    if isinstance(content, str):
+        return content.strip().startswith(INTERRUPT_MARK_S)
+    if isinstance(content, list):
+        # A `tool_result` block never counts — only the model's own text block.
+        return any(isinstance(b, dict) and b.get("type") == "text"
+                   and str(b.get("text") or "").strip().startswith(INTERRUPT_MARK_S)
+                   for b in content)
+    return False
+
+
+def _interrupt_mark(chunk, pos):
+    """Scan one growth chunk for the cancel record: returns (mark, next_pos) —
+    `mark` the ABSOLUTE offset of the interrupt LINE's start (or -1), `next_pos`
+    how far the chunk was consumed. Only COMPLETE lines are decidable, so a torn
+    tail is deliberately left unconsumed and re-read whole on the next tick (the
+    old byte scan needed no line framing; a JSON parse needs the whole record)."""
+    lines = chunk.split(b"\n")
+    off = pos
+    for ln in lines[:-1]:
+        if is_interrupt_line(ln):
+            return off, off
+        off += len(ln) + 1
+    return -1, pos + len(chunk) - len(lines[-1])
+
+
 def run_interruptwatch(transcript):
     """interrupt-watch: recovery for a cancel anywhere in the turn that leaves no
     other signal. Live commands/agents have their own fast self-heal (writer-
@@ -445,7 +501,8 @@ def run_interruptwatch(transcript):
                         chunk = f.read(size - pos)
                 except OSError:
                     chunk = b""
-                if b"[Request interrupted by user]" in chunk:
+                mark, pos = _interrupt_mark(chunk, pos)
+                if mark >= 0:
                     # A QUEUED message changes what this interrupt MEANS:
                     # Claude Code interrupts the turn and immediately
                     # delivers the queued prompt — a NEW turn starts thinking
@@ -460,7 +517,6 @@ def run_interruptwatch(transcript):
                     # plain cancel — and on the queued case KEEP WATCHING:
                     # the delivered turn is mid-flight and deserves the same
                     # cancel recovery as any other.
-                    mark = pos + chunk.index(b"[Request interrupted by user]")
                     time.sleep(poll)
                     try:
                         with open(transcript, "rb") as f:
@@ -476,7 +532,8 @@ def run_interruptwatch(transcript):
                         pos = mark + len(after)
                         continue
                     break
-                pos = size
+                # else: _interrupt_mark already advanced pos past the complete
+                # lines it decided (a torn tail stays for the next tick).
         else:
             reason = f"no-interrupt-within-{_dur_label(INTERRUPT_MAX_S)}"
             return None

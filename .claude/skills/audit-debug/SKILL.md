@@ -513,6 +513,33 @@ New always-audited swallow sites (previously silent — their absence used to ma
   shows a user-prompt record right after the interrupt line = the regression.
   escape-recheck is immune by construction (the queued prompt's record is
   transcript growth, which bails it).
+  A second green-too-early shape, and the one to check FIRST when the session
+  was never interrupted at all (fixed 2026-07-25, session 2e9b57e4): **a
+  merely QUOTED interrupt marker**. `interrupt-watch` scanned raw transcript
+  growth for the bytes `[Request interrupted by user]`, so ANY growth that
+  quotes the marker read as a cancel and flipped the tab green MID-TURN. The
+  live trigger was a **`nested_memory` attachment** injecting a worktree's
+  `CLAUDE.md` — this repo's own CLAUDE.md documents the marker in its
+  "Hard-won invariants" section — so a mid-turn memory load did it, three
+  times in one session; a `Read` of `tabstatus.py`, a grep hit, or an
+  audit-CLI paste landing as a `tool_result` are the same class. The tell:
+  an APPLIED `interrupt-watch` transition to `awaiting-response` reason
+  "interrupt-watch: [Request interrupted by user] in transcript" that is
+  **corrected seconds later by the next `pretool`** row (working again, no
+  `Stop`, no new `UserPromptSubmit`), plus a matching `streams` row
+  `interrupt-detected-flipped-green`. CONFIRM IT FROM THE TRANSCRIPT, per
+  occurrence — the audit has no row for the marker itself: grep the
+  `sessions.transcript_path` for the marker and read the record's `type`.
+  `type: "attachment"` (or the marker sitting inside a `tool_result`'s
+  content) = this false positive; a `type: "user"` record whose content IS
+  the marker = a real cancel. A whole-file scan finding NO `type:"user"`
+  marker record while the audit shows green flips is conclusive. Note the
+  bogus green also arms a `notify-arm kind:done` (a false "done" push if it
+  outlives the grace window). On a current build the watcher matches the
+  marker as a RECORD (`tabstatus.is_interrupt_line`), so a recurrence means
+  that predicate regressed — or Claude Code changed the record shape, in
+  which case real cancels would ALSO stop being detected (the paired
+  symptom: tabs stuck magenta after an Esc).
 - **fg command's output not found + tab goes green while it's still executing**
   *(late redirect target, fixed 2026-07-15)* — a foreground command that creates
   its output file LATE (`sleep 45; cmd > /tmp/out`, a `for … do sleep 40; cmd >
