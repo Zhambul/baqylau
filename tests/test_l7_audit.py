@@ -347,7 +347,7 @@ def test_spool_fallback_and_ingest(run_hook, test_env, session):
     run_hook("claude-task-fmt.py", P.task_created(s, "9", "Spooled"))
     spool = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl")
     assert os.path.exists(spool), "no spool file while the DB was unusable"
-    with open(spool) as f:
+    with open(spool, encoding="utf-8") as f:
         assert any(json.loads(l).get("table") == "hook_events" for l in f)
     os.remove(db)                                    # DB becomes creatable again
     run_hook("claude-task-fmt.py", P.task_created(s, "10", "Direct"))
@@ -362,7 +362,7 @@ def _fake_orphan(test_env, suffix, sid, decisions):
     rows — what a drainer hard-killed between claim and remove leaves behind."""
     path = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl.%s" % suffix)
     os.makedirs(test_env["CLAUDE_AUDIT_DIR"], exist_ok=True)
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         for d in decisions:
             f.write(json.dumps({"table": "hook_events", "cols": {
                 "ts": 1.0, "session_id": sid, "hook": "PostToolUse",
@@ -418,7 +418,7 @@ def test_oracle_sees_spooled_stream_end(test_env):
                            " 'codex-watcher', src_path='x')")
     (stream_id,) = oracle.q(test_env, "SELECT id FROM streams"
                             " WHERE session_id='spoolsid'")[0]
-    with open(os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl"), "a") as f:
+    with open(os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl"), "a", encoding="utf-8") as f:
         f.write(json.dumps({"table": "stream_end", "cols": {
             "id": stream_id, "ended_at": 2.0,
             "end_reason": "state-db-parked (session end)"}}) + "\n")
@@ -522,7 +522,7 @@ def test_spool_replay_produces_identical_rows(test_env):
     _audit_calls(test_env, WRITER_SCRIPT)
     spool = os.path.join(test_env["CLAUDE_AUDIT_DIR"], "spool.jsonl")
     assert os.path.exists(spool)
-    with open(spool) as f:
+    with open(spool, encoding="utf-8") as f:
         recs = [json.loads(l) for l in f]
     by_table = {}
     for r in recs:

@@ -61,7 +61,7 @@ def codex(test_env, session, seed, reaper):
                     created=None, status="running"):
             jid = "job-" + uuid.uuid4().hex[:8]
             logfile = os.path.join(self.jobs, jid + ".log")
-            open(logfile, "a").close()
+            open(logfile, "a", encoding="utf-8").close()
             data = {"threadId": str(uuid.uuid4()), "title": title,
                     "status": status, "logFile": logfile,
                     "createdAt": (created or
@@ -70,12 +70,12 @@ def codex(test_env, session, seed, reaper):
             if session_id is not None:
                 data["sessionId"] = session_id
             path = os.path.join(self.jobs, jid + ".json")
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 json.dump(data, f)
             return path, logfile
 
         def log_event(self, logfile, head, *body):
-            with open(logfile, "a") as f:
+            with open(logfile, "a", encoding="utf-8") as f:
                 f.write("[2026-07-06T10:00:00.000Z] %s\n" % head)
                 for b in body:
                     f.write(b + "\n")
@@ -89,7 +89,7 @@ def codex(test_env, session, seed, reaper):
             os.makedirs(d, exist_ok=True)
             path = os.path.join(
                 d, "rollout-%s-%s.jsonl" % (now.strftime("%Y-%m-%dT%H-%M-%S"), u))
-            with open(path, "w") as f:
+            with open(path, "w", encoding="utf-8") as f:
                 f.write(json.dumps({"type": "session_meta", "payload": {
                     "cwd": cwd or self.s.cwd, "originator": originator}}) + "\n")
                 for e in events:
@@ -126,10 +126,10 @@ def test_companion_job_discovered_streamed_and_completed(test_env, codex):
     wait_until(lambda: "■ exit 3" in codex.s.ops_text(),
                desc="companion failed-exit chip")
 
-    with open(jf) as f:
+    with open(jf, encoding="utf-8") as f:
         data = json.load(f)
     data["status"] = "completed"
-    with open(jf, "w") as f:
+    with open(jf, "w", encoding="utf-8") as f:
         json.dump(data, f)
     wait_until(lambda: any(r[1] and r[0] == "codex"
                            for r in oracle.streams(test_env, codex.s.sid)),
@@ -354,7 +354,7 @@ def test_standalone_session_handler_nested_skips(run_hook, test_env, session,
     the nested host and open NO second mirror."""
     s = session.make()
     host = session.make()                          # the hosting Claude session
-    open(host.state_db, "w").close()               # its mirror DB is live
+    open(host.state_db, "w", encoding="utf-8").close()               # its mirror DB is live
     fake_kitten.set_ls([{"id": 1, "is_focused": True, "tabs": [
         {"id": 1, "is_focused": True, "windows": [
             {"id": int(fake_kitten.window_id), "is_focused": True,
@@ -384,7 +384,7 @@ def test_rollout_malformed_lines_audited_once_with_count(test_env, codex):
                                           "message": "count my garbage"}}])
     wait_until(lambda: "count my garbage" in codex.s.ops_text(),
                timeout=20, desc="rollout adopted")
-    with open(path, "a") as f:
+    with open(path, "a", encoding="utf-8") as f:
         f.write("{not json\n")
         f.write("also not json\n")
         f.write(json.dumps({"type": "event_msg",

@@ -143,7 +143,7 @@ def test_parked_tracks_state_db_file(tmp_path):
     log = str(tmp_path / "claude-mirror-x.log")
     assert S.parked(log)                        # never existed -> parked
     db = S.db_path(log)
-    open(db, "w").close()
+    open(db, "w", encoding="utf-8").close()
     assert not S.parked(log)                    # file exists -> alive
     os.remove(db)                               # SessionEnd parks it away
     assert S.parked(log)

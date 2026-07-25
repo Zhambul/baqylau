@@ -36,10 +36,10 @@ def test_fg_block_copy_cmd_and_out(session, run_hook, test_env, tmp_path):
 
     clip = str(tmp_path / "clip.txt")
     _copy(run_hook, test_env, s.sid, "toolu_cp1", "cmd", clip)
-    assert open(clip).read() == cmd
+    assert open(clip, encoding="utf-8").read() == cmd
 
     _copy(run_hook, test_env, s.sid, "toolu_cp1", "out", clip)
-    text = open(clip).read()
+    text = open(clip, encoding="utf-8").read()
     assert "line-a" in text and "line-b" in text
     assert "\x1b" not in text                      # ANSI styling stripped
 
@@ -59,7 +59,7 @@ def test_copy_cmd_is_wysiwyg_pretty_printed(session, run_hook, test_env, tmp_pat
     assert shown != cmd and "\n" in shown          # the reflow actually happened
     clip = str(tmp_path / "clip.txt")
     _copy(run_hook, test_env, s.sid, "toolu_cp2", "cmd", clip)
-    assert open(clip).read() == shown
+    assert open(clip, encoding="utf-8").read() == shown
 
 
 def test_live_fg_pre_tags_header_and_group_env(session, run_hook, test_env):
@@ -129,9 +129,9 @@ def test_subagent_fg_block_copy_cmd_and_out(session, run_hook, test_env, tmp_pat
 
     clip = str(tmp_path / "clip.txt")
     _copy(run_hook, test_env, s.sid, "tu_cp", "cmd", clip)
-    assert open(clip).read() == "grep -r bug ."
+    assert open(clip, encoding="utf-8").read() == "grep -r bug ."
     _copy(run_hook, test_env, s.sid, "tu_cp", "out", clip)
-    assert "src/x.py: bug here" in open(clip).read()
+    assert "src/x.py: bug here" in open(clip, encoding="utf-8").read()
 
 
 def test_subagent_message_block_copy_all(session, run_hook, test_env, tmp_path):
@@ -167,7 +167,7 @@ def test_subagent_message_block_copy_all(session, run_hook, test_env, tmp_path):
     gid = msg_label["g"]
     clip = str(tmp_path / "clip.txt")
     _copy(run_hook, test_env, s.sid, gid, "all", clip)
-    assert "here is my analysis" in open(clip).read()
+    assert "here is my analysis" in open(clip, encoding="utf-8").read()
 
 
 def test_renderer_paints_single_copy_link_from_lk(session, seed, reaper, test_env):
@@ -207,7 +207,7 @@ def test_file_op_line_carries_view_link_and_stash(session, run_hook, test_env):
     numbers + the file text) is stashed under kv view:<tid> at hook time."""
     s = session.make()
     path = os.path.join(s.cwd, "shown.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("def hello():\n    return 42\n")
     run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
 
@@ -232,7 +232,7 @@ def test_stash_view_pins_shared_kv_and_url_shape(session, seed, test_env):
     that comes up empty (unreadable file) returns the line unchanged, vid None."""
     s = session.make()
     path = os.path.join(s.cwd, "pin.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("a = 1\n")
     out = seed.py(
         "from plugins.claude_code import file_fmt as FF\n"
@@ -262,7 +262,7 @@ def test_md_read_view_is_pretty_rendered(session, run_hook, test_env):
     a fenced-code CODE_BG panel), NOT raw text with a lex/num spec."""
     s = session.make()
     path = os.path.join(s.cwd, "doc.md")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("# Title\n\nsome **bold** prose\n\n```python\nx = 1\n```\n")
     run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
 
@@ -326,7 +326,7 @@ def test_view_click_toggles_in_place_expansion(session, run_hook, test_env):
     and a second click removes it (collapse) — the renderer reflows on each."""
     s = session.make()
     path = os.path.join(s.cwd, "toggle.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("x = 1\n")
     run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
 
@@ -349,7 +349,7 @@ def test_renderer_expands_view_block_in_place(session, run_hook, seed, reaper,
     after the v-tagged line — and drops it again once the set empties."""
     s = session.make()
     path = os.path.join(s.cwd, "inline.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("MAGIC_VIEW_BODY = True\n")
     run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
     url = "claude-copy:///%s/toolu_001/view" % s.sid
@@ -689,7 +689,7 @@ def test_view_toggle_unnudged_falls_back_to_slow_poll(session, run_hook, seed,
     never a toggle frozen until the next event."""
     s = session.make()
     path = os.path.join(s.cwd, "fallback.py")
-    with open(path, "w") as f:
+    with open(path, "w", encoding="utf-8") as f:
         f.write("MAGIC_FALLBACK_BODY = True\n")
     run_hook("claude-file-fmt.py", P.post_file(s, tool="Read", path=path))
 
@@ -736,7 +736,7 @@ def test_code_reader_renders_as_read_with_copiable_stash(session, run_hook,
     # ⧉cmd / ⧉out copy through the collect() stash fallback
     clip = str(tmp_path / "clip.txt")
     _copy(run_hook, test_env, s.sid, "tu_rd", "cmd", clip)
-    cmd_copy = open(clip).read()
+    cmd_copy = open(clip, encoding="utf-8").read()
     assert "sed" in cmd_copy and "Foo.kt" in cmd_copy
     _copy(run_hook, test_env, s.sid, "tu_rd", "out", clip)
-    assert "fun main" in open(clip).read()
+    assert "fun main" in open(clip, encoding="utf-8").read()

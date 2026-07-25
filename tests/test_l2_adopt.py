@@ -158,7 +158,7 @@ def test_adoption_swap_old_path_never_absent(tmp_path, monkeypatch):
     from plugins.claude_code import adopt
     src = str(tmp_path / "old.db")
     dst = str(tmp_path / "new.db")
-    with open(src, "w") as f:
+    with open(src, "w", encoding="utf-8") as f:
         f.write("history")
     samples = []
     real = {n: getattr(os, n) for n in ("link", "symlink", "rename", "remove")}
@@ -182,7 +182,7 @@ def test_adoption_swap_old_path_never_absent(tmp_path, monkeypatch):
     # symlink at the old, same inode, no tmp leftover.
     assert os.path.isfile(dst) and not os.path.islink(dst)
     assert os.path.islink(src) and os.path.samefile(src, dst)
-    assert open(src).read() == "history"
+    assert open(src, encoding="utf-8").read() == "history"
     assert not os.path.lexists(src + adopt._TMP_SYMLINK_SUF)
 
 
@@ -193,7 +193,7 @@ def test_adoption_swap_cleans_tmp_on_failure(tmp_path, monkeypatch):
     from plugins.claude_code import adopt
     src = str(tmp_path / "old.db")
     dst = str(tmp_path / "new.db")
-    with open(src, "w") as f:
+    with open(src, "w", encoding="utf-8") as f:
         f.write("history")
     os.link(src, dst)
 
@@ -235,7 +235,7 @@ def test_partial_adoption_leaves_error_rows(run_hook, test_env, fake_kitten,
     # still exists, so the old-path symlink fails too.
     a = session.make()
     run_hook(HOOK, P.session_start(a, source="resume"))
-    with open(a.state_db + "-wal", "w") as f:
+    with open(a.state_db + "-wal", "w", encoding="utf-8") as f:
         f.write("x")
     b = session.make()
     os.makedirs(os.path.join(b.state_db + "-wal", "occupied"))

@@ -92,3 +92,16 @@ threshold — deterministic, no flake, and it names the one hot spot instead of
 budgeting all 90 function-level imports. Measured baselines, for calibration: a
 bare interpreter is ~24ms, the whole `dispatch` graph ~11ms on top of that,
 `frontends`/`core.render` ~0, and `wenmode` alone ~40ms.
+
+**Fixtures obey the product's file rules too** (2026-07-25). The 87 test-side
+`open()` calls that used the locale default now name `utf-8`, for the reason in
+docs/styleguide.md *Files and encodings* plus one specific to tests: they assert
+on the very non-ASCII content a locale mismatch would mangle, and a fixture is
+where the next `open()` gets copied from. `test_every_open_names_its_encoding`
+walks every tracked `.py` with `ast`, and `test_open_encoding_walker_exemptions`
+pins what it must *not* flag (binary mode, an explicit non-utf-8 encoding, a mode
+hidden behind `**kwargs`) — the exemptions being the whole content of the rule.
+Note for anyone doing a bulk rewrite of call sites: match the AST node by its
+`func`, not by the position a linter reports. For `open(p).read()` the reported
+column belongs to the *outer* chained call, so a position-keyed rewrite lands
+`encoding=` inside `.read()` — 15 syntax errors, all pointing at the wrong line.

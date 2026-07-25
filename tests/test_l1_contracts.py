@@ -412,7 +412,7 @@ def _seed_task_dir(test_env, s, tasks):
                      "session-" + s.sid.split("-")[0])
     os.makedirs(d, exist_ok=True)
     for t in tasks:
-        with open(os.path.join(d, "%s.json" % t["id"]), "w") as f:
+        with open(os.path.join(d, "%s.json" % t["id"]), "w", encoding="utf-8") as f:
             json.dump(t, f)
     return d
 

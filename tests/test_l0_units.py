@@ -8,6 +8,7 @@
 #   3. core.noaudit — the centralized audit-import-degradation helper: the
 #      stub swallows every call, and load_audit() returns the real module
 #      when it imports.
+import ast
 import os
 import re
 import subprocess
@@ -1397,7 +1398,7 @@ def test_park_db_main_move_failure_keeps_db_live_and_audits(tmp_path, monkeypatc
     its sidecars) untouched — never a false keep-history."""
     HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
     _seed_state_db(db).close()
-    open(db + "-wal", "w").write("fake frames")
+    open(db + "-wal", "w", encoding="utf-8").write("fake frames")
     # The DB is rollback-mode with a hand-planted stray -wal: whether the
     # checkpoint's short-lived connection deletes such a stray is
     # sqlite-VERSION-dependent (CI's bundled sqlite does; 3.51 doesn't).
@@ -1421,7 +1422,7 @@ def test_park_db_sidecar_move_failure_still_parks_and_audits(tmp_path, monkeypat
     live sidecar is removed so it can't corrupt the next restore."""
     HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
     _seed_state_db(db).close()
-    open(db + "-wal", "w").write("leftover")
+    open(db + "-wal", "w", encoding="utf-8").write("leftover")
     # Bypass the checkpoint for the same sqlite-version reason as above: some
     # sqlite builds delete a stray -wal on connect, which would leave the
     # sidecar-move path (the thing under test) with nothing to move.
@@ -1461,7 +1462,7 @@ def test_decide_log_fate_restore_drops_stale_live_sidecar(tmp_path, monkeypatch)
     HP, P, log, db, pk, errors = _park_env(tmp_path, monkeypatch)
     os.makedirs(os.path.dirname(pk), exist_ok=True)
     _seed_state_db(pk).close()                    # parked main only, no sidecars
-    open(db + "-wal", "w").write("foreign frames")
+    open(db + "-wal", "w", encoding="utf-8").write("foreign frames")
     assert HP.decide_log_fate("parkunit", log) == "restore-history"
     assert not os.path.exists(db + "-wal"), "stale live sidecar survived restore"
     conn = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
@@ -2062,6 +2063,77 @@ def test_no_tracked_file_ends_in_blank_lines():
         if txt.endswith("\n\n"):
             bad.append(rel)
     assert not bad, "tracked files ending in a blank line:\n  " + "\n  ".join(bad)
+
+
+def _text_opens_without_encoding(src):
+    """Every `open()` in `src` that decodes or encodes text without saying how.
+    Yields (lineno, mode). Binary mode is exempt (no encoding applies); a
+    NON-literal mode is not, since it may well be text at runtime."""
+    for node in ast.walk(ast.parse(src)):
+        if not (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "open"):
+            continue
+        kw = {k.arg for k in node.keywords}
+        if "encoding" in kw or None in kw:      # stated, or hidden behind **kwargs
+            continue
+        mode = node.args[1] if len(node.args) >= 2 else \
+            next((k.value for k in node.keywords if k.arg == "mode"), None)
+        literal = mode.value if isinstance(mode, ast.Constant) else None
+        if isinstance(literal, str) and "b" in literal:
+            continue
+        yield node.lineno, literal or "r"
+
+
+def test_every_open_names_its_encoding():
+    """`open()` in text mode without `encoding=` uses the LOCALE default, which
+    makes the bytes on disk depend on the environment that ran the process. This
+    repo cannot afford that: its sources, transcripts, ops and fixtures are full of
+    non-ASCII (⧉ ✉ ▪ ⇢, the Kazakh in docs/), and `bin/retarget-python.py` is a
+    read-modify-WRITE over the sources themselves — a decode/encode mismatch there
+    corrupts every bin/ entry it touches. Tests are held to the same rule, both
+    because they assert on that same non-ASCII content and because a fixture is
+    where the next `open()` gets copied from.
+
+    Binary mode is exempt: `cmd_pre.py` touches the tee target with "ab" precisely
+    because that stream is raw command output, not text.
+
+    A test rather than a lint rule because ruff's PLW1514 is preview-gated (and
+    preview repo-wide is 693 findings). Parsed, not grepped — the mode argument
+    decides, and a regex can't read it."""
+    bad = []
+    for rel in _repo_text_files():
+        if not rel.endswith(".py"):
+            continue
+        src = open(os.path.join(REPO, rel), encoding="utf-8").read()
+        for lineno, mode in _text_opens_without_encoding(src):
+            bad.append("%s:%d (mode %r)" % (rel, lineno, mode))
+    assert not bad, ("open() in text mode without encoding=:\n  " + "\n  ".join(bad)
+                     + "\n(pass encoding=\"utf-8\", or open in binary if the bytes aren't text)")
+
+
+# What the walker above must and must not flag. The exemptions are the whole
+# content of the rule, so they are pinned rather than left to the reader — and the
+# chained `open(p).read()` shape is here because it is what an earlier, position-
+# matching version of this rewrite got WRONG (it edited the `.read()` call).
+_ENC_CASES = [
+    ("open(p)", True),                          # no mode = text
+    ('open(p, "w")', True),
+    ('open(p, "a")', True),
+    ('open(p, mode="r")', True),                # mode as a keyword
+    ("open(p, m)", True),                       # non-literal mode: may be text
+    ("x = open(p).read()", True),               # chained
+    ('open(p, "rb")', False),                   # binary: no encoding applies
+    ('open(p, "ab").close()', False),
+    ('open(p, "w", encoding="utf-8")', False),  # stated
+    ('open(p, encoding="latin-1")', False),     # stated, and utf-8 isn't the rule
+    ("open(p, **kw)", False),                   # unknowable, not flagged
+    ("io.open(p)", False),                      # not the builtin
+]
+
+
+def test_open_encoding_walker_exemptions():
+    for src, flagged in _ENC_CASES:
+        assert bool(list(_text_opens_without_encoding(src))) is flagged, src
 
 
 def test_retarget_python_refuses_unknown_argv():

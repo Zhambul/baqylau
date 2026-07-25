@@ -397,7 +397,7 @@ GOLDEN_CODE = ("import os\n\ndef greet(name):\n    x = 42  # answer\n"
 
 
 def _golden(name):
-    with open(_os.path.join(GOLDEN, "render-%s.ansi" % name)) as f:
+    with open(_os.path.join(GOLDEN, "render-%s.ansi" % name), encoding="utf-8") as f:
         return f.read()
 
 

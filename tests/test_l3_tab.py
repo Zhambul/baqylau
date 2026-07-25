@@ -379,10 +379,10 @@ def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None,
     def fake_tab_get(win):
         tick["n"] += 1
         if quoted_at is not None and tick["n"] == quoted_at:
-            with open(transcript, "a") as f:
+            with open(transcript, "a", encoding="utf-8") as f:
                 f.write(QUOTED_MARKER + "\n")
         if interrupt_at is not None and tick["n"] == interrupt_at:
-            with open(transcript, "a") as f:
+            with open(transcript, "a", encoding="utf-8") as f:
                 f.write(INTERRUPT_REC + "\n")
                 if queued:
                     f.write('{"type":"user","message":{"content":"queued"}}\n')
@@ -529,7 +529,7 @@ def _drive_escaperecheck(monkeypatch, tmp_path, states, grow_at=None,
     def fake_tab_get(win):
         tick["n"] += 1
         if grow_at is not None and tick["n"] == grow_at:
-            with open(transcript, "a") as f:
+            with open(transcript, "a", encoding="utf-8") as f:
                 f.write(grow_lines if grow_lines is not None else
                         '{"type":"user","message":{"content":"new prompt"}}\n')
         return states[min(tick["n"], len(states) - 1)]

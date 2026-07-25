@@ -209,6 +209,25 @@ charter fits, document the owner here, and (if cheap) add a grep test.
   singleton's cwd is the main checkout). Derive paths from `core/paths.py`,
   which only ever returns absolute ones.
 
+## Files and encodings
+
+- **Every `open()` names its encoding — `utf-8` — or opens in binary.** Text
+  mode without `encoding=` uses the *locale* default, which makes the bytes on
+  disk depend on the environment that happened to run the process. Nothing here
+  can afford that: the sources, transcripts, ops and fixtures are full of
+  non-ASCII (`⧉ ✉ ▪ ⇢`, the Kazakh in docs/), and `bin/retarget-python.py` is a
+  read-modify-**write** over the repo's own sources, where a decode/encode
+  mismatch corrupts every `bin/` entry it touches. Both halves of a
+  read-modify-write pair must agree, explicitly.
+- Binary is the right answer when the bytes *aren't* text: `cmd_pre.py` touches
+  the tee target with `"ab"` because that stream is raw command output. Say it
+  in binary rather than declaring an encoding the data doesn't have.
+- Tests are held to the same rule — they assert on that same non-ASCII content,
+  and a fixture is where the next `open()` gets copied from.
+  `test_every_open_names_its_encoding` walks every tracked `.py` with `ast` and
+  flags text-mode opens with no `encoding=` (ruff's `PLW1514` is preview-gated;
+  parsed rather than grepped, because the *mode* argument decides).
+
 ## Magic values and deliberate divergence
 
 - Any literal that is tuning (timeouts, thresholds, poll intervals), protocol

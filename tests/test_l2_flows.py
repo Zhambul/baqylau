@@ -88,7 +88,7 @@ def test_f1_minimal_session(run_hook, test_env, session, fake_kitten):
     assert oracle.tab_state(test_env, fake_kitten.window_id) == "executing"
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo f1"))
     src = fg_live_record(s)["src"]
-    with open(src, "a") as f:
+    with open(src, "a", encoding="utf-8") as f:
         f.write("f1 output\n")
     s.add_assistant("msg_f1")
     run_hook("claude-cmd-fmt.py", P.post_bash(s, "echo f1", stdout="f1 output\n"))
@@ -153,10 +153,10 @@ def test_f2_fg_lifecycle_streams_live_and_takes_real_outcome(
     assert rec["tid"] == "toolu_001"
     assert started <= rec["ts"] <= time.time()
     w = writer(rec["src"])                       # the running command
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("line one\n")
     wait_until(lambda: "line one" in s.ops_text(), desc="live line in mirror")
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("line two\n")
     wait_until(lambda: "line two" in s.ops_text(), desc="second live line")
 
@@ -188,7 +188,7 @@ def test_f2md_markdown_file_is_pretty_rendered(
     rec = fg_live_record(s)
     w = writer(rec["src"])                       # the running command holds the tee open
     # A complete block (heading + terminating blank) flushes live; likewise the paragraph.
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("# Bold Heading\n\nThis is **strong** text.\n\n")
     wait_until(lambda: "Bold Heading" in s.ops_text(), desc="heading text in mirror")
     wait_until(lambda: _BANNER_SGR in s.ops_text(),
@@ -214,7 +214,7 @@ def test_f2sniff_fenced_output_renders_as_markdown(
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "cat report.txt"))
     rec = fg_live_record(s)
     w = writer(rec["src"])
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("# Report\n\nSome **prose**.\n\n```json\n{\"replicas\": 3}\n```\n\n")
     # The heading became an amber banner and the json fence is colour-highlighted.
     wait_until(lambda: "38;2;229;192;123" in s.ops_text(),
@@ -237,10 +237,10 @@ def test_f2sniff_plain_output_stays_verbatim(
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "make build"))
     rec = fg_live_record(s)
     w = writer(rec["src"])
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("compiling module A\n")
     wait_until(lambda: "compiling module A" in s.ops_text(), desc="plain line live")
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("# not a heading, just a log\n")
     wait_until(lambda: "# not a heading" in s.ops_text(),
                desc="a stray # is NOT treated as markdown (no fence)")
@@ -258,7 +258,7 @@ def test_f2json_json_file_is_pretty_printed(
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "cat data.json"))
     rec = fg_live_record(s)
     w = writer(rec["src"])
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write('{"name":"adapter","count":3,"enabled":true}\n')
     # JSON renders only at close, so drive PostToolUse to finish the stream.
     run_hook("claude-cmd-fmt.py", P.post_bash(s, "cat data.json", duration_ms=120))
@@ -321,7 +321,7 @@ def test_f2code_subagent_fg_is_syntax_highlighted(run_hook, test_env, session):
     run_hook("claude-cmd-pre.py",
              P.pre_bash(s, "cat Foo.kt", tid="tu_kt", agent_id=agent))
     src = s.log + ".subfg.tu_kt.out"
-    with open(src, "a") as f:
+    with open(src, "a", encoding="utf-8") as f:
         f.write("fun main() {\n    val x = 3\n}\n")
     s.write_subagent_jsonl(agent, [
         {"type": "assistant", "message": {
@@ -392,7 +392,7 @@ def test_f3b_fg_waits_for_late_redirect_target(run_hook, test_env, session,
     # The command finally creates its redirect target (a real write-holder, so
     # writer-liveness reads the command as still running).
     w = writer(target)
-    with open(target, "a") as f:
+    with open(target, "a", encoding="utf-8") as f:
         f.write("late line\n")
     wait_until(lambda: "late line" in s.ops_text(), desc="late-created output streams")
 
@@ -418,7 +418,7 @@ def test_f4a_background_command_lifecycle(run_hook, test_env, session,
              P.post_bash(s, cmd, run_in_background=True,
                          background_task_id="bg-" + uuid.uuid4().hex[:8]))
     assert "▷ background" in s.ops_text()
-    with open(out, "a") as f:
+    with open(out, "a", encoding="utf-8") as f:
         f.write("bg line\n")
     wait_until(lambda: "bg line" in s.ops_text(), desc="bg output streams")
 
@@ -445,7 +445,7 @@ def test_f4b_ctrl_b_conversion(run_hook, test_env, session, task_dir, writer):
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "long_job"))
     rec = fg_live_record(s)
     wtee = writer(rec["src"])
-    with open(rec["src"], "a") as f:
+    with open(rec["src"], "a", encoding="utf-8") as f:
         f.write("before ctrl+b\n")
     wait_until(lambda: "before ctrl+b" in s.ops_text(), desc="fg tee streams")
 
@@ -460,7 +460,7 @@ def test_f4b_ctrl_b_conversion(run_hook, test_env, session, task_dir, writer):
                desc="fg tailer bows out on the converted sentinel")
     assert "backgrounded (ctrl+b)" in s.ops_text()
 
-    with open(out, "a") as f:
+    with open(out, "a", encoding="utf-8") as f:
         f.write("after ctrl+b\n")
     wait_until(lambda: "after ctrl+b" in s.ops_text(),
                desc="bg tailer continues the block")
@@ -483,13 +483,13 @@ def test_f4c_bg_tailer_exits_on_park_without_recreating_db(
     run_hook("claude-cmd-fmt.py",
              P.post_bash(s, "quiet_job > %s" % out, run_in_background=True,
                          background_task_id="bg-" + uuid.uuid4().hex[:8]))
-    with open(out, "a") as f:
+    with open(out, "a", encoding="utf-8") as f:
         f.write("before park\n")
     wait_until(lambda: "before park" in s.ops_text(), desc="bg output streams")
 
     run_hook("claude-split.py", P.session_end(s), argv=("close",))  # parks it
     assert os.path.exists(s.parked_db) and not os.path.exists(s.state_db)
-    with open(out, "a") as f:
+    with open(out, "a", encoding="utf-8") as f:
         f.write("after park\n")    # the losing interleaving: job prints post-park
 
     wait_until(lambda: streams_all_ended(test_env, s.sid),
@@ -676,7 +676,7 @@ def test_f7_monitor_lifecycle(run_hook, test_env, session, task_dir, reaper):
     reaper.append(proc)
     taskid = "mon-" + uuid.uuid4().hex[:8]
     out = os.path.join(task_dir, taskid + ".output")
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write("monitor event 1\n")
     run_hook("claude-monitor-fmt.py",
              P.post_monitor(s, description="watching", command=cmd,
@@ -725,7 +725,7 @@ def test_f7b_monitor_waits_for_lazy_output_file(run_hook, test_env, session,
     assert s.live("monitor"), "monitor slot released while the monitor runs"
     assert not any(end_reasons(test_env, s.sid)), "monitor stream ended early"
     out = os.path.join(task_dir, taskid + ".output")   # first output, minutes in
-    with open(out, "w") as f:
+    with open(out, "w", encoding="utf-8") as f:
         f.write("late event\n")
     wait_until(lambda: "late event" in s.ops_text(),
                desc="late-created output streams")
@@ -1090,7 +1090,7 @@ def test_f10c_daemon_origin_resume_reopens_anchored(run_hook, test_env, session,
     run_hook("claude-split.py", P.session_start(s), argv=("open",))
     wins = [w for w in fake_kitten.windows()   # simulate the mirror being gone
             if not ({"claude_mirror", "claude_scorebar"} & set(w["user_vars"]))]
-    with open(os.path.join(fake_kitten.root, "kitten-windows.json"), "w") as f:
+    with open(os.path.join(fake_kitten.root, "kitten-windows.json"), "w", encoding="utf-8") as f:
         json.dump(wins, f)
     fake_kitten.clear()
 
@@ -1218,7 +1218,7 @@ def test_f12_fg_tailer_crash_still_tears_down(test_env, session, monkeypatch):
 
     s = session.make()
     src = os.path.join(s.cwd, "tee.out")            # our own tee target (OWN=1)
-    with open(src, "w") as f:
+    with open(src, "w", encoding="utf-8") as f:
         f.write("some output\n")
     done = s.log + ".t1.done"                       # session-keyed sentinel token
 

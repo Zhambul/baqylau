@@ -209,7 +209,7 @@ def test_transcript_shrink_restarts_cursor(run_hook, session):
     s = session.make()
     s.add_assistant("m1", usage=usage(i=100, o=10))
     fold(run_hook, s)
-    with open(s.transcript, "w"):                    # rotate: truncate to empty
+    with open(s.transcript, "w", encoding="utf-8"):                    # rotate: truncate to empty
         pass
     s.add_assistant("m2", usage=usage(i=7, o=3))     # fresh id in the new file
     c = fold(run_hook, s)

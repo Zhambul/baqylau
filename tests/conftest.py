@@ -273,7 +273,7 @@ class FakeKitten:
         self.bin = os.path.join(self.root, "kitten")
         self.calls_path = os.path.join(self.root, "kitten-calls.jsonl")
         self.ctl_path = os.path.join(self.root, "kitten-ctl.json")
-        with open(self.bin, "w") as f:
+        with open(self.bin, "w", encoding="utf-8") as f:
             f.write(_KITTEN_SRC)
         os.chmod(self.bin, 0o755)
         _WIN_COUNTER[0] += 1
@@ -287,7 +287,7 @@ class FakeKitten:
         whose subcommand (first token after `@ --to <listen>`) matches."""
         out = []
         try:
-            with open(self.calls_path) as f:
+            with open(self.calls_path, encoding="utf-8") as f:
                 for line in f:
                     argv = json.loads(line)
                     if sub is None or self._sub(argv) == sub:
@@ -315,13 +315,13 @@ class FakeKitten:
     def windows(self):
         """The fake window model (what `@ ls` reflects after launches/closes)."""
         try:
-            with open(os.path.join(self.root, "kitten-windows.json")) as f:
+            with open(os.path.join(self.root, "kitten-windows.json"), encoding="utf-8") as f:
                 return json.load(f)
         except OSError:
             return []
 
     def _write_ctl(self):
-        with open(self.ctl_path, "w") as f:
+        with open(self.ctl_path, "w", encoding="utf-8") as f:
             json.dump(self._ctl, f)
 
     def set_rc(self, sub, rc):
@@ -453,7 +453,7 @@ class Session:
         tdir = os.path.join(str(root), "transcripts")
         os.makedirs(tdir, exist_ok=True)
         self.transcript = os.path.join(tdir, self.sid + ".jsonl")
-        open(self.transcript, "a").close()
+        open(self.transcript, "a", encoding="utf-8").close()
         self.log = env["CLAUDE_MIRROR_TMPDIR"] + "/claude-mirror-" + self.sid + ".log"
         self.state_db = self.log + ".state.db"
         # The DURABLE park (core/paths.parked_db) — under HISTORY_DIR, which the
@@ -464,7 +464,7 @@ class Session:
 
     # ---- transcript writers (shapes per plugins/claude_code/accounting.py bump_transcript) ----
     def add_line(self, obj):
-        with open(self.transcript, "a") as f:
+        with open(self.transcript, "a", encoding="utf-8") as f:
             f.write(json.dumps(obj) + "\n")
 
     def add_assistant(self, msg_id, model="claude-opus-4-8", usage=None,
@@ -496,7 +496,7 @@ class Session:
 
     def write_subagent_jsonl(self, agent_id, events):
         os.makedirs(self.subagent_dir, exist_ok=True)
-        with open(self.subagent_jsonl(agent_id), "a") as f:
+        with open(self.subagent_jsonl(agent_id), "a", encoding="utf-8") as f:
             for e in events:
                 f.write(json.dumps(e) + "\n")
 
@@ -505,10 +505,10 @@ class Session:
         path = os.path.join(self.subagent_dir, "agent-%s.meta.json" % agent_id)
         cur = {}
         if os.path.exists(path):
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 cur = json.load(f)
         cur.update(fields)
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             json.dump(cur, f)
         return path
 

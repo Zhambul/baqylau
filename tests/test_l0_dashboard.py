@@ -2891,7 +2891,7 @@ def test_conversation_anchors_and_cursor(tmp_path):
     assert pos > 0
     # incremental: nothing new -> empty, cursor stable
     assert TR.conversation(p, pos) == ([], pos)
-    with open(p, "a") as fh:
+    with open(p, "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "user",
                              "message": {"content": "next ask"}}) + "\n")
     recs2, pos2 = TR.conversation(p, pos)
@@ -2983,7 +2983,7 @@ def test_merged_backlog_interleaves_by_timestamp(dash, tmp_path):
     def iso(e):
         return datetime.fromtimestamp(e, tz=timezone.utc).isoformat()
 
-    with open(tp, "w") as fh:
+    with open(tp, "w", encoding="utf-8") as fh:
         fh.write(_jl(
             {"type": "user", "timestamp": iso(t1 - 1),
              "message": {"content": "first ask"}},
@@ -3031,7 +3031,7 @@ def test_merge_live_interleaves_delta_by_timestamp(dash, tmp_path):
         return datetime.fromtimestamp(e, tz=timezone.utc).isoformat()
 
     # "before cmd" precedes the command in time; "after cmd" follows it.
-    with open(tp, "w") as fh:
+    with open(tp, "w", encoding="utf-8") as fh:
         fh.write(_jl(
             {"type": "assistant", "timestamp": iso(tcmd - 1),
              "message": {"id": "m1", "content": [
@@ -4329,7 +4329,7 @@ def test_session_detail_effort_from_settings(dash, tmp_path):
     # plugins.effort_default fan-out; here the hermetic config dir's
     # settings.json is the only layer
     cfg = os.environ["CLAUDE_CONFIG_DIR"]
-    with open(os.path.join(cfg, "settings.json"), "w") as fh:
+    with open(os.path.join(cfg, "settings.json"), "w", encoding="utf-8") as fh:
         json.dump({"effortLevel": "xhigh"}, fh)
     A.session_start({"session_id": "eff1", "cwd": str(tmp_path),
                      "transcript_path": ""})
@@ -4347,7 +4347,7 @@ def test_session_detail_effort_per_account_config(dash, tmp_path, monkeypatch):
     (cfg / "settings.json").write_text(json.dumps({"effortLevel": "max"}))
     monkeypatch.setattr(ACC, "CONFIGS_DIR", str(tmp_path / "configs"))
     ambient = os.environ["CLAUDE_CONFIG_DIR"]
-    with open(os.path.join(ambient, "settings.json"), "w") as fh:
+    with open(os.path.join(ambient, "settings.json"), "w", encoding="utf-8") as fh:
         json.dump({"effortLevel": "low"}, fh)
     A.session_start({"session_id": "eff2", "cwd": str(tmp_path),
                      "transcript_path": ""})
@@ -4486,7 +4486,7 @@ def test_post_rename_appends_and_retitles_live(dash, monkeypatch, tmp_path):
                                 "tab_retitled": True}
     # the appended record IS the /rename channel: last line, sessionId from
     # the filename stem, and it round-trips through the title parser
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         rec = json.loads(fh.read().splitlines()[-1])
     assert rec == {"type": "agent-name", "agentName": "my session",
                    "sessionId": "ren1"}
@@ -4508,7 +4508,7 @@ def test_post_rename_parked_no_window_still_appends(dash, monkeypatch,
     assert code == 200
     d = json.loads(body)
     assert d["ok"] is True and d["tab_retitled"] is False
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         assert json.loads(fh.read().splitlines()[-1])["agentName"] == "parked one"
     assert fe.titled == []
 
@@ -4523,7 +4523,7 @@ def test_post_rename_no_terminal_still_appends(dash, monkeypatch, tmp_path):
     A.session_start({"session_id": "ren3", "cwd": "/w", "transcript_path": tp})
     code, body = _post(dash + "/api/session/ren3/rename", {"name": "still works"})
     assert code == 200 and json.loads(body)["tab_retitled"] is False
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         assert json.loads(fh.read().splitlines()[-1])["agentName"] == "still works"
 
 
@@ -4534,13 +4534,13 @@ def test_post_rename_empty_name_is_400(dash, monkeypatch, tmp_path):
     tp = _rename_transcript(tmp_path, "ren4",
                             {"type": "user", "message": {"content": "hi"}})
     A.session_start({"session_id": "ren4", "cwd": "/w", "transcript_path": tp})
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         before = fh.read()
     for bad in ({}, {"name": "   "}, {"name": "\x1b\x07\n \x00"}, {"name": 7}):
         with pytest.raises(urllib.error.HTTPError) as e:
             _post(dash + "/api/session/ren4/rename", bad)
         assert e.value.code == 400
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         assert fh.read() == before
     assert fe.titled == []
 
@@ -4572,15 +4572,15 @@ def test_post_rename_unsupported_transcript_is_409(dash, monkeypatch,
     d = tmp_path / "rollouts"
     d.mkdir()
     tp = str(d / "rollout-ren6.jsonl")
-    with open(tp, "w") as fh:
+    with open(tp, "w", encoding="utf-8") as fh:
         fh.write(_jl({"type": "session_meta"}))
     A.session_start({"session_id": "ren6", "cwd": "/w", "transcript_path": tp})
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         before = fh.read()
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/ren6/rename", {"name": "x"})
     assert e.value.code == 409
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         assert fh.read() == before
 
 
@@ -4600,7 +4600,7 @@ def test_post_rename_strips_controls_and_caps(dash, monkeypatch, tmp_path):
     long = "x" * (DS.config.RENAME_MAX + 300)
     code, body = _post(dash + "/api/session/ren7/rename", {"name": long})
     assert json.loads(body)["title"] == "x" * DS.config.RENAME_MAX
-    with open(tp) as fh:
+    with open(tp, encoding="utf-8") as fh:
         rec = json.loads(fh.read().splitlines()[-1])
     assert rec["agentName"] == "x" * DS.config.RENAME_MAX
     assert fe.titled[-1] == ("11", "x" * DS.config.RENAME_MAX)
@@ -4636,7 +4636,7 @@ def test_post_rename_override_survives_tail_window_rollback(dash, monkeypatch,
     assert code == 200
     # simulate time passing: append enough fresh ai-title rows to push the
     # appended agent-name past the tail-window (the real-world rollback trigger)
-    with open(tp, "a") as fh:
+    with open(tp, "a", encoding="utf-8") as fh:
         filler = json.dumps({"type": "ai-title", "aiTitle": "auto"}) + "\n"
         while os.path.getsize(tp) <= TR.TITLE_TAIL_B:
             fh.write(filler)
@@ -4869,7 +4869,7 @@ def test_facade_re_exports_no_config_knob_flat():
     so `monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)` would bind a name nobody
     consults — a green test that changed nothing. There is exactly one handle:
     `DS.config`."""
-    cfg = open(os.path.join(REPO, "dashboard", "config.py")).read()
+    cfg = open(os.path.join(REPO, "dashboard", "config.py"), encoding="utf-8").read()
     owned = set(re.findall(r"^(\w+)\s*=", cfg, re.M)) | set(re.findall(r"^def (\w+)", cfg, re.M))
     assert "NOTIFY_DELAY_S" in owned and "UPLOAD_MAX" in owned    # the scan works
     leaked = sorted(n for n in owned - {"config"} if hasattr(DS, n))

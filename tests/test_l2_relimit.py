@@ -45,7 +45,7 @@ def rl_env(test_env, fake_kitten):
     come back empty)."""
     reg = os.path.join(test_env["HOME"], ".config", "claude-subscriptions")
     os.makedirs(reg, exist_ok=True)
-    with open(os.path.join(reg, "accounts.tsv"), "w") as f:
+    with open(os.path.join(reg, "accounts.tsv"), "w", encoding="utf-8") as f:
         f.write("c1\toboard\tsvc-1\nc2\tclaude-01\tsvc-2\n")
     env = dict(test_env)
     env.update({"CLAUDE_SUBSCRIPTION_SLUG": "c1",
@@ -303,7 +303,7 @@ def test_no_fallback_account_never_migrates(run_hook, rl_env, hosted,
     s = hosted()
     fake_kitten.set_ls_for_session(s.sid)
     reg = os.path.join(rl_env["HOME"], ".config", "claude-subscriptions")
-    with open(os.path.join(reg, "accounts.tsv"), "w") as f:
+    with open(os.path.join(reg, "accounts.tsv"), "w", encoding="utf-8") as f:
         f.write("c1\toboard\tsvc-1\n")
     run_hook(RL, rate_limit_payload(s), env=rl_env)
     assert any("no fallback account" in d

@@ -285,7 +285,7 @@ def test_noconn_drop_is_audited(tmp_path, monkeypatch):
     sid = "otel-noconn-unit"
     log = str(tmp_path / ("claude-mirror-" + sid + ".log"))
     monkeypatch.setattr(R.P, "mirror_log", lambda s: log)
-    open(S.db_path(log), "w").close()               # DB exists -> not parked
+    open(S.db_path(log), "w", encoding="utf-8").close()               # DB exists -> not parked
     monkeypatch.setattr(R.S, "connect", lambda _log: None)
     entry = {"deltas": {"cost": 0.42, "tokens": 7},
              "rows": [("cost", "main", 0.42)]}
