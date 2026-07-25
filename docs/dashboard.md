@@ -611,6 +611,45 @@ to get the bytes onto disk and put the path in the message:
   drops the pending chips (the staged files themselves survive on disk until the
   prune) — a deliberate scope limit; the draft machinery stays text-only.
 
+*Promise-only files — paste the PATH, like kitty.* Copying a file in an app
+that hands the clipboard a file **promise** instead of bytes puts a
+**zero-byte `File`** on the clipboard, alongside a text flavor holding the
+file's path. IntelliJ IDEA's Project-view *Copy* is the reported case (a Finder
+copy is not — it carries real bytes). Uploading the promise stages nothing: the
+server rejects it as an `"empty file"` and the user gets a red chip. That is
+exactly the reported bug, and the audit named it outright —
+`web-upload {"ok": false, "why": "empty file", "name": "'__init__.py'"}`
+(2026-07-25). The kitty TUI has no such failure mode because it takes the
+**text** flavor and pastes the **path**, which Claude Code then resolves itself
+— so the composer now matches it:
+
+- `splitPromises` partitions every incoming file list on `size > 0`. Only real
+  bytes are uploaded; a zero-byte husk never reaches `/api/upload`.
+- **Paste**: when the gesture carried ONLY promises, the handler deliberately
+  does **not** `preventDefault()` — the browser's own default paste writes the
+  clipboard's text flavor (the path) into the textarea. Doing nothing is the
+  fix; there is no path-extraction code on this branch by design.
+- **Drop**: a file drop has no default text behavior in a textarea, so the path
+  is spliced in explicitly — `dragPathText` prefers `text/uri-list` (each
+  `file://` URL decoded to a filesystem path, space-joined; kitty pastes the
+  path on a file drop too) and falls back to `text/plain`, then `insertAtCaret`
+  writes it at the caret and fires `input` so autoGrow / the draft save / the
+  ghost suggestion all see the edit.
+- With **no** text flavor either, the gesture would be a silent no-op, so it
+  toasts instead (the pre-fix behavior at least showed a failed chip). Both
+  branches drop an `attach.promise-paste` / `attach.promise-drop` clog beacon —
+  the only witness, since the server is never contacted (*Frontend audit
+  (clientlog)*).
+- A genuinely empty file chosen through the **picker** is refused at `add()`
+  with an "empty file" toast, so no path can POST bytes the server is
+  guaranteed to reject.
+
+Rejected: sniffing the text flavor and preferring it whenever one exists. A
+Finder copy carries both a filename string AND real bytes, so that rule would
+have regressed the ordinary "copy an image, paste it" flow into pasting the
+word `screenshot.png`. Zero bytes is the unambiguous signal — a promise has no
+data by definition.
+
 **Clipboard-image guard (the spurious-screenshot fix).** Separately from the
 dashboard's own `@path` attachments (above), **Claude Code's TUI auto-attaches
 whatever image is on the macOS clipboard to a message on ANY bracketed paste —
@@ -2139,6 +2178,13 @@ become audit rows.
     history size) — a purely client-side ↑/↓ affordance the server never sees,
     so the browser is its only witness (a "↑ gave the wrong message" report is
     answerable from the `dir`/`idx`/`n` trail).
+  - **Promise-only attachments** (*Web attachments* → *Promise-only files* below):
+    `attach.promise-paste` / `attach.promise-drop` (`n` = how many zero-byte
+    Files the gesture carried, `chars` = the length of the path text we fell
+    back to). The server sees NOTHING for this — the whole point of the fix is
+    that no upload is attempted — so without the beacon a "my paste did nothing"
+    report would have no evidence at all; `chars:0` is precisely the case where
+    the user got the toast instead of a path.
   The audit itself is SELF-GUARDING — `clog`/`flushClog` swallow their own
   exceptions and a re-entrancy flag stops a throw-in-a-flush from looping back
   through the `js.error` handler (the one channel that must never raise the very

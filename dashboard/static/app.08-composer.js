@@ -371,6 +371,14 @@ function attachTray(getSid, onChange) {
   }
   const add = (file) => {
     if (!file) return;
+    // Zero bytes never survives the server (`web-upload` rejects an empty
+    // file), so refuse it here rather than parading a failed chip. The paste /
+    // drop paths filter these out earlier — with a path fallback, see
+    // splitPromises — so this catches only a genuinely empty PICKED file.
+    if (!file.size) {
+      return toast("ask", "empty file",
+                   (file.name || "that file") + " has no content to attach");
+    }
     if (file.size > ATTACH_MAX) {
       return toast("ask", "file too large",
                    (file.name || "file") + " exceeds the upload limit");
@@ -395,6 +403,7 @@ function attachTray(getSid, onChange) {
   };
   return {
     strip,
+    sid: () => getSid() || "",
     addFiles: (files) => { for (const f of files || []) add(f); },
     paths: () => items.filter((it) => it.path).map((it) => it.path),
     pending: () => items.some((it) => !it.path && !it.failed),
@@ -421,6 +430,62 @@ const CLIP_SVG =
   + " 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1"
   + "-2.83-2.83l8.49-8.48'/></svg>";
 
+/* ---------- promise-only files: paste the PATH, like kitty ----------
+   Copying a file in an app that hands the clipboard a file PROMISE rather than
+   bytes (IntelliJ IDEA's Project-view Copy is the reported case; a Finder copy
+   is not) puts a ZERO-BYTE `File` on the clipboard alongside a text flavor
+   holding the file's path. Uploading that promise stages nothing — the server
+   rejects it as an "empty file" (`web-upload ok:false`), which is exactly the
+   "tried to upload it as an attachment and failed" report. The kitty TUI takes
+   the TEXT flavor and pastes the PATH, which Claude Code resolves on its own,
+   so the composer does the same: a zero-byte File is never uploaded, and the
+   path text lands in the box instead. Real bytes (a screenshot, a Finder copy,
+   the picker) always arrive with size > 0 and are unaffected. */
+
+// Split a file list into the ones worth uploading and the promise-only husks.
+function splitPromises(list) {
+  const files = [], empty = [];
+  for (const f of list || []) (f && f.size > 0 ? files : empty).push(f);
+  return { files, empty };
+}
+
+// The path text behind a promise-only DRAG: the `text/uri-list` file:// URLs
+// decoded to filesystem paths (what kitty pastes on a file drop), else the
+// plain-text flavor verbatim. (A promise-only PASTE needs no equivalent — we
+// simply don't preventDefault and the browser pastes its own text flavor.)
+function dragPathText(dt) {
+  const uris = (dt && dt.getData("text/uri-list")) || "";
+  const paths = uris.split(/\r?\n/)
+    .filter((l) => l && l[0] !== "#")
+    .map((l) => {
+      if (!/^file:\/\//i.test(l)) return l;
+      try { return decodeURIComponent(l.replace(/^file:\/\/[^/]*/i, "")); }
+      catch (e) { return l; }
+    });
+  return paths.length ? paths.join(" ") : ((dt && dt.getData("text/plain")) || "");
+}
+
+// Splice text at the caret and fire `input` so autoGrow / the draft save / the
+// ghost suggestion see the edit (the dictation splice's shape, one-shot).
+function insertAtCaret(ta, text) {
+  const at = ta.selectionStart != null ? ta.selectionStart : ta.value.length;
+  const end = ta.selectionEnd != null ? ta.selectionEnd : at;
+  const head = ta.value.slice(0, at) + text;
+  ta.value = head + ta.value.slice(end);
+  ta.setSelectionRange(head.length, head.length);
+  ta.focus();
+  ta.dispatchEvent(new Event("input", { bubbles: true }));
+}
+
+// The promise-only paste/drop has nothing to fall back to — say so rather than
+// letting the gesture be a silent no-op (the pre-fix behavior was a failed
+// upload chip, which at least showed SOMETHING happened).
+function promiseToast(f) {
+  toast("ask", "nothing to attach",
+        ((f && f.name) || "that file") + " arrived on the clipboard with no data"
+        + " and no path — copy the file itself, or paste its path as text");
+}
+
 function wireAttach(tray, ta, zone, enabled) {
   const btn = el("button", "cattach");
   btn.type = "button";
@@ -433,10 +498,20 @@ function wireAttach(tray, ta, zone, enabled) {
   btn.onclick = () => { if (enabled()) input.click(); };
   ta.addEventListener("paste", (e) => {
     if (!enabled()) return;
-    const files = [];
+    const all = [];
     for (const it of (e.clipboardData && e.clipboardData.items) || [])
-      if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
+      if (it.kind === "file") { const f = it.getAsFile(); if (f) all.push(f); }
+    const { files, empty } = splitPromises(all);
     if (files.length) { e.preventDefault(); tray.addFiles(files); }
+    else if (empty.length) {
+      // Promise-only (see splitPromises above): leave the event alone so the
+      // browser's OWN default paste writes the clipboard's text flavor — the
+      // file's path — into the box, byte-for-byte what kitty does.
+      const txt = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
+      clog(tray.sid(), "attach.promise-paste",
+           { n: empty.length, chars: txt.length });
+      if (!txt) promiseToast(empty[0]);
+    }
   });
   zone.addEventListener("dragover", (e) => {
     if (!enabled() || !e.dataTransfer || e.dataTransfer.types.indexOf("Files") < 0)
@@ -449,8 +524,20 @@ function wireAttach(tray, ta, zone, enabled) {
   zone.addEventListener("drop", (e) => {
     zone.classList.remove("dropping");
     if (!enabled()) return;
-    const files = (e.dataTransfer && e.dataTransfer.files) || [];
+    const { files, empty } =
+      splitPromises((e.dataTransfer && e.dataTransfer.files) || []);
     if (files.length) { e.preventDefault(); tray.addFiles(files); }
+    else if (empty.length) {
+      // Same promise-only drag as the paste path — but a file DROP has no
+      // default text behavior in a textarea, so splice the path in ourselves
+      // (kitty does exactly this: dropping a file pastes its path).
+      e.preventDefault();
+      const txt = dragPathText(e.dataTransfer);
+      clog(tray.sid(), "attach.promise-drop",
+           { n: empty.length, chars: txt.length });
+      if (txt) insertAtCaret(ta, txt);
+      else promiseToast(empty[0]);
+    }
   });
   return frag(btn, input);
 }
