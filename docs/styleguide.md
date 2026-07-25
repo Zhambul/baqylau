@@ -136,9 +136,13 @@ charter fits, document the owner here, and (if cheap) add a grep test.
   a module the dispatcher imports.
 - **Registries over if/elif ladders.** Type/event switches are data:
   `dispatch._ROUTES`, `tools.RENDER_KINDS`, `Renderer._USE`/`_RESULT`,
-  `audit.COMMANDS`, `audit.ANOMALY_SECTIONS`. A new case is one registration,
-  and ordering (when load-bearing) is explicit in the table, with a test
-  pinning the sequence.
+  `audit.COMMANDS`, `audit.ANOMALY_SECTIONS`, and the dashboard's two HTTP
+  planes (`_FIXED_GET`/`_SESSION_GET`, `_FIXED_POST`/`_SESSION_POST` —
+  docs/dashboard.md *Routing*). A new case is one registration, and ordering
+  (when load-bearing) is explicit in the table, with a test pinning the
+  sequence. What stays an explicit match is a route whose SHAPE is the
+  routing — a variable-arity path whose tail is a name, not a verb — and the
+  table's own signature must then be uniform enough to call blind.
 - **Long entry `main()`s are named phases.** The house shape (see
   `stream.py`, `substream.py`, `claude-mirror.py`): small functions named for
   what they do (`wait_source` / `make_pump` / `completion_loop` /

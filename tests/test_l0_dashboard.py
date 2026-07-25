@@ -493,6 +493,53 @@ def test_http_root_and_static_whitelist(dash):
     assert e.value.code == 404
 
 
+def test_get_routing_registry_resolves(dash):
+    """The read plane routes through a REGISTRY, the twin of the POST control
+    plane's (_FIXED_GET / _SESSION_GET, dashboard/http/get.py) — so every entry
+    must name a real handler with the table's uniform signature. A typo'd entry
+    is a 404 that looks like an empty tab, not a crash, so the table gets its own
+    guard; each fixed endpoint is also fetched for real, since a handler that
+    exists but raises is the same empty tab."""
+    for table, argc in ((DS.Handler._FIXED_GET, 2),      # (self, url)
+                        (DS.Handler._SESSION_GET, 3)):   # (self, sid, url)
+        for key, name in table.items():
+            fn = getattr(DS.Handler, name, None)
+            assert callable(fn), "%s → no handler named %s" % (key, name)
+            assert fn.__code__.co_argcount == argc, \
+                "%s takes %d args, the table calls it with %d" % (
+                    name, fn.__code__.co_argcount, argc)
+    for key in DS.Handler._FIXED_GET:
+        code, _ = _get(dash + "/api/" + "/".join(key))
+        assert code == 200, key
+    # an unrouted path is 404 on both shapes (fixed and session-scoped), not a 500
+    for miss in ("/api/nope", "/api/session/" + "s" * 8 + "/nope", "/events/nope"):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _get(dash + miss)
+        assert e.value.code == 404, miss
+
+
+def test_page_session_verbs_are_all_routed(dash):
+    """Every `/api/session/<sid>/<verb>` the PAGE builds is routed by the server
+    — the GET registry, the POST registry, or one of the explicitly-matched
+    multi-segment reads whose tail is a NAME (agent/view/copy). Cross-tier, in
+    the direction that breaks: an endpoint the page fetches but nothing routes is
+    a silent 404 (an empty tab, a control gesture that never lands), invisible in
+    the server-side audit because no handler ever ran."""
+    code, index = _get(dash + "/")
+    assert code == 200
+    verbs = set()
+    for p in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index))):
+        code, body = _get(dash + "/static/" + p)
+        assert code == 200
+        verbs |= set(re.findall(r'"/api/session/"\s*\+\s*[^+]+\+\s*"/([a-z-]+)',
+                                body))
+    assert len(verbs) > 20, "the URL shape changed — this guard stopped seeing it"
+    routed = (set(DS.Handler._SESSION_GET) | set(DS.Handler._SESSION_POST)
+              | {"agent", "view", "copy"})
+    assert not (verbs - routed), "the page fetches unrouted verbs: %s" % (
+        sorted(verbs - routed),)
+
+
 def test_close_in_flight_state_has_one_owner(dash):
     """The two halves of an optimistic close — S.closing (greyed card) and
     S.closePend (the optPending web-hint handle) — are MUTATED only by

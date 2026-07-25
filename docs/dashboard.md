@@ -34,8 +34,9 @@ dashboard/control/          launch.py — the terminal-facing control machinery
                             macOS focus/appearance watches)
 dashboard/http/             the HTTP layer: base (send/SSE/guard/static + query
                             parsers) · get (GET read plane) · post (POST control
-                            plane, route registry) · sse (the SSE streams) ·
-                            handler (Handler = base+mixins, + serve())
+                            plane) · sse (the SSE streams) · handler
+                            (Handler = base+mixins, + serve())
+                            BOTH planes route through registries (below)
 dashboard/opshtml/          paint ops -> HTML (the web presenter), split by concern:
                             ansi · ops · markdown · tools
 dashboard/static/           the single-page app (vanilla JS/CSS, no build step) —
@@ -62,6 +63,37 @@ flat** (`DS.config` is the only handle): every reader of a live knob reads
 `monkeypatch.setattr(DS, "NOTIFY_DELAY_S", 0)` would bind a name nobody consults
 and pass while changing nothing. Pinned by
 `test_facade_re_exports_no_config_knob_flat`.
+
+### Routing: both planes are registries
+
+`http/get.py` and `http/post.py` dispatch the same way (the styleguide's tables
+over if/elif ladders):
+
+| table | key | handler signature |
+| --- | --- | --- |
+| `_FIXED_GET` | the full path tuple — `("push", "config")` | `(self, url)` |
+| `_SESSION_GET` | a one-segment session verb — `"ops"` | `(self, sid, url)` |
+| `_FIXED_POST` | the full path tuple | `(self)` |
+| `_SESSION_POST` | a one-segment session verb | `(self, sid)` |
+
+Adding an endpoint is a table line plus a named method whose docstring is its
+design note. The GET signatures are uniform so the dispatch stays a `getattr` —
+most fixed handlers ignore `url`, and passing it always is cheaper than a
+per-endpoint argument decision. What deliberately stays *explicit* (matched by
+shape in `route`/`route_events`/`route_session`, not by table) is everything
+whose trailing segment is a **name** rather than a verb — `/api/session/<sid>/`
+`agent/<aid>`, `view/<gid>`, `copy/<gid>/<what>` — plus the `/events/*` streams,
+where each form has its own arity *and* its own cursor query params.
+
+The read plane was a 165-line if/elif ladder until 2026-07-25, in which the
+three lines of actual routing were invisible between the arms' design comments
+and the two "nothing here" 404s sat 100 lines apart. Two guards keep the tables
+honest: `test_get_routing_registry_resolves` (every entry names a real handler
+with the table's arity, every fixed endpoint answers 200, a miss is 404 not 500)
+and `test_page_session_verbs_are_all_routed` — the cross-tier direction that
+actually breaks, since a verb the page fetches but nothing routes is a silent
+404 (an empty tab, a control gesture that never lands) with no handler to leave
+an audit row.
 
 `./bin/claude-dashboard.py` (default verb `open`) starts the server if needed
 and opens `http://127.0.0.1:8377` (`CLAUDE_DASH_PORT` overrides).
