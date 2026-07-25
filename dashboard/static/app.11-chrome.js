@@ -3,6 +3,16 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.12-init.js for the boot/init sequence.
 
+/* The session view's chrome, as NAMED PHASES (the styleguide's shape for a long
+   builder — small functions named for what they build, one visible order):
+   identity chips → action buttons → quick-command row → the live rows the SSE
+   patchers fill → the tab strip → the open tab's body. Each phase returns its
+   element and parks on `ses` whatever the patchers reach for later.
+
+   It was one 350-line function, which is a poor place to look for any single one
+   of those six jobs: the ✕ close button sat 130 lines below the identity chips it
+   shares nothing with, and "does the effort picker exist when parked?" meant
+   scrolling for the live gate rather than reading one signature. */
 function renderSessionChrome(tab) {
   const ses = S.ses;
   if (!ses) return;
@@ -19,6 +29,28 @@ function renderSessionChrome(tab) {
 
   const head = el("div", "shead");
   head.dataset.tab = meta.tab || "";    // state tint; live via setBadge()
+  head.append(chromeIdentity(ses, meta));
+  // the action buttons live on their OWN rows (actrow) — inside l1 they floated
+  // to wherever the title/chips left room, moving with title width. An empty row
+  // (a parked session has no quick commands) is left out entirely.
+  for (const row of [chromeActions(ses, meta), chromeQuickCmds(ses, meta)])
+    if (row.childElementCount) head.append(row);
+  head.append(...chromeLiveRows(ses));
+  $view.append(head);
+  updateStatsRow();
+  updateRunning();
+
+  $view.append(chromeTabs(ses, meta, tab));
+  const body = el("div");
+  ses.body = body;
+  $view.append(body);
+  chromeBody(ses, tab, body);
+}
+
+/* l1: who this session IS — title, state badge, directory, sid, checkout,
+   account. Every chip is static except the three parked on `ses`, which the
+   `title` / `tab` / `git` SSE events patch in place. */
+function chromeIdentity(ses, meta) {
   const l1 = el("div", "l1");
   const projSpan = el("span", "proj",
                       meta.title || (meta.cwd ? proj(meta) : shortSid(S.cur)));
@@ -60,8 +92,14 @@ function renderSessionChrome(tab) {
     }
     l1.append(chip);
   }
-  // the action buttons live on their OWN row (actrow) — inside l1 they
-  // floated to wherever the title/chips left room, moving with title width
+  return l1;
+}
+
+/* actrow #1: the session-level gestures. rename / migrate / alerts work live AND
+   parked (they touch the transcript or a dashboard pref, not the terminal); stop
+   / rewind / close need a window to type into, and resume is the parked-only
+   counterpart. */
+function chromeActions(ses, meta) {
   const act = el("div", "actrow");
   // rename: deliberately OUTSIDE the live gate — it works for live AND parked
   // sessions (the server appends the agent-name naming record to the
@@ -126,7 +164,7 @@ function renderSessionChrome(tab) {
     // otherwise (the resting state re-derives from the tab, never a blind
     // re-enable). NOT red awaiting-command, where an Esc declines the open
     // dialog instead of interrupting (interruptSession bails there too).
-    ses.stopMode = (tab) => { stop.disabled = !BUSY_TABS.includes(tab); };
+    ses.stopMode = (t) => { stop.disabled = !BUSY_TABS.includes(t); };
     ses.stopMode(liveTab());
     act.append(stop);
     // rewind: idle-only picking mode — click a message below, choose what to
@@ -177,66 +215,73 @@ function renderSessionChrome(tab) {
     res.onclick = () => openNewSession(meta.cwd, S.cur);
     act.append(res);
   }
-  // quick commands on their OWN second row under the action buttons: compact
-  // + the model/effort pickers, each typing the TUI's own slash command into
-  // the session (docs/dashboard.md, *Web quick commands*). Live-only like
-  // stop — there is no window to type into otherwise.
+  return act;
+}
+
+/* actrow #2: the quick commands — compact + the model/effort pickers, each
+   typing the TUI's own slash command into the session (docs/dashboard.md, *Web
+   quick commands*). Live-only like stop: there is no window to type into
+   otherwise, so a parked session gets an EMPTY row the caller drops. */
+function chromeQuickCmds(ses, meta) {
   const act2 = el("div", "actrow");
-  if (meta.live && meta.kitty_window_id) {
-    // compact: two-step confirm like close — a misclick summarizes the whole
-    // conversation out from under you, so it arms first
-    const cpt = el("button", "sstop actses", "⊜ compact");
-    cpt.title = "compact the conversation (/compact)";
-    armConfirm(cpt, "⊜ compact", "compact now?", () => sendQuickCmd("compact"));
-    act2.append(cpt);
-    // model: dropdown picker; the label shows the ctx probe's current model
-    // (live via the `ctx` SSE event → updateStatsRow)
-    const mwrap = el("span", "qcwrap actses");
-    const mdl = el("button", "sstop");
-    ses.modelBtn = mdl;
-    setModelBtn(mdl);
-    mdl.title = "switch the model (/model — also saves as your new-session default)";
-    mdl.onclick = () => openQuickMenu(mwrap, "model", MODEL_CHOICES,
-                                      curModelFamily());
-    mwrap.append(mdl);
-    act2.append(mwrap);
-    // effort: dropdown picker (current effort is config-only — not readable
-    // from any transcript, see plugins/claude_code/model.py — so no label)
-    const ewrap = el("span", "qcwrap actses");
-    const eff = el("button", "sstop");
-    ses.effortBtn = eff;
-    setEffortBtn(eff);
-    eff.title = "set the reasoning effort (/effort — also saves as your new-session default)";
-    eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES,
-                                      (ses.meta && ses.meta.effort) || "");
-    ewrap.append(eff);
-    act2.append(ewrap);
-    // a red tab = a modal dialog is up — pasted text would land IN it (the
-    // server 409s too; disabling just says so up front). Live via the same
-    // SSE tab event as stopMode.
-    ses.quickMode = (tab) => {
-      const block = tab === "awaiting-command";
-      for (const b of [cpt, mdl, eff]) b.disabled = block;
-    };
-    ses.quickMode(liveTab());
-  }
-  head.append(l1);
-  if (act.childElementCount) head.append(act);
-  if (act2.childElementCount) head.append(act2);
+  if (!(meta.live && meta.kitty_window_id)) return act2;
+  // compact: two-step confirm like close — a misclick summarizes the whole
+  // conversation out from under you, so it arms first
+  const cpt = el("button", "sstop actses", "⊜ compact");
+  cpt.title = "compact the conversation (/compact)";
+  armConfirm(cpt, "⊜ compact", "compact now?", () => sendQuickCmd("compact"));
+  act2.append(cpt);
+  // model: dropdown picker; the label shows the ctx probe's current model
+  // (live via the `ctx` SSE event → updateStatsRow)
+  const mwrap = el("span", "qcwrap actses");
+  const mdl = el("button", "sstop");
+  ses.modelBtn = mdl;
+  setModelBtn(mdl);
+  mdl.title = "switch the model (/model — also saves as your new-session default)";
+  mdl.onclick = () => openQuickMenu(mwrap, "model", MODEL_CHOICES,
+                                    curModelFamily());
+  mwrap.append(mdl);
+  act2.append(mwrap);
+  // effort: dropdown picker (current effort is config-only — not readable
+  // from any transcript, see plugins/claude_code/model.py — so no label)
+  const ewrap = el("span", "qcwrap actses");
+  const eff = el("button", "sstop");
+  ses.effortBtn = eff;
+  setEffortBtn(eff);
+  eff.title = "set the reasoning effort (/effort — also saves as your new-session default)";
+  eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES,
+                                    (ses.meta && ses.meta.effort) || "");
+  ewrap.append(eff);
+  act2.append(ewrap);
+  // a red tab = a modal dialog is up — pasted text would land IN it (the
+  // server 409s too; disabling just says so up front). Live via the same
+  // SSE tab event as stopMode.
+  ses.quickMode = (t) => {
+    const block = t === "awaiting-command";
+    for (const b of [cpt, mdl, eff]) b.disabled = block;
+  };
+  ses.quickMode(liveTab());
+  return act2;
+}
+
+/* The three header rows that start EMPTY and are filled by the patchers
+   (updateStatsRow / the ctx bar / updateRunning), in paint order. */
+function chromeLiveRows(ses) {
   const sr = el("div", "statsrow");
   ses.statsRow = sr;
   ses._statsSig = null;      // fresh (empty) row — force the next paint through
-  head.append(sr);
   const cr = el("div", "ctxrow");     // the main thread's ctx bar, its own row
   ses.ctxRow = cr;
-  head.append(cr);
   const rr = el("div", "runrow");
   ses.runRibbon = rr;
-  head.append(rr);
-  $view.append(head);
-  updateStatsRow();
-  updateRunning();
+  return [sr, cr, rr];
+}
 
+/* The tab strip. Each count is the fetched list's length once we have it, else
+   the cheap eager count the overview payload carried — so a badge is right
+   before its tab has ever been opened. The tabs whose badge is patched live are
+   parked on `ses`. */
+function chromeTabs(ses, meta, tab) {
   const tabs = el("div", "tabs");
   const mk = (key, label, count) => {
     const a = el("a", key === tab ? "on" : "");
@@ -262,12 +307,13 @@ function renderSessionChrome(tab) {
     ses.memTab = mk("memory", "memory",
                     ses.memory ? ses.memory.length : (meta.memory_count || 0));
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
-  $view.append(tabs);
+  return tabs;
+}
 
-  const body = el("div");
-  ses.body = body;
-  $view.append(body);
-
+/* The open tab's body. The mirror tab is the composite one (cards → composer →
+   filter bar → the stream/rail split); the rest are a grid or a renderer plus
+   the fetch that fills it. */
+function chromeBody(ses, tab, body) {
   if (tab === "mirror") {
     body.append(buildGoalCard());           // the active /goal, pinned at the very top
     body.append(buildTasksCard());          // the session's task list, pinned first

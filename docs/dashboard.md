@@ -1691,10 +1691,10 @@ post_message's: a RED tab (`awaiting-command` — a modal dialog is up) is a
 attempt is a `web-command` state_files row (`{win, cmd, arg, ok, tab}`),
 failures also an `A.error`.
 
-The client row (the `act2` row of `renderSessionChrome`): compact carries the
-close button's two-step arm via the shared `armConfirm` ("compact now?", 4 s)
-— a misclick would
-summarize the conversation out from under you; model and effort open
+The client row (`chromeQuickCmds`, the second `actrow` of the session chrome):
+compact carries the close button's two-step arm via the shared `armConfirm`
+("compact now?", 4 s) — a misclick would summarize the conversation out from
+under you; model and effort open
 dropdowns in the new-session form's own picker language
 (`.nsdropmenu`/`.nsdropitem` + the anchoring `.qcwrap`/`.qcmenu` classes,
 Esc or click-away closes; the model menu marks the current family `.sel`
@@ -3959,6 +3959,29 @@ Like every control-plane write the POST sits behind `_post_guard` (so
 `state_files` row (empty session log/path — it is dashboard-global, not
 per-session, exactly like the `ns-prefs` write).
 
+## The session chrome, in named phases
+
+`renderSessionChrome(tab)` builds the whole session view, and it does six
+unrelated jobs. Since 2026-07-25 each is its own function and the entry is just
+the order they go in — the styleguide's *long entry `main()`s are named phases*
+rule, applied to the page:
+
+| phase | builds |
+| --- | --- |
+| `chromeIdentity` | `l1` — title · state badge · parked chip · directory · sid · git chip · account chip |
+| `chromeActions` | `actrow` #1 — ✎ rename / ⇆ migrate / ◉ alerts (live AND parked), then ■ stop / ↶ rewind / ✕ close (live+windowed) or ↻ resume (parked) |
+| `chromeQuickCmds` | `actrow` #2 — ⊜ compact + the model/effort pickers (live-only; returns an EMPTY row the caller drops) |
+| `chromeLiveRows` | the three rows that start empty and are filled by the patchers: `statsrow` · `ctxrow` · `runrow` |
+| `chromeTabs` | the tab strip + its badges (fetched list length, else the payload's cheap eager count) |
+| `chromeBody` | the open tab's body — the mirror composite, or a grid + the fetch that fills it |
+
+Each phase returns its element and parks on `ses` whatever the SSE patchers
+reach for later (`ses.projEl`, `ses.badge`, `ses.gitChip`, `ses.stopMode`,
+`ses.quickMode`, `ses.monTab`, …). As one 350-line function this was a poor place
+to look for any single one of the six: the ✕ close button sat 130 lines below the
+identity chips it shares nothing with, and "does the effort picker exist when
+parked?" meant scrolling for the live gate instead of reading one signature.
+
 ## The list renders once, then patches
 
 Two layers used to make the sessions list rebuild its entire DOM every
@@ -4693,7 +4716,7 @@ dashboard root on the phone, not the session. The page translates `?s=<sid>`
 back into the hash route on load (`deepLinkFromQuery` in app.js).
 
 **Per-session opt-out.** The header's **◉ alerts / ○ muted** button
-(`renderSessionChrome`, beside ✎ rename / ⇆ migrate) toggles
+(`chromeActions`, beside ✎ rename / ⇆ migrate) toggles
 `POST /api/session/<sid>/notify` `{"muted": bool}`, which flips the session's
 entry in the durable global prefs store (`dashboard/prefs.notify_muted` /
 `set_notify_muted`, one `notify-muted` kv map keyed by sid — an un-mute deletes
