@@ -689,6 +689,25 @@ def ops_at(path, after_id=0):
         conn.close()
 
 
+def hand_peek_at(path, key):
+    """hand_peek() over an explicit DB path, read-only — the reader twin of the
+    take-once hand-off records, for CONSUMERS that only want to know a hand-off
+    is in flight (the dashboard's live fg-command elapsed timer reads 'fg-live'
+    without the live-path connect(), which would CREATE the DB and fake the
+    session-alive signal). Never consumes: a reader must not eat the record the
+    real consumer (PostToolUse) is waiting for. None when missing/unreadable."""
+    conn = _ro(path)
+    if conn is None:
+        return None
+    try:
+        row = conn.execute("SELECT val FROM handoffs WHERE key=?", (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+    except Exception:
+        return None
+    finally:
+        conn.close()
+
+
 def transcript_fold(log, fold):
     """One atomic read-modify-write of the main session's transcript cursor — the
     transaction plugins/claude_code/accounting.bump_transcript used to hand-roll against this module's

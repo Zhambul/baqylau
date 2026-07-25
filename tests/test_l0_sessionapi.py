@@ -221,6 +221,40 @@ def test_live_at_and_running_group_only_alive_rows(monkeypatch, tmp_path):
     assert S.live_at(str(tmp_path / "claude-mirror-nobody.log.state.db")) == []
 
 
+def test_fg_running_reports_the_in_flight_command_block(monkeypatch, tmp_path):
+    """fg_running() answers WHICH mirror block is executing and since when, off
+    the take-once `fg-live` hand-off claude-cmd-pre.py writes (its `tid` IS the
+    block's copy-group id). Seeded through the product writer (S.hand_put), and
+    it must PEEK — consuming here would strand PostToolUse's finish chip."""
+    import subprocess
+
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    log = P.mirror_log("fg-sess")
+    assert API.fg_running("nobody") is None            # no state DB, none conjured
+
+    rec = {"src": log + ".out", "own": True, "pid": os.getpid(),
+           "done": log + ".done", "tid": "toolu_42", "ts": 1000.0}
+    assert S.hand_put(log, "fg-live", rec)
+    assert API.fg_running("fg-sess") == {"g": "toolu_42", "start_ts": 1000.0}
+    # a READER: the record survives for its real consumer (cmd_fmt's hand_take)
+    assert API.fg_running("fg-sess") == {"g": "toolu_42", "start_ts": 1000.0}
+    assert S.hand_peek(log, "fg-live") == rec
+
+    # an ABANDONED record (a cancelled command fires no hook, so nothing takes
+    # it) reads as not-running once its tailer pid is dead — same staleness
+    # verdict cmd_pre reaches before it clears the record
+    dead = subprocess.Popen(["true"])
+    dead.wait()
+    S.hand_put(log, "fg-live", dict(rec, pid=dead.pid))
+    assert API.fg_running("fg-sess") is None
+    # a pre-`ts` producer's record has no start to tick from
+    S.hand_put(log, "fg-live", {"pid": os.getpid(), "tid": "toolu_43"})
+    assert API.fg_running("fg-sess") is None
+    S.hand_del(log, "fg-live")
+    assert API.fg_running("fg-sess") is None
+
+
 def test_session_overview_composes(monkeypatch, tmp_path):
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))

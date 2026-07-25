@@ -1567,6 +1567,26 @@ def test_running_ribbon_payload_and_sse(dash):
     assert data and "monitor" in json.loads(data)
 
 
+def test_fg_elapsed_payload_and_sse(dash):
+    """The live command-elapsed feed (docs/dashboard.md, *Live command
+    elapsed*): session_payload carries the in-flight foreground command as
+    `fg_running` {g, start_ts} — g being the mirror block's copy-group id — and
+    the per-session SSE announces it as a fast-cadence `fgrun` event, so a page
+    opened mid-command starts ticking from the real start."""
+    A.session_start({"session_id": "fgr1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("fgr1")
+    S.hand_put(log, "fg-live", {"src": log + ".out", "own": True,
+                                "pid": os.getpid(), "done": log + ".done",
+                                "tid": "toolu_live", "ts": 1700.0})
+    fg = _get_json(dash + "/api/session/fgr1")["fg_running"]
+    assert fg == {"g": "toolu_live", "start_ts": 1700.0}
+    data = _sse_event(dash + "/events/session/fgr1?after=0&mpos=0", "fgrun")
+    assert data and json.loads(data)["fg"] == fg
+    # nothing in flight -> null (the client retires its ticker)
+    S.hand_del(log, "fg-live")
+    assert _get_json(dash + "/api/session/fgr1")["fg_running"] is None
+
+
 def test_error_badge_payload_and_sse(dash):
     """session_payload carries the live ⚠ error count (error_count, chain-aware
     COUNT — not len(errors())), and the per-session SSE announces it as an

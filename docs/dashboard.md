@@ -451,7 +451,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). The four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) are one TABLE — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). The four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) are one TABLE — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
 | `GET /api/session/<sid>/jobs` | the session's background Bash jobs (command + lifecycle state, merging audit streams + ops) for the jobs tab (*Jobs tab*); output via the `/copy/<task>/out` endpoint |
 | `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
@@ -4987,6 +4987,83 @@ a stale slot the way `slots.claim` does), grouped by kind. It rides
 `session_payload` as `running` and is pushed as a `running` SSE event on change
 (the same only-on-change, slow-tick cadence as `agents`/`costs`). A parked
 session's rows are all dead, so its ribbon is empty (hidden).
+
+## Live command elapsed (the ticking ⏱ chip)
+
+A foreground command's mirror block used to show its duration only in hindsight
+— the `■ finished · 3.2s` chip the block gets when it ends. While it ran there
+was no clock at all, so a long `make test` / build / deploy read exactly like a
+wedged one. The block now carries a **live elapsed chip** (`⏱ 1m04s`, outlined
+and gently pulsing) beside the `▶ foreground` chip, ticking once a second, and
+retired the moment the real finish chip lands.
+
+**Where the start comes from: the `fg-live` hand-off, not a new store.**
+`claude-cmd-pre.py` already writes a take-once hand-off record when it spawns
+the live tailer, keyed to the tool call by `tid` — and `tid` **is** the mirror
+block's copy-group id (the `g` stamped on the `▶ foreground` header ops, the
+same id ⧉ copy collects by). Adding a `ts` (the command's start) to that record
+makes it, verbatim, the statement the dashboard needs: *block `<tid>` has been
+running since `<ts>`*. `sessionapi.fg_running(sid)` reads it through the new
+read-only `state.hand_peek_at` twin and returns `{g, start_ts}` or `None`. It
+**peeks, never takes** — consuming it here would strand PostToolUse's finish
+chip — and it drops a record whose owning tailer pid is dead, the same staleness
+verdict `cmd_pre` itself reaches before clearing an abandoned record (a manually
+cancelled command fires no hook at all, so nothing consumes its record).
+
+Because the record is take-once, *its presence is the liveness signal*: it
+appears when the command starts and is gone the instant PostToolUse (or the
+tailer's own reclaim) consumes it. No new state, no new sentinel, no lifetime to
+leak.
+
+**Split of labour: the server sends the start, the browser counts.**
+`fg_running` rides `session_payload` as `fg_running` (so a page opened
+mid-command starts ticking from the real start instead of waiting for the next
+command) and is pushed as an `fgrun` SSE event on change. The seconds are
+counted client-side on a 1s `setInterval` (`app.05-session.js` —
+`setFgRun`/`tickFgElapsed`), which is why the event carries a timestamp and not
+a number.
+
+Deliberate choices, each rejecting something that was tried or considered:
+
+- **Fast SSE cadence, unlike the `running` ribbon it resembles.** The elapsed
+  advances locally, so what the event is really for is the START and the END —
+  and on the slow (~3s) cadence a finished command would keep counting for
+  seconds *next to* its authoritative `■ finished · 3.2s` chip. One hand-off
+  peek per 0.6s tick (a single indexed SELECT plus a pid probe), pushed only on
+  change.
+- **The finish chip also retires the ticker, client-side.** `fillBlock` drops
+  the live chip when a further `label` op arrives on the ticking block — that op
+  IS the finish chip. Both signals ride the same 0.6s tick in no fixed order, so
+  whichever lands first wins; `S.ses.fgEnded` remembers the retired block id so a
+  late `fgrun` can't resurrect a ticker on a command already reported done.
+- **Not derived from the ops' own `ts` column.** Every op row is timestamped, so
+  the client *could* compute a block's start from its first op — but that gives
+  no liveness: a block holding one chip is indistinguishable from one whose
+  finish chip never came (a crashed tailer, a parked session, pre-`ts` history),
+  and it would tick forever, in history, for sessions that ended weeks ago.
+- **Not the `live` slot row's `start_ts`,** even though it is already on the wire
+  via `running`. A slot is keyed by palette index and carries no tool_use_id —
+  nothing ties it to a block. It can only power the session-level ribbon above,
+  which is exactly what it does.
+- **Not a per-second server push.** The start time is static; sending a
+  recomputed number every second to every open page would be an event stream for
+  a cosmetic counter.
+- **Foreground only.** Background jobs, monitors and subagents each have their
+  own card with a `running for` line (Jobs/Monitors tabs, the agent cards), and
+  their blocks stay open for the life of the stream anyway. The fg block is the
+  one the eye is on while you wait.
+- **Web only.** The terminal mirror paints on op arrival and has no clock of its
+  own; a per-second repaint there would mean emitting ops to animate a number
+  (and every op is replayed on every SIGWINCH reflow). The scorebar's ⏱ already
+  covers "how long has this session been going" in the pane.
+
+Styling is `style.css` `.chip.blive` — deliberately NOT a filled `.chip` like
+its `▶`/`■` siblings: those are the session's own painted labels replayed from
+the ops stream, this one is the dashboard talking. Outlined, `--exec` blue,
+`tabular-nums` so the ticking seconds don't twitch the chip wider. Read-only
+throughout, so it adds no audit rows (like the ctx bars and the goal card); the
+one producer change — `ts` in the record — is covered by the `state:fg-live`
+`state_files` row `cmd_pre` already writes with the record as its content.
 
 ## Subagent scoreboard swap (drill in → the scoreboard becomes the agent's)
 

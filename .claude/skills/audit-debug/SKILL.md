@@ -643,6 +643,20 @@ New always-audited swallow sites (previously silent — their absence used to ma
   ends in `remove-own` (its exiting tailer reclaimed it) or `remove-stale` (next
   Pre found the pid dead). A `remove` whose consuming hook_event belongs to a
   *different* command means the tid keying regressed (the cross-wire bug).
+- **The web mirror's live ⏱ elapsed chip is missing, stuck, or on the wrong
+  block** — it is driven by that SAME `state:fg-live` row, which now carries
+  `ts` (the command's start) beside `tid` (the mirror block's copy-group id):
+  `sessionapi.fg_running` peeks the record and the dashboard ticks the seconds
+  client-side (docs/dashboard.md, *Live command elapsed*). So: a `write` row
+  whose content has NO `ts` = a pre-2026-07 producer (or a re-encoded record) —
+  the chip can't render, by design. A chip that ticks forever = the record was
+  never consumed; the same `write` → `remove`/`remove-own`/`remove-stale`
+  sequence above is the evidence (a `write` with no terminator is the bug, and
+  it also wedges every later command out of live streaming). A chip on the wrong
+  block = the `tid` in the row is not the tool_use_id stamped on the block's
+  ops. The read side is read-only and writes NO rows of its own — if the record
+  looks healthy, the fault is in the browser (check `web-client` rows for
+  `sse.drop`: a dropped stream stops delivering the `fgrun` clear).
 - **A `.md`/`.json`/`.yml`/source file rendered raw (or garbled) instead of
   pretty** — content render mode (markdown: `.md`; JSON: `.json`; YAML:
   `.yml`/`.yaml`; source code: `.py`/`.java`/`.kt`/`.sh` etc; docs/mirror-pane.md). Detection runs in the TAILER (from the raw command every launch

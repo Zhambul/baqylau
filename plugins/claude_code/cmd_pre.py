@@ -213,8 +213,14 @@ def main():
     # "tid" keys this record to THIS tool call: PostToolUse consumes it only on a
     # matching tool_use_id, so a cancelled command's surviving record can't be
     # eaten by the next command's Post (which cross-wired the two blocks).
+    # "ts" is the command's START — with "tid" (which IS the mirror block's copy
+    # group id) it makes this record the authoritative "block <tid> has been
+    # running since <ts>" signal the dashboard ticks its live elapsed chip from
+    # (core/sessionapi.fg_running); take-once, so it disappears exactly when the
+    # command ends. The tailer's slot row carries a start_ts too, but a slot has
+    # no tool_use_id — nothing there ties it to a block.
     rec = {"src": src, "own": own, "pid": proc.pid, "done": done,
-           "tid": d.get("tool_use_id") or ""}
+           "tid": d.get("tool_use_id") or "", "ts": time.time()}
     if not S.hand_put(log, "fg-live", rec):
         # One retry: a failed hand_put here loses the OUTCOME hand-off — the
         # tailer is already spawned, but PostToolUse (cmd-fmt) can't hand it the

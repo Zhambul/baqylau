@@ -1146,6 +1146,17 @@ body.modal-open { overflow: hidden; }
   color: var(--text-soft); font: 12px/1.4 var(--mono); flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+/* the in-flight foreground command's live elapsed chip (⏱ 1m04s, ticking) —
+   deliberately NOT a filled `.chip` like its ▶/■ siblings: those are the
+   session's own painted labels, this one is the dashboard talking. Outlined and
+   gently pulsing so it reads as "still counting", and tabular figures so the
+   seconds tick without the chip twitching wider. */
+.chip.blive {
+  background: none; color: var(--exec); font-weight: 600;
+  border: 1px solid color-mix(in srgb, var(--exec) 38%, transparent);
+  padding: 0 8px; font-variant-numeric: tabular-nums;
+  animation: pulse 1.6s infinite;
+}
 .bbody {
   box-shadow: inset 0 1px 0 var(--hair);
   background: color-mix(in srgb, var(--bg) 88%, black);

@@ -150,6 +150,8 @@ class _SseMixin:
         main-thread conversation from byte cursor `mpos`, interleaved by ts via
         merge_live so a turn's text keeps its place relative to its command),
         `stats`, `agents`, `tab`, `costs`, `running` (the live slot ribbon),
+        `fgrun` (the in-flight foreground command's block id + start, which the
+        mirror ticks a live elapsed chip from),
         `errors` (the ⚠ swallowed-error count) — each sent only on change. A
         FRESH connection (after=0, mpos=0) gets the ts-merged backlog as its
         first ops event; a reconnect resumes both cursors. The delta merge is
@@ -158,7 +160,8 @@ class _SseMixin:
         self._sse_start()
         last = after
         prev = {"stats": None, "agents": None, "tab": None, "costs": None,
-                "running": None, "errors": None, "ask": None, "plan": None,
+                "running": None, "fgrun": None, "errors": None,
+                "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
                 "term_box": None,
@@ -280,6 +283,17 @@ class _SseMixin:
                     return
             tab = (API.tab_states().get(win) or "") if win else ""
             if not self._push_changed(prev, "tab", "tab", tab, {"tab": tab}):
+                return
+            # the in-flight foreground command ({g, start_ts}) — the mirror
+            # ticks a live elapsed chip on that block. FAST cadence, unlike the
+            # `running` ribbon it resembles: the elapsed counts client-side, so
+            # what this event is really for is the START and the END, and on the
+            # slow cadence a finished command would keep counting for seconds
+            # after its "■ finished · 3.2s" chip already landed. One hand-off
+            # peek per tick (a single indexed SELECT + a pid probe), pushed only
+            # on change.
+            fgrun = API.fg_running(sid)
+            if not self._push_changed(prev, "fgrun", "fgrun", fgrun, {"fg": fgrun}):
                 return
             # the pending modal-dialog cards (fast cadence — the dialog just
             # appeared and the user is waiting); None clears each card

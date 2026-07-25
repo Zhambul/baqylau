@@ -294,6 +294,15 @@ changing what Claude Code itself sees. The mirror is driven by the hook:
     rendering — two commands cross-wired. A mismatched take leaves the record in
     place and returns None; the exiting `fg` tailer also reclaims **its own**
     record (matched on pid) so a cancelled command's record doesn't linger.
+  - **The record doubles as the "this block is running" signal.** It also
+    carries `ts`, the command's start — and since `tid` is the mirror block's
+    copy-group id, the pair reads as *block `<tid>` has been running since
+    `<ts>`*. Being take-once, its mere presence is the liveness; the web
+    dashboard reads it (`sessionapi.fg_running`, a read-only PEEK — a reader
+    must never consume the record `claude-cmd-fmt.py` is waiting for) to tick a
+    live elapsed chip on that block. See docs/dashboard.md, *Live command
+    elapsed*, for why neither the ops' own timestamps nor the slot row's
+    `start_ts` could serve.
   - **Redirect detection is quote-aware** (`tools.parse_redirect`,
     `posix=False` tokens): posix tokenising stripped quotes, so `grep '>' file`
     parsed as a *redirect to `file`* — cmd-pre then skipped the tee rewrite and

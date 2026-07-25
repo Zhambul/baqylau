@@ -144,8 +144,14 @@ def test_f2_fg_lifecycle_streams_live_and_takes_real_outcome(
     """The tee rewrite streams output as it lands; PostToolUse hands the real
     chip to the tailer via the done: hand-off (end_reason=sentinel)."""
     s = session.make()
+    started = time.time()
     run_hook("claude-cmd-pre.py", P.pre_bash(s, "echo working && sleep 1"))
     rec = fg_live_record(s)
+    # the record is also the dashboard's "block <tid> has been running since
+    # <ts>" signal (sessionapi.fg_running -> the web mirror's live elapsed chip):
+    # tid IS the mirror block's copy-group id, ts the command's start
+    assert rec["tid"] == "toolu_001"
+    assert started <= rec["ts"] <= time.time()
     w = writer(rec["src"])                       # the running command
     with open(rec["src"], "a") as f:
         f.write("line one\n")

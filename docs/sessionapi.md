@@ -30,7 +30,18 @@ Two kinds of surface in one module:
   `state_db_for(sid)`, `session_db(row)`, `agents(sid)`,
   `agent_transcript(sid, agent_id)`,
   `codex_runs(sid)` / `codex_aid(src_path)`, `costs(sid)`, `errors(sid)`,
-  `sid_chain(sid)`.
+  `sid_chain(sid)`, `running(sid)` / `fg_running(sid)`.
+
+  `running(sid)` and `fg_running(sid)` are the two grains of "what is executing
+  right now", and are also deliberately kept apart. `running` reads the `live`
+  slot table: it answers *how many* things of each kind are alive (the header's
+  running-now ribbon), but a slot is keyed by palette index and carries no
+  tool_use_id, so it can never say which mirror BLOCK a command belongs to.
+  `fg_running` reads the take-once `fg-live` hand-off, whose `tid` IS the
+  block's copy-group id, and returns `{g, start_ts}` — the block-grained answer
+  the web mirror's live elapsed chip needs (docs/dashboard.md, *Live command
+  elapsed*). It peeks and never takes: consuming a hand-off from the read side
+  would strand the real consumer.
 
   `state_db_for(sid)` and `session_db(row)` are the two spellings of the same
   live-DB-else-park choice, deliberately kept apart: the sid form returns

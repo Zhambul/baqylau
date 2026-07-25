@@ -256,6 +256,7 @@ function leaveSession() {
     clearJobPoll();
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
+    if (S.ses.fgTimer) clearInterval(S.ses.fgTimer);   // the live fg elapsed tick
     // disarm optimistic stale watchdogs (composer bubbles + the ask/plan card
     // pends): navigating away is a deliberate abandon, not a stuck state, so it
     // mustn't beacon `stale` (close pends are global — S.closePend — and keep

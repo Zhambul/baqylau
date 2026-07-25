@@ -24,6 +24,7 @@ function showSession(sid, tab) {
     S.cur = sid;
     S.ses = { lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
               agents: [], costs: null, ctx: null, running: {}, meta: null, es: null, agentEs: null,
+              fgRun: null, fgTimer: null, fgEnded: null, fgChipAt: null,  // live fg elapsed
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
@@ -50,6 +51,10 @@ function showSession(sid, tab) {
         S.ses.ctx = d.ctx || null;
         S.ses.running = d.running || {};
         renderSessionChrome(tab);
+        // a page opened MID-command ticks from the real start (the SSE `fgrun`
+        // only fires on CHANGE, so without this seed a reload would show no
+        // elapsed until the next command)
+        setFgRun(d.fg_running || null);
         // startup TAG-RACE self-heal: a just-launched session momentarily
         // reports live:true with a BLANK kitty_window_id (its kitty pane isn't
         // tagged claude_session=<sid> yet, so session_payload can't resolve the
@@ -153,6 +158,7 @@ function connectSession(sid) {
     }
   });
   es.addEventListener("running", (e) => { if (!S.ses) return; S.ses.running = JSON.parse(e.data); updateRunning(); });
+  es.addEventListener("fgrun", (e) => { setFgRun((JSON.parse(e.data) || {}).fg || null); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("monitors", (e) => { updateMonCount(JSON.parse(e.data).count | 0); });
   es.addEventListener("jobs", (e) => { updateJobCount(JSON.parse(e.data).count | 0); });
@@ -288,6 +294,56 @@ function createBlock() {
   return b;
 }
 
+/* The live elapsed chip on the IN-FLIGHT foreground command (docs/dashboard.md,
+   *Live command elapsed*). The server says WHICH block is running and since
+   when (`fgrun` = sessionapi.fg_running — the fg-live hand-off's tool_use_id,
+   which IS the block's copy-group id, plus its start); the seconds are counted
+   HERE, so the number advances on a 1s local tick instead of costing an event
+   per second. The chip lives in the block's `.bchips` summary row (so a folded
+   block still shows it) right after the `▶ foreground` chip, and is retired the
+   moment the block's own finish chip ("■ finished · 3.2s") lands — that chip is
+   the authoritative duration, and a ticking twin beside it would only disagree.
+   Foreground only: a bg job / monitor / subagent has its own card with a
+   "running for" line, and the fg block is the one the eye is on. */
+const FG_TICK_MS = 1000;
+
+function fgClearChip(g) {
+  const b = g && S.ses.blocks.get(g);
+  const c = b && b.chips.querySelector(".blive");
+  if (c) c.remove();
+}
+
+function tickFgElapsed() {
+  const ses = S.ses;
+  if (!ses) return;
+  const fg = ses.fgRun;
+  if (ses.fgChipAt && (!fg || ses.fgChipAt !== fg.g)) {
+    fgClearChip(ses.fgChipAt);              // the command it belonged to ended
+    ses.fgChipAt = null;
+  }
+  if (!fg) {
+    if (ses.fgTimer) { clearInterval(ses.fgTimer); ses.fgTimer = null; }
+    return;
+  }
+  const b = ses.blocks.get(fg.g);
+  if (!b) return;              // the block's ops haven't landed yet — next tick
+  let c = b.chips.querySelector(".blive");
+  if (!c) { c = el("span", "chip blive"); b.chips.append(c); }
+  ses.fgChipAt = fg.g;
+  c.textContent = "⏱ " + dur(Date.now() / 1000 - fg.start_ts);
+}
+
+function setFgRun(fg) {
+  const ses = S.ses;
+  if (!ses) return;
+  // the finish chip beat the `fgrun` clear (both ride the same 0.6s tick, in no
+  // fixed order) — don't resurrect a ticker on a command already reported done
+  if (fg && fg.g === ses.fgEnded) fg = null;
+  ses.fgRun = fg;
+  if (fg && !ses.fgTimer) ses.fgTimer = setInterval(tickFgElapsed, FG_TICK_MS);
+  tickFgElapsed();
+}
+
 // A single copy-group's body is capped: a long-lived group (a bg stream, a
 // monitor, `tail -f`, a subagent) keeps emitting line/code/gut ops that all
 // share ONE block id, and the `.stream` child cap in appendItems() only counts
@@ -300,6 +356,15 @@ const MAX_BLOCK_BODY = 800;
 // oldest->newest (top-down), matching arrival order.
 function fillBlock(b, it) {
   if (it.t === "label") {
+    // A further label op on the block carrying the live elapsed chip IS this
+    // command's finish chip ("■ finished · 3.2s") — retire the ticker here
+    // rather than wait for the `fgrun` clear, so the counting number can never
+    // be seen still running next to the final duration.
+    if (S.ses && S.ses.fgRun && S.ses.fgRun.g === it.g) {
+      fgClearChip(it.g);
+      S.ses.fgEnded = it.g;
+      S.ses.fgRun = null;
+    }
     b.chips.insertAdjacentHTML("beforeend", it.html);
   } else {
     b.body.insertAdjacentHTML("beforeend", it.html);

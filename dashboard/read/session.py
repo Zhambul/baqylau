@@ -134,6 +134,10 @@ def session_payload(sid):
     # the session effort resolved above is its inherit-default
     agents_model_effort(data["agents"], data["effort"])
     data["running"] = API.running(sid)
+    # the in-flight foreground command ({g, start_ts}) — seeds the mirror's
+    # live elapsed chip on RELOAD, so a page opened mid-command starts ticking
+    # from the real start instead of waiting for the block to finish
+    data["fg_running"] = API.fg_running(sid)
     # Correct `live` to require an OPEN tab and gate the control plane on the
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
     # audit row's start-time id — kitty reuses window ids, so a leaked/parked
