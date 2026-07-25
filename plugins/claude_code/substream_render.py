@@ -49,7 +49,11 @@ cap = SF.cap
 # Line caps per excerpt kind (how many lines of each block the mirror shows before
 # "… (+N lines)"). These deliberately DIVERGE from plugins/codex/stream.py's caps —
 # the two renderers weight their content differently; don't unify the values.
-CAP_MSG      = 40   # an assistant message / final result
+CAP_MSG      = 80   # an assistant message / final result (raised from 40,
+#                     2026-07-25: an agent's message is the one block you read
+#                     rather than skim, and 40 lines elided the substance of a
+#                     long result — the ⇠ result block the web mirror surfaces
+#                     alongside the launch header most of all)
 CAP_PROMPT   = 24   # the spawn prompt
 CAP_TEAMMSG  = 24   # an incoming teammate message
 CAP_SENDMSG  = 12   # an outgoing SendMessage body
