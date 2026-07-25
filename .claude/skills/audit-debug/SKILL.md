@@ -151,9 +151,14 @@ New always-audited swallow sites (previously silent — their absence used to ma
   composer; `restored: false` = the box held something else (the user's own
   terminal draft) and was deliberately left alone; NO restore row at all = the
   box was empty (a plain stop, work kept) or the probe raised — check `errors`
-  for `dashboard web-interrupt (restore probe)`. A take-back also leaves the
-  prompt orphaned in the transcript (see the ghost-message shape above), so the
-  two rows read together tell the whole story of one Escape.
+  for `dashboard web-interrupt (restore probe)`. The same row's `uid` names the
+  record and `flagged` says the `takeback` kv write landed; **if the bubble
+  REAPPEARS after a reload, that flag is what to check** — until the
+  replacement message arrives the prompt has no sibling, so the kv is the only
+  thing that knows (`bin/claude-audit.py sql` the row, then read the kv). A
+  take-back also leaves the prompt orphaned in the transcript once the next
+  message lands (see the ghost-message shape above), so the rows read together
+  tell the whole story of one Escape.
 
 - **A web rewind failed with `step: "open"` ("checkpoint menu never appeared"),
   and/or a nonsense fragment appeared as a chat message**: the classic shape is

@@ -337,19 +337,27 @@ def _plan_pending(sid):
     return pending
 
 
-def _last_prompt(sid):
-    """The session's LAST main-thread user prompt text (via
-    plugins.conversation), or '' — what an early interrupt hands back into
-    the input, so the page can prefill its composer with it. Best-effort: a
-    read failure just yields '' (the cancel still happened in the terminal)."""
+def _last_prompt_rec(sid):
+    """The session's LAST main-thread user prompt as (text, uuid) — what an
+    early interrupt hands back into the input, so the page can prefill its
+    composer with it and the server can FLAG that record as taken back
+    (transcript.mark_taken_back; without the flag the bubble reappears on the
+    next full read, since a taken-back prompt has no sibling until the
+    replacement message arrives). Best-effort: a read failure yields ("", "")
+    — the take-back still happened in the terminal."""
     try:
         got = plugins.conversation(sid)
         if not got:
-            return ""
+            return "", ""
         recs, _ = got
         for r in reversed(recs):
             if r.get("kind") == "prompt":
-                return r.get("text") or ""
+                return r.get("text") or "", r.get("uid") or ""
     except Exception:
         pass
-    return ""
+    return "", ""
+
+
+def _last_prompt(sid):
+    """The last prompt's TEXT alone (see _last_prompt_rec)."""
+    return _last_prompt_rec(sid)[0]

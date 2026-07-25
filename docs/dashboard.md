@@ -1798,7 +1798,32 @@ capture flattens a wrapped box. Anything ELSE in the box is the user's own
 terminal draft — left alone, never echoed. The match is a `RESTORE_MATCH_CHARS`
 prefix of `suggestion.cmp_key` (whitespace REMOVED, since a wrapped box joins
 its lines without a separator); a miss just yields `""` and the page doesn't
-prefill. A take-back adds a `phase: "restore"` `web-interrupt` row.
+prefill. A take-back adds a `phase: "restore"` `web-interrupt` row carrying
+`uid`/`flagged`.
+
+**Two things have to PERSIST, or the take-back half-undoes itself on reload**
+(reported 2026-07-25: *"the message disappeared from the input and reappeared
+in the transcript"*).
+
+1. **The composer text.** `prefillComposer` sets `textarea.value` in code,
+   which fires no `input` event — so the composer's own debounced draft save
+   never ran and a reload dropped the restored message. It now writes the same
+   `composer-draft` stash a typed character would (*Web composer draft*).
+2. **The dropped bubble.** `_dead_uuids` recognizes a discard by two prompts
+   sharing a `parentUuid` — but the sibling only exists once the REPLACEMENT
+   message is sent. In the window between, a taken-back prompt is orphaned and
+   yet indistinguishable on disk from a live one, so the next full read painted
+   it again. So the interrupt STASHES what it saw: `transcript.mark_taken_back`
+   appends the record's `uid` to the session's `takeback` kv (capped, deduped;
+   prompt records now carry `uid` for exactly this), and `conversation_for`
+   feeds it back as `suspects`.
+
+   The flag is **advisory and self-correcting**: a suspect counts as dead only
+   while NOTHING descends from it. The observer read a screen and can be wrong
+   — you might have retyped the same message into the box yourself — but the
+   transcript can't be: if the turn really ran, its records name that prompt as
+   their parent and the bubble stays. Which is why the flag can be a cheap kv
+   hint rather than a decision.
 
 **Root cause of "STOP does nothing" (2026-07-24).** A single Escape does **not** reliably stop a busy turn here, for two compounding reasons: (1) `send-key` reports no per-window delivery and synthesized keys are only **~2/3 reliable** (the same measurement that made the idle rewind path type `/rewind` instead of pressing keys — see *Rewind*); and (2) the user runs Claude Code with **`editorMode: vim`**, so the input box is modal — while a turn runs it is in INSERT mode (`-- INSERT --`), and during the **thinking** phase the first Escape only leaves INSERT mode (INSERT→NORMAL); it never reaches the interrupt handler, so the turn runs to completion. Measured directly: every real single-Esc interrupt on a `thinking` tab missed and ran to its natural `Stop` (`a16a181f`, `3d70feca`), while a mid-STREAM Esc landed; a controlled throwaway diff showed the lone Esc deleting `-- INSERT --` and changing nothing else. This is also why the retired cancel gesture's **two** Escapes measured "3/3 reliable" — the first exits INSERT, the second interrupts; the verified re-press below reaches the same place without a second button.
 
@@ -1902,10 +1927,10 @@ can cancel, edit, and resend entirely from the web — no frontend hop.
 
 Known limit (Claude-Code-imposed): a take-back that ORIGINATES in the kitty
 tab (you press Esc there) reaches the web only PARTLY, because Claude Code
-fires no hook for it. The composer can't be prefilled — the page never learns
-the box was refilled — but the ghost bubble no longer survives: the discard is
-visible in the transcript's parent chain as soon as the next prompt lands, and
-`_dead_uuids` prunes it (*Discarded prompts*). The web mirrors a take-back it
+fires no hook for it — nothing observes it, so there is no `takeback` flag and
+no composer prefill. The ghost bubble still goes, just later: the discard
+becomes visible in the transcript's parent chain as soon as the next prompt
+lands, and `_dead_uuids` prunes it from then on (*Discarded prompts*). The web mirrors a take-back it
 TRIGGERED; a terminal-side one it can only clean up after.
 
 The **`escape-recheck`** the interrupt spawns watches the transcript for a

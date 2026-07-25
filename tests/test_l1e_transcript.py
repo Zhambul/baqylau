@@ -234,8 +234,54 @@ def test_conversation_drops_a_discarded_prompt(tmp_path):
     recs, _ = TR.conversation(str(p), 0)
     assert [r["text"] for r in recs if r["kind"] == "prompt"] \
         == ["real one", "what I meant"]
-    # the survivor carries its tree position, so the live page can do the same
+    # the survivor carries its tree position AND its own id — the page prunes
+    # live off `par`, the take-back stash names a record by `uid`
     assert [r["par"] for r in recs if r["kind"] == "prompt"] == [None, "a1"]
+    assert [r["uid"] for r in recs if r["kind"] == "prompt"] == ["u1", "u3"]
+
+
+def test_conversation_drops_a_flagged_take_back_before_its_sibling(tmp_path):
+    # A prompt Claude Code handed BACK to the input box is orphaned — but only
+    # once the replacement arrives. Until then it has no sibling and looks
+    # exactly like a live prompt, so the dashboard's observation (the uuid it
+    # stashed when it found the message in the box) is what keeps the bubble
+    # gone across a reload ("it reappeared in the transcript", 2026-07-25).
+    p = tmp_path / "tb.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"content": "the one that ran"},
+         "timestamp": "2026-07-25T00:00:01.000Z"},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+         "message": {"content": [{"type": "text", "text": "done"}]},
+         "timestamp": "2026-07-25T00:00:02.000Z"},
+        {"type": "user", "uuid": "u2", "parentUuid": "a1",
+         "message": {"content": "taken back"},
+         "timestamp": "2026-07-25T00:00:03.000Z"},
+    ]), encoding="utf-8")
+    assert [r["text"] for r in TR.conversation(str(p), 0)[0]
+            if r["kind"] == "prompt"] == ["the one that ran", "taken back"]
+    recs, _ = TR.conversation(str(p), 0, suspects=("u2",))
+    assert [r["text"] for r in recs if r["kind"] == "prompt"] \
+        == ["the one that ran"]
+
+
+def test_a_flagged_prompt_with_children_is_kept(tmp_path):
+    # The flag is ADVISORY and self-correcting: the observer reads a screen and
+    # can be wrong (you might have retyped the same text into the box yourself),
+    # but the transcript can't be — anything descending from that prompt proves
+    # the turn really ran, so it stays.
+    p = tmp_path / "tb2.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"content": "not really taken back"},
+         "timestamp": "2026-07-25T00:00:01.000Z"},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+         "message": {"content": [{"type": "text", "text": "it ran"}]},
+         "timestamp": "2026-07-25T00:00:02.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0, suspects=("u1",))
+    assert [(r["kind"], r["text"]) for r in recs] \
+        == [("prompt", "not really taken back"), ("message", "it ran")]
 
 
 def test_conversation_drops_a_rewound_away_turn(tmp_path):

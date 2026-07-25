@@ -119,6 +119,12 @@ function prefillComposer(restored) {
     autoGrow(ta);
     ta.focus();
     ta.setSelectionRange(ta.value.length, ta.value.length);
+    // PERSIST it. Setting .value in code fires no `input` event, so the
+    // composer's own draft save never ran and a reload dropped the restored
+    // message on the floor — while the transcript, which had not yet forked,
+    // showed it again ("it disappeared from the box and reappeared in the
+    // chat", 2026-07-25). Same stash a typed character would have written.
+    saveComposerDraft(ses, S.cur);
   }
   ses.clearDraftNext = true;
 }

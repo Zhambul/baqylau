@@ -589,7 +589,7 @@ def _prompt_bearing(rec):
     return False
 
 
-def _dead_uuids(prompts, lines):
+def _dead_uuids(prompts, lines, suspects=(), parented=()):
     """The uuids of DISCARDED records — a branch Claude Code abandoned but the
     transcript still holds, since nothing is ever REWRITTEN there: a cancelled
     or rewound-away turn is dropped only by RE-PARENTING, so the discarded
@@ -608,7 +608,17 @@ def _dead_uuids(prompts, lines):
     the assistant message that issued them — so a general "last sibling wins"
     rule would prune live content. `prompts` is [(uuid, parent), …] in
     transcript order; `lines` is re-walked for the tree only when a discard is
-    actually found (the common case pays nothing)."""
+    actually found (the common case pays nothing).
+
+    `suspects` are uuids some OTHER observer saw discarded — the dashboard's
+    interrupt watches Claude Code hand a prompt back to the input box and
+    stashes it (docs/dashboard.md, *Interrupt*), because until the REPLACEMENT
+    message arrives a taken-back prompt has no sibling and is indistinguishable
+    on disk from a live one (the "it came back on reload" report, 2026-07-25).
+    A suspect counts as dead only while NOTHING descends from it, which makes
+    the flag self-correcting: if the turn actually ran, its records name that
+    prompt as their parent and it stays. `parented` is the set of parentUuids
+    seen in this window — the observer can be wrong, the transcript can't."""
     by_parent = {}
     for uid, par in prompts:
         if uid:
@@ -617,6 +627,7 @@ def _dead_uuids(prompts, lines):
     for sibs in by_parent.values():
         if len(sibs) > 1:
             dead.update(sibs[:-1])            # the LAST fork is the live one
+    dead.update(u for u in suspects if u and u not in parented)
     if not dead:
         return dead
     kids = {}
@@ -719,7 +730,7 @@ def _format_questions(tool_input):
     return "\n\n".join(blocks)
 
 
-def conversation(path, pos=0):
+def conversation(path, pos=0, suspects=()):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
     (docs/dashboard.md): every prompt / assistant message / teammate message /
     recap (Claude Code's away-summary) — plus, for AskUserQuestion, the
@@ -744,7 +755,11 @@ def conversation(path, pos=0):
     handed, so an incremental (pos > 0) call catches a discard only when both
     forks land in the same poll; the page prunes the live case itself off the
     `par` every prompt record carries (docs/dashboard.md, *Discarded
-    prompts*), and the next full read is authoritative either way."""
+    prompts*), and the next full read is authoritative either way.
+
+    `suspects` are uuids an observer reported discarded before the transcript
+    can show it — see _dead_uuids; `conversation_for` supplies the session's
+    take-back stash. Prompt records carry `uid` so that stash can name one."""
     lines, new_pos = _complete_lines(path, pos)
     parsed = []
     for s in lines:
@@ -757,7 +772,8 @@ def conversation(path, pos=0):
         ts, uid, par = _line_meta(s)
         parsed.append((rec, ts, uid, par))
     dead = _dead_uuids([(u, p) for r, _t, u, p in parsed if _prompt_bearing(r)],
-                       lines)
+                       lines, suspects,
+                       {p for _r, _t, _u, p in parsed if p})
     out, anchor = [], None
     for rec, ts, uid, par in parsed:
         if uid in dead:
@@ -767,7 +783,7 @@ def conversation(path, pos=0):
             t = rec["text"].strip()
             if t and not t.startswith("<"):        # command/caveat wrappers
                 out.append({"kind": "prompt", "text": t, "anchor": anchor,
-                            "ts": ts, "par": par})
+                            "ts": ts, "par": par, "uid": uid})
         elif kind == "recap":
             out.append({"kind": "recap", "text": rec["text"],
                         "anchor": anchor, "ts": ts})
@@ -798,7 +814,8 @@ def conversation(path, pos=0):
                                 "anchor": anchor, "ts": ts})
                 elif text.strip() and not text.strip().startswith("<"):
                     out.append({"kind": "prompt", "text": text.strip(),
-                                "anchor": anchor, "ts": ts, "par": par})
+                                "anchor": anchor, "ts": ts, "par": par,
+                                "uid": uid})
         elif kind == "assistant":
             for bkind, blk in rec["blocks"]:
                 if bkind == "text":
@@ -821,6 +838,47 @@ def conversation(path, pos=0):
     return out, new_pos
 
 
+TAKEN_BACK_KEY = "takeback"      # state-DB kv: uuids Claude Code handed back
+TAKEN_BACK_MAX = 20              # keep the tail — an old flag is inert anyway
+
+
+def taken_back(sid):
+    """The uuids of prompts an observer saw Claude Code TAKE BACK for this
+    session — the dashboard's interrupt stashes one when it finds the message
+    back in the input box (docs/dashboard.md, *Interrupt*). Read-only and
+    best-effort: a missing/unreadable stash is just (), and the flags are
+    advisory — _dead_uuids drops any whose prompt turns out to have children.
+
+    This module owns the stash's SHAPE (both halves: `mark_taken_back` writes
+    it); the dashboard supplies the observation."""
+    from core import sessionapi as API
+    try:
+        sdb = API.state_db_for(sid)
+        got = API.kv_at(sdb, TAKEN_BACK_KEY) if sdb else None
+    except Exception:
+        return ()
+    return tuple(u for u in (got or []) if isinstance(u, str))
+
+
+def mark_taken_back(sid, uid):
+    """Record that `uid`'s prompt was handed back to the input box. Appends to
+    the kv tail (deduped, capped at TAKEN_BACK_MAX — an older flag costs
+    nothing once its prompt has a sibling, which is the durable signal).
+    Best-effort: a failed write just means the bubble reappears on reload, the
+    bug this stash exists to fix."""
+    from core import paths as P
+    from core import state as ST
+    if not sid or not uid:
+        return False
+    try:
+        cur = [u for u in taken_back(sid) if u != uid]
+        ST.kv_set(P.mirror_log(sid), TAKEN_BACK_KEY,
+                  (cur + [uid])[-TAKEN_BACK_MAX:])
+        return True
+    except Exception:
+        return False
+
+
 def conversation_for(sid, pos=0):
     """The conversation provider behind plugins.conversation(): the session's
     MAIN transcript from byte `pos`. None when this plugin has no transcript
@@ -831,7 +889,7 @@ def conversation_for(sid, pos=0):
     path = (row or {}).get("transcript_path") or ""
     if not path or not os.path.isfile(path):
         return None
-    return conversation(path, pos)
+    return conversation(path, pos, taken_back(sid))
 
 
 def ask_preamble(path, tool_use_id):

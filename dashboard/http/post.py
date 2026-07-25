@@ -41,6 +41,7 @@ from dashboard.http.base import _sid
 from dashboard.notify.notifier import NOTIFIER
 from dashboard.notify.presence import _mark_device, _mark_viewing
 from dashboard.read import session as rsession
+from plugins.claude_code import transcript
 
 A = load_audit()
 
@@ -1402,7 +1403,7 @@ class _PostMixin:
         the prefix, rather than the whole string, keeps a box that clipped the
         tail from reading as a mismatch. A miss just yields "" — the interrupt
         still succeeded, the page simply doesn't prefill."""
-        last = rsession._last_prompt(sid)
+        last, uid = rsession._last_prompt_rec(sid)
         if not last:
             return ""
         try:
@@ -1414,8 +1415,15 @@ class _PostMixin:
             return ""
         n = config.RESTORE_MATCH_CHARS
         hit = suggestion.cmp_key(box)[:n] == suggestion.cmp_key(last)[:n]
+        # FLAG the record: a taken-back prompt is orphaned in the transcript but
+        # has no SIBLING until the replacement message arrives, so until then it
+        # is indistinguishable on disk from a live one and the bubble came back
+        # on reload. The flag is advisory — _dead_uuids drops it the moment
+        # anything descends from that prompt (docs/dashboard.md, *Interrupt*).
+        flagged = bool(hit) and transcript.mark_taken_back(sid, uid)
         A.state_file(log, sdb, action,
-                     {"win": win, "phase": "restore", "restored": hit})
+                     {"win": win, "phase": "restore", "restored": hit,
+                      "uid": uid, "flagged": flagged})
         return last if hit else ""
 
     def _screen(self, fe, win, why="interrupt"):

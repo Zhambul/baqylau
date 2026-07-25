@@ -4930,8 +4930,9 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "91")
     A.session_start({"session_id": "tb1", "cwd": "/w", "transcript_path": ""})
-    monkeypatch.setattr(DS.session, "_last_prompt",
-                        lambda sid: "testing the take-back\nwith a second line")
+    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+                        lambda sid: ("testing the take-back\nwith a second line",
+                                     "u-taken"))
     code, body = _post(dash + "/api/session/tb1/interrupt", {})
     assert code == 200
     # the TRANSCRIPT's text, not the box's whitespace-flattened capture
@@ -4939,6 +4940,11 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
         "testing the take-back\nwith a second line"
     row = _last_state_file("tb1", "web-interrupt")
     assert row["phase"] == "restore" and row["restored"] is True
+    # the record is FLAGGED, so the bubble stays gone across a reload — it has
+    # no sibling yet, so nothing on disk would say so
+    assert row["uid"] == "u-taken" and row["flagged"] is True
+    from plugins.claude_code import transcript as TR
+    assert TR.taken_back("tb1") == ("u-taken",)
 
 
 def test_post_interrupt_leaves_a_terminal_draft_alone(dash, monkeypatch):
@@ -4951,7 +4957,8 @@ def test_post_interrupt_leaves_a_terminal_draft_alone(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "92")
     A.session_start({"session_id": "tb2", "cwd": "/w", "transcript_path": ""})
-    monkeypatch.setattr(DS.session, "_last_prompt", lambda sid: "an unrelated prompt")
+    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+                        lambda sid: ("an unrelated prompt", "u-other"))
     code, body = _post(dash + "/api/session/tb2/interrupt", {})
     assert code == 200 and json.loads(body)["restored"] == ""
 
@@ -4966,7 +4973,8 @@ def test_post_interrupt_empty_box_is_a_plain_stop(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "93")
     A.session_start({"session_id": "tb3", "cwd": "/w", "transcript_path": ""})
-    monkeypatch.setattr(DS.session, "_last_prompt", lambda sid: "a prompt that ran")
+    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+                        lambda sid: ("a prompt that ran", "u-ran"))
     code, body = _post(dash + "/api/session/tb3/interrupt", {})
     assert code == 200 and json.loads(body)["restored"] == ""
     assert _last_state_file("tb3", "web-interrupt").get("phase") != "restore"
