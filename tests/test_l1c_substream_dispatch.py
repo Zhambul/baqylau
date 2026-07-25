@@ -85,3 +85,27 @@ def test_known_tools_route_to_their_handlers(monkeypatch):
                             lambda self, n, i, t, c, _h=handler: called.append(_h))
         r.on_tool_use({"name": name, "input": {}, "id": "t-" + name})
     assert called == ["_use_bash", "_use_file", "_use_monitor", "_use_agent"]
+
+
+def test_agent_message_and_result_are_uncapped(monkeypatch):
+    """An agent's ✎ message and its ⇠ result carry the WHOLE text — they are the
+    one excerpt kind in this renderer with no line ceiling (2026-07-25; they were
+    capped at 40 lines, then 80). A long result is what the reader opened the
+    mirror for, and an elision there only forwarded them to the drill-down. The
+    other CAP_* kinds are content you skim and keep theirs, so this pins the
+    asymmetry rather than the absence of a constant."""
+    emitted = []
+    monkeypatch.setattr(SR.O, "emit", lambda log, *ops: emitted.extend(ops))
+    monkeypatch.setattr(SR.O, "new_group", lambda log: "g1")
+    r = make_renderer()
+    body = "\n".join("line %d" % i for i in range(500))
+    for is_result in (False, True):
+        emitted.clear()
+        r.pending_msg = body
+        r.flush_msg(is_result=is_result)
+        painted = "".join(op.get("s", "") for op in emitted)
+        assert "more lines" not in painted, "the message was elided"
+        assert "line 0" in painted and "line 499" in painted
+    # the skimmed kinds still have their ceilings (and the shared cap() still works)
+    assert SR.cap(body, SR.CAP_BODY).endswith("more lines)")
+    assert not hasattr(SR, "CAP_MSG"), "a re-added message cap"

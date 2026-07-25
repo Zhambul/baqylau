@@ -22,6 +22,18 @@ for the counters these streams feed).
     apart from intermediate `✎ message` chatter — then the `■ <type> ended · Ns`
     footer. All in the subagent's colour. (Messages are committed one event late
     so the last one can be tagged `⇠ result`.)
+  - **A message and the result are UNCAPPED; everything else is excerpted.** Every
+    other block kind the renderer paints has a line ceiling (the `CAP_*` table in
+    `substream_render.py` — a command's output body, the spawn prompt, a teammate
+    message, a tool request summary), because those are content you SKIM and the
+    ceiling is what keeps the stream scannable. The agent's own `✎ message` and
+    `⇠ result` are not: they were capped at 40 lines, briefly 80, then not at all
+    (2026-07-25). A long result is the specific thing the reader opened the mirror
+    for, and eliding it into `… (N more lines)` just forwarded them to the
+    drill-down — the opposite of what the summary is for. This is also why the web
+    mirror surfaces exactly those two blocks in the main feed (the `web` op field).
+    The codex renderer keeps its own `CAP_MSG`, per the "these deliberately
+    diverge" note over both tables.
   - **Live foreground commands (subagents too).** A subagent's foreground Bash
     command would otherwise only show its output when the `tool_result` lands in
     the transcript — i.e. *after* it finishes — because `claude-cmd-fmt.py` skips

@@ -49,11 +49,14 @@ cap = SF.cap
 # Line caps per excerpt kind (how many lines of each block the mirror shows before
 # "… (+N lines)"). These deliberately DIVERGE from plugins/codex/stream.py's caps —
 # the two renderers weight their content differently; don't unify the values.
-CAP_MSG      = 80   # an assistant message / final result (raised from 40,
-#                     2026-07-25: an agent's message is the one block you read
-#                     rather than skim, and 40 lines elided the substance of a
-#                     long result — the ⇠ result block the web mirror surfaces
-#                     alongside the launch header most of all)
+#
+# An assistant MESSAGE and the final RESULT are deliberately NOT in this table:
+# they are uncapped (flush_msg). They were capped at 40 lines, briefly 80, and
+# then not at all (2026-07-25) — a long result is precisely the thing you opened
+# the mirror to read, and an elision there just forwarded you to the drill-down.
+# Everything still in the table is content you SKIM (a command's output, a
+# request summary, a launch note), where a ceiling is what keeps the stream
+# scannable. Note codex's own CAP_MSG stays, per the divergence note above.
 CAP_PROMPT   = 24   # the spawn prompt
 CAP_TEAMMSG  = 24   # an incoming teammate message
 CAP_SENDMSG  = 12   # an outgoing SendMessage body
@@ -157,7 +160,12 @@ class Renderer:
         g = O.new_group(self.log)
         O.emit(self.log,
                self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL, web=is_result),
-               self.msg_gutter(cap(self.pending_msg, CAP_MSG), g=g, web=is_result))
+               # UNCAPPED, deliberately — the one excerpt in this renderer with no
+               # line ceiling (see the CAP_* table's note). An agent's message and
+               # its returned result are what the whole stream exists to deliver;
+               # eliding them sent the reader to the drill-down for the substance,
+               # which is the opposite of the summary's job.
+               self.msg_gutter(self.pending_msg, g=g, web=is_result))
         self.pending_msg = None
         self.pending_tag = ""
 
