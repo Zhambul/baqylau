@@ -51,9 +51,23 @@ _VIEWING = {}                      # sid -> monotonic deadline (last beat + TTL)
 
 
 def _mark_viewing(sid):
-    """Record a viewing heartbeat for `sid` — presence is fresh for VIEW_TTL_S."""
-    if sid:
-        _VIEWING[sid] = time.monotonic() + VIEW_TTL_S
+    """Record a viewing heartbeat for `sid` — presence is fresh for VIEW_TTL_S.
+
+    Also SWEEPS the expired entries, which is what keeps this dict bounded in a
+    days-long singleton: `_web_viewing` only ever drops the ONE key it was asked
+    about, and the notifier only asks about ARMED sessions, so every session you
+    ever opened and never got an alert for used to sit here for the life of the
+    process — the same key-set leak `read/cache.py` bounds its memos with
+    API.BoundedLRU for. A sweep (not an LRU) because the bound here can be
+    EXACT: an entry past its deadline is dead by definition, so nothing live is
+    ever dropped, and what remains is one key per session actually being
+    watched. O(n) over that handful, on a per-device heartbeat."""
+    if not sid:
+        return
+    now = time.monotonic()
+    for k in [k for k, dl in list(_VIEWING.items()) if dl <= now]:
+        _VIEWING.pop(k, None)
+    _VIEWING[sid] = now + VIEW_TTL_S
 
 
 def _web_viewing(sid):
@@ -78,7 +92,19 @@ def _web_viewing(sid):
 # fanning out to all: `_mru_push_targets` picks the subscribed device with the
 # newest beat. Never TTL-expired for that choice (we want the LAST device you
 # used even if a while ago); it's a monotonic-max pick, not a freshness gate.
-_DEVICE_SEEN = {}                  # device_id -> monotonic last-seen
+#
+# So this one can't be swept the way _VIEWING is — no entry is ever "dead" — and
+# it is CAPPED instead (BoundedLRU, recency refreshed on write = on beat). It is
+# a dict of every browser that ever beat at this server, and while that is
+# normally a handful, nothing bounds it: a private window mints a fresh
+# DEVICE_ID per session, so a phone/laptop pair is the happy case, not the
+# guarantee. Eviction is safe by construction: the LRU drops the
+# least-recently-BEATEN device, which is by definition not the MRU target this
+# map exists to pick — and an evicted device that beats again is simply re-added
+# (a subscription that outlived its presence just reads `age_s: None`, the same
+# as a device that hasn't beaten this run).
+DEVICE_SEEN_CAP = 64
+_DEVICE_SEEN = API.BoundedLRU(DEVICE_SEEN_CAP)   # device_id -> monotonic last-seen
 
 
 def _mark_device(device):

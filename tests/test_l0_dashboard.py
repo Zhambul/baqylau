@@ -1189,6 +1189,44 @@ def test_web_viewing_presence_expires(monkeypatch):
     assert "sZ" not in DS._VIEWING            # GC'd on the miss
 
 
+def test_presence_maps_stay_bounded(monkeypatch):
+    """Both in-memory presence maps are bounded in a days-long singleton — the
+    key-set leak `read/cache.py` bounds its memos against, one dict per session /
+    per browser ever seen.
+
+    _VIEWING is swept EXACTLY: `_web_viewing` only drops the one key it is asked
+    about (and the notifier only asks about ARMED sessions), so the beat itself
+    reaps the expired ones — nothing live is ever dropped, and only sessions
+    actually being watched remain. _DEVICE_SEEN has no expiry by design (the MRU
+    pick wants the LAST device you used, however long ago), so it is CAPPED
+    instead; eviction drops the least-recently-BEATEN device, which cannot be
+    the MRU target."""
+    monkeypatch.setattr(DS.presence, "VIEW_TTL_S", 20)
+    clock = [5000.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    DS._VIEWING.clear()
+    for i in range(50):                       # 50 sessions viewed, none re-asked
+        DS._mark_viewing("old%d" % i)
+    assert len(DS._VIEWING) == 50
+    clock[0] += 21                            # every one of them lapsed
+    DS._mark_viewing("live1")                 # …the next beat reaps them
+    assert set(DS._VIEWING) == {"live1"}
+    DS._mark_viewing("live2")                 # a still-fresh entry SURVIVES
+    assert set(DS._VIEWING) == {"live1", "live2"}
+    assert DS._web_viewing("live1") is True
+
+    DS._DEVICE_SEEN.clear()
+    cap = DS.presence.DEVICE_SEEN_CAP
+    for i in range(cap + 10):
+        clock[0] += 1
+        DS._mark_device("dev%d" % i)
+    assert len(DS._DEVICE_SEEN) == cap
+    assert "dev0" not in DS._DEVICE_SEEN                  # oldest beat evicted
+    assert DS._device_seen("dev0") == float("-inf")       # …reads as never seen
+    newest = "dev%d" % (cap + 9)
+    assert max(DS._DEVICE_SEEN, key=DS._device_seen) == newest   # MRU intact
+
+
 def test_notify_done_suppressed_when_seen_earlier_then_left(monkeypatch):
     """The user's rule: 'if I've SEEN the final message on the dashboard, no
     notification.' A done arm is checked EVERY scan while armed (not only at

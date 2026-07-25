@@ -196,6 +196,21 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   (`SESSIONS_LIMIT` sessions + their agents), so active sessions never thrash
   and only paths that scrolled out of discovery age out — re-derivable, so a
   re-seen path just re-reads once.
+  The same rule reaches the two in-memory PRESENCE maps
+  (`dashboard/notify/presence.py`), which are not memos but have the identical
+  key-set shape — one entry per session / per browser ever seen. `_VIEWING`
+  (sid → beat deadline) is bounded EXACTLY rather than by an LRU, because an
+  entry past its deadline is dead by definition: `_mark_viewing` sweeps the
+  expired ones on every beat, so what remains is one key per session actually
+  being watched and nothing live is ever dropped. (`_web_viewing` GC's only the
+  ONE key it is asked about, and the notifier asks only about ARMED sessions —
+  so before the sweep, every session you ever opened without an alert sat there
+  for the life of the process.) `_DEVICE_SEEN` cannot be swept — no beat ever
+  goes stale, since the MRU push target is deliberately "the last device you
+  used, however long ago" — so it is a `BoundedLRU(DEVICE_SEEN_CAP)` instead:
+  eviction drops the least-recently-BEATEN device, which by construction is not
+  the MRU target the map exists to pick, and an evicted device that beats again
+  is just re-added.
   The other historical poll-path sink was `sessionapi.sid_chain()`'s adopt-map
   scan on every audit-backed read — fixed at the source with the audit index
   `ix_state_act` (docs/sessionapi.md, *Fork-aware queries*), which took
