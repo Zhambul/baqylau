@@ -508,13 +508,30 @@ function renderAgentScoreboard(sr, focus) {
    re-render), and re-fetches the errors list only when that tab is open and
    the count grew. */
 function updateErrCount(n) {
-  const ses = S.ses;
+  const prev = (S.ses && S.ses.meta && S.ses.meta.error_count) || 0;   // pre-patch
+  const ses = setTabBadge("error_count", "errTab", n);
   if (!ses) return;
-  const prev = (ses.meta && ses.meta.error_count) || 0;
-  if (ses.meta) ses.meta.error_count = n;
-  updateStatsRow();
-  setTabCount(ses.errTab, n);
+  updateStatsRow();                  // the ⚠ chip lives in the scoreboard row too
   if (ses.tab === "errors" && n > prev && ses.body) renderErrorsInto(ses.body);
+}
+
+/* Patch a tab's count badge AND the cached meta it is rebuilt from, together —
+   the shared body of the monitors / jobs / memory / errors counters. Both halves
+   are needed: setTabCount paints the badge now, ses.meta[field] is what a later
+   renderSessionChrome rebuilds it from (drop that and the badge reverts on the
+   next rebuild). Returns the session (null when there's none), so a caller can
+   chain its own "…and refresh the list if that tab is open" tail.
+
+   That tail is exactly why each counter comes in two flavours and they must not
+   be merged: setXCount is called BY the fetch that just loaded the list (an
+   exact length — re-fetching there would loop), updateXCount by the cheap SSE
+   count (a refetch is the point). */
+function setTabBadge(field, tabKey, n) {
+  const ses = S.ses;
+  if (!ses) return null;
+  if (ses.meta) ses.meta[field] = n;
+  setTabCount(ses[tabKey], n);
+  return ses;
 }
 
 function setTabCount(a, n) {
@@ -722,19 +739,13 @@ function clearMonitorPoll() {
 // the ◉ monitors tab badge, live — the cheap `monitors` SSE count (a new launch
 // bumps it) OR the exact list length once /monitors is fetched (setMonCount).
 function updateMonCount(n) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.monitor_count = n;
-  setTabCount(ses.monTab, n);
+  const ses = setTabBadge("monitor_count", "monTab", n);
   // a new monitor arrived while the tab is open -> refresh the list
-  if (ses.tab === "monitors") loadMonitors();
+  if (ses && ses.tab === "monitors") loadMonitors();
 }
 
 function setMonCount(n) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.monitor_count = n;
-  setTabCount(ses.monTab, n);
+  setTabBadge("monitor_count", "monTab", n);
 }
 
 function showMonitor(sid, task) {
@@ -912,18 +923,12 @@ function clearJobPoll() {
 }
 
 function updateJobCount(n) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.job_count = n;
-  setTabCount(ses.jobTab, n);
-  if (ses.tab === "jobs") loadJobs();     // a new job arrived with the tab open
+  const ses = setTabBadge("job_count", "jobTab", n);
+  if (ses && ses.tab === "jobs") loadJobs();   // a new job arrived, tab open
 }
 
 function setJobCount(n) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.job_count = n;
-  setTabCount(ses.jobTab, n);
+  setTabBadge("job_count", "jobTab", n);
 }
 
 /* ---------- memory tab (the memory-wiki notes a session touched) ---------- */
@@ -945,18 +950,12 @@ function loadMemory() {
 }
 
 function setMemCount(n) {
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.memory_count = n;
-  setTabCount(ses.memTab, n);
+  setTabBadge("memory_count", "memTab", n);
 }
 
 function updateMemCount(n) {          // live SSE badge patch
-  const ses = S.ses;
-  if (!ses) return;
-  if (ses.meta) ses.meta.memory_count = n;
-  setTabCount(ses.memTab, n);
-  if (ses.tab === "memory" && !(ses.noteTrail && ses.noteTrail.length))
+  const ses = setTabBadge("memory_count", "memTab", n);
+  if (ses && ses.tab === "memory" && !(ses.noteTrail && ses.noteTrail.length))
     loadMemory();                     // a new note was touched with the grid open
 }
 
