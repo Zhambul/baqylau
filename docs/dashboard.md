@@ -4330,10 +4330,28 @@ Loose top-level rows (file-op one-liners, standalone chip lines) get the same
 card treatment, scoped to DIRECT `.stream` children so ops nested inside a block
 body keep their compact inline form.
 
-This is **CSS only** (`style.css` `.blk`/`.bhead`/`.bsum`/`.bbody` + the
-`.stream > .opl/.ol/.og/.ogut` rule). The fold/expand machinery — `createBlock`,
-the `data-open` toggle, the `KEEP_OPEN` window, click-to-view, and ⧉ copy — is
-UNCHANGED; only the appearance moved. Deliberately NOT ported from the activity
+### What gets an inner scroll box, and what must not
+
+Read content is never boxed; skimmed content is. A **message bubble** (`.msg .md`,
+and the drill-down's `.ent .bd .md`) and a **subagent's `⇢ prompt` / `⇠ result`
+block body** (`.blk[data-act="agent"] > .bbody`) have NO `max-height`: they grow
+to their content and you scroll the feed. A **generic block body** keeps
+`.bbody`'s 480px scroller, because that is a command's output — the thing the
+`CAP_*` line ceilings exist for (docs/subagents.md).
+
+This asymmetry is one decision made in two layers, and getting it right in only
+one is a real bug we shipped: after the server stopped eliding an agent's
+message/result by line count, the text still arrived into a 360/440/480px
+`overflow: auto` box, so long messages *still* had to be scrolled — a
+`max-height` on read content is the same elision wearing a scrollbar. Worse than
+plain truncation, in fact: a nested scroller is easy to miss, needs a hover to
+use, and eats the page's own scroll when the pointer crosses it.
+`test_conversation_text_is_not_in_a_nested_scroll_box` pins both halves.
+
+The card look is otherwise **CSS only** (`style.css`
+`.blk`/`.bhead`/`.bsum`/`.bbody` + the `.stream > .opl/.ol/.og/.ogut` rule). The
+fold/expand machinery — `createBlock`, the `data-open` toggle, the `KEEP_OPEN`
+window, click-to-view, and ⧉ copy — is UNCHANGED; only the appearance moved. Deliberately NOT ported from the activity
 tab: its information architecture (a short *category* pill like `BASH`/`READ`
 with the detail in the summary). The mirror keeps its own richer pill (glyph +
 command/name) and what it shows — the request was the *look*, not the data.

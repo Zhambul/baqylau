@@ -1207,6 +1207,12 @@ body.modal-open { overflow: hidden; }
   padding: 9px 13px; max-height: 480px; overflow: auto;
 }
 .blk[data-open="0"] > .bbody { display: none; }
+/* …except an AGENT block, which in the web mirror is only ever a subagent's
+   ⇢ prompt or ⇠ result (everything between them is producer-source-stamped and
+   dropped — *The web presenter*). That is conversation text, so it gets the
+   treatment above rather than the command-output box: its line cap was removed
+   server-side, and a 480px scroller here would have quietly reinstated it. */
+.blk[data-act="agent"] > .bbody { max-height: none; overflow: visible; }
 
 /* loose top-level rows (file-op one-liners, standalone chip/label lines) get the
    same card treatment so the WHOLE stream reads as uniform activity-style cards.
@@ -1386,8 +1392,15 @@ body.modal-open { overflow: hidden; }
 .md th { color: var(--text); font-weight: 650; background: var(--panel2); }
 .md th.ta-c, .md td.ta-c { text-align: center; }
 .md th.ta-r, .md td.ta-r { text-align: right; }
-.msg .md { max-height: 360px; overflow: auto; }
-.ent .bd .md { max-height: 440px; overflow: auto; }
+/* Conversation text is NOT put in a nested scroll box — a message bubble grows to
+   its content and you scroll the FEED. It used to cap at 360px (440px in the
+   drill-down) with `overflow: auto`, which meant a long reply hid most of itself
+   inside a little scroller: you had to find it, hover it to scroll it, and it
+   swallowed the page's own scroll on the way past. The line caps that elided this
+   same text server-side are gone for the same reason (docs/subagents.md) — a
+   ceiling in CSS was just the same elision wearing a scrollbar.
+   Skimmed content keeps its box: see `.bbody` (a command's output) below. */
+.msg .md, .ent .bd .md { max-height: none; overflow: visible; }
 
 /* ---- agents rail -------------------------------------------------------- */
 .rail { display: flex; flex-direction: column; gap: 8px; align-self: start;

@@ -8009,3 +8009,29 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
                            "text": "Ran 3 shell commands"}
     # and switching back leaves no residue
     assert d["backToVerbose"] == {"sums": 0, "shown": 3}
+
+
+def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
+    """A message bubble grows to its content; only SKIMMED content gets a
+    fixed-height scroller. Both halves of that asymmetry are pinned here because
+    they are one decision made in two places: the server stopped eliding an
+    agent's message/result by line count (docs/subagents.md), and a `max-height`
+    + `overflow: auto` on the same text is that elision wearing a scrollbar —
+    which is exactly how the "why do I still have to scroll long messages"
+    report survived the server-side fix."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = dict((sel.strip(), body) for sel, body in
+                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+
+    # conversation text — the stream's message bubbles AND the drill-down's
+    # entries, capped together by one rule — grows to its content
+    conv = rules[".msg .md, .ent .bd .md"]
+    assert "max-height: none" in conv and "overflow: visible" in conv
+    # a subagent's ⇢ prompt / ⇠ result block body is conversation text too (in the
+    # web mirror an agent block is only ever those two)
+    agent = rules['.blk[data-act="agent"] > .bbody']
+    assert "max-height: none" in agent and "overflow: visible" in agent
+    # …while a generic block body (a command's output — skimmed) keeps its box
+    generic = rules[".bbody"]
+    assert "max-height: 480px" in generic and "overflow: auto" in generic
