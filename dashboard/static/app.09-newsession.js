@@ -141,8 +141,9 @@ function showPendingFail() {
 /* ---------- control plane: the new-session form ---------- */
 // Lives in the persistent #modal host (outside #view) so a list re-render from
 // an SSE snapshot never blows away a half-typed form. Directory input backed by
-// suggest() over the distinct PROJECT directories in the current snapshot
-// (groupKey — worktree cwds resolve to their main checkout); optional first
+// suggest() over nsSuggestDirs() — the current snapshot's distinct PROJECT
+// directories, worktree cwds folded into their main checkout and scratch
+// (`/tmp`) paths dropped; optional first
 // prompt; submit POSTs /api/sessions/new and the session appears on its own via
 // SessionStart. The header "+ session" button opens it blank; a dir group's "+"
 // prefills that cwd.
@@ -319,6 +320,20 @@ function saveNsDraft(cwd, text, now) {
   if (now) post();
   else nsDraftTimer = setTimeout(post, ASK_DRAFT_DEBOUNCE_MS);
 }
+
+// WHAT the directory picker offers: the snapshot's distinct PROJECT directories
+// (groupKey — a linked-worktree cwd resolves to its owning main checkout), minus
+// SCRATCH paths. A `/tmp` anywhere in the path is scratch: the hermetic test
+// suite's per-test dirs, `mktemp -d` throwaway checkouts, `$TMPDIR` (macOS
+// `/var/folders/…/T/tmpXXXXXX`, which is what a realpath'd cwd spells) — all
+// long gone by the time anyone would click them, and they crowded the real
+// projects out of the menu. Accepted false positive: a genuine project under a
+// `/tmp`-prefixed component (`~/code/tmpl`) is menu-invisible — the field is
+// freeform, so typing or pasting the path still launches there; the list is a
+// shortcut, never the only way in.
+const NS_SCRATCH = /\/tmp/;
+const nsSuggestDirs = (rows) => [...new Set(
+  rows.map(r => groupKey(r)).filter(d => d && !NS_SCRATCH.test(d)))];
 
 // Freeform text input + picker menu — replaces the directory field's
 // <datalist>, which Safari renders in the system style AND pops open on
@@ -657,12 +672,7 @@ function openNewSession(prefillCwd, resumeSid) {
   dir.spellcheck = false;
   dir.placeholder = "/path/to/project";
   dir.value = prefillCwd || last.cwd || "";
-  // the suggestions are the snapshot's distinct PROJECT directories (groupKey,
-  // the list page's own grouping notion), not the raw cwds: a worktree session's
-  // cwd is a throwaway `.claude/worktrees/<name>/` checkout that no one wants to
-  // start a session in, and it resolves to its main checkout here.
-  const sug = suggest(dir,
-    [...new Set(S.sessions.map(r => groupKey(r)).filter(Boolean))]);
+  const sug = suggest(dir, nsSuggestDirs(S.sessions));
   dirRow.append(dir, sug.el);
 
   // conversation: FRESH (a new conversation, the default) or RESUME one of this

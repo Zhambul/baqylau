@@ -1979,6 +1979,16 @@ path — nobody starts a new session in a worktree that an agent is about to
 delete, and the noise crowded out the real projects. `groupKey` in
 app.00-core.js is the ONE client-side implementation, shared with
 `groupSessions`, so the picker and the list can't name the folder differently.
+SCRATCH directories are dropped on top of that (`nsSuggestDirs` / the
+`NS_SCRATCH` regex): a `/tmp` ANYWHERE in the path — `/tmp/…`, a realpath'd
+macOS `$TMPDIR` (`/var/folders/…/T/tmpXXXXXX`), the hermetic suite's per-test
+dirs — is a throwaway that no longer exists by the time it could be clicked.
+Accepted false positive: a genuine project under a `/tmp`-prefixed component
+(`~/code/tmpl`) is menu-invisible; the field is freeform text, so typing or
+pasting the path still launches there — the menu is a shortcut, never the only
+way in. This filter is deliberately PICKER-ONLY, not applied to the list: a
+session running in a tmp dir must still show its card (that's how you find and
+close it), it just isn't a place to START one.
 Only a pointer CLICK on the field (or typing / ArrowDown) opens the menu —
 never focus alone, which also fires on the form's own auto-focus — with the
 value blank or an exact known directory it lists EVERYTHING (the picker look, current

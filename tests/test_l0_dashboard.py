@@ -6781,6 +6781,12 @@ def test_app_js_groups_and_suggests_through_the_shared_group_key(dash):
         # the hand-rolled fallback expression must be gone from both readers
         assert "row.group_dir ||" not in body, part
         assert "map(r => r.cwd)" not in body, part   # the picker's old raw-cwd map
+    # and the picker builds its list through the one filter that also drops
+    # scratch (`/tmp`) paths — dead test/mktemp dirs nobody can launch into
+    code, ns = _get(dash + "/static/app.09-newsession.js")
+    assert code == 200
+    assert "const NS_SCRATCH = /\\/tmp/;" in ns
+    assert "suggest(dir, nsSuggestDirs(S.sessions))" in ns
 
 
 # --------------------------------------------------- suggestion (ghost) probe
