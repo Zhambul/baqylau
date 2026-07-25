@@ -281,6 +281,18 @@ class _PostMixin:
         # starts a turn or lands in the TUI's message queue (QUEUE_TABS); it
         # rides the audit row too — "my message vanished" is answerable as "it
         # queued mid-turn".
+        #
+        # But the colour alone cannot PROMISE `queued`, and the page acts on that
+        # promise by pinning a ⧗ chip. Claude Code fires no hook on cancel, so a
+        # turn cancelled AT THE TERMINAL (Esc-Esc) leaves the tab frozen on
+        # magenta: the send then promises `queued` for a message the idle TUI
+        # submits instantly, and the chip has no delivery to wait for (session
+        # bdeca061, 2026-07-25 — UserPromptSubmit fired 0.1s after a
+        # `tab: thinking` send). So VERIFY the turn is really live first. The
+        # probe must run BEFORE the paste: our own paste changes the screen and
+        # would itself read as motion.
+        live = self._turn_live(fe, win) if tab in QUEUE_TABS else None
+        queued = tab in QUEUE_TABS and live is not False
         if clear_draft:
             # kill the restored draft (both directions), settle, then paste
             fe.send_key(win, "ctrl+u")
@@ -301,12 +313,12 @@ class _PostMixin:
         A.state_file(log, sdb, "web-send",
                      {"win": win, "chars": len(text), "ok": ok, "tab": tab,
                       "clear_draft": clear_draft, "attachments": len(attachments),
-                      "clip": clip})
+                      "clip": clip, "live": live, "queued": queued})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "queued": tab in QUEUE_TABS, "tab": tab})
+        return self._json({"ok": True, "queued": queued, "tab": tab})
 
     def post_command(self, sid):
         """The scoreboard's quick-command row — type one of the TUI's OWN
@@ -1364,16 +1376,38 @@ class _PostMixin:
             self._spawn_escape_recheck(fe, win, log, tpath, tsize)
         return self._json({"ok": True, "tab": tab})
 
-    def _screen(self, fe, win):
+    def _screen(self, fe, win, why="interrupt"):
         """The window's ANSI-stripped visible text, or None (unreadable/empty).
-        The unit of the interrupt's screen-DELTA liveness check and its audit
-        probe. Never raises (audit-before-swallow)."""
+        The unit of every screen-DELTA liveness check (the interrupt's verify
+        and post_message's queued-verify) and of the interrupt's audit probe.
+        `why` names the caller in the swallow row (`dashboard <why> (probe)`).
+        Never raises (audit-before-swallow)."""
         try:
             raw = fe.get_text(win)
         except Exception:
-            A.error("", "dashboard interrupt (probe)", {"win": win})
+            A.error("", "dashboard %s (probe)" % why, {"win": win})
             return None
         return strip_ansi(raw) if raw else None
+
+    def _turn_live(self, fe, win):
+        """Is a turn ACTUALLY running in `win`? True = yes, False = the box is
+        static (idle), None = unreadable. Two ANSI-stripped captures
+        QUEUE_VERIFY_GAP_S apart — the same marker-free screen-DELTA liveness
+        the interrupt's verify uses (a running turn always ticks its spinner /
+        elapsed timer / token stream; a stopped one is static), because no
+        marker string survives: glyphs animate, gerunds vary, thinking and
+        streaming phases differ.
+
+        The tab colour is NOT a substitute: Claude Code fires no hook on cancel,
+        so a terminal-side Esc-Esc leaves it frozen mid-turn. post_message calls
+        this before promising `queued`; deliberately NOT folded together with
+        _escape_press's own loop, which re-presses between captures."""
+        a = self._screen(fe, win, why="send")
+        time.sleep(config.QUEUE_VERIFY_GAP_S)
+        b = self._screen(fe, win, why="send")
+        if a is None or b is None:
+            return None
+        return a != b
 
     def _phase(self, screen, at):
         """Diagnostic snapshot of `screen` at capture point `at` for the

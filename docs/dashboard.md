@@ -380,7 +380,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `group_dir\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
 | `/api/notify-config` | `{enabled}` — the GLOBAL alerts master switch (`prefs.notify_enabled()`, default ON); the list page's `#notifytoggle` seeds its ◉/○ label from this on load (*Global alerts toggle* below) |
 | `POST /api/notify` | **control plane** (a FIXED route, distinct from `/api/session/<sid>/notify`): `{"enabled": bool}` → write the durable global `notify-enabled` pref, audit a `notify-global` `state_files` row, and push a `notify-config` SSE event so every other open page repaints; the ONE master switch over all toasts/OS notifs + Telegram/web-push, overriding per-session mutes when OFF (*Global alerts toggle* below); 400 non-bool |
-| `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (`QUEUE_TABS`); 409 headless, 400 empty, 503 no terminal |
+| `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (a `QUEUE_TABS` tab colour VERIFIED against a live screen, `_turn_live` — a terminal-side cancel freezes the colour mid-turn); 409 headless, 400 empty, 503 no terminal |
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
@@ -503,13 +503,14 @@ that (it types into the TUI either way), so the *mechanics* need nothing from
 us. The *feedback* does: a mid-turn message reaches the transcript only at
 delivery, so from the page it would just vanish for minutes. The endpoint
 therefore reports which case happened — the response carries `queued` (tab
-state at send time ∈ `QUEUE_TABS` = `thinking`/`working`/`executing`) and
-`tab`, and the same tab state rides the `web-send` audit row. The page shows a
+state at send time ∈ `QUEUE_TABS` = `thinking`/`working`/`executing`, **verified
+against a live screen** — next paragraph) and `tab`, and both the raw tab state
+and the verdict (`tab`/`live`/`queued`) ride the `web-send` audit row. The page shows a
 queued send as a ⧗ chip under the composer (and the send button reads
 "queue" while busy — a cosmetic client-side mirror of `QUEUE_TABS`; the
 server's verdict is the chip authority). A chip is removed when its prompt
 record actually arrives in the stream — `_conv_items` items additively carry
-`kind` and, for prompts, the raw `text`, and `drainQueue` matches on exact
+`kind` and, for prompts, the raw `text`, and `drainQueue` matches on
 text — because the transcript is the ONE delivery signal: tab transitions are
 useless (green flips busy again the instant a queued prompt starts
 processing), and the chip's ✕ only hides it (the message is already in the
@@ -528,6 +529,29 @@ are not user turns), so both the bubble and the drain work.
 deliberately NOT in `QUEUE_TABS`: a dialog is up and typed text goes to the
 DIALOG, not the input box — a send then is neither immediate nor queued, and
 claiming "queued" would be a lie.
+
+**The tab colour alone cannot promise `queued` — the promise is verified**
+(2026-07-25). `queued: true` is a *promise* the page acts on: it pins a ⧗ chip
+and waits for a delivery. But Claude Code fires **no hook on cancel**, so a turn
+cancelled AT THE TERMINAL (Esc-Esc) leaves the tab frozen on magenta with
+nothing to repaint it — the colour says `thinking` while the TUI sits idle at
+its prompt. A colour-only verdict then promised `queued` for a message the idle
+TUI submitted *instantly*, and the chip had no delivery to wait for: session
+`bdeca061` sent on a `tab: thinking` and `UserPromptSubmit` fired 0.105 s later.
+So on a `QUEUE_TABS` tab `post_message` first runs `_turn_live` — the same
+marker-free **screen-delta** liveness the interrupt's verify uses (two
+ANSI-stripped `get_text` captures `QUEUE_VERIFY_GAP_S` apart: a running turn
+always ticks its spinner / elapsed timer / token stream, a stopped one is
+static; no marker *string* survives Claude Code's versions, see *Interrupt*).
+Static ⇒ `queued: false`. Unreadable (`live: null`) ⇒ keep the colour's verdict,
+so a probe failure can never lose a real queue. Two constraints are load-bearing:
+the probe runs **before** the paste (our own paste changes the screen and would
+itself read as motion), and it is paid **only** on a `QUEUE_TABS` send — where
+the message is queueing anyway, so the gap costs the user nothing. Why not fix
+the tab colour instead: there is no event to fix it with — a terminal-side
+cancel is exactly the signal Claude Code doesn't emit (docs/tab-colors.md), and
+an idle-timeout backstop is a rejected design. This endpoint, unlike the tab
+painter, has a live terminal in hand and can just *look*.
 
 **Interrupt flips the button out of "queue" immediately** (2026-07-20). Claude
 Code fires NO hook on interrupt, so after an Esc the tab can sit stale-busy —
@@ -943,11 +967,27 @@ change (slow cadence, convenience state like the draft), `buildQueuePin` seeds
 empty list deletes the stash. This is display persistence only — the message
 itself lives in the TUI's queue regardless; the pinned bubble just stops vanishing.
 
-`drainQueue` matches a delivered prompt against a queued entry **tolerantly** —
-exact text, or (attachments prepend leading `@path` mentions + `\n`) the
-delivered prompt ends with the queued suffix — the same match `drainPending`
-uses, so a queued message *with attachments* (delivered as `@path\n<text>`) still
-drains instead of sticking.
+**The delivery match is a SUFFIX match, not an exact one** — one rule with one
+owner, `_chip_delivered` server-side and its deliberate twin `promptMatches` in
+`app.00-core.js` (JS can't import it), used by *both* client reconcilers
+(`drainQueue` for the ⧗ chips, `drainPending` for the greyed optimistic
+bubbles). A suffix, because what the composer sent can arrive with anything
+prepended, and **both** known prefixes are real:
+
+- attachments prepend `@path` mentions + `\n` (server `_with_attachments`), so a
+  queued message with a screenshot is delivered as `@path\n<text>`; and
+- text **already in the TUI input box** is glued on with **no separator**. A
+  terminal-side Esc-Esc cancel-edit restores the previous message into the `❯`
+  box and the page cannot know (its `clear_draft` path only fires for a resend
+  the page itself initiated), so the bracketed paste lands right after it.
+
+The match was newline-ONLY until 2026-07-25, which missed the second case
+entirely: in session `bdeca061` a cancelled `testing` sat in the box and the
+delivered prompt arrived as `testing` + the sent text as ONE prompt, so neither
+the client drain nor the server reconcile below could ever match it and the chip
+pinned forever. Empty entry text never matches (it would reconcile every entry
+away). Three hand-rolled copies of this match drifted apart once; a static test
+(`test_app_js_drains_through_the_shared_prompt_match`) keeps them merged.
 
 **Delivered entries are also reconciled server-side, or a persisted one stuck
 forever.** `drainQueue` only reconciles NEW stream items, never the
@@ -958,8 +998,8 @@ backlog, and had no fresh item to drain it against — a ⧗ queued bubble stuck
 forever even though Claude Code received and answered the message (the "still
 shows as queued after it was delivered" report). `_composer_queue` now drops any
 entry whose prompt already appears among the transcript's delivered prompts
-(`_delivered_prompts` / `_chip_delivered`, the same tolerant match) before it
-ever seeds the page. Read-only — the server can't rewrite the kv (`mode=ro`), so
+(`_delivered_prompts` / `_chip_delivered`, the shared suffix match above) before
+it ever seeds the page. Read-only — the server can't rewrite the kv (`mode=ro`), so
 the stale rows are pruned by the client's next `saveQueue` once this filtered
 list seeds it.
 

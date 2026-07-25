@@ -3198,6 +3198,104 @@ def test_post_message_reports_queued_mid_turn(dash, monkeypatch):
     assert json.loads(body)["queued"] is False
 
 
+def test_post_message_queued_is_verified_against_a_live_screen(dash, monkeypatch):
+    """A QUEUE_TABS tab colour is NOT enough to promise `queued` — the promise is
+    VERIFIED against a live screen (docs/dashboard.md, *Web composer queue*).
+
+    Claude Code fires no hook on cancel, so a turn cancelled AT THE TERMINAL
+    (Esc-Esc) leaves the tab frozen on magenta; the colour-only verdict then
+    promised `queued` for a message the idle TUI submitted instantly, pinning a
+    ⧗ chip with no delivery to wait for (session bdeca061, 2026-07-25 —
+    UserPromptSubmit fired 0.1s after a `tab: thinking` send). So a busy colour
+    with a STATIC screen reports queued False; a screen still animating reports
+    True. Both land in the web-send audit row (`live`/`queued`)."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.config, "QUEUE_VERIFY_GAP_S", 0.0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "88")
+    A.session_start({"session_id": "msgv", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"88": "thinking"})
+    # STALE magenta: the screen is static (the turn was cancelled at the
+    # terminal) -> not queued, despite the busy colour
+    fe.screens = ["idle box"]
+    code, body = _post(dash + "/api/session/msgv/message", {"text": "go"})
+    assert code == 200
+    assert json.loads(body) == {"ok": True, "queued": False, "tab": "thinking"}
+    row = _last_state_file("msgv", "web-send")
+    assert row["live"] is False and row["queued"] is False
+    assert row["tab"] == "thinking"           # the raw colour is still recorded
+    # a REAL mid-turn send: the screen keeps changing -> queued
+    fe.screens = ["spinner .", "spinner .."]
+    code, body = _post(dash + "/api/session/msgv/message", {"text": "later"})
+    assert json.loads(body) == {"ok": True, "queued": True, "tab": "thinking"}
+    row = _last_state_file("msgv", "web-send")
+    assert row["live"] is True and row["queued"] is True
+    # an UNREADABLE screen keeps the colour's verdict (never lose a real queue)
+    fe.screens = [""]
+    code, body = _post(dash + "/api/session/msgv/message", {"text": "hm"})
+    assert json.loads(body)["queued"] is True
+    assert _last_state_file("msgv", "web-send")["live"] is None
+
+
+def test_post_message_settled_tab_skips_the_screen_probe(dash, monkeypatch):
+    """The queued-verify is paid ONLY on a QUEUE_TABS send (where the message is
+    queueing anyway) — a settled tab is already a `queued: False` and must not
+    spend a screen capture / the verify gap on it."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "89")
+    A.session_start({"session_id": "msgv2", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "awaiting-response"})
+    reads = []
+    fe.get_text = lambda win, extent="screen": reads.append(win) or ""
+    code, body = _post(dash + "/api/session/msgv2/message", {"text": "hi"})
+    assert json.loads(body)["queued"] is False
+    assert reads == []                        # no probe on a settled tab
+    assert _last_state_file("msgv2", "web-send")["live"] is None
+
+
+def test_chip_delivered_matches_a_glued_prefix():
+    """The delivered-prompt match rule (`_chip_delivered` — owner of the fact,
+    twinned in app.js `promptMatches`) is a SUFFIX match, because what the
+    composer sent can arrive with anything prepended:
+
+    · attachments prepend `@path` mentions + a newline (server-side), and
+    · text ALREADY IN THE TUI INPUT BOX is glued on with NO separator — a
+      terminal-side Esc-Esc cancel-edit restores the previous message there and
+      the page can't know, so the paste lands right after it. The old
+      newline-ONLY tolerance missed that, and the chip pinned forever (session
+      bdeca061, 2026-07-25: `testing` + the sent text arrived as one prompt).
+
+    Empty chip text must never match (it would reconcile every chip away)."""
+    D = DS._chip_delivered
+    assert D("hello", ["hello"])                        # exact
+    assert D("hello", ["@a.png\nhello"])                # attachment mentions
+    assert D("hello", ["testinghello"])                 # restored draft, glued
+    assert D("hello", ["nope", "x\nhello"])             # any delivered prompt
+    assert not D("hello", ["hello there"])              # a PREFIX is not a match
+    assert not D("hello", ["heLLo"])                    # not case-folded
+    assert not D("hello", [])
+    assert not D("", ["anything at all"])               # empty never matches
+    assert not D("   ", ["anything at all"])
+
+
+def test_app_js_drains_through_the_shared_prompt_match(dash):
+    """Both client reconcilers — drainQueue (the ⧗ queued chips) and
+    drainPending (the greyed optimistic bubbles) — must go through the ONE
+    shared `promptMatches` rule, the deliberate twin of the server's
+    `_chip_delivered`. Three copies of this match drifted apart once (the
+    newline-only tolerance that pinned a chip forever); a static check on the
+    served bundles keeps them from re-splitting."""
+    code, core = _get(dash + "/static/app.00-core.js")
+    assert code == 200 and "function promptMatches(" in core
+    for part in ("app.05-session.js", "app.06-clientlog.js"):
+        code, body = _get(dash + "/static/" + part)
+        assert code == 200
+        assert "promptMatches(" in body, part
+        # the old hand-rolled forms must be gone from both drains
+        assert 'endsWith("\\n" + ' not in body, part
+
+
 def test_conv_items_carry_kind_and_prompt_text():
     items = DS._conv_items([
         {"kind": "prompt", "text": "do the thing"},

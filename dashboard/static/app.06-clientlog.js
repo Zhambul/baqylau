@@ -132,10 +132,10 @@ function drainPending(items) {
   for (const it of items) {
     if (it.t !== "msg" || it.kind !== "prompt") continue;
     const real = (it.text || "").trim();
-    // exact match, or (attachments prepend leading @path mentions +\n) the
-    // real text ends with the typed suffix — server._with_attachments order
-    const i = ses.pending.findIndex(p =>
-      real === p.text || real.endsWith("\n" + p.text));
+    // suffix match (promptMatches — the one rule, shared with drainQueue and
+    // mirrored server-side): the delivered prompt may carry attachment mentions
+    // OR a terminal-restored draft in front of what we sent.
+    const i = ses.pending.findIndex(p => promptMatches(real, p.text));
     if (i >= 0) settlePending(ses.pending[i], "reconciled");
   }
 }

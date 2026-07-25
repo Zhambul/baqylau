@@ -653,9 +653,11 @@ function slashMenu(ta, host, getCmds, opts) {
 // Claude Code natively QUEUES a message typed while a turn is running and
 // delivers it when the turn ends — the composer rides exactly that (send_text
 // types into the TUI either way). The /message response says which happened
-// (`queued: true` when the send landed mid-turn — the server's QUEUE_TABS
-// verdict is the authority; the client QUEUE_TABS below only styles the send
-// button). A queued message would otherwise VANISH from the page until
+// (`queued: true` when the send landed mid-turn — the server's verdict is the
+// authority: a QUEUE_TABS tab colour VERIFIED against a live screen, since a
+// terminal-side cancel can freeze the colour mid-turn and a colour-only verdict
+// pinned chips no delivery would ever drain; the client QUEUE_TABS below only
+// styles the send button). A queued message would otherwise VANISH from the page until
 // delivery (it reaches the transcript only when the turn ends), so it shows as
 // an amber "⧗ queued" prompt bubble PINNED at the top of the transcript — above
 // the newest-first stream, so incoming activity never buries it — until its
@@ -741,10 +743,10 @@ function drainQueue(items) {
   for (const it of items) {
     if (it.t !== "msg" || it.kind !== "prompt") continue;
     const real = (it.text || "").trim();
-    // exact match, or (attachments prepend leading @path mentions +\n) the real
-    // text ends with the queued suffix — same tolerant match as drainPending,
-    // since a queued message with attachments arrives as `@path\n<text>`.
-    const i = ses.queue.findIndex(m => real === m.text || real.endsWith("\n" + m.text));
+    // suffix match (promptMatches — the one rule, shared with drainPending and
+    // mirrored server-side): the delivered prompt may carry attachment mentions
+    // OR a terminal-restored draft in front of what we sent.
+    const i = ses.queue.findIndex(m => promptMatches(real, m.text));
     if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
   }
   if (hit) { renderQueue(); saveQueue(ses); }

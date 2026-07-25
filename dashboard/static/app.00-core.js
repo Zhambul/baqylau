@@ -331,6 +331,24 @@ function copySid(sid) {
     () => toast("ask", "copy failed", "clipboard permission?"));
 }
 
+// Does a DELIVERED transcript prompt carry what the composer sent? The one
+// match rule behind both reconcilers — drainQueue (the ⧗ queued chips) and
+// drainPending (the greyed optimistic bubbles). Deliberate twin of the server's
+// dashboard/read/session._chip_delivered (which reconciles the persisted chips
+// against the transcript), since JS can't import it — keep the two in step.
+//
+// A SUFFIX match, not exact: what we sent can arrive with anything prepended,
+// and both known prefixes are real — attachments prepend `@path` mentions +
+// "\n", and text ALREADY IN THE TUI INPUT BOX is glued on with NO separator (a
+// terminal-side Esc-Esc cancel-edit restores the previous message there and the
+// page can't know, so the paste lands after it: `testing` + the sent text
+// arrived as ONE prompt and the old "\n"-only tolerance missed, pinning the chip
+// forever — session bdeca061, 2026-07-25). Empty `sent` never matches (it would
+// match every prompt).
+function promptMatches(real, sent) {
+  return !!sent && (real || "").endsWith(sent);
+}
+
 const TAB_LABEL = {
   "": "no tab", "idle": "idle", "thinking": "busy", "working": "busy",
   "executing": "running", "awaiting-bg": "running",

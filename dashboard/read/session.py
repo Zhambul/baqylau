@@ -257,12 +257,24 @@ def _delivered_prompts(sid):
 
 
 def _chip_delivered(text, delivered):
-    """True when a queued ⧗ chip's text matches a delivered prompt — exact, or
-    (attachments prepend leading `@path` mentions + '\\n') the delivered prompt
-    ends with the typed suffix (app.js drainPending uses the same tolerant
-    match, since a queued message with attachments arrives as `@path\\n<text>`)."""
+    """True when a queued ⧗ chip's / optimistic bubble's text matches a
+    DELIVERED prompt. THE match rule for reconciling web-composer stand-ins
+    against the transcript — owner of the fact, mirrored in app.js
+    `promptMatches` (drainQueue + drainPending), which JS cannot import.
+
+    A SUFFIX match, not exact: what the composer sent can arrive with anything
+    prepended, and both known prefixes are real.
+      · attachments prepend `@path` mentions + '\\n' (server _with_attachments);
+      · text ALREADY IN THE TUI INPUT BOX is glued on with NO separator — a
+        terminal-side Esc-Esc cancel-edit restores the previous message there
+        and the page can't know (its `clear_draft` never fires), so the paste
+        lands after it: `testing` + the sent text arrived as one prompt and the
+        old '\\n'-only tolerance missed, pinning the chip forever (session
+        bdeca061, 2026-07-25).
+    So the separator is not required. Empty chip text never matches (it would
+    match every prompt)."""
     c = (text or "").strip()
-    return bool(c) and any(d == c or d.endswith("\n" + c) for d in delivered)
+    return bool(c) and any(d.endswith(c) for d in delivered)
 
 
 def _composer_queue(sid):

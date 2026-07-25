@@ -176,6 +176,26 @@ NOTIFY_URL_BASE = (os.environ.get("CLAUDE_DASH_PUBLIC_URL")
 # NOT here: a dialog is up and typed text goes to the DIALOG, not the queue.
 QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 
+QUEUE_VERIFY_GAP_S = 0.5           # gap between the TWO screen captures whose
+#                                    equality decides "is a turn REALLY running"
+#                                    before post_message promises `queued`. The
+#                                    tab colour alone cannot promise it: Claude
+#                                    Code fires NO hook on cancel, so a turn
+#                                    cancelled AT THE TERMINAL (Esc-Esc) leaves
+#                                    the tab frozen on magenta and the send
+#                                    reports `queued` for a message the idle TUI
+#                                    submits instantly — pinning a ⧗ chip no
+#                                    prompt will ever drain (session bdeca061,
+#                                    2026-07-25). Same marker-free screen-DELTA
+#                                    liveness as the interrupt's verify (see
+#                                    INTERRUPT_RETRY_S for why no string is
+#                                    safe), and the same value for the same
+#                                    reason: a running turn animates its
+#                                    spinner/elapsed-timer/stream within it at
+#                                    every thinking level. Paid only on a
+#                                    QUEUE_TABS send, where the message is
+#                                    queueing anyway.
+
 # Tab states in which the session is MID-TURN — where Claude Code's double-Esc
 # means "cancel the work and restore the last message for editing", not the
 # rewind menu (post_rewind mirrors that split). awaiting-command (red) is
