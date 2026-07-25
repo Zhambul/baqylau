@@ -317,6 +317,8 @@ class _PostMixin:
         # attach whatever image is on the board (docs/dashboard.md *Clipboard-
         # image guard*); no-op on a text clipboard / off macOS.
         clip = launch._clear_clipboard_image()
+        launch.note_send(sid)      # our paste is about to sit in the box for a
+        #                            beat — the draft sync must not read it back
         ok = bool(fe.paste_text(win, text))
         A.state_file(log, sdb, "web-send",
                      {"win": win, "chars": len(text), "ok": ok, "tab": tab,

@@ -9,6 +9,7 @@ import time
 import plugins
 from core import paths as P
 from core import sessionapi as API
+from core import tabs
 from core.noaudit import load_audit
 from dashboard import config
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
@@ -135,7 +136,7 @@ class _SseMixin:
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
-                "term_box": "",
+                "term_box": None,
                 "composer_queue": None, "monitors": None, "jobs": None,
                 "memory": None, "suggestion": None, "goal": None}
         row = API.session_row(sid) or {}
@@ -303,20 +304,25 @@ class _SseMixin:
             # the tab is settled (done/idle), no modal dialog is pending, and
             # the web composer box is empty (else there's nothing to surface, or
             # the probe would fight a draft the user is editing elsewhere).
-            if n % SLOW_EVERY == 0 and (tab in _SUGGEST_TABS
+            # A MODAL dialog (red tab / pending ask/plan) makes the `❯` region
+            # the DIALOG's input, not the message box — never read it as one.
+            if n % SLOW_EVERY == 0 and (tab != tabs.AWAITING_COMMAND
                                         and ask is None and plan is None):
                 ghost, box = _input_box(sid)
-                # the ghost is only interesting while the web box is empty (a
-                # draft the user is editing elsewhere would fight it)
-                sug = ghost if prev["composer_draft"] is None else None
-                # …the typed half, though, is exactly what we want REGARDLESS of
-                # the web draft: it is the terminal→web sync. Only on a change,
-                # and a clear only propagates if it empties text we ourselves
-                # synced (launch.sync_terminal_draft owns that asymmetry).
-                box = box or ""
+                # the ghost only exists on a SETTLED tab, and only matters while
+                # the web box is empty (a draft the user is editing elsewhere
+                # would fight it)
+                sug = (ghost if (tab in _SUGGEST_TABS
+                                 and prev["composer_draft"] is None) else None)
+                # …the typed half is wanted on ANY tab: typing a follow-up while
+                # Claude works is the main reason to reach for another device,
+                # and gating this on a settled tab meant the sync did nothing
+                # exactly then (reported 2026-07-25). launch.sync_terminal_draft
+                # owns the push/clear asymmetry.
                 launch.sync_terminal_draft(sid, box, prev["term_box"],
                                            prev["composer_draft"])
-                prev["term_box"] = box
+                if box is not None:
+                    prev["term_box"] = box
             else:
                 sug = prev["suggestion"]
             if not self._push_changed(prev, "suggestion", "suggestion", sug, {"suggestion": sug}):

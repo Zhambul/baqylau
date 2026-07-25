@@ -5132,13 +5132,53 @@ def test_terminal_draft_sync_pushes_typing_and_ignores_a_still_box():
     log = P.mirror_log("ts1")
     S.kv_set(log, "seed", 1)                     # the state DB must exist
     L = DS.launch
-    assert L.sync_terminal_draft("ts1", "typed at the terminal", "", None) \
+    assert L.sync_terminal_draft("ts1", "typed at the terminal", None, None) \
         == "typed at the terminal"
     d = S.kv_get(log, "composer-draft")
     assert d["text"] == "typed at the terminal" and d["origin"] == "terminal"
-    # unchanged box -> no write at all (no seq churn, no SSE noise)
+    # unchanged box -> no write at all: no seq churn, and (the reason it
+    # matters) no overwriting an edit the user is making to that same draft on
+    # the web while the box sits still
     assert L.sync_terminal_draft("ts1", "typed at the terminal",
                                  "typed at the terminal", d) is None
+    # the box holding that text also arms clear_draft, or a web send of the
+    # very draft we synced would paste after it and deliver it twice
+    assert L.tui_draft("ts1") == "typed at the terminal"
+
+
+def test_terminal_draft_sync_clears_after_a_send_on_a_fresh_connection():
+    # "the draft doesn't clear after I send from the kitty tab": the clear used
+    # to need the previous probe's memo to match, but a page that CONNECTS
+    # after the send starts with an empty memo and an empty box — equal, so it
+    # left the stale draft forever. The STORED record's origin is what says the
+    # draft came from that now-empty box, and it survives reconnects.
+    A.session_start({"session_id": "ts3", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("ts3")
+    S.kv_set(log, "seed", 1)
+    mine = {"text": "sent from kitty", "origin": "terminal", "seq": 1}
+    S.kv_set(log, "composer-draft", mine)
+    # fresh connection: no memo at all, box already empty
+    assert DS.launch.sync_terminal_draft("ts3", "", None, mine) == ""
+    assert S.kv_get(log, "composer-draft")["text"] == ""
+
+
+def test_terminal_draft_sync_ignores_an_unreadable_box_and_our_own_send():
+    # None = "we could not read a box" (dead window, kitten failure) — no news,
+    # never a signal, or every session ending would wipe its draft.
+    A.session_start({"session_id": "ts4", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("ts4")
+    S.kv_set(log, "seed", 1)
+    mine = {"text": "still typing", "origin": "terminal", "seq": 1}
+    S.kv_set(log, "composer-draft", mine)
+    L = DS.launch
+    assert L.sync_terminal_draft("ts4", None, "still typing", mine) is None
+    assert S.kv_get(log, "composer-draft")["text"] == "still typing"
+    # and our OWN paste sits in that box for a beat before its Enter — reading
+    # it back would echo the outgoing message into every device's composer
+    L.note_send("ts4")
+    assert L.sync_terminal_draft("ts4", "the message we just sent", None,
+                                 mine) is None
+    assert S.kv_get(log, "composer-draft")["text"] == "still typing"
 
 
 def test_terminal_draft_sync_never_wipes_another_devices_draft():

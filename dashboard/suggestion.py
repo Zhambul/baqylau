@@ -178,10 +178,18 @@ def probe_box(fe, win, sid=""):
     the ghost feeds the composer's placeholder, the typed text feeds the
     terminal→web draft sync (docs/dashboard.md, *Terminal draft sync*). They run
     on the same SSE tick, so sharing the capture keeps that one `kitten @
-    get-text` per tick instead of two. (None, None) on any failure (audited)."""
+    get-text` per tick instead of two.
+
+    The typed half distinguishes "" (a box we READ and it is empty) from None
+    (we could not read one — dead window, kitten failure, no box on screen).
+    The sync treats an empty box as a signal and an unreadable one as no news,
+    so collapsing the two would clear a draft every time a session's window
+    goes away. (None, None) on any failure (audited)."""
     try:
         screen = fe.get_text(win, ansi=True)
     except Exception:
         A.error(sid, "dashboard suggestion probe", {"win": win})
         return None, None
-    return parse(screen), typed(screen)
+    if not screen:
+        return None, None
+    return parse(screen), (typed(screen) or "")

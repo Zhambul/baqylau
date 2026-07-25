@@ -279,6 +279,17 @@ def set_tui_draft(sid, text):
 
 
 TERMINAL_ORIGIN = "terminal"     # composer-draft `origin` for a synced box
+SEND_QUIET_S = 4.0               # after OUR paste, ignore the box for this long
+_LAST_SEND = {}                  # sid -> monotonic stamp of the last web send
+
+
+def note_send(sid):
+    """Stamp that the web just pasted into this session's input box, so the
+    draft sync ignores it (see sync_terminal_draft). In-process only: the
+    dashboard is one process, and a missed stamp costs a self-correcting
+    flicker, not correctness."""
+    if sid:
+        _LAST_SEND[sid] = time.monotonic()
 
 
 def sync_terminal_draft(sid, seen, last, stored):
@@ -288,22 +299,43 @@ def sync_terminal_draft(sid, seen, last, stored):
     kv the web composer uses — so it reaches every device through the machinery
     that already broadcasts and restores drafts, and needs no second store.
 
-    `seen` is the box's real text now, `last` what the previous probe saw,
-    `stored` the current draft record (or None). Returns the text written, or
-    None when nothing was.
+    `seen` is the box's real text now (None = we could not read it: no news,
+    never a signal), `last` what the previous probe saw, `stored` the current
+    draft record (or None). Returns the text written, or None when nothing was.
 
     The asymmetry is the point. A NON-EMPTY box means someone is typing at the
     terminal, so it wins. An EMPTY box does NOT mean "clear the draft": a draft
     typed on another device lives only in the kv, and the terminal box is empty
     for it ALWAYS — blindly syncing emptiness would wipe the phone's draft on
-    the next tick. So a clear only propagates when the box is emptying out text
-    WE synced from it (`stored` still holds exactly what the box held last
-    probe) — i.e. the terminal draft was sent or cleared where it came from."""
+    the next tick. A clear rides through only when the STORED draft is one WE
+    synced (`origin`), i.e. its text came from that now-empty box.
+
+    Keying the clear on `origin` rather than on `last` is what makes it survive
+    a reconnect: `last` is per-connection memo and starts empty, so a page that
+    opens AFTER the terminal message was sent would see empty == empty and
+    leave the stale draft forever ("the draft doesn't clear after I send from
+    kitty", 2026-07-25). The stored record remembers where it came from; a
+    freshly-connected page doesn't have to."""
     from core import state as ST
     from core import sessionapi as API
-    if seen == last:
-        return None                      # nothing changed at the terminal
-    if not seen and not (stored and stored.get("text") == last):
+    if seen is None:
+        return None                      # unreadable box — no news
+    if time.monotonic() - _LAST_SEND.get(sid, 0) < SEND_QUIET_S:
+        # our OWN paste is briefly in that box before its Enter — reading it
+        # back would echo the outgoing message into every device's composer
+        return None
+    stale = bool(stored and stored.get("text")
+                 and stored.get("origin") == TERMINAL_ORIGIN)
+    if seen:
+        if last is not None and seen == last:
+            # the terminal box hasn't CHANGED, so it has nothing new to say —
+            # and re-pushing it every tick would overwrite an edit the user is
+            # making to that same draft on the web, making it impossible to
+            # touch a synced draft anywhere else. `last is None` is the first
+            # probe of a connection: adopt the box then, which is what makes
+            # "type in kitty, then open the dashboard" work.
+            return None
+    elif not stale:
         return None                      # someone else's draft — not ours to clear
     try:
         sdb = API.state_db_for(sid)
@@ -319,6 +351,11 @@ def sync_terminal_draft(sid, seen, last, stored):
         return None
     if res != "written":
         return None
+    # The box HOLDS that text, so the next web send must replace it rather than
+    # paste after it — the same flag a take-back sets. Without this, sending
+    # from the web the draft you typed in kitty delivers it TWICE over
+    # (`abcabc`), since the composer now shows what the box already holds.
+    set_tui_draft(sid, seen)
     # audited like every other composer-draft write, with its own action so the
     # trail says WHERE a draft came from (a page's save vs the terminal box)
     A.state_file(sid, sdb, "composer-draft",

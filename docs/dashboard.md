@@ -1156,19 +1156,46 @@ no page mistakes it for its own echo) and a `composer-draft` audit row with
 at the terminal, so it wins. An empty box does **not** mean "clear the draft":
 a draft typed on a phone lives only in the kv, and the terminal box is empty
 for it *always* — propagating emptiness would wipe that draft on the very next
-tick. So a clear only rides through when the box is emptying out text **we
-synced from it** (the stored draft still holds exactly what the box held on the
-previous probe), i.e. the terminal draft was sent or cleared where it came
-from. Anything else, hands off.
+tick. A clear rides through only when the STORED draft is one we synced
+(`origin: "terminal"`), i.e. its text came from that now-empty box.
+
+Keying the clear on the stored `origin` rather than on the previous probe's
+memo is what makes it survive a reconnect. The memo is per-connection and
+starts empty, so a page opening AFTER a terminal send saw empty box == empty
+memo and left the stale draft forever ("the draft doesn't clear after I send
+from kitty", 2026-07-25). The record remembers where it came from; a
+freshly-connected page doesn't have to.
+
+The other rules, each earned:
+
+- **A still box says nothing.** Re-pushing an unchanged box every tick would
+  overwrite an edit being made to that same draft on the web, making a synced
+  draft impossible to touch anywhere else. Only a CHANGE pushes — except the
+  first probe of a connection, which adopts whatever is in the box (that is
+  what makes "type in kitty, then open the dashboard" work).
+- **Unreadable ≠ empty.** `probe_box` returns `""` for a box it read and found
+  empty, `None` when it couldn't read one (dead window, kitten failure). Only
+  `""` is a signal; collapsing the two would clear the draft of every session
+  whose window goes away.
+- **Our own paste is not the user typing.** A web send puts the message in that
+  box for a beat before its Enter; reading it back would echo the outgoing
+  message into every device's composer. `post_message` stamps `note_send` and
+  the sync ignores the box for `SEND_QUIET_S`.
+- **A synced draft arms `clear_draft`.** The box HOLDS that text, so the sync
+  also sets the `tui-draft` flag (*Interrupt*) — otherwise sending from the web
+  the draft you typed in kitty pastes after it and delivers it twice.
+- **Never on a red tab / pending ask/plan.** The `❯` region is then the
+  DIALOG's input, not the message box.
 
 Nothing is ever typed back INTO the terminal, so there is no echo loop; the
 page's own guard (`applyComposerDraft` ignores a draft while the textarea has
 focus) keeps a synced draft from yanking text out from under active typing.
 
 Known limits: the sync runs only while a page has the session open (it rides
-that session's SSE tick), and only on a SETTLED tab — a message typed mid-turn
-(one the TUI is queueing) is not mirrored until the turn ends, which also keeps
-our own send's transient paste from reading back as a draft.
+that session's SSE tick, on the `SLOW_EVERY` cadence — a few seconds, not
+keystroke-live), and `suggestion.typed` whitespace-normalizes the box, so a
+draft with its own newlines arrives as one line (the box pads its rows, so an
+ordinary WRAPPED line keeps its spaces).
 
 ## Web composer queue (`POST /api/session/<sid>/composer-queue`)
 
