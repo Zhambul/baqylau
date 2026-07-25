@@ -155,6 +155,19 @@ New always-audited swallow sites (previously silent — their absence used to ma
   prompt orphaned in the transcript (see the ghost-message shape above), so the
   two rows read together tell the whole story of one Escape.
 
+- **A web rewind failed with `step: "open"` ("checkpoint menu never appeared"),
+  and/or a nonsense fragment appeared as a chat message**: the classic shape is
+  a rewind (or any slash command) issued shortly AFTER a web interrupt. The
+  interrupt presses Escape, `editorMode: vim` makes the input box modal, and a
+  typed `/rewind` in NORMAL mode is vim COMMANDS — the menu never opens and the
+  keystroke tail gets submitted (observed as the message `nd`, 2026-07-25).
+  Look for a `web-interrupt` row shortly before the failing `web-rewind-to`
+  row, and check the transcript for a short junk prompt between them. Fixed by
+  pasting every slash command (`launch.type_command`, docs/dashboard.md *Slash
+  commands are pasted*), so a RECURRENCE means something reached the TUI as
+  typed text again — check whether the failing site calls `send_text` with a
+  `/…` string.
+
 - **No Telegram alert for a session left red/green on the dashboard** (docs/dashboard.md
   *Telegram alerts* — the deferred off-device notification): the alert fires only if the
   tab sat asking/done past `CLAUDE_DASH_NOTIFY_DELAY_S` (default 60s) with no reaction and

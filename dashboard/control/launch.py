@@ -232,6 +232,38 @@ def _clear_clipboard_image():
         return False
 
 
+def type_command(fe, win, text):
+    """Put a SLASH COMMAND into a session's input box and submit it. Returns
+    (ok, cleared_clipboard_image).
+
+    THE one way to do that — every site that puts a `/…` command in front of
+    Claude Code goes through here, because raw keystrokes are NOT SAFE in that
+    box. With `editorMode: vim` the input is MODAL, and anything that pressed
+    Escape first (the interrupt presses up to `INTERRUPT_TRIES`) leaves it in
+    NORMAL mode, where the characters are vim COMMANDS rather than text: `/`
+    opens reverse history search, and Claude Code's own hint spells out the
+    workaround — *"press Esc then i then / to open the command menu instead"*.
+    Measured 2026-07-25: a web rewind ~14s after a web interrupt typed
+    `/rewind` into a NORMAL-mode box, the checkpoint menu never opened, and the
+    tail of the keystrokes was submitted into the conversation as the message
+    `nd` (the first `web-rewind-to` `step: "open"` failure in the audit; the
+    identical `nd` artifact recorded earlier in the Esc-gesture comment was
+    blamed on a racing Escape, which now looks like the wrong diagnosis).
+
+    A BRACKETED PASTE is mode-proof — Claude Code takes it as content, never as
+    keystrokes — and it is already how `post_command`'s quick commands
+    (`/compact`, `/model`, `/effort`) reach the TUI, which is why those kept
+    working where the typed `/rewind` did not. The Enter rides outside the
+    paste (kitten_send_text), so it still submits.
+
+    The clipboard-image guard comes with it: a bracketed paste makes Claude
+    Code attach whatever IMAGE is on the board (docs/dashboard.md
+    *Clipboard-image guard*), so no caller may paste without it — folding the
+    two together here is the point of the single owner."""
+    clip = _clear_clipboard_image()
+    return bool(fe.paste_text(win, text)), clip
+
+
 def _steal_watch(before, terminal_app):
     """The post-launch focus watch (a daemon thread — the HTTP response never
     waits on it): record each TRANSITION of the frontmost app onto the

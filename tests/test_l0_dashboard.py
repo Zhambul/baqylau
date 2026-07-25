@@ -4840,7 +4840,8 @@ def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     code, body = _post(dash + "/api/session/rew1/rewind", {})
     assert code == 200
     assert json.loads(body) == {"ok": True, "tab": ""}
-    assert fe.sent == [("88", "/rewind")]             # typed, not key events
+    assert fe.pasted == [("88", "/rewind")]     # BRACKETED paste, not keystrokes
+    assert fe.sent == []                       # never raw text (vim-mode unsafe)
     assert fe.keyed == [("88", ("escape",))]          # no extra Escapes
     assert fe.closed == []
     # same live-tag discipline as interrupt/stop
@@ -4848,7 +4849,7 @@ def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/rew1/rewind", {})
     assert e.value.code == 409
-    assert fe.sent == [("88", "/rewind")]
+    assert fe.pasted == [("88", "/rewind")]
 
 
 def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
@@ -4905,6 +4906,45 @@ def test_post_interrupt_empty_box_is_a_plain_stop(dash, monkeypatch):
     code, body = _post(dash + "/api/session/tb3/interrupt", {})
     assert code == 200 and json.loads(body)["restored"] == ""
     assert _last_state_file("tb3", "web-interrupt").get("phase") != "restore"
+
+
+def test_no_slash_command_is_send_text_anywhere():
+    """The slash-command channel is launch.type_command's (styleguide
+    single-owner table): a bracketed paste, because raw keystrokes in a vim
+    NORMAL-mode input box are COMMANDS, not text. A `send_text` of a `/…`
+    literal anywhere in the dashboard is that bug coming back."""
+    import os
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pat = re.compile(r"""send_text\(\s*\w+\s*,\s*["']/""")
+    hits = []
+    for dirpath, _dirs, files in os.walk(os.path.join(root, "dashboard")):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            p = os.path.join(dirpath, f)
+            with open(p, encoding="utf-8", errors="replace") as fh:
+                if pat.search(fh.read()):
+                    hits.append(os.path.relpath(p, root))
+    assert hits == [], hits
+
+
+def test_slash_commands_never_reach_the_tui_as_keystrokes(dash, monkeypatch):
+    # THE vim-mode regression (2026-07-25). With editorMode vim the input box is
+    # MODAL, and anything that pressed Escape first — the interrupt presses up
+    # to INTERRUPT_TRIES — leaves it in NORMAL mode, where "/rewind" is vim
+    # COMMANDS, not text: the checkpoint menu never opened and the tail of the
+    # keystrokes was submitted into the conversation as the message `nd`. A
+    # bracketed paste is mode-proof (Claude Code reads it as content), so EVERY
+    # slash command goes through launch.type_command and NOTHING types one.
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "94")
+    A.session_start({"session_id": "sl1", "cwd": "/w", "transcript_path": ""})
+    _post(dash + "/api/session/sl1/rewind", {})                    # the menu
+    _post(dash + "/api/session/sl1/command", {"cmd": "compact"})   # quick cmds
+    assert fe.sent == []                        # nothing typed, ever
+    assert [t for _w, t in fe.pasted] == ["/rewind", "/compact"]
 
 
 def test_post_rewind_busy_is_refused(dash, monkeypatch):
@@ -4991,8 +5031,10 @@ class _MenuFE(_FakeFE):
         self.cursor = len(self.prompts)      # start on "(current)"
         self.picked = None                   # (prompt index, option label)
 
-    def send_text(self, win, text):
-        ok = super().send_text(win, text)
+    def paste_text(self, win, text):
+        # /rewind arrives as a BRACKETED PASTE, never raw keystrokes: with
+        # editorMode vim a NORMAL-mode box reads typed characters as commands
+        ok = super().paste_text(win, text)
         if text == "/rewind" and self.state == "idle":
             self.state, self.cursor = "menu", len(self.prompts)
         return ok
@@ -5063,7 +5105,8 @@ def test_post_rewind_to_drives_the_menu(dash, monkeypatch):
         "ok": True, "mode": "both", "degraded": False,
         "restored": "make beta\nsecond line the menu never shows"}
     assert fe.picked == (1, "Restore code and conversation")
-    assert ("31", "/rewind") in fe.sent
+    assert ("31", "/rewind") in fe.pasted      # pasted, never typed
+    assert fe.sent == []
     assert fe.state == "idle"                 # menu fully closed
 
 

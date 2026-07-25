@@ -742,6 +742,36 @@ sometimes", and screenshots (the dominant attach-by-paste case) carry no file
 path anyway, so they already upload. One rule, plus drag-drop as the explicit
 attach gesture.
 
+**Slash commands are PASTED, never typed** (`launch.type_command`, 2026-07-25).
+Raw keystrokes are not safe in Claude Code's input box: with **`editorMode: vim`**
+it is MODAL, and anything that pressed Escape first — the interrupt presses up to
+`INTERRUPT_TRIES` — leaves it in **NORMAL** mode, where the characters are vim
+COMMANDS rather than text. Claude Code's own docs spell out the workaround: in
+normal mode `/` opens reverse history search, and the empty-search hint reads
+*"press `Esc` then `i` then `/` to open the command menu instead."*
+
+Measured: a web rewind ~14 s after a web interrupt typed `/rewind` into a
+NORMAL-mode box; the checkpoint menu never appeared (`web-rewind-to` `step:
+"open"` — the FIRST such failure in the audit, against 4 clean successes) and the
+tail of the keystrokes was submitted into the conversation as the message `nd`.
+The identical `nd` artifact recorded earlier in the Esc-gesture comment was
+blamed on an Escape racing the text through two server threads; vim mode explains
+it without any race, and that older diagnosis now looks wrong.
+
+A **bracketed paste** is mode-proof — Claude Code takes it as content, never as
+keystrokes — and it was already how the quick commands (`/compact`, `/model`,
+`/effort`) reached the TUI, which is exactly why *those* kept working where the
+typed `/rewind` did not. So `launch.type_command` is the ONE slash-command
+channel (`post_rewind`, `post_command`, `rewindmenu.drive`), and it folds in the
+clipboard-image guard below, which every paste requires. The Enter rides outside
+the paste, so it still submits. A grep-test pins it: nothing may reach the TUI as
+a typed slash command.
+
+Residual (unchanged, and NOT made worse): `drive`'s opening `ctrl+u`/`ctrl+k`
+line-kill is still key events, which a NORMAL-mode box also reinterprets — so a
+leftover draft can still get `/rewind` appended to it. That degrades to the same
+honest `step: "open"` failure rather than stray input.
+
 **Clipboard-image guard (the spurious-screenshot fix).** Separately from the
 dashboard's own `@path` attachments (above), **Claude Code's TUI auto-attaches
 whatever image is on the macOS clipboard to a message on ANY bracketed paste —
@@ -1793,14 +1823,15 @@ promise for it).
   `/rewind` would land in the open dialog.
 - **IDLE**: double-Esc opens the rewind/checkpoint menu (restore code
   and/or conversation, summarize; checkpoints are automatic, one per user
-  prompt — code.claude.com/docs/en/checkpointing.md). Mirrored by **typing
-  `/rewind`** (documented identical) — NOT synthesized key events:
+  prompt — code.claude.com/docs/en/checkpointing.md). Mirrored by **the
+  `/rewind` command** (documented identical) — NOT synthesized key events:
   measured on a live idle session, two `send-key` Escapes opened the menu
   only ~2/3 of the time at the BEST gap (0.15 s), ~1/3 at 0.5 s, never
-  from one batched call, focus irrelevant, while typed `/rewind` opened it
-  **every time**. No Escape ⇒ no recheck.
+  from one batched call, focus irrelevant, while `/rewind` opened it
+  **every time**. No Escape ⇒ no recheck. The command is **pasted, never
+  typed** — see *Slash commands are pasted* below.
 
-Every attempt rides a `web-rewind` audit row (`{win, ok, tab}`; a busy
+Every attempt rides a `web-rewind` audit row (`{win, ok, tab, clip}`; a busy
 refusal carries `refused: "busy"`). The take-back's `restored` moved to
 `post_interrupt`, where the screen — not a guess at the last prompt — decides
 whether there was one.

@@ -32,6 +32,7 @@ import re
 import time
 
 from dashboard import screendrive
+from dashboard.control import launch
 
 # One entry per selectable restore option: the requested `mode` (the POST
 # body's vocabulary) → the menu label it must match. Labels are matched
@@ -174,7 +175,12 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
     fe.send_key(win, "ctrl+u")
     fe.send_key(win, "ctrl+k")
     sleep(POLL_S)
-    if not fe.send_text(win, "/rewind"):
+    # a bracketed paste, never raw keystrokes: with editorMode vim the box is
+    # MODAL and the Escapes that preceded this (an interrupt, a bail) leave it
+    # in NORMAL mode, where "/rewind" is vim COMMANDS — the menu never opens and
+    # the tail lands in the conversation (launch.type_command has the measurement)
+    ok, _clip = launch.type_command(fe, win, "/rewind")
+    if not ok:
         raise MenuError("send", "/rewind not delivered")
     screen, ok = screendrive.poll_until(fe, win, menu_open, OPEN_TIMEOUT_S, sleep)
     if not ok:

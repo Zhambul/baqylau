@@ -366,8 +366,10 @@ class _PostMixin:
                           "ok": False, "tab": tab})
             return self._json({"error": "a dialog is open — answer it first"},
                               409)
-        clip = launch._clear_clipboard_image()      # don't let a clipboard image ride
-        ok = bool(fe.paste_text(win, text))  # the slash command (see post_message)
+        # the ONE slash-command channel: a bracketed paste (mode-proof — a raw
+        # typed command is vim KEYSTROKES in a NORMAL-mode box) + the clipboard
+        # -image guard that a paste requires (launch.type_command)
+        ok, clip = launch.type_command(fe, win, text)
         A.state_file(log, sdb, "web-command",
                      {"win": win, "cmd": cmd, "arg": arg or "", "ok": ok,
                       "tab": tab, "clip": clip})
@@ -636,8 +638,9 @@ class _PostMixin:
                           "refused": "busy"})
             return self._json({"error": "session is busy — stop the turn first",
                                "tab": tab}, 409)
-        ok = bool(fe.send_text(win, "/rewind"))
-        A.state_file(log, sdb, "web-rewind", {"win": win, "ok": ok, "tab": tab})
+        ok, clip = launch.type_command(fe, win, "/rewind")
+        A.state_file(log, sdb, "web-rewind",
+                     {"win": win, "ok": ok, "tab": tab, "clip": clip})
         if not ok:
             A.error(log, "dashboard rewind (send failed)",
                     {"sid": sid, "win": win})
