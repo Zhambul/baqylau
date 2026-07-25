@@ -45,6 +45,12 @@ A = load_audit()   # always-on audit trail; inert stub if it can't import
 # as errwatch's own audit-at-most-once recursion guard. Keyed by the PAIR, not
 # the key alone, so a swallowed read doesn't then mask a different failure
 # (a connect) against the same key.
+#
+# CAREFUL: this module's public `set(key, obj)` SHADOWS the builtin for
+# everything below it, so this line must stay ABOVE that def — moved under it,
+# `set()` would resolve to prefs.set and raise at IMPORT time, taking the whole
+# dashboard down. (The shadowing itself stays: `prefs.set`/`prefs.get` is the
+# read-well kv API from every call site outside.)
 _READ_FAILED = set()
 
 

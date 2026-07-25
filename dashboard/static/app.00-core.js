@@ -129,6 +129,30 @@ function el(tag, cls, text) {
 }
 function frag(...kids) { const f = document.createDocumentFragment(); kids.forEach(k => k && f.append(k)); return f; }
 
+// The two repeated row/grid appenders. Each was an identical inline closure in
+// two builders, and the pair is exactly the kind of markup shape that drifts
+// when only one copy gets a tweak.
+// chipAdder: one SCOREBOARD chip into `row` — `<span>label <span class=cls|v>
+// value</span></span>`. The session scoreboard and the drilled-in agent
+// scoreboard build the same chip into their own row.
+function chipAdder(row) {
+  return (label, value, cls) => {
+    const s = el("span");
+    if (label) s.append(tnode(label + " "));
+    s.append(el("span", cls || "v", value));
+    row.append(s);
+  };
+}
+// metaAdder: one key/value pair into an `mmeta` grid, SKIPPING empty values (so
+// a builder can list every field it might have and absent ones just vanish) —
+// the monitor and background-job detail cards.
+function metaAdder(grid) {
+  return (k, v) => {
+    if (v == null || v === "") return;
+    grid.append(el("span", "mk", k), el("span", "mv", String(v)));
+  };
+}
+
 // The compact endpoint label for the frontend audit — the path minus the /api/
 // prefix and the (already-separately-logged) sid, so `/api/session/<sid>/stop`
 // → `session/stop`. Purely for readable `web-client` rows.

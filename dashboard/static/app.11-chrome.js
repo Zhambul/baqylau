@@ -406,12 +406,7 @@ function updateStatsRow() {
   // land here, but this branch keeps them from clobbering the agent view.
   if (ses.agentFocus) { renderAgentScoreboard(sr, ses.agentFocus); return; }
   const st = ses.stats || {};
-  const add = (label, value, cls) => {
-    const s = el("span");
-    if (label) s.append(tnode(label + " "));
-    s.append(el("span", cls || "v", value));
-    sr.append(s);
-  };
+  const add = chipAdder(sr);
   if (st.commands) {
     add("", st.commands + " cmds");
     if (st.failed) add("", "(" + st.failed + "✗)", "neg");
@@ -496,12 +491,7 @@ function renderAgentScoreboard(sr, focus) {
   const back = el("a", "backses", "← session");
   back.href = "#/s/" + encodeURIComponent(S.cur);   // the mirror = the main agent
   sr.append(back);
-  const add = (label, value, cls) => {
-    const s = el("span");
-    if (label) s.append(tnode(label + " "));
-    s.append(el("span", cls || "v", value));
-    sr.append(s);
-  };
+  const add = chipAdder(sr);
   add("", sttxt, stcls);
   const model = rec.model || (d.model ? String(d.model) : "");
   if (model) add("", model + (rec.effort ? "·" + rec.effort : ""), "amodel");
@@ -816,10 +806,7 @@ function renderMonitorDetail(container, m) {
     info.append(pre(m.command));
   }
   const grid = el("div", "mmeta");
-  const add = (k, v) => {
-    if (v == null || v === "") return;
-    grid.append(el("span", "mk", k), el("span", "mv", String(v)));
-  };
+  const add = metaAdder(grid);
   add("task", m.task);
   add("lifetime", m.persistent ? "persistent"
     : (m.timeout_ms ? "≤" + dur(m.timeout_ms / 1000) : "—"));
@@ -1172,10 +1159,7 @@ function renderJobDetail(container, j) {
     info.append(pre(j.command));
   }
   const grid = el("div", "mmeta");
-  const add = (k, v) => {
-    if (v == null || v === "") return;
-    grid.append(el("span", "mk", k), el("span", "mv", String(v)));
-  };
+  const add = metaAdder(grid);
   add("task", j.task);
   add("lines", j.lines);
   if (j.started_at) add("started", new Date(j.started_at * 1000).toLocaleString());
