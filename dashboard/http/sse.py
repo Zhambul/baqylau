@@ -12,6 +12,7 @@ from core import sessionapi as API
 from core import tabs
 from core.noaudit import load_audit
 from dashboard import config
+from dashboard import prefs
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.control import launch
 from dashboard.notify.notifier import NOTIFIER
@@ -280,6 +281,18 @@ class _SseMixin:
                 cqueue = _composer_queue(sid)
                 if not self._push_changed(prev, "composer_queue", "composer-queue",
                                           cqueue, {"queue": cqueue}):
+                    return
+                # the mirror's VIEW MODE — so switching density on the phone
+                # re-renders the desktop page already open on this session,
+                # instead of it holding the old mode until a reload. The pref
+                # itself has always been server-side and per-session
+                # (dashboard/prefs.py, docs/dashboard.md *View modes*); this is
+                # only what makes an OPEN page follow it. Slow cadence, and a
+                # prefs read is a tiny kv SELECT — pushed only on change, like the
+                # global alerts toggle's `notify-config`.
+                vmode = prefs.view_mode(sid)
+                if not self._push_changed(prev, "view_mode", "view-mode",
+                                          vmode, {"mode": vmode}):
                     return
             tab = (API.tab_states().get(win) or "") if win else ""
             if not self._push_changed(prev, "tab", "tab", tab, {"tab": tab}):

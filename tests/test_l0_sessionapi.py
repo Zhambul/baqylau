@@ -22,9 +22,36 @@ def _log(tmp_path, sid):
     return str(tmp_path / ("claude-mirror-%s.log" % sid))
 
 
+def _drain_audit():
+    """Force any SPOOLED audit row into the DB, so a read that follows sees it.
+
+    core.audit.event() degrades to a JSONL spool FILE whenever its INSERT raises
+    (a lock, a busy DB, anything), and _ingest_spool only runs when _connect()
+    opens a NEW connection — so a row spooled AFTER this process cached its
+    connection stays invisible to every later reader in the process. The read
+    model then finds no `adopt` row and resolves a chain of one, which is
+    indistinguishable from "this sid never forked": the assert downstream fails
+    on a wrong PATH with nothing pointing at the write. Re-opening drains it.
+
+    In production nothing needs this — every hook is a fresh short-lived process,
+    so the next one's _connect() ingests the spool — but a test process writes and
+    reads in one breath. The dashboard tests already do this dance before reading
+    rows; the sessionapi ones did not, which made them the pair that could flake
+    (test_state_db_for_prefers_live_then_parked_across_chain, once, unreproduced
+    in ~50 runs — but this is the only mechanism that yields exactly its failure)."""
+    try:
+        if A._CONN is not None:
+            A._CONN.close()
+    except Exception:
+        pass
+    A._CONN = None
+    A._connect()
+
+
 def _adopt(old, new):
     # Exactly what plugins/claude_code/adopt.py records at a sid fork.
     A.state_file(P.mirror_log(new), "db", "adopt", {"from": old, "moved": ["db"]})
+    _drain_audit()
 
 
 # ------------------------------------------------------------------ sid_chain
@@ -93,8 +120,33 @@ def test_state_db_for_prefers_live_then_parked_across_chain(monkeypatch, tmp_pat
     assert S.connect(log_old) is not None
     os.makedirs(P.HISTORY_DIR, exist_ok=True)
     os.replace(P.state_db(log_old), P.parked_db(log_old))
+    # The PRECONDITION, asserted separately: state_db_for's answer is only as
+    # good as the fork chain behind it, and a missing adopt row degrades that
+    # chain SILENTLY to [sid] — so without this the next failure reads as "wrong
+    # path" and says nothing about which layer broke.
+    assert API.sid_chain("newp") == ["oldp", "newp"], (
+        "adopt row not visible: audit_db=%r exists=%s"
+        % (API.audit_db(), os.path.isfile(API.audit_db() or "")))
     # No DB under the new sid; the parked one under the OLD sid is found.
     assert API.state_db_for("newp") == P.parked_db(log_old)
+
+
+def test_sid_chain_sees_an_adopt_row_that_had_to_be_SPOOLED(monkeypatch, tmp_path):
+    """The failure mode _drain_audit exists for, pinned. An adopt row written
+    while sqlite was unwritable lands in the JSONL spool instead of the table;
+    until some process re-opens the DB, every reader resolves a chain of ONE and
+    a forked session looks unforked. Here the row is spooled DIRECTLY (the shape
+    core.audit.event falls back to), and the chain must still come out whole once
+    the spool is drained."""
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    A.state_file(P.mirror_log("warm"), "db", "warm", "")   # cache the connection
+    A._spool("state_files", {"ts": 1.0, "session_id": "spoolnew", "path": "db",
+                             "action": "adopt",
+                             "content": json.dumps({"from": "spoolold"}),
+                             "script": "t", "pid": os.getpid()})
+    assert API.sid_chain("spoolnew") == ["spoolnew"]    # invisible while spooled
+    _drain_audit()
+    assert API.sid_chain("spoolnew") == ["spoolold", "spoolnew"]
 
 
 # ------------------------------------------------------------------ read model

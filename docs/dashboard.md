@@ -4624,10 +4624,19 @@ from the op rather than stamped into it, those classify exactly like live ones.
 ## View modes (verbose · default · focus)
 
 Claude Code's own transcript densities, over the web mirror. The filter bar
-carries a 3-way segmented control left of the kind chips (`.vmodes`), and the
-choice is per session and durable (`POST /api/session/<sid>/viewmode` → the
-`view-mode` map in `dashboard/prefs.py`, served on the session payload as
-`view_mode`).
+carries a 3-way segmented control left of the kind chips (`.vmodes`).
+
+**The choice lives on the SERVER, per session** — `POST
+/api/session/<sid>/viewmode` writes the `view-mode` map in `dashboard/prefs.py`
+(durable, at `~/.claude`, outside any checkout), and it rides the session payload
+as `view_mode`. So it survives reloads, park and resume, and is set ONCE for a
+session rather than per browser: open that session on the phone and it is already
+in the mode you left it in. A page ALREADY open follows a switch made elsewhere
+too, over a `view-mode` SSE event on the slow cadence (same shape as the global
+alerts toggle's `notify-config`); the client ignores its own echo, since
+re-applying would clear the runs the user just expanded. Deliberately NOT
+`localStorage`, which is per-browser and would need re-selecting on every device
+— the same reasoning that moved the new-session prefs off it.
 
 - **verbose** — every block, exactly as the dashboard rendered before this
   feature. Nothing is ever hidden.

@@ -201,6 +201,21 @@ function connectSession(sid) {
     if (!S.ses) return;
     applyComposerDraft(d.draft);
   });
+  es.addEventListener("view-mode", (e) => {
+    // another DEVICE (or tab) switched this session's density — follow it, so
+    // the selection is set once and holds everywhere. Guarded on an actual
+    // change: the event repeats only on change server-side, but our own POST's
+    // echo would otherwise clear the runs the user just expanded.
+    const m = JSON.parse(e.data).mode;
+    if (!S.ses || !VIEW_MODES.includes(m) || S.ses.view === m) return;
+    S.ses.view = m;
+    if (S.ses.meta) S.ses.meta.view_mode = m;
+    S.ses.viewOpen.clear();
+    S.ses.viewFill = 0;
+    applyViewMode();
+    if (S.ses.modeBtns)
+      S.ses.modeBtns.forEach((b, k) => b.classList.toggle("on", k === m));
+  });
   es.addEventListener("composer-queue", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
@@ -1091,6 +1106,7 @@ function buildFilterBar() {
   // this one is the coarser cut, so it reads first
   const modes = el("div", "vmodes");
   const mbtns = new Map();
+  ses.modeBtns = mbtns;              // the `view-mode` SSE repaints these
   for (const key of VIEW_MODES) {
     const c = el("button", "vmode" + (ses.view === key ? " on" : ""), key);
     c.onclick = () => {

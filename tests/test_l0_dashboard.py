@@ -8216,3 +8216,35 @@ def test_interrupt_annotation_is_flagged_by_its_id_not_its_text(dash):
         "message": {"role": "user",
                     "content": "why is [Request interrupted by user] shown?"}}))
     assert quote["kind"] == "prompt" and quote["meta"] is False
+
+
+def test_view_mode_syncs_to_an_open_page_on_another_device(dash):
+    """The mode has always been stored SERVER-side and per-session, so opening
+    the session anywhere picks it up (`view_mode` on the payload). What this pins
+    is the other half: a page ALREADY open follows a switch made elsewhere, via a
+    `view-mode` SSE event on the slow cadence — same shape as the global alerts
+    toggle's `notify-config`. Without it, the phone's switch left the desktop on
+    the old density until a reload."""
+    A.session_start({"session_id": "vmsse", "cwd": "/w", "transcript_path": ""})
+    prefs.set_view_mode("vmsse", "focus")
+    seen = []
+    r = urllib.request.urlopen(dash + "/events/session/vmsse", timeout=20)
+    try:
+        deadline = time.time() + 15
+        event = None
+        while time.time() < deadline:
+            raw = r.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", "replace").strip()
+            if line.startswith("event:"):
+                event = line.split(":", 1)[1].strip()
+            elif line.startswith("data:") and event == "view-mode":
+                seen.append(json.loads(line.split(":", 1)[1]).get("mode"))
+                if len(seen) == 1:            # the initial state…
+                    prefs.set_view_mode("vmsse", "verbose")   # …then a switch
+                if len(seen) == 2:
+                    break
+    finally:
+        r.close()
+    assert seen == ["focus", "verbose"], seen
