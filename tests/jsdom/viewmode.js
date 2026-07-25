@@ -34,17 +34,50 @@ class El {
   _cls() { return this.className.split(/\s+/).filter(Boolean); }
   get textContent() { return this._text + this.children.map(c => c.textContent).join(""); }
   set textContent(v) { this._text = String(v); this.children = []; }
-  append(...kids) { for (const k of kids) { k.parentNode = this; this.children.push(k); } }
+  // A DocumentFragment must FLATTEN on insert (its children move, the fragment
+  // itself never becomes a node) — appendOlder batches a whole page into one.
+  _flat(kids) {
+    const out = [];
+    for (const k of kids) {
+      if (k.tag === "#frag") { out.push(...k.children); k.children = []; }
+      else out.push(k);
+    }
+    return out;
+  }
+  append(...kids) {
+    for (const k of this._flat(kids)) { k.parentNode = this; this.children.push(k); }
+  }
   insertBefore(node, ref) {
     const at = this.children.indexOf(ref);
-    node.parentNode = this;
-    this.children.splice(at < 0 ? this.children.length : at, 0, node);
+    const kids = this._flat([node]);
+    for (const k of kids) k.parentNode = this;
+    this.children.splice(at < 0 ? this.children.length : at, 0, ...kids);
   }
   remove() {
     if (!this.parentNode) return;
     const a = this.parentNode.children;
     a.splice(a.indexOf(this), 1);
     this.parentNode = null;
+  }
+  // Enough of innerHTML for appendItems/appendOlder, which set it on a scratch
+  // div and take firstElementChild: one child element carrying the outermost
+  // tag's class. The served HTML is otherwise opaque to these tests.
+  set innerHTML(html) {
+    const m = /^\s*<(\w+)[^>]*?(?:\sclass="([^"]*)")?[^>]*>/.exec(String(html));
+    this.children = [];
+    if (m) this.append(new El(m[1], m[2] || ""));
+  }
+  get innerHTML() { return ""; }
+  get firstElementChild() { return this.children[0] || null; }
+  get lastElementChild() { return this.children[this.children.length - 1] || null; }
+  get childElementCount() { return this.children.length; }
+  // Enough of insertAdjacentHTML for the block filler: the served HTML is opaque
+  // to these tests (they measure counts, classes and data-*), so it is kept as
+  // one text-bearing child rather than parsed.
+  insertAdjacentHTML(_pos, html) {
+    const n = new El("#html", "", html);
+    n.parentNode = this;
+    this.children.push(n);
   }
   _all(out) { for (const c of this.children) { out.push(c); c._all(out); } return out; }
   querySelectorAll(sel) {                       // only ".cls" / ".cls[data-x]"
@@ -62,6 +95,8 @@ const sandbox = {
   setInterval: () => 1, clearInterval: () => {},
   setTimeout: () => 1, clearTimeout: () => {},
   performance: { now: () => 0 },
+  document: { createElement: t => new El(t), createTextNode: s => new El("#text", "", s),
+              createDocumentFragment: () => new El("#frag") },
   el: (tag, cls, text) => new El(tag, cls, text),
   tnode: s => new El("#text", "", s),
   dur: sec => Math.max(0, sec | 0) + "s",
@@ -71,6 +106,34 @@ const sandbox = {
   clog: () => {}, loadOlder: () => { sandbox.__loadOlder++; },
   renderAttention: () => {}, applyFilter: () => {},
   S: null, __tab: "", __loadOlder: 0, __posted: 0,
+  // /history stub for the load-older loop. __pages records the block counts asked
+  // for. Two content shapes, because they exercise opposite ends of the loop:
+  //   __mix = true  — a realistic page (a prompt/reply/edit every ~5 blocks;
+  //                   measured against real sessions, a 40-block page yields
+  //                   ~20-30 focus-visible items), so the loop converges fast;
+  //   __mix = false — a pathological all-commands stretch, where EVERY block
+  //                   folds into the run already at the boundary, so the visible
+  //                   count cannot rise however much is fetched. The loop must
+  //                   spend its budget and stop, not spin.
+  __pages: [],
+  __mix: true,
+  __exhaustAfter: 99,
+  fetch: (url) => {
+    const blocks = +(/blocks=(\d+)/.exec(url) || [])[1];
+    sandbox.__pages.push(blocks);
+    const p = sandbox.__pages.length, items = [];
+    for (let i = 0; i < blocks; i++) {
+      const id = "old" + p + "-" + i;
+      if (sandbox.__mix && i % 5 === 0)
+        items.push({ g: null, t: "msg", kind: i % 10 ? "message" : "prompt",
+                     act: "msg", html: "<div class=\"msg\">x</div>" });
+      else
+        items.push({ g: id, t: "label", act: "bash",
+                     html: "<span class=\"chip\">x</span>" });
+    }
+    const oldest = p >= sandbox.__exhaustAfter ? 0 : 5;
+    return Promise.resolve({ json: () => Promise.resolve({ items, oldest }) });
+  },
 };
 sandbox.window = sandbox;
 vm.createContext(sandbox);
@@ -102,6 +165,7 @@ function scene(mode, oldestFirst, tab) {
   sandbox.S = { cur: "sid", sessions: [{ sid: "sid", tab: tab || "" }], ses: {
     stream, view: mode, viewOpen: new Set(), viewSeq: seq, viewTimer: null,
     viewFill: 0, oldest: 0, blocks: new Map(), fgRun: null, meta: {},
+    loadingOlder: false, moreEl: null,
   } };
   sandbox.applyViewMode();
   return sandbox.S.ses;
@@ -203,4 +267,53 @@ back.view = "verbose";
 sandbox.applyViewMode();
 out.backToVerbose = { sums: sums(back).length, shown: shown(back).length };
 
-process.stdout.write(JSON.stringify(out, null, 1));
+// ---- the "load older · 40 more" promise, in a collapsing mode
+// The page-size policy is pure, so check it directly: aim the next request at
+// the shortfall at the observed yield, and reach for the ceiling when a page
+// yielded nothing at all.
+out.pageSize = {
+  yielded2of40: sandbox.olderPageSize(40, 2, 40),   // 2 per 40 -> ~760, capped
+  yielded10of40: sandbox.olderPageSize(40, 10, 40), // 10 per 40 -> 120
+  yieldedNothing: sandbox.olderPageSize(40, 0, 40), // -> the ceiling
+  alreadyThere: sandbox.olderPageSize(40, 40, 40),  // -> the floor, unused
+};
+
+// …and drive the real loop against the /history stub. Focus mode collapses every
+// block the stub serves, so one page yields ~1 visible line: the loop must keep
+// going instead of stopping at the first (the reported bug).
+function fillScene(mode, opts) {
+  opts = opts || {};
+  const ses = scene(mode, [F.prompt, F.fg]);
+  ses.oldest = 5;                      // older history exists
+  sandbox.__pages = [];
+  sandbox.__mix = opts.mix !== false;
+  sandbox.__exhaustAfter = opts.exhaustAfter === undefined ? 99 : opts.exhaustAfter;
+  return ses;
+}
+
+const fills = {};
+function runFill(name, mode, target, opts) {
+  const ses = fillScene(mode, opts);
+  const before = sandbox.visibleCount();
+  return Promise.resolve(sandbox.loadOlder(target)).then(() => new Promise(r => {
+    // let the promise chain drain (the stub resolves immediately, so a few
+    // microtask turns are enough)
+    let n = 0;
+    const tick = () => (++n < 50 ? Promise.resolve().then(tick) : r());
+    tick();
+  })).then(() => {
+    fills[name] = { pages: sandbox.__pages.length,
+                    asked: sandbox.__pages.slice(0, 3),
+                    gained: sandbox.visibleCount() - before,
+                    stuck: ses.loadingOlder };
+  });
+}
+
+runFill("focus", "focus", 40)
+  .then(() => runFill("verbose", "verbose", 40))
+  .then(() => runFill("allCommands", "focus", 40, { mix: false }))
+  .then(() => runFill("exhausted", "focus", 40, { mix: false, exhaustAfter: 2 }))
+  .then(() => {
+    out.fills = fills;
+    process.stdout.write(JSON.stringify(out, null, 1));
+  });

@@ -540,26 +540,79 @@ function updateMoreBtn() {
   const has = (ses.oldest | 0) > 0;
   b.hidden = !has;
   if (has && !ses.loadingOlder)
-    b.textContent = "load older · " + HISTORY_FETCH + " more blocks…";
+    // "blocks" only in verbose, where a block IS what appears. In default/focus
+    // the promise is kept in VISIBLE items (see loadOlder) — most of the blocks
+    // fetched to satisfy it collapse into the summary lines, so promising
+    // "blocks" there would be promising the wrong noun.
+    b.textContent = "load older · " + HISTORY_FETCH
+      + (ses.view === "verbose" ? " more blocks…" : " more…");
 }
 
-function loadOlder() {
+// What the reader can actually SEE right now: unhidden stream items plus the
+// collapsed-run summary lines standing in for the rest.
+function visibleCount() {
+  const ses = S.ses;
+  if (!ses || !ses.stream) return 0;
+  return streamItems().filter(elem => !itemHidden(elem)).length
+    + ses.stream.querySelectorAll(".vsum").length;
+}
+
+const OLDER_TRIES = 6;        // /history requests one fill may spend
+const OLDER_PAGE_MAX = 400;   // blocks per request ceiling
+
+// How big to make the NEXT page, given what this one cost: `blocks` fetched
+// yielded `gained` visible items against a target of `want`. Aim the next
+// request at the remaining shortfall at the observed yield — a page that
+// collapsed almost entirely (or merged wholly into an existing run, gaining
+// nothing) reaches straight for the ceiling. Converges in 2-3 requests instead
+// of creeping 40 at a time, which matters because every /history call re-merges
+// the session's whole op+conversation history server-side.
+function olderPageSize(want, gained, blocks) {
+  const per = gained > 0 ? blocks / gained : OLDER_PAGE_MAX;
+  const next = Math.ceil((want - gained) * per);
+  return Math.max(HISTORY_FETCH, Math.min(next, OLDER_PAGE_MAX));
+}
+
+// Load older history until `want` MORE VISIBLE items have landed (default: the
+// HISTORY_FETCH the button promises), history is exhausted, or the request
+// budget runs out.
+//
+// It loops because the server counts BLOCKS and the modes hide most of them: one
+// 40-block page can collapse to two summary lines — or to nothing at all, when
+// every block in it merges into the run already at the boundary. That was the
+// "load older 40 blocks doesn't give me 40" report; the fix has to live here,
+// since only the client knows what its current mode leaves visible.
+function loadOlder(want) {
   const ses = S.ses;
   if (!ses || ses.loadingOlder || (ses.oldest | 0) <= 0) return;
+  const target = want || HISTORY_FETCH;
+  const start = visibleCount();
+  const sid = S.cur;
+  let tries = 0, blocks = HISTORY_FETCH;
   ses.loadingOlder = true;
-  const sid = S.cur, before = ses.oldest;
   if (ses.moreEl) ses.moreEl.textContent = "loading…";
-  fetch("/api/session/" + encodeURIComponent(sid) + "/history?before=" + before
-        + "&blocks=" + HISTORY_FETCH)
+
+  const step = () => fetch("/api/session/" + encodeURIComponent(sid)
+                           + "/history?before=" + (ses.oldest | 0)
+                           + "&blocks=" + blocks)
     .then(r => r.json())
     .then(d => {
-      ses.loadingOlder = false;
-      if (S.cur !== sid) return;                 // navigated away mid-fetch
+      if (S.cur !== sid || !S.ses) return;         // navigated away mid-fetch
+      tries++;
       appendOlder(d.items || []);
       ses.oldest = d.oldest | 0;
-      updateMoreBtn();
-    })
-    .catch(() => { ses.loadingOlder = false; updateMoreBtn(); });
+      const gained = visibleCount() - start;
+      if (gained >= target || (ses.oldest | 0) <= 0 || tries >= OLDER_TRIES) return;
+      blocks = olderPageSize(target, gained, blocks);
+      if (ses.moreEl) ses.moreEl.textContent = "loading… " + gained + "/" + target;
+      return step();
+    });
+
+  step().catch(() => {}).then(() => {
+    if (S.cur !== sid || !S.ses) return;
+    ses.loadingOlder = false;
+    updateMoreBtn();
+  });
 }
 
 /* ---------- stream search + kind filters ---------- */
@@ -722,11 +775,12 @@ const VIEW_COUNTER = { write: "edit" };
 // Claude Code's own threshold for the same chip, and it keeps a fast run from
 // flashing "· 0s".
 const VIEW_ELAPSED_MIN_S = 2;
-// How many /history pages a mode switch may auto-pull when collapsing leaves the
-// screen nearly empty (focus over a command-heavy tail can hide almost
-// everything). Bounded: an unbounded fill would walk a long session's whole
-// backlog on one click.
-const VIEW_FILL_PAGES = 3;
+// Collapsing can leave the screen nearly empty (focus over a command-heavy tail
+// hides almost everything), so a mode switch tops the feed up to VIEW_FILL_MIN
+// visible items. VIEW_FILL_TRIES bounds how many TIMES that may fire per switch
+// — each one runs loadOlder(), which has its own OLDER_TRIES request budget, so
+// no fill can walk a long session's whole backlog.
+const VIEW_FILL_TRIES = 3;
 const VIEW_FILL_MIN = 6;
 
 // Which counter one item feeds: its activity class, with memory-wiki file ops
@@ -939,16 +993,16 @@ function applyViewMode() {
 
 // Collapsing can leave the window almost empty (80 blocks of commands become two
 // summary lines). Pull the next history page or two so there is something to
-// read, bounded by VIEW_FILL_PAGES per mode switch.
+// read, bounded by VIEW_FILL_TRIES per mode switch.
 function viewAutoFill() {
   const ses = S.ses;
   if (!ses || ses.view === "verbose" || ses.loadingOlder) return;
-  if ((ses.viewFill | 0) >= VIEW_FILL_PAGES || (ses.oldest | 0) <= 0) return;
-  const shown = streamItems().filter(elem => !itemHidden(elem)).length
-    + ses.stream.querySelectorAll(".vsum").length;
-  if (shown >= VIEW_FILL_MIN) return;
+  if ((ses.viewFill | 0) >= VIEW_FILL_TRIES || (ses.oldest | 0) <= 0) return;
+  if (visibleCount() >= VIEW_FILL_MIN) return;
   ses.viewFill = (ses.viewFill | 0) + 1;
-  loadOlder();
+  loadOlder(VIEW_FILL_MIN);      // the same loader, aimed at a smaller target —
+  //                                two independent pagers would fight over
+  //                                `loadingOlder` and double-fetch the boundary
 }
 
 function setViewMode(mode) {

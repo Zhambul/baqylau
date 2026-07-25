@@ -4757,10 +4757,29 @@ Mechanics worth knowing:
   re-created every summary, which reflows the feed under a reader who has
   scrolled back and drops a text selection. Same trick, same reason, as
   `statsSig`.
+- **"load older" is measured in VISIBLE items, not blocks.** The server counts
+  BLOCKS (`_cut_blocks`) and cannot do better: what a page leaves on screen
+  depends on the current mode AND on runs that merge across the page boundary,
+  neither of which the server knows. So in a collapsing mode a 40-block page
+  could arrive and change nothing — the run at the boundary simply absorbed it
+  and its counter went up. That was the "I click load older 40 more blocks and 40
+  more blocks don't appear" report. `loadOlder(want)` therefore LOOPS: fetch,
+  measure the rise in `visibleCount()` (unhidden items + summary lines), and if
+  it is short, fetch again — sizing the next page at the observed yield
+  (`olderPageSize`, capped at `OLDER_PAGE_MAX` 400) rather than creeping 40 at a
+  time, because every `/history` call re-merges the session's whole history
+  server-side. Measured on real sessions a 40-block page yields ~20-30
+  focus-visible items, so it converges in about two requests. `OLDER_TRIES` (6)
+  bounds it, for the pathological case the loop cannot win: a long
+  commands-only stretch where every block merges into the same run, so the
+  visible count physically cannot rise. Verbose is unaffected — one page is 40
+  visible items, so it never issues a second request. The button also stops
+  saying "blocks" outside verbose, where the noun would be wrong.
 - **Auto-fill**: collapsing 80 blocks can leave two lines on screen, so a mode
-  switch pulls up to `VIEW_FILL_PAGES` (3) `/history` pages until at least
-  `VIEW_FILL_MIN` items are visible — bounded, or it would walk a long session's
-  whole backlog on one click.
+  switch tops the feed up to `VIEW_FILL_MIN` (6) visible items, at most
+  `VIEW_FILL_TRIES` (3) times per switch — through the SAME `loadOlder`, aimed at
+  a smaller target. Two independent pagers would fight over `loadingOlder` and
+  double-fetch the boundary.
 - The two axes are independent classes: `.fhide` is the kind filter's, `.vhide`
   the view mode's. One shared class would let either pass un-hide the other's
   items.

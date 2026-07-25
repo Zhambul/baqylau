@@ -8091,3 +8091,45 @@ def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
     # …and it reaches the page on the wire item the view modes read
     items = DS.mirror._conv_items(recs)
     assert [it.get("meta") for it in items] == [None, 1, 1]
+
+
+def test_load_older_keeps_its_promise_in_a_collapsing_mode(dash):
+    """"load older · 40 more" must deliver 40 more things to READ, not 40 raw
+    blocks that collapse to two lines — the reported bug. The server counts
+    BLOCKS and cannot do better: what a page leaves visible depends on the mode
+    and on runs that merge across the page boundary, both of which only the
+    client knows. So `loadOlder` loops until the visible count has risen by its
+    target, sizing each next page at the observed yield.
+
+    Driven through the real loop in tests/jsdom/viewmode.js against a stubbed
+    /history (see that file for the two content shapes and why)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "viewmode.js"),
+         os.path.join(REPO, "dashboard", "static", "app.05-session.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    # the page-size policy: aim at the shortfall at the observed yield, reach for
+    # the ceiling when a page yielded nothing, never go below one page
+    assert d["pageSize"] == {"yielded2of40": 400, "yielded10of40": 120,
+                             "yieldedNothing": 400, "alreadyThere": 40}
+
+    f = d["fills"]
+    # VERBOSE is untouched: one page IS 40 visible items, so no extra request
+    assert f["verbose"]["pages"] == 1 and f["verbose"]["gained"] == 40
+    # FOCUS over realistic history reaches the full 40 — in 2 requests, because
+    # the second is sized from the first's yield rather than creeping by 40
+    assert f["focus"]["gained"] >= 40 and f["focus"]["pages"] <= 3
+    assert f["focus"]["asked"][0] == 40 and f["focus"]["asked"][1] > 40
+    # a PATHOLOGICAL all-commands stretch cannot raise the visible count at all
+    # (every block merges into the run already at the boundary): the loop must
+    # spend its budget and stop cleanly, never spin, and must leave the button
+    # usable again
+    assert f["allCommands"]["pages"] == 6      # == OLDER_TRIES
+    assert f["allCommands"]["stuck"] is False
+    # and exhausted history stops it BEFORE the budget, on the same clean exit
+    assert f["exhausted"]["pages"] == 2 and f["exhausted"]["stuck"] is False
