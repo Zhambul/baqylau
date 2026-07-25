@@ -88,7 +88,13 @@ def _load_keypair():
             priv = load_pem_private_key(rec["priv"].encode("ascii"), password=None)
             return priv, rec["pub"]
         except Exception:
-            pass                       # corrupt record — regenerate below
+            # Corrupt stored record — regenerate below, but NOT silently: the
+            # docstring's own warning is that a new key orphans every existing
+            # subscription, so every already-subscribed browser goes quiet at
+            # once with nothing to point at. This row is the only thing that
+            # explains it afterwards.
+            A.error("", "webpush keypair (corrupt record — regenerating)",
+                    {"subs": len(prefs.push_subscriptions())})
     try:
         priv = ec.generate_private_key(ec.SECP256R1())
         pub_point = priv.public_key().public_bytes(

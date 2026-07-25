@@ -1708,6 +1708,64 @@ def test_ns_draft_map_is_pruned(dash):
     assert "/p00" not in drafts                  # the oldest was pruned
 
 
+def test_prefs_store_failures_are_audited(monkeypatch, tmp_path):
+    """Every swallow site in the durable global prefs store leaves an audit
+    `errors` row — the audit-before-swallow invariant, which this module used to
+    break at all five of them (a locked/corrupt/unwritable prefs DB lost the
+    toggle, the draft or the rename with NO trace, and mutate_map's callers still
+    answer ok:True, so 'it didn't stick' was undebuggable from the DB).
+
+    Real sqlite failures, no mocking: a BEFORE INSERT trigger that RAISEs makes
+    every WRITE fail while reads keep working, and a non-JSON stored value makes
+    the READ fail. Reads are additionally flood-guarded — they run on nearly
+    every request and SSE tick, and a session_id='' errors row lights errwatch's
+    `⚠ global:` chip in EVERY session's scorebar — so a broken read is audited
+    at most ONCE per (operation, key) per process (errwatch's own guard, same
+    reasoning) — by the PAIR, so a swallowed read can't then mask a connect
+    failure against the same key."""
+    import sqlite3
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    monkeypatch.setattr(prefs, "_READ_FAILED", set())
+    monkeypatch.setattr(A, "_CONN", None)
+    monkeypatch.setattr(A, "_FAILED", False)
+
+    def errs():
+        A._CONN = None
+        A._FAILED = False
+        A._connect()
+        conn = sqlite3.connect(A.db_path())
+        try:
+            return [f for (f,) in conn.execute("SELECT func FROM errors")]
+        finally:
+            conn.close()
+
+    assert prefs.set("k", {"a": 1}) is True          # a healthy store, no rows
+    assert prefs.get("k") == {"a": 1}
+    assert errs() == []
+    # a stored value that isn't JSON: the read swallow, and only ONE row for it
+    conn = prefs._connect()
+    conn.execute("UPDATE kv SET val='{not json' WHERE key=?", ("k",))
+    conn.execute("CREATE TRIGGER block BEFORE INSERT ON kv "
+                 "BEGIN SELECT RAISE(ABORT, 'read-only'); END")
+    conn.commit()
+    conn.close()
+    assert prefs.get("k", "fallback") == "fallback"
+    assert prefs.get("k", "fallback") == "fallback"
+    assert errs() == ["dashboard prefs get"], "one row per (op, key) per process"
+    # the two write swallows: set() reports False, mutate_map lies (it returns
+    # the intended map) — so its row is the only evidence the write was lost
+    assert prefs.set("k2", {"b": 2}) is False
+    assert prefs.mutate_map("k3", lambda d: d.__setitem__("c", 3)) == {"c": 3}
+    assert errs() == ["dashboard prefs get", "dashboard prefs set",
+                      "dashboard prefs mutate"]
+    # and connect(): a prefs path whose parent is a FILE can't be opened at all
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db" / "x.db"))
+    assert prefs.get("k", None) is None
+    assert prefs.set("k", 1) is False
+    # 2 rows: the read's guarded one plus set()'s, which isn't guarded at all
+    assert errs().count("dashboard prefs connect") == 2
+
+
 def test_hide_dir_prefs_roundtrip_and_validation(dash):
     """Hiding a directory from the list page (docs/dashboard.md *Hidden
     directories*): POST /api/dirs/hide stamps time.time() into the durable global

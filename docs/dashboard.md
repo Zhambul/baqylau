@@ -1240,6 +1240,31 @@ per-session rule). These remembered defaults seed a FRESH launch; selecting a
 row in the resume picker overrides the model/effort with that session's own
 (*Resume picker* above), while the account always re-load-balances.
 
+**A degraded prefs write is audited, not silent.** Everything durable the
+dashboard remembers rides this one store — these launch defaults, the
+per-directory drafts, the hidden directories, the per-session notify mutes, the
+global alerts switch, the web-push subscriptions and VAPID keypair, the
+`renamed-title` override — and every one of its five swallow sites used to
+degrade with **no row anywhere**, breaking the audit-before-swallow invariant.
+That mattered most for `mutate_map`, whose optimistic return (the *intended* map
+even when the write was lost — deliberate: the page keeps the draft/toggle it
+just made, and a 500 would only throw it away) means the caller answers `ok`
+either way. So the handler's `web-*` row says `ok:True` while nothing persisted,
+and "my alerts toggle didn't stick" / "my launch draft vanished" was
+undebuggable from the DB. Each swallow now reports through `prefs._audit_fail` →
+an `errors` row `dashboard prefs <get|set|mutate|connect>` carrying the kv key
+and the DB path; **a gesture whose `web-*` row says `ok:True` next to a
+`dashboard prefs mutate` row at the same instant is the "it didn't stick"
+signature.** Writes are audited every time (each is one bounded user gesture);
+READS are audited at most once per `(operation, key)` per process, because they
+run on nearly every request and SSE tick and a `session_id=''` `errors` row
+lights errwatch's `⚠ global:` chip in *every* session's scorebar — the same
+audit-at-most-once reasoning as `core/errwatch.py`'s own recursion guard. In the
+same spirit, `webpush._load_keypair`'s corrupt-record path now audits before it
+regenerates: a new VAPID key silently orphans every existing subscription, so
+that row is the only explanation for every subscribed browser going quiet at
+once.
+
 ## New-session draft (`GET`/`POST /api/ns-draft`)
 
 The form's **first prompt is a draft**, exactly like the composer's message box

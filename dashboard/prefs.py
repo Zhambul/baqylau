@@ -18,11 +18,47 @@
 # ThreadingHTTPServer, and sqlite connections are single-thread-bound. Nothing
 # here raises — a broken prefs DB degrades to "no remembered preference", never
 # into a request handler.
+#
+# But degrading SILENTLY is what this module used to do, and that broke the
+# audit-before-swallow invariant at every one of its five swallow sites: a
+# locked/corrupt/unwritable prefs DB lost the toggle, the draft or the rename
+# with NO row anywhere, and mutate_map's callers report their gesture as
+# SUCCEEDED (see its own note) — so "my global alerts switch didn't stick" /
+# "my launch draft vanished" was undebuggable from the DB, the exact blind spot
+# the audit exists to close. Every swallow now reports through _audit_fail
+# first.
 import json
 import os
 import sqlite3
 
 from core import paths as P
+from core.noaudit import load_audit
+
+A = load_audit()   # always-on audit trail; inert stub if it can't import
+
+# The (op, key) pairs whose READ failure has already been reported this process.
+# Writes are user gestures (bounded, each worth a row), but reads run on nearly
+# every request and SSE tick — a permanently broken DB would append an `errors`
+# row per tick forever, and since these are session_id='' rows, errwatch
+# surfaces each as a `⚠ global:` in EVERY session's scorebar. One row per
+# operation per key per process is enough to name the fault; the same reasoning
+# as errwatch's own audit-at-most-once recursion guard. Keyed by the PAIR, not
+# the key alone, so a swallowed read doesn't then mask a different failure
+# (a connect) against the same key.
+_READ_FAILED = set()
+
+
+def _audit_fail(op, key, once=False):
+    """Report the currently-handled exception from one of this module's swallow
+    sites to the audit `errors` table (never raising — A.error degrades to its
+    spool file). `op` names the operation (`get`/`set`/`mutate`/`connect`), `key`
+    the kv key at stake. `once=True` is the read-path flood guard above."""
+    if once:
+        if (op, key) in _READ_FAILED:
+            return
+        _READ_FAILED.add((op, key))
+    A.error("", "dashboard prefs %s" % op,
+            {"key": key, "db": P.DASH_PREFS_DB})
 
 
 def _connect():
@@ -42,21 +78,25 @@ def get(key, default=None):
     try:
         conn = _connect()
     except Exception:
+        _audit_fail("connect", key, once=True)
         return default
     try:
         row = conn.execute("SELECT val FROM kv WHERE key=?", (key,)).fetchone()
         return json.loads(row[0]) if row else default
     except Exception:
+        _audit_fail("get", key, once=True)
         return default
     finally:
         conn.close()
 
 
 def set(key, obj):
-    """Upsert `obj` (JSON-encoded) under `key`. True on write, else False."""
+    """Upsert `obj` (JSON-encoded) under `key`. True on write, else False — and a
+    False is audited (a lost durable write is never silent)."""
     try:
         conn = _connect()
     except Exception:
+        _audit_fail("connect", key)
         return False
     try:
         conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
@@ -65,6 +105,7 @@ def set(key, obj):
         conn.commit()
         return True
     except Exception:
+        _audit_fail("set", key)
         return False
     finally:
         conn.close()
@@ -79,10 +120,18 @@ def mutate_map(key, fn):
     write clobber the first — one entry silently lost. BEGIN IMMEDIATE takes the
     write lock up front, so a racing mutate blocks (WAL + timeout=5.0) and reads
     the committed map. Returns the updated map (best-effort like set(): the
-    intended map even if the write degraded — `fn` is called once either way)."""
+    intended map even if the write degraded — `fn` is called once either way).
+
+    That optimistic return is deliberate — the page keeps the draft/toggle it
+    just made and a 500 would only throw it away — but it means the CALLER can't
+    tell a persisted write from a lost one, and answers `ok` either way. So the
+    audited failure below is the ONLY trace a degraded write leaves: a gesture
+    whose `web-*` state_files row says ok:True next to a `dashboard prefs mutate`
+    error row at the same instant IS the "it didn't stick" signature."""
     try:
         conn = _connect()
     except Exception:
+        _audit_fail("connect", key)
         conn = None
     if conn is not None:
         try:
@@ -98,7 +147,7 @@ def mutate_map(key, fn):
             conn.commit()
             return d
         except Exception:
-            pass
+            _audit_fail("mutate", key)
         finally:
             conn.close()
     d = get(key, {})                       # degraded: reflect intent anyway
