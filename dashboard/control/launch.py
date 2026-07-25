@@ -232,6 +232,46 @@ def _clear_clipboard_image():
         return False
 
 
+TUI_DRAFT_KEY = "tui-draft"      # state-DB kv: text WE left in the input box
+
+
+def tui_draft(sid):
+    """The text the web KNOWS is sitting in this session's `❯` input box
+    because the web put it there — an interrupt that took a message back, or a
+    rewind that restored one. "" when the box is (as far as we know) ours to
+    paste into cleanly.
+
+    This exists because the next send must REPLACE that text rather than paste
+    after it. The page used to remember this in a per-view variable
+    (`clearDraftNext`), which a RELOAD wiped while the TUI's draft survived —
+    so the next send glued the two together and delivered `testingtesting2`
+    (reported 2026-07-25). Server state outlives the page, and covers a send
+    from a different device too. Read-only/best-effort: unreadable is ""."""
+    from core import sessionapi as API
+    try:
+        sdb = API.state_db_for(sid)
+        got = API.kv_at(sdb, TUI_DRAFT_KEY) if sdb else None
+    except Exception:
+        return ""
+    return got if isinstance(got, str) else ""
+
+
+def set_tui_draft(sid, text):
+    """Record (or, with "", forget) the text we left in the input box. Called
+    where the web CAUSES it — post_interrupt's take-back, post_rewind_to's
+    restore — and cleared by the send that consumes it. A stale flag is benign:
+    the clear it triggers is a Ctrl+U/Ctrl+K on an already-empty line."""
+    from core import paths as P
+    from core import state as ST
+    if not sid:
+        return False
+    try:
+        ST.kv_set(P.mirror_log(sid), TUI_DRAFT_KEY, text or "")
+        return True
+    except Exception:
+        return False
+
+
 def type_command(fe, win, text):
     """Put a SLASH COMMAND into a session's input box and submit it. Returns
     (ok, cleared_clipboard_image).

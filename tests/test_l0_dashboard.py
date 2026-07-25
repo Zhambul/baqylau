@@ -4947,6 +4947,36 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
     assert TR.taken_back("tb1") == ("u-taken",)
 
 
+def test_take_back_makes_the_next_send_replace_the_tui_draft(dash, monkeypatch):
+    # The reload hole (2026-07-25): the take-back leaves the message in the TUI
+    # input box, and the NEXT send has to replace it. The page used to remember
+    # that in a per-view variable, which a reload wiped while the TUI's draft
+    # survived — so the send pasted AFTER the leftover and delivered
+    # "testingtesting2". The server owns the fact now, so a send that knows
+    # nothing (no clear_draft in the body — a freshly reloaded page) still
+    # clears the line first.
+    fe = _FakeFE()
+    fe.ansi_screen = ("\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n"
+                      "\x1b[m\u276f\xa0testing\n"
+                      "\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n")
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "95")
+    A.session_start({"session_id": "td1", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+                        lambda sid: ("testing", "u-tb"))
+    _post(dash + "/api/session/td1/interrupt", {})
+    assert DS.launch.tui_draft("td1") == "testing"      # recorded server-side
+    fe.keyed = []
+    code, _b = _post(dash + "/api/session/td1/message", {"text": "testing2"})
+    assert code == 200
+    # the line was killed BOTH ways before the paste — no "testingtesting2"
+    assert fe.keyed == [("95", ("ctrl+u",)), ("95", ("ctrl+k",))]
+    assert fe.pasted[-1] == ("95", "testing2")
+    row = _last_state_file("td1", "web-send")
+    assert row["clear_draft"] is True and row["tui_draft"] is True
+    assert DS.launch.tui_draft("td1") == ""             # consumed by the send
+
+
 def test_post_interrupt_leaves_a_terminal_draft_alone(dash, monkeypatch):
     # The box holding something ELSE is the user's own terminal draft, not a
     # take-back — never echoed into the web composer.

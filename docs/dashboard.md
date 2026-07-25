@@ -1824,6 +1824,18 @@ in the transcript"*).
    transcript can't be: if the turn really ran, its records name that prompt as
    their parent and the bubble stays. Which is why the flag can be a cheap kv
    hint rather than a decision.
+3. **That the TUI's box is still holding it.** The take-back leaves the message
+   in the `❯` box, so the NEXT send must REPLACE it rather than paste after it
+   (`clear_draft`). The page remembered that in a per-view variable
+   (`clearDraftNext`) — which the same reload wiped while the TUI's draft
+   survived, so the next send glued them together and delivered
+   `testingtesting2` (reported 2026-07-25). `launch.set_tui_draft` now records
+   it server-side (the `tui-draft` kv), `post_message` ORs it into
+   `clear_draft` and consumes it on success, and `post_rewind_to` sets the same
+   flag for a restore. Server state outlives the page and covers a send from a
+   different device; a stale flag is benign, since the clear it triggers is a
+   Ctrl+U/Ctrl+K on an already-empty line. The page keeps its variable as an
+   immediate same-page hint, but nothing depends on it any more.
 
 **Root cause of "STOP does nothing" (2026-07-24).** A single Escape does **not** reliably stop a busy turn here, for two compounding reasons: (1) `send-key` reports no per-window delivery and synthesized keys are only **~2/3 reliable** (the same measurement that made the idle rewind path type `/rewind` instead of pressing keys — see *Rewind*); and (2) the user runs Claude Code with **`editorMode: vim`**, so the input box is modal — while a turn runs it is in INSERT mode (`-- INSERT --`), and during the **thinking** phase the first Escape only leaves INSERT mode (INSERT→NORMAL); it never reaches the interrupt handler, so the turn runs to completion. Measured directly: every real single-Esc interrupt on a `thinking` tab missed and ran to its natural `Stop` (`a16a181f`, `3d70feca`), while a mid-STREAM Esc landed; a controlled throwaway diff showed the lone Esc deleting `-- INSERT --` and changing nothing else. This is also why the retired cancel gesture's **two** Escapes measured "3/3 reliable" — the first exits INSERT, the second interrupts; the verified re-press below reaches the same place without a second button.
 

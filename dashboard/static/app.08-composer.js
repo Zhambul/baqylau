@@ -699,8 +699,12 @@ function buildComposer() {
         });
       return;
     }
-    // after an interrupt took the message back the TUI holds it as a draft, so this
-    // edited send must replace it (server: Ctrl+U/K then bracketed paste)
+    // After an interrupt took the message back (or a rewind restored one) the
+    // TUI holds it as a draft and this send must REPLACE it — but that fact is
+    // the SERVER's now (launch.tui_draft): a page variable didn't survive a
+    // reload while the TUI's draft did, and the next send pasted after the
+    // leftover ("testingtesting2", 2026-07-25). The flag stays as an immediate
+    // same-page hint; the server ORs its own record in either way.
     const msg = { text };
     if (atts.length) msg.attachments = atts;
     if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }

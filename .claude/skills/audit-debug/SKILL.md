@@ -160,6 +160,16 @@ New always-audited swallow sites (previously silent — their absence used to ma
   message lands (see the ghost-message shape above), so the rows read together
   tell the whole story of one Escape.
 
+- **A web-sent message arrived with the PREVIOUS one glued to its front**
+  (`testingtesting2`): the input box still held a message the web had put there
+  — an interrupt's take-back or a rewind restore — and the send pasted after it
+  instead of replacing it. The `web-send` row says which: `clear_draft: false`
+  with a take-back (`web-interrupt` `phase: "restore"`) shortly before it is the
+  bug's signature. Since 2026-07-25 the server owns that fact (`tui_draft` on
+  the same row = it knew the box was dirty and cleared the line first), so a
+  recurrence means the `tui-draft` kv write or read failed, not that the page
+  forgot — the old failure was exactly the page forgetting across a reload.
+
 - **A web rewind failed with `step: "open"` ("checkpoint menu never appeared"),
   and/or a nonsense fragment appeared as a chat message**: the classic shape is
   a rewind (or any slash command) issued shortly AFTER a web interrupt. The

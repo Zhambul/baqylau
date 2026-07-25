@@ -231,14 +231,20 @@ class _PostMixin:
         when no terminal resolves; else Frontend.send_text. Every attempt is a
         `web-send` state_files row, failures also an A.error.
 
-        `clear_draft` (bool): the page sets it when resending an edited
-        message after an interrupt took the last one back — the TUI input holds the
-        restored draft, so the send first kills the line (Ctrl+U to start +
-        Ctrl+K to end, so the cursor position doesn't matter) and then
-        delivers the text as a BRACKETED PASTE (paste_text): a raw send into
-        the just-cleared input drops leading bytes (measured — the mangle),
-        an atomic paste doesn't. This is what lets you edit AND resend from
-        the web without touching the kitty tab (docs/dashboard.md)."""
+        `clear_draft` (bool): the TUI input already holds text the web put
+        there — an interrupt that took the last message back, or a rewind that
+        restored one — so the send first kills the line (Ctrl+U to start +
+        Ctrl+K to end, so the cursor position doesn't matter) and then delivers
+        the text as a BRACKETED PASTE (paste_text): a raw send into the
+        just-cleared input drops leading bytes (measured — the mangle), an
+        atomic paste doesn't. This is what lets you edit AND resend from the
+        web without touching the kitty tab (docs/dashboard.md).
+
+        The SERVER decides it (`launch.tui_draft`), OR-ed with the body flag.
+        It used to be the page's call alone, remembered in a per-view variable
+        — which a RELOAD wiped while the TUI's draft survived, so the next send
+        pasted after the leftover and delivered `testingtesting2` (reported
+        2026-07-25). A successful send consumes the flag."""
         body = self._post_guard()
         if body is None:
             return
@@ -255,7 +261,10 @@ class _PostMixin:
             return self._reject_input("web-send", "empty text", "empty text",
                                       {"chars": len(text)}, sid=sid)
         text = self._with_attachments(text, attachments)
-        clear_draft = bool(body.get("clear_draft"))
+        # the box holds text WE left there (take-back / rewind restore) — the
+        # server's own record, so a reload or another device can't lose it
+        pending_draft = launch.tui_draft(sid)
+        clear_draft = bool(body.get("clear_draft")) or bool(pending_draft)
         # AUTHORITATIVE window (see _resolve_live_window): the pane tagged
         # claude_session=<sid>, NOT the audit row's stale start-time id (typing
         # into a reused id would land in an unrelated tab — a fresh scan, never
@@ -312,12 +321,15 @@ class _PostMixin:
         ok = bool(fe.paste_text(win, text))
         A.state_file(log, sdb, "web-send",
                      {"win": win, "chars": len(text), "ok": ok, "tab": tab,
-                      "clear_draft": clear_draft, "attachments": len(attachments),
+                      "clear_draft": clear_draft, "tui_draft": bool(pending_draft),
+                      "attachments": len(attachments),
                       "clip": clip, "live": live, "queued": queued})
         if not ok:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
+        if pending_draft:
+            launch.set_tui_draft(sid, "")     # consumed by this send
         return self._json({"ok": True, "queued": queued, "tab": tab})
 
     def post_command(self, sid):
@@ -713,6 +725,11 @@ class _PostMixin:
                       "ups": ups, "steps": res["steps"],
                       "digit": res["digit"], "degraded": res["degraded"]})
         restored = text if mode in ("conversation", "both") else ""
+        if restored:
+            # Claude Code puts the rewound-to prompt back in the input box, so
+            # the next send must REPLACE it (launch.tui_draft — the same
+            # server-owned flag the interrupt's take-back sets)
+            launch.set_tui_draft(sid, restored)
         return self._json({"ok": True, "mode": mode, "restored": restored,
                            "degraded": res["degraded"]})
 
@@ -1421,6 +1438,10 @@ class _PostMixin:
         # on reload. The flag is advisory — _dead_uuids drops it the moment
         # anything descends from that prompt (docs/dashboard.md, *Interrupt*).
         flagged = bool(hit) and transcript.mark_taken_back(sid, uid)
+        if hit:
+            # the box now holds `last` — the NEXT send must replace it, not
+            # paste after it (launch.tui_draft; the `testingtesting2` bug)
+            launch.set_tui_draft(sid, last)
         A.state_file(log, sdb, action,
                      {"win": win, "phase": "restore", "restored": hit,
                       "uid": uid, "flagged": flagged})
