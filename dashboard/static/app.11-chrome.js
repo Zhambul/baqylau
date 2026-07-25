@@ -404,11 +404,8 @@ function updateStatsRow() {
   if (st.files) add("", st.files + " files");
   if (st.added) add("", "+" + st.added, "pos");
   if (st.removed) add("", "−" + st.removed, "neg");
-  const tin = st.tk_in | 0, tout = st.tk_out | 0, tread = st.tk_read | 0, tcre = st.tk_create | 0;
-  const tot = tin + tout + tread + tcre;
-  if (tot)
-    add("Σ", kfmt(tot) + " (" + kfmt(tin) + " in · " + kfmt(tout) + " out · "
-        + kfmt(tread) + " cache · " + kfmt(tcre) + " write)");
+  sigmaChip(add, { in: st.tk_in, out: st.tk_out,
+                   cache: st.tk_read, create: st.tk_create });
   const cost = (ses.costs && ses.costs.total_usd) || st.cost;
   if (cost) add("≈", usd(cost), "cost");
   if (st.msg_delivered)
@@ -419,12 +416,7 @@ function updateStatsRow() {
   // the main thread's ctx bar on its own row — live via the `ctx` SSE event
   // the model quick-button's label follows the same ctx probe
   if (ses.modelBtn) setModelBtn(ses.modelBtn);
-  if (ses.ctxRow) {
-    ses.ctxRow.textContent = "";
-    const cx = ses.ctx;
-    if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
-    ses.ctxRow.style.display = cx && cx.used ? "" : "none";
-  }
+  paintCtxRow(ses.ctx);
 }
 
 /* Header-action visibility for the agent-focus state (docs/dashboard.md,
@@ -487,19 +479,22 @@ function renderAgentScoreboard(sr, focus) {
   if (ev != null) add("", ev + " events");
   if (rec.started_at)
     add("⏱", rec.ended_at ? dur(rec.ended_at - rec.started_at) : ago(rec.started_at));
-  const u = d.usage || {};
-  const tin = u.in | 0, tout = u.out | 0, tread = u.cache | 0, tcre = u.create | 0;
-  const tot = tin + tout + tread + tcre;
-  if (tot)
-    add("Σ", kfmt(tot) + " (" + kfmt(tin) + " in · " + kfmt(tout) + " out · "
-        + kfmt(tread) + " cache · " + kfmt(tcre) + " write)");
+  sigmaChip(add, d.usage || {});     // the agent shape IS in/out/cache/create
   if (d.cost) add("≈", usd(d.cost), "cost");
-  if (ses.ctxRow) {
-    ses.ctxRow.textContent = "";
-    const cx = rec.ctx;
-    if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
-    ses.ctxRow.style.display = cx && cx.used ? "" : "none";
-  }
+  paintCtxRow(rec.ctx);              // the agent's own saturation, same row
+}
+
+/* The ctx-saturation row under the scoreboard — its own row, shown only while
+   there is an occupancy figure to show (docs/dashboard.md, *Context
+   saturation*). One owner for both scoreboards: the session's ctx comes from the
+   `ctx` SSE event, a drilled-in agent's from its own record, and the row is
+   REPLACED (not appended) on every repaint. */
+function paintCtxRow(cx) {
+  const ses = S.ses;
+  if (!ses || !ses.ctxRow) return;
+  ses.ctxRow.textContent = "";
+  if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
+  ses.ctxRow.style.display = cx && cx.used ? "" : "none";
 }
 
 /* Live ⚠ error badge — the web sibling of the scorebar's errwatch chip
@@ -1332,20 +1327,11 @@ function closeAgentStream() {
 
 function timelineHead(d, title) {
   const h = el("div", "tlhead");
-  const add = (label, value) => {
-    const s = el("span");
-    s.append(tnode(label + " "));
-    s.append(el("span", "v", value));
-    h.append(s);
-  };
+  const add = chipAdder(h);            // the same chip shape as the scoreboards
   add("◈", title);
   if (d.model) add("model", d.model);
   if (d.tools) add("tools", String(d.tools));
-  const u = d.usage || {};
-  const tot = (u.in | 0) + (u.out | 0) + (u.cache | 0) + (u.create | 0);
-  if (tot)
-    add("Σ", kfmt(tot) + " (" + kfmt(u.in) + " in · " + kfmt(u.out) + " out · "
-        + kfmt(u.cache) + " cache · " + kfmt(u.create) + " write)");
+  sigmaChip(add, d.usage || {});
   if (d.bad_lines) add("⚠", d.bad_lines + " bad lines");
   return h;
 }

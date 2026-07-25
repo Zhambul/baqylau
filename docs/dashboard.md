@@ -4670,6 +4670,18 @@ and a leading **← session** link that restores the session view (it points at
 skipped mid-inline-rename). The running ribbon hides while focused (it's
 session-scoped).
 
+Because it is the SAME scoreboard in two modes, the two renderers share their
+repeated pieces rather than re-encoding them: `chipAdder` (the chip markup),
+`sigmaChip` (the `Σ` breakdown — the web twin of `core.ops.token_parts`, which is
+the single owner of that display on the terminal side, so a per-site copy is a
+bug there too) and `paintCtxRow` (the ctx row is REPLACED on every repaint, and
+hidden when there's no occupancy figure). The one thing that legitimately differs
+is where the four counters come from: the session reads the stats row's
+`tk_in/tk_out/tk_read/tk_create`, an agent its drill-down `usage`
+`in/out/cache/create` — so each caller maps its own fields into `sigmaChip`. The
+agent timeline header (`timelineHead`) shows the same rollup through the same
+owner.
+
 The header **state indicator follows the focused agent too**: the badge pill
 (its text and colored dot) and the whole `.shead` state wash switch from the
 session's tab state to THIS agent's status. `renderAgentScoreboard` calls

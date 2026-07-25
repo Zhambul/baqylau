@@ -314,6 +314,21 @@ function kfmt(n) {
   if (n >= 1000) return Math.round(n / 1000) + "k";
   return String(n);
 }
+// The Σ token-breakdown chip — the web twin of core.ops.token_parts(), which is
+// the ONE owner of that display on the terminal side (per-site re-encoding of the
+// token split is banned there, docs/styleguide.md). Same rule here: the session
+// scoreboard and the drilled-in agent scoreboard both show it, and they get their
+// four counters under DIFFERENT names from the server (stats `tk_in/tk_out/
+// tk_read/tk_create` vs an agent's usage `in/out/cache/create`), so the caller
+// maps its fields and this owns the arithmetic + the wording. Nothing is added
+// when nothing has been counted yet. `add` is a chipAdder.
+function sigmaChip(add, t) {
+  const tin = t.in | 0, tout = t.out | 0, tread = t.cache | 0, tcre = t.create | 0;
+  const tot = tin + tout + tread + tcre;
+  if (!tot) return;
+  add("Σ", kfmt(tot) + " (" + kfmt(tin) + " in · " + kfmt(tout) + " out · "
+      + kfmt(tread) + " cache · " + kfmt(tcre) + " write)");
+}
 function usd(c) {
   if (c == null || isNaN(c)) return "";
   if (c === 0) return "$0";
