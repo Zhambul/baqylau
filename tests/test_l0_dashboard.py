@@ -7840,21 +7840,24 @@ def test_conversation_items_carry_the_msg_act(dash):
     assert [it["kind"] for it in items] == ["prompt", "message"]
 
 
-def test_view_mode_pref_is_per_session_and_defaults_verbose(dash):
+def test_view_mode_pref_is_per_session_and_defaults_to_default(dash):
     """The mode is stored per SESSION in the durable global prefs store, and an
-    untouched session reads VERBOSE — the mode that hides nothing. Setting a
-    session back to the default DELETES its entry, so the map stays the small set
-    of overridden sessions rather than one row per session ever opened."""
-    assert prefs.view_mode("vm1") == "verbose" == prefs.VIEW_DEFAULT
+    untouched session reads VIEW_DEFAULT — `default`, the mode Claude Code's own
+    viewMode defaults to. Setting a session back to it DELETES the entry, so the
+    map stays the small set of overridden sessions rather than one row per session
+    ever opened."""
+    assert prefs.view_mode("vm1") == "default" == prefs.VIEW_DEFAULT
     prefs.set_view_mode("vm1", "focus")
     assert prefs.view_mode("vm1") == "focus"
-    assert prefs.view_mode("vm2") == "verbose"          # strictly per session
-    prefs.set_view_mode("vm1", "verbose")
+    assert prefs.view_mode("vm2") == "default"          # strictly per session
+    prefs.set_view_mode("vm1", "verbose")               # an override IS stored…
     assert prefs.view_mode("vm1") == "verbose"
+    assert prefs.get(prefs.VIEW_MODE_KEY, {}) == {"vm1": "verbose"}
+    prefs.set_view_mode("vm1", "default")               # …and back is an absence
     assert prefs.get(prefs.VIEW_MODE_KEY, {}) == {}
-    # junk in the store can never make the page hide content
+    # junk in the store falls back to the default, never to a hidden-content mode
     prefs.set(prefs.VIEW_MODE_KEY, {"vm1": "nonsense"})
-    assert prefs.view_mode("vm1") == "verbose"
+    assert prefs.view_mode("vm1") == prefs.VIEW_DEFAULT
 
 
 def test_viewmode_endpoint_persists_serves_and_validates(dash):
@@ -7862,14 +7865,14 @@ def test_viewmode_endpoint_persists_serves_and_validates(dash):
     serves it back (not live-gated — a parked session re-opens at the mode you
     left it in). A mode outside the vocabulary is a 400 input reject."""
     A.session_start({"session_id": "vmses", "cwd": "/w", "transcript_path": ""})
-    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "verbose"
-    code, body = _post(dash + "/api/session/vmses/viewmode", {"mode": "default"})
-    assert code == 200 and json.loads(body) == {"ok": True, "mode": "default"}
     assert _get_json(dash + "/api/session/vmses")["view_mode"] == "default"
+    code, body = _post(dash + "/api/session/vmses/viewmode", {"mode": "verbose"})
+    assert code == 200 and json.loads(body) == {"ok": True, "mode": "verbose"}
+    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "verbose"
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/vmses/viewmode", {"mode": "tiny"})
     assert e.value.code == 400
-    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "default"  # unchanged
+    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "verbose"  # unchanged
 
 
 def test_viewmode_endpoint_is_audited_and_guarded(dash, monkeypatch):
@@ -7921,14 +7924,18 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
 
 def test_page_view_modes_match_the_pref_vocabulary(dash):
     """The three mode names are the wire vocabulary the endpoint validates
-    against (prefs.VIEW_MODES) — the page must not invent a fourth, and the
-    DEFAULT must stay the first entry (verbose: the mode that hides nothing, so a
-    session nobody touched shows everything, as before the feature)."""
+    against (prefs.VIEW_MODES) — the page must not invent a fourth, must list them
+    in the same CONTROL order, and must agree on which one is the DEFAULT. The
+    list order and the default are deliberately decoupled: the control reads
+    densest-to-sparsest while an untouched session opens at `default`, so the page
+    taking VIEW_MODES[0] for the default (as it first did) is now a bug."""
     code, ses = _get(dash + "/static/app.05-session.js")
     assert code == 200
     names = re.search(r"const VIEW_MODES = \[([^\]]*)\]", ses).group(1)
     assert tuple(re.findall(r'"([a-z]+)"', names)) == tuple(prefs.VIEW_MODES)
-    assert prefs.VIEW_MODES[0] == prefs.VIEW_DEFAULT == "verbose"
+    page_default = re.search(r'const VIEW_DEFAULT = "([a-z]+)"', ses).group(1)
+    assert page_default == prefs.VIEW_DEFAULT == "default"
+    assert "VIEW_MODES[0]" not in ses, "the default is not the first mode"
 
 
 def test_page_reads_the_served_act_instead_of_sniffing_glyphs(dash):

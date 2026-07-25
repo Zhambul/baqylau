@@ -33,10 +33,11 @@ function showSession(sid, tab) {
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
               filter: { kind: "all" },            // cleared per session (new S.ses)
               // the view mode + its derived state: `view` is seeded from the
-              // session's durable pref when meta lands (verbose until then, the
-              // mode that hides nothing), `viewOpen` holds the runs the user
+              // session's durable pref when meta lands, and until then from the
+              // same default the server would serve — so the first paint doesn't
+              // flash the wrong density. `viewOpen` holds the runs the user
               // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
-              view: VIEW_MODES[0], viewOpen: new Set(), viewSeq: 0,
+              view: VIEW_DEFAULT, viewOpen: new Set(), viewSeq: 0,
               viewTimer: null, viewFill: 0 };
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
@@ -723,7 +724,7 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 // never touches Claude Code's own `viewMode` setting, and the kitty mirror keeps
 // painting everything.
 //
-//   verbose — every block, as before (the default; nothing is ever hidden)
+//   verbose — every block; nothing is ever hidden
 //   default — runs of adjacent read/command/agent activity collapse into ONE
 //             clickable summary line; file MUTATIONS stay expanded, so an edit
 //             always breaks the run and is always visible
@@ -735,8 +736,11 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 // nudge; `data-injected`, from the transcript's isMeta). Verbose keeps them: it
 // shows the transcript as it is, and they are genuinely in it.
 //
-// Must match dashboard/prefs.py VIEW_MODES (grep-tested).
+// Must match dashboard/prefs.py VIEW_MODES / VIEW_DEFAULT (grep-tested). The
+// list is in CONTROL order (densest to sparsest); the default is NOT its first
+// entry — a session nobody switched opens at "default", like the TUI.
 const VIEW_MODES = ["verbose", "default", "focus"];
+const VIEW_DEFAULT = "default";
 
 // Which activity classes each mode folds into a summary. Everything not listed
 // stays its own visible block, which is also what an unclassified item gets —
@@ -894,7 +898,7 @@ function clearViewMarks(items) {
 function applyViewMode() {
   const ses = S.ses;
   if (!ses || !ses.stream) return;
-  const mode = VIEW_MODES.includes(ses.view) ? ses.view : VIEW_MODES[0];
+  const mode = VIEW_MODES.includes(ses.view) ? ses.view : VIEW_DEFAULT;
   const items = streamItems();
   if (mode === "verbose") {
     if (ses.viewSig === "verbose") return;      // already plain — nothing to undo

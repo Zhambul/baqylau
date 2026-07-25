@@ -4629,13 +4629,20 @@ choice is per session and durable (`POST /api/session/<sid>/viewmode` → the
 `view-mode` map in `dashboard/prefs.py`, served on the session payload as
 `view_mode`).
 
-- **verbose** — every block, exactly as the dashboard always rendered. **The
-  default**: a session nobody switched hides nothing, so the feature is opt-in
-  per session and can never silently swallow something you were looking for.
+- **verbose** — every block, exactly as the dashboard rendered before this
+  feature. Nothing is ever hidden.
 - **default** — runs of adjacent read/command/agent activity collapse into ONE
   clickable summary line. File **mutations stay expanded**, so an Update/Write
   always breaks the run and is always on screen; so do conversation messages and
-  the ⚠ audit one-liner.
+  the ⚠ audit one-liner. **This is the default mode** (`prefs.VIEW_DEFAULT`), the
+  same one Claude Code's `viewMode` defaults to — the dashboard reads like the
+  TUI it mirrors. It shipped defaulting to `verbose` while the collapse was new
+  and unproven, and that caution outlived its reason: nothing at `default` is
+  unreachable (every run is one click from expanded, and mutations/messages/the ⚠
+  line never fold at all). Note `VIEW_MODES` is in CONTROL order — densest to
+  sparsest — so the default is deliberately NOT its first entry; the page carries
+  its own `VIEW_DEFAULT` and the grep test pins both halves against
+  `prefs.VIEW_DEFAULT`.
 - **focus** — only your prompts, each turn's FINAL reply, and a one-line summary
   of the edits. Everything else folds, including mid-turn assistant prose.
 
@@ -4795,8 +4802,9 @@ Mechanics worth knowing:
 
 Known gap: a STANDALONE codex host session's blocks classify as `agent` (there
 codex IS the main agent, and its chips carry no main-session glyph), so its
-default-mode summary reads "ran N agents". Harmless at the default mode
-(verbose), and it needs a codex-specific act to fix properly.
+default-mode summary reads "ran N agents" instead of naming the codex run. It
+needs a codex-specific act to fix properly; until then `verbose` shows such a
+session unfolded.
 
 ## Notifications (the toaster)
 

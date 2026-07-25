@@ -306,8 +306,13 @@ def set_notify_muted(sid, muted):
 # DELIBERATELY per-session and NOT a global default: switching one session to
 # focus must not silently re-render every other one (a mode is a per-session
 # reading choice, unlike the alerts switch, which is one machine-wide policy).
-# So a session the user never touched stays VERBOSE — today's dashboard
-# behaviour, and the mode where nothing is ever hidden.
+#
+# A session nobody switched opens at DEFAULT — the same mode Claude Code's own
+# `viewMode` defaults to, so the dashboard reads like the TUI it mirrors. It
+# shipped defaulting to `verbose` (the mode that hides nothing) while the collapse
+# was new and unproven; nothing is actually lost at `default` — every collapsed
+# run is one click from expanded, and mutations, messages and the ⚠ warning line
+# never fold at all — so the cautious default outlived its reason.
 #
 # This ONLY ever changes what the browser paints. Claude Code has its own
 # `viewMode` setting for the TUI and this store is not it: nothing here is
@@ -318,10 +323,11 @@ def set_notify_muted(sid, muted):
 # re-opens at the mode you last read it in), and a mode set back to the default
 # DELETES the key so the map stays the small set of overridden sessions.
 VIEW_MODE_KEY = "view-mode"
-# The mode vocabulary, in control order (the page renders the segmented control
-# from the served list). VERBOSE is first because it is the default.
+# The mode vocabulary, in CONTROL order — the segmented control reads
+# verbose → default → focus, densest to sparsest, which is why the default is not
+# simply the first entry (the two are deliberately decoupled).
 VIEW_MODES = ("verbose", "default", "focus")
-VIEW_DEFAULT = VIEW_MODES[0]
+VIEW_DEFAULT = "default"
 
 
 def view_mode(sid):
