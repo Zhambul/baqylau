@@ -305,6 +305,11 @@ function createBlock() {
   head.onclick = (e) => {
     if (e.target.closest("a")) return;           // ⧉ links keep working
     b.userSet = true;
+    // …mirrored onto the node, because the view-mode pass reads this off the DOM:
+    // it folds the blocks a run reveals, and must not re-fold one you opened
+    // yourself. `b.userSet` is unreachable there — history blocks have no entry
+    // in S.ses.blocks at all (appendOlder tracks them locally).
+    root.dataset.userset = "1";
     root.dataset.open = root.dataset.open === "1" ? "0" : "1";
   };
   return b;
@@ -1027,6 +1032,15 @@ function applyViewMode() {
       // children — moving items would break all three.
       for (const m of p.span) m.classList.add("vrun");
       p.span[p.span.length - 1].classList.add("vrun-last");
+      // The revealed blocks arrive FOLDED. Expanding a summary asks "which
+      // actions were these?", not "dump every command's output" — a run of five
+      // commands opening at full body is the wall the collapse existed to
+      // remove, and each block is one more click away anyway. A block you opened
+      // yourself is left alone (`userset`), so this can't fight you on the next
+      // pass. Only in the collapsing modes: verbose has no summary lines.
+      for (const m of p.members)
+        if (m.classList.contains("blk") && !m.dataset.userset)
+          m.dataset.open = "0";
     } else {
       for (const m of p.span) hideIt(m);
     }

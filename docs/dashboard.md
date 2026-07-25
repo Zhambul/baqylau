@@ -4782,6 +4782,15 @@ Mechanics worth knowing:
   re-parenting into a container would break all three. Every mark is cleared at
   the top of each pass (`clearViewMarks`) — a leftover would rail a run that is no
   longer open.
+
+  The revealed blocks also arrive **folded** (`data-open="0"`), each showing just
+  its header line. Expanding a summary asks *which actions were these*, not *dump
+  every command's output* — a run of five commands opening at full body is the
+  wall the collapse exists to remove, and any one block is a further click away. A
+  block you opened YOURSELF is exempt: the head toggle stamps `data-userset` on
+  the node, which this pass reads, so it cannot re-fold your manual toggle on the
+  next tick. (The flag is mirrored onto the DOM because `b.userSet` is
+  unreachable here — a history block has no entry in `S.ses.blocks` at all.)
 - **Hidden AND dimmed items are transparent to the run cut** — the activity
   either side of an injected prompt, or of focus mode's greyed prose, merges into
   one summary rather than leaving two lines with a gap. Only a fully shown item

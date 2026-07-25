@@ -8036,7 +8036,16 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # stale one would draw a rail under a run that is no longer open.
     assert d["expanded"] == {"shown": ["read", "bash", "bash", "msg"],
                              "sums": ["1"],
-                             "marks": ["R-", "R-", "RL", "--"]}
+                             "marks": ["R-", "R-", "RL", "--"],
+                             # …and they arrive FOLDED (`data-open` 0): expanding
+                             # a summary answers "which actions were these", not
+                             # "dump every command's output" — which would be the
+                             # wall the collapse exists to remove
+                             "opens": ["0", "0", "0", "-"]}
+    # a block the USER opened is left alone, so the fold can't fight a manual
+    # toggle on the next pass (its `userset` mark is read off the DOM, because a
+    # history block has no entry in S.ses.blocks to carry the flag)
+    assert d["userOpened"] == ["-0", "U1", "-0", "--"]
     assert d["recollapsed"] == {"shown": ["msg"], "sums": ["0"],
                                 "marks": ["--", "--", "--", "--"]}
     # a run absorbing new items keeps its identity, so an expansion survives it

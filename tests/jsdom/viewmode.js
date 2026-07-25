@@ -153,6 +153,9 @@ function item(spec) {
   if (spec.add) e.dataset.add = String(spec.add);
   if (spec.rem) e.dataset.rem = String(spec.rem);
   if (spec.g) e.dataset.g = spec.g;
+  if (spec.act && spec.act !== "msg") e.dataset.open = "1";   // a block card,
+  //                          born expanded like appendItems' live-tail blocks
+  if (spec.userset) e.dataset.userset = "1";
   e.dataset.vk = String(++seq);
   e.dataset.vt = String(Date.now() / 1000 - 30);   // 30s old: past the 2s floor
   return e;
@@ -253,8 +256,11 @@ const marks = (ses) => ses.stream.children
   .filter(c => c.dataset.kind)
   .map(c => (c.classList.contains("vrun") ? "R" : "-")
           + (c.classList.contains("vrun-last") ? "L" : "-"));
+const opens = ses => ses.stream.children
+  .filter(c => c.dataset.kind && c.classList.contains("blk"))
+  .map(c => c.dataset.open || "-");
 out.expanded = { shown: shown(rt), sums: sums(rt).map(s => s.open),
-                 marks: marks(rt) };
+                 marks: marks(rt), opens: opens(rt) };
 sumRow(rt).onclick();
 out.recollapsed = { shown: shown(rt), sums: sums(rt).map(s => s.open),
                     marks: marks(rt) };
@@ -268,6 +274,14 @@ out.injected = {
   default: shown(scene("default", inj)),
   focus: shown(scene("focus", inj)),
 };
+
+// a block the USER opened inside a revealed run is left alone
+const keep = scene("default", [F.prompt, F.fg,
+                               { act: "bash", g: "tK", userset: 1 }, F.fg]);
+sumRow(keep).onclick();
+out.userOpened = keep.stream.children
+  .filter(c => c.dataset.kind && c.classList.contains("blk"))
+  .map(c => (c.dataset.userset ? "U" : "-") + (c.dataset.open || "-"));
 
 // a run that GROWS keeps its key (so the user's expansion survives new items)
 const grow = scene("default", [F.prompt, F.fg, F.fg]);
