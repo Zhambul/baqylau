@@ -30,7 +30,11 @@ ignore = [
     "E402",     # bin/ entries sys.path.insert before imports; modules defer
                 # frontend/DB imports below module setup (styleguide: no
                 # import-time side effects)
-    "PLC0415",  # imports inside functions ARE the import-purity pattern
+    "PLC0415",  # imports inside functions ARE the import-purity pattern. The
+                # rule this ignore CANNOT check — that a deferred import has one
+                # of four reasons, named at the site — is in the styleguide, and
+                # the cost half is tested directly
+                # (test_per_event_imports_stay_off_the_heavy_renderers)
     # -- documented mechanisms ruff would misread ------------------------
     "PLW0603",  # `global` — the mirror's documented renderer loop state
     "PLW1510",  # subprocess.run without check= — silenced fire-and-forget

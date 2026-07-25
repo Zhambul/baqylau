@@ -87,6 +87,57 @@ def test_dashboard_imports_clean():
     _import_fresh("dashboard.opshtml")
 
 
+# Reports the offending ROOTS, not the 56 wenmode submodules one hoist drags in.
+_COST_PROG = """
+import sys, importlib
+importlib.import_module(sys.argv[1])
+heavy = {n.split(".")[0] for n in sys.modules if n.split(".")[0] in ("wenmode", "pygments")}
+heavy |= {"core.mdrender"} & set(sys.modules)
+print("HEAVY " + " ".join(sorted(heavy)))
+"""
+
+# The markdown/highlighting stack, and the module that reaches it. wenmode alone
+# is ~40ms of import — 1.7x a bare interpreter, and 4x every other module in the
+# repo put together (measured: `python3 -X importtime`).
+_HEAVY_ROOTS = ("wenmode", "pygments", "core.mdrender")
+
+# Modules a HOOK EVENT imports. Each hook is a fresh short-lived process, so an
+# import here is paid per event, several times per turn.
+_PER_EVENT = ["plugins.claude_code.dispatch", "plugins.claude_code.file_fmt",
+              "plugins.claude_code.cmd_fmt", "plugins.claude_code.tabstatus"]
+
+
+def test_per_event_imports_stay_off_the_heavy_renderers():
+    """The cost half of import discipline, and the half nothing else pins.
+
+    Import PLACEMENT is not the property worth enforcing — the styleguide's rule
+    is "no import-time side effects", and the tests above check that directly, by
+    sabotage. But the OTHER reason this repo defers imports is measured cost, and
+    the compliant-looking direction is the dangerous one: hoisting
+    `from core import mdrender` to the top of file_fmt.py would satisfy every
+    linter and add ~40ms of wenmode to every file op, several times per turn.
+
+    So this asserts the outcome instead: a per-event module's import graph
+    contains neither wenmode nor pygments nor core.mdrender. Deterministic (a
+    module-set check, not a timing threshold — no flake), and it names the one
+    real hot spot rather than policing all 90 function-level imports.
+
+    The legitimate top-level import of mdrender is plugins/claude_code/stream.py:
+    a long-lived detached tailer pays the 40ms once, at spawn. Same import, other
+    placement, both right — which is why the reason belongs in a comment at the
+    site, and the budget belongs here."""
+    for module in _PER_EVENT:
+        r = subprocess.run([sys.executable, "-c", _COST_PROG, module], cwd=REPO,
+                           capture_output=True, text=True, timeout=30, check=False)
+        assert r.returncode == 0, "import of %s failed:\n%s" % (module, r.stderr)
+        heavy = r.stdout.split("HEAVY", 1)[1].split()
+        assert not heavy, (
+            "%s now imports %s at module level — that is ~40ms on EVERY hook event.\n"
+            "If it needs one, defer it into the function that uses it (see\n"
+            "plugins/claude_code/file_fmt.py) and say why in a comment."
+            % (module, ", ".join(heavy)))
+
+
 _STREAM_PROG = """
 import sys, os
 sys.argv = ["import-safety-test"]          # no argv contract available

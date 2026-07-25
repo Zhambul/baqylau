@@ -134,6 +134,27 @@ charter fits, document the owner here, and (if cheap) add a grep test.
   accessors for expensive singletons (`_fe()`/`_win()` in `tabstatus.py`,
   `split.py`). `tests/test_import_safety.py` pins this — extend it when adding
   a module the dispatcher imports.
+- **A function-level import needs one of four reasons, named at the site.**
+  Top-level is the default. `ruff.toml` ignores `PLC0415` wholesale because the
+  purity rule above produces deferred imports legitimately — but the ignore
+  makes a copy-pasted one indistinguishable from a deliberate one (a pylint pass
+  found four re-imports of modules the same file already imports at the top). So
+  a deferred import says which reason put it there: **(1) measured cost on a
+  per-event path** — `python3 -X importtime`, and the bar is real: a bare
+  interpreter is ~24ms, the whole hook dispatcher's graph is ~11ms on top, and
+  only `core/mdrender.py` → `wenmode` (~40ms) is worth deferring at all;
+  **(2) a cycle break**; **(3) registry fan-out**, where the point is that most
+  events need none of the providers (`plugins/claude_code/__init__.py`);
+  **(4) an import with unavoidable side effects** — rare, and prefer fixing the
+  callee with a lazy accessor. Note an *optional dependency* is NOT on that
+  list: it belongs at the top under `try/except ImportError` with a degrade path
+  (`core/mdrender.py`, `wenmode`). The cost reason gets a test, not trust —
+  `test_per_event_imports_stay_off_the_heavy_renderers` asserts the per-event
+  modules' import graph contains no `wenmode`/`pygments`/`mdrender`, because the
+  regression direction (hoisting an import to the top) is the one every linter
+  calls compliant. `plugins/claude_code/stream.py` imports `mdrender` at the top
+  and `file_fmt.py` defers it: same import, opposite placement, both correct —
+  a long-lived tailer pays once, a per-event handler would pay per file op.
 - **Registries over if/elif ladders.** Type/event switches are data:
   `dispatch._ROUTES`, `tools.RENDER_KINDS`, `Renderer._USE`/`_RESULT`,
   `audit.COMMANDS`, `audit.ANOMALY_SECTIONS`, and the dashboard's two HTTP

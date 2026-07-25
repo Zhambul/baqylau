@@ -76,3 +76,19 @@ refuses a RELATIVE path outright (it creates what it opens, and no session ever
 lives in a relative path — the dashboard singleton's cwd is the main checkout),
 and `conftest.pytest_sessionfinish` fails the run listing any DB found under the
 repo. A test that loads a pane entry pins argv and passes a `tmp_path` log.
+
+**Import discipline is pinned by OUTCOME, twice** (2026-07-25).
+`test_import_safety.py` had one half: importing a hook/streamer module in a fresh
+interpreter with a sabotaged `frontends.get`/`open`/`sqlite3.connect` must still
+succeed — that checks the *side-effect* rule directly, rather than policing where
+`import` lines sit. The cost half was missing, and it is the direction that
+actually regresses: hoisting `from core import mdrender` to the top of a per-event
+handler satisfies **every** linter (`PLC0415` is ignored repo-wide, and the hoist
+is the compliant direction anyway) while adding ~40ms of `wenmode` to every file
+op, several times per turn. `test_per_event_imports_stay_off_the_heavy_renderers`
+asserts the per-event modules' import graph contains no
+`wenmode`/`pygments`/`core.mdrender`. A **module-set** check, not a timing
+threshold — deterministic, no flake, and it names the one hot spot instead of
+budgeting all 90 function-level imports. Measured baselines, for calibration: a
+bare interpreter is ~24ms, the whole `dispatch` graph ~11ms on top of that,
+`frontends`/`core.render` ~0, and `wenmode` alone ~40ms.
