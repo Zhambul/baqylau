@@ -7980,19 +7980,22 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
                                     "Ran 2 shell commands",
                                     "Read 2 files, ran 1 shell command"]
     assert d["default"]["shown"] == ["msg", "edit", "msg", "msg"]
-    # focus: your prompt and the turn's FINAL reply at full weight, its mid-turn
-    # prose DIMMED (":dim") — kept rather than dropped, because only the NEWEST
-    # message in a turn is the final one, so each new reply flipped its
-    # predecessor from shown to hidden and a message you were reading vanished
-    # the moment the turn ended.
-    #
-    # Dimming is a PAINT, not a placement: a dimmed item still continues a run
-    # exactly as a hidden one did, so the three default-mode lines still merge
-    # into ONE here. That equality is the whole point of the pinning — the
-    # greying must not move the collapse.
+    # focus: your prompt + exactly ONE message — the one the turn ends on — and
+    # the activity merged into a single summary line. A settled turn (this story's
+    # tab is idle) shows that message at full weight; the mid-turn prose is gone.
     assert d["focus"]["sums"] == \
         ["Edited 1 file +12 -3, read 3 files, ran 4 shell commands"]
-    assert d["focus"]["shown"] == ["msg", "msg:dim", "msg"]
+    assert d["focus"]["shown"] == ["msg", "msg"]
+
+    # …and while the turn is STILL RUNNING that newest message is PROVISIONAL —
+    # greyed, because the result is still coming — going to full weight when the
+    # tab settles. Same story, same items, only the tab state differs; the older
+    # in-turn prose is hidden in both.
+    assert d["focusRunning"] == ["msg:dim", "msg"]
+    assert d["focusSettled"] == ["msg", "msg"]
+    # a PREVIOUS turn's reply is never provisional, even while a new turn runs
+    # (that turn has produced no message yet, so nothing there is in flight)
+    assert d["focusOlderTurn"] == ["msg", "msg", "msg"]
 
     # Claude Code's wording, to the letter (docs/dashboard.md *View modes*):
     # singular/plural units, fragment ORDER, capitalized first fragment only…
@@ -8018,9 +8021,9 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # firing.
     assert d["injected"]["verbose"] == 5
     assert d["injected"]["default"] == ["msg", "msg", "msg"]   # prompt + 2 replies
-    # prompt + THE reply, with the mid-turn one dimmed — and still exactly ONE
-    # undimmed reply, so the hook firing did not manufacture a second "final"
-    assert d["injected"]["focus"] == ["msg", "msg:dim", "msg"]
+    # prompt + THE reply: still exactly ONE, so the hook firing did not
+    # manufacture a second turn-ending message
+    assert d["injected"]["focus"] == ["msg", "msg"]
 
     # the summary is clickable BOTH ways (it stays put while expanded — it is the
     # only way back), and a redundant pass is a no-op (the signature guard, which
@@ -8177,3 +8180,30 @@ def test_expanded_run_rail_is_styled_as_one_group(dash):
         assert prop in run.group(1), prop
     cards = css.index(".stream > .opl, .stream > .ol")
     assert cards < css.index(".stream > .vrun"), "the rail must override the cards"
+
+
+def test_interrupt_annotation_is_flagged_by_its_id_not_its_text(dash):
+    """`[Request interrupted by user]` (and the `… for tool use]` form) is another
+    user-SHAPED record Claude Code writes itself, so it was rendering as a YOU
+    bubble. It is NOT isMeta — measured across the corpus — but it does carry
+    `interruptedMessageId`, the id of the message it cut off, and THAT is what
+    flags it.
+
+    Deliberately not matched on the annotation's text: a Read of a doc that
+    mentions the marker, a grep hit, or a conversation about it is textually
+    identical, which is the exact false-positive class that once flipped tab
+    colours mid-turn (tabstatus.is_interrupt_line). An id-bearing field can't be
+    quoted."""
+    from plugins.claude_code import transcript as TR
+    for content in ("[Request interrupted by user]",
+                    [{"type": "text", "text": "[Request interrupted by user for tool use]"}]):
+        rec = TR.parse_line(json.dumps({
+            "type": "user", "interruptedMessageId": "msg_1",
+            "message": {"role": "user", "content": content}}))
+        assert rec["meta"] is True, content
+    # a real message that merely QUOTES the marker stays yours
+    quote = TR.parse_line(json.dumps({
+        "type": "user",
+        "message": {"role": "user",
+                    "content": "why is [Request interrupted by user] shown?"}}))
+    assert quote["kind"] == "prompt" and quote["meta"] is False

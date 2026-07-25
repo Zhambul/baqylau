@@ -219,6 +219,15 @@ out.default = { sums: sums(dflt).map(s => s.text), shown: shown(dflt) };
 const foc = scene("focus", story);
 out.focus = { sums: sums(foc).map(s => s.text), shown: shown(foc) };
 
+// focus, mid-turn: the newest message is PROVISIONAL (greyed), older prose is
+// gone, and once the tab settles that same message is the result (full weight)
+const midTurn = [F.prompt, F.read, F.reply, F.fg, F.reply];
+out.focusRunning = shown(scene("focus", midTurn, "executing"));
+out.focusSettled = shown(scene("focus", midTurn, "awaiting-response"));
+// an older turn's reply is never provisional, even while a NEW turn runs
+out.focusOlderTurn = shown(scene("focus",
+  [F.prompt, F.reply, F.prompt, F.fg], "executing"));
+
 out.singular = sums(scene("default", [F.prompt, F.read, F.fg]))[0].text;
 out.plural = sums(scene("default",
   [F.prompt, F.read, F.read, F.fg, F.fg]))[0].text;

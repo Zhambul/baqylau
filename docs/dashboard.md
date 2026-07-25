@@ -4671,11 +4671,20 @@ render as `YOU` bubbles, so a hook's feedback — or an entire skill — read as
 something you had said. `<`-wrapped envelopes (`<command-name>`,
 `<local-command-caveat>`, `<system-reminder>`) were already dropped by
 `conversation()`; these are bare prose, so nothing but the flag distinguishes
-them, which is why `transcript.parse_line` now CARRIES `isMeta` (as `meta`)
+them, which is why `transcript.parse_line` now CARRIES the flag (as `meta`)
 instead of discarding it — on both record shapes, since a skill body arrives as
 list content while a hook's feedback is a plain string. `session_title` had
 skipped `isMeta` rows all along for the same reason; the fact is now shared
 rather than re-read per consumer.
+
+The second mark is `interruptedMessageId`, which flags Claude Code's synthetic
+`[Request interrupted by user]` / `[… for tool use]` annotation. That record is
+NOT isMeta, so it needed its own mark; the field carries the id of the message the
+cancel cut off. Matching the annotation's TEXT instead would re-run the
+false-positive class `tabstatus.is_interrupt_line` documents at length — a Read of
+a doc that mentions the marker, a grep hit, or a conversation about it is
+textually identical to the real thing, and that once flipped tab colours mid-turn.
+An id-bearing field cannot be quoted.
 
 Verbose deliberately keeps them: it shows the transcript as it is, and they ARE
 in it. An injected prompt also does **not close the turn** for focus mode's

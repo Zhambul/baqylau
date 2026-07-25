@@ -728,9 +728,10 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 //   default — runs of adjacent read/command/agent activity collapse into ONE
 //             clickable summary line; file MUTATIONS stay expanded, so an edit
 //             always breaks the run and is always visible
-//   focus   — your prompts and each turn's FINAL reply at full weight, its
-//             mid-turn prose DIMMED, and one line of edits; every intermediate
-//             step folds away
+//   focus   — your prompts, ONE message per turn (the one it ends on) and one
+//             line of edits; every intermediate step folds away. That message is
+//             greyed while the turn is still running (it is provisional) and
+//             full weight once the turn settles (it is the result)
 //
 // Both non-verbose modes also drop INJECTED prompts — user-shaped turns Claude
 // Code wrote itself (a Stop hook's feedback, a loaded skill's body, a resume
@@ -915,7 +916,13 @@ function applyViewMode() {
   // DOM order is newest -> oldest, so "the first reply seen since the last
   // prompt" IS that turn's final one — which is the only assistant prose focus
   // mode keeps. A prompt closes the turn: items below it are the older one's.
+  const fgg = (ses.fgRun && ses.fgRun.g) || "";
+  const busy = typeof BUSY_TABS !== "undefined" && BUSY_TABS.includes(liveTab());
   let sawReply = false;
+  // Still inside the NEWEST turn: the feed is newest-top and a turn reads
+  // [replies … activity … prompt], so everything above the first prompt we meet
+  // belongs to the turn in progress.
+  let inNewestTurn = true;
   const disp = items.map(elem => {
     const kind = elem.dataset.kind;
     if (kind === "messages") {
@@ -927,26 +934,27 @@ function applyViewMode() {
       // typed, and treating it as a boundary would surface a second "final"
       // reply per hook firing.
       if (elem.dataset.injected) return "hide";
-      if (mk === "prompt") { sawReply = false; return "show"; }
+      if (mk === "prompt") { sawReply = false; inNewestTurn = false; return "show"; }
       if (mode === "focus" && mk === "message") {
-        // Mid-turn prose is DIMMED, not dropped. Focus mode is about weighting
-        // the turn — your prompt and the reply it ends on carry it, the running
-        // commentary is context — and hiding that commentary outright lost
-        // things worth glancing at (Claude Code greys it for the same reason;
-        // the known complaint about its focus mode is precisely that it hides
-        // substantive prose). A dimmed item is VISIBLE, so unlike a hidden one
-        // it breaks a run rather than merging the activity either side of it.
-        const final = !sawReply;
+        // Exactly ONE message survives per turn — the newest, which is the one
+        // the turn ends on. The rest are the running commentary and stay hidden.
+        //
+        // While the turn is STILL GOING that newest message is PROVISIONAL: more
+        // prose (and the actual result) is still coming, so it is greyed rather
+        // than presented as the answer. Once the turn settles it is the result,
+        // and it goes to full weight beside the one-line summary of what the turn
+        // did. Greying it only while in flight is the difference between "this is
+        // the answer" and "this is where it's got to".
+        const newest = !sawReply;
         sawReply = true;
-        return final ? "show" : "dim";
+        if (!newest) return "hide";
+        return (busy && inNewestTurn) ? "dim" : "show";
       }
       return "show";
     }
     return fold.includes(elem.dataset.act || "") ? "fold" : "show";
   });
 
-  const fgg = (ses.fgRun && ses.fgRun.g) || "";
-  const busy = typeof BUSY_TABS !== "undefined" && BUSY_TABS.includes(liveTab());
   // PLAN first, mutate second: the runs are computed into a list, and the DOM is
   // only rebuilt when the plan actually differs from the painted one (the
   // signature below). Without that guard every SSE tick tore down and re-created

@@ -30,11 +30,12 @@
 #   {"kind": "prompt", "text": str, "meta": bool}   a user prompt (unstripped) —
 #       a plain `user` string OR a `queued_command` attachment (the delivered
 #       form of a message queued mid-turn; commandMode=="prompt" only).
-#       `meta` is Claude Code's own `isMeta` flag: the record is shaped like a
-#       user turn but the HUMAN DID NOT TYPE IT — Claude Code injects it. Seen
-#       carrying `Stop hook feedback: …` (a Stop hook's blocking output),
-#       `Continue from where you left off.` (a resume nudge) and the
-#       `<local-command-caveat>` envelope. The `<`-wrapped ones are dropped by
+#       `meta` means the record is shaped like a user turn but the HUMAN DID NOT
+#       TYPE IT — Claude Code injected it (see _injected for the two structural
+#       marks it reads). Seen carrying `Stop hook feedback: …` (a Stop hook's
+#       blocking output), a loaded skill's whole SKILL.md body, `Continue from
+#       where you left off.` (a resume nudge), the `<local-command-caveat>`
+#       envelope, and `[Request interrupted by user…]` (the cancel annotation). The `<`-wrapped ones are dropped by
 #       conversation() anyway; the bare-prose ones are indistinguishable from a
 #       real prompt WITHOUT this flag, which is why it is now carried rather
 #       than dropped: the dashboard's focus mode promises "your prompt", and a
@@ -169,6 +170,28 @@ def _strip_recap_hint(text):
     return _RECAP_HINT.sub("", text).strip()
 
 
+def _injected(o):
+    """Whether this user-shaped record was written by CLAUDE CODE rather than
+    typed by the human — the `meta` flag on the prompt/results records below.
+    Two structural marks, no text matching:
+
+      isMeta               a Stop hook's blocking feedback, a loaded skill's
+                           whole SKILL.md body, the `Continue from where you
+                           left off.` resume nudge;
+      interruptedMessageId the synthetic `[Request interrupted by user…]`
+                           annotation, which carries the id of the message it
+                           cut off. It is NOT isMeta (measured across the
+                           transcript corpus, both the bare and the `for tool
+                           use` form), so it needed its own mark.
+
+    Deliberately NOT matched on the annotation's TEXT, which would re-run the
+    false-positive class tabstatus.is_interrupt_line documents at length: any
+    growth that merely QUOTES the marker — a Read of a doc that mentions it, a
+    grep hit, a conversation about it — is textually identical to the real
+    thing. The id-bearing field cannot be quoted."""
+    return bool(o.get("isMeta") or o.get("interruptedMessageId"))
+
+
 def parse_line(s):
     """One transcript JSONL line -> a typed record (see the module header)."""
     try:
@@ -196,8 +219,7 @@ def parse_line(s):
                 return {"kind": "teammsg", "sender": a, "body": b}
             # isMeta = Claude Code injected this user turn (see the header) —
             # carried so consumers can tell it from something the human typed.
-            return {"kind": "prompt", "text": content,
-                    "meta": bool(o.get("isMeta"))}
+            return {"kind": "prompt", "text": content, "meta": _injected(o)}
         if isinstance(content, list):
             blocks, texts = [], []
             for blk in content:
@@ -216,7 +238,7 @@ def parse_line(s):
                 # bubble holding the entire skill.
                 return {"kind": "results", "blocks": blocks,
                         "tur": o.get("toolUseResult"), "texts": texts,
-                        "meta": bool(o.get("isMeta"))}
+                        "meta": _injected(o)}
         return None
     if t == "assistant":
         blocks = []
