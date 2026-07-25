@@ -2306,6 +2306,17 @@ those ARE bugs worth the light. (The stash-race 409s — `no pending question` /
 legitimately when the dialog was resolved AT THE TERMINAL, and the
 `ask-pending`/`plan-pending` stash lifecycle already records that.)
 
+Those stash-race refusals have ONE owner per dialog kind: `_ask_stash` for the
+two ask endpoints (`answer` drives the dialog, `ask-draft` only stashes
+selections) and `_plan_guard` for the two plan ones. The `tool_use_id` match is
+the load-bearing half — it is what stops a decision meant for a REPLACED
+question from being typed into the dialog that took its place — and the ask side
+used to hand-roll all three refusals at both call sites, which is how they came
+to answer a stale card with two different bodies (a bare `ask expired` vs the
+fuller "a newer question replaced it (refresh)"). `count=False` is the one
+per-caller knob: `answer`'s `chat: true` declines the questions rather than
+answering them, so it carries no `answers` list to length-check.
+
 **Guard rejections ARE audited now (`web-reject`).** The above is the
 INPUT-validation layer (a handler ran and disliked a field). BENEATH it,
 `_post_guard` rejects a POST before ANY handler runs — a missing `X-Claude-Dash`

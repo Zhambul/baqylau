@@ -7032,6 +7032,25 @@ def test_session_scoped_rejects_resolve_their_target_by_sid():
         assert not ("sid=sid" in call and "log=" in call), call
 
 
+def test_modal_stash_match_has_one_owner_per_dialog():
+    """Refusing a decision meant for a REPLACED modal (the `tool_use_id`
+    mismatch) is what keeps an answer from being typed into the dialog that
+    took its place — so each dialog kind matches its stash in exactly ONE
+    place: `_ask_stash` for the two ask endpoints (answer / ask-draft),
+    `_plan_guard` for the two plan ones. The ask side used to hand-roll it at
+    both call sites, which is how the two ended up answering a stale card with
+    different HTTP bodies."""
+    src = dict(_dash_py("dashboard/http"))["dashboard/http/post.py"]
+    # the mismatch test itself: exactly twice, once per guard (they spell it
+    # identically). post_message's `_ask_pending(sid) or _plan_pending(sid)`
+    # asks a DIFFERENT question — "is ANY modal up" (a paste would go into the
+    # dialog) — and matches no id, so the stash READS are not what's counted.
+    assert src.count('!= (pending.get("tool_use_id")') == 2
+    for guard in ("_ask_stash", "_plan_guard"):
+        assert src.count("def %s(" % guard) == 1
+        assert src.count("self.%s(" % guard) == 2, "the two %s callers" % guard
+
+
 def test_live_or_parked_state_db_has_one_owner():
     """Choosing between the live state DB and its park is core.sessionapi's
     (state_db_for / session_db) — no dashboard module may re-derive it. post.py

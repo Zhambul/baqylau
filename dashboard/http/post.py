@@ -712,6 +712,43 @@ class _PostMixin:
         return self._json({"ok": True, "mode": mode, "restored": restored,
                            "degraded": res["degraded"]})
 
+    def _ask_stash(self, sid, body, action, *, count=True):
+        """Match `body` against the session's OPEN `ask-pending` stash — the
+        shared head of the two ask endpoints (post_answer drives the real
+        dialog, post_ask_draft only stashes selections), and the sibling of
+        `_plan_guard` for the ask side. Returns (pending, questions), or
+        (None, None) after ALREADY sending the error response (the same
+        'already responded' convention).
+
+        Three refusals, in this order: no stash at all (409 — the dialog
+        resolved in the terminal, or there never was one), a `tool_use_id` that
+        doesn't match (409 — a NEWER question replaced it, so an answer meant
+        for the old one must never be typed into the new dialog), and an
+        `answers` list whose length doesn't match the questions (a 400
+        `_reject_input`, `action` naming the row). `count=False` skips only the
+        last one — post_answer's `chat: true` declines the questions instead of
+        answering them, so it carries no answers at all."""
+        pending = _ask_pending(sid)
+        if not pending:
+            self._json({"error": "no pending question"}, 409)
+            return None, None
+        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id") or ""):
+            self._json({"error": "ask expired — a newer question "
+                        "replaced it (refresh)"}, 409)
+            return None, None
+        questions = pending.get("questions") or []
+        answers = body.get("answers")
+        if count and (not isinstance(answers, list)
+                      or len(answers) != len(questions)):
+            self._reject_input(
+                action, "answer count",
+                "answers must match the %d question%s"
+                % (len(questions), "" if len(questions) == 1 else "s"),
+                {"n_answers": len(answers) if isinstance(answers, list) else None,
+                 "n_questions": len(questions)}, sid=sid)
+            return None, None
+        return pending, questions
+
     def post_ask_draft(self, sid):
         """Persist the UNSUBMITTED ask selections (the ask card's in-progress
         answers) to the `ask-draft` kv so another device — or the same one
@@ -732,20 +769,10 @@ class _PostMixin:
         body = self._post_guard()
         if body is None:
             return
-        pending = _ask_pending(sid)
-        if not pending:
-            return self._json({"error": "no pending question"}, 409)
-        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id") or ""):
-            return self._json({"error": "ask expired"}, 409)
+        pending, questions = self._ask_stash(sid, body, "ask-draft")
+        if pending is None:
+            return
         answers = body.get("answers")
-        questions = pending.get("questions") or []
-        if not isinstance(answers, list) or len(answers) != len(questions):
-            return self._reject_input(
-                "ask-draft", "answer count",
-                "answers must match the %d question%s"
-                % (len(questions), "" if len(questions) == 1 else "s"),
-                {"n_answers": len(answers) if isinstance(answers, list) else None,
-                 "n_questions": len(questions)}, sid=sid)
         # normalize each answer to a dict FIRST: `answers` is only validated for
         # length above, so a non-dict element (adversarial/malformed body) must
         # not reach `.get()`. The old inline `if isinstance(a, dict)` on the
@@ -1056,21 +1083,12 @@ class _PostMixin:
         chat = bool(body.get("chat"))
         answers = body.get("answers")
         log, sdb = self._audit_target(sid)[1:]
-        pending = _ask_pending(sid)
-        if not pending:
-            return self._json({"error": "no pending question"}, 409)
-        if (body.get("tool_use_id") or "") != (pending.get("tool_use_id") or ""):
-            return self._json({"error": "ask expired — a newer question "
-                               "replaced it (refresh)"}, 409)
-        questions = pending.get("questions") or []
-        if not chat and (not isinstance(answers, list)
-                         or len(answers) != len(questions)):
-            return self._reject_input(
-                "web-answer", "answer count",
-                "answers must match the %d question%s"
-                % (len(questions), "" if len(questions) == 1 else "s"),
-                {"n_answers": len(answers) if isinstance(answers, list) else None,
-                 "n_questions": len(questions)}, log=log, path=sdb)
+        # the stash match + the answer-count 400 must BOTH fire before the
+        # terminal checks below — no key may be pressed for a stale card
+        pending, questions = self._ask_stash(sid, body, "web-answer",
+                                            count=not chat)
+        if pending is None:
+            return
         fe = launch._frontend()
         if fe is None:
             A.error(log, "dashboard answer (no terminal)", {"sid": sid})
