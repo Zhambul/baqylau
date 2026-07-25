@@ -260,4 +260,3 @@ function renderTasks() {
   card.append(list);
   wrap.append(card);
 }
-

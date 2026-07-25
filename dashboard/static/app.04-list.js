@@ -396,4 +396,3 @@ function updateHeadFromList() {
 }
 
 /* ---------- session view ---------- */
-

@@ -296,5 +296,3 @@ def bump_transcript(log, transcript):
     except Exception:
         A.error(log, "bump_transcript", {"transcript": transcript})
         return {}
-
-

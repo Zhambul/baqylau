@@ -825,4 +825,3 @@ function buildComposer() {
 // timeout: a launch that never produces a session (claude failed to start)
 // must not yank the browser somewhere minutes later.
 const JUMP_TIMEOUT_MS = 120000;
-

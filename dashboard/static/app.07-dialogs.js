@@ -471,4 +471,3 @@ function micIcon() {
 
 let dictActive = null;             // the page-wide single live dictation
 function stopDictation() { if (dictActive) dictActive.stop(); }
-

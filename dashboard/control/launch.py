@@ -473,4 +473,3 @@ def _launch_wake(win, cwd, t0):
     A.state_file("", "", "web-launch-wake",
                  {"sid": sid, "win": win, "cwd": cwd, "ok": bool(sid),
                   "waited_s": round(time.time() - t0, 3)})
-

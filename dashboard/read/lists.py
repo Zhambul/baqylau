@@ -370,4 +370,3 @@ def stats_payload():
            "windows": windows, "projects": proj_list}
     _STATS_AGG["t"], _STATS_AGG["v"] = now, out
     return out
-

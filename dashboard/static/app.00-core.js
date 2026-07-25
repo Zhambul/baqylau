@@ -512,5 +512,3 @@ function toast(kind, t1, t2, onclick) {
   $toasts.append(n);
   setTimeout(() => n.remove(), TOAST_MS);
 }
-
-

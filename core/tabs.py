@@ -232,5 +232,3 @@ COLORS = {
     AWAITING_COMMAND:  ("#e06c75", "#2a0608", "#5e2d31"),  # red — Claude is asking you
     AWAITING_RESPONSE: ("#98c379", "#07180a", "#445733"),  # green — done, your turn
 }
-
-

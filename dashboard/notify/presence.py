@@ -151,4 +151,3 @@ def _mru_push_targets():
     return targets, {"target": best, "target_label": targets[0].get("label"),
                      "legacy": False, "n_subs": len(subs),
                      "candidates": [cand(s) for s in tagged]}
-

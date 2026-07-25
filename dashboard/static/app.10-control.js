@@ -490,4 +490,3 @@ function startRenameHeader() {
   inp.focus();
   inp.select();
 }
-

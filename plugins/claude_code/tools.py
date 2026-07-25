@@ -533,5 +533,3 @@ def edit_range(structured_patch):
 FILE_LABEL = {"Read": "Read", "Edit": "Update", "MultiEdit": "Update",
               "Write": "Write", "NotebookEdit": "Update"}
 FILE_RGB   = {"Read": BLUE, "Update": YELLOW, "Write": GREEN}
-
-

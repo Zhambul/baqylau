@@ -345,4 +345,3 @@ function renderAccounts(list) {
   $accounts.textContent = "";
   for (const a of shown) $accounts.append(acctPill(a));
 }
-

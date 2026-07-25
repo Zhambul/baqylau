@@ -2042,6 +2042,28 @@ def test_file_pointers_in_comments_resolve():
     assert not bad, "file pointers that no longer resolve:\n  " + "\n  ".join(bad)
 
 
+def test_no_tracked_file_ends_in_blank_lines():
+    """One trailing newline, never two. A blank line at EOF is invisible in review
+    and in the editor, so it survives indefinitely — then shows up as a spurious
+    hunk in the NEXT diff that touches the file's tail, which is where the noise
+    costs something. A pylint pass found six files carrying one.
+
+    This is a test rather than a lint rule on purpose: ruff's W391 is preview-gated,
+    and turning preview on to reach it activates every other unstable rule in the
+    selected groups (693 findings, and a silent CI break on the next ruff bump).
+    The property is cheap to state directly, so it is stated directly — the same
+    call the pointer walker above makes."""
+    bad = []
+    for rel in _repo_text_files():
+        try:
+            txt = open(os.path.join(REPO, rel), encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        if txt.endswith("\n\n"):
+            bad.append(rel)
+    assert not bad, "tracked files ending in a blank line:\n  " + "\n  ".join(bad)
+
+
 def test_connect_refuses_a_relative_db_path(tmp_path, monkeypatch):
     """core.state._connect CREATES what it opens, so a RELATIVE path would put a
     live session's DB in whatever directory the process happens to run from — the

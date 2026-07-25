@@ -275,4 +275,3 @@ function leaveSession() {
 }
 
 /* ---------- sessions list view ---------- */
-

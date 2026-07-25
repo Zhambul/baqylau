@@ -356,4 +356,3 @@ def note_payload(path, stem):
             "frontmatter": notehtml.frontmatter_rows(fm),
             "html": notehtml.note_html(body, resolve=MEM.resolve),
             "backlinks": MEM.backlinks(p), "missing": False}
-
