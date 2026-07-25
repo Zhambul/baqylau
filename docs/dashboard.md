@@ -384,7 +384,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
-| `POST /api/clipboard/files` | **local-machine read** (no terminal write, nothing staged): `{"names": [basename, …], "sid"?}` → `{paths: [abs, …]}`, the FULL paths of those files on the host's pasteboard (`dashboard/clipboard.py`). The one way a pasted zero-byte file PROMISE becomes a usable path — the browser only ever sees a basename (*Web attachments* → *Promise-only files*). Returns paths ONLY when the basenames match exactly (`clipboard.match` — a remote device's clipboard is not the host's); a miss is a 200 with `[]`, audited either way as a `web-clipboard` row; 400 missing/non-string `names` |
+| `POST /api/clipboard/files` | **local-machine read** (no terminal write, nothing staged): `{"names": [basename, …], "sid"?}` → `{paths: [abs, …]}`, the FULL paths of those files on the host's pasteboard (`dashboard/clipboard.py`). The one way a pasted file becomes a usable path instead of an upload — the browser only ever sees a basename (*Web attachments* → *Pasting a copied FILE*). Returns paths ONLY when the basenames match exactly (`clipboard.match` — a remote device's clipboard is not the host's); a miss is a 200 with `[]`, audited either way as a `web-clipboard` row; 400 missing/non-string `names` |
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "device", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); every row carries this browser's `device` id (device-attributable — the frontend side of notification *Device routing*); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a ~8s heartbeat while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
@@ -636,82 +636,93 @@ to get the bytes onto disk and put the path in the message:
   drops the pending chips (the staged files themselves survive on disk until the
   prune) — a deliberate scope limit; the draft machinery stays text-only.
 
-*Promise-only files — paste the PATH, like kitty.* Copying a file in an app
-that hands the clipboard a file **promise** instead of bytes puts a
-**zero-byte `File`** on the clipboard. IntelliJ IDEA's Project-view *Copy* is
-the reported case (a Finder copy is not — it carries real bytes). Uploading the
-promise stages nothing: the server rejects it as an `"empty file"` and the user
-gets a red chip. That is exactly the reported bug, and the audit named it
-outright —
-`web-upload {"ok": false, "why": "empty file", "name": "'__init__.py'"}`
-(2026-07-25). The kitty TUI has no such failure mode: it pastes the file's
-**path**, which Claude Code then resolves itself.
+*Pasting a copied FILE — its PATH, like kitty.* Copy a file in Finder or an
+IDE, paste it into the composer, and the dashboard used to **upload** it: the
+bytes were staged under `UPLOADS_DIR` and the message went out as
+`@/…/baqylau-uploads/064783b1-glab.py`. The kitty TUI does the opposite, and its
+behavior is what you want when the file came out of a project — it pastes the
+**path**, so Claude Code reads the file in place, at its real location, still in
+its repo. The composer now matches.
 
-Matching that takes the **server**, because the path is unreachable from the
-page. Here is the actual pasteboard IntelliJ writes (dumped with pyobjc while
-reproducing the bug):
+Deciding *which* gesture happened is the whole problem, and the page **cannot**
+do it. A pasted screenshot and a pasted file both arrive as a `File` on
+`clipboardData`, carrying a basename and bytes and nothing else. The one
+distinguishing fact — is there a real file on disk behind this? — lives in
+pasteboard flavors the browser never exposes:
 
 ```
-public.utf8-plain-text   "__init__.py"                     ← the BARE NAME
-NSFilenamesPboardType    ["/Users/…/clients/__init__.py"]  ← the full path
-public.file-url          "file:///Users/…/__init__.py"     ← the full path
+public.utf8-plain-text   "glab.py"                   ← the BARE NAME
+NSFilenamesPboardType    ["/Users/…/glab.py"]        ← the full path
+public.file-url          "file:///Users/…/glab.py"   ← the full path
 ```
 
-The browser is shown **none** of the path-bearing flavors. It hands the page a
-`File` whose `.name` is a **basename** — the web platform deliberately never
-exposes a filesystem path to script, and no clipboard API
-(`clipboardData.getData`, `navigator.clipboard.read`) surfaces
+The web platform does not hand a filesystem path to script, by design, and no
+clipboard API (`clipboardData.getData`, `navigator.clipboard.read`) surfaces
 `public.file-url`. During a file paste Chrome reports `types: ["Files"]` and
-`getData("text/plain")` is empty; even when readable it is only that bare name.
-The first cut of this fix simply let the default paste through and got exactly
-that — the first `attach.promise-paste` beacon came back `chars: 0`, and the
-"I expected a full path, not just the file name" report followed. The page
-cannot answer this question. **The dashboard server shares the pasteboard with
-kitty, so it reads what kitty reads:**
+`getData("text/plain")` is empty — and even when readable it is only the bare
+name. So the browser reports WHICH files it was handed and the **server**,
+which shares the pasteboard with kitty, answers whether they are real files and
+where:
 
-- `splitPromises` partitions every incoming file list on `size > 0`. Only real
-  bytes are uploaded; a zero-byte husk never reaches `/api/upload`.
-- **Paste**: a promise-only paste is `preventDefault()`ed and
-  `pastePromisePaths` POSTs the observed basenames to `/api/clipboard/files`;
-  the returned absolute paths are spliced at the caret (space-joined for a
-  multi-file copy) by `insertAtCaret`, which fires `input` so autoGrow / the
-  draft save / the ghost suggestion all see the edit. The bare name is the
-  fallback when nothing resolves. (The round-trip is why the paste is
-  cancelled: the browser would otherwise write the bare name synchronously and
-  we would have to un-write it.)
+- **Paste**: any file paste is `preventDefault()`ed and `pasteFiles` POSTs the
+  observed basenames to `/api/clipboard/files`. Resolved ⇒ the absolute paths
+  are spliced at the caret (space-joined for a multi-file copy) by
+  `insertAtCaret`, which fires `input` so autoGrow / the draft save / the ghost
+  suggestion all see the edit. Not resolved ⇒ `tray.addFiles`, the upload path,
+  exactly as before. A failed or refused probe also falls through to the
+  upload, so the worst case is the old behavior. (The round-trip is why the
+  paste is cancelled: the browser would otherwise write its own text flavor —
+  the bare name — synchronously, and we would have to un-write it.)
+- **Not resolved** covers the two cases where uploading is right: there is no
+  file on disk behind the bytes (a screenshot, a copied image region — the
+  pasteboard has no path to give), or the pasting device is not the host (a
+  phone over the tunnel), where an upload is the only option that can work.
 - `dashboard/clipboard.py` is the one owner of the read: `NSFilenamesPboardType`
   first (the only flavor carrying a multi-select, and already POSIX paths),
   else `public.file-url` decoded. pyobjc is imported lazily INSIDE the read —
   the module is on every request path and must not pay (or crash on) an AppKit
   load it may never need. Every failure — no pyobjc, no pasteboard, a non-macOS
-  host — degrades to `[]` and the page falls back to the bare name. No caching:
-  a pasteboard is live state, and a stale answer is a *wrong path*.
-- **Correlation guard** (`clipboard.match`): the paths are returned only if
-  their basenames are exactly what the caller reported — same names, same
-  count, order-insensitive. The dashboard is reachable from a phone over the
-  tunnel and a phone's clipboard is not this Mac's; without the check, a remote
-  paste would be answered with whatever happens to sit on the host's
-  pasteboard. We only ever *resolve* a file the caller already named, never
-  volunteer one. A miss is a 200 with `paths: []`, not an error.
-- **Drop**: deliberately does NOT consult `/api/clipboard/files` — a drag
-  carries its own pasteboard, so the general (copy) pasteboard holds something
-  unrelated, and asking would paste the path of whatever was last *copied*.
-  A drop uses only what the drag itself offers: `dragPathText` prefers
-  `text/uri-list` (each `file://` URL decoded, space-joined) and falls back to
-  `text/plain`.
-- With nothing to fall back to, the gesture would be a silent no-op, so it
-  toasts instead. Both gestures drop an `attach.promise-paste` /
-  `attach.promise-drop` clog beacon carrying `n`/`resolved`/`chars` (*Frontend
-  audit (clientlog)*).
-- A genuinely empty file chosen through the **picker** is refused at `add()`
-  with an "empty file" toast, so no path can POST bytes the server is
-  guaranteed to reject.
+  host — degrades to `[]`, i.e. to uploading. No caching: a pasteboard is live
+  state, and a stale answer is a *wrong path*.
+- **Correlation guard** (`clipboard.match`): paths come back only if their
+  basenames are exactly what the caller reported — same names, same count,
+  order-insensitive. The dashboard is reachable from a phone over the tunnel
+  and a phone's clipboard is not this Mac's; without the check, a remote paste
+  would be answered with whatever happens to sit on the host's pasteboard. We
+  only ever *resolve* a file the caller already named, never volunteer one. A
+  miss is a 200 with `paths: []`, not an error.
+- **Drop and the paperclip picker keep uploading.** They are the explicit
+  "attach this" gestures, and a drag carries its OWN pasteboard — asking
+  `/api/clipboard/files` about a drop would answer about whatever was last
+  *copied*. Dropping a file is therefore also the escape hatch when you want a
+  copied file ATTACHED rather than referenced.
+- Every paste drops an `attach.paste` clog beacon (`n`, `resolved`) — the
+  client is the only witness to which branch ran (*Frontend audit
+  (clientlog)*).
+- A genuinely empty file is refused at `add()` with an "empty file" toast, so
+  no path POSTs bytes the server is guaranteed to reject.
 
-Rejected: **sniffing the text flavor and preferring it whenever one exists.** A
-Finder copy carries both a filename string AND real bytes, so that rule would
-have regressed the ordinary "copy an image, paste it" flow into pasting the
-word `screenshot.png`. Zero bytes is the unambiguous signal — a promise has no
-data by definition.
+**The wrong turn, recorded because it is instructive.** The first report was a
+failed upload of `__init__.py`, and the audit row read
+`web-upload {"ok": false, "why": "empty file", "name": "'__init__.py'"}`. That
+was diagnosed as a **file promise** — a clipboard entry with no bytes behind it
+— and two fixes were built on it: skip zero-byte Files, then resolve their
+paths server-side. The premise was false. `__init__.py` was an ordinary **empty
+package marker**, 0 bytes on disk; Chrome had handed over the real file and the
+server rejected it correctly. There is no promise in this story at all, and the
+zero-byte gate never touched the actual bug — the next paste (`glab.py`, 1538
+bytes) sailed straight into the upload path and was reported again. The lesson
+is the repo's own rule about empirical claims: *the pasteboard was never dumped
+until the third pass.* When it was, it answered both questions at once — the
+text flavor is only the bare name (killing the "just let the default paste
+through" fix) and `NSFilenamesPboardType` holds the path (giving the real one).
+The server-side pasteboard read survived the correction because it was the
+right mechanism attached to the wrong trigger; only the client-side gate
+(`size === 0` → is this a real file?) had to change.
+
+Rejected: **gating on zero bytes** (the promise theory above). It fires on
+genuinely empty files and never fires on the case that matters — any file with
+content, which is nearly all of them.
 
 Rejected: **`navigator.clipboard.read()`** as a richer client-side read. It is
 sanitized to a fixed type list (`text/plain`, `text/html`, `image/png`, web
@@ -719,9 +730,17 @@ custom formats); `public.file-url` is not among them and never will be — the
 path boundary is the point, not an oversight.
 
 Rejected: **searching the session's project dir for the basename** server-side.
-It needs no new clipboard access, but `__init__.py` (the actual reported file)
-matches dozens of directories in one Python repo — the answer would be a guess
-dressed as a resolution, and picking wrong pastes a path to the wrong file.
+It needs no clipboard access at all, but `__init__.py` (the file that started
+this) matches dozens of directories in one Python repo — the answer would be a
+guess dressed as a resolution, and picking wrong pastes a path to the wrong
+file.
+
+Rejected: **keeping images on the upload path even when they resolve** (so a
+Finder-copied PNG still attaches). It is defensible — an image's bytes are
+usually the point — but it makes the rule "paste gives you a path, except
+sometimes", and screenshots (the dominant attach-by-paste case) carry no file
+path anyway, so they already upload. One rule, plus drag-drop as the explicit
+attach gesture.
 
 **Clipboard-image guard (the spurious-screenshot fix).** Separately from the
 dashboard's own `@path` attachments (above), **Claude Code's TUI auto-attaches
@@ -2267,15 +2286,14 @@ become audit rows.
     history size) — a purely client-side ↑/↓ affordance the server never sees,
     so the browser is its only witness (a "↑ gave the wrong message" report is
     answerable from the `dir`/`idx`/`n` trail).
-  - **Promise-only attachments** (*Web attachments* → *Promise-only files* below):
-    `attach.promise-paste` / `attach.promise-drop` — `n` = how many zero-byte
-    Files the gesture carried, `resolved` = how many the pasteboard read
-    answered with (paste only), `chars` = the length of the text finally
-    spliced in. `resolved: 0` with `chars > 0` is the bare-name fallback (the
-    clipboard moved on, or the pasting device isn't the host); `chars: 0` is
-    the "nothing to attach" toast. The client is the only witness to what
-    actually landed in the box — the `web-clipboard` row records what the
-    server was ASKED and what it answered, but not whether the page used it.
+  - **File pastes** (*Web attachments* → *Pasting a copied FILE* below):
+    `attach.paste` — `n` = how many Files the paste carried, `resolved` = how
+    many the host's pasteboard read answered with. `resolved > 0` = the paths
+    were spliced into the box (the kitty-parity branch); `resolved: 0` = the
+    files were uploaded as attachments instead (a screenshot, or a device whose
+    clipboard isn't the host's). The client is the only witness to WHICH branch
+    ran — the `web-clipboard` row records what the server was asked and what it
+    answered, but not what the page did with it.
   The audit itself is SELF-GUARDING — `clog`/`flushClog` swallow their own
   exceptions and a re-entrancy flag stops a throw-in-a-flush from looping back
   through the `js.error` handler (the one channel that must never raise the very

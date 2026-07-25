@@ -372,9 +372,9 @@ function attachTray(getSid, onChange) {
   const add = (file) => {
     if (!file) return;
     // Zero bytes never survives the server (`web-upload` rejects an empty
-    // file), so refuse it here rather than parading a failed chip. The paste /
-    // drop paths filter these out earlier — with a path fallback, see
-    // splitPromises — so this catches only a genuinely empty PICKED file.
+    // file), so refuse it here rather than parading a failed chip. An empty
+    // `__init__.py` package marker is the real-world case, and the red chip it
+    // produced is what the "paste is broken" report was originally about.
     if (!file.size) {
       return toast("ask", "empty file",
                    (file.name || "that file") + " has no content to attach");
@@ -430,74 +430,53 @@ const CLIP_SVG =
   + " 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1"
   + "-2.83-2.83l8.49-8.48'/></svg>";
 
-/* ---------- promise-only files: paste the PATH, like kitty ----------
-   Copying a file in an app that hands the clipboard a file PROMISE rather than
-   bytes (IntelliJ IDEA's Project-view Copy is the reported case; a Finder copy
-   is not) puts a ZERO-BYTE `File` on the clipboard. Uploading that promise
-   stages nothing — the server rejects it as an "empty file"
-   (`web-upload ok:false`), which is exactly the "tried to upload it as an
-   attachment and failed" report. The kitty TUI has no such failure mode: it
-   pastes the file's PATH, which Claude Code resolves on its own.
+/* ---------- pasting a copied FILE: its PATH, like kitty ----------
+   Copy a file in Finder or an IDE, paste it here, and the composer used to
+   UPLOAD it — the bytes landed in ~/.claude/baqylau-uploads and the message
+   went out as `@/…/baqylau-uploads/064783b1-glab.py`. The kitty TUI does the
+   opposite and it is what you actually want when you copy a file out of a
+   project: it pastes the file's PATH, which Claude Code resolves in place, at
+   its real location, still attached to its repo.
 
-   Matching it takes the SERVER, because the path is unreachable from here.
-   The pasteboard IntelliJ writes looks like this:
+   Deciding which gesture happened is the whole problem, and the page CANNOT do
+   it. A pasted screenshot and a pasted file both arrive as a `File` on
+   `clipboardData`; the `File` carries a basename and bytes and nothing more.
+   The one distinguishing fact — is there a real file on disk behind this? — is
+   a pasteboard flavor the browser never exposes:
 
-     public.utf8-plain-text   "__init__.py"                ← the BARE NAME
-     NSFilenamesPboardType    ["/Users/…/__init__.py"]     ← the full path
-     public.file-url          "file:///Users/…/__init__.py" ← the full path
+     public.utf8-plain-text   "glab.py"                  ← the BARE NAME
+     NSFilenamesPboardType    ["/Users/…/glab.py"]       ← the full path
+     public.file-url          "file:///Users/…/glab.py"  ← the full path
 
-   The page is shown none of the path-bearing flavors, and the `File` it does
-   get carries a BASENAME — the web platform never exposes a filesystem path to
-   script, by design. `clipboardData.getData("text/plain")` is empty during a
-   file paste in Chrome, and even when readable it is only that bare name. So
-   the browser reports WHICH file (basename + zero bytes) and `/api/clipboard/
-   files` answers WHERE it is, off the same pasteboard kitty reads
-   (dashboard/clipboard.py). Real bytes (a screenshot, a Finder copy, the
-   picker) always arrive with size > 0 and never take this path. */
+   The web platform does not hand a filesystem path to script, by design; no
+   clipboard API (`getData`, `navigator.clipboard.read`) surfaces those. So the
+   browser reports WHICH files it was given (their basenames) and the SERVER —
+   which shares the pasteboard with kitty — answers whether they are real files
+   and where (`/api/clipboard/files`, dashboard/clipboard.py). Resolved ⇒ paste
+   the paths. Not resolved ⇒ there is no file behind these bytes (a screenshot,
+   a copied image region) or we are not on the host (a phone over the tunnel),
+   and uploading is both correct and the only option.
 
-// Split a file list into the ones worth uploading and the promise-only husks.
-function splitPromises(list) {
-  const files = [], empty = [];
-  for (const f of list || []) (f && f.size > 0 ? files : empty).push(f);
-  return { files, empty };
-}
+   Drag-drop and the paperclip picker deliberately keep uploading: they are the
+   "attach this" gestures, and a drag carries its OWN pasteboard, so the
+   general (copy) pasteboard would answer about whatever was last copied. */
 
-// Resolve a promise-only PASTE to full paths and splice them in. Async by
-// necessity (a server round-trip), which is why the caller preventDefault'd:
-// the browser's own paste would have written the bare name synchronously and
-// we would have to un-write it. `fallback` is that bare name — used only when
-// the clipboard has moved on / the host can't read it / we're on a device
-// whose clipboard isn't the server's (the basename correlation in
-// clipboard.match fails, and a wrong path is far worse than a bare name).
-function pastePromisePaths(tray, ta, empty, fallback) {
-  const names = empty.map((f) => (f && f.name) || "");
+// A file PASTE: the path when the host's clipboard says these are real files,
+// an upload otherwise. Async by necessity (a server round-trip), which is why
+// the caller preventDefault'd — the browser would otherwise have pasted its
+// own text flavor (the bare NAME) synchronously and we would have to un-write
+// it. A failed/refused probe falls through to the upload, so the worst case is
+// exactly the old behavior.
+function pasteFiles(tray, ta, files) {
+  const names = files.map((f) => (f && f.name) || "");
   postJSON("/api/clipboard/files", { sid: tray.sid(), names })
     .then((d) => (d && d.paths) || [], () => [])
     .then((paths) => {
-      const text = paths.length ? paths.join(" ") : fallback;
-      clog(tray.sid(), "attach.promise-paste",
-           { n: empty.length, resolved: paths.length, chars: text.length });
-      if (text) insertAtCaret(ta, text);
-      else promiseToast(empty[0]);
+      clog(tray.sid(), "attach.paste",
+           { n: files.length, resolved: paths.length });
+      if (paths.length) insertAtCaret(ta, paths.join(" "));
+      else tray.addFiles(files);
     });
-}
-
-// The path text behind a promise-only DRAG: the `text/uri-list` file:// URLs
-// decoded to filesystem paths (what kitty pastes on a file drop), else the
-// plain-text flavor verbatim. A DROP deliberately does NOT consult
-// /api/clipboard/files: a drag carries its own pasteboard, so the general
-// (copy) pasteboard holds something unrelated — asking would paste the path of
-// whatever was last COPIED, which is worse than pasting nothing.
-function dragPathText(dt) {
-  const uris = (dt && dt.getData("text/uri-list")) || "";
-  const paths = uris.split(/\r?\n/)
-    .filter((l) => l && l[0] !== "#")
-    .map((l) => {
-      if (!/^file:\/\//i.test(l)) return l;
-      try { return decodeURIComponent(l.replace(/^file:\/\/[^/]*/i, "")); }
-      catch (e) { return l; }
-    });
-  return paths.length ? paths.join(" ") : ((dt && dt.getData("text/plain")) || "");
 }
 
 // Splice text at the caret and fire `input` so autoGrow / the draft save / the
@@ -512,15 +491,6 @@ function insertAtCaret(ta, text) {
   ta.dispatchEvent(new Event("input", { bubbles: true }));
 }
 
-// The promise-only paste/drop has nothing to fall back to — say so rather than
-// letting the gesture be a silent no-op (the pre-fix behavior was a failed
-// upload chip, which at least showed SOMETHING happened).
-function promiseToast(f) {
-  toast("ask", "nothing to attach",
-        ((f && f.name) || "that file") + " arrived on the clipboard with no data"
-        + " and no path — copy the file itself, or paste its path as text");
-}
-
 function wireAttach(tray, ta, zone, enabled) {
   const btn = el("button", "cattach");
   btn.type = "button";
@@ -533,19 +503,12 @@ function wireAttach(tray, ta, zone, enabled) {
   btn.onclick = () => { if (enabled()) input.click(); };
   ta.addEventListener("paste", (e) => {
     if (!enabled()) return;
-    const all = [];
+    const files = [];
     for (const it of (e.clipboardData && e.clipboardData.items) || [])
-      if (it.kind === "file") { const f = it.getAsFile(); if (f) all.push(f); }
-    const { files, empty } = splitPromises(all);
-    if (files.length) { e.preventDefault(); tray.addFiles(files); }
-    else if (empty.length) {
-      // Promise-only (see splitPromises above): never upload it. Take over the
-      // paste and resolve the real paths server-side; the clipboard's own text
-      // flavor is just the bare name, kept only as the fallback.
-      e.preventDefault();
-      const txt = (e.clipboardData && e.clipboardData.getData("text/plain")) || "";
-      pastePromisePaths(tray, ta, empty, txt);
-    }
+      if (it.kind === "file") { const f = it.getAsFile(); if (f) files.push(f); }
+    if (!files.length) return;          // an ordinary text paste
+    e.preventDefault();                 // see pasteFiles: path or upload, async
+    pasteFiles(tray, ta, files);
   });
   zone.addEventListener("dragover", (e) => {
     if (!enabled() || !e.dataTransfer || e.dataTransfer.types.indexOf("Files") < 0)
@@ -558,20 +521,11 @@ function wireAttach(tray, ta, zone, enabled) {
   zone.addEventListener("drop", (e) => {
     zone.classList.remove("dropping");
     if (!enabled()) return;
-    const { files, empty } =
-      splitPromises((e.dataTransfer && e.dataTransfer.files) || []);
+    // Always an UPLOAD — unlike a paste (pasteFiles). A drop is the explicit
+    // "attach this" gesture, and a drag carries its own pasteboard, so asking
+    // /api/clipboard/files would answer about whatever was last COPIED.
+    const files = (e.dataTransfer && e.dataTransfer.files) || [];
     if (files.length) { e.preventDefault(); tray.addFiles(files); }
-    else if (empty.length) {
-      // Same promise-only drag as the paste path — but a file DROP has no
-      // default text behavior in a textarea, so splice the path in ourselves
-      // (kitty does exactly this: dropping a file pastes its path).
-      e.preventDefault();
-      const txt = dragPathText(e.dataTransfer);
-      clog(tray.sid(), "attach.promise-drop",
-           { n: empty.length, chars: txt.length });
-      if (txt) insertAtCaret(ta, txt);
-      else promiseToast(empty[0]);
-    }
   });
   return frag(btn, input);
 }
