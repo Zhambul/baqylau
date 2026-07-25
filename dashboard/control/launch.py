@@ -260,14 +260,20 @@ def set_tui_draft(sid, text):
     """Record (or, with "", forget) the text we left in the input box. Called
     where the web CAUSES it — post_interrupt's take-back, post_rewind_to's
     restore — and cleared by the send that consumes it. A stale flag is benign:
-    the clear it triggers is a Ctrl+U/Ctrl+K on an already-empty line."""
-    from core import paths as P
+    the clear it triggers is a Ctrl+U/Ctrl+K on an already-empty line.
+
+    `kv_set_at`, never `kv_set`: this runs on a ThreadingHTTPServer request
+    thread, and kv_set's cached connection is bound to the thread that opened
+    it — from any other thread it raises inside its own swallow and writes
+    NOTHING (see transcript.mark_taken_back, same 2026-07-25 bug). Returns the
+    write's result so the caller can audit a failure instead of assuming."""
+    from core import sessionapi as API
     from core import state as ST
     if not sid:
         return False
     try:
-        ST.kv_set(P.mirror_log(sid), TUI_DRAFT_KEY, text or "")
-        return True
+        sdb = API.state_db_for(sid)
+        return bool(sdb) and bool(ST.kv_set_at(sdb, TUI_DRAFT_KEY, text or ""))
     except Exception:
         return False
 

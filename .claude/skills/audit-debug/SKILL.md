@@ -152,8 +152,13 @@ New always-audited swallow sites (previously silent — their absence used to ma
   terminal draft) and was deliberately left alone; NO restore row at all = the
   box was empty (a plain stop, work kept) or the probe raised — check `errors`
   for `dashboard web-interrupt (restore probe)`. The same row's `uid` names the
-  record and `flagged` says the `takeback` kv write landed; **if the bubble
-  REAPPEARS after a reload, that flag is what to check** — until the
+  record, and `flagged`/`noted` say the two kv writes landed — a False pair
+  also raises an `errors` row `dashboard web-interrupt (take-back stash)`.
+  Those writes go through `kv_set_at` because `kv_set` from a request THREAD
+  silently writes nothing and returns False (the dashboard is a
+  ThreadingHTTPServer); a random-looking reappearance with `flagged: true` on
+  a pre-2026-07-25 build is that bug. **If the bubble REAPPEARS after a reload,
+  those flags are what to check** — until the
   replacement message arrives the prompt has no sibling, so the kv is the only
   thing that knows (`bin/claude-audit.py sql` the row, then read the kv). A
   take-back also leaves the prompt orphaned in the transcript once the next

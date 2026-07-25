@@ -327,8 +327,12 @@ class _PostMixin:
             A.error(log, "dashboard message (send failed)",
                     {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
-        if pending_draft:
-            launch.set_tui_draft(sid, "")     # consumed by this send
+        if pending_draft and not launch.set_tui_draft(sid, ""):
+            # a stale flag only costs an extra Ctrl+U/K on an empty line, but
+            # it means the STASH is broken — the same write path the take-back
+            # depends on, so surface it
+            A.error(log, "dashboard message (tui-draft clear)",
+                    {"sid": sid, "win": win})
         return self._json({"ok": True, "queued": queued, "tab": tab})
 
     def post_command(self, sid):
@@ -724,11 +728,12 @@ class _PostMixin:
                       "ups": ups, "steps": res["steps"],
                       "digit": res["digit"], "degraded": res["degraded"]})
         restored = text if mode in ("conversation", "both") else ""
-        if restored:
+        if restored and not launch.set_tui_draft(sid, restored):
             # Claude Code puts the rewound-to prompt back in the input box, so
             # the next send must REPLACE it (launch.tui_draft — the same
             # server-owned flag the interrupt's take-back sets)
-            launch.set_tui_draft(sid, restored)
+            A.error(log, "dashboard rewind-to (tui-draft stash)",
+                    {"sid": sid, "win": win})
         return self._json({"ok": True, "mode": mode, "restored": restored,
                            "degraded": res["degraded"]})
 
@@ -1437,13 +1442,20 @@ class _PostMixin:
         # on reload. The flag is advisory — _dead_uuids drops it the moment
         # anything descends from that prompt (docs/dashboard.md, *Interrupt*).
         flagged = bool(hit) and transcript.mark_taken_back(sid, uid)
-        if hit:
-            # the box now holds `last` — the NEXT send must replace it, not
-            # paste after it (launch.tui_draft; the `testingtesting2` bug)
-            launch.set_tui_draft(sid, last)
+        # the box now holds `last` — the NEXT send must replace it, not paste
+        # after it (launch.tui_draft; the `testingtesting2` bug)
+        noted = bool(hit) and launch.set_tui_draft(sid, last)
         A.state_file(log, sdb, action,
                      {"win": win, "phase": "restore", "restored": hit,
-                      "uid": uid, "flagged": flagged})
+                      "uid": uid, "flagged": flagged, "noted": noted})
+        if hit and not (flagged and noted):
+            # both stashes are what make the take-back survive a reload, so a
+            # failed write is a REAL defect, not a degrade — audit it rather
+            # than reporting a success the row can't back up (the rows lied
+            # once already: kv_set from a request thread writes nothing)
+            A.error(log, "dashboard %s (take-back stash)" % action,
+                    {"sid": sid, "uid": uid, "flagged": flagged,
+                     "noted": noted})
         return last if hit else ""
 
     def _screen(self, fe, win, why="interrupt"):

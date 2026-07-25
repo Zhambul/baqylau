@@ -864,17 +864,27 @@ def mark_taken_back(sid, uid):
     """Record that `uid`'s prompt was handed back to the input box. Appends to
     the kv tail (deduped, capped at TAKEN_BACK_MAX — an older flag costs
     nothing once its prompt has a sibling, which is the durable signal).
-    Best-effort: a failed write just means the bubble reappears on reload, the
-    bug this stash exists to fix."""
-    from core import paths as P
+
+    Writes through `kv_set_at` (an explicit path, a FRESH connection), never
+    `kv_set`: the caller is the dashboard, a ThreadingHTTPServer where every
+    request runs on its own thread, and kv_set's cached connection belongs to
+    whichever thread opened it — a call from any other thread raises inside its
+    own swallow and silently does nothing. That is exactly what happened
+    (2026-07-25): the flag landed only when a request happened to hit the
+    owning thread, so the bubble came back at random. RETURNS the write's own
+    result — the caller audits it; reporting success blindly is what made the
+    `flagged: true` rows lie about a write that never happened."""
+    from core import sessionapi as API
     from core import state as ST
     if not sid or not uid:
         return False
     try:
+        sdb = API.state_db_for(sid)
+        if not sdb:
+            return False
         cur = [u for u in taken_back(sid) if u != uid]
-        ST.kv_set(P.mirror_log(sid), TAKEN_BACK_KEY,
-                  (cur + [uid])[-TAKEN_BACK_MAX:])
-        return True
+        return bool(ST.kv_set_at(sdb, TAKEN_BACK_KEY,
+                                 (cur + [uid])[-TAKEN_BACK_MAX:]))
     except Exception:
         return False
 

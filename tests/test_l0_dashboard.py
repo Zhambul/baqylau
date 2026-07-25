@@ -5063,6 +5063,8 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "91")
     A.session_start({"session_id": "tb1", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("tb1"), "seed", 1)   # the state DB must EXIST: the
+    #   stash writes through kv_set_at, which never creates one
     monkeypatch.setattr(DS.session, "_last_prompt_rec",
                         lambda sid: ("testing the take-back\nwith a second line",
                                      "u-taken"))
@@ -5080,6 +5082,55 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
     assert TR.taken_back("tb1") == ("u-taken",)
 
 
+def test_no_dashboard_code_calls_the_thread_bound_kv_set():
+    """state.kv_set caches its connection per PROCESS but sqlite binds it to
+    the creating THREAD, so from a ThreadingHTTPServer request it writes
+    nothing and returns False (styleguide single-owner table). Dashboard-side
+    writes must use kv_set_at. A plain `kv_set(` under dashboard/ is that bug
+    coming back — it cost two rounds of "the take-back came back at random"."""
+    import re
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    pat = re.compile(r"(?<!_at)\bkv_set\s*\(")
+    hits = []
+    for dirpath, _dirs, files in os.walk(os.path.join(root, "dashboard")):
+        for f in files:
+            if not f.endswith(".py"):
+                continue
+            fp = os.path.join(dirpath, f)
+            with open(fp, encoding="utf-8", errors="replace") as fh:
+                for i, line in enumerate(fh, 1):
+                    if pat.search(line) and not line.lstrip().startswith("#"):
+                        hits.append("%s:%d" % (os.path.relpath(fp, root), i))
+    assert hits == [], hits
+
+
+def test_take_back_stash_writes_from_another_thread():
+    # THE bug behind "it came back at random" (2026-07-25): the dashboard is a
+    # ThreadingHTTPServer, so every request runs on its own thread, and
+    # state.kv_set's CACHED connection belongs to whichever thread opened it —
+    # from any other thread it raises inside its own swallow and writes
+    # nothing. The stash landed only when a request happened to hit the owning
+    # thread. Both stashes go through kv_set_at (fresh connection per call).
+    from plugins.claude_code import transcript as TR
+    A.session_start({"session_id": "thr1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("thr1")
+    S.kv_set(log, "seed", 1)          # binds the cached connection to THIS thread
+    out = []
+    t = threading.Thread(target=lambda: out.append(
+        TR.mark_taken_back("thr1", "u-from-another-thread")))
+    t.start()
+    t.join()
+    assert out == [True]                        # the write REPORTS honestly
+    assert TR.taken_back("thr1") == ("u-from-another-thread",)   # and landed
+    out2 = []
+    t2 = threading.Thread(target=lambda: out2.append(
+        DS.launch.set_tui_draft("thr1", "left in the box")))
+    t2.start()
+    t2.join()
+    assert out2 == [True]
+    assert DS.launch.tui_draft("thr1") == "left in the box"
+
+
 def test_take_back_makes_the_next_send_replace_the_tui_draft(dash, monkeypatch):
     # The reload hole (2026-07-25): the take-back leaves the message in the TUI
     # input box, and the NEXT send has to replace it. The page used to remember
@@ -5095,6 +5146,8 @@ def test_take_back_makes_the_next_send_replace_the_tui_draft(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "95")
     A.session_start({"session_id": "td1", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("td1"), "seed", 1)   # the state DB must EXIST: the
+    #   stash writes through kv_set_at, which never creates one
     monkeypatch.setattr(DS.session, "_last_prompt_rec",
                         lambda sid: ("testing", "u-tb"))
     _post(dash + "/api/session/td1/interrupt", {})
@@ -5120,6 +5173,8 @@ def test_post_interrupt_leaves_a_terminal_draft_alone(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "92")
     A.session_start({"session_id": "tb2", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("tb2"), "seed", 1)   # the state DB must EXIST: the
+    #   stash writes through kv_set_at, which never creates one
     monkeypatch.setattr(DS.session, "_last_prompt_rec",
                         lambda sid: ("an unrelated prompt", "u-other"))
     code, body = _post(dash + "/api/session/tb2/interrupt", {})
@@ -5136,6 +5191,8 @@ def test_post_interrupt_empty_box_is_a_plain_stop(dash, monkeypatch):
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "93")
     A.session_start({"session_id": "tb3", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("tb3"), "seed", 1)   # the state DB must EXIST: the
+    #   stash writes through kv_set_at, which never creates one
     monkeypatch.setattr(DS.session, "_last_prompt_rec",
                         lambda sid: ("a prompt that ran", "u-ran"))
     code, body = _post(dash + "/api/session/tb3/interrupt", {})

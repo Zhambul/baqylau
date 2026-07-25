@@ -1882,6 +1882,17 @@ in the transcript"*).
    prompt records now carry `uid` for exactly this), and `conversation_for`
    feeds it back as `suspects`.
 
+   Both stashes write through **`kv_set_at`**, never `kv_set` — and both check
+   the returned bool. The dashboard is a `ThreadingHTTPServer`, so every
+   request runs on its own thread, while `kv_set`'s cached connection belongs
+   to whichever thread opened it: from any other thread sqlite raises inside
+   `kv_set`'s own swallow, so it writes NOTHING and returns False. The first
+   cut used it and ignored the bool, so the stash landed only when a request
+   happened to hit the connection-owning thread and the bubble came back at
+   random — with `flagged: true` rows claiming otherwise. A failed stash is now
+   an `A.error` (`dashboard web-interrupt (take-back stash)`) and a `noted`
+   field on the row.
+
    The flag is **advisory and self-correcting**: a suspect counts as dead only
    while NOTHING descends from it. The observer read a screen and can be wrong
    — you might have retyped the same message into the box yourself — but the
