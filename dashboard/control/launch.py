@@ -247,7 +247,6 @@ def tui_draft(sid):
     so the next send glued the two together and delivered `testingtesting2`
     (reported 2026-07-25). Server state outlives the page, and covers a send
     from a different device too. Read-only/best-effort: unreadable is ""."""
-    from core import sessionapi as API
     try:
         sdb = API.state_db_for(sid)
         got = API.kv_at(sdb, TUI_DRAFT_KEY) if sdb else None
@@ -267,7 +266,6 @@ def set_tui_draft(sid, text):
     it — from any other thread it raises inside its own swallow and writes
     NOTHING (see transcript.mark_taken_back, same 2026-07-25 bug). Returns the
     write's result so the caller can audit a failure instead of assuming."""
-    from core import sessionapi as API
     from core import state as ST
     if not sid:
         return False
@@ -317,7 +315,6 @@ def sync_terminal_draft(sid, seen, last, stored):
     kitty", 2026-07-25). The stored record remembers where it came from; a
     freshly-connected page doesn't have to."""
     from core import state as ST
-    from core import sessionapi as API
     if seen is None:
         return None                      # unreadable box — no news
     if time.monotonic() - _LAST_SEND.get(sid, 0) < SEND_QUIET_S:

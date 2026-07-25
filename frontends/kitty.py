@@ -449,16 +449,16 @@ class KittyFrontend(Frontend):
         path = listen[5:] if listen.startswith("unix:") else listen
         if not path:
             return None
-        import json as _json
-        import socket as _socket
+        import socket           # deferred: this is the only site, and every hook
+                                # process imports this module (json is at the top)
         obj = {"cmd": cmd, "version": KITTY_RC_VERSION,
                "no_response": not want_response, "payload": payload}
         try:
-            s = _socket.socket(_socket.AF_UNIX, _socket.SOCK_STREAM)
+            s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
                 s.settimeout(timeout)
                 s.connect(path)
-                s.sendall(RC_CMD_DCS + _json.dumps(obj).encode("utf-8") + RC_ST)
+                s.sendall(RC_CMD_DCS + json.dumps(obj).encode("utf-8") + RC_ST)
                 if not want_response:
                     return True
                 buf = b""
@@ -469,8 +469,8 @@ class KittyFrontend(Frontend):
                     buf += b
             finally:
                 s.close()
-            return _json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
-                                   buf.index(RC_ST)])
+            return json.loads(buf[buf.index(RC_CMD_KEY) + len(RC_CMD_KEY):
+                                  buf.index(RC_ST)])
         except Exception:
             return None
 
