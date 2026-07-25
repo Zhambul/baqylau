@@ -95,11 +95,15 @@ class _GetMixin:
             # *New-session prefs*). {} when nothing launched yet.
             return self._json(prefs.get("new-session", {}))
         if api == ["ns-draft"]:
-            # the new-session form's UNSENT first prompt (docs/dashboard.md,
-            # *New-session draft*) — {text, seq}, restored into the box on every
-            # form open so an accidental close (Esc / backdrop click) can't throw
-            # a half-typed prompt away. {"text": "", "seq": 0} when there is none.
-            return self._json(prefs.ns_draft())
+            # the new-session form's UNSENT first prompts (docs/dashboard.md,
+            # *New-session draft*) — the whole {cwd: {text, seq}} map, one draft
+            # per directory, restored into the box on every form open so an
+            # accidental close (Esc / backdrop click) can't throw a half-typed
+            # prompt away. The map (not one entry) because the page caches it and
+            # switches drafts as the form's directory changes, with no round-trip
+            # in the way; it is bounded by prefs.NS_DRAFT_MAX. {} when there are
+            # none.
+            return self._json(prefs.ns_drafts())
         if api == ["resumable"]:
             # the new-session resume picker's rows for one directory (fetched on
             # open, dir change, and search): recent sessions in `cwd`, each with

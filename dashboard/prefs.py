@@ -5,7 +5,8 @@
 # any one session:
 #
 #   new-session        →  {cwd, model, effort}  (the launch form's last-used values)
-#   new-session-draft  →  {text, seq}           (its UNSENT first-prompt draft)
+#   new-session-draft  →  {cwd: {text, seq}}    (its UNSENT first-prompt drafts,
+#                                                one per directory)
 #
 # This is DELIBERATELY unlike the per-session kv helpers in core/state.py:
 #   - it is GLOBAL (one row set per machine), not keyed by session_id;
@@ -130,31 +131,38 @@ def hide_dir(key, ts):
     return mutate_map(HIDDEN_KEY, lambda d: d.__setitem__(str(key), float(ts)))
 
 
-# --- the new-session form's unsent first prompt ---------------------------------
+# --- the new-session form's unsent first prompts (one per directory) -------------
 # The launch form's first-prompt box is a DRAFT like the composer's (docs/
 # dashboard.md, *New-session draft*): closing the form — deliberately, with Esc,
 # or by a stray click on the backdrop — must not throw the text away, and the
-# next open restores it. Stored under one kv key as {text, seq}.
+# next open restores it. Stored under one kv key as a PER-DIRECTORY map,
+# {cwd: {text, seq}} — different projects hold different half-typed prompts, and
+# switching the form's directory switches which one is in the box (the single
+# shared draft this started as bled one project's prompt into the next).
 #
-# Deliberately GLOBAL and NOT keyed by directory (unlike `composer-draft`, which
-# is per-session): the form is ONE transient box, opened from the header or a
-# group's "+", and its directory can be re-picked while the prompt stays — a
-# per-cwd map would accumulate stale drafts nobody ever sees again, and would
-# lose the text the moment you corrected the directory. One draft, restored on
-# every open, cleared by the launch that consumes it.
+# The cwd KEY is whatever the page sends (`app.09-newsession.js` nsDirKey — the
+# form's own notion of "the same folder": trimmed, trailing slashes dropped),
+# stored verbatim here; the server is a dumb kv for it deliberately, so the
+# normalization has ONE implementation instead of two that can disagree. "" is a
+# legitimate key (the form opened with no directory yet).
 #
 # `seq` is the writer's wall clock, same STALE-WRITE GUARD as the composer draft
-# (dashboard/http/post.py post_composer_draft): a debounced save in flight when
-# the launch clears the box must not resurrect it by landing later. A clear is a
-# TOMBSTONE (empty text at the newer seq), never a delete, so its seq survives to
-# reject that straggler.
+# (dashboard/http/post.py post_composer_draft), applied PER ENTRY: a debounced
+# save in flight when the launch clears the box must not resurrect it by landing
+# later. A clear is a TOMBSTONE (empty text at the newer seq), never a delete, so
+# its seq survives to reject that straggler.
+#
+# The map is PRUNED to the NS_DRAFT_MAX most recent entries by seq (tombstones
+# included — recency, not emptiness, is what decides): the form is opened against
+# a handful of projects in practice, and an unbounded map would accumulate a row
+# per directory ever typed into, forever.
 NS_DRAFT_KEY = "new-session-draft"
+NS_DRAFT_MAX = 24
 
 
-def ns_draft():
-    """The unsent new-session first prompt as {text, seq} ({"text": "", "seq": 0}
-    when never written / cleared / unreadable)."""
-    d = get(NS_DRAFT_KEY, {})
+def _ns_entry(d):
+    """One stored draft normalized to {text, seq} — the shape every reader gets,
+    whatever junk the value holds."""
     if not isinstance(d, dict):
         return {"text": "", "seq": 0}
     text = d.get("text")
@@ -163,24 +171,52 @@ def ns_draft():
             "seq": seq if isinstance(seq, (int, float)) else 0}
 
 
-def set_ns_draft(text, seq):
-    """Persist the new-session draft `text` at `seq`, DROPPING a write older than
-    what is stored (the stale-write guard above). Atomic read-modify-write
-    (mutate_map — one BEGIN IMMEDIATE, so the compare and the set can't straddle
-    a peer request thread's write). Returns the stored record, with `stale` True
-    when this write was rejected; best-effort like set()."""
+def ns_drafts():
+    """Every unsent new-session prompt as {cwd: {text, seq}} ({} when none /
+    unreadable). The page caches this whole map so opening the form seeds the
+    box synchronously — it is bounded by NS_DRAFT_MAX."""
+    d = get(NS_DRAFT_KEY, {})
+    if not isinstance(d, dict):
+        return {}
+    if isinstance(d.get("text"), str):
+        return {}          # the pre-per-directory single-draft shape: drop it
+    #                        (one stale prompt, not worth a migration path)
+    return {str(k): _ns_entry(v) for k, v in d.items()}
+
+
+def ns_draft(cwd):
+    """The unsent prompt for ONE directory as {text, seq} ({"text": "", "seq": 0}
+    when that directory has none)."""
+    return _ns_entry(ns_drafts().get(str(cwd)))
+
+
+def set_ns_draft(cwd, text, seq):
+    """Persist `text` at `seq` as the draft for directory `cwd`, DROPPING a write
+    older than that directory's stored seq (the stale-write guard above — per
+    entry, so two directories' saves never fight) and pruning the map back to
+    NS_DRAFT_MAX. Atomic read-modify-write (mutate_map — one BEGIN IMMEDIATE, so
+    the compare, the set and the prune can't straddle a peer request thread's
+    write). Returns the stored entry, with `stale` True when this write was
+    rejected; best-effort like set()."""
+    key = str(cwd)
     keep = {}
 
     def _apply(d):
-        cur = d.get("seq")
-        cur = cur if isinstance(cur, (int, float)) else 0
-        if seq < cur:
+        if isinstance(d.get("text"), str):
+            d.clear()                  # ditch the pre-per-directory shape (see
+            #                             ns_drafts) before it becomes junk keys
+        cur = _ns_entry(d.get(key))
+        if seq < cur["seq"]:
             keep["stale"] = True
             return
-        d["text"] = text
-        d["seq"] = seq
+        d[key] = {"text": text, "seq": seq}
+        if len(d) > NS_DRAFT_MAX:
+            # oldest-first by seq, keeping this write (it has the newest clock)
+            for k in sorted(d, key=lambda k: _ns_entry(d[k])["seq"]
+                            )[:len(d) - NS_DRAFT_MAX]:
+                d.pop(k, None)
     rec = mutate_map(NS_DRAFT_KEY, _apply)
-    return dict(rec, stale=bool(keep.get("stale")))
+    return dict(_ns_entry(rec.get(key)), stale=bool(keep.get("stale")))
 
 
 # --- notification mute (the session header's ◉/○ opt-out) ------------------------

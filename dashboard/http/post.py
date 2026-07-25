@@ -1604,14 +1604,16 @@ class _PostMixin:
         no session to hang a `composer-draft` kv on yet, and like it this types
         NOTHING into any terminal — a pure state write.
 
-        Body: `text` (the current draft; empty/blank CLEARS it — the launch that
-        consumed the prompt sends that), `seq` (the writer's wall clock; a write
-        older than the stored one is DROPPED, so a debounced save in flight when
-        the launch clears can't resurrect the sent prompt — the same stale-write
-        guard the composer draft carries). Best-effort like every prefs write
-        (mutate_map degrades silently rather than raising into a request), and
-        the page never clears its own box on the response — a lost save just
-        re-saves on the next keystroke."""
+        Body: `cwd` (WHICH directory's draft — drafts are per-directory, so two
+        projects hold two half-typed prompts; the key is the page's own nsDirKey
+        normalization, stored verbatim, and "" is legitimate), `text` (the
+        current draft; empty/blank CLEARS that directory's), `seq` (the writer's
+        wall clock; a write older than that directory's stored one is DROPPED, so
+        a debounced save in flight when the launch clears can't resurrect the
+        sent prompt — the same stale-write guard the composer draft carries).
+        Best-effort like every prefs write (mutate_map degrades silently rather
+        than raising into a request), and the page never clears its own box on
+        the response — a lost save just re-saves on the next keystroke."""
         body = self._post_guard()
         if body is None:
             return
@@ -1620,19 +1622,26 @@ class _PostMixin:
             return self._reject_input("ns-draft", "bad text",
                                       "text must be a string",
                                       {"type": type(text).__name__})
+        cwd = body.get("cwd", "")
+        if not isinstance(cwd, str):
+            return self._reject_input("ns-draft", "bad cwd",
+                                      "cwd must be a string",
+                                      {"type": type(cwd).__name__})
         seq = body.get("seq")
         seq = seq if isinstance(seq, (int, float)) else 0
         text = text if text.strip() else ""          # a blank box IS a clear
-        rec = prefs.set_ns_draft(text, seq)
+        rec = prefs.set_ns_draft(cwd, text, seq)
         if rec.get("stale"):
-            A.state_file("", "", "ns-draft", {"action": "stale", "seq": seq})
+            A.state_file("", "", "ns-draft",
+                         {"action": "stale", "cwd": cwd, "seq": seq})
             return self._json({"ok": True, "stale": True})
         # global (no session) — audited with an empty log/path like ns-prefs.
         # The TEXT never lands in the audit (it is the user's unsent prose, and
-        # the composer draft records only its length either): chars + seq are
-        # what a "my draft vanished / came back" report needs.
+        # the composer draft records only its length either): the directory,
+        # chars + seq are what a "my draft vanished / came back / belongs to the
+        # wrong project" report needs.
         A.state_file("", "", "ns-draft",
-                     {"action": "write" if text else "clear",
+                     {"action": "write" if text else "clear", "cwd": cwd,
                       "chars": len(text), "seq": seq})
         return self._json({"ok": True})
 

@@ -64,12 +64,13 @@ const S = {
   nsPrefs: {},           // the new-session form's last-used {cwd, model, effort}
                          // — the backend prefs cache (GET/POST /api/ns-prefs;
                          // fetched at boot), so nsLast() reads it synchronously
-  nsDraft: { text: "", seq: 0 },
-                         // its UNSENT first prompt (GET/POST /api/ns-draft),
-                         // cached the same way so openNewSession can seed the
-                         // box synchronously — an accidental close must not
-                         // lose a half-typed prompt (docs/dashboard.md,
-                         // *New-session draft*)
+  nsDrafts: {},          // its UNSENT first prompts, {cwd: {text, seq}} — one
+                         // per directory (GET/POST /api/ns-draft), cached the
+                         // same way so openNewSession and a directory switch
+                         // seed the box synchronously; an accidental close must
+                         // not lose a half-typed prompt, and two projects must
+                         // not share one (docs/dashboard.md, *New-session
+                         // draft*)
 };
 
 const ARCHIVE_S = 3 * 86400;   // sessions older than this fold into "archived"

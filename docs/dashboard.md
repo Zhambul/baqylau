@@ -1096,53 +1096,78 @@ up blank (reported 2026-07-25). Now every edit persists it and every open
 restores it.
 
 **Where it lives.** The same durable **global** prefs store as *New-session
-prefs* above (`dashboard/prefs.py`, `NS_DRAFT_KEY = "new-session-draft"` →
-`{text, seq}`), not a per-session kv — the form has **no session yet**, which is
-the whole reason `composer-draft` (keyed by sid) can't hold it. It is
-consequently cross-device and reboot-proof: start typing a prompt on the phone,
-open the form on the laptop, and it is there.
+prefs* above (`dashboard/prefs.py`, `NS_DRAFT_KEY = "new-session-draft"`), not a
+per-session kv — the form has **no session yet**, which is the whole reason
+`composer-draft` (keyed by sid) can't hold it. It is consequently cross-device
+and reboot-proof: start typing a prompt on the phone, open the form on the
+laptop, and it is there.
 
-**One draft, not one per directory.** Deliberate: the form is a single transient
-box whose directory can be re-picked while the prompt stays put. A per-cwd map
-would strand drafts nobody ever re-opens, and — worse — would lose your text the
-moment you corrected the directory field. The cwd already has its own memory
-(the last-used pref above).
+**One draft PER DIRECTORY** — `{cwd: {text, seq}}`. It shipped as a single
+shared draft (the form is one transient box, and a per-cwd map looked like
+avoidable state); that was wrong in practice and was fixed the same day: you
+keep a half-written prompt for one project while starting something in another,
+and the shared box bled the first project's prompt into the second's form. So
+the box always shows the draft belonging to the directory currently in the form.
+The map is **pruned to `NS_DRAFT_MAX` (24) entries by `seq`** — tombstones
+included, since recency is what decides — because the key is a free-text field:
+without a bound it would grow a row per directory ever typed into.
+
+The cwd **key** is whatever the page sends: `nsDirKey` (trimmed, trailing
+slashes dropped) is the form's own notion of "the same folder" and the ONE
+implementation of it — the server stores the key verbatim rather than
+re-normalizing, so two implementations can't disagree. `""` is a legitimate key
+(the form opened with no directory yet).
 
 **Lifecycle.**
-- *Write* — `prompt.oninput` → `saveNsDraft` (debounced `ASK_DRAFT_DEBOUNCE_MS`,
-  the composer's constant). Dictation and the ⌃W/⌃A/⌃E readline keys dispatch
-  `input` events, so their text is covered by the same one handler.
+- *Write* — `prompt.oninput` → `saveNsDraft(nsDraftDir, …)` (debounced
+  `ASK_DRAFT_DEBOUNCE_MS`, the composer's constant). Dictation and the ⌃W/⌃A/⌃E
+  readline keys dispatch `input` events, so their text is covered by the same one
+  handler. `nsDraftDir` is which directory the box's text belongs to right now.
 - *Flush* — `closeNewSession` saves immediately, debounce bypassed: that gesture
   IS the bug this fixes, and the textarea is about to stop existing. Its handle
   on the box is the module-level `nsPromptBox` (null while the form is closed).
-  Skipped when the box already matches the cached draft (a form opened and
-  closed untouched writes nothing — and any pending debounced save carries the
-  same text anyway, so it is left to fire).
+  Skipped when the box already matches that directory's cached draft (a form
+  opened and closed untouched writes nothing — and any pending debounced save
+  carries the same text anyway, so it is left to fire).
 - *Restore* — `openNewSession` seeds `prompt.value` synchronously from the
-  `S.nsDraft` cache (primed at boot, kept current by every save), puts the caret
-  at the END (you reopened to keep typing), and `autoGrow`s once mounted. It
-  then reconciles with a fresh `GET /api/ns-draft`, applying it only while the
-  box still holds exactly what was seeded (never yank text from under an edit —
-  the `applyComposerDraft` discipline) and only when the server's `seq` is not
-  older than our own last write.
+  `S.nsDrafts` cache for the directory it opens on (the prefill, or the last-used
+  pref; the cache is primed at boot and kept current by every save), puts the
+  caret at the END (you reopened to keep typing), and `autoGrow`s once mounted.
+  It then reconciles with a fresh `GET /api/ns-draft` — the whole map, merged
+  per directory with the newer `seq` winning, so our own just-typed entries
+  survive — and repaints the box only while it still holds exactly what was
+  seeded (never yank text from under an edit — the `applyComposerDraft`
+  discipline).
+- *Switch* — `settleDraftDir`, on the directory field's **blur**. Deliberately
+  not on every keystroke: typing `/Users/me/proj` would walk a dozen half-paths
+  and blank the box under each. The current text is parked under the directory
+  it was typed for first (nothing is ever lost), then the new directory's own
+  draft takes the box — and if that directory has NONE, the text follows you
+  there instead (nothing to overwrite, and a re-targeted launch usually wants the
+  prompt you just wrote). Beaconed as an `nsdraft.dir` clog row (*Frontend audit
+  (clientlog)*) with `{from, to, carried, chars}`.
 - *Clear* — a successful launch. `go()` already empties the box optimistically
   before the POST (so the prompt never LINGERS after you hit launch), and the
-  close that follows flushes that empty box as the clear. A FAILED launch
+  close that follows flushes that empty box as the clear — under `nsDraftDir`,
+  which is exactly where the consumed text was stored (even if you typed a new
+  directory and hit Enter without ever blurring the field). A FAILED launch
   restores the text and never clears, so a retry keeps everything.
 
 **Stale-write guard.** Every write carries a wall-clock `seq` stamped at
-DISPATCH, and `prefs.set_ns_draft` drops a write older than the stored one
-(atomically, inside `mutate_map`'s one `BEGIN IMMEDIATE` — the dashboard is a
-`ThreadingHTTPServer`, so the compare and the set must not straddle a peer
-thread's write). This is the `post_composer_draft` guard, for the same reason: a
-debounced save in flight when the launch clears must not resurrect the sent
-prompt by landing later over the tunnel. A clear is an empty-text **tombstone**,
-never a delete, so its `seq` survives to reject that straggler.
+DISPATCH, and `prefs.set_ns_draft` drops a write older than **that directory's**
+stored one (atomically, inside `mutate_map`'s one `BEGIN IMMEDIATE` — the
+dashboard is a `ThreadingHTTPServer`, so the compare, the set and the prune must
+not straddle a peer thread's write; per entry, so two directories' saves never
+fight). This is the `post_composer_draft` guard, for the same reason: a debounced
+save in flight when the launch clears must not resurrect the sent prompt by
+landing later over the tunnel. A clear is an empty-text **tombstone**, never a
+delete, so its `seq` survives to reject that straggler.
 
 **Audit.** `ns-draft` `state_files` rows, global (empty log/path, like
-`ns-prefs`): `action=write|clear|stale` with `chars` + `seq`. The TEXT is never
-recorded — it is the user's unsent prose, and the length is what a "my draft
-vanished / came back" report actually needs.
+`ns-prefs`): `action=write|clear|stale` with `cwd`, `chars` + `seq`. The TEXT is
+never recorded — it is the user's unsent prose, and the directory plus the length
+is what a "my draft vanished / came back / belongs to the wrong project" report
+actually needs.
 
 ## Web quick commands (`POST /api/session/<sid>/command`)
 

@@ -163,8 +163,8 @@ function closeNewSession() {
   // debounced save is left to fire, since it carries exactly that same text.
   if (nsPromptBox) {
     const now = nsPromptBox.value.trim() ? nsPromptBox.value : "";
-    if (now !== ((S.nsDraft && S.nsDraft.text) || ""))
-      saveNsDraft(nsPromptBox.value, true);
+    if (now !== nsDraftFor(nsDraftDir).text)
+      saveNsDraft(nsDraftDir, nsPromptBox.value, true);
   }
   nsPromptBox = null;
   $modal.hidden = true;
@@ -277,23 +277,43 @@ const nsRemember = (p) => {
 // The form's UNSENT first prompt is a DRAFT (docs/dashboard.md, *New-session
 // draft*) — the composer's `composer-draft` machinery for the one box that has
 // no session to hang a per-session kv on yet, so it lives in the same durable
-// GLOBAL prefs store as nsLast() (GET/POST /api/ns-draft, one draft, not one
-// per directory). Written debounced on every edit AND flushed on close: an
-// accidental Esc / backdrop click used to drop a half-typed prompt on the
-// floor, and the next open came up blank. Cleared by the launch that consumes
-// it. `nsPromptBox` is the open form's textarea (null while closed) — the
-// close flush's handle on the text, since closeNewSession tears the DOM down.
+// GLOBAL prefs store as nsLast() (GET/POST /api/ns-draft). Written debounced on
+// every edit AND flushed on close: an accidental Esc / backdrop click used to
+// drop a half-typed prompt on the floor, and the next open came up blank.
+// Cleared by the launch that consumes it.
+//
+// PER DIRECTORY (`{cwd: {text, seq}}`): different projects hold different
+// half-typed prompts, so the box always shows the draft belonging to the
+// directory in the form. `nsDraftDir` is WHICH directory the box's text
+// currently belongs to (settled on the dir field's blur, not on every keystroke
+// of a half-typed path — see settleDraftDir), and `nsPromptBox` is the open
+// form's textarea (null while closed): the close flush's handle on the text,
+// since closeNewSession tears the DOM down.
 let nsPromptBox = null;
+let nsDraftDir = "";
 let nsDraftTimer = 0;
-function saveNsDraft(text, now) {
-  S.nsDraft = { text: text.trim() ? text : "", seq: Date.now() };  // cache: the
-  //                       next open seeds from here, no round-trip in the way
+// The form's notion of "the same folder" — and, since the server stores the key
+// verbatim (dashboard/prefs.py `NS_DRAFT_KEY`), the ONE implementation of it.
+// "" is a legitimate key: the form opened with no directory yet.
+const nsDirKey = (v) => {
+  const s = (v || "").trim();
+  return s.length > 1 ? s.replace(/\/+$/, "") : s;
+};
+const nsDraftFor = (cwd) =>
+  (S.nsDrafts && S.nsDrafts[nsDirKey(cwd)]) || { text: "", seq: 0 };
+function saveNsDraft(cwd, text, now) {
+  const key = nsDirKey(cwd);
+  const t = text.trim() ? text : "";
+  S.nsDrafts[key] = { text: t, seq: Date.now() };   // cache: the next open (and
+  //                    a directory switch) seeds from here, no round-trip
   clearTimeout(nsDraftTimer);
   // seq is stamped at DISPATCH (like saveComposerDraft): a debounced save still
   // in flight when the launch clears the box must not resurrect the sent prompt
-  // if it arrives later over the tunnel — the server keeps only the highest seq.
+  // if it arrives later over the tunnel — the server keeps only the highest seq
+  // (per directory, so two folders' saves never fight). The pending post
+  // captures its OWN cwd+text, since the form's directory may have moved on.
   const post = () => postJSON("/api/ns-draft",
-                              { text: S.nsDraft.text, seq: Date.now() })
+                              { cwd: key, text: t, seq: Date.now() })
     .catch(() => {});
   if (now) post();
   else nsDraftTimer = setTimeout(post, ASK_DRAFT_DEBOUNCE_MS);
@@ -799,9 +819,12 @@ function openNewSession(prefillCwd, resumeSid) {
   prompt.placeholder = IS_IPAD
     ? "what should Claude start on?"
     : "what should Claude start on?  (Enter to launch · Shift+Enter for newline)";
-  // restore the unsent draft (an accidental close, a reload, another device):
-  // synchronous from the cache, then reconciled below with a fresh GET
-  const seeded = (S.nsDraft && S.nsDraft.text) || "";
+  // restore THIS DIRECTORY's unsent draft (an accidental close, a reload,
+  // another device): synchronous from the cache, then reconciled below with a
+  // fresh GET. The box belongs to the directory the form opened on until the
+  // dir field settles on another one (settleDraftDir).
+  nsDraftDir = nsDirKey(dir.value);
+  const seeded = nsDraftFor(nsDraftDir).text;
   prompt.value = seeded;
   nsPromptBox = prompt;
   const pdic = dictation(prompt, () => dir.value.trim());
@@ -822,20 +845,51 @@ function openNewSession(prefillCwd, resumeSid) {
   // (on an iPad Enter is a newline and only the launch button launches).
   // Every edit persists the draft (debounced) — dictation and the readline
   // keys dispatch `input` too, so their text is saved by the same handler.
-  prompt.oninput = () => { autoGrow(prompt); saveNsDraft(prompt.value); };
-  // reconcile with the server: the cache can be stale (another device typed,
-  // or this page has been open since before that write). Never yank text out
-  // from under an edit — apply only while the box still holds exactly what we
-  // seeded, and only for a draft NEWER than our own last write.
-  fetch("/api/ns-draft").then(r => r.json()).then(d => {
-    if (!d || typeof d.text !== "string") return;
-    if (!prompt.isConnected || prompt.value !== seeded) return;
-    if (d.seq < ((S.nsDraft && S.nsDraft.seq) || 0)) return;
-    S.nsDraft = d;
-    if (d.text === seeded) return;
-    prompt.value = d.text;
+  prompt.oninput = () => { autoGrow(prompt); saveNsDraft(nsDraftDir, prompt.value); };
+  // reconcile with the server: the cache can be stale (another device typed, or
+  // this page has been open since before that write). Merge per directory,
+  // newest seq wins, so our own just-typed entries survive. Never yank text out
+  // from under an edit — repaint the box only while it still holds exactly what
+  // we seeded.
+  fetch("/api/ns-draft").then(r => r.json()).then(m => {
+    if (!m || typeof m !== "object") return;
+    for (const [k, v] of Object.entries(m))
+      if (v && typeof v.text === "string" && v.seq >= (nsDraftFor(k).seq || 0))
+        S.nsDrafts[k] = v;
+    const text = nsDraftFor(nsDraftDir).text;
+    if (!prompt.isConnected || prompt.value !== seeded || text === seeded) return;
+    prompt.value = text;
     autoGrow(prompt);
   }).catch(() => {});
+  // Switching the form to another directory switches which draft is in the box
+  // — but only once the directory has SETTLED (the field blurs: you clicked or
+  // tabbed into the prompt, picked a suggestion and moved on). Never per
+  // keystroke: typing "/Users/me/proj" would otherwise walk a dozen half-paths,
+  // blanking the box under each. The text in the box is parked under the
+  // directory it was typed for first, so nothing is ever lost; the new
+  // directory's own draft then wins, and if it has NONE the text follows you
+  // there (there is nothing to overwrite, and a re-targeted launch usually
+  // wants the prompt you just wrote).
+  const settleDraftDir = () => {
+    const to = nsDirKey(dir.value);
+    if (to === nsDraftDir || !prompt.isConnected) return;
+    const from = nsDraftDir;
+    const carry = prompt.value;
+    if ((carry.trim() ? carry : "") !== nsDraftFor(from).text)
+      saveNsDraft(from, carry, true);
+    nsDraftDir = to;
+    const mine = nsDraftFor(to).text;
+    const keep = !mine && !!carry.trim();      // carry the text into an empty one
+    if (!keep && prompt.value !== mine) {
+      prompt.value = mine;
+      autoGrow(prompt);
+      prompt.selectionStart = prompt.selectionEnd = mine.length;   // caret at end
+    }
+    if (keep) saveNsDraft(to, carry, true);    // …and it belongs to `to` now
+    clog("", "nsdraft.dir", { from, to, carried: keep ? 1 : 0,
+                              chars: (keep ? carry : mine).length });
+  };
+  dir.addEventListener("blur", settleDraftDir);
   prompt.onkeydown = (e) => {
     if (spm.key(e)) return;
     if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
