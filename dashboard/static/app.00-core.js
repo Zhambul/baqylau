@@ -91,6 +91,30 @@ const LAUNCH_RESOLVE_TRIES = 12;
 // channel*).
 const CLOSE_POST_MS = 12000;
 
+// The SERVER's numbers that the page has to agree with, fetched from
+// GET /api/limits at boot (loadLimits, app.12-init.js) — the owners are
+// dashboard/config.py (upload/rename caps) and dashboard/notify/presence.py
+// (the presence TTL), and this is the one place the page keeps them:
+//
+//   upload_max  — post_upload's cap; the attach path rejects a bigger file
+//                 CLIENT-side so you get a named toast instead of a 413.
+//   rename_max  — the rename input's maxLength (the server cleans + caps too).
+//   view_ttl_s  — how long a /api/presence beat keeps a session "watched"; the
+//                 heartbeat cadence is DERIVED from it (viewBeatMs).
+//
+// Each was a literal here with a "mirrors the server's X" comment, i.e. a
+// second copy of a fact owned elsewhere — and VIEW_TTL_S is env-overridable
+// (CLAUDE_DASH_VIEW_TTL_S), so lowering it below the fixed 8s beat silently
+// broke watch-suppression with no code change on either side. The values below
+// are only the PRE-FETCH fallback (the fetch is one round-trip; an attach or a
+// rename in that window still behaves), so they may lag config.py without
+// breaking anything — the served numbers always win.
+const LIMITS = {
+  upload_max: 14 * 1024 * 1024,
+  rename_max: 120,
+  view_ttl_s: 20,
+};
+
 // The in-flight state of an optimistic close, in ONE place. Two maps have to
 // move together — S.closing (the greyed card / disabled ✕) and S.closePend (the
 // optPending web-hint handle) — and the handle must settle EXACTLY once: leak it

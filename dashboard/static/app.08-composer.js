@@ -317,7 +317,8 @@ function syncSuggestion(ta) {
    and hands back an absolute path. On send, those paths ride the message as
    leading `@path` mentions — the TUI-native way to attach a file — so Claude
    Code itself reads/attaches them (docs/dashboard.md, *Web attachments*). */
-const ATTACH_MAX = 14 * 1024 * 1024;      // mirrors the server's UPLOAD_MAX
+// The upload cap is the SERVER's (config.UPLOAD_MAX, served via /api/limits into
+// LIMITS) — read at attach time, not captured at load, so the fetched value wins.
 
 // A File → base64 (no data: prefix), the JSON-transport shape /api/upload wants.
 function fileToB64(file) {
@@ -383,7 +384,7 @@ function attachTray(getSid, onChange) {
       return toast("ask", "empty file",
                    (file.name || "that file") + " has no content to attach");
     }
-    if (file.size > ATTACH_MAX) {
+    if (file.size > LIMITS.upload_max) {
       return toast("ask", "file too large",
                    (file.name || "file") + " exceeds the upload limit");
     }

@@ -29,7 +29,6 @@ from dashboard.config import (BUSY_TABS,
                               CLIENTLOG_MAX, EFFORTS,
                               IMAGE_MIMES,
                               QUEUE_TABS,
-                              RENAME_MAX, UPLOAD_MAX,
                               _MODEL_ARG_OK, _MODEL_OK, _NAME_CTRL, _SID_OK,
                               _clip_screen)
 from dashboard.control import launch
@@ -134,7 +133,7 @@ class _PostMixin:
         (gated by _post_guard/READONLY like every other mutating POST).
 
         docs/dashboard.md, *Web attachments*."""
-        body = self._post_guard(UPLOAD_MAX)
+        body = self._post_guard(config.UPLOAD_MAX)
         if body is None:
             return
         sid = body.get("sid")
@@ -170,7 +169,7 @@ class _PostMixin:
         if not raw:
             return self._reject_input("web-upload", "empty file", "empty file",
                                       {"name": safe}, log=log, path=sdb)
-        if len(raw) > UPLOAD_MAX:
+        if len(raw) > config.UPLOAD_MAX:
             return self._reject_input("web-upload", "too large",
                                       "file too large", {"bytes": len(raw)},
                                       code=413, log=log, path=sdb)
@@ -499,7 +498,7 @@ class _PostMixin:
         if not isinstance(name, str):
             return self._reject_input("web-rename", "bad name", "empty name",
                                       {"type": type(name).__name__}, sid=sid)
-        name = _NAME_CTRL.sub(" ", name).strip()[:RENAME_MAX].strip()
+        name = _NAME_CTRL.sub(" ", name).strip()[:config.RENAME_MAX].strip()
         if not name:
             return self._reject_input("web-rename", "empty name", "empty name",
                                       {"raw": body.get("name")}, sid=sid)

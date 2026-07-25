@@ -12,7 +12,9 @@ from core import paths as P
 from core import sessionapi as API
 from core.noaudit import load_audit
 from dashboard import dictate, prefs, webpush
+from dashboard import config
 from dashboard.config import (RESUMABLE_MAX)
+from dashboard.notify import presence
 from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_payload,
                                   stats_payload, _wire_row)
 from dashboard.read.mirror import (history, merged_backlog, note_payload,
@@ -122,6 +124,26 @@ class _GetMixin:
             key = webpush.public_key()
             return self._json({"enabled": bool(webpush.enabled() and key),
                                "key": key})
+        if api == ["limits"]:
+            # The server-side numbers the PAGE has to know to behave the same way
+            # (docs/dashboard.md *Served limits*): the upload cap it must reject
+            # an over-size attachment against, the rename cap it caps its input
+            # at, and the presence TTL its heartbeat has to beat. Each of these
+            # used to be a LITERAL in the JS with a "mirrors the server's X"
+            # comment — three copies of a fact whose owner is config.py /
+            # presence.py, drifting the moment one side changes (and VIEW_TTL_S
+            # is env-overridable, so the drift needs no commit at all: lower
+            # CLAUDE_DASH_VIEW_TTL_S past the 8s beat and every watched session
+            # starts firing off-device alerts while you're looking at it).
+            # Read-only, no audit rows — a probe like /api/dictate. Read
+            # MODULE-QUALIFIED (`config.X` / `presence.X`, the styleguide's rule
+            # for a patchable knob), which here is load-bearing rather than
+            # stylistic: the number we SERVE must be the number the guard
+            # ENFORCES, and a by-value `from … import UPLOAD_MAX` copy would
+            # freeze at import while post_upload's own read moved.
+            return self._json({"upload_max": config.UPLOAD_MAX,
+                               "rename_max": config.RENAME_MAX,
+                               "view_ttl_s": presence.VIEW_TTL_S})
         if api == ["notify-config"]:
             # the GLOBAL alerts master switch (docs/dashboard.md *Global alerts
             # toggle*); the list page seeds its ◉/○ button from this on load.

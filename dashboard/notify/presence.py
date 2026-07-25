@@ -43,6 +43,9 @@ def _composing(sid):
 # one dict is the whole truth. A plain dict get/set is atomic enough for the
 # 1 s watcher read vs the request-thread writes (no torn state, worst case a
 # beat lands a tick late).
+# SERVED to the page (GET /api/limits, docs/dashboard.md *Served limits*): the
+# beat cadence is derived from this, so the knob must reach the browser — a
+# matching literal there silently broke suppression whenever this was lowered.
 VIEW_TTL_S = float(os.environ.get("CLAUDE_DASH_VIEW_TTL_S") or 20)
 _VIEWING = {}                      # sid -> monotonic deadline (last beat + TTL)
 

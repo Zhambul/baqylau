@@ -125,18 +125,49 @@ setInterval(() => { if (!S.cur) renderList(true); }, LIST_REFRESH_MS);
 // being frontmost (*Telegram alerts*). Both ride ONE beat to /api/presence.
 // Sent from ANY view (device presence must be recorded even from the list, not
 // only a session). hasFocus() rules out a visible-but-unfocused window;
-// visibilityState rules out a backgrounded/minimised tab. Cadence is well under
-// the server's CLAUDE_DASH_VIEW_TTL_S (20s) so a watched session's presence
-// never lapses between beats. UN-audited (no `audit` tag → no web-client rows;
-// it would flood at this rate) and best-effort.
-const VIEW_HEARTBEAT_MS = 8000;
+// visibilityState rules out a backgrounded/minimised tab. UN-audited (no `audit`
+// tag → no web-client rows; it would flood at this rate) and best-effort.
 function presenceBeat() {
   if (document.visibilityState !== "visible") return;
   if (document.hasFocus && !document.hasFocus()) return;
   postJSON("/api/presence", { device: DEVICE_ID, sid: S.cur || "" })
     .catch(() => {});                              // presence is best-effort
 }
-setInterval(presenceBeat, VIEW_HEARTBEAT_MS);
+
+// The cadence is DERIVED from the server's presence TTL (LIMITS.view_ttl_s, the
+// env-overridable CLAUDE_DASH_VIEW_TTL_S) rather than a matching literal: a beat
+// every TTL/2.5 leaves room for one to be lost/late and still not lapse, which
+// is what the alert suppression rests on — a lapsed beat is read as "nobody is
+// watching" and fires the off-device alert while you sit looking at the session.
+// A fixed 8s beat did that silently for any TTL under ~8s. Floored at 2s so a
+// tiny/mis-set knob can't turn the beat into a request loop, and re-armed when
+// the fetched limits land (armBeat is idempotent).
+const VIEW_BEAT_FLOOR_MS = 2000;
+const VIEW_BEAT_SHARE = 2.5;
+let beatTimer = null;
+let beatMs = 0;
+function armBeat() {
+  const ms = Math.max(VIEW_BEAT_FLOOR_MS,
+                      Math.round(LIMITS.view_ttl_s * 1000 / VIEW_BEAT_SHARE));
+  if (ms === beatMs) return;
+  if (beatTimer) clearInterval(beatTimer);
+  beatMs = ms;
+  beatTimer = setInterval(presenceBeat, ms);
+}
+armBeat();
+
+// The server's own caps/TTL (docs/dashboard.md *Served limits*) — one round-trip
+// at boot, then the page stops guessing at them. A failure leaves the fallbacks
+// in LIMITS in place (the features degrade to the compiled-in numbers, never to
+// a dead button).
+function loadLimits() {
+  return fetch("/api/limits").then(r => r.json()).then(d => {
+    for (const k of Object.keys(LIMITS))
+      if (typeof d[k] === "number" && d[k] > 0) LIMITS[k] = d[k];
+    armBeat();
+  }).catch(() => {});
+}
+loadLimits();
 // Beat immediately when you (re)focus / reveal the page or open a session, so
 // presence is re-established at once rather than up to one interval late.
 window.addEventListener("focus", presenceBeat);

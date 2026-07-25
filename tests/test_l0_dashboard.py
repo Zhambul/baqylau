@@ -1879,6 +1879,53 @@ def test_global_notify_toggle_roundtrip_and_validation(dash):
     assert _get_json(dash + "/api/notify-config") == {"enabled": True}
 
 
+def test_limits_endpoint_serves_its_owners_numbers(dash, monkeypatch):
+    """GET /api/limits (docs/dashboard.md *Served limits*) is the ONE channel for
+    the server-side numbers the PAGE acts on: the upload/rename caps it enforces
+    client-side and the presence TTL its heartbeat cadence is derived from. Each
+    value comes from its owning module and is read PER REQUEST — patching the
+    owner moves the served number, which is what a `mirrors the server's X`
+    literal in the JS could never do (and `view_ttl_s` needs no commit to drift:
+    it is CLAUDE_DASH_VIEW_TTL_S)."""
+    got = _get_json(dash + "/api/limits")
+    assert got == {"upload_max": DS.config.UPLOAD_MAX,
+                   "rename_max": DS.config.RENAME_MAX,
+                   "view_ttl_s": DS.presence.VIEW_TTL_S}
+    monkeypatch.setattr(DS.presence, "VIEW_TTL_S", 4.0)
+    monkeypatch.setattr(DS.config, "UPLOAD_MAX", 999)
+    assert _get_json(dash + "/api/limits")["view_ttl_s"] == 4.0
+    assert _get_json(dash + "/api/limits")["upload_max"] == 999
+    # and the served cap IS the enforced one — post_upload reads the same
+    # module-qualified knob, so the two can't disagree (a by-value import copy
+    # would have frozen one of them at import time)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/upload",
+              {"name": "big.png", "mime": "image/png", "data": "A" * 2000})
+    assert e.value.code == 413
+
+
+def test_page_reads_the_served_limits_not_its_own_copies(dash):
+    """The page must CONSUME /api/limits, not re-encode the caps: one `LIMITS`
+    declaration (app.00-core.js, the pre-fetch fallback + the fetch target), and
+    the consumers read `LIMITS.<k>`. A static check over the SERVED parts, so a
+    future site that hardcodes the cap again is caught here — the drift this
+    endpoint exists to end (the JS literals carried `mirrors the server's X`
+    comments, and CLAUDE_DASH_VIEW_TTL_S broke the presence beat with no code
+    change on either side)."""
+    parts = ("00-core", "08-composer", "10-control", "12-init")
+    body = {}
+    for p in parts:
+        code, body[p] = _get(dash + "/static/app.%s.js" % p)
+        assert code == 200
+    assert sum(b.count("const LIMITS") for b in body.values()) == 1
+    assert "const LIMITS" in body["00-core"]
+    assert "LIMITS.upload_max" in body["08-composer"]
+    assert "LIMITS.rename_max" in body["10-control"]
+    # the heartbeat is DERIVED from the served TTL, never a matching literal
+    assert "LIMITS.view_ttl_s" in body["12-init"]
+    assert "/api/limits" in body["12-init"]
+
+
 def test_prefs_mutate_map_accumulates_atomically(monkeypatch, tmp_path):
     # mutate_map is a single-transaction read-modify-write: successive mutations
     # ACCUMULATE (no lost update), and it degrades to the intended map even when

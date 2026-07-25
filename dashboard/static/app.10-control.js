@@ -454,7 +454,7 @@ function startRenameHeader() {
   const old = span.textContent;
   const inp = el("input", "renamein");
   inp.value = (ses.meta && ses.meta.title) || "";
-  inp.maxLength = 120;                  // mirrors the server's RENAME_MAX
+  inp.maxLength = LIMITS.rename_max;    // the server's RENAME_MAX (/api/limits)
   let done = false;
   const restore = (txt) => span.replaceChildren(tnode(txt));
   const cancel = () => { if (!done) { done = true; restore(old); } };

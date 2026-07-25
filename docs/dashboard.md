@@ -376,6 +376,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/copy/<gid>/<what>` | copy text (`core/copy.collect`); leaves a `web-copy` `state_files` row (`gid`/`what`/`chars`) — the web twin of the terminal `copy` row (the dashboard calls `collect()` directly, bypassing `claude-copy.py`'s audit) |
 | `/api/dictate` | `{available}` — Deepgram key-file probe; the page renders mic buttons iff true (*Web dictation* below) |
 | `POST /api/dictate/token` | **control plane:** `{"sample_rate"}` → `{token, expires_in, ws_url}` — a ~30s Deepgram grant JWT + the fully-assembled live-listen URL; the browser connects to Deepgram DIRECTLY (*Web dictation* below); 400 bogus rate, 501 no key, 502 grant failed |
+| `/api/limits` | `{upload_max, rename_max, view_ttl_s}` — the server-side numbers the PAGE has to agree with (*Served limits* below): `config.UPLOAD_MAX` (the attach path's client-side size refusal), `config.RENAME_MAX` (the rename input's `maxLength`), and `presence.VIEW_TTL_S` (the presence heartbeat's cadence is derived from it). Read-only, no audit rows |
 | `/api/dirs/hidden` | `{group_key: hidden_at_epoch}` — the directories the `✕` hid from the list (the durable prefs store, `prefs.hidden_dirs()`); the page seeds `S.hidden` from this on load (*Hidden directories* below) |
 | `POST /api/dirs/hide` | **control plane:** `{"cwd"}` (the group key `group_dir\|\|cwd`) → stamp `time.time()` into the hidden-dirs prefs and return `{ok, hidden}` (the full map); the group vanishes until a session started after now shows up in it (*Hidden directories* below); 400 non-string key; **409 when the directory has an active (live) session** |
 | `/api/notify-config` | `{enabled}` — the GLOBAL alerts master switch (`prefs.notify_enabled()`, default ON); the list page's `#notifytoggle` seeds its ◉/○ label from this on load (*Global alerts toggle* below) |
@@ -386,10 +387,10 @@ reflow for free and keeps the no-build rule.
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
 | `POST /api/clipboard/files` | **local-machine read** (no terminal write, nothing staged): `{"names": [basename, …], "sid"?}` → `{paths: [abs, …]}`, the FULL paths of those files on the host's pasteboard (`dashboard/clipboard.py`). The one way a pasted file becomes a usable path instead of an upload — the browser only ever sees a basename (*Web attachments* → *Pasting a copied FILE*). Returns paths ONLY when the basenames match exactly (`clipboard.match` — a remote device's clipboard is not the host's); a miss is a 200 with `[]`, audited either way as a `web-clipboard` row; 400 missing/non-string `names` |
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "device", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); every row carries this browser's `device` id (device-attributable — the frontend side of notification *Device routing*); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
-| `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a ~8s heartbeat while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
+| `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a heartbeat DERIVED from the served `view_ttl_s` (TTL/2.5, *Served limits* above) while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a ~8s presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
@@ -420,6 +421,42 @@ document a reload always refetches, so each restart hands the browser fresh
 cached. The `?v=` is a cache key only — `do_GET` parses the path (query
 stripped), so `static()` still serves the same file. A hard reload is no longer
 required for a remote page to pick up new JS/CSS; a normal reload suffices.
+
+## Served limits (`GET /api/limits`)
+
+A handful of server-side numbers have to be known by the PAGE too, because the
+browser acts on them before any request reaches a handler:
+
+| Served | Owner | What the page does with it |
+|---|---|---|
+| `upload_max` | `config.UPLOAD_MAX` | refuses an over-size attachment client-side, with a named toast instead of a 413 |
+| `rename_max` | `config.RENAME_MAX` | the rename input's `maxLength` |
+| `view_ttl_s` | `presence.VIEW_TTL_S` | DERIVES the presence heartbeat cadence (below) |
+
+Each of these used to be a literal in the JS carrying a `// mirrors the server's
+X` comment — i.e. a second copy of a fact whose owner is `config.py` /
+`presence.py`, which drifts the moment either side changes. The upload/rename
+caps drift into a confusing UI (the page refuses a file the server would have
+taken, or accepts one it won't); `view_ttl_s` is worse, because it is
+env-overridable (`CLAUDE_DASH_VIEW_TTL_S`) and so drifts with **no code change
+at all**: set it below the page's fixed 8 s beat and every watched session's
+presence lapses between beats, which the deferred alert reads as "nobody is
+looking" and fires the off-device Telegram/push alert while you sit staring at
+the session (docs/dashboard.md *Telegram alerts*). So the server serves them and
+the page stops guessing: `loadLimits()` (app.12-init.js) fetches once at boot
+into the `LIMITS` object (app.00-core.js), and the consumers read `LIMITS.<k>` at
+use time, not at load time. The literals still in `LIMITS` are only the
+PRE-FETCH fallback — an attach or a rename in that one round-trip still behaves
+— so they may lag `config.py` without breaking anything; the served numbers
+always win. A failed fetch leaves them in place (degrade to the compiled-in
+number, never to a dead button). Read-only, so it adds no audit rows — like
+`/api/dictate` and `/api/stats`.
+
+The heartbeat is a **derived** cadence, not a matching literal: `armBeat()` beats
+every `view_ttl_s / 2.5`, floored at 2 s (a mis-set knob must not turn presence
+into a request loop), and re-arms when the fetched limits land. TTL/2.5 leaves
+room for one beat to be lost or late and still not lapse — which is the whole
+point, since a lapse is indistinguishable from absence.
 
 ## Control plane (web writes)
 
@@ -4441,7 +4478,7 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
     read is one shared `ls()` per scan (passed to every armed entry's check),
     not one `kitten @ ls` per session.
   - **A browser is VIEWING the session** (`reason: web-viewing`). The page POSTs
-    `POST /api/session/<sid>/viewing` on an ~8s heartbeat, but ONLY while it is
+    `POST /api/session/<sid>/viewing` on a heartbeat, but ONLY while it is
     visible + focused + inside that session's view (`document`
     `visibilityState`/`hasFocus`), so the beat's mere arrival is the signal; the
     server holds it in an in-memory `_VIEWING` deadline for `CLAUDE_DASH_VIEW_TTL_S`
