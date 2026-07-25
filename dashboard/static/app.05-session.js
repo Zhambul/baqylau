@@ -324,6 +324,7 @@ function appendItems(items) {
   }
   drainQueue(items);
   drainPending(items);
+  dropSuperseded(items);
   enforceWindow();
   while (st.childElementCount > 3000) {
     let last = st.lastElementChild;
@@ -750,6 +751,28 @@ function drainQueue(items) {
     if (i >= 0) { ses.queue.splice(i, 1); hit = true; }
   }
   if (hit) { renderQueue(); saveQueue(ses); }
+}
+
+// A prompt the terminal DISCARDED (Esc-Esc right after sending, or a rewind)
+// is never deleted from the transcript — Claude Code just re-parents around it,
+// so the next prompt arrives carrying the SAME data-par and the dead one is
+// simply orphaned. The server prunes that on any full read, but a live feed has
+// already painted the bubble, so drop it here the moment its replacement shows
+// up (docs/dashboard.md, *Discarded prompts*). Newest-top feed ⇒ the survivor
+// is the first match in DOM order; only server-rendered bubbles carry data-par,
+// so the optimistic .pending / ⧗ .queued stand-ins are untouched.
+function dropSuperseded(items) {
+  const st = S.ses && S.ses.stream;
+  if (!st) return;
+  for (const it of items) {
+    if (it.t !== "msg" || it.kind !== "prompt" || !it.par) continue;
+    let live = false;
+    for (const el of st.querySelectorAll(".msg.prompt[data-par]")) {
+      if (el.dataset.par !== it.par) continue;
+      if (!live) { live = true; continue; }        // keep the newest
+      el.remove();
+    }
+  }
 }
 
 /* ---------- optimistic prompt bubbles (the composer's own send) ---------- */

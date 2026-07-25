@@ -3639,6 +3639,72 @@ polling `tab_states()`. Without this, a stream opened before the resume
 polled the dead window's lingering tab state forever: the page showed the
 old window's green while the real tab sat magenta (shipped).
 
+### Discarded prompts (the transcript is a TREE, not a list)
+
+Reported 2026-07-25: *"I wrote `testing`, instantly hit Esc-Esc in the kitty tab,
+and the message got removed from the transcript and moved into the input — but in
+the web dashboard `testing` is still there."*
+
+The premise the reader was built on — that the transcript is an append-only
+LIST of what happened — is wrong. Every record names its `parentUuid`, and the
+live conversation is the branch the newest records hang off. **Claude Code never
+rewrites the file**; it discards a turn by RE-PARENTING around it, leaving the
+dead records in place, orphaned. The reporter's own transcript (v2.1.220):
+
+```
+225 system                 uuid=0a03011c…
+227 user   promptId=7eb…   uuid=86e9492a…  parent=0a03011c…   "testing"
+229 user   promptId=6a0…   uuid=4c12f2ad…  parent=0a03011c…   "testingthat's what I did…"
+230 assistant              uuid=b9f2cb39…  parent=4c12f2ad…
+```
+
+227 and 229 **share a parent**: the conversation forked there and only the later
+branch survived. (229 opening with the discarded text is the other half of the
+gesture — Esc-Esc hands the prompt back to the TUI input, and the user typed on
+after it.) `conversation()` walked lines in file order and emitted every prompt
+record, so the dashboard replayed a message the terminal had already taken back.
+
+`transcript._dead_uuids` prunes it. **The tell is two user PROMPTS sharing one
+`parentUuid`** — all but the last are dead, and each dead prompt takes its whole
+subtree with it (a tree walk, not a line drop): an Esc-Esc discard has no
+descendants, but a REWIND supersedes the restored-to prompt and its entire turn.
+
+The rule is deliberately narrow, and that narrowness is the design. **The tree
+forks legitimately all the time**: an `attachment` hangs off the record it
+annotates, and PARALLEL tool calls each parent their `tool_result` to the
+assistant message that issued them — measured across the corpus, ~30 such forks
+in a 250-record session. A general "last sibling wins" / leaf-to-root walk would
+prune live content. Only prompt-vs-prompt siblings count, which is why
+`_prompt_bearing` distinguishes a `results` record carrying typed TEXT (a prompt
+with pasted or attached content) from the same kind carrying only tool_results.
+Across 30 recent transcripts the prune drops exactly the two known discards and
+nothing else.
+
+Cost stays where it was: `_line_meta` returns `(ts, uuid, parent)` in the ONE
+json parse that `_line_ts` already did per renderable line, prompt forks are
+detected from those ids alone, and the full-tree walk runs only when a discard
+is actually found (the common case pays nothing).
+
+**Live, the page prunes itself.** The server sees only the window it was handed,
+so an incremental (`pos > 0`) call catches a discard only when both forks land in
+one poll — and a live feed has already PAINTED the dead bubble anyway. So every
+prompt record carries `par` (its `parentUuid`), `msg_html` stamps it as
+`data-par`, and `dropSuperseded` (app.05-session.js, called from `appendItems`
+beside `drainQueue`/`drainPending`) removes any older bubble sharing the arriving
+prompt's `data-par`. Newest-top feed ⇒ the survivor is the first match in DOM
+order; only server-rendered bubbles carry `data-par`, so the optimistic
+`.pending` and ⧗ `.queued` stand-ins are untouched. The next full read (reload,
+`/history` page, navigating back into the session) is authoritative either way.
+
+This subsumes `applyCancelEdit`'s optimistic bubble removal, which only ever
+covered a cancel issued FROM the web and did not survive a reload — a cancel
+pressed in the terminal left a ghost, and so did every rewind.
+
+No audit rows: like ctx saturation, the goal card and the stats page, this is a
+read-side view change over data the transcript already holds (the transcript
+path is recorded in `sessions`, so any pruning decision is reconstructible from
+the file plus the rule above).
+
 ## Lazy backlog (a big session paints its newest slice instantly)
 
 A long-running session's merged backlog is multi-MB of rendered HTML — sending

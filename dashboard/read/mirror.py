@@ -85,14 +85,18 @@ def _conv_items(recs):
     sent — the transcript's prompt record is the one true delivery signal (tab
     transitions are useless: green flips busy again the instant a queued
     prompt starts processing). Every kind renders through opshtml.msg_html; only
-    prompts need the raw text echoed back (queued-chip match + rewind picker)."""
+    prompts need the raw text echoed back (queued-chip match + rewind picker)
+    — plus `par`, the prompt's parentUuid, which the page's dropSuperseded
+    matches siblings on (docs/dashboard.md, *Discarded prompts*)."""
     out = []
     for r in recs:
         it = {"g": None, "t": "msg", "kind": r["kind"],
               "html": opshtml.msg_html(r["kind"], r.get("text", ""),
-                                       r.get("sender", ""), r.get("qa"))}
+                                       r.get("sender", ""), r.get("qa"),
+                                       r.get("par") or "")}
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
+            it["par"] = r.get("par") or ""
         out.append(it)
     return out
 

@@ -46,7 +46,7 @@ def answer_html(pairs):
     return "<div class=\"ansqa\">%s</div>" % "".join(rows) if rows else None
 
 
-def msg_html(kind, text, sender="", qa=None):
+def msg_html(kind, text, sender="", qa=None, par=""):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
@@ -60,7 +60,10 @@ def msg_html(kind, text, sender="", qa=None):
     here — the neutralize() analog. `qa` (answer only) is the structured
     [{q, header, answer}] pairs from transcript._answer_pairs: when present it
     renders the highlighted per-question card (answer_html) instead of the flat
-    recap text."""
+    recap text. `par` (prompt only) is the record's `parentUuid` — its place in
+    the transcript's message tree, stamped as `data-par` so the page can spot a
+    prompt a later one re-parented over and drop the dead bubble live
+    (docs/dashboard.md, *Discarded prompts*)."""
     who = {"prompt": "you", "message": "claude",
            "question": "claude ▸ asks you", "answer": "you ▸ answered",
            "recap": "↩ recap"} \
@@ -72,6 +75,8 @@ def msg_html(kind, text, sender="", qa=None):
         # and prefills the composer with after a restore; the ↶ button is
         # hover/pick-mode revealed by CSS and handled by feed delegation
         extra = " data-txt=\"%s\"" % html.escape(text or "", quote=True)
+        if par:
+            extra += " data-par=\"%s\"" % html.escape(par, quote=True)
         who = ("%s<button class=\"rw\" title=\"rewind to here\">↶</button>"
                % html.escape(who))
     else:

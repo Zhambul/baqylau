@@ -553,14 +553,84 @@ def _iso_epoch(v):
         return None
 
 
-def _line_ts(s):
-    """The `timestamp` epoch of a raw transcript line (parse_line is fed the
-    same string; a second parse only for the few lines that yield conversation
-    records — prompts/messages/mail — not every noise line)."""
+def _line_meta(s):
+    """A raw transcript line's (ts, uuid, parent) — its `timestamp` as an epoch
+    float plus its position in Claude Code's message TREE. The transcript is
+    not a list: every record names its `parentUuid`, and the live conversation
+    is the branch the newest records hang off (see _dead_uuids). parse_line is
+    fed the same string; this second parse runs only for the few lines that
+    yield conversation records — prompts/messages/mail — not every noise
+    line."""
     try:
-        return _iso_epoch(json.loads(s).get("timestamp"))
+        d = json.loads(s)
     except Exception:
-        return None
+        return None, None, None
+    return _iso_epoch(d.get("timestamp")), d.get("uuid"), d.get("parentUuid")
+
+
+def _line_ts(s):
+    """The `timestamp` epoch of a raw transcript line, alone."""
+    return _line_meta(s)[0]
+
+
+def _prompt_bearing(rec):
+    """Whether a parsed record carries a USER PROMPT — the only fork _dead_uuids
+    counts. A plain `user` string parses as `prompt`, but a prompt with pasted
+    or attached content arrives as list content, i.e. a `results` record whose
+    `texts` hold the typed part; a tool_result is that same `results` kind with
+    no texts, and those DO fork legitimately (parallel tool calls), so the
+    distinction is load-bearing. `<`-prefixed text is a wrapper (teammate
+    message, command/caveat envelope), not something the user typed."""
+    if rec["kind"] == "prompt":
+        return not rec["text"].strip().startswith("<") and bool(rec["text"].strip())
+    if rec["kind"] == "results":
+        return any(t.strip() and not t.strip().startswith("<")
+                   for t in rec["texts"])
+    return False
+
+
+def _dead_uuids(prompts, lines):
+    """The uuids of DISCARDED records — a branch Claude Code abandoned but the
+    transcript still holds, since nothing is ever REWRITTEN there: a cancelled
+    or rewound-away turn is dropped only by RE-PARENTING, so the discarded
+    records stay in the file, orphaned (measured 2026-07-25, v2.1.220).
+
+    The tell is two user PROMPTS sharing one `parentUuid`: the conversation
+    forked at that point and only the later branch survived. Two shapes reach
+    it — Esc-Esc right after a send (the prompt is discarded outright and
+    handed back to the input, so it has no descendants) and a rewind (the
+    restored-to prompt is superseded, taking its whole turn with it) — so the
+    walk expands each dead prompt over the FULL tree, not just its own line.
+
+    Deliberately narrow: only prompt-vs-prompt siblings count. The tree forks
+    legitimately all the time — an `attachment` hangs off the assistant record
+    it annotates, and PARALLEL tool calls each parent their `tool_result` to
+    the assistant message that issued them — so a general "last sibling wins"
+    rule would prune live content. `prompts` is [(uuid, parent), …] in
+    transcript order; `lines` is re-walked for the tree only when a discard is
+    actually found (the common case pays nothing)."""
+    by_parent = {}
+    for uid, par in prompts:
+        if uid:
+            by_parent.setdefault(par, []).append(uid)
+    dead = set()
+    for sibs in by_parent.values():
+        if len(sibs) > 1:
+            dead.update(sibs[:-1])            # the LAST fork is the live one
+    if not dead:
+        return dead
+    kids = {}
+    for s in lines:
+        _ts, uid, par = _line_meta(s)
+        if uid:
+            kids.setdefault(par, []).append(uid)
+    stack = list(dead)
+    while stack:                              # everything below a dead prompt
+        for uid in kids.get(stack.pop(), ()):
+            if uid not in dead:
+                dead.add(uid)
+                stack.append(uid)
+    return dead
 
 
 def _split_answer(answer, labels):
@@ -664,9 +734,19 @@ def conversation(path, pos=0):
     anchor is None before the first tool — and for every record of an
     incremental (pos > 0) call, where the preceding anchor is unknowable;
     incremental consumers append in arrival order instead. Returns
-    (records, new_pos)."""
+    (records, new_pos).
+
+    DISCARDED branches are dropped (_dead_uuids): a prompt the user cancelled
+    with Esc-Esc — or rewound away — lives on in the transcript, re-parented
+    around rather than deleted, and replaying it verbatim showed messages the
+    terminal had already taken back (the "cancelled message still shows in the
+    dashboard" report, 2026-07-25). The prune sees only the window it was
+    handed, so an incremental (pos > 0) call catches a discard only when both
+    forks land in the same poll; the page prunes the live case itself off the
+    `par` every prompt record carries (docs/dashboard.md, *Discarded
+    prompts*), and the next full read is authoritative either way."""
     lines, new_pos = _complete_lines(path, pos)
-    out, anchor = [], None
+    parsed = []
     for s in lines:
         s = s.strip()
         if not s:
@@ -674,13 +754,20 @@ def conversation(path, pos=0):
         rec = parse_line(s)
         if rec is None:
             continue
+        ts, uid, par = _line_meta(s)
+        parsed.append((rec, ts, uid, par))
+    dead = _dead_uuids([(u, p) for r, _t, u, p in parsed if _prompt_bearing(r)],
+                       lines)
+    out, anchor = [], None
+    for rec, ts, uid, par in parsed:
+        if uid in dead:
+            continue
         kind = rec["kind"]
-        ts = _line_ts(s)
         if kind == "prompt":
             t = rec["text"].strip()
             if t and not t.startswith("<"):        # command/caveat wrappers
                 out.append({"kind": "prompt", "text": t, "anchor": anchor,
-                            "ts": ts})
+                            "ts": ts, "par": par})
         elif kind == "recap":
             out.append({"kind": "recap", "text": rec["text"],
                         "anchor": anchor, "ts": ts})
@@ -711,7 +798,7 @@ def conversation(path, pos=0):
                                 "anchor": anchor, "ts": ts})
                 elif text.strip() and not text.strip().startswith("<"):
                     out.append({"kind": "prompt", "text": text.strip(),
-                                "anchor": anchor, "ts": ts})
+                                "anchor": anchor, "ts": ts, "par": par})
         elif kind == "assistant":
             for bkind, blk in rec["blocks"]:
                 if bkind == "text":

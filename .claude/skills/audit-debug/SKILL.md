@@ -100,6 +100,24 @@ New always-audited swallow sites (previously silent — their absence used to ma
   stamped; `claude-cmd-fmt.py` etc. should not — except `claude-monitor-fmt.py`,
   whose agent-launched monitors are stamped via the explicit `emit(src=)`).
 
+- **A message the terminal TOOK BACK is still in the web stream** (the user
+  cancelled a prompt with Esc-Esc right after sending, or rewound, and the
+  dashboard still shows it): this leaves NO audit rows — the evidence is the
+  transcript itself (`sessions.transcript_path`), because Claude Code never
+  rewrites that file. A discarded turn is dropped by RE-PARENTING around it, so
+  the tell is **two `type=user` prompt records sharing one `parentUuid`**: all
+  but the last are dead, along with everything descending from them.
+  `python3 -c` over the jsonl (print `uuid`/`parentUuid`/`promptId` around the
+  ghost) shows the fork in one look; a discarded prompt's text usually also
+  PREFIXES the next real prompt, since Esc-Esc hands it back to the TUI input.
+  `transcript._dead_uuids` prunes these (docs/dashboard.md, *Discarded
+  prompts*), so a ghost that survives means either the fork isn't
+  prompt-vs-prompt (only those count — attachments and parallel tool_results
+  fork legitimately) or the page never re-read: the live prune is client-side
+  (`dropSuperseded` off `data-par`) and a stale open tab keeps the bubble until
+  the next full read. Check `web-client` rows for a `boot`/`sse.open` after the
+  discard before suspecting the server.
+
 - **No Telegram alert for a session left red/green on the dashboard** (docs/dashboard.md
   *Telegram alerts* — the deferred off-device notification): the alert fires only if the
   tab sat asking/done past `CLAUDE_DASH_NOTIFY_DELAY_S` (default 60s) with no reaction and

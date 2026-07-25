@@ -210,6 +210,92 @@ def test_conversation_surfaces_delivered_queued_message(tmp_path):
     assert prompts == ["first prompt", "queued while busy"]
 
 
+def test_conversation_drops_a_discarded_prompt(tmp_path):
+    # Esc-Esc right after a send DISCARDS the prompt (Claude Code hands it back
+    # to the input) — but nothing is deleted from the transcript: the next
+    # prompt just re-parents to the SAME parentUuid, orphaning the dead one.
+    # conversation() must drop it, or the dashboard replays a message the
+    # terminal already took back (the 2026-07-25 report).
+    p = tmp_path / "d.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"content": "real one"},
+         "timestamp": "2026-07-25T00:00:01.000Z"},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+         "message": {"content": [{"type": "text", "text": "on it"}]},
+         "timestamp": "2026-07-25T00:00:02.000Z"},
+        {"type": "user", "uuid": "u2", "parentUuid": "a1",
+         "message": {"content": "testing"},
+         "timestamp": "2026-07-25T00:00:03.000Z"},
+        {"type": "user", "uuid": "u3", "parentUuid": "a1",
+         "message": {"content": "what I meant"},
+         "timestamp": "2026-07-25T00:00:04.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    assert [r["text"] for r in recs if r["kind"] == "prompt"] \
+        == ["real one", "what I meant"]
+    # the survivor carries its tree position, so the live page can do the same
+    assert [r["par"] for r in recs if r["kind"] == "prompt"] == [None, "a1"]
+
+
+def test_conversation_drops_a_rewound_away_turn(tmp_path):
+    # A rewind supersedes the restored-to prompt the same way — but that one
+    # HAS descendants (its whole turn ran), so the prune must walk the tree,
+    # not just the one line.
+    p = tmp_path / "rw.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"content": "keep me"},
+         "timestamp": "2026-07-25T00:00:01.000Z"},
+        {"type": "user", "uuid": "u2", "parentUuid": "u1",
+         "message": {"content": "wrong turn"},
+         "timestamp": "2026-07-25T00:00:02.000Z"},
+        {"type": "assistant", "uuid": "a2", "parentUuid": "u2",
+         "message": {"content": [{"type": "text", "text": "down the wrong path"}]},
+         "timestamp": "2026-07-25T00:00:03.000Z"},
+        {"type": "user", "uuid": "u3", "parentUuid": "u1",
+         "message": {"content": "right turn"},
+         "timestamp": "2026-07-25T00:00:04.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    assert [(r["kind"], r["text"]) for r in recs] \
+        == [("prompt", "keep me"), ("prompt", "right turn")]
+
+
+def test_conversation_keeps_parallel_tool_branches(tmp_path):
+    # The tree forks legitimately: PARALLEL tool calls each parent their
+    # tool_result to the assistant message that issued them, and an attachment
+    # hangs off the record it annotates. Only prompt-vs-prompt siblings are a
+    # discard — a general "last sibling wins" rule would eat live content.
+    p = tmp_path / "par.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "uuid": "u1", "parentUuid": None,
+         "message": {"content": "run both"},
+         "timestamp": "2026-07-25T00:00:01.000Z"},
+        {"type": "assistant", "uuid": "a1", "parentUuid": "u1",
+         "message": {"content": [
+             {"type": "tool_use", "id": "t1", "name": "Bash", "input": {}}]},
+         "timestamp": "2026-07-25T00:00:02.000Z"},
+        {"type": "assistant", "uuid": "a2", "parentUuid": "a1",
+         "message": {"content": [
+             {"type": "tool_use", "id": "t2", "name": "Bash", "input": {}}]},
+         "timestamp": "2026-07-25T00:00:03.000Z"},
+        {"type": "attachment", "uuid": "x1", "parentUuid": "a2",
+         "attachment": {"type": "hook_success"},
+         "timestamp": "2026-07-25T00:00:04.000Z"},
+        {"type": "user", "uuid": "r1", "parentUuid": "a1",
+         "message": {"content": [{"type": "tool_result", "tool_use_id": "t1",
+                                  "content": "ok"}]},
+         "timestamp": "2026-07-25T00:00:05.000Z"},
+        {"type": "assistant", "uuid": "a3", "parentUuid": "r1",
+         "message": {"content": [{"type": "text", "text": "both done"}]},
+         "timestamp": "2026-07-25T00:00:06.000Z"},
+    ]), encoding="utf-8")
+    recs, _ = TR.conversation(str(p), 0)
+    assert [(r["kind"], r["text"]) for r in recs] \
+        == [("prompt", "run both"), ("message", "both done")]
+
+
 def test_conversation_and_timeline_surface_recap(tmp_path):
     # A recap (away_summary) shows in BOTH read models: the mirror conversation
     # (a `recap` bubble) and the drill-down timeline (a `recap` entry), the hint

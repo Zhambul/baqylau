@@ -304,6 +304,16 @@ def test_msg_html_renders_markdown_body():
     assert "<strong>bold</strong>" in h
 
 
+def test_msg_html_prompt_stamps_tree_position():
+    # data-par is the prompt's parentUuid — what the page's dropSuperseded
+    # matches siblings on to drop a bubble the terminal discarded. Only prompts
+    # carry it (nothing else can be superseded).
+    h = opshtml.msg_html("prompt", "hi", "", None, "a1")
+    assert 'data-par="a1"' in h
+    assert 'data-par' not in opshtml.msg_html("prompt", "hi")
+    assert 'data-par' not in opshtml.msg_html("message", "hi", "", None, "a1")
+
+
 def test_msg_html_question_bubble():
     # the AskUserQuestion the transcript records: a `claude ▸ asks you` bubble
     # (no rewind ↶ — not a re-runnable prompt), options rendered as a list
