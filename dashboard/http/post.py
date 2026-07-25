@@ -630,11 +630,7 @@ class _PostMixin:
             # the session's last user prompt — read it BEFORE the Escapes so
             # the page can prefill its composer + drop the cancelled bubble
             restored = rsession._last_prompt(sid)
-            tpath = row.get("transcript_path") or ""
-            try:
-                tsize = os.path.getsize(tpath) if tpath else -1
-            except OSError:
-                tsize = -1
+            tpath, tsize = self._press_baseline(row)
             ok = bool(fe.send_key(win, "escape"))
             time.sleep(config.DOUBLE_ESC_GAP_S)
             ok = bool(fe.send_key(win, "escape")) and ok
@@ -1297,15 +1293,7 @@ class _PostMixin:
         row, log, sdb, fe, win, tab = resolved
         if self._dialog_open_guard(tab, log, sdb, win, action):
             return
-        # Press-time transcript size — the escape-recheck's growth baseline
-        # (stat'd BEFORE the key lands so even the interrupt line counts as
-        # growth). '' / unstat-able transcript degrades to the recheck's own
-        # start-time baseline.
-        tpath = row.get("transcript_path") or ""
-        try:
-            tsize = os.path.getsize(tpath) if tpath else -1
-        except OSError:
-            tsize = -1
+        tpath, tsize = self._press_baseline(row)   # BEFORE the key lands
         # ROBUST verified interrupt (docs/dashboard.md *Interrupt*). A single
         # synthesized Escape does NOT reliably stop a busy turn here: kitty
         # reports no per-window delivery (~2/3 reliable), AND with vim editorMode
@@ -1416,6 +1404,22 @@ class _PostMixin:
                 "toks": "tok/s" in screen,
                 "spin": bool(_SPIN_RE.search(screen)),
                 "tail": screen[-240:]}
+
+    @staticmethod
+    def _press_baseline(row):
+        """The escape-recheck's growth baseline as (transcript_path, size): the
+        session's transcript and its byte size, -1 when there is no path or it
+        can't be stat'd (the recheck then falls back to its own start-time
+        measurement). MUST be read BEFORE the key lands, so even the
+        `[Request interrupted by user]` line itself counts as growth — that
+        ordering is the whole point of taking the baseline here rather than in
+        the watcher, and it's the shared half of the two Escape-sending
+        handlers (post_rewind's cancel-edit and _escape_press)."""
+        tpath = row.get("transcript_path") or ""
+        try:
+            return tpath, (os.path.getsize(tpath) if tpath else -1)
+        except OSError:
+            return tpath, -1
 
     def _spawn_escape_recheck(self, fe, win, log, tpath, tsize):
         """Detached `claude-tab-status.py escape-recheck <log> <transcript>
