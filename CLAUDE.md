@@ -55,7 +55,7 @@ Script edits take effect immediately (hooks re-exec them). Only `kitty.conf` cha
 
 **The web dashboard is the ONE exception — it does NOT hot-reload.** It is a long-running singleton server process (`bin/claude-dashboard.py serve`) started from the MAIN checkout, so a dashboard change is invisible until BOTH happen: the new code is on disk in the main checkout (merged to `main` and the checkout fast-forwarded — not just pushed to `origin/main` from a worktree) AND the server is restarted. Concretely:
 - **Backend** (`dashboard/*.py`, or any `core`/`plugins`/`frontends` module the server imports): the code is loaded into the live process's memory — it keeps running the OLD code until `./bin/claude-dashboard.py stop && ./bin/claude-dashboard.py start` (verify with `status`; confirm with `curl -s http://127.0.0.1:8377/api/...`).
-- **Frontend** (`dashboard/static/app.js` / `style.css` / `index.html`): served as static files, so a restart serves fresh bytes — but the BROWSER caches the old ones. The restart bumps the server's `BOOT_ID`, so an open page's SSE reconnect toasts "dashboard updated — refresh"; the user must hard-reload (Cmd+Shift+R) to pick up new JS/CSS.
+- **Frontend** (`dashboard/static/app.NN-*.js` / `style.css` / `index.html`): served as static files, so a restart serves fresh bytes — but the BROWSER caches the old ones. The restart bumps the server's `BOOT_ID`, so an open page's SSE reconnect toasts "dashboard updated — refresh"; the user must hard-reload (Cmd+Shift+R) to pick up new JS/CSS.
 So: after ANY dashboard front- or back-end change, restarting the dashboard is part of finishing the work (see the worktree-merge section below), and the user is told to hard-reload the browser.
 
 ## Architecture

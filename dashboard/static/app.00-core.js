@@ -1,15 +1,15 @@
 "use strict";
+// dashboard/static/app.00-core.js — the SPA's core: page state (S), the DOM and
+// formatting helpers, the postJSON spine, toasts.
+//
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.12-init.js for the boot/init sequence.
-
-// dashboard/static/app.js — the single-page app.
 //
-// Server-rendered op HTML (dashboard/opshtml.py — escaped there, the
+// Server-rendered op HTML (dashboard/opshtml/ — escaped there, the
 // neutralize() analog) is the ONLY thing inserted via innerHTML; everything
 // built from JSON (timelines, stats, session rows) goes through el() /
 // textContent, so transcript text can never become markup.
-"use strict";
 
 const $view = document.getElementById("view");
 const $toasts = document.getElementById("toasts");

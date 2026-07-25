@@ -2,7 +2,7 @@
 #
 # The op stream + conversation merged into the paint the browser renders:
 # backlog / history windows, the ops delta, the click-to-view stash, and the
-# memory-note render. HTML-escaping happens in dashboard/opshtml.py (the
+# memory-note render. HTML-escaping happens in dashboard/opshtml/ (the
 # neutralize() analog). Read-only (ops_at on the resolved DB path, never a
 # connect that would fake a parked session's liveness).
 import bisect

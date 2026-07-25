@@ -1466,7 +1466,7 @@ older, `↓` newer, and `↓` past the newest restores whatever you were typing.
 **Source: the feed itself, not client bookkeeping.** The recall list is the
 session's REAL delivered prompts — every `.msg.prompt` bubble already carries
 its raw text in `data-txt` (`opshtml.msg_html`, the same lossless source the
-rewind picker POSTs). `recallHistory` (`dashboard/static/app.js`) reads them
+rewind picker POSTs). `recallHistory` (`dashboard/static/app.08-composer.js`) reads them
 live off `ses.stream` on each keypress, so the list survives reloads / device
 switches / a return to the session with zero extra state, always reflects
 exactly what was sent (from the composer OR the terminal), and includes a

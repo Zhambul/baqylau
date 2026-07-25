@@ -36,7 +36,7 @@
 #     (the A.spawn row) and serve() runs inside core.tail.stream_lifecycle
 #     (kind='dashboard'), so the server's lifetime is a streams row with a
 #     real end_reason (stopped / lock-denied / port-busy / crash).
-#   * HTML-escaping (dashboard/opshtml.py) is the neutralize() analog.
+#   * HTML-escaping (dashboard/opshtml/ansi.py) is the neutralize() analog.
 #
 # The notification watcher (toasts): one daemon thread diffs the global tab
 # DB's whole table (sessionapi.tab_states) once a second and maps windows to

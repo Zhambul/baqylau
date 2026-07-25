@@ -34,7 +34,7 @@ def _composing(sid):
 
 # Per-session "a browser is LOOKING AT this session right now" presence. The
 # page POSTs /api/session/<sid>/viewing on a heartbeat, but ONLY while it is
-# visible + focused + showing that session (dashboard/static/app.js). So the
+# visible + focused + showing that session (app.12-init.js presenceBeat). So the
 # mere arrival of a recent beat IS the "you're watching the dashboard" signal
 # the deferred Telegram alert suppresses on — the web analog of the kitty tab
 # being frontmost. In-memory + TTL'd: this is ephemeral live-only presence

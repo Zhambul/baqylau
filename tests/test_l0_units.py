@@ -9,6 +9,8 @@
 #      stub swallows every call, and load_audit() returns the real module
 #      when it imports.
 import os
+import re
+import subprocess
 import sys
 
 from conftest import REPO
@@ -1968,3 +1970,55 @@ def test_ops_after_reset_contract_and_gated_probe(tmp_path, monkeypatch):
     assert ops[0]["t"] == "line" and ops[0]["s"] == "a"
     assert isinstance(ops[0]["_ts"], float)
     assert S.ops_after(log, 0) == (last, ops)
+
+
+# --- every repo file pointer in a comment must RESOLVE ------------------------
+# The comments and docs here are load-bearing: they are how the next reader (and
+# the next agent) finds the owner of a mechanism, and they name files constantly
+# — "see core/streamfmt.py", "escaped in dashboard/opshtml/…". A pointer that no
+# longer resolves is worse than none: it sends the reader to a file that does not
+# exist and quietly implies the design still looks the way it did.
+#
+# They rot by RENAME, silently, and always in bulk: the dashboard decomposition
+# turned server.py into a package and app.js into ordered parts, and left ten
+# pointers behind in six files (docs/styleguide.md still assigned the no-emoji
+# rule to the dashboard's `opshtml.py`, a module that had become a package by
+# then). Nothing failed, because nothing checks prose — and note that spelling it
+# out here with its directory would trip this very test, which is the point.
+#
+# So this walks every tracked text file, extracts anything shaped like a
+# repo-relative path to a source file, and requires it to exist. It is
+# deliberately narrow — only paths under the known top-level dirs, only with a
+# source extension — because the alternative (parsing prose) mis-flags, and a
+# guard that cries wolf gets deleted.
+
+_PTR_ROOTS = ("core", "plugins", "frontends", "dashboard", "bin", "tests", "docs")
+_PTR_RE = re.compile(r"\b((?:%s)/[\w./-]*[\w])" % "|".join(_PTR_ROOTS))
+_PTR_EXT = (".py", ".md", ".js", ".css", ".html")
+# Paths that are DATA, not pointers: strings a test feeds to a parser, and the
+# upstream Claude Code doc tree (docs/en/*.md lives in Anthropic's repo, not this
+# one) — each needs its literal spelling, and neither is a place to look.
+_PTR_SKIP = ("docs/x.md", "docs/en/")
+
+
+def _repo_text_files():
+    out = subprocess.run(["git", "ls-files"], cwd=REPO, capture_output=True,
+                         text=True, check=True).stdout.split()
+    return [f for f in out if f.endswith(_PTR_EXT + (".txt", ".toml", ".json"))]
+
+
+def test_file_pointers_in_comments_resolve():
+    bad = []
+    for rel in _repo_text_files():
+        try:
+            txt = open(os.path.join(REPO, rel), encoding="utf-8").read()
+        except (OSError, UnicodeDecodeError):
+            continue
+        for m in _PTR_RE.finditer(txt):
+            ptr = m.group(1).rstrip(".,;:)")
+            if not ptr.endswith(_PTR_EXT) or ptr.startswith(_PTR_SKIP):
+                continue
+            if not os.path.exists(os.path.join(REPO, ptr)):
+                line = txt.count("\n", 0, m.start()) + 1
+                bad.append("%s:%d -> %s" % (rel, line, ptr))
+    assert not bad, "file pointers that no longer resolve:\n  " + "\n  ".join(bad)
