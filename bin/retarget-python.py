@@ -62,14 +62,19 @@ def retarget_shebangs(interp, revert):
         if not name.endswith(".py"):
             continue
         path = os.path.join(HERE, name)
-        with open(path, "r") as f:
+        # utf-8 on BOTH halves, explicitly: this is a read-modify-WRITE of the
+        # repo's own sources, and they are full of non-ASCII (⧉ ✉ ▪ ⇢, the
+        # Kazakh in the docs). Under a non-UTF-8 locale the default encoding
+        # would decode the body one way and re-encode it another — rewriting a
+        # shebang would corrupt every bin/ entry it touched.
+        with open(path, "r", encoding="utf-8") as f:
             lines = f.readlines()
         if not lines or not _is_py_shebang(lines[0]):
             continue
         if lines[0].rstrip("\n") == new_line:
             continue
         lines[0] = new_line + "\n"
-        with open(path, "w") as f:
+        with open(path, "w", encoding="utf-8") as f:
             f.writelines(lines)
         changed.append(name)
     return changed
@@ -78,19 +83,32 @@ def retarget_shebangs(interp, revert):
 def retarget_settings(interp, revert):
     if not os.path.exists(SETTINGS):
         return None
-    with open(SETTINGS, "r") as f:
-        text = f.read()
+    with open(SETTINGS, "r", encoding="utf-8") as f:   # same read-modify-write
+        text = f.read()                                # pairing as above
     repl = "python3" if revert else interp
     new_text, n = _CMD_PY.subn(lambda m: m.group(1) + repl + m.group(3), text)
     if new_text != text:
-        with open(SETTINGS, "w") as f:
+        with open(SETTINGS, "w", encoding="utf-8") as f:
             f.write(new_text)
         return n
     return 0    # matched, but already pointed at the target — nothing written
 
 
+USAGE = "usage: retarget-python.py [--revert]"
+
+
 def main():
-    revert = "--revert" in sys.argv[1:]
+    # An UNRECOGNISED argument must not be read as "retarget" — this tool rewrites
+    # files in place, and the old `"--revert" in argv` test meant every other argv,
+    # `--help` included, silently performed the rewrite (it rewrote a shebang out
+    # from under the author of this comment). Anything but the one flag is usage.
+    args = sys.argv[1:]
+    if args in (["-h"], ["--help"]):
+        print(USAGE)
+        return
+    if args not in ([], ["--revert"]):
+        raise SystemExit("%s\nunrecognised: %s" % (USAGE, " ".join(args)))
+    revert = args == ["--revert"]
     interp = real_interpreter()
     sheb = retarget_shebangs(interp, revert)
     n_cmds = retarget_settings(interp, revert)

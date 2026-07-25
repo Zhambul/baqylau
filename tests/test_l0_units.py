@@ -2064,6 +2064,23 @@ def test_no_tracked_file_ends_in_blank_lines():
     assert not bad, "tracked files ending in a blank line:\n  " + "\n  ".join(bad)
 
 
+def test_retarget_python_refuses_unknown_argv():
+    """`retarget-python.py` REWRITES every bin/ shebang in place, so an argv it
+    doesn't understand must refuse, not act. It used to test `"--revert" in argv`,
+    which made every other argv — `--help` included — mean "retarget": running it
+    to read the usage rewrote a shebang instead.
+
+    Only the refusing paths are exercised here: a bare run would retarget the real
+    checkout, which is the whole hazard being pinned."""
+    for args, code in ((["--help"], 0), (["-h"], 0),
+                       (["--revrt"], 1), (["--revert", "--oops"], 1)):
+        r = subprocess.run([sys.executable, os.path.join(REPO, "bin", "retarget-python.py")] + args,
+                           capture_output=True, text=True, check=False)
+        assert r.returncode == code, "%s -> rc %d\n%s%s" % (args, r.returncode, r.stdout, r.stderr)
+        assert "usage:" in (r.stdout + r.stderr), args
+        assert "shebangs rewritten" not in r.stdout, "%s performed the rewrite" % args
+
+
 def test_connect_refuses_a_relative_db_path(tmp_path, monkeypatch):
     """core.state._connect CREATES what it opens, so a RELATIVE path would put a
     live session's DB in whatever directory the process happens to run from — the

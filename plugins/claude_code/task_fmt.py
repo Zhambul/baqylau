@@ -63,7 +63,7 @@ def read_tasks(sid):
         if not name.endswith(".json"):
             continue
         try:
-            with open(os.path.join(d, name)) as f:
+            with open(os.path.join(d, name), encoding="utf-8") as f:
                 rec = json.load(f)
             if isinstance(rec, dict):
                 out.append(rec)

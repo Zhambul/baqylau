@@ -69,7 +69,7 @@ def _read_text(path, ti, tr):
     if isinstance(finfo, dict) and isinstance(finfo.get("content"), str):
         return finfo["content"], int(finfo.get("startLine") or 1)
     try:
-        with open(path, "r", errors="replace") as f:
+        with open(path, "r", encoding="utf-8", errors="replace") as f:
             lines = f.read().split("\n")
     except OSError:
         return None, 1

@@ -59,7 +59,7 @@ def _prepare_tee(cmd, stem, cwd):
         return src, False, append, None
     src = stem + ".out"
     try:
-        open(src, "a").close()
+        open(src, "ab").close()          # a touch, and the tee writes raw bytes
     except Exception:
         return None
     return src, True, False, _tee_wrap(cmd, src)
