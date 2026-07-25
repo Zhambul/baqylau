@@ -26,7 +26,9 @@ class El {
     const self = this;
     this.classList = {
       add(c) { if (!self._cls().includes(c)) self.className = (self.className + " " + c).trim(); },
-      remove(c) { self.className = self._cls().filter(x => x !== c).join(" "); },
+      remove(...cs) {
+        self.className = self._cls().filter(x => !cs.includes(x)).join(" ");
+      },
       contains(c) { return self._cls().includes(c); },
       toggle(c, on) { if (on) this.add(c); else this.remove(c); },
     };
@@ -237,9 +239,15 @@ const sig = rt.viewSig;
 sandbox.applyViewMode();
 out.idempotent = sig === rt.viewSig;
 sumRow(rt).onclick();
-out.expanded = { shown: shown(rt), sums: sums(rt).map(s => s.open) };
+const marks = (ses) => ses.stream.children
+  .filter(c => c.dataset.kind)
+  .map(c => (c.classList.contains("vrun") ? "R" : "-")
+          + (c.classList.contains("vrun-last") ? "L" : "-"));
+out.expanded = { shown: shown(rt), sums: sums(rt).map(s => s.open),
+                 marks: marks(rt) };
 sumRow(rt).onclick();
-out.recollapsed = { shown: shown(rt), sums: sums(rt).map(s => s.open) };
+out.recollapsed = { shown: shown(rt), sums: sums(rt).map(s => s.open),
+                    marks: marks(rt) };
 
 // an INJECTED prompt is dropped by both non-verbose modes and does NOT close the
 // turn — the reply after it still belongs to the prompt the human typed, so focus

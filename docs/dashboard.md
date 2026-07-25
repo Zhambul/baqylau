@@ -4740,7 +4740,16 @@ Mechanics worth knowing:
   stamp). Runs grow at the newest end, so that key is stable as a run absorbs new
   items — which is what makes a user's expansion survive the next SSE tick.
 - **Expanding leaves the summary in place** (caret `▾`): it is the only way back
-  to collapsed, and it keeps naming what the revealed blocks are.
+  to collapsed, and it keeps naming what the revealed blocks are. It also becomes
+  the group's HEADER: the blocks it revealed are marked `.vrun` (`.vrun-last` on
+  the oldest) and share an indented left rail whose vertical gaps are closed, so
+  the group reads as one connected stack and you can see where the expansion ENDS
+  — without it, revealed blocks land in the feed looking like any other activity.
+  The marks are classes, not a wrapper element: SSE inserts by position, the block
+  map holds live references, and the eviction sweep walks top-level children, so
+  re-parenting into a container would break all three. Every mark is cleared at
+  the top of each pass (`clearViewMarks`) — a leftover would rail a run that is no
+  longer open.
 - **Hidden-but-uncounted items are transparent to the run cut** — focus mode's
   mid-turn prose disappearing MERGES the runs either side of it, rather than
   leaving two lines with a gap.

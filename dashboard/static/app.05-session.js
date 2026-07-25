@@ -883,6 +883,14 @@ function tickRunTimers() {
 // ones, and put a summary line where each run sits. Derived entirely from the
 // DOM + the current mode, so it is safe to re-run after any append — which is
 // how a live stream keeps its collapse correct as blocks arrive.
+// Undo everything a previous pass stamped on the items (hidden flag + the
+// expanded-run rail). Both exits of applyViewMode go through it: a mark left
+// behind would draw a rail under a run that is no longer open.
+function clearViewMarks(items) {
+  for (const it of items)
+    it.classList.remove("vhide", "vrun", "vrun-last");
+}
+
 function applyViewMode() {
   const ses = S.ses;
   if (!ses || !ses.stream) return;
@@ -892,7 +900,7 @@ function applyViewMode() {
     if (ses.viewSig === "verbose") return;      // already plain — nothing to undo
     for (const old of [...ses.stream.children])
       if (old.classList.contains("vsum")) old.remove();
-    for (const it of items) it.classList.remove("vhide");
+    clearViewMarks(items);
     ses.viewSig = "verbose";
     updateFilterCount();
     return;
@@ -977,10 +985,22 @@ function applyViewMode() {
 
   for (const old of [...ses.stream.children])
     if (old.classList.contains("vsum")) old.remove();
-  for (const it of items) it.classList.remove("vhide");
+  clearViewMarks(items);
   for (const s of strays) s.classList.add("vhide");
   for (const p of plan) {
-    if (!p.open) for (const m of p.span) m.classList.add("vhide");
+    if (p.open) {
+      // An EXPANDED run keeps its summary as the group's HEADER and marks the
+      // blocks it revealed, so it is visible at a glance which actions belong to
+      // it: `.vrun` draws the shared left rail (and closes the vertical gaps, so
+      // the rail is continuous), `.vrun-last` rounds it off at the oldest member.
+      // Marking beats re-parenting into a wrapper: SSE inserts by position, the
+      // block map holds live references and the eviction sweep walks top-level
+      // children — moving items would break all three.
+      for (const m of p.span) m.classList.add("vrun");
+      p.span[p.span.length - 1].classList.add("vrun-last");
+    } else {
+      for (const m of p.span) m.classList.add("vhide");
+    }
     ses.stream.insertBefore(
       buildRunSummary(p.key, p.members, p.running, p.anchor, p.bad, p.open),
       p.span[0]);

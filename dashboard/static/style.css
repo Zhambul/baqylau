@@ -33,6 +33,11 @@
   --ask: #e06c75;
   --done: #98c379;
 
+  /* an expanded run's rail (docs/dashboard.md *View modes*): the accent at low
+     strength — traceable by eye, quiet enough not to compete with the blocks'
+     own kind colours */
+  --runrail: color-mix(in srgb, var(--accent, #6b9bd1) 55%, transparent);
+
   /* semantic == core/ops.py */
   --red: #e06c75;
   --green: #98c379;
@@ -1222,6 +1227,27 @@ body.modal-open { overflow: hidden; }
   box-shadow: var(--card); border-radius: var(--r);
   background: var(--panel); padding: 7px 13px; margin: 7px 0;
 }
+
+/* ---- an EXPANDED run: header + rail ------------------------------------- */
+/* Clicking a collapsed summary reveals the blocks it stood for, and those blocks
+   need to read as BELONGING to it — otherwise they land in the feed looking like
+   any other activity and you can't tell where the expansion ends. So the summary
+   becomes a group header and its blocks share a left rail: indented, gaps closed
+   so the rail is continuous, and rounded off at the oldest member. Declared
+   AFTER the card rules above, which set the margins this overrides (equal
+   specificity — order is what wins). docs/dashboard.md *View modes* */
+.stream > .vsum[data-open="1"] {
+  background: var(--panel); color: var(--text-soft);
+  border-left: 2px solid var(--runrail);
+  border-radius: var(--r) var(--r) 0 0;
+  margin: 7px 0 0; padding-left: 11px;
+}
+.stream > .vrun {
+  margin-top: 0; margin-bottom: 0; margin-left: 13px;
+  border-left: 2px solid var(--runrail);
+  border-radius: 0 var(--r) var(--r) 0;
+}
+.stream > .vrun.vrun-last { margin-bottom: 8px; }
 /* ⧉ copy links only materialize on hover — ambient noise otherwise */
 .cl { opacity: 0; transition: opacity .12s; }
 .bhead:hover .cl, .ol:hover .cl, .bbody:hover .cl { opacity: 1; }

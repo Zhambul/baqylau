@@ -8011,8 +8011,16 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # only way back), and a redundant pass is a no-op (the signature guard, which
     # is what keeps a live stream from rebuilding the feed under a reader)
     assert d["idempotent"] is True
-    assert d["expanded"] == {"shown": ["read", "bash", "bash", "msg"], "sums": ["1"]}
-    assert d["recollapsed"] == {"shown": ["msg"], "sums": ["0"]}
+    # Expanding also MARKS what the run revealed, so the blocks read as belonging
+    # to the summary above them rather than as loose feed activity: every member
+    # carries the rail class ("R"), the OLDEST one closes it ("L"), and the
+    # message outside the run is untouched. Collapsing clears every mark — a
+    # stale one would draw a rail under a run that is no longer open.
+    assert d["expanded"] == {"shown": ["read", "bash", "bash", "msg"],
+                             "sums": ["1"],
+                             "marks": ["R-", "R-", "RL", "--"]}
+    assert d["recollapsed"] == {"shown": ["msg"], "sums": ["0"],
+                                "marks": ["--", "--", "--", "--"]}
     # a run absorbing new items keeps its identity, so an expansion survives it
     assert d["growth"] == {"sameKey": True, "stillOpen": True,
                            "text": "Ran 3 shell commands"}
@@ -8133,3 +8141,24 @@ def test_load_older_keeps_its_promise_in_a_collapsing_mode(dash):
     assert f["allCommands"]["stuck"] is False
     # and exhausted history stops it BEFORE the budget, on the same clean exit
     assert f["exhausted"]["pages"] == 2 and f["exhausted"]["stuck"] is False
+
+
+def test_expanded_run_rail_is_styled_as_one_group(dash):
+    """The rail the engine marks has to be DRAWN, and drawn as a continuous
+    group: the open summary is the header (rounded on top only, its bottom margin
+    closed) and each revealed block indents under it sharing the rail colour,
+    with the vertical gaps closed so the line does not break between cards. These
+    rules must also come AFTER the `.stream > .opl/.ol/...` card rules they
+    override — equal specificity, so source ORDER is what decides."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    assert "--runrail:" in css, "the rail colour needs one owner in :root"
+    head = re.search(r"\.stream > \.vsum\[data-open=\"1\"\] \{([^}]*)\}", css)
+    run = re.search(r"\.stream > \.vrun \{([^}]*)\}", css)
+    assert head and run
+    assert "var(--runrail)" in head.group(1) and "var(--runrail)" in run.group(1)
+    assert "margin: 7px 0 0" in head.group(1), "the header must close its gap"
+    for prop in ("margin-top: 0", "margin-bottom: 0", "margin-left"):
+        assert prop in run.group(1), prop
+    cards = css.index(".stream > .opl, .stream > .ol")
+    assert cards < css.index(".stream > .vrun"), "the rail must override the cards"
