@@ -158,6 +158,18 @@ class Notifier:
         }
 
     def scan(self):
+        """One 1 s tick: diff the tab DB, then walk the armed entries twice.
+        THREE passes, in this order and no other (each depends on the previous
+        one's edits to self.pending):
+          1. _arm_transitions — the tab diff: toast every new asking/done
+             transition and arm its deferred off-device alert.
+          2. _cancel_armed — drop the arms you already reacted to, all BEFORE
+             any delay elapses.
+          3. _fire_due — send what survived the grace window (on-device push,
+             then the Telegram escalation).
+        `tree` (one `kitten @ ls`) is resolved once between 1 and 2 and shared by
+        both later passes' tab-focus checks — else it costs one subprocess per
+        armed session per second."""
         cur = API.tab_states()
         prev, self.prev = self.prev, cur
         if prev is None:
@@ -168,6 +180,22 @@ class Notifier:
         # toast AND its Telegram arm). Only the true first scan (prev is None) is
         # a baseline; an empty {} is a real state a transition diffs against.
         now = time.monotonic()
+        self._arm_transitions(cur, prev, now)
+        # one ls per scan, shared by every armed entry's tab-focus check (both
+        # the done 'seen it' branch and the asking send-time check) — avoids a
+        # kitten @ ls per armed session per second. Best-effort.
+        try:
+            tree = self.fe.ls() if (self.fe and self.pending) else None
+        except Exception:
+            tree = None
+        self._cancel_armed(cur, tree)
+        self._fire_due(now, tree)
+
+    def _arm_transitions(self, cur, prev, now):
+        """PASS 1 — the tab diff. For every window that just ENTERED an
+        asking/done state: push the immediate in-page toast + OS notification,
+        and arm `self.pending[win]` for the deferred off-device alert. The global
+        alerts switch gates BOTH here (the one suppression site)."""
         for win, state in cur.items():
             kind = NOTIFY_STATES.get(state)
             if not kind or prev.get(win) == state:
@@ -196,21 +224,17 @@ class Notifier:
                 A.state_file("", "", "notify-arm",
                              {"sid": payload.get("sid"), "kind": kind,
                               "phase": "arm", "delay_s": config.NOTIFY_DELAY_S})
-        # cancel the ones you reacted to / are already handling, all before the
-        # delay: the tab left its armed state (answered → busy, or the win
-        # vanished = tab gone), the session ENDED (you closed / quit it — moved
-        # on, and the alert's deep link would open a dead session), OR you're
-        # actively COMPOSING a reply to it (a non-empty unsent web draft is
-        # "I'm on it" — don't nag). ended_at is the robust signal the win-vanish
-        # check can miss: a stale tab row can linger, and a reused window id can
-        # even re-match the armed state under a DIFFERENT session.
-        # one ls per scan, shared by every armed entry's tab-focus check (both
-        # the done 'seen it' branch below and the asking send-time check) —
-        # avoids a kitten @ ls per armed session per second. Best-effort.
-        try:
-            tree = self.fe.ls() if (self.fe and self.pending) else None
-        except Exception:
-            tree = None
+
+    def _cancel_armed(self, cur, tree):
+        """PASS 2 — cancel the arms you reacted to / are already handling, all
+        BEFORE the delay elapses: the tab left its armed state (answered → busy,
+        or the win vanished = tab gone), the session ENDED (you closed / quit it
+        — moved on, and the alert's deep link would open a dead session), OR
+        you're actively COMPOSING a reply to it (a non-empty unsent web draft is
+        "I'm on it" — don't nag). ended_at is the robust signal the win-vanish
+        check can miss: a stale tab row can linger, and a reused window id can
+        even re-match the armed state under a DIFFERENT session. Then the two
+        per-kind TERMINAL-activity signals (see the branches)."""
         for win in list(self.pending):
             entry = self.pending[win]
             sid = entry.get("sid")
@@ -261,22 +285,25 @@ class Notifier:
                         A.state_file("", "", "notify-suppress",
                                      {"sid": sid, "kind": "done",
                                       "reason": seen})
-        # fire the ones that persisted past the grace window (once each) —
-        # unless, at THIS moment, you're looking at the session (the kitty tab
-        # is frontmost, or a browser is actively viewing it): then you don't
-        # need an off-device ping, so drop it with a notify-suppress row. In
-        # practice this send-time check now matters for `asking` arms: a `done`
-        # arm that was ever seen was already dropped above (the 'seen it' rule),
-        # so a done arm reaching here was never looked at.
-        # DEVICE-FIRST, TELEGRAM-IF-IGNORED. Two stages per armed entry:
-        #  1. after the grace window, the ON-DEVICE push goes to the one device
-        #     you most recently used (_webpush → _mru_push_targets); the entry
-        #     STAYS armed, now with an escalate_at ESCALATE_S in the future.
-        #  2. if it survives to escalate_at — you STILL did nothing with the
-        #     session (any reaction / look already dropped it in the cancel loop
-        #     above) — Telegram nudges you, in case you're away from that device.
-        # Telegram is instead the IMMEDIATE fallback when there's no device to
-        # push to (nobody subscribed); `_ALWAYS` fires both at stage 1.
+
+    def _fire_due(self, now, tree):
+        """PASS 3 — fire the arms that persisted past the grace window (once
+        each) — unless, at THIS moment, you're looking at the session (the kitty
+        tab is frontmost, or a browser is actively viewing it): then you don't
+        need an off-device ping, so drop it with a notify-suppress row. In
+        practice that send-time check now matters for `asking` arms: a `done` arm
+        that was ever seen was already dropped in _cancel_armed (the 'seen it'
+        rule), so a done arm reaching here was never looked at.
+
+        DEVICE-FIRST, TELEGRAM-IF-IGNORED. Two stages per armed entry:
+          1. after the grace window, the ON-DEVICE push goes to the one device
+             you most recently used (_webpush → _mru_push_targets); the entry
+             STAYS armed, now with an escalate_at ESCALATE_S in the future.
+          2. if it survives to escalate_at — you STILL did nothing with the
+             session (any reaction / look already dropped it in _cancel_armed) —
+             Telegram nudges you, in case you're away from that device.
+        Telegram is instead the IMMEDIATE fallback when there's no device to push
+        to (nobody subscribed); `_ALWAYS` fires both at stage 1."""
         for win in list(self.pending):
             entry = self.pending[win]
             escalating = entry.get("notified") is not None

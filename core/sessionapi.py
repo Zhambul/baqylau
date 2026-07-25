@@ -308,9 +308,13 @@ def db_cached(cache, path, read):
     return val
 
 
-def _session_db(row):
-    """A sessions() row's state DB path — the live /tmp file when present,
-    else its durable park."""
+def session_db(row):
+    """A sessions() row's state DB path — the live /tmp file when present, else
+    its durable park. The ONE owner of that choice: distinct from
+    state_db_for(sid), which resolves the same pair from a SID and returns falsy
+    when NEITHER exists — a caller that already holds a row wants a usable path
+    unconditionally (the list/resume payloads stat it for last_active and read
+    stats off it, both of which tolerate an absent file)."""
     sdb = P.state_db(row["log"])
     return sdb if os.path.isfile(sdb) else P.parked_db(row["log"])
 
@@ -335,7 +339,7 @@ def account_usage(limit=50, cache=None):
             ent[key] = val
     best = {}
     for row in sessions(limit):
-        sdb = _session_db(row)
+        sdb = session_db(row)
         acc, usage, hit, lo = (db_cached(cache, sdb, read) if cache is not None
                                else read(sdb))
         slug = acc.get("slug") or ""

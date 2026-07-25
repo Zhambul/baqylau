@@ -11,6 +11,7 @@ import binascii
 import os
 import time
 import uuid
+from functools import partial
 from urllib.parse import unquote, urlparse
 
 import plugins
@@ -60,10 +61,12 @@ class _PostMixin:
     # pass, since we answer OPTIONS with a bare 501 — no Access-Control-Allow-*),
     # and additionally reject any Origin that isn't our own. See docs/dashboard.md.
     def do_POST(self):
-        url = urlparse(self.path)
-        parts = [unquote(p) for p in url.path.strip("/").split("/") if p]
+        # No POST route reads the QUERY STRING — the JSON body is the whole
+        # payload — so route_post takes only the path parts (unlike GET's
+        # route(), which needs `url` for ?after/?cwd/?blocks).
+        parts = [unquote(p) for p in urlparse(self.path).path.strip("/").split("/") if p]
         try:
-            self.route_post(url, parts)
+            self.route_post(parts)
         except (BrokenPipeError, ConnectionResetError):
             pass
         except Exception:
@@ -101,7 +104,7 @@ class _PostMixin:
         ("notify",): "post_notify_global",
     }
 
-    def route_post(self, url, parts):
+    def route_post(self, parts):
         api = parts[1:] if parts[:1] == ["api"] else None
         if api is None:
             return self._json({"error": "not found"}, 404)
@@ -133,9 +136,15 @@ class _PostMixin:
             return
         sid = body.get("sid")
         sid = sid if isinstance(sid, str) and _sid(sid) else ""
-        # A rejected upload files its row under the uploader's session when we
-        # have a sid, else the global stream (a log-less staging upload).
-        ulog = P.mirror_log(sid) if sid else ""
+        # Audit target: the uploader's session when we have a sid, else the
+        # GLOBAL stream — an empty log/path, exactly like web-launch/ns-prefs.
+        # NOT P.mirror_log(""), which is not a global key at all: with no sid it
+        # falls back to the cwd SLUG of whatever directory the dashboard process
+        # was started in, so a log-less staging upload used to file its rows in
+        # the audit timeline of an unrelated session that happens to run in the
+        # main checkout (the reject path already used "" — the success path did
+        # not, and the two disagreed).
+        log, sdb = self._audit_target(sid)[1:] if sid else ("", "")
         name = body.get("name")
         mime = body.get("mime") or ""
         data_b64 = body.get("data")
@@ -143,7 +152,7 @@ class _PostMixin:
                 or not isinstance(mime, str):
             return self._reject_input(
                 "web-upload", "bad fields", "name, mime, data required",
-                {"name": name, "mime": mime}, log=ulog)
+                {"name": name, "mime": mime}, log=log, path=sdb)
         # basename only — strip any path component a hostile name carries, and
         # fall back to a neutral stem so an empty/dotfile name can't produce a
         # bare-uuid or hidden file.
@@ -153,20 +162,16 @@ class _PostMixin:
             raw = base64.b64decode(data_b64, validate=True)
         except (binascii.Error, ValueError):
             return self._reject_input("web-upload", "bad base64",
-                                      "invalid base64", {"name": safe}, log=ulog)
+                                      "invalid base64", {"name": safe},
+                                      log=log, path=sdb)
         if not raw:
             return self._reject_input("web-upload", "empty file", "empty file",
-                                      {"name": safe}, log=ulog)
+                                      {"name": safe}, log=log, path=sdb)
         if len(raw) > UPLOAD_MAX:
             return self._reject_input("web-upload", "too large",
                                       "file too large", {"bytes": len(raw)},
-                                      code=413, log=ulog)
+                                      code=413, log=log, path=sdb)
         is_image = mime in IMAGE_MIMES
-        # audit target: the uploader's session log if we have a sid, else the
-        # shared staging bucket keyed on the log-less "staging" slug.
-        row = API.session_row(sid) or {} if sid else {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
         dest_dir = P.session_uploads_dir(sid)
         path = os.path.join(dest_dir, "%s-%s" % (uuid.uuid4().hex[:8], safe))
         try:
@@ -458,9 +463,7 @@ class _PostMixin:
             return self._reject_input("web-rename", "empty name", "empty name",
                                       {"raw": body.get("name")},
                                       log=P.mirror_log(sid))
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        row, log, sdb = self._audit_target(sid)
         tpath = row.get("transcript_path") or ""
         if not tpath or not os.path.isfile(tpath):
             A.state_file(log, sdb, "web-rename",
@@ -528,14 +531,16 @@ class _PostMixin:
         body = self._post_guard()
         if body is None:
             return
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
+        row, log, sdb = self._audit_target(sid)
+        # The unknown-sid 404 deliberately runs BEFORE anything else (the
+        # migrator can't tell "parked" from "never existed"), and files its row
+        # with an empty PATH — a sid with no row and no DB has no state DB to
+        # name, so the derived one would be a fiction.
         if not (row or os.path.isfile(P.state_db(log))
                 or os.path.isfile(P.parked_db(log))):
             A.state_file(log, "", "web-migrate",
                          {"ok": False, "reason": "unknown sid"})
             return self._json({"error": "unknown session"}, 404)
-        sdb = API.state_db_for(sid) or P.state_db(log)
         fe = launch._frontend()
         if fe is None:
             A.error(log, "dashboard migrate (no terminal)", {"sid": sid})
@@ -753,9 +758,7 @@ class _PostMixin:
         draft = {"tool_use_id": pending.get("tool_use_id") or "",
                  "answers": clean,
                  "origin": str(body.get("origin") or "")}
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         if not ST.kv_set_at(sdb, "ask-draft", draft):
             A.error(log, "dashboard ask-draft (write failed)", {"sid": sid})
             return self._json({"error": "draft not saved"}, 500)
@@ -793,9 +796,7 @@ class _PostMixin:
         origin = str(body.get("origin") or "")
         seq = body.get("seq")
         seq = seq if isinstance(seq, (int, float)) else 0
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         # STALE-WRITE GUARD: a debounced save and the clear-on-send race — over a
         # slow tunnel AND, since the dashboard is a ThreadingHTTPServer, in two
         # concurrent worker threads — and can arrive out of order; an old save
@@ -853,9 +854,7 @@ class _PostMixin:
                  for it in items if isinstance(it, dict)
                  and str(it.get("text") or "").strip()]
         origin = str(body.get("origin") or "")
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         if clean:
             if not ST.kv_set_at(sdb, "composer-queue",
                                 {"items": clean, "origin": origin}):
@@ -904,9 +903,7 @@ class _PostMixin:
         if op not in ("composer", "close", "answer", "plan"):
             return self._reject_input("web-hint", "bad op", "bad op",
                                       {"op": op}, log=P.mirror_log(sid))
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         content = {"op": op, "phase": phase}
         for k in ("chars", "wait_ms"):
             v = body.get(k)
@@ -958,9 +955,7 @@ class _PostMixin:
             v = body.get(k)
             if isinstance(v, (int, float)):
                 content[k] = int(v)
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         A.state_file(log, sdb, "web-clientfail", content)
         return self._json({"ok": True})
 
@@ -1017,9 +1012,9 @@ class _PostMixin:
                 continue
             esid = e.get("sid")
             esid = esid if isinstance(esid, str) and _sid(esid) else ""
-            row = API.session_row(esid) if esid else {}
-            log = (row or {}).get("log") or (P.mirror_log(esid) if esid else "")
-            sdb = (API.state_db_for(esid) or P.state_db(log)) if esid else ""
+            # a blank/invalid sid is a session-LESS row (a launch, a boot
+            # record): the global stream, empty log/path — never a derived key.
+            log, sdb = self._audit_target(esid)[1:] if esid else ("", "")
             content = {"ev": ev}
             if client:
                 content["client"] = client
@@ -1061,9 +1056,7 @@ class _PostMixin:
             return
         chat = bool(body.get("chat"))
         answers = body.get("answers")
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         pending = _ask_pending(sid)
         if not pending:
             return self._json({"error": "no pending question"}, 409)
@@ -1148,9 +1141,7 @@ class _PostMixin:
         terminal check — none of which this fixed shape can host without
         changing which check responds first."""
         extra = extra or {}
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        row, log, sdb = self._audit_target(sid)
         fe = launch._frontend()
         if fe is None:
             A.error(log, "dashboard %s (no terminal)" % verb, {"sid": sid})
@@ -1173,9 +1164,7 @@ class _PostMixin:
         body = self._post_guard()
         if body is None:
             return none
-        row = API.session_row(sid) or {}
-        log = row.get("log") or P.mirror_log(sid)
-        sdb = API.state_db_for(sid) or P.state_db(log)
+        log, sdb = self._audit_target(sid)[1:]
         pending = _plan_pending(sid)
         if not pending:
             self._json({"error": "no pending plan"}, 409)
@@ -1233,23 +1222,25 @@ class _PostMixin:
         if body is None:
             return
         tid = pending.get("tool_use_id") or ""
+        # one driver call per body shape, bound to a zero-arg callable so the
+        # single try/except below owns the PlanError handling for all three
         if body.get("dismiss"):
-            kind, run = "dismiss", (plandialog.dismiss, (fe, win))
+            kind, run = "dismiss", partial(plandialog.dismiss, fe, win)
         elif isinstance(body.get("feedback"), str) \
                 and body["feedback"].strip():
             kind = "feedback"
-            run = (plandialog.feedback, (fe, win, body["feedback"]))
+            run = partial(plandialog.feedback, fe, win, body["feedback"])
         elif body.get("digit") and isinstance(body.get("label"), str):
             kind = "decide"
-            run = (plandialog.decide,
-                   (fe, win, str(body["digit"]), body["label"]))
+            run = partial(plandialog.decide, fe, win, str(body["digit"]),
+                          body["label"])
         else:
             return self._reject_input(
                 "web-plan", "no action",
                 "need digit+label, feedback, or dismiss",
                 {"keys": sorted(body)}, log=log, path=sdb)
         try:
-            run[0](*run[1])
+            run()
         except plandialog.PlanError as e:
             A.error(log, "dashboard plan (%s)" % e.step,
                     {"sid": sid, "win": win, "kind": kind,

@@ -6609,3 +6609,54 @@ def test_suggestion_typed_empty_and_no_box_is_none():
     assert SUG.typed("just\noutput\nlines") is None
     assert SUG.typed("") is None
     assert SUG.typed(None) is None
+
+
+# --- single-owner grep tests for the read/control-plane resolutions ----------
+# These three facts were each re-encoded at a dozen call sites before being
+# given an owner (styleguide single-owner table). A grep test is the only thing
+# that keeps a new handler from pasting the inline spelling back in — one of the
+# spellings was outright WRONG (P.mirror_log("") resolves to the dashboard
+# process's own cwd slug, filing a log-less upload's rows in an unrelated
+# session's audit timeline), so the drift here is not merely cosmetic.
+
+def _dash_py(*roots):
+    """(relpath, source) for every .py under the given repo-relative roots."""
+    for root in roots:
+        for dirpath, _dirs, files in os.walk(os.path.join(REPO, root)):
+            for f in sorted(files):
+                if f.endswith(".py"):
+                    p = os.path.join(dirpath, f)
+                    with open(p, encoding="utf-8", errors="replace") as fh:
+                        yield os.path.relpath(p, REPO), fh.read()
+
+
+def test_audit_target_triple_has_one_owner():
+    """A control-plane handler resolving its own audit `log` — the
+    `<row>.get("log") or P.mirror_log(<sid>)` spelling — is drift:
+    dashboard/http/base._audit_target owns it. Two sanctioned exceptions, both
+    documented in that docstring: get.py's copy/view fetchers need the STRICT
+    state_db_for (they branch on its absence), and sse.py resolves the mirror
+    KEY for op rendering, not an audit target."""
+    hits = [f for f, src in _dash_py("dashboard")
+            if 'or P.mirror_log(sid)' in src or 'or P.mirror_log(esid)' in src]
+    assert hits == ["dashboard/http/base.py", "dashboard/http/get.py",
+                    "dashboard/http/sse.py"], hits
+
+
+def test_live_or_parked_state_db_has_one_owner():
+    """Choosing between the live state DB and its park is core.sessionapi's
+    (state_db_for / session_db) — no dashboard module may re-derive it. post.py
+    is the one hit: its unknown-sid 404 probes BOTH files without choosing
+    between them, which is a different question ("did this sid ever exist")."""
+    hits = [f for f, src in _dash_py("dashboard") if "parked_db" in src]
+    assert hits == ["dashboard/http/post.py"], hits
+
+
+def test_session_kv_read_has_one_owner():
+    """In the READ model, a per-session kv read goes through
+    read/meta.session_kv — a hand-rolled state_db_for + kv_at pair can drift on
+    the no-state-DB guard that keeps the probe from CREATING the DB whose
+    existence is a liveness signal. (post.py's write handlers legitimately call
+    kv_at on an sdb _audit_target already resolved for them.)"""
+    hits = [f for f, src in _dash_py("dashboard/read") if "kv_at(" in src]
+    assert hits == ["dashboard/read/meta.py"], hits

@@ -5,7 +5,8 @@
 # grouping directory, and its context/goal probes. All memoized on a (path, size)
 # or _db_sig key (see read/cache.py) because the list poll must not re-scan 50
 # transcript heads or re-walk 50 .git dirs per tick. File-reads + one sanctioned
-# `git status` (dirty); no control writes.
+# `git status` (dirty); no control writes. Also the single owner of the
+# read-only per-session kv read (session_kv) every card/draft reader shares.
 import os
 import subprocess
 import time
@@ -19,6 +20,20 @@ _TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, title): a title
 #                   only changes when the file grows, so (path, size) is the
 #                   natural cache key — the list poll must not re-scan 50
 #                   transcript heads per tick
+
+
+def session_kv(sid, key):
+    """One READ-ONLY kv row off a session's state DB (live or parked), or None —
+    the ONE owner of the `state_db_for` + `kv_at` pair the modal-dialog /
+    draft / queue / tasks / account readers all need. None when the session has
+    no state DB at all (never seen / evicted) OR the row is missing, which the
+    callers treat identically ("no card").
+
+    `state_db_for` resolves the live /tmp DB or its durable park and returns
+    falsy when neither exists, and `kv_at` is mode=ro — so this can never CREATE
+    the state DB whose mere existence is a liveness signal elsewhere."""
+    sdb = API.state_db_for(sid)
+    return API.kv_at(sdb, key) if sdb else None
 
 
 def _rename_override(tpath):
@@ -254,5 +269,4 @@ def _session_slug(sid):
     """The session's subscription-account slug from its statusline stash
     ('' for the default account / no stash) — resolves WHICH user-level
     settings the effort read consults."""
-    sdb = API.state_db_for(sid)
-    return ((API.kv_at(sdb, "account") or {}).get("slug") or "") if sdb else ""
+    return (session_kv(sid, "account") or {}).get("slug") or ""

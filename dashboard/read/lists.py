@@ -9,7 +9,6 @@ import os
 import time
 
 import plugins
-from core import paths as P
 from core import sessionapi as API
 from dashboard import config
 from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS)
@@ -72,9 +71,7 @@ def sessions_payload():
     live_wins = launch._live_windows()
     out = []
     for row in API.sessions(SESSIONS_LIMIT):
-        sdb = P.state_db(row["log"])
-        if not os.path.isfile(sdb):
-            sdb = P.parked_db(row["log"])
+        sdb = API.session_db(row)      # the live DB, else its durable park
         # demote a state-DB-live session whose window is gone (launch.demote_if_dead
         # is the single owner of the check; docs/dashboard.md *Liveness*).
         launch.demote_if_dead(row, live_wins)
@@ -159,9 +156,7 @@ def resumable_payload(cwd, limit, q=""):
         title = session_title(row.get("transcript_path") or "")
         if ql and ql not in (title or "").lower() and ql not in sid.lower():
             continue
-        sdb = P.state_db(row["log"])
-        if not os.path.isfile(sdb):
-            sdb = P.parked_db(row["log"])
+        sdb = API.session_db(row)      # the live DB, else its durable park
         # demote a state-DB-live session whose window is gone (same correction
         # sessions_payload applies, launch.demote_if_dead) — a resume of a truly-
         # live session 409s anyway, but the row marks it so the picker can flag it.

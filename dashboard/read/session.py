@@ -12,8 +12,10 @@ from core import tabs
 from dashboard import opshtml, prefs, suggestion
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, git_info, session_ctx, session_goal,
-                                 session_title, _session_slug)
+                                 session_kv, session_title, _session_slug)
+from plugins.claude_code import accounting as ACC
 from plugins.claude_code import memory as MEM
+from plugins.claude_code import model as M
 
 
 def visible_agents(agents):
@@ -52,7 +54,6 @@ def agents_model_effort(agents, effort):
     override, the substream's higher-precedence source, isn't readable here and
     is the one divergence). Rows with no ctx (husks, not-yet-started agents) stay
     unstamped, exactly as their ctx bar does."""
-    from plugins.claude_code import model as M
     for a in agents:
         raw = (a.get("ctx") or {}).get("model") or ""
         if not raw:
@@ -72,7 +73,6 @@ def _stamp_agent_cost(tl):
     the client just omits the ≈cost chip. This transcript pricing is the ONLY
     per-agent cost figure: OTEL `costs()` is aggregate by query_source
     (main/subagent/auxiliary), never attributable to a single agent_id."""
-    from plugins.claude_code import accounting as ACC
     u = tl.get("usage") or {}
     if not u:
         return
@@ -159,10 +159,7 @@ def _dialog_pending(sid, key):
     PreToolUse, cleared on answer/turn-boundary). Read-only (kv_at — never
     creates the state DB). The endpoints verify the DIALOG on screen anyway,
     so a stale stash can never mis-answer."""
-    sdb = API.state_db_for(sid)
-    if not sdb:
-        return None
-    pending = API.kv_at(sdb, key)
+    pending = session_kv(sid, key)
     return pending if isinstance(pending, dict) else None
 
 
@@ -202,10 +199,7 @@ def _ask_draft(sid, ask=None):
     ask = ask if ask is not None else _ask_pending(sid)
     if not ask:
         return None
-    sdb = API.state_db_for(sid)
-    if not sdb:
-        return None
-    draft = API.kv_at(sdb, "ask-draft")
+    draft = session_kv(sid, "ask-draft")
     if not isinstance(draft, dict):
         return None
     if (draft.get("tool_use_id") or "") != (ask.get("tool_use_id") or ""):
@@ -220,10 +214,7 @@ def _composer_draft(sid):
     (kv_at — never creates the state DB; resolves the parked copy for a parked
     session, so a resume-&-send draft survives too). None when there's no draft
     or the stored text is empty — None keeps the composer blank."""
-    sdb = API.state_db_for(sid)
-    if not sdb:
-        return None
-    draft = API.kv_at(sdb, "composer-draft")
+    draft = session_kv(sid, "composer-draft")
     if not isinstance(draft, dict) or not (draft.get("text") or "").strip():
         return None
     return draft
@@ -293,10 +284,7 @@ def _composer_queue(sid):
     next saveQueue prunes the stale rows once this filtered list seeds it.
     {"items": [{text}, …], "origin": …} or None when empty (docs/dashboard.md,
     *Web composer queue*)."""
-    sdb = API.state_db_for(sid)
-    if not sdb:
-        return None
-    q = API.kv_at(sdb, "composer-queue")
+    q = session_kv(sid, "composer-queue")
     items = q.get("items") if isinstance(q, dict) else None
     if not items:
         return None
@@ -315,10 +303,7 @@ def _session_tasks(sid):
     dashboard.md, *Web tasks*). A list of task records ({id, subject, status,
     …}, id-sorted), or None when the session never had tasks / the list is
     empty — None keeps the card hidden. Read-only (kv_at)."""
-    sdb = API.state_db_for(sid)
-    if not sdb:
-        return None
-    stash = API.kv_at(sdb, "tasks")
+    stash = session_kv(sid, "tasks")
     tasks = stash.get("tasks") if isinstance(stash, dict) else None
     return tasks if isinstance(tasks, list) and tasks else None
 

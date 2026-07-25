@@ -27,9 +27,19 @@ Two kinds of surface in one module:
   | transcripts | full-fidelity drill-down (parsed plugin-side — see below) |
 
   Functions: `sessions()`, `session(sid)`, `session_row(sid)`,
-  `state_db_for(sid)`, `agents(sid)`, `agent_transcript(sid, agent_id)`,
+  `state_db_for(sid)`, `session_db(row)`, `agents(sid)`,
+  `agent_transcript(sid, agent_id)`,
   `codex_runs(sid)` / `codex_aid(src_path)`, `costs(sid)`, `errors(sid)`,
   `sid_chain(sid)`.
+
+  `state_db_for(sid)` and `session_db(row)` are the two spellings of the same
+  live-DB-else-park choice, deliberately kept apart: the sid form returns
+  **falsy when neither file exists** (its callers treat that as "no session
+  state — no card, no ops"), the row form always returns a usable path for a
+  caller that already holds the row and only stats/reads it opportunistically
+  (the list + resume payloads' `last_active` / `stats_at`). Neither may be
+  re-encoded inline — `P.state_db(...) if isfile else P.parked_db(...)` at a
+  call site is the bug this pair exists to prevent.
 
 ## The `streams` table is the keystone
 

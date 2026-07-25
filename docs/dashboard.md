@@ -583,7 +583,14 @@ to get the bytes onto disk and put the path in the message:
   working tree, so an uploaded screenshot never dirties `git status`. The
   filename is slugged to a basename (a `../` name can't escape the dir), prefixed
   with a uuid. Every write is a `web-upload` `state_files` row (`ok`, `bytes`,
-  `name`, `mime`); a write/decode failure adds an `A.error`. `serve()` best-effort
+  `name`, `mime`); a write/decode failure adds an `A.error`. With a `sid` those
+  rows file under that session (`_audit_target`); WITHOUT one — the new-session
+  form's staging upload — they file under the GLOBAL stream, an empty log/path
+  like `web-launch`/`ns-prefs`. Not `P.mirror_log("")`: with no sid that falls
+  back to the **cwd slug of whatever directory the dashboard process was started
+  in**, so staging uploads used to land in the audit timeline of an unrelated
+  session running in the main checkout (the reject paths already used `""`; the
+  success path didn't, and the two disagreed — fixed 2026-07-25). `serve()` best-effort
   prunes attachments older than a week (`_prune_uploads`) — the bytes are only
   needed until Claude Code has read them.
 - On send, the composer prepends the vetted paths as leading `@path` mentions

@@ -11,6 +11,8 @@ import re
 from http.server import BaseHTTPRequestHandler
 from urllib.parse import parse_qs
 
+from core import paths as P
+from core import sessionapi as API
 from core.noaudit import load_audit
 from dashboard import config
 from dashboard.config import (BOOT_ID, CLIENTLOG_FIELD_MAX, CLIENTLOG_STR_MAX,
@@ -158,16 +160,44 @@ class _Base(BaseHTTPRequestHandler):
     @staticmethod
     def _clip_scalars(d):
         """Keep only JSON scalars from a client-supplied dict — bounded count,
-        strings capped — so telemetry can't smuggle bulk/nesting into the audit."""
+        strings capped — so telemetry can't smuggle bulk/nesting into the audit.
+
+        `bool` needs no arm of its own: it is a subclass of `int`, so the numeric
+        test already admits True/False (the separate `isinstance(v, bool)` clause
+        it used to carry was unreachable)."""
         out = {}
         for k, v in list(d.items())[:CLIENTLOG_FIELD_MAX]:
             if not isinstance(k, str):
                 continue
-            if isinstance(v, bool) or isinstance(v, (int, float)):
+            if isinstance(v, (int, float)):
                 out[k] = v
             elif isinstance(v, str):
                 out[k] = v[:CLIENTLOG_STR_MAX]
         return out
+
+    @staticmethod
+    def _audit_target(sid):
+        """A session id -> (row, log, sdb): the audit `sessions` row (or {}), the
+        mirror-log KEY every audit row is filed under, and the state-DB path
+        `A.state_file` records as the row's `path`. The ONE owner of that
+        resolution — nearly every session-scoped handler needs it, and it was
+        re-encoded inline at 13 sites in four slightly different spellings.
+
+        Both fallbacks are load-bearing, not defensive padding: a sid with no
+        audit row (a session this machine never saw, or one whose row is still
+        being written) must STILL file its rejection/attempt somewhere
+        attributable, so `log` degrades to the derived P.mirror_log(sid) and
+        `sdb` to the derived live path. That keeps a 404/4xx from being a silent
+        no-row hole — the same blind spot `_reject`/`_reject_input` close.
+
+        DELIBERATELY not used by get_copy/get_view (http/get.py), which resolve
+        the same `log` but need the STRICT `API.state_db_for` — they branch on a
+        missing state DB (a gone/parked session is their no-op path), and the
+        derived fallback here is a path that need not exist, so it would never be
+        falsy. Same two lines, different fact; don't unify them."""
+        row = API.session_row(sid) or {}
+        log = row.get("log") or P.mirror_log(sid)
+        return row, log, API.state_db_for(sid) or P.state_db(log)
 
     def _reject_input(self, action, why, message, detail, code=400,
                       log="", path=""):

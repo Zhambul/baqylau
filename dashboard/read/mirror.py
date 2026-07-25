@@ -5,6 +5,7 @@
 # memory-note render. HTML-escaping happens in dashboard/opshtml.py (the
 # neutralize() analog). Read-only (ops_at on the resolved DB path, never a
 # connect that would fake a parked session's liveness).
+import bisect
 import os
 
 import plugins
@@ -13,6 +14,7 @@ from core import sessionapi as API
 from core import state as ST
 from core.noaudit import load_audit
 from dashboard import notehtml, opshtml
+from dashboard.read.meta import session_kv
 from plugins.claude_code import memory as MEM
 
 A = load_audit()
@@ -171,12 +173,27 @@ def _merge_order(sid, key):
                 lastpos[tid] = i
     ts_ops = [(op["_ts"], i) for i, op in enumerate(ops) if op.get("_ts") is not None]
     HEAD, TAIL = -1, len(ops)
+    # The chronological placement below wants "the LAST op whose ts <= r.ts",
+    # which a linear scan of ts_ops answered per record — O(ops x recs), and both
+    # grow with the session: a long session's _merge_order (rebuilt on the
+    # initial backlog AND on every /history page) burned most of its time here.
+    # ts_ops is id-ordered, and op ids are assigned at emit time, so its ts
+    # column is normally non-decreasing and a bisect finds the same index in
+    # O(log n). Normally, not always: `_ts` is wall-clock, so an NTP step / DST
+    # correction mid-session can leave one pair inverted, and then bisect and the
+    # scan disagree. So check monotonicity ONCE (O(n), off the per-record path)
+    # and keep the scan for that case — same answers, faster in the common one.
+    _tscol = [t for t, _i in ts_ops]
+    _sorted = all(a <= b for a, b in zip(_tscol, _tscol[1:]))
 
     def place(r):
         ts = r.get("ts")
         if ts is not None and ts_ops:          # primary: chronological
+            if _sorted:
+                k = bisect.bisect_right(_tscol, ts)
+                return ts_ops[k - 1][1] if k else HEAD
             p = HEAD
-            for ots, i in ts_ops:              # ts_ops is id-ordered == ts-ordered
+            for ots, i in ts_ops:              # non-monotonic ts: last match wins
                 if ots <= ts:
                     p = i
             return p
@@ -304,10 +321,7 @@ def ops_payload(sid, after):
 def view_payload(sid, gid):
     """A click-to-view stash rendered to HTML, or None when there is no stash
     (pre-feature line / failed stash write — same no-op the terminal shows)."""
-    sdb = API.state_db_for(sid)
-    if not sdb:
-        return None
-    ops = API.kv_at(sdb, "view:" + gid)
+    ops = session_kv(sid, "view:" + gid)
     ops = [o for o in (ops or []) if isinstance(o, dict)]
     if not ops:
         return None
