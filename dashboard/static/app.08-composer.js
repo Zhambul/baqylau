@@ -263,12 +263,20 @@ function clearComposerDraft(ses, sid) {
 function applyComposerDraft(draft) {
   const ses = S.ses;
   if (!ses) return;
+  const was = (ses.meta && ses.meta.composer_draft) || null;   // what we showed
   if (ses.meta) ses.meta.composer_draft = draft || null;   // for a later rebuild
   if (draft && draft.origin && draft.origin === CLIENT_ID) return;   // our write
   const ta = ses.composer;
-  if (!ta || ta === document.activeElement) return;
+  if (!ta) return;
   const text = (draft && draft.text) || "";
   if (ta.value === text) return;
+  // Focus normally means "the user is typing here, don't yank it". But a box
+  // that still holds EXACTLY the draft we last showed has not been touched —
+  // merely clicked into — and refusing the update there left a message sent
+  // from the kitty tab sitting in the composer forever, because the clear
+  // arrived while the box happened to have focus (reported 2026-07-25).
+  const untouched = ta.value === ((was && was.text) || "");
+  if (ta === document.activeElement && !untouched) return;
   ta.value = text;
   autoGrow(ta);
   syncSuggestion(ta);   // draft filled/emptied the box → toggle the ghost placeholder

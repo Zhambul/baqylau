@@ -5141,6 +5141,10 @@ def test_terminal_draft_sync_pushes_typing_and_ignores_a_still_box():
     # the web while the box sits still
     assert L.sync_terminal_draft("ts1", "typed at the terminal",
                                  "typed at the terminal", d) is None
+    # …and a FRESH connection (no memo) whose box already matches the kv writes
+    # nothing either: otherwise every open device re-pushes the same text on
+    # its first probe (three identical stores in four seconds, seen live)
+    assert L.sync_terminal_draft("ts1", "typed at the terminal", None, d) is None
     # the box holding that text also arms clear_draft, or a web send of the
     # very draft we synced would paste after it and deliver it twice
     assert L.tui_draft("ts1") == "typed at the terminal"

@@ -327,6 +327,11 @@ def sync_terminal_draft(sid, seen, last, stored):
     stale = bool(stored and stored.get("text")
                  and stored.get("origin") == TERMINAL_ORIGIN)
     if seen:
+        if stored and stored.get("text") == seen:
+            return None                  # the kv already says exactly this —
+            #   without this, every page's FIRST probe re-writes the same text
+            #   (one redundant push per open device, seen live as the same
+            #   draft stored three times in four seconds)
         if last is not None and seen == last:
             # the terminal box hasn't CHANGED, so it has nothing new to say —
             # and re-pushing it every tick would overwrite an edit the user is

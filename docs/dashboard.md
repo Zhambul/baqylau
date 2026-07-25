@@ -1186,10 +1186,19 @@ The other rules, each earned:
   the draft you typed in kitty pastes after it and delivers it twice.
 - **Never on a red tab / pending ask/plan.** The `❯` region is then the
   DIALOG's input, not the message box.
+- **Don't re-push what the kv already holds.** Every open device's FIRST probe
+  adopts the box, so without this the same text was stored once per connection
+  (three identical writes in four seconds, seen live).
 
 Nothing is ever typed back INTO the terminal, so there is no echo loop; the
-page's own guard (`applyComposerDraft` ignores a draft while the textarea has
-focus) keeps a synced draft from yanking text out from under active typing.
+page's own guard keeps a synced draft from yanking text out from under active
+typing — but that guard needed a caveat. It used to skip ANY update while the
+textarea had focus, so a message sent from the kitty tab left its draft sitting
+in the composer forever when the clear happened to arrive while the box was
+focused (reported 2026-07-25). `applyComposerDraft` now applies an update to a
+focused box too when the box still holds EXACTLY the draft it last showed —
+untouched, merely clicked into. A box the user has actually edited is still
+left alone.
 
 Known limits: the sync runs only while a page has the session open (it rides
 that session's SSE tick, on the `SLOW_EVERY` cadence — a few seconds, not
