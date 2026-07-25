@@ -4643,8 +4643,24 @@ choice is per session and durable (`POST /api/session/<sid>/viewmode` → the
   sparsest — so the default is deliberately NOT its first entry; the page carries
   its own `VIEW_DEFAULT` and the grep test pins both halves against
   `prefs.VIEW_DEFAULT`.
-- **focus** — only your prompts, each turn's FINAL reply, and a one-line summary
-  of the edits. Everything else folds, including mid-turn assistant prose.
+- **focus** — your prompts and each turn's FINAL reply at full weight, its
+  mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and a one-line
+  summary of the edits. Everything else folds.
+
+  Mid-turn prose is greyed rather than dropped, which it was at first. Hiding it
+  read as content VANISHING: only the NEWEST message in a turn is its "final"
+  one, so each new reply flipped its predecessor from shown to hidden — the
+  message you were reading disappeared the instant the turn ended. Claude Code
+  greys it for the same reason.
+
+  **The greying is a paint change and nothing more — the collapse semantics do
+  not move with it.** A dimmed item still CONTINUES a run exactly as a hidden one
+  did (`inRun`), so the activity either side of it still merges into one summary
+  line, and a dimmed item that falls inside a collapsed run's span is simply
+  never given `.vhide` (`hideIt`). Letting visibility drive the run cut instead —
+  the obvious reading of "it's on screen, so it should end the run" — silently
+  re-cut every focus-mode stream into more summary lines, which is a different
+  feature from greying one bubble.
 
 Both non-verbose modes additionally drop **injected prompts** — turns written in
 the USER's shape that the human never typed, which Claude Code marks `isMeta`:
@@ -4757,9 +4773,10 @@ Mechanics worth knowing:
   re-parenting into a container would break all three. Every mark is cleared at
   the top of each pass (`clearViewMarks`) — a leftover would rail a run that is no
   longer open.
-- **Hidden-but-uncounted items are transparent to the run cut** — focus mode's
-  mid-turn prose disappearing MERGES the runs either side of it, rather than
-  leaving two lines with a gap.
+- **Hidden AND dimmed items are transparent to the run cut** — the activity
+  either side of an injected prompt, or of focus mode's greyed prose, merges into
+  one summary rather than leaving two lines with a gap. Only a fully shown item
+  ends a run. Dimming deliberately does NOT change this (see *focus* above).
 - **The dot**: grey and pulsing while the run is going, green when done, red when
   any member failed (`bad`). A run counts as running when it contains the live
   foreground command (`fg_running`) or sits at the top of the feed while the tab

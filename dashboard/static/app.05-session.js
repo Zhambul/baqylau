@@ -728,8 +728,9 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 //   default — runs of adjacent read/command/agent activity collapse into ONE
 //             clickable summary line; file MUTATIONS stay expanded, so an edit
 //             always breaks the run and is always visible
-//   focus   — only your prompts, each turn's FINAL reply, and a one-line
-//             summary of the edits; every intermediate step folds away
+//   focus   — your prompts and each turn's FINAL reply at full weight, its
+//             mid-turn prose DIMMED, and one line of edits; every intermediate
+//             step folds away
 //
 // Both non-verbose modes also drop INJECTED prompts — user-shaped turns Claude
 // Code wrote itself (a Stop hook's feedback, a loaded skill's body, a resume
@@ -892,7 +893,7 @@ function tickRunTimers() {
 // behind would draw a rail under a run that is no longer open.
 function clearViewMarks(items) {
   for (const it of items)
-    it.classList.remove("vhide", "vrun", "vrun-last");
+    it.classList.remove("vhide", "vdim", "vrun", "vrun-last");
 }
 
 function applyViewMode() {
@@ -928,9 +929,16 @@ function applyViewMode() {
       if (elem.dataset.injected) return "hide";
       if (mk === "prompt") { sawReply = false; return "show"; }
       if (mode === "focus" && mk === "message") {
+        // Mid-turn prose is DIMMED, not dropped. Focus mode is about weighting
+        // the turn — your prompt and the reply it ends on carry it, the running
+        // commentary is context — and hiding that commentary outright lost
+        // things worth glancing at (Claude Code greys it for the same reason;
+        // the known complaint about its focus mode is precisely that it hides
+        // substantive prose). A dimmed item is VISIBLE, so unlike a hidden one
+        // it breaks a run rather than merging the activity either side of it.
         const final = !sawReply;
         sawReply = true;
-        return final ? "show" : "hide";
+        return final ? "show" : "dim";
       }
       return "show";
     }
@@ -946,14 +954,21 @@ function applyViewMode() {
   // back, and drops an in-progress text selection. Same reasoning, and the same
   // shape, as `statsSig` for the header.
   const plan = [];
-  const strays = [];                   // hidden-but-uncounted (focus-mode prose)
+  const strays = [];                   // hidden-but-uncounted (an injected prompt)
+  const dims = items.filter((_e, k) => disp[k] === "dim");
+  const isDim = new Set(dims);
+  // "dim" is a PAINT, not a placement: it continues a run exactly as "hide" did,
+  // so greying mid-turn prose leaves the collapse semantics untouched — the runs
+  // either side of it still merge into one summary. Only "show" ends a run.
+  const inRun = d => d === "fold" || d === "hide" || d === "dim";
+  // …and a dimmed item is never hidden, wherever it falls: inside a collapsed
+  // run's span, or trailing it as a stray.
+  const hideIt = elem => { if (!isDim.has(elem)) elem.classList.add("vhide"); };
   let i = 0;
   while (i < items.length) {
-    if (disp[i] === "show") { i++; continue; }
-    // a maximal span of foldable/hidden items — the hidden ones are transparent,
-    // so mid-turn prose between two folded blocks doesn't split the run
+    if (!inRun(disp[i])) { i++; continue; }
     let j = i, last = i;
-    while (j < items.length && disp[j] !== "show") {
+    while (j < items.length && inRun(disp[j])) {
       if (disp[j] === "fold") last = j;
       j++;
     }
@@ -980,7 +995,8 @@ function applyViewMode() {
   // Everything the painted lines DEPEND on — deliberately not the elapsed
   // seconds, which the 1s timer owns (a signature carrying the clock would
   // rebuild the DOM every second, the very thing this avoids).
-  const sig = mode + "!" + strays.map(s => s.dataset.vk).join(",") + "!"
+  const sig = mode + "!" + strays.map(s => s.dataset.vk).join(",")
+    + "!" + dims.map(s => s.dataset.vk).join(",") + "!"
     + plan.map(p => [p.key, p.open ? 1 : 0, p.running ? 1 : 0, p.bad ? 1 : 0,
                      p.anchor, p.members.map(m => m.dataset.vk).join(".")].join(":"))
         .join(";");
@@ -990,7 +1006,8 @@ function applyViewMode() {
   for (const old of [...ses.stream.children])
     if (old.classList.contains("vsum")) old.remove();
   clearViewMarks(items);
-  for (const s of strays) s.classList.add("vhide");
+  for (const s of strays) hideIt(s);
+  for (const s of dims) s.classList.add("vdim");
   for (const p of plan) {
     if (p.open) {
       // An EXPANDED run keeps its summary as the group's HEADER and marks the
@@ -1003,7 +1020,7 @@ function applyViewMode() {
       for (const m of p.span) m.classList.add("vrun");
       p.span[p.span.length - 1].classList.add("vrun-last");
     } else {
-      for (const m of p.span) m.classList.add("vhide");
+      for (const m of p.span) hideIt(m);
     }
     ses.stream.insertBefore(
       buildRunSummary(p.key, p.members, p.running, p.anchor, p.bad, p.open),

@@ -7980,13 +7980,19 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
                                     "Ran 2 shell commands",
                                     "Read 2 files, ran 1 shell command"]
     assert d["default"]["shown"] == ["msg", "edit", "msg", "msg"]
-    # focus: your prompt + the turn's FINAL reply + one line of edits. The
-    # mid-turn reply is gone, and its disappearance MERGES the runs either side
-    # of it into one (a hidden item is transparent to the run cut) — the three
-    # default-mode lines become one.
+    # focus: your prompt and the turn's FINAL reply at full weight, its mid-turn
+    # prose DIMMED (":dim") — kept rather than dropped, because only the NEWEST
+    # message in a turn is the final one, so each new reply flipped its
+    # predecessor from shown to hidden and a message you were reading vanished
+    # the moment the turn ended.
+    #
+    # Dimming is a PAINT, not a placement: a dimmed item still continues a run
+    # exactly as a hidden one did, so the three default-mode lines still merge
+    # into ONE here. That equality is the whole point of the pinning — the
+    # greying must not move the collapse.
     assert d["focus"]["sums"] == \
         ["Edited 1 file +12 -3, read 3 files, ran 4 shell commands"]
-    assert d["focus"]["shown"] == ["msg", "msg"]
+    assert d["focus"]["shown"] == ["msg", "msg:dim", "msg"]
 
     # Claude Code's wording, to the letter (docs/dashboard.md *View modes*):
     # singular/plural units, fragment ORDER, capitalized first fragment only…
@@ -8012,7 +8018,9 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # firing.
     assert d["injected"]["verbose"] == 5
     assert d["injected"]["default"] == ["msg", "msg", "msg"]   # prompt + 2 replies
-    assert d["injected"]["focus"] == ["msg", "msg"]            # prompt + THE reply
+    # prompt + THE reply, with the mid-turn one dimmed — and still exactly ONE
+    # undimmed reply, so the hook firing did not manufacture a second "final"
+    assert d["injected"]["focus"] == ["msg", "msg:dim", "msg"]
 
     # the summary is clickable BOTH ways (it stays put while expanded — it is the
     # only way back), and a redundant pass is a no-op (the signature guard, which

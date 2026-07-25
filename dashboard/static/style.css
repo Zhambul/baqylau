@@ -1131,9 +1131,17 @@ body.modal-open { overflow: hidden; }
 /* hidden by the kind filter; never removed (SSE keeps appending) */
 .fhide { display: none; }
 /* hidden by the VIEW MODE (collapsed into a `.vsum` run summary, or — in focus
-   mode — mid-turn prose). A separate class from `.fhide` because the two axes
+   mode — an injected prompt). A separate class from `.fhide` because the two axes
    are independent: sharing one would let either pass un-hide the other's items. */
 .vhide { display: none; }
+/* focus mode's MID-TURN prose: kept, but pushed into the background so the eye
+   lands on your prompt and the reply the turn ends on. Greyed rather than hidden
+   — the running commentary is still worth a glance, and dropping it outright is
+   the standing complaint about Claude Code's own focus mode. Opacity, not a
+   colour override: the bubble's own kind colouring (the gold prompt bar, code
+   spans, links) recedes as a whole instead of being repainted flat. */
+.vdim { opacity: .5; }
+.vdim:hover { opacity: 1; }
 
 /* ---- collapsed run summary (default/focus modes) ------------------------- */
 /* One clickable line standing in for a run of adjacent activity ("Read 3 files,

@@ -200,7 +200,8 @@ function sums(ses) {
 function shown(ses) {
   return ses.stream.children
     .filter(c => c.dataset.kind && !c.classList.contains("vhide"))
-    .map(c => c.dataset.act || c.dataset.kind);
+    .map(c => (c.dataset.act || c.dataset.kind)
+              + (c.classList.contains("vdim") ? ":dim" : ""));
 }
 function sumRow(ses) {
   return ses.stream.children.find(c => c.classList.contains("vsum"));
