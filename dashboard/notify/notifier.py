@@ -140,6 +140,25 @@ class Notifier:
             return "web-viewing"
         return None
 
+    def _drop(self, win, reason=None):
+        """Disarm `self.pending[win]` — the ONE way an armed deferred alert ends
+        without being sent. `reason` names it in a `notify-suppress` row; None is
+        the deliberate no-row case (you REACTED — the tab left the armed state,
+        the session ended, or you're composing a web reply — each of which the
+        `tab_transitions` / `sessions` / `composer-draft` rows already explain,
+        and the notify-arm anchor documents as the silent-disappearance case).
+
+        Every OTHER drop owes a row: `notify-arm` promises each arm ends in
+        exactly one of suppress / route+send / telegram, so an unaudited drop
+        for a reason nothing else records is indistinguishable from that
+        silent case — which is how a MUTED session's dropped alert used to read
+        as "you reacted" (it now files `reason='muted'`)."""
+        entry = self.pending.pop(win, None)
+        if entry is not None and reason:
+            A.state_file("", "", "notify-suppress",
+                         {"sid": entry.get("sid"), "kind": entry.get("kind"),
+                          "reason": reason})
+
     def _payload(self, kind, state, row):
         # a worktree session's toast names the PROJECT it groups under, not the
         # worktree dir — the SAME group_dir resolution the list page uses (the
@@ -220,7 +239,8 @@ class Notifier:
                 # exactly one of suppress / route+send (+escalate) / telegram,
                 # all keyed back to this `notify-arm` row (a silent disappearance
                 # instead = you reacted, the tab moved off red/green — see the
-                # paired tab_transitions row).
+                # paired tab_transitions row). `_drop` is the ONE disarm site and
+                # what keeps that promise true.
                 A.state_file("", "", "notify-arm",
                              {"sid": payload.get("sid"), "kind": kind,
                               "phase": "arm", "delay_s": config.NOTIFY_DELAY_S})
@@ -240,7 +260,7 @@ class Notifier:
             sid = entry.get("sid")
             if (cur.get(win) != entry["state"]
                     or presence._session_ended(sid) or presence._composing(sid)):
-                del self.pending[win]
+                self._drop(win)                # you reacted — no row (see _drop)
                 continue
             # You answering AT THE TERMINAL — typing a free-text answer or
             # toggling a selection — doesn't move the tab off red and doesn't
@@ -254,10 +274,7 @@ class Notifier:
                     if entry.get("ask_region") is None:
                         entry["ask_region"] = reg
                     elif reg != entry["ask_region"]:
-                        del self.pending[win]
-                        A.state_file("", "", "notify-suppress",
-                                     {"sid": sid, "kind": "asking",
-                                      "reason": "dialog-activity"})
+                        self._drop(win, "dialog-activity")
             # A green `done` tab is your turn; you replying AT THE TERMINAL —
             # typing a message into the `❯` input box — likewise moves neither
             # the tab off green nor the transcript until you submit, so the
@@ -267,10 +284,7 @@ class Notifier:
             # there: you're continuing the conversation in the kitty tab.
             elif entry.get("kind") == "done":
                 if self._input_typed(win):
-                    del self.pending[win]
-                    A.state_file("", "", "notify-suppress",
-                                 {"sid": sid, "kind": "done",
-                                  "reason": "terminal-input"})
+                    self._drop(win, "terminal-input")
                 else:
                     # "If I've SEEN the final message, no notification." A done
                     # tab's final message is on screen the moment it goes green,
@@ -281,10 +295,7 @@ class Notifier:
                     # a result you already read.
                     seen = self._watching(win, sid, tree)
                     if seen:
-                        del self.pending[win]
-                        A.state_file("", "", "notify-suppress",
-                                     {"sid": sid, "kind": "done",
-                                      "reason": seen})
+                        self._drop(win, seen)
 
     def _fire_due(self, now, tree):
         """PASS 3 — fire the arms that persisted past the grace window (once
@@ -316,16 +327,19 @@ class Notifier:
             # asking arm's send-time check, applied at both stages).
             watching = self._watching(win, sid, tree)
             if watching:
-                del self.pending[win]
-                A.state_file("", "", "notify-suppress",
-                             {"sid": sid, "kind": entry.get("kind"),
-                              "reason": watching})
+                self._drop(win, watching)
                 continue
             if prefs.notify_muted(sid):
-                del self.pending[win]
+                # audited (`muted`) — see _drop: an unaudited drop here read as
+                # "you reacted", so a per-session mute silently swallowing the
+                # off-device alert was indistinguishable from you answering it.
+                self._drop(win, "muted")
                 continue
+            # the two SEND paths disarm with no suppress row — they are not
+            # suppressions, and their own `telegram-notify` / `web-push` rows
+            # are the record `notify-arm` promised (see _drop).
             if escalating:                         # stage 2: the Telegram nudge
-                del self.pending[win]
+                self._drop(win)
                 if config.NOTIFY_TELEGRAM:
                     self._telegram(entry, "escalation")
                 continue
@@ -338,7 +352,7 @@ class Notifier:
                              {"sid": sid, "kind": entry.get("kind"),
                               "phase": "escalate", "in_s": config.ESCALATE_S})
                 continue
-            del self.pending[win]
+            self._drop(win)
             if config.NOTIFY_TELEGRAM:                     # no device to push to, or _ALWAYS
                 self._telegram(entry, "always" if pushed else "no-device")
 

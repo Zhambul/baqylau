@@ -4464,7 +4464,15 @@ black box:
   anchor; a silent disappearance instead = you reacted (the tab moved, see the
   paired `tab_transitions` row).
 - `notify-suppress` (`reason:` dialog-activity / terminal-input / tab-focused /
-  web-viewing) when a look/reaction dropped it (as before).
+  web-viewing / muted / global-off) when a look/reaction/opt-out dropped it.
+  `Notifier._drop(win, reason=None)` is the ONE disarm site, and that is what
+  keeps the anchor's promise auditable: a drop with a `reason` files the row, and
+  the *only* no-row drops are the deliberate ones — you reacted (tab moved off
+  red/green, session ended, a web draft in progress), which `tab_transitions` /
+  `sessions` / `composer-draft` already explain, and the two SEND paths, whose
+  `telegram-notify` / `web-push` rows are their own record. A per-session
+  **mute** used to drop unaudited and so read as "you reacted"; it now files
+  `reason='muted'`.
 - `notify-route` — the DEVICE-SELECTION decision at stage 1: `{target,
   target_label, candidates:[{device, label, age_s}], n_subs, legacy}`. This is
   the "why did the iPad and not the Mac get it" evidence: the chosen device AND

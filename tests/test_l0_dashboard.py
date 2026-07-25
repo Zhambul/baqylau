@@ -1119,6 +1119,41 @@ def test_notify_suppressed_when_web_viewing(monkeypatch):
         DS._VIEWING.pop("sX", None)
 
 
+def test_notify_muted_drop_is_audited(monkeypatch):
+    """A per-session MUTE drops the armed alert at send time — with a
+    `notify-suppress` `reason='muted'` row. The `notify-arm` anchor promises
+    every arm ends in exactly one of suppress / send / telegram, so this drop
+    owed a row: unaudited (as it was), a muted session swallowing the
+    off-device alert was indistinguishable from the ONE deliberate no-row case
+    (you reacted and the tab moved off green — `_drop(win)` with no reason)."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}   # empty box, tab not focused
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=0)
+    monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: True)
+    n.scan()                                  # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                  # arm + fire-time mute check → drop
+    assert "9" not in n.pending and sent == []
+    assert any(a[2] == "notify-suppress" and a[3].get("reason") == "muted"
+               and a[3].get("sid") == "sX" for a in audited)
+
+
+def test_notify_reaction_drop_leaves_no_row(monkeypatch):
+    """The counterpart: when you REACT (the tab leaves the armed state), the arm
+    disappears with NO suppress row — deliberately, because the paired
+    `tab_transitions` row already explains it. That silence is what makes the
+    audited drops above readable, so it is pinned here too."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=999)
+    n.scan()                                  # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                  # arm
+    assert "9" in n.pending
+    cur["states"] = {"9": "working"}          # you answered — the tab moved on
+    n.scan()
+    assert "9" not in n.pending and sent == []
+    assert not [a for a in audited if a[2] == "notify-suppress"]
+
+
 def test_web_viewing_presence_expires(monkeypatch):
     """The viewing presence is TTL'd: a beat marks the sid fresh, and once the
     deadline passes (`_web_viewing` GC's it) presence is gone — so the alert
