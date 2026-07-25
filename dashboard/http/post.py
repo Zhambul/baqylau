@@ -22,7 +22,8 @@ from core import spawn as SP
 from core import state as ST
 from core import tabs
 from core.noaudit import load_audit
-from dashboard import askdialog, confirmdialog, dictate, plandialog, prefs, rewindmenu
+from dashboard import (askdialog, clipboard, confirmdialog, dictate, plandialog,
+                       prefs, rewindmenu)
 from dashboard import config
 from dashboard.config import (BUSY_TABS,
                               CLIENTLOG_MAX, EFFORTS,
@@ -101,6 +102,7 @@ class _PostMixin:
         ("push", "subscribe"): "post_push_subscribe",
         ("push", "unsubscribe"): "post_push_unsubscribe",
         ("clientlog",): "post_client_log",
+        ("clipboard", "files"): "post_clipboard_files",
         ("notify",): "post_notify_global",
     }
 
@@ -1813,6 +1815,49 @@ class _PostMixin:
         prefs.remove_push_subscription(ep)
         A.state_file("", "", "web-push", {"action": "unsubscribe", "endpoint": ep[:80]})
         return self._json({"ok": True})
+
+    def post_clipboard_files(self):
+        """Resolve the FULL PATHS of files the browser just pasted as zero-byte
+        promises (docs/dashboard.md *Web attachments* → *Promise-only files*).
+        Body: {names: [basename, …], sid?} → {paths: [abs, …]}.
+
+        The page cannot answer this itself: a pasted `File` carries a BASENAME
+        and nothing else (the web platform never exposes a filesystem path),
+        while the pasteboard's path-bearing flavors are hidden from script. The
+        server shares the pasteboard with kitty, so it reads what kitty reads —
+        this endpoint is the whole reason the web composer can match the TUI.
+
+        `clipboard.match` returns paths ONLY when their basenames are exactly
+        what the caller reported, so a remote device (whose clipboard is not
+        this Mac's) can never be handed an unrelated host path. A miss is a
+        200 with `paths: []`, not an error — "the clipboard moved on" is an
+        ordinary outcome and the page falls back to the bare name.
+
+        Read-only apart from its audit row: nothing is written, nothing is
+        staged, no terminal is touched. It stays behind _post_guard anyway —
+        it reads local machine state on a page's say-so, which is exactly what
+        the browser-vector defense is for."""
+        body = self._post_guard()
+        if body is None:
+            return
+        sid = body.get("sid")
+        sid = sid if isinstance(sid, str) and _sid(sid) else ""
+        log, sdb = self._audit_target(sid)[1:] if sid else ("", "")
+        names = body.get("names")
+        if not isinstance(names, list) or not names \
+                or not all(isinstance(n, str) for n in names):
+            return self._reject_input(
+                "web-clipboard", "bad names", "names required",
+                {"names": names}, log=log, path=sdb)
+        names = [os.path.basename(n) for n in names[:clipboard.FILES_MAX]]
+        paths = clipboard.match(names)
+        # The paths ARE the diagnostic here ("it pasted the wrong file" is
+        # otherwise unanswerable), and a mismatch records what was asked for so
+        # a phone-vs-Mac clipboard divergence is visible as such.
+        A.state_file(log, sdb, "web-clipboard",
+                     {"sid": sid, "names": names, "matched": len(paths),
+                      "paths": paths})
+        return self._json({"paths": paths})
 
     def post_dictate_token(self):
         """Mint a short-lived Deepgram grant for the browser's DIRECT wss

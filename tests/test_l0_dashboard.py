@@ -6324,6 +6324,61 @@ def test_notifier_ignores_windowless_transitions(monkeypatch):
 # rejections (missing header / bad Origin / READONLY) are the shared
 # _post_guard, covered above.
 
+def test_clipboard_files_filters_to_existing_absolute_paths(tmp_path, monkeypatch):
+    # the CLAUDE_DASH_CLIPBOARD_FILES knob replaces the real (macOS-only)
+    # pasteboard read, so the whole feature is testable off macOS
+    from dashboard import clipboard
+    real = tmp_path / "kept.py"
+    real.write_text("x")
+    monkeypatch.setenv(clipboard.ENV_FILES,
+                       ":".join([str(real), str(tmp_path / "gone.py"), "rel.py"]))
+    assert clipboard.files() == [str(real)]
+    monkeypatch.setenv(clipboard.ENV_FILES, "")
+    assert clipboard.files() == []
+
+
+def test_clipboard_match_requires_the_same_basenames(tmp_path, monkeypatch):
+    # the correlation guard: a device whose clipboard is NOT the server's must
+    # never be handed a host path it didn't name
+    from dashboard import clipboard
+    a, b = tmp_path / "a.py", tmp_path / "b.py"
+    a.write_text("x")
+    b.write_text("x")
+    monkeypatch.setenv(clipboard.ENV_FILES, "%s:%s" % (a, b))
+    assert clipboard.match(["b.py", "a.py"]) == [str(a), str(b)]   # order-free
+    assert clipboard.match(["a.py"]) == []                 # count must agree
+    assert clipboard.match(["a.py", "other.py"]) == []     # name must agree
+    assert clipboard.match([]) == []
+
+
+def test_post_clipboard_files_resolves_the_pasted_basename(dash, tmp_path,
+                                                           monkeypatch):
+    # the whole point of the endpoint: the browser can only report a BASENAME
+    # (a pasted zero-byte File carries nothing else), the server answers with
+    # the full path off the same pasteboard kitty reads
+    from dashboard import clipboard
+    f = tmp_path / "__init__.py"
+    f.write_text("x")
+    monkeypatch.setenv(clipboard.ENV_FILES, str(f))
+    code, body = _post(dash + "/api/clipboard/files", {"names": ["__init__.py"]})
+    assert code == 200 and json.loads(body)["paths"] == [str(f)]
+    # a name the clipboard doesn't hold is a 200 with nothing — an ordinary
+    # "the clipboard moved on" outcome, never an error
+    code, body = _post(dash + "/api/clipboard/files", {"names": ["other.py"]})
+    assert code == 200 and json.loads(body)["paths"] == []
+    # a path component in the reported name can't widen the match
+    code, body = _post(dash + "/api/clipboard/files",
+                       {"names": ["../../etc/__init__.py"]})
+    assert code == 200 and json.loads(body)["paths"] == [str(f)]
+
+
+def test_post_clipboard_files_rejects_bad_names(dash):
+    for names in (None, [], "x.py", [1], ["ok.py", 2]):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            _post(dash + "/api/clipboard/files", {"names": names})
+        assert e.value.code == 400, names
+
+
 def test_http_dictate_probe_tracks_key_file(dash, tmp_path, monkeypatch):
     monkeypatch.setenv("CLAUDE_DICTATE_KEY_FILE", str(tmp_path / "dg-key"))
     assert _get_json(dash + "/api/dictate") == {"available": False}
