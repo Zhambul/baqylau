@@ -254,14 +254,6 @@ function windowLabel(k) {
     .replace(/_/g, " ").trim();
 }
 
-// Effective 5h-used % for the new-session form's load-balancing default —
-// SERVER-computed (core/sessionapi.effective_five_hour, the single owner of
-// the rolled-over→0 arithmetic; the rate-limit migration's target picker uses
-// the same function). An account with no snapshot has had no traffic → 0.
-function fiveHourUsed(a) {
-  return typeof a.five_hour_eff === "number" ? a.five_hour_eff : 0;
-}
-
 // The new-session picker's weekly-quota PERISHABILITY (higher = burn first).
 // SERVER-computed (core/sessionapi.sched_score, the single owner of the
 // scheduling arithmetic); missing → 0 (no snapshot / no urgency).

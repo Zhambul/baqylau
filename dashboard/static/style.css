@@ -105,7 +105,6 @@ code, pre, .mono { font-family: var(--mono); }
 /* the shanyrak mark in the header lockup — gold accent baked in, ink follows
    the brand's currentColor (see index.html) */
 .brandmark { width: 2em; height: 2em; flex: none; display: block; }
-.dimtxt { color: var(--dim); }
 .topright { display: flex; align-items: center; gap: 14px; }
 .dot {
   width: 8px; height: 8px; border-radius: 50%;

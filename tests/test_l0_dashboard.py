@@ -512,6 +512,35 @@ def test_close_in_flight_state_has_one_owner(dash):
     assert "function closeBegin(" in core and "function closeSettle(" in core
 
 
+def test_no_dead_page_functions(dash):
+    """Every function declared by the SPA is called by someone. The parts are
+    classic scripts sharing one global scope (app.NN-*.js, ordered), which makes
+    an orphan invisible: nothing errors, nothing lints, the code just sits there
+    reading as live — `fiveHourUsed` outlived the client-side account picker that
+    way (the ranking moved server-side to `sched_score`/`sched_ok`, and the
+    function kept its explanatory comment about a job it no longer had).
+
+    The part list comes from index.html so a NEW part is covered the moment it is
+    wired, and index.html is part of the haystack (an inline handler counts as a
+    call)."""
+    code, index = _get(dash + "/")
+    assert code == 200
+    parts = sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index)))
+    assert len(parts) > 5, parts
+    bodies = {}
+    for p in parts:
+        code, bodies[p] = _get(dash + "/static/" + p)
+        assert code == 200
+    hay = index + "".join(bodies.values())
+    dead = []
+    for p, body in bodies.items():
+        for name in re.findall(r"^function (\w+)\(", body, re.M):
+            # one occurrence IS the declaration; a call adds another
+            if len(re.findall(r"\b%s\b" % re.escape(name), hay)) < 2:
+                dead.append("%s: %s()" % (p, name))
+    assert not dead, "dead page functions: " + ", ".join(dead)
+
+
 def test_app_js_initializes_close_state(dash):
     """Regression guard for THE "still not closing" bug: the ✕ handler does
     `S.closePend[sid] = optPending(...)` and reconcileCloses does
