@@ -82,6 +82,22 @@ def _stamp_agent_cost(tl):
                               u.get("create_1h", 0))
 
 
+def memory_scope(cwd):
+    """True when a session working in `cwd` gets the Memory tab at all — the
+    feature is deliberately scoped to one project (plugins/claude_code/memory
+    `in_scope`), though the wiki it reads is shared across code/01."""
+    return MEM.in_scope(canon_cwd(cwd))
+
+
+def memory_count(sid, cwd):
+    """The Memory tab badge's number, 0 off-scope. The gate lives HERE, with one
+    owner, because the badge has TWO readers: this module's overview payload and
+    the SSE stream's live patch. They disagreed — the stream pushed the real
+    count for an off-scope session, at a tab the page never builds there (benign
+    on screen, but a per-tick kv read for nobody, and two readings of one rule)."""
+    return API.memory_count(sid) if memory_scope(cwd) else 0
+
+
 def session_payload(sid):
     """One session's overview — session() plus the error count the ⚠ badge
     shows (full rows stay behind /errors) and the display title."""
@@ -93,8 +109,8 @@ def session_payload(sid):
     # the Memory tab is SCOPED: only sessions inside the enabled project
     # (aggregator-adapters) get it. The flag gates the tab client-side (hidden
     # off-scope); the count still rides along (0 off-scope — nothing recorded).
-    data["memory_scope"] = MEM.in_scope(canon_cwd(data.get("cwd") or ""))
-    data["memory_count"] = API.memory_count(sid) if data["memory_scope"] else 0
+    data["memory_scope"] = memory_scope(data.get("cwd") or "")
+    data["memory_count"] = memory_count(sid, data.get("cwd") or "")
     data["title"] = session_title(data.get("transcript_path") or "")
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude

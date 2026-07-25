@@ -1303,6 +1303,37 @@ def test_presence_maps_stay_bounded(monkeypatch):
     assert max(DS._DEVICE_SEEN, key=DS._device_seen) == newest   # MRU intact
 
 
+def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
+    """The session tab badges are a TABLE (`_BADGE_COUNTS`) — four cheap counts
+    with one shape, pushed on change — not four hand-written stanzas.
+
+    Its `memory` row is the interesting one: that badge is project-SCOPED, and
+    the gate now has ONE owner (`read/session.memory_count`) shared with the
+    overview payload. The two readings had drifted apart — the payload reported 0
+    off-scope while the stream kept pushing the real count, for a tab the page
+    never builds there."""
+    from dashboard.read import session as rsession
+    proj = tmp_path / "code" / "01" / "aggregator-adapters"
+    proj.mkdir(parents=True)
+    # realpath: canon_cwd resolves symlinks (/var → /private/var on macOS) while
+    # memory.project() only abspaths, so the seam has to be given the real path
+    monkeypatch.setenv("BAQYLAU_MEMORY_PROJECT", os.path.realpath(str(proj)))
+    monkeypatch.setattr(rsession.API, "memory_count", lambda sid: 5)
+    off = str(tmp_path / "elsewhere")
+    assert rsession.memory_count("s1", str(proj)) == 5
+    assert rsession.memory_count("s1", off) == 0
+    assert rsession.memory_scope(str(proj)) is True and rsession.memory_scope(off) is False
+    # the stream's row IS that owner — not its own API call beside it
+    table = DS.Handler._BADGE_COUNTS
+    assert set(table) == {"errors", "monitors", "jobs", "memory"}
+    assert table["memory"]("s1", str(proj)) == 5
+    assert table["memory"]("s1", off) == 0
+    # every row resolves its count at CALL time, so a patched sessionapi moves
+    # the pushed number (a class-body-bound callable would have frozen it)
+    monkeypatch.setattr(rsession.API, "error_count", lambda sid: 3)
+    assert table["errors"]("s1", off) == 3
+
+
 def test_notify_done_suppressed_when_seen_earlier_then_left(monkeypatch):
     """The user's rule: 'if I've SEEN the final message on the dashboard, no
     notification.' A done arm is checked EVERY scan while armed (not only at

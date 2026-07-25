@@ -21,7 +21,7 @@ from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
                                  session_title, _session_slug)
 from dashboard.read.mirror import (merged_backlog, merge_live, _enrich_entries)
 from dashboard.read.session import (agents_ctx, agents_model_effort,
-                                    visible_agents, _ask_draft,
+                                    memory_count, visible_agents, _ask_draft,
                                     _ask_pending, _ask_wire, _composer_draft, _composer_queue,
                                     _plan_pending, _session_tasks,
                                     _input_box, _SUGGEST_TABS)
@@ -51,6 +51,31 @@ class _SseMixin:
             if not self._sse(event, value if payload is _UNSET else payload):
                 return False
         return True
+
+    # The tab-badge counts pushed on the slow cadence: each is a CHEAP count (an
+    # audit COUNT / the streams keystone / a kv read — never a transcript parse),
+    # wired to a {"count": n} event of the same name, sent only on change. Four
+    # copies of one shape were four near-identical stanzas 30 lines long; as a
+    # table, adding a badge is a row and the shape can't drift. The full detail
+    # behind every one of them stays on its REST endpoint, fetched when the tab
+    # opens (/errors, /monitors, /jobs, /memory).
+    #
+    # Values are (sid, cwd) callables, not bound API functions: the lookup has to
+    # happen at CALL time so a patched sessionapi moves the pushed number too
+    # (the module-qualified read rule), and `memory` needs a different owner than
+    # the others — its badge is project-SCOPED, and that gate belongs to the read
+    # model it shares with the overview payload, not to this loop.
+    _BADGE_COUNTS = {
+        # ⚠ swallowed errors — the web sibling of the scorebar's errwatch chip;
+        # a COUNT, no tracebacks
+        "errors": lambda sid, cwd: API.error_count(sid),
+        # distinct monitors — a new Monitor launch bumps it
+        "monitors": lambda sid, cwd: API.monitor_count(sid),
+        # distinct background jobs — a new bg launch bumps it
+        "jobs": lambda sid, cwd: API.job_count(sid),
+        # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
+        "memory": lambda sid, cwd: memory_count(sid, cwd),
+    }
 
     def _keepalive(self, beat, force=False):
         """The per-tick keep-alive: send a heartbeat comment iff HEARTBEAT_S has
@@ -217,33 +242,12 @@ class _SseMixin:
                 run = API.running(sid)
                 if not self._push_changed(prev, "running", "running", run):
                     return
-                # the ⚠ error badge, live: a cheap COUNT (no tracebacks) on the
-                # slow cadence, pushed only on change (full rows stay behind
-                # /errors). The web sibling of the scorebar's errwatch chip.
-                ec = API.error_count(sid)
-                if not self._push_changed(prev, "errors", "errors", ec, {"count": ec}):
-                    return
-                # the monitors tab badge, live: the cheap distinct-monitor COUNT
-                # (streams keystone, no transcript parse), pushed on change — a
-                # new Monitor launch bumps it. Full monitor detail (command,
-                # events) stays behind /monitors, fetched when the tab opens.
-                mc = API.monitor_count(sid)
-                if not self._push_changed(prev, "monitors", "monitors", mc, {"count": mc}):
-                    return
-                # the jobs tab badge, live: the cheap distinct background-job
-                # COUNT (streams keystone), pushed on change — a new bg launch
-                # bumps it. Full job detail (command, output) stays behind /jobs
-                # + /copy, fetched when the tab / drill-down opens.
-                jc = API.job_count(sid)
-                if not self._push_changed(prev, "jobs", "jobs", jc, {"count": jc}):
-                    return
-                # the memory tab badge, live: the distinct-note COUNT from the
-                # `memory` kv (plugins.claude_code.memory), pushed on change — a
-                # new op under ~/wiki/01 bumps it. Full note list stays behind
-                # /memory, note bodies behind /note, fetched when the tab opens.
-                memc = API.memory_count(sid)
-                if not self._push_changed(prev, "memory", "memory", memc, {"count": memc}):
-                    return
+                # the tab badges, live (_BADGE_COUNTS) — four cheap COUNTs, one
+                # shape, pushed only on change
+                for key, count in self._BADGE_COUNTS.items():
+                    n = count(sid, cwd)
+                    if not self._push_changed(prev, key, key, n, {"count": n}):
+                        return
                 # the pinned tasks card, live — a task create / status flip
                 # re-stashes the `tasks` kv (task_fmt.py) and shows on the
                 # slow cadence (tasks change per-hook, not per-keystroke;
