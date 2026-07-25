@@ -373,7 +373,7 @@ function copySid(sid) {
 // A SUFFIX match, not exact: what we sent can arrive with anything prepended,
 // and both known prefixes are real — attachments prepend `@path` mentions +
 // "\n", and text ALREADY IN THE TUI INPUT BOX is glued on with NO separator (a
-// terminal-side Esc-Esc cancel-edit restores the previous message there and the
+// terminal-side Escape can hand the previous message back there and the
 // page can't know, so the paste lands after it: `testing` + the sent text
 // arrived as ONE prompt and the old "\n"-only tolerance missed, pinning the chip
 // forever — session bdeca061, 2026-07-25). Empty `sent` never matches (it would

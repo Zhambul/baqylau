@@ -196,27 +196,31 @@ QUEUE_VERIFY_GAP_S = 0.5           # gap between the TWO screen captures whose
 #                                    QUEUE_TABS send, where the message is
 #                                    queueing anyway.
 
-# Tab states in which the session is MID-TURN — where Claude Code's double-Esc
-# means "cancel the work and restore the last message for editing", not the
-# rewind menu (post_rewind mirrors that split). awaiting-command (red) is
-# DELIBERATELY NOT here: red means a MODAL DIALOG is open (AskUserQuestion /
-# ExitPlanMode / a permission prompt), and an Esc there does not "cancel a
-# turn" — it DECLINES/dismisses the dialog. A cancel-edit gesture's Esc-Esc
-# once landed on an open ask and killed the very answer the user was giving via
-# the web ask card ("User declined to answer questions", 2026-07-20). The
-# dashboard has dedicated cards for those states (ask/plan/confirm), so every
-# Esc-sending gesture REFUSES on a red tab instead — see _dialog_open_guard,
-# mirroring post_command's own awaiting-command 409.
+# Tab states in which the session is MID-TURN — where an Escape means "stop the
+# turn" (post_interrupt), and where the rewind MENU is therefore unavailable
+# (post_rewind refuses; a typed /rewind would just queue as a message).
+# awaiting-command (red) is DELIBERATELY NOT here: red means a MODAL DIALOG is
+# open (AskUserQuestion / ExitPlanMode / a permission prompt), and an Esc there
+# does not stop a turn — it DECLINES/dismisses the dialog. Such a gesture once
+# landed on an open ask and killed the very answer the user was giving via the
+# web ask card ("User declined to answer questions", 2026-07-20). The dashboard
+# has dedicated cards for those states (ask/plan/confirm), so every Esc-sending
+# gesture REFUSES on a red tab instead — see _dialog_open_guard, mirroring
+# post_command's own awaiting-command 409.
 BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING, tabs.AWAITING_BG)
 
 DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
 #                                    (ctrl+u/k) and the bracketed paste of the
 #                                    edited resend (post_message clear_draft)
-DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
-#                                    Escapes — measured 3/3 reliable mid-turn
-#                                    (the idle rewind-menu detection is flaky at
-#                                    every gap, which is why THAT path types
-#                                    /rewind instead — see post_rewind)
+RESTORE_MATCH_CHARS = 40           # prefix length compared when deciding
+#                                    whether the input box now holds the message
+#                                    the just-pressed Escape took back
+#                                    (post_interrupt._restored_input, over
+#                                    suggestion.cmp_key — whitespace REMOVED, so
+#                                    the box's wrap points can't matter). A
+#                                    prefix, not the whole string, so a box that
+#                                    clipped a long tail still matches; long
+#                                    enough that two real prompts don't collide.
 
 # Interrupt verification (post_interrupt / _escape_press). A single synthesized
 # Escape via `kitten @ send-key` is only ~2/3 reliable (kitty reports no
@@ -225,8 +229,8 @@ DOUBLE_ESC_GAP_S = 0.15            # beat between the cancel-edit gesture's two
 # BUSY-tab interrupt is now VERIFIED against Claude Code's working spinner
 # (WORKING_MARKERS) and re-pressed WHILE it is still up — but never on an idle
 # box (a stray Esc there could open /rewind). INTERRUPT_RETRY_S sits well above
-# DOUBLE_ESC_GAP_S so two spaced retries never read as a double-Esc (a lone
-# late Esc at an idle prompt is a harmless no-op).
+# the TUI's own ~150 ms double-Esc detection window, so two spaced retries never
+# read as a double-Esc (a lone late Esc at an idle prompt is a harmless no-op).
 INTERRUPT_TRIES = 4                # re-press passes on a still-live turn (a vim
 #                                    editorMode thinking-phase Esc only exits
 #                                    INSERT, so ≥2 presses are needed; extra
@@ -234,8 +238,8 @@ INTERRUPT_TRIES = 4                # re-press passes on a still-live turn (a vim
 INTERRUPT_RETRY_S = 0.5           # gap between the TWO screen captures whose
 #                                    equality decides "is the turn still live"
 #                                    (also the beat between re-presses — well
-#                                    above DOUBLE_ESC_GAP_S so two never read as
-#                                    a double-Esc). A running Claude Code turn
+#                                    above the TUI's own ~150 ms double-Esc
+#                                    window, so two never read as a double-Esc). A running Claude Code turn
 #                                    animates its spinner/elapsed-timer/stream
 #                                    within this window at EVERY thinking level;
 #                                    a stopped one is static. This screen-DELTA

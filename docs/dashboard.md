@@ -389,7 +389,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a ~8s heartbeat while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (mid-turn cancel-edit, the double-Esc), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a ~8s presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a ~8s presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below) |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
@@ -559,9 +559,9 @@ especially from `executing`, where not even the escape-recheck spawns (it only
 covers magenta `thinking`/`working`). The composer then kept reading "queue"
 even though the turn had ended and a plain send is what would happen. So
 `interruptSession`, on a successful interrupt of a `BUSY_TABS` tab,
-optimistically drives `composerMode`/`cancelMode`/`stopMode`/`quickMode` to the
+optimistically drives `composerMode`/`stopMode`/`quickMode` to the
 your-turn state (`awaiting-response`) — the button reads "send" at once (and
-■ stop / ⊘ cancel grey out, since the turn just ended). This is only a
+■ stop greys out, since the turn just ended). This is only a
 client-side hint: the escape-recheck's green (or the next prompt's tab event)
 is what reconciles the real state, and if the turn actually kept going that
 next `tab` event flips the button right back to "queue". Terminal-side Esc
@@ -571,15 +571,15 @@ only clears on the next real hook.
 **A red `awaiting-command` tab refuses every Esc-sending gesture** (2026-07-20).
 Red means a MODAL DIALOG is open — AskUserQuestion, ExitPlanMode, or a
 permission prompt — and an Escape there DECLINES/dismisses the dialog, it does
-not interrupt a turn. A `cancel-edit` gesture (double-Esc) once landed its
+not interrupt a turn. The since-retired cancel gesture once landed its
 Esc-Esc on an open ask and killed the very answer the user was giving through
 the web ask card (the tab read "User declined to answer questions", and the
 web answer then hit "no question dialog on screen"). So `awaiting-command` is
-DELIBERATELY excluded from the server's `BUSY_TABS` and the page's `CANCEL_TABS`,
-and `post_interrupt`, `post_rewind` (cancel-edit) AND `post_rewind_to` all bail
-with a 409 *"a dialog is open — answer it first"* (`_dialog_open_guard`,
-mirroring post_command's own red-tab refusal). Client-side the ■ stop / ⊘ cancel
-buttons disable on red, and the keyboard Esc gesture / ↶ rewind button swallow
+DELIBERATELY excluded from `BUSY_TABS` on BOTH sides (one constant now, the
+page's second copy having gone with the button), and `post_interrupt`,
+`post_rewind` AND `post_rewind_to` all bail with a 409 *"a dialog is open —
+answer it first"* (`_dialog_open_guard`, mirroring post_command's own red-tab
+refusal). Client-side the ■ stop button disables on red, and the keyboard Esc gesture / ↶ rewind button swallow
 themselves with a toast pointing at the card. The ask / plan / confirm cards are
 the response path; the 409 is the authoritative backstop for a stale page that
 still believes the tab is cancelable.
@@ -1025,9 +1025,9 @@ prepended, and **both** known prefixes are real:
 - attachments prepend `@path` mentions + `\n` (server `_with_attachments`), so a
   queued message with a screenshot is delivered as `@path\n<text>`; and
 - text **already in the TUI input box** is glued on with **no separator**. A
-  terminal-side Esc-Esc cancel-edit restores the previous message into the `❯`
-  box and the page cannot know (its `clear_draft` path only fires for a resend
-  the page itself initiated), so the bracketed paste lands right after it.
+  terminal-side Escape can hand the previous message back into the `❯` box and
+  the page cannot know (its `clear_draft` path only fires for a resend the page
+  itself initiated), so the bracketed paste lands right after it.
 
 The match was newline-ONLY until 2026-07-25, which missed the second case
 entirely: in session `bdeca061` a cancelled `testing` sat in the box and the
@@ -1683,9 +1683,44 @@ only, no confirm — it matches pressing Esc in the terminal) and as the
 only when no overlay (modal, slash menu, filter, dropdown) claimed the
 Escape, so muscle memory from the terminal carries over to the browser.
 
-**Root cause of "STOP does nothing" (2026-07-24).** A single Escape does **not** reliably stop a busy turn here, for two compounding reasons: (1) `send-key` reports no per-window delivery and synthesized keys are only **~2/3 reliable** (the same measurement that made the idle rewind path type `/rewind` instead of pressing keys — see *Rewind*); and (2) the user runs Claude Code with **`editorMode: vim`**, so the input box is modal — while a turn runs it is in INSERT mode (`-- INSERT --`), and during the **thinking** phase the first Escape only leaves INSERT mode (INSERT→NORMAL); it never reaches the interrupt handler, so the turn runs to completion. Measured directly: every real single-Esc interrupt on a `thinking` tab missed and ran to its natural `Stop` (`a16a181f`, `3d70feca`), while a mid-STREAM Esc landed; a controlled throwaway diff showed the lone Esc deleting `-- INSERT --` and changing nothing else. This also explains why the cancel-edit gesture (*Rewind*) sends **two** Escapes and is "3/3 reliable" — the first exits INSERT, the second interrupts.
+**One button, because the terminal decides (2026-07-25).** There used to be a
+second button — **⊘ cancel** — sending TWO Escapes for Claude Code's "cancel the
+turn and hand the message back for editing", on the theory that the second press
+was what made the difference. It isn't. A plain single Escape from **this** button
+produced exactly the same outcome, and the transcript proves it: the discarded
+prompt and its replacement end up sharing one `parentUuid` (see *Discarded
+prompts*) either way. What decides the outcome is **when** you press:
 
-**Robust verified re-press.** So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint presses Escape, then RE-PRESSES *while the turn is still LIVE*, up to `INTERRUPT_TRIES` times. Liveness is **not** a marker string — spinner glyphs animate, gerunds vary, and the thinking level changes how long each phase lasts, so no fixed literal (`esc to interrupt`, `tok/s`, …) is robust. Instead it is **whether the screen is still CHANGING**: two `Frontend.get_text` captures `INTERRUPT_RETRY_S` apart (well above `DOUBLE_ESC_GAP_S`, so re-presses never read as a double-Esc) — a running turn always ticks its spinner / elapsed-timer / stream within that window at *every* thinking level, a stopped one is static. It stops the instant the screen goes static (dead), so an already-idle box never gets a stray Esc. The `web-interrupt` row carries `attempts`, `stopped` (True = verified static/dead · False = still animating after every re-press, the Esc never landed · None = idle press / unreadable) and `probes` — the per-capture phase snapshots. When `stopped` is **False** the endpoint returns `502` and spawns **no** `escape-recheck` (flipping the tab green would mask a live turn, exactly how the failure hid), so the page toasts a real failure. Every capture is also folded into an **`interrupt-probe`** `state_files` row (`insert`/`toks`/`spin` flags + a tail per capture point) — the durable ground truth for diagnosing a recurrence across thinking levels.
+- press before the turn has produced anything and Claude Code **discards the
+  prompt** and restores it to the input box;
+- press once it has done work and the **work is kept**.
+
+The press count never entered into it, so the two buttons were one gesture
+wearing two labels, and the survivor is the verified one. `post_rewind` lost its
+whole mid-turn branch with it (see *Rewind*), and the page's Esc gesture stopped
+paying the `ESC_DOUBLE_MS` hold on a busy tab — that delay existed only to tell
+"interrupt" from "cancel", so a mid-turn Escape now fires immediately and a
+habitual double-tap is swallowed into one stop.
+
+**`restored`: the take-back, read off the screen.** When the interrupt discards
+the prompt, the terminal's input box ends up holding it — and the web composer
+used to stay empty, so the text was simply lost on that side ("the message went
+back into kitty's input but the dashboard's box stayed empty"). The endpoint now
+reads the box (`_restored_input` → `suggestion.typed`, the same input-box reader
+the Telegram "still at the keyboard" check uses) and returns the message as
+`restored`; `applyTakeBack` prefills the composer with it and drops the
+discarded bubble from the feed. **The screen says WHETHER, the transcript says
+WHAT**: a box that now holds the message we just sent is a take-back, but the
+exact text (newlines intact) comes from the transcript record, because the
+capture flattens a wrapped box. Anything ELSE in the box is the user's own
+terminal draft — left alone, never echoed. The match is a `RESTORE_MATCH_CHARS`
+prefix of `suggestion.cmp_key` (whitespace REMOVED, since a wrapped box joins
+its lines without a separator); a miss just yields `""` and the page doesn't
+prefill. A take-back adds a `phase: "restore"` `web-interrupt` row.
+
+**Root cause of "STOP does nothing" (2026-07-24).** A single Escape does **not** reliably stop a busy turn here, for two compounding reasons: (1) `send-key` reports no per-window delivery and synthesized keys are only **~2/3 reliable** (the same measurement that made the idle rewind path type `/rewind` instead of pressing keys — see *Rewind*); and (2) the user runs Claude Code with **`editorMode: vim`**, so the input box is modal — while a turn runs it is in INSERT mode (`-- INSERT --`), and during the **thinking** phase the first Escape only leaves INSERT mode (INSERT→NORMAL); it never reaches the interrupt handler, so the turn runs to completion. Measured directly: every real single-Esc interrupt on a `thinking` tab missed and ran to its natural `Stop` (`a16a181f`, `3d70feca`), while a mid-STREAM Esc landed; a controlled throwaway diff showed the lone Esc deleting `-- INSERT --` and changing nothing else. This is also why the retired cancel gesture's **two** Escapes measured "3/3 reliable" — the first exits INSERT, the second interrupts; the verified re-press below reaches the same place without a second button.
+
+**Robust verified re-press.** So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint presses Escape, then RE-PRESSES *while the turn is still LIVE*, up to `INTERRUPT_TRIES` times. Liveness is **not** a marker string — spinner glyphs animate, gerunds vary, and the thinking level changes how long each phase lasts, so no fixed literal (`esc to interrupt`, `tok/s`, …) is robust. Instead it is **whether the screen is still CHANGING**: two `Frontend.get_text` captures `INTERRUPT_RETRY_S` apart (well above the TUI's own ~150 ms double-Esc window, so re-presses never read as a double-Esc) — a running turn always ticks its spinner / elapsed-timer / stream within that window at *every* thinking level, a stopped one is static. It stops the instant the screen goes static (dead), so an already-idle box never gets a stray Esc. The `web-interrupt` row carries `attempts`, `stopped` (True = verified static/dead · False = still animating after every re-press, the Esc never landed · None = idle press / unreadable) and `probes` — the per-capture phase snapshots. When `stopped` is **False** the endpoint returns `502` and spawns **no** `escape-recheck` (flipping the tab green would mask a live turn, exactly how the failure hid), so the page toasts a real failure. Every capture is also folded into an **`interrupt-probe`** `state_files` row (`insert`/`toks`/`spin` flags + a tail per capture point) — the durable ground truth for diagnosing a recurrence across thinking levels.
 
 When the (verified or unverifiable) Escape lands on a MAGENTA tab
 (`thinking`/`working`) the endpoint also spawns the **`escape-recheck`** tab
@@ -1719,30 +1754,26 @@ mechanics + the manual/auto differences: docs/relimit.md *Manual migrate*. No-co
 app.js): "no confirm" means one deliberate click is enough, not that a
 double-tap during the ~1s POST should spawn TWO racing migrators (each closing
 the tab and picking a target). The same closure-local in-flight lock guards the
-other immediate no-confirm header actions — ■ stop and ⊘ cancel would otherwise
-double-send Escape mid-flight; it re-enables on settle (cancel re-derives from
-the tab, so an idle turn keeps it disabled). This is button-closure state, not
-`S` like the card ✕ (above): nothing tears the detail view's action row down
-mid-action, and the Esc-KEY gesture path has its own `escHold` debounce, so the
-lock lives on the buttons rather than the shared `interruptSession`/`cancelEdit`
-/`migrateSession` functions (which just return their POST promise for it).
+other immediate no-confirm header action — ■ stop would otherwise double-send
+Escape mid-flight; it re-enables on settle (re-deriving from the tab, so an idle
+turn keeps it disabled). This is button-closure state, not `S` like the card ✕
+(above): nothing tears the detail view's action row down mid-action, and the
+Esc-KEY gesture path has its own debounce (`escHold` when idle, the `escFired`
+window when busy), so the lock lives on the buttons rather than the shared
+`interruptSession`/`migrateSession` functions (which just return their POST
+promise for it).
 
-`POST /api/session/<sid>/rewind` mirrors Claude Code's double-Esc, whose
-MEANING depends on session state — and the endpoint splits on the tab
-state at gesture time:
+`POST /api/session/<sid>/rewind` opens Claude Code's rewind/checkpoint menu.
 
-- **MID-TURN** (a `BUSY_TABS` colour — `thinking`/`working`/`executing`/
-  `awaiting-bg`, NOT red `awaiting-command`): double-Esc CANCELS the running
-  work and restores the last message into the input for editing (removing it
-  from the conversation). Mirrored with **two Escape key events**
-  `DOUBLE_ESC_GAP_S` (150 ms) apart — measured **3/3 reliable** mid-turn
-  on a live session (2026-07-18), unlike the idle menu — plus the same
-  magenta `escape-recheck` (that experiment showed the tab stays stuck
-  `thinking` after the cancel). Editing then happens in the kitty tab.
-  A red `awaiting-command` tab is NEITHER this nor the idle branch: a modal
-  dialog is open there, so the endpoint refuses outright (`_dialog_open_guard`
-  — see the interrupt section) rather than sending Esc-Esc (which would decline
-  the ask) or typing `/rewind` (which would land in the dialog).
+- **MID-TURN** (a `BUSY_TABS` colour): **409**. This endpoint used to FORK
+  here — a mid-turn double-Esc meant "cancel the turn and restore the message",
+  and that fork WAS the ⊘ cancel button. It is gone (2026-07-25): `post_interrupt`
+  produces the same take-back with ONE Escape, decided by when you press rather
+  than how many times (see *Interrupt*), so the two gestures were one gesture and
+  the verified one survives. Mid-turn the menu is simply unavailable — a typed
+  `/rewind` would queue as a message. A red `awaiting-command` tab refuses even
+  earlier (`_dialog_open_guard` — see the interrupt section), since typing
+  `/rewind` would land in the open dialog.
 - **IDLE**: double-Esc opens the rewind/checkpoint menu (restore code
   and/or conversation, summarize; checkpoints are automatic, one per user
   prompt — code.claude.com/docs/en/checkpointing.md). Mirrored by **typing
@@ -1752,21 +1783,22 @@ state at gesture time:
   from one batched call, focus irrelevant, while typed `/rewind` opened it
   **every time**. No Escape ⇒ no recheck.
 
-The response's `mode` (`cancel-edit` | `rewind`) tells the page which
-meaning fired (its toast differs), and rides the `web-rewind` audit row
-(`{win, ok, tab, mode}`). On `cancel-edit` the response also carries
-`restored` — the session's last user prompt (`_last_prompt` →
-`plugins.conversation`), the message Claude Code puts back into the input.
+Every attempt rides a `web-rewind` audit row (`{win, ok, tab}`; a busy
+refusal carries `refused: "busy"`). The take-back's `restored` moved to
+`post_interrupt`, where the screen — not a guess at the last prompt — decides
+whether there was one.
 Same guard chain and window discipline as the other writes. The page now
 calls this endpoint only for the MID-TURN meaning (the cancel); its idle
 rewind is the full web rewind below — the endpoint's idle branch (type
 `/rewind`, navigate in kitty) survives for API callers and tests.
 
-**What the page does on `cancel-edit` — the full loop, no jumping to the
-terminal.** It drops the cancelled prompt bubble from the feed (abandoned
-— kitty un-renders it too; optimistic, since a mid-turn cancel does NOT
-rewrite the transcript, so a full reload re-shows it) and puts `restored`
-into the composer for editing. Resending the edit goes through
+**What the page does on a take-back — the full loop, no jumping to the
+terminal.** `applyTakeBack` drops the discarded prompt bubble from the feed
+(kitty un-renders it too, and it is genuinely out of the conversation: the
+record stays in the transcript FILE but orphaned, which `_dead_uuids` prunes on
+the next full read — see *Discarded prompts* — so this removal only says sooner
+what the server would say anyway) and puts `restored` into the composer for
+editing. Resending the edit goes through
 `/message` with `clear_draft: true` (`ses.clearDraftNext`), because the
 TUI input still holds the restored draft: the send kills the line
 (`Ctrl+U` to start + `Ctrl+K` to end — cursor-position-independent) and
@@ -1785,16 +1817,17 @@ makes the TUI read it as ONE atomic paste, which lands clean every time
 OUTSIDE the paste so it still submits. So the reliable boundary is: you
 can cancel, edit, and resend entirely from the web — no frontend hop.
 
-Known limit (Claude-Code-imposed): a cancel that ORIGINATES in the kitty
-tab (you press Esc-Esc there) can't be reflected on the web, because
-Claude Code fires no hook and a mid-thinking cancel writes NOTHING to the
-transcript (verified — the same no-signal gap the tab-colour recovery
-documents in docs/tab-colors.md). The web mirrors a cancel it TRIGGERED;
-it cannot observe one it didn't.
+Known limit (Claude-Code-imposed): a take-back that ORIGINATES in the kitty
+tab (you press Esc there) reaches the web only PARTLY, because Claude Code
+fires no hook for it. The composer can't be prefilled — the page never learns
+the box was refilled — but the ghost bubble no longer survives: the discard is
+visible in the transcript's parent chain as soon as the next prompt lands, and
+`_dead_uuids` prunes it (*Discarded prompts*). The web mirrors a take-back it
+TRIGGERED; a terminal-side one it can only clean up after.
 
-The **`escape-recheck`** that both the interrupt and the mid-turn
-cancel-edit spawn watches the transcript for a new `"type":"user"` RECORD,
-not raw byte growth: the cancel-edit gesture appends pure METADATA
+The **`escape-recheck`** the interrupt spawns watches the transcript for a
+new `"type":"user"` RECORD, not raw byte growth: the gesture appends pure
+METADATA
 (`ai-title`, `last-prompt`) right after killing the turn, and a
 raw-growth bail false-positived on the gesture's own records — the tab
 sat magenta until a later gesture's recheck flipped it (observed live).
@@ -1934,10 +1967,10 @@ The endpoint refuses a BUSY tab outright (409 — mid-turn the gesture
 means cancel, and a typed `/rewind` would just queue as a message; stop
 or cancel first). Success returns `restored` (the target text) for the
 conversation-restoring modes: Claude Code puts the rewound prompt back
-into the TUI input, so the page runs the same tail as cancel-edit
+into the TUI input, so the page runs the same tail as a take-back
 (`prefillComposer`) — composer prefilled, next send `clear_draft` — and
 `applyRewind` un-renders everything from the target bubble on, matching
-what the terminal now shows (optimistic like cancel-edit: the transcript
+what the terminal now shows (optimistic like a take-back: the transcript
 keeps the dead branch, a full reload re-shows it). A code-only restore
 changes no conversation, so nothing is dropped. Every attempt is a
 `web-rewind-to` state_files row (`{win, ok, tab, mode, ups, steps,
@@ -1974,7 +2007,7 @@ press is HELD for `ESC_DOUBLE_MS` (450 ms) then classified — single press
 → one `/interrupt` (an Escape key event; busy tab → "interrupted" toast,
 idle → "double-press Esc for rewind"), rapid double → the double-Esc
 meaning split CLIENT-side by tab state: mid-turn the `/rewind` POST (the
-cancel-edit above), idle picking mode (no POST until you pick a message),
+take-back above), idle picking mode (no POST until you pick a message),
 with **no separate Escape sent at all**. Streaming the first press immediately
 shipped and corrupted the rewind: the in-flight Escape and the `/rewind`
 text race through two server threads with variable kitten latency, and
@@ -2549,14 +2582,14 @@ here **Escape declines the whole question set**, so a failed step leaves
 the dialog exactly as it was (AskError → 409 with `step`; a retry
 re-normalizes). Because Escape is the decline key, the DIALOG itself must
 never receive a stray Escape from elsewhere in the dashboard: a
-`cancel-edit` gesture once fired its Esc-Esc into an open ask (the tab was
+retired cancel gesture once fired its Esc-Esc into an open ask (the tab was
 red `awaiting-command`, which the cancel path wrongly treated as a
 cancelable mid-turn state), so by the time the user's answer POSTed the
 dialog was already declined and `drive` bailed at the very first check with
 `AskError("open", "no question dialog on screen")` — the "I answered but it
 failed, and the tab said *User declined*" report (2026-07-20). The fix lives
 on the gesture side (`_dialog_open_guard`, the interrupt section): no web
-interrupt / cancel-edit / rewind sends a key while a red dialog is open.
+interrupt or rewind sends a key while a red dialog is open.
 
 **The open-check polls (2026-07-22).** `drive`'s first check — is the dialog
 on screen at all — used to read `get_text` ONCE with no retry, unlike every

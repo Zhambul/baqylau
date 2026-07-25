@@ -23,7 +23,7 @@ from core import state as ST
 from core import tabs
 from core.noaudit import load_audit
 from dashboard import (askdialog, clipboard, confirmdialog, dictate, plandialog,
-                       prefs, rewindmenu)
+                       prefs, rewindmenu, suggestion)
 from dashboard import config
 from dashboard.config import (BUSY_TABS,
                               CLIENTLOG_MAX, EFFORTS,
@@ -231,7 +231,7 @@ class _PostMixin:
         `web-send` state_files row, failures also an A.error.
 
         `clear_draft` (bool): the page sets it when resending an edited
-        message after a mid-turn cancel-edit — the TUI input still holds the
+        message after an interrupt took the last one back — the TUI input holds the
         restored draft, so the send first kills the line (Ctrl+U to start +
         Ctrl+K to end, so the cursor position doesn't matter) and then
         delivers the text as a BRACKETED PASTE (paste_text): a raw send into
@@ -448,7 +448,21 @@ class _PostMixin:
         kitty keyboard protocol as Escape. 409 when the session has no window
         (headless — nothing to interrupt); 503 when no terminal resolves.
         Every attempt is a `web-interrupt` state_files row, failures also an
-        A.error."""
+        A.error.
+
+        THE one stop gesture (docs/dashboard.md, *Interrupt*). There used to be
+        a second button — ⊘ cancel — that pressed Escape TWICE for Claude Code's
+        "cancel the turn and hand the message back". Measured 2026-07-25: a
+        plain single Escape does that too. Which of the two outcomes you get is
+        decided by WHEN you press, not by how many times: interrupt a turn
+        that has produced nothing and Claude Code discards the prompt (by
+        RE-PARENTING — see transcript._dead_uuids) and restores it to the input
+        box; interrupt one that has done work and the work is kept. The press
+        count never entered into it, so the second button was the same gesture
+        wearing a different label.
+
+        The response's `restored` is that handed-back message, or "" — read off
+        the LIVE SCREEN (_restored_input), never guessed."""
         return self._escape_press(sid, "interrupt", "web-interrupt")
 
     def post_rename(self, sid):
@@ -593,27 +607,20 @@ class _PostMixin:
         return self._json({"ok": True, "to": target["slug"]})
 
     def post_rewind(self, sid):
-        """The double-Esc GESTURE, whose meaning in Claude Code depends on
-        session state — mirrored here by the tab state at gesture time:
+        """Open Claude Code's rewind/checkpoint menu by TYPING `/rewind`
+        (documented identical to the idle double-Esc; synthesized double-press
+        key events opened the menu only ~2/3 at the best gap while the typed
+        command opened it every time). No Escape pressed ⇒ no recheck.
 
-        MID-TURN (busy tab): double-Esc CANCELS the current work and
-        restores the last message into the input for editing (it leaves the
-        conversation). Mirrored with TWO Escape key events
-        `DOUBLE_ESC_GAP_S` apart — measured 3/3 reliable mid-turn on a live
-        session (2026-07-18), unlike the idle rewind-menu detection — plus
-        the magenta escape-recheck (the same experiment showed the tab
-        stays stuck thinking after the cancel). Editing then happens in the
-        kitty tab.
+        409 on a BUSY tab. This endpoint used to FORK there — a mid-turn
+        double-Esc meant "cancel the turn and restore the message", the ⊘
+        cancel button. That fork is gone: post_interrupt does the same thing
+        with ONE Escape (the outcome is decided by WHEN you press, not by how
+        many times — see its docstring), so the two gestures were one gesture
+        all along, and the survivor is the verified one. Mid-turn the menu is
+        simply unavailable: a typed `/rewind` would queue as a message.
 
-        IDLE: double-Esc opens the rewind/checkpoint menu — mirrored by
-        TYPING `/rewind` (documented identical; synthesized double-press
-        key events opened the menu only ~2/3 at the best gap while the
-        typed command opened it every time). No Escape pressed ⇒ no
-        recheck.
-
-        The response's `mode` (`cancel-edit` | `rewind`) tells the page
-        which meaning fired; the same field rides the `web-rewind` audit
-        row (`{win, ok, tab, mode}`)."""
+        Every attempt is a `web-rewind` state_files row (`{win, ok, tab}`)."""
         body = self._post_guard()
         if body is None:
             return
@@ -623,30 +630,19 @@ class _PostMixin:
         row, log, sdb, fe, win, tab = resolved
         if self._dialog_open_guard(tab, log, sdb, win, "web-rewind"):
             return
-        restored = ""
         if tab in BUSY_TABS:
-            mode = "cancel-edit"
-            # the message the cancel restores into the input for editing IS
-            # the session's last user prompt — read it BEFORE the Escapes so
-            # the page can prefill its composer + drop the cancelled bubble
-            restored = rsession._last_prompt(sid)
-            tpath, tsize = self._press_baseline(row)
-            ok = bool(fe.send_key(win, "escape"))
-            time.sleep(config.DOUBLE_ESC_GAP_S)
-            ok = bool(fe.send_key(win, "escape")) and ok
-            if ok and tab in (tabs.THINKING, tabs.WORKING):
-                self._spawn_escape_recheck(fe, win, log, tpath, tsize)
-        else:
-            mode = "rewind"
-            ok = bool(fe.send_text(win, "/rewind"))
-        A.state_file(log, sdb, "web-rewind",
-                     {"win": win, "ok": ok, "tab": tab, "mode": mode})
+            A.state_file(log, sdb, "web-rewind",
+                         {"win": win, "ok": False, "tab": tab,
+                          "refused": "busy"})
+            return self._json({"error": "session is busy — stop the turn first",
+                               "tab": tab}, 409)
+        ok = bool(fe.send_text(win, "/rewind"))
+        A.state_file(log, sdb, "web-rewind", {"win": win, "ok": ok, "tab": tab})
         if not ok:
             A.error(log, "dashboard rewind (send failed)",
-                    {"sid": sid, "win": win, "mode": mode})
+                    {"sid": sid, "win": win})
             return self._json({"error": "send failed"}, 502)
-        return self._json({"ok": True, "tab": tab, "mode": mode,
-                           "restored": restored})
+        return self._json({"ok": True, "tab": tab})
 
     def post_rewind_to(self, sid):
         """FULL web rewind — restore the session to the checkpoint of a
@@ -661,13 +657,13 @@ class _PostMixin:
         distance from the menu's "(current)" cursor start (newer prompts
         + 1), a jump hint the text-verify scan corrects.
 
-        409 when the tab is BUSY (mid-turn the double-Esc gesture means
-        cancel, not rewind — and a typed `/rewind` would just queue as a
-        message) or when the step didn't verify (MenuError — menus already
+        409 when the tab is BUSY (mid-turn there is no rewinding — stop the
+        turn first; a typed `/rewind` would just queue as a message) or when
+        the step didn't verify (MenuError — menus already
         closed; `step` says which). The response's `restored` echoes `text`
         for conversation restores — Claude Code puts the rewound prompt back
         into the TUI input, so the page prefills its composer and resends
-        with clear_draft, the cancel-edit contract. Every attempt is a
+        with clear_draft, the same contract an interrupt's restore uses. Every attempt is a
         `web-rewind-to` state_files row carrying mode/ups/steps/digit (or
         the failing step), failures also an A.error."""
         body = self._post_guard()
@@ -1259,7 +1255,7 @@ class _PostMixin:
         return self._json({"ok": True, "kind": kind})
 
     def _dialog_open_guard(self, tab, log, sdb, win, action):
-        """Refuse an Esc-sending gesture (interrupt / cancel-edit / rewind) when
+        """Refuse an Esc-sending gesture (interrupt / rewind) when
         a MODAL DIALOG is open — the red `awaiting-command` tab means Claude is
         asking YOU (AskUserQuestion / ExitPlanMode / a permission prompt). An
         Esc there does not cancel a turn; it DECLINES/dismisses the dialog,
@@ -1355,7 +1351,51 @@ class _PostMixin:
             # within its grace. Detached + audited (A.spawn); its verdict
             # lands as tab_transitions rows under DISPATCH escape-recheck.
             self._spawn_escape_recheck(fe, win, log, tpath, tsize)
-        return self._json({"ok": True, "tab": tab})
+        return self._json({"ok": True, "tab": tab,
+                           "restored": self._restored_input(fe, win, sid, log,
+                                                            sdb, action)})
+
+    def _restored_input(self, fe, win, sid, log, sdb, action):
+        """The message Claude Code HANDED BACK to its input box by the Escape
+        just pressed, or "". Interrupt a turn early enough and the prompt is
+        discarded and restored to the `❯` box for editing (docs/dashboard.md,
+        *Interrupt*) — the terminal does it, we only need to notice, so the
+        composer can mirror it instead of the user losing the text on the web
+        side (the "the message went back into kitty's input but the dashboard's
+        box stayed empty" report, 2026-07-25).
+
+        Read from the LIVE SCREEN via suggestion.typed() — the same input-box
+        reader the Telegram alert's "still at the keyboard" check uses, which
+        returns REAL (non-faint) box content and ignores a grey ghost
+        suggestion. The screen says WHETHER; the transcript says WHAT: a box
+        that now holds the message we just sent is a restore, and the exact
+        text (newlines and all) comes from the transcript record, because
+        typed() whitespace-normalizes a wrapped box. Anything else in the box
+        is the user's OWN terminal draft — left alone, never echoed into the
+        composer.
+
+        Matching is on a RESTORE_MATCH_CHARS prefix of suggestion.cmp_key —
+        whitespace REMOVED, not just normalized. A message wider than the box
+        (or one with its own newlines) is captured as several lines that join
+        without a separator, so the words agree but the spaces never do; and
+        the prefix, rather than the whole string, keeps a box that clipped the
+        tail from reading as a mismatch. A miss just yields "" — the interrupt
+        still succeeded, the page simply doesn't prefill."""
+        last = rsession._last_prompt(sid)
+        if not last:
+            return ""
+        try:
+            box = suggestion.typed(fe.get_text(win, ansi=True) or "")
+        except Exception:
+            A.error(log, "dashboard %s (restore probe)" % action, {"win": win})
+            return ""
+        if not box:
+            return ""
+        n = config.RESTORE_MATCH_CHARS
+        hit = suggestion.cmp_key(box)[:n] == suggestion.cmp_key(last)[:n]
+        A.state_file(log, sdb, action,
+                     {"win": win, "phase": "restore", "restored": hit})
+        return last if hit else ""
 
     def _screen(self, fe, win, why="interrupt"):
         """The window's ANSI-stripped visible text, or None (unreadable/empty).

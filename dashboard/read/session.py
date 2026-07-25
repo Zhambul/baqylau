@@ -266,7 +266,7 @@ def _chip_delivered(text, delivered):
     prepended, and both known prefixes are real.
       · attachments prepend `@path` mentions + '\\n' (server _with_attachments);
       · text ALREADY IN THE TUI INPUT BOX is glued on with NO separator — a
-        terminal-side Esc-Esc cancel-edit restores the previous message there
+        terminal-side Escape can hand the previous message back there
         and the page can't know (its `clear_draft` never fires), so the paste
         lands after it: `testing` + the sent text arrived as one prompt and the
         old '\\n'-only tolerance missed, pinning the chip forever (session
@@ -332,7 +332,7 @@ def _plan_pending(sid):
 
 def _last_prompt(sid):
     """The session's LAST main-thread user prompt text (via
-    plugins.conversation), or '' — what a mid-turn cancel-edit restores into
+    plugins.conversation), or '' — what an early interrupt hands back into
     the input, so the page can prefill its composer with it. Best-effort: a
     read failure just yields '' (the cancel still happened in the terminal)."""
     try:

@@ -699,7 +699,7 @@ function buildComposer() {
         });
       return;
     }
-    // after a mid-turn cancel-edit the TUI holds the restored draft, so this
+    // after an interrupt took the message back the TUI holds it as a draft, so this
     // edited send must replace it (server: Ctrl+U/K then bracketed paste)
     const msg = { text };
     if (atts.length) msg.attachments = atts;

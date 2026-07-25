@@ -108,35 +108,28 @@ function renderSessionChrome(tab) {
   };
   act.append(notif);
   if (meta.live && meta.kitty_window_id) {
-    // stop: interrupt the agent in place — an Escape key press in the
-    // session's window (the TUI's own interrupt; Esc here does the same).
+    // stop: THE one stop gesture — an Escape key press in the session's window.
+    // What it does is the terminal's call, not ours: interrupt a turn that has
+    // already done work and the work is kept; interrupt one early enough and
+    // Claude Code takes the message back, handing it to the input box (the
+    // response's `restored`, which applyTakeBack mirrors into the composer).
+    // There used to be a second ⊘ cancel button for that second outcome, on the
+    // theory that it needed a DOUBLE Escape — it doesn't (measured 2026-07-25),
+    // so the two buttons were one gesture with two labels.
     // Immediate, no confirm: it matches pressing Esc in the terminal.
     const stop = el("button", "sstop actstop", "■ stop");
-    stop.title = "interrupt the agent (Esc)";
+    stop.title = "stop the turn (Esc) — takes your message back if nothing ran yet";
     stop.onclick = () => lockDuring(stop, interruptSession,
                                     () => ses.stopMode(liveTab()));
-    // gated to the working states like ⊘ cancel — an interrupt only applies
-    // while a turn is running, and an Esc when idle can clear queued input, so
-    // it greys out otherwise (the resting state re-derives from the tab, never
-    // a blind re-enable). Same CANCEL_TABS set (thinking/working/executing/
-    // awaiting-bg) — NOT red awaiting-command, where an Esc declines the open
+    // gated to the working states — a stop only applies while a turn is
+    // running, and an Esc when idle can clear queued input, so it greys out
+    // otherwise (the resting state re-derives from the tab, never a blind
+    // re-enable). NOT red awaiting-command, where an Esc declines the open
     // dialog instead of interrupting (interruptSession bails there too).
-    ses.stopMode = (tab) => { stop.disabled = !CANCEL_TABS.includes(tab); };
+    ses.stopMode = (tab) => { stop.disabled = !BUSY_TABS.includes(tab); };
     ses.stopMode(liveTab());
     act.append(stop);
-    // cancel: mid-turn double-Esc — cancel the running turn and restore your
-    // message into the composer for editing. Enabled only while a turn runs.
-    const cancel = el("button", "sstop actses", "⊘ cancel");
-    cancel.title = "cancel this turn and edit your message (mid-turn double-Esc)";
-    // resting state re-derives from the tab (idle → stays disabled) rather
-    // than a blind re-enable, matching ses.cancelMode's own gate
-    cancel.onclick = () => lockDuring(cancel, cancelEdit,
-                                      () => ses.cancelMode(liveTab()));
-    ses.cancelMode = (tab) => { cancel.disabled = !CANCEL_TABS.includes(tab); };
-    ses.cancelMode(liveTab());
-    act.append(cancel);
-    // rewind: Claude Code's double-Esc — mid-turn it cancels for editing;
-    // idle it enters picking mode: click a message below, choose what to
+    // rewind: idle-only picking mode — click a message below, choose what to
     // restore, and the server drives the TUI's own checkpoint menu
     const rew = el("button", "sstop actses", "↶ rewind");
     rew.title = "rewind: pick a message to restore to (mid-turn: cancel + edit)";
@@ -255,7 +248,7 @@ function renderSessionChrome(tab) {
     act2.append(ewrap);
     // a red tab = a modal dialog is up — pasted text would land IN it (the
     // server 409s too; disabling just says so up front). Live via the same
-    // SSE tab event as cancelMode.
+    // SSE tab event as stopMode.
     ses.quickMode = (tab) => {
       const block = tab === "awaiting-command";
       for (const b of [cpt, mdl, eff]) b.disabled = block;

@@ -112,6 +112,26 @@ def _box_content(screen):
     return chars
 
 
+def norm(s):
+    """Input-box text, whitespace-normalized — every run of whitespace (the
+    box's own padding, and the line breaks a wrapped entry is captured with)
+    collapsed to one space. The ONE normalization for box content: `parse`/
+    `typed` return it, and post_interrupt's restore check compares a transcript
+    prompt against a box read through it (docs/dashboard.md, *Interrupt*)."""
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def cmp_key(s):
+    """A box-text COMPARISON key: every whitespace character removed. Stronger
+    than `norm` on purpose — a wrapped box is captured as separate lines that
+    join with NO separator, so a box read and the same text from the transcript
+    agree on their words but not on the spaces between them. Dropping
+    whitespace altogether is what makes post_interrupt's restore check survive
+    a wrap (docs/dashboard.md, *Interrupt*); nothing else may compare box text
+    by hand."""
+    return re.sub(r"\s+", "", s)
+
+
 def parse(screen):
     """The greyish suggested-answer text from an ANSI screen capture, or None.
     None means: no input box, an empty box, or REAL input (any non-whitespace
@@ -125,7 +145,7 @@ def parse(screen):
     if not all(f for _, f in body):
         return None                       # real input, not a ghost
     raw = "".join(c for c, _ in chars).replace(NBSP, " ")
-    return re.sub(r"\s+", " ", raw).strip() or None
+    return norm(raw) or None
 
 
 def typed(screen):
@@ -136,10 +156,13 @@ def typed(screen):
     detect the user composing a reply AT THE TERMINAL — the one trace that
     typing into the `❯` box leaves before submitting (it moves neither the tab
     nor the transcript), so the deferred Telegram alert can tell "still at the
-    keyboard" from "walked away" (docs/dashboard.md, *Telegram alerts*)."""
+    keyboard" from "walked away" (docs/dashboard.md, *Telegram alerts*) — AND,
+    since an early interrupt makes Claude Code hand the prompt BACK to this
+    box, to tell a restore from a plain stop (post_interrupt's
+    `_restored_input`, docs/dashboard.md *Interrupt*)."""
     chars = _box_content(screen)
     real = "".join(c for c, f in chars if not f and c != "\n").replace(NBSP, " ")
-    return re.sub(r"\s+", " ", real).strip() or None
+    return norm(real) or None
 
 
 def probe(fe, win, sid=""):

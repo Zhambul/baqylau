@@ -30,14 +30,22 @@ function interruptSession() {
   return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/interrupt", {},
                   { audit: "interrupt" })
     .then(r => {
-      if (BUSY_TABS.includes(r && r.tab))
+      // `restored` = Claude Code handed the message back to its input box
+      // (an early-enough interrupt discards the prompt instead of keeping
+      // partial work — the terminal decides, the server READ the box). Mirror
+      // it into the composer so the web side doesn't lose the text.
+      if (r && r.restored) {
+        applyTakeBack(r.restored);
+        toast("done", "took it back", "message restored below — edit and resend");
+      } else if (BUSY_TABS.includes(r && r.tab)) {
         toast("done", "interrupted", "Esc sent to the session");
-      else
+      } else {
         toast("done", "Esc sent", "double-press Esc for rewind");
+      }
       // an interrupt ENDS the turn → it's your turn now. But Claude Code fires
       // NO hook on interrupt, so the tab can sit stale-busy (from EXECUTING not
       // even the escape-recheck spawns), leaving the composer button stuck on
-      // "queue" when a plain "send" is what actually happens. Flip send/cancel/
+      // "queue" when a plain "send" is what actually happens. Flip send/stop/
       // quick out of the busy state NOW; a real tab change — the escape-recheck's
       // green, or the next prompt — reconciles, and if the turn somehow kept
       // going that next tab event flips it right back to "queue".
@@ -45,7 +53,6 @@ function interruptSession() {
       if (ses && BUSY_TABS.includes(r && r.tab)) {
         const yourTurn = "awaiting-response";   // green, not a QUEUE_TAB
         if (ses.composerMode) ses.composerMode(yourTurn);
-        if (ses.cancelMode) ses.cancelMode(yourTurn);
         if (ses.stopMode) ses.stopMode(yourTurn);
         if (ses.quickMode) ses.quickMode(yourTurn);
       }
@@ -53,23 +60,22 @@ function interruptSession() {
     .catch(e => toast("ask", "interrupt failed", (e && e.error) || ""));
 }
 
-// The double-Esc gesture — its MEANING is the TUI's, decided by the tab
-// state at gesture time: mid-turn it cancels the work and restores the last
-// message for editing (the cancelEdit POST — two real Escapes server-side);
-// idle it means REWIND, which the web now does fully itself (rewind picking
-// mode below — no more "go open the kitty tab").
+// REWIND: enter picking mode (click a message below, choose what to restore).
+// Idle only — mid-turn there is nothing to rewind TO yet, and the server 409s.
 function rewindSession() {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
-  // red "asking you" tab: a dialog is open — neither cancel-edit (Esc-Esc) nor
-  // rewind (/rewind) belongs here; both would land in the dialog and dismiss or
-  // corrupt it. Answer via the card instead.
+  // red "asking you" tab: a dialog is open — a rewind (/rewind) would land in
+  // it and dismiss or corrupt it. Answer via the card instead.
   if (liveTab() === "awaiting-command") {
     toast("done", "a question is waiting",
           "answer it in the card above first");
     return;
   }
-  if (CANCEL_TABS.includes(liveTab())) return cancelEdit();
+  if (BUSY_TABS.includes(liveTab())) {
+    toast("done", "a turn is running", "stop it first, then rewind");
+    return;
+  }
   rewindPickMode(true);
 }
 
@@ -80,64 +86,27 @@ function liveTab() {
       || ((S.ses && S.ses.meta && S.ses.meta.tab) || "");
 }
 
-// Tab states in which a turn is running, so Claude Code's mid-turn double-Esc
-// means CANCEL (not the rewind menu). Matches the server's BUSY_TABS — the
-// cancel/stop buttons gate on this so an idle click never opens the rewind menu.
-// awaiting-command (red) is DELIBERATELY excluded: red means a modal dialog is
-// open (ask/plan/permission), where an Esc DECLINES the dialog rather than
-// cancelling a turn — the stop/cancel buttons disable there and the gestures
-// bail (see interruptSession/rewindSession), so the ask card stays the response
-// path (docs/tab-colors.md; the "User declined to answer questions" fix).
-const CANCEL_TABS = ["thinking", "working", "executing", "awaiting-bg"];
-
-// The Cancel button: Claude Code's mid-turn double-Esc — cancel the running
-// turn and restore your message into the composer for editing. Distinct from
-// ■ stop (a plain interrupt that keeps the partial work) and ↶ rewind (the
-// checkpoint menu). Only meaningful mid-turn; the button disables when idle,
-// and this guard is the belt-and-braces (an idle /rewind would type the
-// rewind command, not cancel).
-function cancelEdit() {
-  const meta = (S.ses && S.ses.meta) || {};
-  if (!S.cur || !meta.live || !meta.kitty_window_id) return Promise.resolve();
-  if (!CANCEL_TABS.includes(liveTab())) {
-    toast("done", "nothing to cancel", "no turn is running");
-    return Promise.resolve();
-  }
-  return postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rewind", {},
-                  { audit: "rewind" })
-    .then(r => {
-      if (r && r.mode === "cancel-edit") {
-        applyCancelEdit(r.restored || "");
-        toast("done", "cancelled", "message restored below — edit and resend");
-      } else {
-        toast("done", "nothing to cancel", "no turn is running");
-      }
-    })
-    .catch(e => toast("ask", "cancel failed", (e && e.error) || ""));
-}
-
-// Mirror Claude Code's mid-turn cancel-edit fully on the web — no jumping to
-// the kitty tab: the restored message (the last user prompt) goes into the
-// composer for editing, the cancelled prompt bubble is dropped from the feed
-// (abandoned — kitty un-renders it too), and the NEXT composer send clears the
-// TUI's restored draft and resends as an atomic paste (clear_draft → the
-// server's Ctrl+U/K + bracketed paste, which is the ONLY reliable way to
-// replace the draft: a raw send drops leading bytes after a cancel). Prefill
-// only an EMPTY composer — never clobber text you were already typing.
-function applyCancelEdit(restored) {
+// The web side of an interrupt that TOOK THE MESSAGE BACK: the restored text
+// goes into the composer for editing and the discarded prompt bubble leaves the
+// feed. Claude Code un-renders it in kitty the same way, and it is genuinely
+// gone from the conversation — it stays in the transcript FILE, but orphaned
+// (re-parented around), which transcript._dead_uuids prunes on the next full
+// read, so this removal is what the server would say anyway, just sooner. The
+// NEXT composer send clears the TUI's restored draft and resends as an atomic
+// paste (clear_draft → the server's Ctrl+U/K + bracketed paste, the only
+// reliable way to replace the draft: a raw send drops leading bytes after it).
+function applyTakeBack(restored) {
   const ses = S.ses;
   if (!ses) return;
-  // drop the cancelled prompt bubble (newest .msg.prompt — items prepend, so
-  // it's the FIRST in the feed). Optimistic: the transcript keeps the record
-  // (verified — a mid-turn cancel doesn't rewrite the file), so a full reload
-  // re-shows it; within this view the append-only feed keeps it hidden.
+  // the taken-back bubble is the newest .msg.prompt (items prepend, so it is
+  // the FIRST in the feed)
   const feed = ses.stream;
   const bubble = feed && feed.querySelector(".msg.prompt");
   if (bubble) bubble.remove();
   prefillComposer(restored);
 }
 
-// The shared tail of cancel-edit and web rewind: the TUI now holds the
+// The shared tail of an interrupt's take-back and web rewind: the TUI now holds the
 // restored prompt as its input draft, so prefill OUR composer with the same
 // text (only when empty — never clobber what you were typing) and make the
 // next send replace the TUI draft (clear_draft) instead of appending to it.
@@ -323,8 +292,8 @@ function openRewindMenu(bubble) {
 function doRewindTo(bubble, mode, menu) {
   const meta = (S.ses && S.ses.meta) || {};
   if (!S.cur || !meta.live || !meta.kitty_window_id) return;
-  if (CANCEL_TABS.includes(liveTab())) {
-    toast("ask", "session is busy", "stop or cancel the turn first");
+  if (BUSY_TABS.includes(liveTab())) {
+    toast("ask", "session is busy", "stop the turn first");
     return;
   }
   const text = bubble.dataset.txt || "";
@@ -363,7 +332,7 @@ function doRewindTo(bubble, mode, menu) {
 }
 
 // A conversation restore un-renders everything from the target prompt on —
-// kitty's TUI does the same. Optimistic like applyCancelEdit: the transcript
+// kitty's TUI does the same. Optimistic like applyTakeBack: the transcript
 // still holds the dead branch (a rewind writes nothing until the next send
 // forks it), so a full reload re-shows it; this view matches the terminal.
 function applyRewind(bubble, restored) {
@@ -385,20 +354,24 @@ document.addEventListener("click", (e) => {
   } else closeRewindMenu();           // click-away closes a hover-opened menu
 });
 
-// The Esc GESTURE is atomic — hold a lone press for ESC_DOUBLE_MS, then
-// classify: single press → one /interrupt (an Escape key event), rapid
-// double → ONLY /rewind (the typed command), with NO Escape sent at all.
-// Streaming the first press immediately shipped and corrupted the rewind:
-// its in-flight Escape raced the /rewind text through two server threads
-// and once landed MID-TEXT — the input cleared after "/rewi", the "nd"
-// tail re-typed into the empty box, and the Enter submitted "nd" into the
-// chat. Nothing streams until the gesture is decided, so nothing can
-// interleave. The hold delays a real interrupt by 450ms — imperceptible
-// next to the HTTP+kitten pipeline. Residual accepted mismatch: a SLOW
-// double-press (>450ms) is two interrupts to us, but the TUI's own flaky
-// double-Esc detection may still open the panel on those two Escapes.
+// The Esc GESTURE. MID-TURN there is only ONE meaning left — stop the turn —
+// so a busy tab fires IMMEDIATELY and a rapid second press inside the window is
+// swallowed (a habitual double-tap must not send two Escapes). That fast path
+// is what unifying stop and cancel buys: the 450ms below used to delay every
+// real interrupt just to tell "interrupt" from "cancel", and those turned out
+// to be the same gesture.
+//
+// IDLE the gesture is still atomic — hold a lone press for ESC_DOUBLE_MS, then
+// classify: single press → one /interrupt (an Escape key event), rapid double →
+// ONLY the rewind picker, with NO Escape sent at all. Streaming the first press
+// immediately shipped and corrupted the rewind: its in-flight Escape raced the
+// /rewind text through two server threads and once landed MID-TEXT — the input
+// cleared after "/rewi", the "nd" tail re-typed into the empty box, and the
+// Enter submitted "nd" into the chat. Nothing streams until the gesture is
+// decided, so nothing can interleave.
 const ESC_DOUBLE_MS = 450;
 let escHold = null;
+let escFired = 0;                    // when the busy fast path last fired
 const BUSY_TABS = ["thinking", "working", "executing", "awaiting-bg"];
 function escGesture() {
   const meta = (S.ses && S.ses.meta) || {};
@@ -412,6 +385,13 @@ function escGesture() {
     escHold = null;
     toast("done", "a question is waiting",
           "answer it in the card above — Esc would decline it");
+    return;
+  }
+  if (BUSY_TABS.includes(liveTab())) {
+    const now = Date.now();
+    if (now - escFired < ESC_DOUBLE_MS) return;   // double-tap → one stop
+    escFired = now;
+    interruptSession();
     return;
   }
   if (escHold) {

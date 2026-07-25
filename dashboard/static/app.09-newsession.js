@@ -1126,7 +1126,7 @@ document.addEventListener("keydown", (e) => {
 // resume and the adopt machinery + jump watch carry the page over.
 // Lock an immediate (no-confirm) control-plane action button for the duration
 // of its POST so a double-tap can't fire the terminal write twice — ⇆ migrate
-// would spawn two racing migrators, ■ stop/⊘ cancel would double-send Escape.
+// would spawn two racing migrators, ■ stop would double-send Escape.
 // `run` returns the POST promise; `rest` restores the button's resting state
 // once it settles (default: re-enable; cancel re-derives from the tab). This
 // lives on the buttons, not the functions, because the Esc-key gesture has its

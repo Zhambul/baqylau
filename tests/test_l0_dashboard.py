@@ -3128,13 +3128,19 @@ class _FakeFE:
         self.keyed.append((win, keys))
         return self.send_ok
 
-    def get_text(self, win, extent="screen"):
+    def get_text(self, win, extent="screen", ansi=False):
+        # ansi=True is the INPUT-BOX read (post_interrupt's restore probe,
+        # suggestion.typed) — its own fixture, so it can't disturb the
+        # plain-text screens the interrupt's liveness delta pops through
+        if ansi:
+            return self.ansi_screen
         # screens pop in order; the last one sticks (a stable final state)
         if len(self.screens) > 1:
             return self.screens.pop(0)
         return self.screens[0] if self.screens else ""
 
     screens = ()
+    ansi_screen = ""
 
     def export_env(self):
         pass
@@ -4643,7 +4649,9 @@ def test_post_interrupt_sends_escape(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "66")
     A.session_start({"session_id": "intr1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/intr1/interrupt", {})
-    assert code == 200 and json.loads(body) == {"ok": True, "tab": ""}
+    # `restored` is "" — nothing in this session's transcript to hand back
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": "",
+                                                "restored": ""}
     assert fe.keyed == [("66", ("escape",))]
     assert fe.closed == []                    # never touches the tab
 
@@ -4666,7 +4674,8 @@ def test_post_interrupt_magenta_spawns_escape_recheck(dash, monkeypatch,
                      "transcript_path": str(tp)})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"77": "thinking"})
     code, body = _post(dash + "/api/session/intr3/interrupt", {})
-    assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking"}
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking",
+                                                "restored": ""}
     assert len(spawned) == 1
     path, argv, env, purpose = spawned[0]
     assert path.endswith("claude-tab-status.py")
@@ -4717,7 +4726,8 @@ def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
     A.session_start({"session_id": "intrv", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"78": "thinking"})
     code, body = _post(dash + "/api/session/intrv/interrupt", {})
-    assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking"}
+    assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking",
+                                                "restored": ""}
     assert fe.keyed == [("78", ("escape",)), ("78", ("escape",))]  # one re-press
     row = _last_state_file("intrv", "web-interrupt")
     assert row["attempts"] == 2 and row["stopped"] is True
@@ -4756,12 +4766,11 @@ def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "88")
     A.session_start({"session_id": "rew1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/rew1/interrupt", {})
-    assert json.loads(body) == {"ok": True, "tab": ""}
+    assert json.loads(body) == {"ok": True, "tab": "", "restored": ""}
     assert fe.keyed == [("88", ("escape",))]          # single press = interrupt
     code, body = _post(dash + "/api/session/rew1/rewind", {})
     assert code == 200
-    assert json.loads(body) == {"ok": True, "tab": "", "mode": "rewind",
-                                "restored": ""}   # idle: nothing to restore
+    assert json.loads(body) == {"ok": True, "tab": ""}
     assert fe.sent == [("88", "/rewind")]             # typed, not key events
     assert fe.keyed == [("88", ("escape",))]          # no extra Escapes
     assert fe.closed == []
@@ -4773,38 +4782,77 @@ def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     assert fe.sent == [("88", "/rewind")]
 
 
-def test_post_rewind_busy_is_cancel_edit(dash, monkeypatch):
-    # MID-TURN double-Esc = cancel + restore the last message for editing:
-    # TWO Escape key events (measured 3/3 reliable mid-turn), never the typed
-    # command (which would queue as a message), plus the magenta recheck (the
-    # cancel leaves the tab stuck thinking — same experiment)
+def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
+    # Interrupt a turn early enough and Claude Code DISCARDS the prompt and
+    # hands it back to the input box (measured 2026-07-25 — one Escape does
+    # this; it was never the ⊘ cancel button's second press). The endpoint
+    # notices by READING the box, so the composer can mirror it: the screen
+    # says WHETHER, the transcript says WHAT (exact text, newlines intact).
+    fe = _FakeFE()
+    fe.ansi_screen = ("\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n"
+                      "\x1b[m\u276f\xa0testing the take-back\n"
+                      "\x1b[m  with a second line\n"
+                      "\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n")
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "91")
+    A.session_start({"session_id": "tb1", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.session, "_last_prompt",
+                        lambda sid: "testing the take-back\nwith a second line")
+    code, body = _post(dash + "/api/session/tb1/interrupt", {})
+    assert code == 200
+    # the TRANSCRIPT's text, not the box's whitespace-flattened capture
+    assert json.loads(body)["restored"] == \
+        "testing the take-back\nwith a second line"
+    row = _last_state_file("tb1", "web-interrupt")
+    assert row["phase"] == "restore" and row["restored"] is True
+
+
+def test_post_interrupt_leaves_a_terminal_draft_alone(dash, monkeypatch):
+    # The box holding something ELSE is the user's own terminal draft, not a
+    # take-back — never echoed into the web composer.
+    fe = _FakeFE()
+    fe.ansi_screen = ("\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n"
+                      "\x1b[m\u276f\xa0something I was typing here\n"
+                      "\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n")
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "92")
+    A.session_start({"session_id": "tb2", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.session, "_last_prompt", lambda sid: "an unrelated prompt")
+    code, body = _post(dash + "/api/session/tb2/interrupt", {})
+    assert code == 200 and json.loads(body)["restored"] == ""
+
+
+def test_post_interrupt_empty_box_is_a_plain_stop(dash, monkeypatch):
+    # Nothing in the box = the turn was interrupted with its work KEPT; there
+    # is nothing to restore and no restore row.
+    fe = _FakeFE()
+    fe.ansi_screen = ("\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n"
+                      "\x1b[m\u276f\xa0\n"
+                      "\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100 + "\n")
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "93")
+    A.session_start({"session_id": "tb3", "cwd": "/w", "transcript_path": ""})
+    monkeypatch.setattr(DS.session, "_last_prompt", lambda sid: "a prompt that ran")
+    code, body = _post(dash + "/api/session/tb3/interrupt", {})
+    assert code == 200 and json.loads(body)["restored"] == ""
+    assert _last_state_file("tb3", "web-interrupt").get("phase") != "restore"
+
+
+def test_post_rewind_busy_is_refused(dash, monkeypatch):
+    # MID-TURN there is no rewinding: the endpoint used to FORK here into the
+    # ⊘ cancel button's double-Escape "cancel + restore". post_interrupt does
+    # that with ONE Escape (the outcome is the terminal's call, decided by WHEN
+    # you press), so the fork is gone and a busy rewind 409s, pressing nothing —
+    # a typed /rewind would queue as a message.
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.config, "DOUBLE_ESC_GAP_S", 0)
-    spawned = []
-    monkeypatch.setattr(DS.SP, "spawn_detached",
-                        lambda path, argv, log, env=None, purpose="", **kw:
-                        spawned.append(argv) or None)
     monkeypatch.setenv("KITTY_WINDOW_ID", "89")
     A.session_start({"session_id": "rew2", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "working"})
-    # the cancel restores the session's last user prompt — returned so the
-    # page can prefill its composer
-    monkeypatch.setattr(DS.session, "_last_prompt", lambda sid: "the cancelled message")
-    code, body = _post(dash + "/api/session/rew2/rewind", {})
-    assert code == 200
-    assert json.loads(body) == {"ok": True, "tab": "working",
-                                "mode": "cancel-edit",
-                                "restored": "the cancelled message"}
-    assert fe.keyed == [("89", ("escape",)), ("89", ("escape",))]
-    assert fe.sent == []                              # nothing typed mid-turn
-    assert len(spawned) == 1 and spawned[0][0] == "escape-recheck"
-    # blue (executing) is also mid-turn = cancel-edit, but NOT magenta — the
-    # bg writer-liveness recovery owns it, so no recheck
-    monkeypatch.setattr(DS.API, "tab_states", lambda: {"89": "executing"})
-    code, body = _post(dash + "/api/session/rew2/rewind", {})
-    assert json.loads(body)["mode"] == "cancel-edit"
-    assert len(spawned) == 1
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/rew2/rewind", {})
+    assert e.value.code == 409
+    assert fe.keyed == [] and fe.sent == []
 
 
 def test_post_interrupt_refuses_on_open_dialog(dash, monkeypatch):

@@ -227,14 +227,14 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   a new prompt submitted within the grace repaints the same magenta invisibly
   (the paint dedup skips identical colours), which would put green over a live
   think; the prompt's user record is what makes it visible. It matches a user
-  record specifically, NOT raw byte growth: the dashboard's mid-turn
-  cancel-edit gesture (double-Esc — docs/dashboard.md) appends pure metadata
+  record specifically, NOT raw byte growth: the gesture that killed the turn
+  (docs/dashboard.md, *Interrupt*) appends pure metadata
   (`ai-title`, `last-prompt`) right after killing the turn, and a raw-growth
   bail false-positived on the gesture's own records, leaving the tab stuck
   magenta (observed live). Magenta only: blue and red keep their own
   recoveries, and any cancel that wrote the interrupt line is
   `interrupt-watch`'s. And on RED `awaiting-command` the escape-recheck never
-  arises, because a web interrupt / cancel-edit / rewind is REFUSED there
+  arises, because a web interrupt or rewind is REFUSED there
   outright (`_dialog_open_guard`, docs/dashboard.md): red means a modal dialog
   is open, where Esc would DECLINE the ask/plan/permission rather than
   interrupt a turn — the dashboard's ask/plan/confirm cards are the response

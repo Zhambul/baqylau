@@ -211,7 +211,6 @@ function connectSession(sid) {
     // (same focus guard as updateRunning/updateStatsRow).
     if (S.ses && S.ses.badge && !S.ses.agentFocus) setBadge(S.ses.badge, d.tab || "");
     if (S.ses && S.ses.composerMode) S.ses.composerMode(d.tab || "");
-    if (S.ses && S.ses.cancelMode) S.ses.cancelMode(d.tab || "");
     if (S.ses && S.ses.stopMode) S.ses.stopMode(d.tab || "");
     if (S.ses && S.ses.quickMode) S.ses.quickMode(d.tab || "");
     // patch the open session's row so the session strip reacts before the
