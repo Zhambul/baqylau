@@ -144,21 +144,7 @@ function renderSessionChrome(tab) {
     // Two-step confirm: first click arms for 4s, second click fires.
     const cls = el("button", "sstop actses", "✕ close");
     cls.title = "close this session's terminal tab";
-    let armed = null;
-    const disarm = () => {
-      armed = null;
-      cls.textContent = "✕ close";
-      cls.classList.remove("arm");
-    };
-    cls.onclick = () => {
-      if (!armed) {
-        cls.textContent = "close session?";
-        cls.classList.add("arm");
-        armed = setTimeout(disarm, ARM_MS);
-        return;
-      }
-      clearTimeout(armed);
-      disarm();
+    armConfirm(cls, "✕ close", "close session?", () => {
       cls.disabled = true;
       cls.textContent = "closing…";
       const sid = S.cur;
@@ -180,7 +166,7 @@ function renderSessionChrome(tab) {
           clientFail(sid, "close", e);   // a lost/rejected /stop the audit can't see
           toast("ask", "close failed", (e && e.error) || "");
         });
-    };
+    });
     act.append(cls);
   }
   // resume (parked, with a cwd): reopen the new-session form preset to
@@ -201,23 +187,7 @@ function renderSessionChrome(tab) {
     // conversation out from under you, so it arms first
     const cpt = el("button", "sstop actses", "⊜ compact");
     cpt.title = "compact the conversation (/compact)";
-    let cptArmed = null;
-    const cptDisarm = () => {
-      cptArmed = null;
-      cpt.textContent = "⊜ compact";
-      cpt.classList.remove("arm");
-    };
-    cpt.onclick = () => {
-      if (!cptArmed) {
-        cpt.textContent = "compact now?";
-        cpt.classList.add("arm");
-        cptArmed = setTimeout(cptDisarm, ARM_MS);
-        return;
-      }
-      clearTimeout(cptArmed);
-      cptDisarm();
-      sendQuickCmd("compact");
-    };
+    armConfirm(cpt, "⊜ compact", "compact now?", () => sendQuickCmd("compact"));
     act2.append(cpt);
     // model: dropdown picker; the label shows the ctx probe's current model
     // (live via the `ctx` SSE event → updateStatsRow)

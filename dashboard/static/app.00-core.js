@@ -204,6 +204,41 @@ function metaAdder(grid) {
   };
 }
 
+/* Two-step confirm on a button: the first click ARMS it (label swaps to `ask`,
+   .arm styling) for ARM_MS, a second click inside that window fires, and the
+   timeout disarms. Returns disarm, for a caller that has to cancel the arm from
+   elsewhere.
+
+   The header's ✕ close and ⊜ compact each hand-rolled this — the same timer
+   handle, the same label swap, the same clearTimeout-then-fire — 60 lines apart
+   in one function, which is how one of them ends up with a fix the other misses.
+   The gesture is one rule ("a misclick here costs you the conversation, so ask
+   once"), so it gets one implementation.
+
+   The list card's ✕ deliberately stays out (see cardClose): its arm must survive
+   the per-tick card REBUILD, so it keeps a deadline in S rather than a closure —
+   a different problem with a different answer, not a third copy of this one. */
+function armConfirm(btn, label, ask, fire) {
+  let t = null;
+  const disarm = () => {
+    t = null;
+    btn.textContent = label;
+    btn.classList.remove("arm");
+  };
+  btn.onclick = () => {
+    if (!t) {
+      btn.textContent = ask;
+      btn.classList.add("arm");
+      t = setTimeout(disarm, ARM_MS);
+      return;
+    }
+    clearTimeout(t);
+    disarm();
+    fire();
+  };
+  return disarm;
+}
+
 // The compact endpoint label for the frontend audit — the path minus the /api/
 // prefix and the (already-separately-logged) sid, so `/api/session/<sid>/stop`
 // → `session/stop`. Purely for readable `web-client` rows.

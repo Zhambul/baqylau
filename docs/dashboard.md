@@ -1691,8 +1691,9 @@ post_message's: a RED tab (`awaiting-command` — a modal dialog is up) is a
 attempt is a `web-command` state_files row (`{win, cmd, arg, ok, tab}`),
 failures also an `A.error`.
 
-The client row (app.js `act2` in `renderSessionChrome`): compact carries the
-close button's two-step arm ("compact now?", 4 s) — a misclick would
+The client row (the `act2` row of `renderSessionChrome`): compact carries the
+close button's two-step arm via the shared `armConfirm` ("compact now?", 4 s)
+— a misclick would
 summarize the conversation out from under you; model and effort open
 dropdowns in the new-session form's own picker language
 (`.nsdropmenu`/`.nsdropitem` + the anchoring `.qcwrap`/`.qcmenu` classes,
@@ -1896,7 +1897,9 @@ cleanly on SIGHUP, firing SessionEnd — so the normal end-of-session lifecycle
 `ended_at`/`end_reason` audit row, the parked state DB, and the clean `/tmp`.
 Headless session (no window) is `409` — there is no tab to close. The page
 puts a **close** button in the session head (live + windowed only) behind a
-two-step confirm (first click arms for 4 s, second fires); on success it
+two-step confirm (first click arms for 4 s, second fires — `armConfirm`, the
+ONE implementation of that gesture; the header's ✕ and ⊜ compact each
+hand-rolled it until 2026-07-25, 60 lines apart in one function); on success it
 navigates back to the sessions list (the session just ended — staying on its
 now-dead view helps nobody; skipped if the user already navigated elsewhere
 while the POST was in flight). A parked session shows a **resume** button

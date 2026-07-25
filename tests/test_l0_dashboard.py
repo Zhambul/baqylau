@@ -559,6 +559,34 @@ def test_close_in_flight_state_has_one_owner(dash):
     assert "function closeBegin(" in core and "function closeSettle(" in core
 
 
+def test_two_step_confirm_has_one_implementation(dash):
+    """The arm-then-fire confirm is one rule — "a misclick here costs you the
+    conversation, so ask once" — with one implementation: `armConfirm`
+    (app.00-core.js). The header's ✕ close and ⊜ compact each hand-rolled it,
+    the same timer handle and label swap 60 lines apart in one function, which is
+    how one of them ends up with a fix the other misses.
+
+    The list card's ✕ is the sanctioned exception and says so at the site: its
+    arm must survive the per-tick card REBUILD, so it holds a deadline in `S`
+    instead of a closure. Static check over the served parts — the arm styling is
+    the tell, since that is what any hand-rolled copy has to do."""
+    code, index = _get(dash + "/")
+    assert code == 200
+    bodies = {}
+    for p in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index))):
+        code, bodies[p] = _get(dash + "/static/" + p)
+        assert code == 200
+    assert "function armConfirm(" in bodies["app.00-core.js"]
+    owners = ("app.00-core.js", "app.04-list.js")     # the helper + cardClose
+    for p, body in bodies.items():
+        if p in owners:
+            continue
+        assert 'classList.add("arm")' not in body, \
+            "%s hand-rolls the two-step confirm — use armConfirm()" % p
+    # …and the two sites that used to own copies now go through it
+    assert bodies["app.11-chrome.js"].count("armConfirm(") == 2
+
+
 def test_no_dead_page_functions(dash):
     """Every function declared by the SPA is called by someone. The parts are
     classic scripts sharing one global scope (app.NN-*.js, ordered), which makes
