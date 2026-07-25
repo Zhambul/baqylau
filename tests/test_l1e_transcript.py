@@ -57,8 +57,11 @@ def test_blank_user_content_is_none():
 def test_prompt_keeps_unstripped_text():
     # The renderer strips at paint (cap(text.strip())) — the parser must not
     # pre-strip, or the pre-split byte-identical contract breaks.
+    # `meta` rides along ALWAYS (False for a real prompt) rather than only when
+    # set: a declared field that is sometimes absent is how a consumer ends up
+    # reading a KeyError as "not injected".
     rec = TR.parse_line(_l({"type": "user", "message": {"content": "  hi\n"}}))
-    assert rec == {"kind": "prompt", "text": "  hi\n"}
+    assert rec == {"kind": "prompt", "text": "  hi\n", "meta": False}
 
 
 def test_teammate_message_unwraps_sender_and_body():

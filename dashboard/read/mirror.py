@@ -104,6 +104,14 @@ def _conv_items(recs, cmds=()):
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
             it["par"] = r.get("par") or ""
+            # An INJECTED user turn, not something the human typed (Claude
+            # Code's isMeta: a Stop hook's feedback, a loaded skill's body, a
+            # resume nudge). Verbose still shows it — it is in the transcript —
+            # but the non-verbose modes hide it, because a bubble labelled YOU
+            # that you never wrote is a lie about the conversation
+            # (docs/dashboard.md, *View modes*).
+            if r.get("meta"):
+                it["meta"] = 1
         out.append(it)
     return out
 

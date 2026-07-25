@@ -7998,6 +7998,15 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # the ⚠ audit warning never folds — and it splits the run it sits in
     assert d["warnBreaksRuns"] == {"sums": 2, "shown": ["warn", "msg"]}
 
+    # An INJECTED prompt (a Stop hook's feedback, a loaded skill's body — the
+    # transcript's isMeta) is not something you said: verbose keeps it (it IS in
+    # the transcript), both non-verbose modes drop it, and it does NOT close the
+    # turn — so focus still shows exactly ONE final reply, not one per hook
+    # firing.
+    assert d["injected"]["verbose"] == 5
+    assert d["injected"]["default"] == ["msg", "msg", "msg"]   # prompt + 2 replies
+    assert d["injected"]["focus"] == ["msg", "msg"]            # prompt + THE reply
+
     # the summary is clickable BOTH ways (it stays put while expanded — it is the
     # only way back), and a redundant pass is a no-op (the signature guard, which
     # is what keeps a live stream from rebuilding the feed under a reader)
@@ -8035,3 +8044,50 @@ def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
     # …while a generic block body (a command's output — skimmed) keeps its box
     generic = rules[".bbody"]
     assert "max-height: 480px" in generic and "overflow: auto" in generic
+
+
+def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
+    """Claude Code writes some turns in the USER's shape without the human
+    typing them, and marks them `isMeta`: a Stop hook's blocking feedback, a
+    resume nudge, and — the noisiest — a SKILL LOAD, whose whole SKILL.md body
+    arrives as an isMeta text block right after the Skill tool_result. They used
+    to render as "YOU" bubbles (a hook's feedback, or an entire skill, attributed
+    to the user). `<`-wrapped envelopes were already dropped; these are bare
+    prose, so only the flag can tell them apart. Carried through parse_line →
+    conversation → the wire item, where the view modes act on it."""
+    from plugins.claude_code import transcript as TR
+
+    def line(**kw):
+        return json.dumps(kw)
+
+    # parentUuid CHAINED: prompt-bearing records sharing one parent are a
+    # re-parented fork, i.e. a discarded branch (*Discarded prompts*), and the
+    # prune would legitimately drop all but the last.
+    real = line(type="user", message={"role": "user", "content": "do the thing"},
+                uuid="u1", timestamp="2026-07-25T10:00:00.000Z")
+    hook = line(type="user", isMeta=True, uuid="u2", parentUuid="u1",
+                timestamp="2026-07-25T10:00:01.000Z",
+                message={"role": "user", "content": "Stop hook feedback:\nwiki check"})
+    skill = line(type="user", isMeta=True, uuid="u3", parentUuid="u2",
+                 timestamp="2026-07-25T10:00:02.000Z",
+                 message={"role": "user", "content": [
+                     {"type": "text",
+                      "text": "Base directory for this skill: /x/.claude/skills/k\n\nbody"}]})
+    # parse_line carries the flag on BOTH shapes (plain string, and the list
+    # content a skill body arrives in)
+    assert TR.parse_line(real)["meta"] is False
+    assert TR.parse_line(hook)["meta"] is True
+    assert TR.parse_line(skill)["meta"] is True
+
+    tf = tmp_path / "t.jsonl"
+    tf.write_text(real + "\n" + hook + "\n" + skill + "\n", encoding="utf-8")
+    recs, _pos = TR.conversation(str(tf))
+    got = [(r["kind"], r.get("meta"), r["text"].split("\n")[0][:34]) for r in recs]
+    assert got == [
+        ("prompt", None, "do the thing"),
+        ("prompt", True, "Stop hook feedback:"),
+        ("prompt", True, "Base directory for this skill: /x/"),
+    ], got
+    # …and it reaches the page on the wire item the view modes read
+    items = DS.mirror._conv_items(recs)
+    assert [it.get("meta") for it in items] == [None, 1, 1]

@@ -619,6 +619,8 @@ function stampItem(elem, it) {
   if (it.add) elem.dataset.add = String(it.add);   // a mutation's line counts, for
   if (it.rem) elem.dataset.rem = String(it.rem);   //   focus mode's edit summary
   if (it.kind) elem.dataset.msg = it.kind;
+  if (it.meta) elem.dataset.injected = "1";   // a prompt Claude Code injected,
+  //                                             not one the human typed
   elem.dataset.vk = String(++S.ses.viewSeq);
   elem.dataset.vt = String(Date.now() / 1000);
   applyFilterTo(elem);
@@ -674,6 +676,11 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 //             always breaks the run and is always visible
 //   focus   — only your prompts, each turn's FINAL reply, and a one-line
 //             summary of the edits; every intermediate step folds away
+//
+// Both non-verbose modes also drop INJECTED prompts — user-shaped turns Claude
+// Code wrote itself (a Stop hook's feedback, a loaded skill's body, a resume
+// nudge; `data-injected`, from the transcript's isMeta). Verbose keeps them: it
+// shows the transcript as it is, and they are genuinely in it.
 //
 // Must match dashboard/prefs.py VIEW_MODES (grep-tested).
 const VIEW_MODES = ["verbose", "default", "focus"];
@@ -846,6 +853,13 @@ function applyViewMode() {
     const kind = elem.dataset.kind;
     if (kind === "messages") {
       const mk = elem.dataset.msg || "";
+      // An INJECTED prompt (Claude Code's isMeta — a Stop hook's feedback, a
+      // loaded skill's whole SKILL.md body, a resume nudge) is not something
+      // you said, so neither non-verbose mode shows it, and it does NOT close
+      // the turn: the reply that follows it belongs to the prompt you actually
+      // typed, and treating it as a boundary would surface a second "final"
+      // reply per hook firing.
+      if (elem.dataset.injected) return "hide";
       if (mk === "prompt") { sawReply = false; return "show"; }
       if (mode === "focus" && mk === "message") {
         const final = !sawReply;

@@ -4639,6 +4639,26 @@ choice is per session and durable (`POST /api/session/<sid>/viewmode` → the
 - **focus** — only your prompts, each turn's FINAL reply, and a one-line summary
   of the edits. Everything else folds, including mid-turn assistant prose.
 
+Both non-verbose modes additionally drop **injected prompts** — turns written in
+the USER's shape that the human never typed, which Claude Code marks `isMeta`:
+a **Stop hook's blocking feedback**, a **loaded skill's whole SKILL.md body**
+(injected as a text block right after the `Skill` tool_result — the noisiest of
+them), and the resume nudge `Continue from where you left off.`. They used to
+render as `YOU` bubbles, so a hook's feedback — or an entire skill — read as
+something you had said. `<`-wrapped envelopes (`<command-name>`,
+`<local-command-caveat>`, `<system-reminder>`) were already dropped by
+`conversation()`; these are bare prose, so nothing but the flag distinguishes
+them, which is why `transcript.parse_line` now CARRIES `isMeta` (as `meta`)
+instead of discarding it — on both record shapes, since a skill body arrives as
+list content while a hook's feedback is a plain string. `session_title` had
+skipped `isMeta` rows all along for the same reason; the fact is now shared
+rather than re-read per consumer.
+
+Verbose deliberately keeps them: it shows the transcript as it is, and they ARE
+in it. An injected prompt also does **not close the turn** for focus mode's
+final-reply rule — the reply after a hook firing still belongs to the prompt you
+typed, and treating it as a boundary surfaced a second "final" reply per firing.
+
 **This is a rendering choice, not a setting.** Claude Code has its own
 `viewMode` (settings.json; Ctrl+O toggles verbose/default, `/focus` toggles
 focus) and this feature deliberately does NOT touch it: nothing is written into

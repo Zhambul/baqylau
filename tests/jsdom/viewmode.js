@@ -83,6 +83,7 @@ function item(spec) {
   e.dataset.kind = spec.kind || "commands";
   if (spec.act) e.dataset.act = spec.act;
   if (spec.msg) e.dataset.msg = spec.msg;
+  if (spec.injected) e.dataset.injected = "1";
   if (spec.bad) e.dataset.bad = "1";
   if (spec.add) e.dataset.add = String(spec.add);
   if (spec.rem) e.dataset.rem = String(spec.rem);
@@ -116,6 +117,9 @@ const F = {
   reply: { act: "msg", kind: "messages", msg: "message" },
   warn: { act: "warn", kind: "commands" },
   memread: { act: "read", kind: "memory" },
+  // a user-SHAPED turn Claude Code injected: a Stop hook's feedback, a loaded
+  // skill's SKILL.md body, a resume nudge (transcript isMeta)
+  hookmsg: { act: "msg", kind: "messages", msg: "prompt", injected: 1 },
 };
 
 /* ---------- readers */
@@ -172,6 +176,16 @@ sumRow(rt).onclick();
 out.expanded = { shown: shown(rt), sums: sums(rt).map(s => s.open) };
 sumRow(rt).onclick();
 out.recollapsed = { shown: shown(rt), sums: sums(rt).map(s => s.open) };
+
+// an INJECTED prompt is dropped by both non-verbose modes and does NOT close the
+// turn — the reply after it still belongs to the prompt the human typed, so focus
+// must not surface a second "final" reply per hook firing
+const inj = [F.prompt, F.fg, F.reply, F.hookmsg, F.reply];
+out.injected = {
+  verbose: shown(scene("verbose", inj)).length,
+  default: shown(scene("default", inj)),
+  focus: shown(scene("focus", inj)),
+};
 
 // a run that GROWS keeps its key (so the user's expansion survives new items)
 const grow = scene("default", [F.prompt, F.fg, F.fg]);

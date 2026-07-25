@@ -27,9 +27,20 @@
 #       were away (auto after ~3min idle, or on-demand via /recap), stored as a
 #       `type=system` `subtype=away_summary` line whose plain-text `content` is
 #       the summary. Not a compaction (adds context, doesn't compress it)
-#   {"kind": "prompt", "text": str}                 a user prompt (unstripped) —
+#   {"kind": "prompt", "text": str, "meta": bool}   a user prompt (unstripped) —
 #       a plain `user` string OR a `queued_command` attachment (the delivered
-#       form of a message queued mid-turn; commandMode=="prompt" only)
+#       form of a message queued mid-turn; commandMode=="prompt" only).
+#       `meta` is Claude Code's own `isMeta` flag: the record is shaped like a
+#       user turn but the HUMAN DID NOT TYPE IT — Claude Code injects it. Seen
+#       carrying `Stop hook feedback: …` (a Stop hook's blocking output),
+#       `Continue from where you left off.` (a resume nudge) and the
+#       `<local-command-caveat>` envelope. The `<`-wrapped ones are dropped by
+#       conversation() anyway; the bare-prose ones are indistinguishable from a
+#       real prompt WITHOUT this flag, which is why it is now carried rather
+#       than dropped: the dashboard's focus mode promises "your prompt", and a
+#       hook's feedback rendered as a YOU bubble is not it (docs/dashboard.md,
+#       *View modes*). session_title has always skipped isMeta rows for the same
+#       reason — this makes that fact reusable instead of re-read per consumer.
 #   {"kind": "teammsg", "sender": str, "body": str} an incoming teammate message
 #   {"kind": "results", "blocks": [...], "tur": …, "texts": [str, ...]}
 #       a user record carrying tool_result blocks (in order) — `tur` is the
@@ -183,7 +194,10 @@ def parse_line(s):
             kind, a, b = classify_user_text(content)
             if kind == "teammsg":
                 return {"kind": "teammsg", "sender": a, "body": b}
-            return {"kind": "prompt", "text": content}
+            # isMeta = Claude Code injected this user turn (see the header) —
+            # carried so consumers can tell it from something the human typed.
+            return {"kind": "prompt", "text": content,
+                    "meta": bool(o.get("isMeta"))}
         if isinstance(content, list):
             blocks, texts = [], []
             for blk in content:
@@ -194,8 +208,15 @@ def parse_line(s):
                 elif blk.get("type") == "text" and (blk.get("text") or "").strip():
                     texts.append(blk.get("text"))
             if blocks or texts:
+                # `meta` as on a plain prompt (see the header): a SKILL LOAD
+                # arrives in exactly this shape — an isMeta user record whose
+                # text block is the whole SKILL.md body ("Base directory for
+                # this skill: …"), injected right after the Skill tool_result.
+                # Without the flag conversation() rendered it as a YOU prompt
+                # bubble holding the entire skill.
                 return {"kind": "results", "blocks": blocks,
-                        "tur": o.get("toolUseResult"), "texts": texts}
+                        "tur": o.get("toolUseResult"), "texts": texts,
+                        "meta": bool(o.get("isMeta"))}
         return None
     if t == "assistant":
         blocks = []
@@ -782,8 +803,16 @@ def conversation(path, pos=0, suspects=()):
         if kind == "prompt":
             t = rec["text"].strip()
             if t and not t.startswith("<"):        # command/caveat wrappers
-                out.append({"kind": "prompt", "text": t, "anchor": anchor,
-                            "ts": ts, "par": par, "uid": uid})
+                p = {"kind": "prompt", "text": t, "anchor": anchor,
+                     "ts": ts, "par": par, "uid": uid}
+                # Claude Code injected this turn rather than the human typing it
+                # (`Stop hook feedback: …`, a resume nudge). Carried, not
+                # dropped: it IS part of the conversation and belongs in the
+                # verbose stream — but a consumer that promises "what YOU said"
+                # (the dashboard's focus mode) needs to be able to tell.
+                if rec.get("meta"):
+                    p["meta"] = True
+                out.append(p)
         elif kind == "recap":
             out.append({"kind": "recap", "text": rec["text"],
                         "anchor": anchor, "ts": ts})
@@ -813,9 +842,11 @@ def conversation(path, pos=0, suspects=()):
                     out.append({"kind": "teammsg", "text": b, "sender": a,
                                 "anchor": anchor, "ts": ts})
                 elif text.strip() and not text.strip().startswith("<"):
-                    out.append({"kind": "prompt", "text": text.strip(),
-                                "anchor": anchor, "ts": ts, "par": par,
-                                "uid": uid})
+                    p = {"kind": "prompt", "text": text.strip(),
+                         "anchor": anchor, "ts": ts, "par": par, "uid": uid}
+                    if rec.get("meta"):      # an injected turn — a skill body
+                        p["meta"] = True
+                    out.append(p)
         elif kind == "assistant":
             for bkind, blk in rec["blocks"]:
                 if bkind == "text":
