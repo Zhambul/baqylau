@@ -3365,6 +3365,28 @@ def test_app_js_drains_through_the_shared_prompt_match(dash):
         assert 'endsWith("\\n" + ' not in body, part
 
 
+def test_app_js_tints_the_picked_slash_command(dash):
+    """A picked command/skill reads TINTED inside BOTH message boxes. The tint
+    must be built inside the ONE shared `slashMenu` helper — that is what makes
+    the composer and the new-session prompt carry it alike — and the mirror div
+    must COPY the textarea's metrics instead of re-declaring the font/padding in
+    CSS (a second declaration is exactly how such a mirror drifts a glyph out of
+    alignment). Static checks on the served bundles — no JS engine needed."""
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200 and "function cmdHighlight(" in ses
+    inside = ses.split("function slashMenu(")[1]
+    assert "cmdHighlight(ta, host" in inside, "both boxes get it via slashMenu"
+    assert "getComputedStyle(ta)" in ses and "HL_METRICS" in ses
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    assert "var(--exec)" in css.split(".cmhlt {")[1].split("}")[0]
+    mirror = css.split(".cmhl {")[1].split("}")[0]
+    assert "font" not in mirror and "padding" not in mirror   # copied, not declared
+    # every PROGRAMMATIC value change re-places the mirror (no `input` fires)
+    code, comp = _get(dash + "/static/app.08-composer.js")
+    assert code == 200 and "ta.cmdPaint()" in comp
+
+
 def test_conv_items_carry_kind_and_prompt_text():
     items = DS._conv_items([
         {"kind": "prompt", "text": "do the thing"},

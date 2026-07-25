@@ -757,6 +757,24 @@ body.in-session #accounts { display: none; }
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 .cmsrc { margin-left: auto; flex: none; font: 10px/1 var(--mono); color: var(--dim2); }
+/* the picked command, tinted inside the box — a mirror div laid OVER the
+   textarea (a range can't be styled inside one): its text is transparent and
+   only .cmhlt paints, a translucent --exec wash the box's own glyphs show
+   through. Every metric (font, padding, borders) is copied from the live
+   textarea by cmdHighlight — deliberately NOT re-declared here, so the box
+   stays the single owner of its typography. */
+.cmhl {
+  position: absolute; z-index: 2; pointer-events: none;
+  overflow: hidden; box-sizing: border-box;
+  border-style: solid; border-color: transparent;
+  white-space: pre-wrap; overflow-wrap: break-word; color: transparent;
+}
+.cmhl[hidden] { display: none; }
+.cmhlt {
+  background: color-mix(in srgb, var(--exec) 24%, transparent);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--exec) 34%, transparent);
+  border-radius: 3px;
+}
 .cinput {
   flex: 1; resize: none; overflow-y: auto;
   max-height: 40vh; max-height: 40dvh;  /* == GROW_CAP; dvh: keyboard-aware */

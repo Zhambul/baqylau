@@ -854,6 +854,35 @@ Claude Code's own palette parses and executes it — the menu only has to be
 good enough to complete against, never to validate, so `BUILTINS` drifting
 behind the CLI is harmless (an un-listed command still types fine).
 
+**The picked command reads TINTED in the box** (`cmdHighlight`, both boxes —
+it lives inside the shared `slashMenu`, which is what makes the composer and
+the new-session first prompt carry it alike), echoing the TUI, which paints a
+selected command/skill the same way. A `<textarea>` cannot style a *range* of
+its own text, so the tint is a **mirror div laid over the box**
+(`.cmhl`, `pointer-events: none`, its own text `color: transparent`) in which
+only the leading `/name` token carries a translucent `--exec` background —
+read as a wash over the textarea's own glyphs, like a selection highlight.
+Rejected alternatives: a `contenteditable` box (loses the native textarea
+behaviour the composer depends on — placeholder/ghost suggestion, autoGrow,
+dictation splices, iOS keyboard handling) and drawing the mirror *behind* a
+transparent textarea (the box's own background would have to move to a
+wrapper, restructuring the composer's flex row and its drag-drop target).
+The mirror's metrics — font, line-height, letter-spacing, padding, border
+widths — are **copied off the live textarea** (`getComputedStyle`,
+`HL_METRICS`), never re-declared in `style.css`: the box stays the single
+owner of its typography (its `@media (pointer: coarse)` ≥16px anti-zoom
+override among it), so a CSS twin can't drift a glyph out of alignment.
+What is tinted is the leading token *while it names a known command* (a name
+the menu has fetched, or the one just picked) — so editing it into something
+else drops the tint by itself, and `/gh:fix some args` tints just the
+`/gh:fix`. Painted one frame late (the caller's own `oninput` → `autoGrow`
+resizes the box on the same event, and the mirror must match the settled
+geometry), and re-placed through `autoGrow` — the one call every
+*programmatic* value change already goes through (draft restore, another
+device's SSE draft, a cleared send), none of which fire an `input` event.
+Purely presentational, so like the ctx bars / goal card it adds **no audit
+rows**: it restyles text the audited `send`/`command` path already records.
+
 **Both message boxes share the Claude Code input UX**: Enter sends (the
 composer) / launches (the form's first prompt), Shift+Enter inserts a
 newline — **except on an iPad**, where Enter is always a newline and only

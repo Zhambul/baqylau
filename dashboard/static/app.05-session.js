@@ -576,12 +576,94 @@ function cmdsFor(cwd, cache, key) {
   return cache[key];
 }
 
+// The picked command reads TINTED inside the box (Claude Code's TUI paints the
+// selected command/skill the same way). A <textarea> cannot style a range, so a
+// mirror div is positioned OVER the box (pointer-events:none, its own text
+// transparent) and only the leading "/name" token carries a translucent --exec
+// background — a tint the textarea's own glyphs show through, like a selection.
+// The mirror's metrics are COPIED from the live box (getComputedStyle), never
+// re-declared in CSS: the textarea stays the single owner of its font/padding
+// (the iPad ≥16px override among them), so the two can't drift out of alignment.
+const HL_METRICS = ["fontFamily", "fontSize", "fontWeight", "fontStyle",
+                    "lineHeight", "letterSpacing", "wordSpacing", "tabSize",
+                    "textIndent", "paddingTop", "paddingRight", "paddingBottom",
+                    "paddingLeft", "borderTopWidth", "borderRightWidth",
+                    "borderBottomWidth", "borderLeftWidth", "borderRadius"];
+
+function cmdHighlight(ta, host, isCmd) {
+  const hl = el("div", "cmhl");
+  hl.hidden = true;
+  host.append(hl);
+  let queued = false;
+  // the mirror tracks the box's live geometry: it grows with autoGrow, moves as
+  // the attachment strip wraps, and reflows on a resize/rotation
+  const place = () => {
+    const r = ta.getBoundingClientRect(), h = host.getBoundingClientRect();
+    hl.style.left = (r.left - h.left) + "px";
+    hl.style.top = (r.top - h.top) + "px";
+    hl.style.width = r.width + "px";
+    hl.style.height = r.height + "px";
+    const cs = getComputedStyle(ta);
+    for (const k of HL_METRICS) hl.style[k] = cs[k];
+  };
+  // Painted a frame LATE on purpose: the caller's own oninput (autoGrow) resizes
+  // the box on the same event, and the mirror must match the SETTLED geometry.
+  const paint = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => {
+      queued = false;
+      if (!ta.isConnected) return;
+      const v = ta.value;
+      // the leading token only, and only while it names a real command — editing
+      // it into something else (or sending) drops the tint by itself
+      const m = /^\/(\S+)(?=\s|$)/.exec(v);
+      const name = m && isCmd(m[1]) ? m[1] : null;
+      if (!name || ta.disabled) { hl.hidden = true; hl.textContent = ""; return; }
+      place();
+      hl.textContent = "";
+      hl.append(el("span", "cmhlt", "/" + name),
+                document.createTextNode(v.slice(name.length + 1)));
+      hl.scrollTop = ta.scrollTop;      // the rest of the text is only there to
+      hl.hidden = false;                // wrap/scroll the token like the box does
+    });
+  };
+  ta.addEventListener("input", paint);
+  ta.addEventListener("scroll", paint);
+  // autoGrow is the one hook every PROGRAMMATIC value change already goes
+  // through (draft restore, an SSE draft from another device, a cleared send),
+  // none of which fire `input` — see the autoGrow call in app.08-composer.js
+  ta.cmdPaint = paint;
+  const onResize = () => {
+    if (!ta.isConnected) { removeEventListener("resize", onResize); return; }
+    paint();
+  };
+  addEventListener("resize", onResize);
+  // the box can MOVE with no value change and no window resize — the attachment
+  // strip appearing above it wraps the composer's flex row (paint places the
+  // mirror, but nothing else would call it). Safe from feedback: the mirror is
+  // absolutely positioned, so painting it never resizes what we observe.
+  if (window.ResizeObserver) {
+    const ro = new ResizeObserver(() => {
+      if (!ta.isConnected) { ro.disconnect(); return; }
+      paint();
+    });
+    ro.observe(ta);
+    ro.observe(host);
+  }
+  return paint;
+}
+
 function slashMenu(ta, host, getCmds, opts) {
   const enterSends = !!(opts && opts.enterSends);
   const menu = el("div", "cmenu");
   menu.hidden = true;
   host.append(menu);
   let items = [], sel = 0;
+  // every command name this box has seen, so the tint can recognise one without
+  // a fetch of its own (a pick adds its name; a menu refresh adds the batch)
+  const known = new Set();
+  const hlPaint = cmdHighlight(ta, host, (name) => known.has(name));
 
   // the "/" token being completed, or null when the menu shouldn't show
   // (no leading slash, or whitespace = arguments underway)
@@ -593,6 +675,7 @@ function slashMenu(ta, host, getCmds, opts) {
   };
   const close = () => { menu.hidden = true; items = []; };
   const complete = (c) => {
+    known.add(c.name);                      // …so it paints tinted right away
     ta.value = "/" + c.name + " ";
     close();
     ta.focus();
@@ -612,10 +695,15 @@ function slashMenu(ta, host, getCmds, opts) {
     if (items.length && menu.children[sel])
       menu.children[sel].scrollIntoView({ block: "nearest" });
   };
+  const learn = (cmds) => {
+    cmds.forEach(c => known.add(c.name));
+    hlPaint();                              // a name we just learned may be typed
+    return cmds;
+  };
   const refresh = () => {
     const tok = token();
     if (tok === null) { close(); return; }
-    getCmds().then(cmds => {
+    getCmds().then(learn).then(cmds => {
       if (!ta.isConnected || token() !== tok) return;   // view/input moved on
       sel = 0;
       const q = tok.toLowerCase();
@@ -647,6 +735,9 @@ function slashMenu(ta, host, getCmds, opts) {
   ta.addEventListener("input", refresh);
   ta.addEventListener("blur", () => setTimeout(close, 150));   // menu clicks
   //                     preventDefault (never blur); this catches clicks away
+  // a RESTORED draft can already hold a picked command with nothing typed since
+  // (so no menu fetch would ever happen) — learn the names once, for the tint
+  if (ta.value.startsWith("/")) getCmds().then(learn);
   return { key };
 }
 

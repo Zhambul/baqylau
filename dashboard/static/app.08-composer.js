@@ -208,6 +208,10 @@ const GROW_CAP = 0.4;
 function autoGrow(ta) {
   ta.style.height = "auto";
   ta.style.height = Math.min(ta.scrollHeight, Math.round(innerHeight * GROW_CAP)) + "px";
+  // re-place the "/command" tint mirror (cmdHighlight): autoGrow is the one call
+  // every value change goes through, including the PROGRAMMATIC ones that fire
+  // no `input` event (draft restore, an SSE draft, a cleared send)
+  if (ta.cmdPaint) ta.cmdPaint();
 }
 
 // Persist the unsent composer text to the server (debounced) so a reopen on any
