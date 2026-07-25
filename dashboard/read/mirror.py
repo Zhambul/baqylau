@@ -14,7 +14,7 @@ from core import sessionapi as API
 from core import state as ST
 from core.noaudit import load_audit
 from dashboard import notehtml, opshtml
-from dashboard.read.meta import session_kv
+from dashboard.read.meta import session_cmds, session_kv
 from plugins.claude_code import memory as MEM
 
 A = load_audit()
@@ -78,7 +78,7 @@ def _mdify(tl):
     return tl
 
 
-def _conv_items(recs):
+def _conv_items(recs, cmds=()):
     """Conversation records -> stream items. Additively carry `kind`
     (prompt|message|teammsg|question|answer|recap) and, for prompts, the raw `text`:
     the page's queued-message chips match a DELIVERED prompt against what they
@@ -87,13 +87,16 @@ def _conv_items(recs):
     prompt starts processing). Every kind renders through opshtml.msg_html; only
     prompts need the raw text echoed back (queued-chip match + rewind picker)
     — plus `par`, the prompt's parentUuid, which the page's dropSuperseded
-    matches siblings on (docs/dashboard.md, *Discarded prompts*)."""
+    matches siblings on (docs/dashboard.md, *Discarded prompts*). `cmds` is the
+    session's real slash-command names, for the prompt bubbles' `/command` tint
+    — resolved ONCE per render by the caller (a directory walk behind a TTL
+    memo), never per bubble."""
     out = []
     for r in recs:
         it = {"g": None, "t": "msg", "kind": r["kind"],
               "html": opshtml.msg_html(r["kind"], r.get("text", ""),
                                        r.get("sender", ""), r.get("qa"),
-                                       r.get("par") or "")}
+                                       r.get("par") or "", cmds)}
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
             it["par"] = r.get("par") or ""
@@ -101,7 +104,7 @@ def _conv_items(recs):
     return out
 
 
-def merge_live(ops, recs, key=""):
+def merge_live(ops, recs, key="", cmds=()):
     """A LIVE SSE delta of new ops + new conversation recs -> ONE oldest->newest
     item list, interleaved by ts — the increment-side twin of _merge_order's
     placement rule. Without it the SSE loop emits ops and msgs as two separate
@@ -122,7 +125,7 @@ def merge_live(ops, recs, key=""):
     while i < len(ops) and j < len(recs):
         ot, rt = ops[i].get("_ts"), recs[j].get("ts")
         if rt is not None and (ot is None or rt < ot):
-            items.extend(_conv_items([recs[j]]))
+            items.extend(_conv_items([recs[j]], cmds))
             j += 1
         else:
             items.extend(opshtml.op_items([ops[i]], key))
@@ -130,7 +133,7 @@ def merge_live(ops, recs, key=""):
     for op in ops[i:]:
         items.extend(opshtml.op_items([op], key))
     if j < len(recs):
-        items.extend(_conv_items(recs[j:]))
+        items.extend(_conv_items(recs[j:], cmds))
     return items
 
 
@@ -261,14 +264,14 @@ def _snap(entries, start):
     return start
 
 
-def _render_window(entries, start, key):
+def _render_window(entries, start, key, cmds=()):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
     op_items, msg entries through _conv_items. Only the windowed slice is
     rendered — the whole point of the block cut."""
     out = []
     for _slot, kind, obj in entries[start:]:
         out.extend(opshtml.op_items([obj], key) if kind == "op"
-                   else _conv_items([obj]))
+                   else _conv_items([obj], cmds))
     return out
 
 
@@ -283,7 +286,8 @@ def merged_backlog(sid, key, blocks=TAIL_BLOCKS):
     entries, last, mpos = _merge_order(sid, key)
     start = _snap(entries, _cut_blocks(entries, blocks))
     oldest = entries[start][0] if start > 0 else 0
-    return last, mpos, oldest, _render_window(entries, start, key)
+    return last, mpos, oldest, _render_window(entries, start, key,
+                                              session_cmds(sid))
 
 
 def history(sid, key, before, blocks):
@@ -305,7 +309,7 @@ def history(sid, key, before, blocks):
     universe = entries[:bound]
     start = _snap(universe, _cut_blocks(universe, blocks))
     oldest = universe[start][0] if start > 0 else 0
-    return oldest, _render_window(universe, start, key)
+    return oldest, _render_window(universe, start, key, session_cmds(sid))
 
 
 def ops_payload(sid, after):

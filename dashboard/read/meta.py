@@ -265,6 +265,45 @@ def session_goal(tpath):
     return _size_cached(_GOAL, tpath, lambda: plugins.goal(tpath))
 
 
+_CMDS = API.BoundedLRU(MEMO_CAP)   # cwd -> (monotonic expiry, frozenset(names)).
+#                   TTL'd like _DIRTY, not size-keyed like the transcript memos:
+#                   the input is a DIRECTORY WALK (every ancestor .claude's
+#                   commands/skills), which has no cheap fingerprint, and a
+#                   command file added mid-session must start tinting without a
+#                   server restart. One walk per cwd per TTL instead of one per
+#                   rendered bubble.
+CMDS_TTL_S = 60.0      # command-set staleness bound (a new .md shows within it)
+
+
+def cmd_names(cwd):
+    """The set of REAL slash-command names available in `cwd` — the truth behind
+    the prompt bubbles' `/command` tint (docs/dashboard.md, *The "/" menu*).
+    Names only: the "/" menu fetches the full {name, desc, src} rows through the
+    same `plugins.slash_commands` provider — this is its projection, so the tint
+    and the menu can never disagree about what a real command is."""
+    if not cwd:
+        return frozenset()
+    now = time.monotonic()
+    hit = _CMDS.get(cwd)
+    if hit and hit[0] > now:
+        return hit[1]
+    try:
+        names = frozenset(c.get("name") or "" for c in plugins.slash_commands(cwd))
+    except Exception:
+        names = frozenset()          # discovery is best-effort: no tint, no failure
+    _CMDS[cwd] = (now + CMDS_TTL_S, names)
+    return names
+
+
+def session_cmds(sid):
+    """cmd_names for a session's cwd — the one door the mirror/SSE/meta readers
+    use, so none of them re-derives the cwd lookup."""
+    row = API.session_row(sid) or {}
+    # canon_cwd, like every other cwd-keyed reader here — so the mirror's
+    # lookup and session_payload's share ONE memo entry (and one walk)
+    return cmd_names(canon_cwd(row.get("cwd") or ""))
+
+
 def _session_slug(sid):
     """The session's subscription-account slug from its statusline stash
     ('' for the default account / no stash) — resolves WHICH user-level

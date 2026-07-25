@@ -76,12 +76,30 @@ function closeSession(sid, via) {
 // The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
 // the pinned queued bubble): the text with hard line breaks, textContent only —
 // never innerHTML, since an undelivered prompt must never interpret markup.
+// The leading "/command" of a message, when it NAMES a real command — the
+// deliberate cross-language twin of the server's `_lead_cmd`
+// (dashboard/opshtml/tools.py), which tints the transcript bubbles IT renders.
+// This one serves the two bubbles the page builds itself and the server never
+// sees: the optimistic stand-in and the ⧗ queued chip. The name list is the
+// SERVER's (meta.commands, from the same plugins.slash_commands the "/" menu
+// uses), so the two renderers can't disagree about what a real command is.
+function leadCmd(text) {
+  const names = (S.ses && S.ses.meta && S.ses.meta.commands) || null;
+  if (!names || !names.length || !(text || "").startsWith("/")) return "";
+  const m = /^\/(\S+)(?=\s|$)/.exec(text);
+  return m && names.indexOf(m[1]) >= 0 ? m[0] : "";
+}
+
 function promptMd(text) {
   const md = el("div", "md");
   const p = el("p");
+  const tok = leadCmd(text);
   (text || "").split("\n").forEach((line, i) => {
     if (i) p.append(el("br"));
-    p.append(tnode(line));
+    if (!i && tok)                       // the token can only lead the FIRST line
+      p.append(el("span", "cmdtok", tok), tnode(line.slice(tok.length)));
+    else
+      p.append(tnode(line));
   });
   md.append(p);
   return md;

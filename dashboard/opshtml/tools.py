@@ -5,6 +5,7 @@
 # markdown (md_html).
 import html
 import json
+import re
 
 from dashboard.opshtml.ansi import ansi_html, _esc
 from dashboard.opshtml.markdown import md_html
@@ -46,7 +47,40 @@ def answer_html(pairs):
     return "<div class=\"ansqa\">%s</div>" % "".join(rows) if rows else None
 
 
-def msg_html(kind, text, sender="", qa=None, par=""):
+# --- the prompt bubble's leading "/command" tint -----------------------------
+# A prompt you sent as a slash command reads TINTED in the transcript, the same
+# --exec wash the composer paints on the token you picked (docs/dashboard.md,
+# *The "/" menu*). The rule — leading token, whitespace/EOL-terminated, and it
+# must NAME a real command — is the deliberate cross-language twin of the page's
+# own `leadCmd` (app.06-clientlog.js, for the optimistic/queued stand-ins the
+# server never renders); keep the two in step. `cmds` is read_model-supplied
+# (read.meta.cmd_names) — an empty set simply means no tint, never a wrong one.
+_CMD_LEAD = re.compile(r"/(\S+)(?=\s|$)")
+
+
+def _lead_cmd(text, cmds):
+    """The leading '/name' of `text` when it names a real command, else ''."""
+    if not cmds or not (text or "").startswith("/"):
+        return ""
+    m = _CMD_LEAD.match(text)
+    return m.group(0) if m and m.group(1) in cmds else ""
+
+
+def _tint_lead(body, tok):
+    """Wrap `tok` in the rendered body's FIRST block, where a leading token must
+    be. Structural, not a blind replace: the token has to sit immediately after
+    the first opening tag (`<p>/compact …`) or nothing is touched — so an
+    unexpected render (a list, a fence, an already-marked-up head) degrades to
+    the untinted body instead of corrupting it."""
+    i = body.find(">")
+    esc = html.escape(tok, quote=False)
+    if i < 0 or not body.startswith(esc, i + 1):
+        return body
+    return "%s<span class=\"cmdtok\">%s</span>%s" % (
+        body[:i + 1], esc, body[i + 1 + len(esc):])
+
+
+def msg_html(kind, text, sender="", qa=None, par="", cmds=()):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
@@ -63,7 +97,9 @@ def msg_html(kind, text, sender="", qa=None, par=""):
     recap text. `par` (prompt only) is the record's `parentUuid` — its place in
     the transcript's message tree, stamped as `data-par` so the page can spot a
     prompt a later one re-parented over and drop the dead bubble live
-    (docs/dashboard.md, *Discarded prompts*)."""
+    (docs/dashboard.md, *Discarded prompts*). `cmds` (prompt only) is the
+    session's real slash-command names — the leading `/name` of a prompt that
+    IS one renders tinted (_lead_cmd/_tint_lead); empty = no tint."""
     who = {"prompt": "you", "message": "claude",
            "question": "claude ▸ asks you", "answer": "you ▸ answered",
            "recap": "↩ recap"} \
@@ -89,9 +125,14 @@ def msg_html(kind, text, sender="", qa=None, par=""):
         if inner is not None:
             return ("<div class=\"msg answer\"><span class=\"who\">%s</span>%s</div>"
                     % (who, inner))
+    body = md_html(text)
+    if kind == "prompt":
+        tok = _lead_cmd(text or "", cmds)
+        if tok:
+            body = _tint_lead(body, tok)
     return ("<div class=\"msg %s\"%s><span class=\"who\">%s</span>"
             "<div class=\"md\">%s</div></div>"
-            % (html.escape(kind, quote=True), extra, who, md_html(text)))
+            % (html.escape(kind, quote=True), extra, who, body))
 
 
 # --- rich tool rendering (tool_html / tool_output_html) -----------------------

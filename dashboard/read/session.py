@@ -11,8 +11,9 @@ from core import sessionapi as API
 from core import tabs
 from dashboard import opshtml, prefs, suggestion
 from dashboard.control import launch
-from dashboard.read.meta import (canon_cwd, git_info, session_ctx, session_goal,
-                                 session_kv, session_title, _session_slug)
+from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
+                                 session_goal, session_kv, session_title,
+                                 _session_slug)
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import memory as MEM
 from plugins.claude_code import model as M
@@ -150,6 +151,12 @@ def session_payload(sid):
     # pref (docs/dashboard.md, *Telegram alerts*), so the header toggle reflects
     # + flips it live AND parked
     data["notify_muted"] = prefs.notify_muted(sid)
+    # the session's real slash-command NAMES — the server tints them inside the
+    # prompt bubbles it renders, and the page needs the same truth for the two
+    # bubbles it builds ITSELF (the optimistic stand-in + the ⧗ queued chip),
+    # which never pass through msg_html. Shipped here rather than fetched: one
+    # source, so the two renderers can't disagree about what a real command is.
+    data["commands"] = sorted(cmd_names(data.get("cwd") or ""))
     return data
 
 

@@ -41,6 +41,11 @@
   --blue: #61afef;
   --amber: #d6995c;
 
+  /* the "/command" tint — ONE hue for both places a picked command is shown:
+     the input-box overlay (.cmhlt) and the transcript prompt bubble (.cmdtok) */
+  --cmdtint: color-mix(in srgb, var(--exec) 24%, transparent);
+  --cmdtint-ring: color-mix(in srgb, var(--exec) 34%, transparent);
+
   --sans: "Inter", system-ui, -apple-system, sans-serif;
   --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
   --r: 0.5rem;
@@ -771,9 +776,17 @@ body.in-session #accounts { display: none; }
 }
 .cmhl[hidden] { display: none; }
 .cmhlt {
-  background: color-mix(in srgb, var(--exec) 24%, transparent);
-  box-shadow: 0 0 0 1px color-mix(in srgb, var(--exec) 34%, transparent);
+  background: var(--cmdtint);
+  box-shadow: 0 0 0 1px var(--cmdtint-ring);
   border-radius: 3px;
+}
+/* the same tint on the SENT command, inside a prompt bubble (opshtml.msg_html's
+   _tint_lead server-side, promptMd's leadCmd for the page's own stand-ins) —
+   here the text is ours to colour, so it takes the --exec hue too */
+.cmdtok {
+  background: var(--cmdtint);
+  box-shadow: 0 0 0 1px var(--cmdtint-ring);
+  border-radius: 3px; color: var(--exec);
 }
 .cinput {
   flex: 1; resize: none; overflow-y: auto;

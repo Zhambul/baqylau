@@ -15,7 +15,7 @@ from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.notify.notifier import NOTIFIER
 from dashboard.read.lists import (sessions_payload,
                                   _row_key, _wire_row)
-from dashboard.read.meta import (git_info, session_ctx, session_goal,
+from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
                                  session_title, _session_slug)
 from dashboard.read.mirror import (merged_backlog, merge_live, _enrich_entries)
 from dashboard.read.session import (agents_ctx, agents_model_effort,
@@ -139,6 +139,10 @@ class _SseMixin:
         row = API.session_row(sid) or {}
         win = str(row.get("kitty_window_id") or "")
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
+        # the prompt bubbles' `/command` tint: resolved per tick off the cwd
+        # (a TTL memo — a command file added mid-session starts tinting without
+        # a reconnect), never per bubble
+        cwd = row.get("cwd") or ""
         if not after and not mpos:
             last, mpos, oldest, items = merged_backlog(sid, key)
             if items and not self._sse("ops", {"last": last, "mpos": mpos,
@@ -159,7 +163,8 @@ class _SseMixin:
                 recs, mpos = got            # advance the transcript cursor always
             if ops or recs:
                 if not self._sse("ops", {"last": last2, "mpos": mpos,
-                                         "items": merge_live(ops, recs, key)}):
+                                         "items": merge_live(ops, recs, key,
+                                                             cmd_names(cwd))}):
                     return
                 last = last2
             if recs:

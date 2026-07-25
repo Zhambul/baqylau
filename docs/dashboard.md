@@ -930,6 +930,41 @@ device's SSE draft, a cleared send), none of which fire an `input` event.
 Purely presentational, so like the ctx bars / goal card it adds **no audit
 rows**: it restyles text the audited `send`/`command` path already records.
 
+**The same tint carries into the TRANSCRIPT** — a prompt you sent as a slash
+command keeps its `/name` tinted in its bubble, so the feed reads as a history
+of commands rather than of text that happens to start with a slash. Scope, all
+three deliberate: **your prompt bubbles only** (`kind == "prompt"` — Claude's
+messages quote commands often enough that tinting them would be noise, and the
+question/answer/recap bubbles aren't things you typed); the **leading** token
+only (whitespace/EOL-terminated — `/gh:fix some args` tints just the `/gh:fix`);
+and only when it **names a real command**. "Real" is `read.meta.cmd_names(cwd)`
+— a TTL'd (`CMDS_TTL_S`) frozenset over the same `plugins.slash_commands(cwd)`
+the "/" menu lists, so the menu and the tint can never disagree about what a
+command is, and a `.md` added mid-session starts tinting without a restart. The
+walk is per-cwd-per-TTL, resolved ONCE per render by `merged_backlog` /
+`history` / the SSE tick (`session_cmds`), never per bubble.
+
+Rendering is `opshtml.msg_html`'s `_lead_cmd` + `_tint_lead`. The wrap is
+**structural, not a blind replace**: the escaped token must sit immediately
+after the rendered body's first opening tag (`<p>/compact …`), else the body is
+returned untouched — so an unexpected render (a list, a fence, an already
+marked-up head) degrades to no tint instead of corrupted HTML. Rejected: doing
+it in `md_html` (the markdown owner has no business knowing about commands) and
+splitting the source into "first line + rest" before rendering (it re-flows a
+multi-line prompt into two paragraphs).
+
+The two bubbles the PAGE builds itself — the optimistic stand-in and the ⧗
+queued chip — never pass through `msg_html`, so `promptMd` tints them
+client-side via `leadCmd` (app.06-clientlog.js), the deliberate cross-language
+twin of `_lead_cmd`. Its name list is the **server's**: `session_payload` ships
+`commands` (names only — the projection of the same provider) rather than
+having the page fetch its own, so both renderers agree by construction. That
+matters most for a queued chip, which can sit in the feed for minutes before
+its real bubble arrives. Same `--cmdtint` hue as the input overlay (one CSS
+custom property owns it; `.cmdtok` adds the `--exec` text colour, which the
+transparent-text overlay can't use), and, being presentational, it adds no
+audit rows either.
+
 **Both message boxes share the Claude Code input UX**: Enter sends (the
 composer) / launches (the form's first prompt), Shift+Enter inserts a
 newline — **except on an iPad**, where Enter is always a newline and only

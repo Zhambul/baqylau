@@ -3439,7 +3439,9 @@ def test_app_js_tints_the_picked_slash_command(dash):
     assert "getComputedStyle(ta)" in ses and "HL_METRICS" in ses
     code, css = _get(dash + "/static/style.css")
     assert code == 200
-    assert "var(--exec)" in css.split(".cmhlt {")[1].split("}")[0]
+    # the hue has ONE owner (--cmdtint), shared with the transcript's .cmdtok
+    assert "var(--cmdtint)" in css.split(".cmhlt {")[1].split("}")[0]
+    assert "var(--exec)" in css.split("--cmdtint:")[1].split(";")[0]
     mirror = css.split(".cmhl {")[1].split("}")[0]
     assert "font" not in mirror and "padding" not in mirror   # copied, not declared
     # every PROGRAMMATIC value change re-places the mirror (no `input` fires)
@@ -3472,6 +3474,68 @@ def test_conv_items_carry_kind_and_prompt_text():
     assert items[0]["text"] == "do the thing"        # the queue-chip match key
     assert "text" not in items[1] and "text" not in items[2]
     assert all(it["t"] == "msg" and it["g"] is None for it in items)
+
+
+def test_prompt_bubbles_tint_a_real_slash_command(dash, tmp_path):
+    """A prompt SENT as a slash command reads tinted in the transcript — the
+    server-rendered twin of the composer's own `/command` tint. Real commands
+    only: the leading token must name one the session's cwd actually has (a CLI
+    built-in or a discovered .claude/commands entry), so a message that merely
+    opens with a slash is left alone. End-to-end through the read model
+    (cwd -> meta.cmd_names -> msg_html), which is where it could silently stop
+    tinting without either half changing."""
+    proj = tmp_path / "proj"
+    (proj / ".claude" / "commands").mkdir(parents=True)
+    (proj / ".claude" / "commands" / "deploy.md").write_text(
+        "---\ndescription: ship it\n---\nbody\n")
+    tp = _tw(tmp_path, "cmds.jsonl",
+             {"type": "user", "message": {"content": "/deploy staging"}},
+             {"type": "user", "message": {"content": "/compact"}},
+             {"type": "user", "message": {"content": "/notacommand at all"}})
+    A.session_start({"session_id": "dashct", "cwd": str(proj),
+                     "transcript_path": tp})
+    _last, _mpos, _oldest, items = DS.merged_backlog("dashct", "dashct")
+    got = [it["html"] for it in items if it.get("kind") == "prompt"]
+    assert len(got) == 3
+    assert '<span class="cmdtok">/deploy</span> staging' in got[0]   # discovered
+    assert '<span class="cmdtok">/compact</span>' in got[1]          # built-in
+    assert "cmdtok" not in got[2]                       # not a command: no tint
+
+
+def test_msg_html_tint_is_prompt_only_and_fail_safe():
+    """The tint's guard rails: prompts only (Claude's own messages quote
+    commands often enough to be noise), an unknown name is never tinted, and the
+    wrap is STRUCTURAL — the token has to sit right after the body's first
+    opening tag or the body is returned untouched, so an unexpected render can't
+    be corrupted by a blind replace."""
+    cmds = frozenset({"compact"})
+    assert '<span class="cmdtok">/compact</span> now' in \
+        opshtml.msg_html("prompt", "/compact now", cmds=cmds)
+    assert "cmdtok" not in opshtml.msg_html("message", "/compact now", cmds=cmds)
+    assert "cmdtok" not in opshtml.msg_html("prompt", "/other now", cmds=cmds)
+    assert "cmdtok" not in opshtml.msg_html("prompt", "/compact now")  # no list
+    assert "cmdtok" not in opshtml.msg_html("prompt", "hi /compact", cmds=cmds)
+    # a body whose first block is not the bare token (a list item) is left alone
+    assert "cmdtok" not in opshtml.msg_html("prompt", "- /compact", cmds=cmds)
+    # escaping is unchanged around the tinted token
+    h = opshtml.msg_html("prompt", "/compact <b>x</b> & co", cmds=cmds)
+    assert "&lt;b&gt;x&lt;/b&gt; &amp; co" in h and "<b>" not in h
+
+
+def test_app_js_tints_the_client_built_prompt_bubbles(dash):
+    """The two prompt bubbles the page builds ITSELF (the optimistic stand-in
+    and the ⧗ queued chip) never pass through msg_html, so they carry their own
+    tint — through the ONE shared promptMd, off the SERVER's name list
+    (meta.commands), so the two renderers can't disagree about what a real
+    command is. Static check on the served bundle + the payload field."""
+    code, body = _get(dash + "/static/app.06-clientlog.js")
+    assert code == 200
+    assert "function leadCmd(" in body and "leadCmd(text)" in body
+    assert "meta.commands" in body, "the name list must come from the server"
+    assert 'el("span", "cmdtok", tok)' in body
+    A.session_start({"session_id": "dashcm", "cwd": "/w", "transcript_path": ""})
+    ov = _get_json(dash + "/api/session/dashcm")
+    assert isinstance(ov.get("commands"), list) and "compact" in ov["commands"]
 
 
 def test_post_message_no_window_is_409(dash, monkeypatch):
