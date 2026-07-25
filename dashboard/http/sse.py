@@ -50,6 +50,20 @@ class _SseMixin:
                 return False
         return True
 
+    def _keepalive(self, beat, force=False):
+        """The per-tick keep-alive: send a heartbeat comment iff HEARTBEAT_S has
+        passed since `beat` (or `force` — sse_global beats right after it drains
+        the notifier queue, so an idle proxy sees traffic on the same tick it
+        forwarded an event). Returns (new beat, client-still-there); the caller
+        MUST `return` on a False, same contract as _push_changed and for the same
+        reason — every one of the three loops owed both halves of this, and an
+        unchecked _sse_beat leaks a dead connection's thread until the next
+        write."""
+        now = time.monotonic()
+        if not force and now - beat <= HEARTBEAT_S:
+            return beat, True
+        return now, self._sse_beat()
+
     # -- SSE loops --
     def sse_global(self):
         """The all-sessions stream: a `hello` (the server's BOOT_ID — the
@@ -98,11 +112,9 @@ class _SseMixin:
                     if not self._sse("sessions-delta", {"rows": changed}):
                         return
                     keys = cur
-                now = time.monotonic()
-                if drained or now - beat > HEARTBEAT_S:
-                    beat = now
-                    if not self._sse_beat():
-                        return
+                beat, alive = self._keepalive(beat, drained)
+                if not alive:
+                    return
         finally:
             NOTIFIER.unregister(q)
 
@@ -292,11 +304,9 @@ class _SseMixin:
                 sug = prev["suggestion"]
             if not self._push_changed(prev, "suggestion", "suggestion", sug, {"suggestion": sug}):
                 return
-            now = time.monotonic()
-            if now - beat > HEARTBEAT_S:
-                beat = now
-                if not self._sse_beat():
-                    return
+            beat, alive = self._keepalive(beat)
+            if not alive:
+                return
             n += 1
             time.sleep(TICK_S)
 
@@ -327,9 +337,7 @@ class _SseMixin:
                     if not self._sse("resolve", {"pos": pos,
                                                  "resolutions": resolutions}):
                         return
-            now = time.monotonic()
-            if now - beat > HEARTBEAT_S:
-                beat = now
-                if not self._sse_beat():
-                    return
+            beat, alive = self._keepalive(beat)
+            if not alive:
+                return
             time.sleep(TICK_S)
