@@ -165,8 +165,7 @@ function renderSessionChrome(tab) {
       // optimistic close: beacon the `close` lifecycle (web-hint op=close) and
       // navigate back to the list on the POST ack — the list card shows greyed
       // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
-      S.closing.add(sid);
-      S.closePend[sid] = optPending(sid, "close");
+      closeBegin(sid);
       closeSession(sid, "header")
         .then(() => {
           toast("done", "session closed", "terminal tab closed");
@@ -175,11 +174,7 @@ function renderSessionChrome(tab) {
           if (S.cur === sid) location.hash = "#/";
         })
         .catch(e => {
-          S.closing.delete(sid);
-          if (S.closePend[sid]) {
-            S.closePend[sid].settle("dropped", { reason: "failed" });
-            delete S.closePend[sid];
-          }
+          closeSettle(sid, "dropped", { reason: "failed" });
           cls.disabled = false;
           cls.textContent = "✕ close";
           clientFail(sid, "close", e);   // a lost/rejected /stop the audit can't see

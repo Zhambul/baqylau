@@ -52,10 +52,12 @@ const S = {
   closePend: {},         // sid -> optPending handle for a close in flight (the
                          // web-hint lifecycle + reconcile). MUST be an object:
                          // reconcileCloses does Object.keys(S.closePend) on every
-                         // sessions tick and the ✕ handler does S.closePend[sid]=…
+                         // sessions tick and closeBegin does S.closePend[sid]=…
                          // — an undefined here threw a TypeError BEFORE closeSession
                          // ran, so /stop never fired (THE "still not closing" bug,
-                         // caught by the js.error frontend-audit row at app.js:878)
+                         // caught by the js.error frontend-audit row at app.js:878).
+                         // Mutated ONLY via closeBegin/closeSettle below; every
+                         // other site reads it
   hidden: {},            // {group_key: hidden_at_epoch} — directories the ✕
                          // hid from the list (server prefs, /api/dirs/hidden).
                          // A group stays hidden only while it has no session
@@ -88,6 +90,31 @@ const LAUNCH_RESOLVE_TRIES = 12;
 // instead of hanging silently (docs/dashboard.md *Close via the plain-fetch
 // channel*).
 const CLOSE_POST_MS = 12000;
+
+// The in-flight state of an optimistic close, in ONE place. Two maps have to
+// move together — S.closing (the greyed card / disabled ✕) and S.closePend (the
+// optPending web-hint handle) — and the handle must settle EXACTLY once: leak it
+// and its 20s watchdog beacons a bogus `stale` row (the stuck-greyed-state bug
+// signal) for a close that in fact resolved. Three call sites hand-rolled that
+// pairing — the card ✕ (app.04-list.js), the header ✕ (app.11-chrome.js) and
+// reconcileCloses — in two files, which is one edit away from a map that keeps a
+// sid the other dropped (a ✕ disabled forever, or a card stuck grey).
+function closeBegin(sid) {
+  S.closing.add(sid);
+  S.closePend[sid] = optPending(sid, "close");
+}
+
+// End it: `phase` is the web-hint lifecycle transition — "reconciled" (the
+// sessions snapshot shows the tab actually parked) or "dropped" (the POST
+// failed, and the caller reverts its own button/card chrome). Safe to call for a
+// sid with nothing in flight (a close begun in a previous page load).
+function closeSettle(sid, phase, extra) {
+  S.closing.delete(sid);
+  const pend = S.closePend[sid];
+  if (!pend) return;
+  delete S.closePend[sid];
+  pend.settle(phase, extra);
+}
 
 // iPad detection — gates the message boxes' Enter behavior AND every
 // non-user-initiated .focus() (view-open, form-open, post-send refocus:

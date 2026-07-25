@@ -493,6 +493,25 @@ def test_http_root_and_static_whitelist(dash):
     assert e.value.code == 404
 
 
+def test_close_in_flight_state_has_one_owner(dash):
+    """The two halves of an optimistic close — S.closing (greyed card) and
+    S.closePend (the optPending web-hint handle) — are MUTATED only by
+    closeBegin/closeSettle in app.00-core.js. The card ✕, the header ✕ and
+    reconcileCloses hand-rolled the pairing in two files; the settle half also
+    had to fire exactly once, since a leaked handle beacons a bogus `stale` row
+    (the stuck-greyed-state bug signal) 20s after a close that did resolve.
+    Static check on the served parts: reads (`.has`, `Object.keys`, `.t0`) stay
+    open to every site, writes don't."""
+    for part in ("04-list", "11-chrome", "05-session", "07-dialogs"):
+        code, body = _get(dash + "/static/app.%s.js" % part)
+        assert code == 200
+        for write in ("S.closing.add", "S.closing.delete", "S.closePend[sid] =",
+                      "delete S.closePend"):
+            assert write not in body, "%s writes close state: %s" % (part, write)
+    code, core = _get(dash + "/static/app.00-core.js")
+    assert "function closeBegin(" in core and "function closeSettle(" in core
+
+
 def test_app_js_initializes_close_state(dash):
     """Regression guard for THE "still not closing" bug: the ✕ handler does
     `S.closePend[sid] = optPending(...)` and reconcileCloses does

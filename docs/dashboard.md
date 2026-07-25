@@ -2480,6 +2480,15 @@ initialized (`closePend: {}`), guarded by `test_app_js_initializes_close_state`.
 The frontend audit is what surfaced it — an uncaught handler exception was
 previously invisible server-side, exactly the blind spot this channel closes.
 
+Both halves of that in-flight state now have ONE owner, `closeBegin` /
+`closeSettle` in `app.00-core.js` (`test_close_in_flight_state_has_one_owner`):
+`S.closing` (the greyed card + disabled ✕) and `S.closePend` (the `optPending`
+handle) have to move together, and the handle must settle EXACTLY once — a
+leaked one beacons a bogus `web-hint stale` 20s later for a close that did
+resolve, i.e. it manufactures the very bug signal this machinery exists to
+report. Three sites in two files (the card ✕, the header ✕, `reconcileCloses`)
+hand-rolled the pairing; every other site only READS the maps.
+
 **The launch tag-race (why a just-launched session's controls were dead).** A
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged
 `claude_session=<sid>` for a moment, so `/api/session` momentarily reports

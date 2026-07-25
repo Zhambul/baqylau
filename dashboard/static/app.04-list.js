@@ -190,9 +190,7 @@ function reconcileCloses() {
     if (row && row.live) continue;             // still live — close hasn't landed
     clog(sid, "close.reconciled",
          { ms: Math.round(performance.now() - S.closePend[sid].t0) });
-    S.closePend[sid].settle("reconciled");
-    delete S.closePend[sid];
-    S.closing.delete(sid);
+    closeSettle(sid, "reconciled");
     const card = S.cards.get(sid);
     if (card) card.classList.remove("closing");
   }
@@ -305,19 +303,14 @@ function cardClose(sid) {
     // from the sessions poll may lag a tick), and beacon the `close` lifecycle
     // (web-hint op=close). reconcileCloses swaps it to the parked chip when the
     // snapshot shows the sid go not-live; a failed POST reverts.
-    S.closing.add(sid);
-    S.closePend[sid] = optPending(sid, "close");
+    closeBegin(sid);
     btn.textContent = "closing…";
     const a = btn.closest(".scard");
     if (a) a.classList.add("closing");
     closeSession(sid, "card")
       .then(() => toast("done", "session closed", "terminal tab closed"))
       .catch(err => {
-        S.closing.delete(sid);
-        if (S.closePend[sid]) {
-          S.closePend[sid].settle("dropped", { reason: "failed" });
-          delete S.closePend[sid];
-        }
+        closeSettle(sid, "dropped", { reason: "failed" });
         btn.disabled = false;
         btn.textContent = "✕";
         if (a) a.classList.remove("closing");
