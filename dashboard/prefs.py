@@ -7,6 +7,8 @@
 #   new-session        →  {cwd, model, effort}  (the launch form's last-used values)
 #   new-session-draft  →  {cwd: {text, seq}}    (its UNSENT first-prompt drafts,
 #                                                one per directory)
+#   view-mode          →  {sid: mode}           (each session's mirror density —
+#                                                verbose | default | focus)
 #
 # This is DELIBERATELY unlike the per-session kv helpers in core/state.py:
 #   - it is GLOBAL (one row set per machine), not keyed by session_id;
@@ -294,6 +296,53 @@ def set_notify_muted(sid, muted):
         else:
             d.pop(str(sid), None)
     return mutate_map(NOTIFY_MUTE_KEY, _apply)
+
+
+# --- the mirror's VIEW MODE, per session (the filter bar's 3-way control) --------
+# Which of Claude Code's three transcript densities the session's web mirror is
+# rendered at (docs/dashboard.md, *View modes*), stored under one kv key as a
+# {session_id: mode} map.
+#
+# DELIBERATELY per-session and NOT a global default: switching one session to
+# focus must not silently re-render every other one (a mode is a per-session
+# reading choice, unlike the alerts switch, which is one machine-wide policy).
+# So a session the user never touched stays VERBOSE — today's dashboard
+# behaviour, and the mode where nothing is ever hidden.
+#
+# This ONLY ever changes what the browser paints. Claude Code has its own
+# `viewMode` setting for the TUI and this store is not it: nothing here is
+# written into any settings.json, and the terminal mirror keeps painting
+# everything at every mode.
+#
+# Global like the other dashboard prefs (it survives park, so a parked session
+# re-opens at the mode you last read it in), and a mode set back to the default
+# DELETES the key so the map stays the small set of overridden sessions.
+VIEW_MODE_KEY = "view-mode"
+# The mode vocabulary, in control order (the page renders the segmented control
+# from the served list). VERBOSE is first because it is the default.
+VIEW_MODES = ("verbose", "default", "focus")
+VIEW_DEFAULT = VIEW_MODES[0]
+
+
+def view_mode(sid):
+    """The stored view mode for `sid`, or VIEW_DEFAULT when unset / unreadable /
+    junk (an unknown stored value can never make the page hide content)."""
+    d = get(VIEW_MODE_KEY, {})
+    mode = d.get(str(sid)) if isinstance(d, dict) else None
+    return mode if mode in VIEW_MODES else VIEW_DEFAULT
+
+
+def set_view_mode(sid, mode):
+    """Persist `mode` as the view mode for `sid`; returns the updated map.
+    Atomic read-modify-write (mutate_map) so two sessions' concurrent switches
+    can't lose each other's entry; best-effort like set(). The default mode is
+    stored as an ABSENCE (see the note above)."""
+    def _apply(d):
+        if mode == VIEW_DEFAULT:
+            d.pop(str(sid), None)
+        else:
+            d[str(sid)] = mode
+    return mutate_map(VIEW_MODE_KEY, _apply)
 
 
 # --- global alerts toggle (the list page's ◉/○, next to "+ session") -------------

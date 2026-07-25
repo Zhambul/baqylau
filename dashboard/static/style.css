@@ -450,6 +450,19 @@ code, pre, .mono { font-family: var(--mono); }
   box-shadow: inset 0 0 0 1px var(--hair);
 }
 .fcount { color: var(--dim2); font: 11px/1 var(--mono); flex: none; margin-left: auto; }
+/* the view-mode control (verbose · default · focus) — a segmented switch, so the
+   three read as ONE choice, unlike the kind chips beside it (independent
+   toggles). docs/dashboard.md *View modes* */
+.vmodes {
+  display: inline-flex; flex: none; border-radius: var(--r);
+  box-shadow: inset 0 0 0 1px var(--hair); overflow: hidden;
+}
+.vmode {
+  background: transparent; color: var(--dim); border: none; cursor: pointer;
+  padding: 5px 10px; font: 500 11.5px/1 var(--sans);
+}
+.vmode:hover { color: var(--text); }
+.vmode.on { color: var(--text); background: var(--panel2); }
 
 /* ---- account usage strip (under the header) ----------------------------- */
 body.in-session #accounts { display: none; }
@@ -1112,6 +1125,37 @@ body.modal-open { overflow: hidden; }
 
 /* hidden by the kind filter; never removed (SSE keeps appending) */
 .fhide { display: none; }
+/* hidden by the VIEW MODE (collapsed into a `.vsum` run summary, or — in focus
+   mode — mid-turn prose). A separate class from `.fhide` because the two axes
+   are independent: sharing one would let either pass un-hide the other's items. */
+.vhide { display: none; }
+
+/* ---- collapsed run summary (default/focus modes) ------------------------- */
+/* One clickable line standing in for a run of adjacent activity ("Read 3 files,
+   ran 2 shell commands"). Deliberately QUIETER than the block cards it replaces
+   — no card background, dim mono text — so a collapsed stream reads as a thin
+   index of what happened and the blocks that stay expanded (edits, messages)
+   keep all the visual weight. docs/dashboard.md *View modes* */
+.vsum {
+  display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+  padding: 5px 13px; margin: 3px 0; border-radius: var(--r);
+  font: 12px/1.5 var(--mono); color: var(--dim);
+}
+.vsum:hover { background: var(--panel); color: var(--text-soft); }
+.vsum .vtext b { color: var(--text-soft); font-weight: 650; }
+/* the leading dot: GREY while the run is still going, GREEN once it is done, RED
+   when any member of it failed — the same at-a-glance outcome the expanded
+   blocks carry in their finish chips. */
+.vsum .vdot {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--dim); animation: pulse 1.6s infinite;
+}
+.vsum .vdot.done { background: var(--green); animation: none; }
+.vsum .vdot.bad { background: var(--red); animation: none; }
+.vsum .vtimer { color: var(--dim2); font-variant-numeric: tabular-nums; }
+.vsum .vcaret { color: var(--dim2); margin-left: auto; flex: none; font-size: 10px; }
+.vsum .dadd { color: var(--green); }
+.vsum .drem { color: var(--red); }
 
 /* ---- the mirror stream -------------------------------------------------- */
 .stream {
@@ -1642,7 +1686,7 @@ html { touch-action: manipulation; }
   }
   /* tap targets toward the 44px HIG guideline (a modest 36–40px keeps the
      information density; padding grows the hit area, not the type) */
-  .ghost, .fchip, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
+  .ghost, .fchip, .vmode, .xclose, .sstop, .sresume, .nsbtn, .dirnew, .dirhide,
   .askchat, .planopt, .loadmore, .rwmenu .rwopt, .csend, .micbtn, .cattach,
   .chint {
     min-height: 36px;

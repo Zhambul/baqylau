@@ -7,6 +7,7 @@ import html
 
 from core import codefmt as CF
 from core import render as R
+from dashboard.opshtml import actclass
 from dashboard.opshtml.ansi import CODE_W, ansi_html, _esc, _rgb
 
 
@@ -149,9 +150,15 @@ def op_items(ops, key=""):
     of the subagent's own contribution — its ⇢ prompt and ⇠ result blocks, which
     the substream stamps `web` to override the drop (core/ops.py's "web" field);
     everything in between stays drill-down only. Pre-stamp history (parked DBs)
-    has no `src`, so old sessions render as before — the client's heuristic
-    `agents` filter chip still covers those (a prompt/result chip opens with the
-    agent label, not a command glyph, so it classifies as `agents`)."""
+    has no `src`, so old sessions render as before — an unstamped agent block
+    still reads as one, because the ACTIVITY CLASS below is derived from the op
+    itself and so classifies live and parked ops identically.
+
+    Each item also carries that class: `act` (a token from actclass.ACTS, absent
+    when the op names no kind — a body op inherits its block's), `bad` (1 when
+    the op reports a failed outcome) and, for a mutation one-liner, its `add`/
+    `rem` line counts. The page reads them for the kind filter and the view
+    modes; it never re-derives them from the HTML it was handed."""
     out = []
     for op in ops:
         if not isinstance(op, dict):
@@ -160,8 +167,24 @@ def op_items(ops, key=""):
         if t in ("rule", "blank") or (op.get("src") and not op.get("web")):
             continue
         h = op_html(op, key)
-        if h:
-            out.append({"g": op.get("g") or None, "t": t, "html": h})
+        if not h:
+            continue
+        it = {"g": op.get("g") or None, "t": t, "html": h}
+        # The ACTIVITY CLASS the view modes collapse a run of items on
+        # (docs/dashboard.md, *View modes*) — classified here, once, instead of
+        # sniffed back out of the rendered HTML by the page.
+        act, bad = actclass.classify(op)
+        if act:
+            it["act"] = act
+        if bad:
+            it["bad"] = 1
+        if act in (actclass.ACT_EDIT, actclass.ACT_WRITE):
+            add, rem = actclass.diffstat(op)     # the collapsed edit summary sums these
+            if add:
+                it["add"] = add
+            if rem:
+                it["rem"] = rem
+        out.append(it)
     return out
 
 

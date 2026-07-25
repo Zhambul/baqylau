@@ -171,6 +171,10 @@ def session_payload(sid):
     # pref (docs/dashboard.md, *Telegram alerts*), so the header toggle reflects
     # + flips it live AND parked
     data["notify_muted"] = prefs.notify_muted(sid)
+    # deliberately NOT live-gated either: the mirror's view mode is a reading
+    # preference over the stream, which a PARKED session still has
+    # (docs/dashboard.md, *View modes*)
+    data["view_mode"] = prefs.view_mode(sid)
     # the session's real slash-command NAMES — the server tints them inside the
     # prompt bubbles it renders, and the page needs the same truth for the two
     # bubbles it builds ITSELF (the optimistic stand-in + the ⧗ queued chip),

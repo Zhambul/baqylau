@@ -420,7 +420,7 @@ reflow for free and keeps the no-build rule.
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
 | `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree/root/dirty, below) |
-| `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git`; agent rows carry their own `ctx` |
+| `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git` + `view_mode` (the mirror density, *View modes* below); agent rows carry their own `ctx` |
 | `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
 | `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
 | `/api/session/<sid>/backlog` | the initial newest-`TAIL_BLOCKS` slice (`merged_backlog`): `{last, mpos, oldest, items}` — the gzip-able GET twin of the SSE fresh-connect backlog; the page fetches this first, then connects the session SSE with the cursors (*Lazy backlog* below) |
@@ -449,7 +449,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a heartbeat DERIVED from the served `view_ttl_s` (TTL/2.5, *Served limits* above) while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). The four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) are one TABLE — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
@@ -4586,20 +4586,151 @@ chips are the whole filter surface now, and the `data-kind` machinery below is
 what they act on.
 
 Each top-level stream child is stamped with a `data-kind`
-(`commands`/`files`/`agents`/`messages`) ONCE at creation in `appendItems`
+(`commands`/`files`/`agents`/`messages`) ONCE at creation (`stampItem`)
 rather than re-sniffed per filter pass — selector stability beats matching the
-exact chip text, which drifts. Blocks default to `commands` and upgrade to
-`agents` on an agent signal (an outer-gutter `.og` wrapper == a subagent's
-nested job, or a block-opening chip that starts with a who-prefix rather than a
-main-session command glyph `▶▷◉■` — subagent/teammate/codex chips lead with
-their label/`codex`). Ungrouped items classify by item type: `msg` items are
+exact chip text, which drifts. The kind now comes from the SERVED activity class
+(`act`, *View modes* below — `ACT_KIND` maps it), which replaced the page's own
+`CMD_GLYPH = /^\s*[▶▷◉■]/` regex over the rendered chip text: same answer, but
+the glyph table has one owner and it is server-side. A block still upgrades to
+`agents` on an outer-gutter `.og` wrapper (a subagent's nested job), and the
+upgrade stays monotonic. Ungrouped items classify by item type: `msg` items are
 `messages`, memory-wiki file ops (they carry `data-mem` — the ❖ marker, checked
 first) are `memory`, other file-op one-liners (they carry a `data-v` click-to-view
 id) are `files`, the rest `commands`. On a CURRENT session the `agents` chip mostly
 matches nothing: agent/codex stream ops are producer-source-stamped and never
-reach the page (the main-agent-only rule, *The web presenter* above). The
-chip and its heuristic survive deliberately for pre-stamp history — parked
-DBs written before the stamp existed still carry agent blocks.
+reach the page (the main-agent-only rule, *The web presenter* above). The chip
+survives deliberately for pre-stamp history — parked DBs written before the
+stamp existed still carry agent blocks, and since the activity class is derived
+from the op rather than stamped into it, those classify exactly like live ones.
+
+## View modes (verbose · default · focus)
+
+Claude Code's own transcript densities, over the web mirror. The filter bar
+carries a 3-way segmented control left of the kind chips (`.vmodes`), and the
+choice is per session and durable (`POST /api/session/<sid>/viewmode` → the
+`view-mode` map in `dashboard/prefs.py`, served on the session payload as
+`view_mode`).
+
+- **verbose** — every block, exactly as the dashboard always rendered. **The
+  default**: a session nobody switched hides nothing, so the feature is opt-in
+  per session and can never silently swallow something you were looking for.
+- **default** — runs of adjacent read/command/agent activity collapse into ONE
+  clickable summary line. File **mutations stay expanded**, so an Update/Write
+  always breaks the run and is always on screen; so do conversation messages and
+  the ⚠ audit one-liner.
+- **focus** — only your prompts, each turn's FINAL reply, and a one-line summary
+  of the edits. Everything else folds, including mid-turn assistant prose.
+
+**This is a rendering choice, not a setting.** Claude Code has its own
+`viewMode` (settings.json; Ctrl+O toggles verbose/default, `/focus` toggles
+focus) and this feature deliberately does NOT touch it: nothing is written into
+any settings.json, the kitty mirror keeps painting everything at every mode, and
+switching modes here changes only what this browser paints.
+
+### The summary vocabulary is Claude Code's, verbatim
+
+Read out of the `2.1.220` binary's bundled JS (`strings` + the
+`collapsed_read_search` renderer) rather than guessed, because the whole point is
+that a collapsed line reads exactly like the TUI's. The rules:
+
+- one fragment per counter, `"<verb> <n> <unit>"`, joined with `", "`;
+- the FIRST fragment is capitalized, the rest are not;
+- while the run is still going, the verb is a present participle and the line
+  ends in `…`; once it is done, past tense and no ellipsis;
+- fragments emit in a FIXED order (edits first, memory last) — not in the order
+  the tools ran.
+
+| counter | running | done | unit |
+|---|---|---|---|
+| edits (incl. Write) | `editing` | `edited` | `N file(s)` + `+A -R` |
+| reads | `reading` | `read` | `N file(s)` |
+| agents | `running` | `ran` | `N agent(s)` |
+| shell commands | `running` | `ran` | `N shell command(s)` |
+| background jobs | `running` | `ran` | `N background job(s)` |
+| monitors | `watching` | `watched` | `N monitor(s)` |
+| memory reads | `recalling` | `recalled` | `N memor(y/ies)` |
+| memory writes | `writing` | `wrote` | `N memor(y/ies)` |
+
+So: `Read 1 file, ran 1 shell command` · `Ran 2 shell commands` ·
+`Reading 4 files, running 2 shell commands…` ·
+`Edited 2 files +52 -3, read 1 file, ran 1 shell command`.
+
+Claude Code's own table also carries `searching for N patterns`, `listing N
+directories`, `calling <mcp server> N times`, `REPL'd N times` and
+`Thought for <t>` — dropped here because **the mirror carries no such ops**:
+only Bash, the file tools, and agent/monitor/codex streams reach the ops table
+(a Grep never appears in the web stream at all, in any mode). The last two rows
+are ours, not Claude Code's — it has no background-job or monitor concept — and
+keep its verb pattern. A Write counting as an *edit* is Claude Code's own
+behaviour (one `editFileCount` over its whole edit-tool set), so the summary says
+"edited" even for a created file; expanded, the mirror still shows `Write(name)`.
+
+### Where the collapse is computed, and why on the client
+
+The activity class each item is grouped on — `act`, plus `bad` and a mutation's
+`add`/`rem` — is computed SERVER-side, once, in `dashboard/opshtml/actclass.py`
+and carried on every stream item by `op_items`. The classifier keys on structure
+first (the op's `t`, and the semantic colours imported from `core/ops.py`: a chip
+in the shared `RED` IS a failure; a `▶` in a slot PALETTE colour is a subagent
+launch, not a shell command — the glyph alone is ambiguous), then the file-op
+verb taken from its owner `tools.FILE_LABEL`, then the block-opening glyph
+(`▶ ▷ ◉ ↻ ■` — producer vocabulary, and this table is its one reader; the glyph
+is deliberately preferred over the WORD beside it, which has been reworded).
+An unclassifiable op gets no `act`, which means "not collapsible": a
+classification gap always fails toward SHOWING content.
+
+**Why not stamp `act` in the producers** (the route `src`/`web` took)? Because
+unlike a producer's identity, the activity class is fully recoverable from the op
+the producer already wrote — so stamping would put the same knowledge in eight
+formatters AND still need the render-time classifier for every PARKED session
+(which can't be re-stamped), i.e. two implementations that drift.
+
+**Why the grouping is client-side** (`applyViewMode` in `app.05-session.js`): a
+run is a maximal set of ADJACENT items, and the server never sees the stream as a
+whole — ops arrive as SSE increments and history as separate `/history` pages, so
+a run routinely straddles two responses. The client, which owns the assembled
+feed, is the only place that can cut runs correctly; it also means switching
+modes is instant and re-fetches nothing. The price is that the phrase table above
+lives in JS as a deliberate twin of no Python owner, pinned by grep tests
+(`test_act_vocabulary_matches_the_page_phrase_table`) plus one executed test:
+`tests/jsdom/viewmode.js` runs the real engine under `node` over a DOM shim,
+because a grep cannot tell a correct run cut from an off-by-one.
+
+Mechanics worth knowing:
+
+- **The run key is its OLDEST member's** (`data-vk`, a monotonic per-session
+  stamp). Runs grow at the newest end, so that key is stable as a run absorbs new
+  items — which is what makes a user's expansion survive the next SSE tick.
+- **Expanding leaves the summary in place** (caret `▾`): it is the only way back
+  to collapsed, and it keeps naming what the revealed blocks are.
+- **Hidden-but-uncounted items are transparent to the run cut** — focus mode's
+  mid-turn prose disappearing MERGES the runs either side of it, rather than
+  leaving two lines with a gap.
+- **The dot**: grey and pulsing while the run is going, green when done, red when
+  any member failed (`bad`). A run counts as running when it contains the live
+  foreground command (`fg_running`) or sits at the top of the feed while the tab
+  is busy — the same two facts the ⏱ chip uses.
+- **The elapsed** ` · 12s` ticks locally once a second, anchored on the running
+  command's real `start_ts` when there is one, and only appears after 2s (Claude
+  Code's own threshold, and it stops a fast run flashing `· 0s`).
+- **A repeat pass is a no-op**: the plan is reduced to a signature (runs, their
+  members, open/running/bad — never the elapsed clock) and the DOM is only
+  rebuilt when it changes. Without that, every 0.6s SSE tick tore down and
+  re-created every summary, which reflows the feed under a reader who has
+  scrolled back and drops a text selection. Same trick, same reason, as
+  `statsSig`.
+- **Auto-fill**: collapsing 80 blocks can leave two lines on screen, so a mode
+  switch pulls up to `VIEW_FILL_PAGES` (3) `/history` pages until at least
+  `VIEW_FILL_MIN` items are visible — bounded, or it would walk a long session's
+  whole backlog on one click.
+- The two axes are independent classes: `.fhide` is the kind filter's, `.vhide`
+  the view mode's. One shared class would let either pass un-hide the other's
+  items.
+
+Known gap: a STANDALONE codex host session's blocks classify as `agent` (there
+codex IS the main agent, and its chips carry no main-session glyph), so its
+default-mode summary reads "ran N agents". Harmless at the default mode
+(verbose), and it needs a codex-specific act to fix properly.
 
 ## Notifications (the toaster)
 
@@ -5325,3 +5456,11 @@ logic. The lazy-backlog tests assert the tail limit + `oldest` cursor, that
 `/history` chains to exhaustion with the slices concatenating to the unlimited
 merge (no gap, no overlap), and that a straddling group is never duplicated.
 Import safety for both modules rides `test_import_safety.py`.
+
+The view modes are the one feature whose core logic is not reachable from
+Python — the run cut lives in the page — so besides the usual classifier /
+endpoint / vocabulary-parity tests there is `tests/jsdom/viewmode.js`: a
+DOM-shim harness that `test_view_mode_engine_collapses_runs_and_words_them`
+executes under `node` and asserts the resulting summary lines on. It SKIPS when
+`node` is absent and is the only JS-executing test in the suite — deliberately
+not a build requirement (see docs/testing.md).

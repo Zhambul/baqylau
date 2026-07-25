@@ -105,3 +105,20 @@ Note for anyone doing a bulk rewrite of call sites: match the AST node by its
 `func`, not by the position a linter reports. For `open(p).read()` the reported
 column belongs to the *outer* chained call, so a position-keyed rewrite lands
 `encoding=` inside `.read()` — 15 syntax errors, all pointing at the wrong line.
+
+**One test executes JavaScript, on purpose, and skips without it** (2026-07-25).
+The web mirror's view modes (docs/dashboard.md *View modes*) compute their
+collapse in the page — which adjacent items become one run, what the summary line
+says, which colour the dot is — because only the client holds the assembled feed
+(ops arrive as SSE increments, history as separate pages, and a run routinely
+straddles two responses). That put the feature's core logic somewhere the suite
+could previously only *grep*, and a grep cannot distinguish a correct run cut
+from an off-by-one. So `tests/jsdom/viewmode.js` shims ~60 lines of DOM (classes,
+`dataset`, class-selector queries) plus the handful of app globals the engine
+calls, `vm`-runs the REAL `app.05-session.js`, and prints a JSON verdict that
+`test_view_mode_engine_collapses_runs_and_words_them` asserts on. It
+`pytest.skip`s when `node` is not on PATH, so node is NOT a suite dependency and
+`requirements-dev.txt` is unchanged — the Python-side tests (classifier,
+endpoint, vocabulary parity) still cover everything reachable from Python. Adding
+a second such test is fine; adding a JS test FRAMEWORK is not the same decision
+and should be taken separately.

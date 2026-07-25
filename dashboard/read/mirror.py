@@ -93,7 +93,11 @@ def _conv_items(recs, cmds=()):
     memo), never per bubble."""
     out = []
     for r in recs:
-        it = {"g": None, "t": "msg", "kind": r["kind"],
+        # `act` is the ACTIVITY CLASS every stream item carries for the view
+        # modes (opshtml/actclass.py); conversation text is always ACT_MSG — the
+        # `kind` beside it is what the focus mode narrows on (prompts and the
+        # turn's final reply survive, mid-turn prose does not).
+        it = {"g": None, "t": "msg", "kind": r["kind"], "act": opshtml.ACT_MSG,
               "html": opshtml.msg_html(r["kind"], r.get("text", ""),
                                        r.get("sender", ""), r.get("qa"),
                                        r.get("par") or "", cmds)}

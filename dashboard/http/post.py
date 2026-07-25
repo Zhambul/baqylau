@@ -93,6 +93,7 @@ class _PostMixin:
         "hint-audit": "post_hint_audit", "client-fail": "post_client_fail",
         "plan-options": "post_plan_options", "plan-decision": "post_plan_decision",
         "notify": "post_notify_mute", "viewing": "post_viewing",
+        "viewmode": "post_view_mode",
     }
     _FIXED_POST = {
         ("presence",): "post_presence", ("upload",): "post_upload",
@@ -1794,6 +1795,29 @@ class _PostMixin:
         prefs.set_notify_muted(sid, muted)
         A.state_file("", "", "notify-mute", {"sid": sid, "muted": muted})
         return self._json({"ok": True, "muted": muted})
+
+    def post_view_mode(self, sid):
+        """Set the session mirror's VIEW MODE — the filter bar's
+        verbose/default/focus control (docs/dashboard.md *View modes*). Body:
+        `mode` (one of prefs.VIEW_MODES). Writes the durable global prefs store
+        (dashboard/prefs.py), NOT any session/terminal state and emphatically NOT
+        Claude Code's own `viewMode` setting: this changes only what the BROWSER
+        paints, so it works live AND parked and the TUI is untouched. Behind
+        _post_guard like every control-plane POST; audited as a `web-viewmode`
+        state_files row (global — empty log/path like notify-mute). Returns the
+        stored mode."""
+        body = self._post_guard()
+        if body is None:
+            return
+        mode = body.get("mode")
+        if mode not in prefs.VIEW_MODES:
+            return self._reject_input("web-viewmode", "bad mode",
+                                      "mode must be one of %s"
+                                      % ", ".join(prefs.VIEW_MODES),
+                                      {"mode": mode}, sid=sid)
+        prefs.set_view_mode(sid, mode)
+        A.state_file("", "", "web-viewmode", {"sid": sid, "mode": mode})
+        return self._json({"ok": True, "mode": mode})
 
     def post_notify_global(self):
         """The GLOBAL alerts master switch (docs/dashboard.md *Global alerts

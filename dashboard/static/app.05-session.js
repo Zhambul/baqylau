@@ -31,7 +31,13 @@ function showSession(sid, tab) {
               memory: null, noteTrail: null, noteFocus: null,
               loadingOlder: false, queue: [], pending: [],
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
-              filter: { kind: "all" } };          // cleared per session (new S.ses)
+              filter: { kind: "all" },            // cleared per session (new S.ses)
+              // the view mode + its derived state: `view` is seeded from the
+              // session's durable pref when meta lands (verbose until then, the
+              // mode that hides nothing), `viewOpen` holds the runs the user
+              // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
+              view: VIEW_MODES[0], viewOpen: new Set(), viewSeq: 0,
+              viewTimer: null, viewFill: 0 };
     S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
     // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
     // snapshots never repair it (updateHeadFromList no-ops while meta is null),
@@ -50,7 +56,13 @@ function showSession(sid, tab) {
         S.ses.costs = d.costs || null;
         S.ses.ctx = d.ctx || null;
         S.ses.running = d.running || {};
+        // the durable per-session view mode (dashboard/prefs.py) — seeded before
+        // the chrome is built, so the filter bar renders with the right segment
+        // lit and the backlog collapses on first paint rather than flashing
+        // verbose first
+        if (VIEW_MODES.includes(d.view_mode)) S.ses.view = d.view_mode;
         renderSessionChrome(tab);
+        applyViewMode();
         // a page opened MID-command ticks from the real start (the SSE `fgrun`
         // only fires on CHANGE, so without this seed a reload would show no
         // elapsed until the next command)
@@ -237,6 +249,9 @@ function connectSession(sid) {
     const row = S.sessions.find(r => r.sid === S.cur);
     if (row) row.tab = d.tab || "";
     renderAttention();
+    // a settled tab retires the newest run's grey dot + ticking elapsed (the
+    // turn is over, so nothing in that run is still going)
+    applyViewMode();
   });
   es.onopen = () => { $conn.dataset.on = "1"; sseMark("session", true, { sid }); };
   es.onerror = () => {
@@ -342,6 +357,10 @@ function setFgRun(fg) {
   ses.fgRun = fg;
   if (fg && !ses.fgTimer) ses.fgTimer = setInterval(tickFgElapsed, FG_TICK_MS);
   tickFgElapsed();
+  // a collapsed run showing this command re-anchors its elapsed on the command's
+  // real start (and drops it once the command is done) — the same hand-off the
+  // ⏱ chip above uses, applied to the summary line standing in for the block
+  applyViewMode();
 }
 
 // A single copy-group's body is capped: a long-lived group (a bg stream, a
@@ -386,7 +405,7 @@ function appendItems(items) {
     if (!it.g) {
       st.insertAdjacentHTML("afterbegin", it.html);
       const elem = st.firstElementChild;
-      if (elem) { elem.dataset.kind = ungroupedKind(it, elem); applyFilterTo(elem); }
+      if (elem) stampItem(elem, it);
       continue;
     }
     let b = S.ses.blocks.get(it.g);
@@ -394,6 +413,8 @@ function appendItems(items) {
       b = createBlock();
       st.prepend(b.root);
       S.ses.blocks.set(it.g, b);
+      b.root.dataset.vk = String(++S.ses.viewSeq);
+      b.root.dataset.vt = String(Date.now() / 1000);
     }
     fillBlock(b, it);
     refineBlockKind(b, it);
@@ -412,6 +433,7 @@ function appendItems(items) {
         if (b.root === last) { S.ses.blocks.delete(g); break; }   // a detached node
     last.remove();
   }
+  applyViewMode();               // re-cut the collapsed runs over the final DOM
   updateFilterCount();
 }
 
@@ -432,7 +454,7 @@ function appendOlder(items) {
       const tmp = el("div");
       tmp.innerHTML = it.html;
       const elem = tmp.firstElementChild;
-      if (elem) { elem.dataset.kind = ungroupedKind(it, elem); applyFilterTo(elem); frag.append(elem); }
+      if (elem) { stampItem(elem, it); frag.append(elem); }
       continue;
     }
     const live = S.ses.blocks.get(it.g);         // straddling group: fold in-place
@@ -446,6 +468,8 @@ function appendOlder(items) {
     if (!b) {
       b = createBlock();
       b.root.dataset.open = "0";                 // history blocks arrive folded
+      b.root.dataset.vk = String(++S.ses.viewSeq);
+      b.root.dataset.vt = String(Date.now() / 1000);
       local.set(it.g, b);
       frag.append(b.root);
     }
@@ -455,6 +479,7 @@ function appendOlder(items) {
   }
   if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
   else st.append(frag);
+  applyViewMode();
   updateFilterCount();
 }
 
@@ -541,27 +566,34 @@ function loadOlder() {
 // Every top-level stream child carries a data-kind (commands · files · agents ·
 // messages) so the filter bar can hide non-matching items via a CSS class
 // (never removing them — SSE keeps appending, and folded bodies stay
-// textContent-searchable). data-kind is stamped once at creation: glyph/who
-// sniffing (below) is stable against the exact chip text, which drifts, so we
-// prefer a stamped attribute over re-sniffing the DOM on every filter pass.
+// textContent-searchable). data-kind is stamped once at creation (`stampItem`),
+// never re-derived per filter pass, and it is derived from the SERVED activity
+// class rather than from the rendered chip text — the sniffing this file used to
+// do now has one owner, server-side (dashboard/opshtml/actclass.py).
 
-// Main-session command/monitor/bg/fg blocks OPEN with one of these glyphs;
-// subagent/teammate/codex blocks open with a who-prefix (agent label or
-// "codex") before their glyph — that's the command-vs-agent tell.
-const CMD_GLYPH = /^\s*[▶▷◉■]/;
+// Which filter kind each served ACTIVITY CLASS belongs to. The `act` stamp
+// (dashboard/opshtml/actclass.py — one owner, server-side) replaced the glyph
+// regex the page used to run over the block-opening chip text: same answer, but
+// classified where the structured op is, not re-sniffed out of rendered HTML.
+const ACT_KIND = {
+  bash: "commands", bg: "commands", monitor: "commands", warn: "commands",
+  agent: "agents", read: "files", edit: "files", write: "files",
+  msg: "messages",
+};
 
 function refineBlockKind(b, it) {
   if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
+  if (it.g) b.root.dataset.g = it.g;                   // the run pass reads it
   if (/class="og"/.test(it.html)) {                    // outer gutter == nested subagent job
     b.root.dataset.kind = "agents";
+    b.root.dataset.act = "agent";
     return;
   }
-  if (it.t === "label" && !b.kindLocked) {
-    const txt = (b.chips.textContent || "").trim();    // the block-opening chip
-    if (txt) {
-      b.root.dataset.kind = CMD_GLYPH.test(txt) ? "commands" : "agents";
-      b.kindLocked = true;
-    }
+  if (it.bad) b.root.dataset.bad = "1";                // any failing op reddens the block
+  if (it.act && !b.kindLocked) {                       // the block-opening chip
+    b.root.dataset.kind = ACT_KIND[it.act] || "commands";
+    b.root.dataset.act = it.act;
+    b.kindLocked = true;
   }
 }
 
@@ -575,6 +607,23 @@ function ungroupedKind(it, elem) {
   return "commands";
 }
 
+// Stamp one freshly-created top-level stream child with everything the view-mode
+// pass reads off the DOM: its filter kind, its served activity class + failure
+// flag, the conversation kind (focus mode narrows on it), a monotonic key that
+// names the item for as long as it lives, and its arrival time (the fallback
+// anchor for the live elapsed on a run with no running command in it).
+function stampItem(elem, it) {
+  elem.dataset.kind = ungroupedKind(it, elem);
+  if (it.act) elem.dataset.act = it.act;
+  if (it.bad) elem.dataset.bad = "1";
+  if (it.add) elem.dataset.add = String(it.add);   // a mutation's line counts, for
+  if (it.rem) elem.dataset.rem = String(it.rem);   //   focus mode's edit summary
+  if (it.kind) elem.dataset.msg = it.kind;
+  elem.dataset.vk = String(++S.ses.viewSeq);
+  elem.dataset.vt = String(Date.now() / 1000);
+  applyFilterTo(elem);
+}
+
 function streamItems() {
   return [...S.ses.stream.children].filter(el => el.dataset && el.dataset.kind);
 }
@@ -583,6 +632,13 @@ function matchesFilter(elem) {
   const f = (S.ses && S.ses.filter) || { kind: "all" };
   if (f.kind !== "all" && elem.dataset.kind !== f.kind) return false;
   return true;
+}
+
+// Hidden by EITHER control: `.fhide` is the kind filter's, `.vhide` the view
+// mode's. Deliberately two classes over two independent axes — one shared class
+// would make whichever pass ran last un-hide the other's items.
+function itemHidden(elem) {
+  return elem.classList.contains("fhide") || elem.classList.contains("vhide");
 }
 
 function applyFilterTo(elem) {
@@ -600,16 +656,319 @@ function updateFilterCount() {
   const ses = S.ses;
   if (!ses || !ses.countEl || !ses.countEl.isConnected) return;
   const items = streamItems();
-  const shown = items.filter(elem => !elem.classList.contains("fhide")).length;
+  const shown = items.filter(elem => !itemHidden(elem)).length;
   ses.countEl.textContent = shown + " of " + items.length + " shown";
 }
 
 const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"];
 
+/* ---------- view modes: verbose · default · focus ---------- */
+// Claude Code's three transcript densities, over the web mirror (docs/
+// dashboard.md, *View modes*). This changes only what the BROWSER paints — it
+// never touches Claude Code's own `viewMode` setting, and the kitty mirror keeps
+// painting everything.
+//
+//   verbose — every block, as before (the default; nothing is ever hidden)
+//   default — runs of adjacent read/command/agent activity collapse into ONE
+//             clickable summary line; file MUTATIONS stay expanded, so an edit
+//             always breaks the run and is always visible
+//   focus   — only your prompts, each turn's FINAL reply, and a one-line
+//             summary of the edits; every intermediate step folds away
+//
+// Must match dashboard/prefs.py VIEW_MODES (grep-tested).
+const VIEW_MODES = ["verbose", "default", "focus"];
+
+// Which activity classes each mode folds into a summary. Everything not listed
+// stays its own visible block, which is also what an unclassified item gets —
+// a classification gap fails toward SHOWING content, never toward hiding it.
+const VIEW_FOLD = {
+  verbose: [],
+  default: ["bash", "read", "agent"],
+  focus: ["bash", "read", "agent", "bg", "monitor", "edit", "write"],
+};
+
+// THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
+// (docs/dashboard.md, *View modes* records the full table and how it was read):
+// [counter, active verb, done verb, singular unit, plural unit], in Claude
+// Code's own emission ORDER. Each fragment is "<verb> <n> <unit>"; the FIRST
+// fragment is capitalized and the rest are not; they join with ", "; and while
+// the run is still running the participle form is used and the line ends in "…".
+// The keys are actclass.ACTS tokens (plus the two memory flavours), so a new act
+// with no row here would be counted into nothing (grep-tested both ways).
+const VIEW_FRAGMENTS = [
+  ["edit", "editing", "edited", "file", "files"],
+  ["read", "reading", "read", "file", "files"],
+  ["agent", "running", "ran", "agent", "agents"],
+  ["bash", "running", "ran", "shell command", "shell commands"],
+  ["bg", "running", "ran", "background job", "background jobs"],
+  ["monitor", "watching", "watched", "monitor", "monitors"],
+  ["mem-read", "recalling", "recalled", "memory", "memories"],
+  ["mem-write", "writing", "wrote", "memory", "memories"],
+];
+
+// Claude Code counts a Write as an edit (one `editFileCount` over its whole
+// edit-tool set), so the two share a fragment here too — the mirror still shows
+// them as distinct Update/Write one-liners when expanded.
+const VIEW_COUNTER = { write: "edit" };
+
+// Don't show a run's elapsed until it has actually been running a moment —
+// Claude Code's own threshold for the same chip, and it keeps a fast run from
+// flashing "· 0s".
+const VIEW_ELAPSED_MIN_S = 2;
+// How many /history pages a mode switch may auto-pull when collapsing leaves the
+// screen nearly empty (focus over a command-heavy tail can hide almost
+// everything). Bounded: an unbounded fill would walk a long session's whole
+// backlog on one click.
+const VIEW_FILL_PAGES = 3;
+const VIEW_FILL_MIN = 6;
+
+// Which counter one item feeds: its activity class, with memory-wiki file ops
+// (the ❖ ops, `data-mem`) routed to the memory fragments — Claude Code words
+// those as "recalled"/"wrote memories" rather than file reads and edits.
+function viewCounter(elem) {
+  const act = elem.dataset.act || "";
+  const mem = elem.dataset.kind === "memory";
+  if (mem && act === "read") return "mem-read";
+  if (mem && (act === "edit" || act === "write")) return "mem-write";
+  return VIEW_COUNTER[act] || act;
+}
+
+// The one-line summary of a run, as nodes: "Read 3 files, ran 2 shell commands"
+// (done) / "Reading 3 files, running 2 shell commands…" (still going). `counts`
+// is a counter->n map carrying optional `add`/`rem` line totals for the edit
+// fragment, whose diffstat Claude Code prints right after "N files".
+function viewSummaryNodes(counts, running) {
+  const out = [];
+  for (const [key, active, done, one, many] of VIEW_FRAGMENTS) {
+    const n = counts[key] | 0;
+    if (!n) continue;
+    let verb = running ? active : done;
+    if (!out.length) verb = verb[0].toUpperCase() + verb.slice(1);
+    else out.push(tnode(", "));
+    out.push(tnode(verb + " "), el("b", "", String(n)),
+             tnode(" " + (n === 1 ? one : many)));
+    if (key === "edit" && (counts.add || counts.rem)) {
+      out.push(tnode(" "));
+      if (counts.add) out.push(el("span", "dadd", "+" + counts.add));
+      if (counts.add && counts.rem) out.push(tnode(" "));
+      if (counts.rem) out.push(el("span", "drem", "-" + counts.rem));
+    }
+  }
+  if (running) out.push(tnode("…"));
+  return out;
+}
+
+// A run's collapsed stand-in. `members` are the folded items it speaks for (its
+// key is the OLDEST member's — runs grow at the newest end, so that key is
+// stable as the run absorbs new items and the user's expansion survives).
+function buildRunSummary(key, members, running, anchor, bad, open) {
+  const row = el("div", "vsum");
+  row.dataset.run = key;
+  row.dataset.open = open ? "1" : "0";
+  row.append(el("span", "vdot" + (running ? "" : bad ? " bad" : " done")));
+  const text = el("span", "vtext");
+  const counts = { add: 0, rem: 0 };
+  for (const m of members) {
+    const c = viewCounter(m);
+    if (c) counts[c] = (counts[c] | 0) + 1;
+    counts.add += +(m.dataset.add || 0);       // served per item (actclass.diffstat)
+    counts.rem += +(m.dataset.rem || 0);
+  }
+  text.append(...viewSummaryNodes(counts, running));
+  row.append(text);
+  const timer = el("span", "vtimer");
+  row.append(timer);
+  // the summary stays PUT when expanded (▾) — it is the only way back to
+  // collapsed, and it keeps naming what the revealed blocks below it are
+  row.append(el("span", "vcaret", open ? "▾" : "▸"));
+  if (running && anchor) {
+    row.dataset.anchor = String(anchor);
+    paintRunTimer(row);
+  }
+  row.onclick = () => {
+    const open = S.ses.viewOpen;
+    if (open.has(key)) open.delete(key);
+    else open.add(key);
+    applyViewMode();
+  };
+  return row;
+}
+
+// The ticking " · 12s" on a still-running run — the same live-elapsed idea as the
+// foreground command's ⏱ chip (the server says since WHEN, the browser counts),
+// reusing that chip's anchor when the run contains the running command.
+function paintRunTimer(row) {
+  const anchor = +row.dataset.anchor || 0;
+  const timer = row.querySelector(".vtimer");
+  if (!timer) return;
+  const secs = Date.now() / 1000 - anchor;
+  timer.textContent = (anchor && secs >= VIEW_ELAPSED_MIN_S)
+    ? " · " + dur(secs) : "";
+}
+
+function tickRunTimers() {
+  const ses = S.ses;
+  if (!ses) return;
+  const rows = [...ses.stream.querySelectorAll(".vsum[data-anchor]")];
+  if (!rows.length) {
+    clearInterval(ses.viewTimer);
+    ses.viewTimer = null;
+    return;
+  }
+  rows.forEach(paintRunTimer);
+}
+
+// The whole pass: decide each item's disposition, cut maximal runs of foldable
+// ones, and put a summary line where each run sits. Derived entirely from the
+// DOM + the current mode, so it is safe to re-run after any append — which is
+// how a live stream keeps its collapse correct as blocks arrive.
+function applyViewMode() {
+  const ses = S.ses;
+  if (!ses || !ses.stream) return;
+  const mode = VIEW_MODES.includes(ses.view) ? ses.view : VIEW_MODES[0];
+  const items = streamItems();
+  if (mode === "verbose") {
+    if (ses.viewSig === "verbose") return;      // already plain — nothing to undo
+    for (const old of [...ses.stream.children])
+      if (old.classList.contains("vsum")) old.remove();
+    for (const it of items) it.classList.remove("vhide");
+    ses.viewSig = "verbose";
+    updateFilterCount();
+    return;
+  }
+
+  const fold = VIEW_FOLD[mode] || [];
+  // DOM order is newest -> oldest, so "the first reply seen since the last
+  // prompt" IS that turn's final one — which is the only assistant prose focus
+  // mode keeps. A prompt closes the turn: items below it are the older one's.
+  let sawReply = false;
+  const disp = items.map(elem => {
+    const kind = elem.dataset.kind;
+    if (kind === "messages") {
+      const mk = elem.dataset.msg || "";
+      if (mk === "prompt") { sawReply = false; return "show"; }
+      if (mode === "focus" && mk === "message") {
+        const final = !sawReply;
+        sawReply = true;
+        return final ? "show" : "hide";
+      }
+      return "show";
+    }
+    return fold.includes(elem.dataset.act || "") ? "fold" : "show";
+  });
+
+  const fgg = (ses.fgRun && ses.fgRun.g) || "";
+  const busy = typeof BUSY_TABS !== "undefined" && BUSY_TABS.includes(liveTab());
+  // PLAN first, mutate second: the runs are computed into a list, and the DOM is
+  // only rebuilt when the plan actually differs from the painted one (the
+  // signature below). Without that guard every SSE tick tore down and re-created
+  // every summary line — which reflows the feed under a reader who has scrolled
+  // back, and drops an in-progress text selection. Same reasoning, and the same
+  // shape, as `statsSig` for the header.
+  const plan = [];
+  const strays = [];                   // hidden-but-uncounted (focus-mode prose)
+  let i = 0;
+  while (i < items.length) {
+    if (disp[i] === "show") { i++; continue; }
+    // a maximal span of foldable/hidden items — the hidden ones are transparent,
+    // so mid-turn prose between two folded blocks doesn't split the run
+    let j = i, last = i;
+    while (j < items.length && disp[j] !== "show") {
+      if (disp[j] === "fold") last = j;
+      j++;
+    }
+    const span = items.slice(i, last + 1);
+    const members = span.filter((_, k) => disp[i + k] === "fold");
+    // hidden items TRAILING the run's last folded member aren't part of it (they
+    // hide on their own); a span with no folded member at all is all-strays
+    strays.push(...items.slice(members.length ? last + 1 : i, j));
+    i = j;
+    if (!members.length) continue;
+    const key = span[span.length - 1].dataset.vk || "";
+    const running = members.some(m => m.dataset.g && m.dataset.g === fgg)
+      || (span[0] === items[0] && busy);
+    plan.push({
+      key, span, members, running,
+      open: ses.viewOpen.has(key),
+      bad: members.some(m => m.dataset.bad === "1"),
+      anchor: running
+        ? ((ses.fgRun && members.some(m => m.dataset.g === fgg))
+           ? ses.fgRun.start_ts : +(span[span.length - 1].dataset.vt || 0))
+        : 0,
+    });
+  }
+  // Everything the painted lines DEPEND on — deliberately not the elapsed
+  // seconds, which the 1s timer owns (a signature carrying the clock would
+  // rebuild the DOM every second, the very thing this avoids).
+  const sig = mode + "!" + strays.map(s => s.dataset.vk).join(",") + "!"
+    + plan.map(p => [p.key, p.open ? 1 : 0, p.running ? 1 : 0, p.bad ? 1 : 0,
+                     p.anchor, p.members.map(m => m.dataset.vk).join(".")].join(":"))
+        .join(";");
+  if (sig === ses.viewSig) return;
+  ses.viewSig = sig;
+
+  for (const old of [...ses.stream.children])
+    if (old.classList.contains("vsum")) old.remove();
+  for (const it of items) it.classList.remove("vhide");
+  for (const s of strays) s.classList.add("vhide");
+  for (const p of plan) {
+    if (!p.open) for (const m of p.span) m.classList.add("vhide");
+    ses.stream.insertBefore(
+      buildRunSummary(p.key, p.members, p.running, p.anchor, p.bad, p.open),
+      p.span[0]);
+    if (p.running && !ses.viewTimer)
+      ses.viewTimer = setInterval(tickRunTimers, FG_TICK_MS);
+  }
+  updateFilterCount();
+  viewAutoFill();
+}
+
+// Collapsing can leave the window almost empty (80 blocks of commands become two
+// summary lines). Pull the next history page or two so there is something to
+// read, bounded by VIEW_FILL_PAGES per mode switch.
+function viewAutoFill() {
+  const ses = S.ses;
+  if (!ses || ses.view === "verbose" || ses.loadingOlder) return;
+  if ((ses.viewFill | 0) >= VIEW_FILL_PAGES || (ses.oldest | 0) <= 0) return;
+  const shown = streamItems().filter(elem => !itemHidden(elem)).length
+    + ses.stream.querySelectorAll(".vsum").length;
+  if (shown >= VIEW_FILL_MIN) return;
+  ses.viewFill = (ses.viewFill | 0) + 1;
+  loadOlder();
+}
+
+function setViewMode(mode) {
+  const ses = S.ses;
+  if (!ses || !VIEW_MODES.includes(mode)) return;
+  ses.view = mode;
+  ses.viewOpen.clear();          // expansions belong to the mode that made them
+  ses.viewFill = 0;
+  if (ses.meta) ses.meta.view_mode = mode;
+  applyViewMode();
+  // Durable + per-session (dashboard/prefs.py): re-opening this session — on
+  // this device or another — comes back at the mode you left it in.
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/viewmode",
+           { mode }, { audit: "viewmode" });
+}
+
 function buildFilterBar() {
   const ses = S.ses;
   const f = ses.filter;
   const bar = el("div", "fbar");
+
+  // the view-mode control, left of the kind chips: both act on this stream, and
+  // this one is the coarser cut, so it reads first
+  const modes = el("div", "vmodes");
+  const mbtns = new Map();
+  for (const key of VIEW_MODES) {
+    const c = el("button", "vmode" + (ses.view === key ? " on" : ""), key);
+    c.onclick = () => {
+      setViewMode(key);
+      mbtns.forEach((cc, k) => cc.classList.toggle("on", k === ses.view));
+    };
+    mbtns.set(key, c);
+    modes.append(c);
+  }
 
   const chipwrap = el("div", "fchips");
   const chips = new Map();
@@ -626,7 +985,7 @@ function buildFilterBar() {
 
   const count = el("span", "fcount");
   ses.countEl = count;
-  bar.append(chipwrap, count);
+  bar.append(modes, chipwrap, count);
   ses.filterBar = bar;
   return bar;
 }
