@@ -132,7 +132,7 @@ function renderSessionChrome(tab) {
     // rewind: idle-only picking mode — click a message below, choose what to
     // restore, and the server drives the TUI's own checkpoint menu
     const rew = el("button", "sstop actses", "↶ rewind");
-    rew.title = "rewind: pick a message to restore to (mid-turn: cancel + edit)";
+    rew.title = "rewind: pick a message to restore to (idle only)";
     // stopPropagation is load-bearing: the ENABLING click must not bubble to
     // the document click-away handler, which reads any non-bubble click in
     // picking mode as "leave" — without it the mode self-cancelled in the
@@ -199,7 +199,7 @@ function renderSessionChrome(tab) {
   // quick commands on their OWN second row under the action buttons: compact
   // + the model/effort pickers, each typing the TUI's own slash command into
   // the session (docs/dashboard.md, *Web quick commands*). Live-only like
-  // stop/cancel — there is no window to type into otherwise.
+  // stop — there is no window to type into otherwise.
   const act2 = el("div", "actrow");
   if (meta.live && meta.kitty_window_id) {
     // compact: two-step confirm like close — a misclick summarizes the whole
@@ -434,7 +434,7 @@ function updateStatsRow() {
 
 /* Header-action visibility for the agent-focus state (docs/dashboard.md,
    *Subagent scoreboard swap*). While a subagent scoreboard is showing, the
-   session-only actions (`.actses` — rename / migrate / cancel / rewind / close /
+   session-only actions (`.actses` — rename / migrate / rewind / close /
    resume / compact / model / effort) don't apply to a subagent, so they hide;
    ■ stop (`.actstop`) stays ONLY while the focused subagent is still running
    (interrupting the session is the one way to stop it). An action row left with
