@@ -5082,6 +5082,26 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
     assert TR.taken_back("tb1") == ("u-taken",)
 
 
+def test_menu_open_survives_the_chord_label_formats():
+    """Claude Code composes the menu footer at runtime as `<chord> to
+    <action>`, and the chord label has three formats (`Enter`/`enter`/`⏎`).
+    Matching the whole phrase in one of them is what broke every web rewind on
+    v2.1.220 with `step: "open"` while the menu was open on screen
+    (2026-07-25) — only the action half is the product's own literal."""
+    from dashboard import rewindmenu as RW
+
+    def screen(foot):
+        return "\n".join(["", "  Rewind", "", "  ❯ a prompt", "", "  " + foot])
+
+    for foot in ("Enter to continue · Esc to cancel",
+                 "enter to continue · esc to cancel",
+                 "\u23ce to continue · \u238b to cancel"):
+        assert RW.menu_open(screen(foot)), foot
+    # the confirm menu is NOT the first menu, whatever the footer says
+    assert not RW.menu_open("\n  Rewind\n\n  Confirm you want to restore to"
+                            " the point\n  enter to continue")
+
+
 def test_no_dashboard_code_calls_the_thread_bound_kv_set():
     """state.kv_set caches its connection per PROCESS but sqlite binds it to
     the creating THREAD, so from a ThreadingHTTPServer request it writes
@@ -5357,7 +5377,9 @@ class _MenuFE(_FakeFE):
                     "", "  Restore the code and/or conversation to the point…"]
             for i, p in enumerate(self.prompts + ["(current)"]):
                 rows += [("  ❯ " if i == self.cursor else "    ") + p, ""]
-            rows.append("  Enter to continue · Esc to cancel")
+            # v2.1.220 composes this footer as `<chord> to <action>` with a
+            # LOWERCASE chord label — the drift that broke menu_open
+            rows.append("  enter to continue · esc to cancel")
             return "\n".join(rows)
         if self.state == "confirm":
             # the real confirm screen states the code consequence — absent

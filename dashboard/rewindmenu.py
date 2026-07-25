@@ -46,8 +46,19 @@ MODE_LABELS = {
 }
 
 MENU_HEADER = "Rewind"                       # first-menu region anchor
-MENU_FOOT = "Enter to continue"              # first-menu open detector
+# First-menu open detector, matched CASE-INSENSITIVELY on the STABLE half of
+# the footer. Claude Code composes that footer at runtime from a chord + an
+# action — the component renders `[<chord label>, " to ", <action>]` — and the
+# chord label has three formats (`Enter` / `enter` / `⏎`, a key table in the
+# binary). So the literal never exists in the product; only the tail does. The
+# old marker was the whole phrase in title case (`Enter to continue`), measured
+# on v2.1.214, and by v2.1.220 it no longer matched: every web rewind failed
+# with `step: "open"` — "checkpoint menu never appeared" — while the menu was in
+# fact open on screen (2026-07-25). Matching the composed half is the bug; the
+# action word is hard-coded in the menu's own JSX and is what to key on.
+MENU_FOOT = "to continue"                    # first-menu open detector
 CONFIRM_HEADER = "Confirm you want to restore"   # second-menu open detector
+#                  (a JSX literal, unlike the footer — safe to match whole)
 CODE_UNCHANGED = "The code will be unchanged."   # confirm-menu line when the
 #                  checkpoint has no code changes — the verifiable reason the
 #                  code-restoring options are absent (vs "will be restored…")
@@ -93,9 +104,12 @@ def menu_region(screen):
 
 
 def menu_open(screen):
-    """True when the checkpoint list (first menu) is on screen."""
+    """True when the checkpoint list (first menu) is on screen. The footer
+    match is case-insensitive — see MENU_FOOT: its chord label is one of three
+    runtime formats and only the tail is stable."""
     region = menu_region(screen)
-    return bool(region) and MENU_FOOT in region and CONFIRM_HEADER not in region
+    return (bool(region) and MENU_FOOT in region.lower()
+            and CONFIRM_HEADER not in region)
 
 
 def confirm_open(screen):
@@ -185,7 +199,12 @@ def drive(fe, win, target, mode, ups=0, sleep=time.sleep):
     screen, ok = screendrive.poll_until(fe, win, menu_open, OPEN_TIMEOUT_S, sleep)
     if not ok:
         _bail(fe, win, sleep)
-        raise MenuError("open", "checkpoint menu never appeared")
+        # carry the SCREEN we gave up on (StepError.screen, as askdialog does):
+        # "the menu never appeared" is indistinguishable, from the audit alone,
+        # between a menu that truly never opened and one that opened while our
+        # detector missed it — which is exactly the marker drift that cost three
+        # rounds on 2026-07-25. The capture makes the next one a single look.
+        raise MenuError("open", "checkpoint menu never appeared", screen)
     # burst the hinted distance blind, then verify by text: scan up to the
     # top, and if the hint overshot (the page counted dead-branch bubbles the
     # menu doesn't list), come back down through the whole list

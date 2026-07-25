@@ -175,8 +175,19 @@ New always-audited swallow sites (previously silent — their absence used to ma
   recurrence means the `tui-draft` kv write or read failed, not that the page
   forgot — the old failure was exactly the page forgetting across a reload.
 
-- **A web rewind failed with `step: "open"` ("checkpoint menu never appeared"),
-  and/or a nonsense fragment appeared as a chat message**: the classic shape is
+- **A web rewind failed with `step: "open"` ("checkpoint menu never appeared")
+  with NO stray chat message**: suspect MARKER DRIFT before anything else — the
+  menu very likely DID open and `menu_open` stopped recognizing it. The row now
+  carries a clipped `screen` (the capture the step gave up on): if it shows the
+  `Rewind` list, the detector is stale, not the terminal. Claude Code composes
+  that footer at runtime (`<chord> to <action>`, chord label ∈ `Enter`/`enter`/
+  `⏎`), so a version bump can change it without changing any literal in the
+  binary — matching the composed half is the bug (v2.1.220 broke the title-case
+  match, 2026-07-25). Re-measure against a live window; never guess a new one.
+  Rows from BEFORE that fix carry no `screen`, so they can't be told apart.
+
+- **A web rewind failed with `step: "open"` AND a nonsense fragment appeared as
+  a chat message**: the classic shape is
   a rewind (or any slash command) issued shortly AFTER a web interrupt. The
   interrupt presses Escape, `editorMode: vim` makes the input box modal, and a
   typed `/rewind` in NORMAL mode is vim COMMANDS — the menu never opens and the

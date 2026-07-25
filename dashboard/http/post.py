@@ -717,11 +717,16 @@ class _PostMixin:
         try:
             res = rewindmenu.drive(fe, win, text, mode, ups=ups)
         except rewindmenu.MenuError as e:
+            # the screen the failing step gave up on, clipped — without it a
+            # `step: "open"` row cannot tell "the menu never opened" from "our
+            # marker stopped matching a menu that did" (the 2026-07-25 drift)
+            seen = _clip_screen(e.screen) if e.screen else ""
             A.error(log, "dashboard rewind-to (%s)" % e.step,
-                    {"sid": sid, "win": win, "mode": mode, "detail": str(e)})
+                    {"sid": sid, "win": win, "mode": mode, "detail": str(e),
+                     "screen": seen})
             A.state_file(log, sdb, "web-rewind-to",
                          {"win": win, "ok": False, "tab": tab, "mode": mode,
-                          "ups": ups, "step": e.step})
+                          "ups": ups, "step": e.step, "screen": seen})
             return self._json({"error": str(e), "step": e.step}, 409)
         A.state_file(log, sdb, "web-rewind-to",
                      {"win": win, "ok": True, "tab": tab, "mode": mode,

@@ -2128,7 +2128,7 @@ reading the screen back (`Frontend.get_text`), never pressing blind:
 
 - type `/rewind` (the 100%-reliable opener; draft killed first — Ctrl+U/K
   — so a held draft can't corrupt the command), poll until the checkpoint
-  list renders (`menu_open`: the `Rewind` header + `Enter to continue`
+  list renders (`menu_open`: the `Rewind` header + `to continue`
   footer, anchored at the LAST header occurrence so scrollback can't
   spoof it);
 - the list is one entry per LIVE-BRANCH user prompt, oldest first, cursor
@@ -2157,6 +2157,24 @@ reading the screen back (`Frontend.get_text`), never pressing blind:
   (its `.step` names the failing stage: `open`/`find`/`confirm`/`option`/
   `close`) after Escape-closing whatever was open — the session is never
   left sitting inside a menu — and the endpoint returns it as a 409.
+
+  **Marker drift (2026-07-25).** That footer is COMPOSED at runtime: Claude
+  Code renders `[<chord label>, " to ", <action>]`, and the chord label has
+  three formats (`Enter` / `enter` / `⏎`). The detector matched the whole
+  phrase in title case, measured on v2.1.214; by v2.1.220 it no longer matched
+  and EVERY web rewind failed with `step: "open"` — "checkpoint menu never
+  appeared" — while the menu was in fact open on screen. Only the action word
+  is the product's own literal, so `MENU_FOOT` is now `to continue`, matched
+  case-insensitively; `CONFIRM_HEADER` stays a whole-phrase match because it IS
+  a JSX literal. This is the repo's own rule paying out (CLAUDE.md,
+  *Experimenting with live sessions*): screen markers are version-fragile, and
+  a composed one is fragile twice over.
+
+  The failing step now also carries the SCREEN it gave up on
+  (`StepError.screen` → a clipped `screen` field on the `web-rewind-to` row and
+  its `errors` row). Without it, `step: "open"` cannot distinguish "the menu
+  never opened" from "our marker stopped matching a menu that did" — which is
+  why this took three rounds to find instead of one look.
 
 The endpoint refuses a BUSY tab outright (409 — mid-turn the gesture
 means cancel, and a typed `/rewind` would just queue as a message; stop
