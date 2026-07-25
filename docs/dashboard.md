@@ -1966,12 +1966,22 @@ the closed state and the open list in the page's own cmenu language. It keeps
 the old call-site shape (`value` get/set, `fill()` rebuild-preserving-value)
 and native-ish keyboard handling (↑/↓/Enter/Space, Esc closes the menu without
 closing the modal via `stopPropagation`). The directory field is freeform text
-with `suggest()` — the same menu language over the snapshot's distinct cwds —
-NOT a `<datalist>`: Safari renders that list in the system style too, and pops
-it open on focus, which made the prefilled field look already-clicked. Only a
-pointer CLICK on the field (or typing / ArrowDown) opens the menu — never
-focus alone, which also fires on the form's own auto-focus — with the value
-blank or an exact known cwd it lists EVERYTHING (the picker look, current
+with `suggest()` — the same menu language over the snapshot's distinct PROJECT
+directories — NOT a `<datalist>`: Safari renders that list in the system style
+too, and pops it open on focus, which made the prefilled field look
+already-clicked. The suggestion list is built from `groupKey(row)`, NOT the raw
+`row.cwd`: that is the same grouping notion the list page's project headers use
+(the server's `group_dir` — the session's frozen original cwd resolved to its
+linked-worktree OWNER, with `cwd` as the legacy fallback), so a session running
+in a throwaway `.claude/worktrees/<name>/` checkout (`EnterWorktree`, or any
+`git worktree add`) is offered as its MAIN checkout instead of the worktree
+path — nobody starts a new session in a worktree that an agent is about to
+delete, and the noise crowded out the real projects. `groupKey` in
+app.00-core.js is the ONE client-side implementation, shared with
+`groupSessions`, so the picker and the list can't name the folder differently.
+Only a pointer CLICK on the field (or typing / ArrowDown) opens the menu —
+never focus alone, which also fires on the form's own auto-focus — with the
+value blank or an exact known directory it lists EVERYTHING (the picker look, current
 value highlighted), while typing filters by substring; Enter picks the
 highlighted row, but when that row already IS the value (or nothing is
 highlighted) it falls through to launch — so click-pick-Enter and

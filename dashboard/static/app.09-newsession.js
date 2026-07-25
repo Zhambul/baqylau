@@ -141,7 +141,8 @@ function showPendingFail() {
 /* ---------- control plane: the new-session form ---------- */
 // Lives in the persistent #modal host (outside #view) so a list re-render from
 // an SSE snapshot never blows away a half-typed form. Directory input backed by
-// suggest() over the distinct cwds in the current snapshot; optional first
+// suggest() over the distinct PROJECT directories in the current snapshot
+// (groupKey — worktree cwds resolve to their main checkout); optional first
 // prompt; submit POSTs /api/sessions/new and the session appears on its own via
 // SessionStart. The header "+ session" button opens it blank; a dir group's "+"
 // prefills that cwd.
@@ -656,7 +657,12 @@ function openNewSession(prefillCwd, resumeSid) {
   dir.spellcheck = false;
   dir.placeholder = "/path/to/project";
   dir.value = prefillCwd || last.cwd || "";
-  const sug = suggest(dir, [...new Set(S.sessions.map(r => r.cwd).filter(Boolean))]);
+  // the suggestions are the snapshot's distinct PROJECT directories (groupKey,
+  // the list page's own grouping notion), not the raw cwds: a worktree session's
+  // cwd is a throwaway `.claude/worktrees/<name>/` checkout that no one wants to
+  // start a session in, and it resolves to its main checkout here.
+  const sug = suggest(dir,
+    [...new Set(S.sessions.map(r => groupKey(r)).filter(Boolean))]);
   dirRow.append(dir, sug.el);
 
   // conversation: FRESH (a new conversation, the default) or RESUME one of this

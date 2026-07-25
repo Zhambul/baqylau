@@ -45,10 +45,10 @@ function groupSessions(rows) {
   // over worktrees of one repo file under the main checkout (the per-card ⋔
   // chip tells them apart), AND a mid-session `cd` never moves a card between
   // groups — group_dir ignores the live cwd entirely (row.cwd is the fallback
-  // for legacy/parked rows with no group_dir).
+  // for legacy/parked rows with no group_dir, via groupKey).
   const groups = new Map();
   for (const row of rows) {
-    const k = row.group_dir || row.cwd || "";
+    const k = groupKey(row);
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(row);
   }

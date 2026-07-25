@@ -6766,6 +6766,23 @@ def test_group_dir_resolves_worktree_owner(tmp_path):
     assert DS._group_dir("") == ""
 
 
+def test_app_js_groups_and_suggests_through_the_shared_group_key(dash):
+    """The list's grouping AND the new-session directory picker must both name a
+    session's project directory through the ONE `groupKey(row)` helper. Two
+    inline copies of `group_dir || cwd` is how the picker came to suggest raw
+    `.claude/worktrees/<name>/` cwds that the list had already folded into their
+    main checkout — a static check on the served bundles keeps them in step."""
+    code, core = _get(dash + "/static/app.00-core.js")
+    assert code == 200 and "function groupKey(" in core
+    for part in ("app.04-list.js", "app.09-newsession.js"):
+        code, body = _get(dash + "/static/" + part)
+        assert code == 200
+        assert "groupKey(" in body, part
+        # the hand-rolled fallback expression must be gone from both readers
+        assert "row.group_dir ||" not in body, part
+        assert "map(r => r.cwd)" not in body, part   # the picker's old raw-cwd map
+
+
 # --------------------------------------------------- suggestion (ghost) probe
 # Pure parse over an ANSI get-text capture: the faint (SGR 2) input line
 # between the grey divider rules is Claude Code's greyish "suggested answer"

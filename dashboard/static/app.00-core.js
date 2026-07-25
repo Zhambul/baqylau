@@ -323,6 +323,15 @@ function lastActive(row) { return row.last_active || row.started_at || 0; }
 // leapfrog each other every SSE tick (order is part of listShape, so each
 // flip forced a full list rebuild — the page visibly jolted).
 function orderKey(row) { return row.started_at || lastActive(row); }
+// The PROJECT DIRECTORY a session belongs to: the server's `group_dir` — its
+// frozen ORIGINAL cwd resolved to its linked-worktree OWNER (read/meta.py
+// `_group_dir`) — with row.cwd as the fallback for legacy/parked rows pushed
+// before the field existed. The ONE client-side implementation, shared by the
+// list's grouping and the new-session directory picker so both name the same
+// folder: a session running in `.claude/worktrees/<name>/` (EnterWorktree, or
+// any `git worktree add` checkout) resolves to its main checkout, and the
+// picker never offers a throwaway worktree as a place to start a session.
+function groupKey(row) { return row.group_dir || row.cwd || ""; }
 function proj(row) {
   const c = row.cwd || "";
   return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
