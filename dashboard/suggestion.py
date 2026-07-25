@@ -168,8 +168,20 @@ def typed(screen):
 def probe(fe, win, sid=""):
     """The audited screen probe: capture the ANSI viewport and parse the ghost
     suggestion. None on any failure (audited) or when there is no suggestion."""
+    return probe_box(fe, win, sid)[0]
+
+
+def probe_box(fe, win, sid=""):
+    """ONE capture, BOTH readings: (ghost, typed) — the faint suggestion and the
+    user's own real text. Exactly one of them can be non-None (they partition
+    the box's content by intensity), and the two callers want opposite halves:
+    the ghost feeds the composer's placeholder, the typed text feeds the
+    terminal→web draft sync (docs/dashboard.md, *Terminal draft sync*). They run
+    on the same SSE tick, so sharing the capture keeps that one `kitten @
+    get-text` per tick instead of two. (None, None) on any failure (audited)."""
     try:
-        return parse(fe.get_text(win, ansi=True))
+        screen = fe.get_text(win, ansi=True)
     except Exception:
         A.error(sid, "dashboard suggestion probe", {"win": win})
-        return None
+        return None, None
+    return parse(screen), typed(screen)

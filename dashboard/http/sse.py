@@ -12,6 +12,7 @@ from core import sessionapi as API
 from core.noaudit import load_audit
 from dashboard import config
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
+from dashboard.control import launch
 from dashboard.notify.notifier import NOTIFIER
 from dashboard.read.lists import (sessions_payload,
                                   _row_key, _wire_row)
@@ -22,7 +23,7 @@ from dashboard.read.session import (agents_ctx, agents_model_effort,
                                     visible_agents, _ask_draft,
                                     _ask_pending, _ask_wire, _composer_draft, _composer_queue,
                                     _plan_pending, _session_tasks,
-                                    _suggestion, _SUGGEST_TABS)
+                                    _input_box, _SUGGEST_TABS)
 
 A = load_audit()
 
@@ -134,6 +135,7 @@ class _SseMixin:
                 "running": None, "errors": None, "ask": None, "plan": None,
                 "ctx": None, "git": None, "title": None, "effort": None,
                 "tasks": None, "ask_draft": None, "composer_draft": None,
+                "term_box": "",
                 "composer_queue": None, "monitors": None, "jobs": None,
                 "memory": None, "suggestion": None, "goal": None}
         row = API.session_row(sid) or {}
@@ -301,10 +303,20 @@ class _SseMixin:
             # the tab is settled (done/idle), no modal dialog is pending, and
             # the web composer box is empty (else there's nothing to surface, or
             # the probe would fight a draft the user is editing elsewhere).
-            if n % SLOW_EVERY == 0:
-                sug = (_suggestion(sid)
-                       if (tab in _SUGGEST_TABS and ask is None and plan is None
-                           and prev["composer_draft"] is None) else None)
+            if n % SLOW_EVERY == 0 and (tab in _SUGGEST_TABS
+                                        and ask is None and plan is None):
+                ghost, box = _input_box(sid)
+                # the ghost is only interesting while the web box is empty (a
+                # draft the user is editing elsewhere would fight it)
+                sug = ghost if prev["composer_draft"] is None else None
+                # …the typed half, though, is exactly what we want REGARDLESS of
+                # the web draft: it is the terminal→web sync. Only on a change,
+                # and a clear only propagates if it empties text we ourselves
+                # synced (launch.sync_terminal_draft owns that asymmetry).
+                box = box or ""
+                launch.sync_terminal_draft(sid, box, prev["term_box"],
+                                           prev["composer_draft"])
+                prev["term_box"] = box
             else:
                 sug = prev["suggestion"]
             if not self._push_changed(prev, "suggestion", "suggestion", sug, {"suggestion": sug}):

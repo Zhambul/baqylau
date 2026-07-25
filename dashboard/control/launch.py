@@ -278,6 +278,54 @@ def set_tui_draft(sid, text):
         return False
 
 
+TERMINAL_ORIGIN = "terminal"     # composer-draft `origin` for a synced box
+
+
+def sync_terminal_draft(sid, seen, last, stored):
+    """Mirror what the user typed AT THE TERMINAL into the web composer draft,
+    so a half-written prompt in the kitty tab can be finished on a phone
+    (docs/dashboard.md, *Terminal draft sync*). Writes the SAME `composer-draft`
+    kv the web composer uses — so it reaches every device through the machinery
+    that already broadcasts and restores drafts, and needs no second store.
+
+    `seen` is the box's real text now, `last` what the previous probe saw,
+    `stored` the current draft record (or None). Returns the text written, or
+    None when nothing was.
+
+    The asymmetry is the point. A NON-EMPTY box means someone is typing at the
+    terminal, so it wins. An EMPTY box does NOT mean "clear the draft": a draft
+    typed on another device lives only in the kv, and the terminal box is empty
+    for it ALWAYS — blindly syncing emptiness would wipe the phone's draft on
+    the next tick. So a clear only propagates when the box is emptying out text
+    WE synced from it (`stored` still holds exactly what the box held last
+    probe) — i.e. the terminal draft was sent or cleared where it came from."""
+    from core import state as ST
+    from core import sessionapi as API
+    if seen == last:
+        return None                      # nothing changed at the terminal
+    if not seen and not (stored and stored.get("text") == last):
+        return None                      # someone else's draft — not ours to clear
+    try:
+        sdb = API.state_db_for(sid)
+        if not sdb:
+            return None
+        # kv_set_at's seq-guarded sibling, like every composer-draft write: a
+        # page's own save may be in flight (the CAS keeps the newest)
+        res = ST.kv_cas_seq_at(sdb, "composer-draft",
+                               {"text": seen, "origin": TERMINAL_ORIGIN,
+                                "seq": int(time.time() * 1000)})
+    except Exception:
+        A.error(sid, "dashboard terminal draft (sync)", {"chars": len(seen)})
+        return None
+    if res != "written":
+        return None
+    # audited like every other composer-draft write, with its own action so the
+    # trail says WHERE a draft came from (a page's save vs the terminal box)
+    A.state_file(sid, sdb, "composer-draft",
+                 {"action": "terminal", "chars": len(seen)})
+    return seen
+
+
 def type_command(fe, win, text):
     """Put a SLASH COMMAND into a session's input box and submit it. Returns
     (ok, cleared_clipboard_image).

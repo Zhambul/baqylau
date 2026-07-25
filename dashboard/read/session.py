@@ -233,23 +233,23 @@ def _composer_draft(sid):
 _SUGGEST_TABS = (tabs.AWAITING_RESPONSE, tabs.IDLE)
 
 
-def _suggestion(sid):
-    """The greyish input-box ghost suggestion for a LIVE session — the faint
-    pre-filled 'suggested answer' Claude Code shows when a turn settles, read
-    straight off the TUI screen (no hook fires for it; docs/dashboard.md, *Web
-    ghost suggestion*). None when no frontend/live window resolves, there is no
-    suggestion, or the input holds real (non-faint) text. The CALLER gates on a
-    settled tab + no pending ask/plan + empty web draft so we only screen-scrape
-    when a suggestion could plausibly be there — this just resolves the
-    authoritative live window (the memoized claude_session=<sid> map, never a
-    reused start-time id) and probes it."""
+def _input_box(sid):
+    """A LIVE session's input box, read straight off the TUI screen (no hook
+    fires for either half): (ghost, typed) — the faint pre-filled 'suggested
+    answer' Claude Code shows when a turn settles (docs/dashboard.md, *Web ghost
+    suggestion*), and the REAL text the user has typed there (*Terminal draft
+    sync*). At most one is non-None; (None, None) when no frontend/live window
+    resolves or the box is empty. The CALLER gates on a settled tab + no pending
+    ask/plan so we only screen-scrape when the box is worth reading — this just
+    resolves the authoritative live window (the memoized claude_session=<sid>
+    map, never a reused start-time id) and probes it ONCE for both."""
     fe = launch._frontend()
     if fe is None:
-        return None
+        return None, None
     win = (launch._live_windows() or {}).get(sid)
     if not win:
-        return None
-    return suggestion.probe(fe, win, sid)
+        return None, None
+    return suggestion.probe_box(fe, win, sid)
 
 
 def _delivered_prompts(sid):

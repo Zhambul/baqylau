@@ -1130,6 +1130,46 @@ a passed read on both — with the stale save landing last. Folding the check an
 the write into one BEGIN-IMMEDIATE transaction serializes the two threads, so a
 lower-seq write can never straddle a higher-seq one.
 
+### Terminal draft sync (the kitty box → every device)
+
+Asked for 2026-07-25: *"if I type into the kitty tab's message input without
+sending and then open that session in the dashboard, I want the draft there —
+so I can continue the prompt from my iPad."*
+
+Claude Code fires no hook for typing, so the only source is the SCREEN — the
+same `❯`-box read the ghost suggestion uses, but its opposite half:
+`suggestion.parse` returns the FAINT text (a suggestion), `suggestion.typed`
+the normal-weight text (what the user actually typed). `probe_box` returns both
+from ONE capture, so the per-tick `kitten @ get-text` count doesn't change; the
+SSE loop feeds the ghost to the placeholder and the typed half to this sync
+(`launch.sync_terminal_draft`), on the same slow cadence and behind the same
+gate (settled tab, no pending ask/plan).
+
+It writes the **same `composer-draft` kv** the web composer uses, so it inherits
+the whole existing mechanism for free: the seq-guarded CAS, the SSE
+re-broadcast to every open page, and the restore-on-open path. Nothing new is
+stored and no new event is needed. The record carries `origin: "terminal"` (so
+no page mistakes it for its own echo) and a `composer-draft` audit row with
+`action: "terminal"`, which is what makes a draft's PROVENANCE answerable.
+
+**The asymmetry is the whole design.** A non-empty box means someone is typing
+at the terminal, so it wins. An empty box does **not** mean "clear the draft":
+a draft typed on a phone lives only in the kv, and the terminal box is empty
+for it *always* — propagating emptiness would wipe that draft on the very next
+tick. So a clear only rides through when the box is emptying out text **we
+synced from it** (the stored draft still holds exactly what the box held on the
+previous probe), i.e. the terminal draft was sent or cleared where it came
+from. Anything else, hands off.
+
+Nothing is ever typed back INTO the terminal, so there is no echo loop; the
+page's own guard (`applyComposerDraft` ignores a draft while the textarea has
+focus) keeps a synced draft from yanking text out from under active typing.
+
+Known limits: the sync runs only while a page has the session open (it rides
+that session's SSE tick), and only on a SETTLED tab — a message typed mid-turn
+(one the TUI is queueing) is not mirrored until the turn ends, which also keeps
+our own send's transient paste from reading back as a draft.
+
 ## Web composer queue (`POST /api/session/<sid>/composer-queue`)
 
 A message sent while a turn is running lands in Claude Code's OWN message queue

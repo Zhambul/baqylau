@@ -5102,6 +5102,65 @@ def test_menu_open_survives_the_chord_label_formats():
                             " the point\n  enter to continue")
 
 
+# --- terminal -> web draft sync (docs/dashboard.md, *Terminal draft sync*) ----
+# Type into the kitty tab's input box without sending, open the session on
+# another device, and the half-written prompt is in the composer.
+def _term_screen(text):
+    rule = "\x1b[m\x1b[38:2:136:136:136m" + "\u2500" * 100
+    return rule + "\n\x1b[m\u276f\xa0" + text + "\n" + rule + "\n"
+
+
+def test_probe_box_reads_both_halves_from_one_capture():
+    # the ghost and the typed text partition the box by INTENSITY, and the SSE
+    # tick wants both — so it captures once
+    calls = []
+
+    class FE:
+        def get_text(self, win, extent="screen", ansi=False):
+            calls.append(ansi)
+            return _term_screen("half a prompt")
+
+    ghost, typed = SUG.probe_box(FE(), "1", "s")
+    assert (ghost, typed) == (None, "half a prompt")
+    assert calls == [True]                       # ONE capture, both readings
+    ghostly = _term_screen("\x1b[22;2ma suggestion")
+    assert SUG.parse(ghostly) == "a suggestion" and SUG.typed(ghostly) is None
+
+
+def test_terminal_draft_sync_pushes_typing_and_ignores_a_still_box():
+    A.session_start({"session_id": "ts1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("ts1")
+    S.kv_set(log, "seed", 1)                     # the state DB must exist
+    L = DS.launch
+    assert L.sync_terminal_draft("ts1", "typed at the terminal", "", None) \
+        == "typed at the terminal"
+    d = S.kv_get(log, "composer-draft")
+    assert d["text"] == "typed at the terminal" and d["origin"] == "terminal"
+    # unchanged box -> no write at all (no seq churn, no SSE noise)
+    assert L.sync_terminal_draft("ts1", "typed at the terminal",
+                                 "typed at the terminal", d) is None
+
+
+def test_terminal_draft_sync_never_wipes_another_devices_draft():
+    # THE asymmetry: an empty box is the NORMAL state for a draft typed on a
+    # phone (it lives only in the kv), so emptiness must not propagate. A clear
+    # only rides through when the box is emptying text we ourselves synced.
+    A.session_start({"session_id": "ts2", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("ts2")
+    S.kv_set(log, "seed", 1)
+    L = DS.launch
+    phone = {"text": "written on the iPad", "origin": "devA", "seq": 1}
+    S.kv_set(log, "composer-draft", phone)
+    # box empty, and the stored draft is NOT what the box last held -> hands off
+    assert L.sync_terminal_draft("ts2", "", "something else", phone) is None
+    assert S.kv_get(log, "composer-draft")["text"] == "written on the iPad"
+    # but a terminal draft that WE synced, then sent at the terminal, clears
+    mine = {"text": "mine", "origin": "terminal", "seq": 2}
+    S.kv_set(log, "composer-draft", mine)
+    assert L.sync_terminal_draft("ts2", "", "mine", mine) == ""
+    assert S.kv_get(log, "composer-draft")["text"] == ""
+
+
 def test_no_dashboard_code_calls_the_thread_bound_kv_set():
     """state.kv_set caches its connection per PROCESS but sqlite binds it to
     the creating THREAD, so from a ThreadingHTTPServer request it writes

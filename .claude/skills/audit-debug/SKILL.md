@@ -165,6 +165,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
   message lands (see the ghost-message shape above), so the rows read together
   tell the whole story of one Escape.
 
+- **A composer draft appeared / vanished on its own**: since 2026-07-25 the
+  `composer-draft` kv has a SECOND writer — the terminal→web sync mirrors what
+  the user typed in the kitty `❯` box (docs/dashboard.md, *Terminal draft
+  sync*). `composer-draft` rows carry `action`: `write`/`clear` are a page's own
+  save, **`terminal`** is the sync, `stale` is a seq-rejected straggler. So "a
+  draft I didn't type" is answered by a `terminal` row, and the draft record's
+  `origin` field (`terminal` vs a page's client id) says the same thing live. A
+  draft VANISHING should never be the sync's doing unless the box was emptying
+  text it had itself synced — the clear is deliberately one-directional — so a
+  `terminal` row with `chars: 0` next to a draft the user typed elsewhere is a
+  real bug, not the design.
+
 - **A web-sent message arrived with the PREVIOUS one glued to its front**
   (`testingtesting2`): the input box still held a message the web had put there
   — an interrupt's take-back or a rewind restore — and the send pasted after it
