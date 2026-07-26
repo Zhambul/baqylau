@@ -581,3 +581,94 @@ def test_paths_root_is_repo_root():
                  "claude-mirror.py", "claude-codex-launch.py",
                  "claude-otlp-launch.py"):
         assert os.path.isfile(os.path.join(CP.BIN, shim)), shim
+
+
+# --- the plugin PROVIDER surface ------------------------------------------------
+# frontends/ has had a declared interface (frontends/base.Frontend) and a contract
+# test since it existed. plugins/ is the same problem — a registry of optional
+# duck-typed functions reached by name — and had neither: a provider whose name
+# was misspelled, or whose signature drifted from the fan-out calling it, was
+# never an error. It was simply never found, and the feature degraded silently to
+# "no plugin answered". `plugins.PROVIDERS` declares the surface; these two pin it
+# against reality in both directions.
+
+def test_every_plugin_fanout_reaches_a_declared_provider():
+    """Every provider name the fan-outs reach for is DECLARED in PROVIDERS.
+
+    The direction that actually breaks: a fan-out is written (or renamed) with a
+    name no plugin defines. `getattr(p, name, None)` finds nothing on every
+    plugin, the fan-out returns its default, and the feature is quietly off with
+    no error, no audit row and no failing test. Routing every lookup through
+    `plugins.provider()` turns that into a KeyError at the call — but only if the
+    table is complete, which is what this checks by parsing the fan-outs."""
+    import ast
+    import inspect
+    import plugins
+
+    src = inspect.getsource(plugins)
+    tree = ast.parse(src)
+    reached = set()
+    for n in ast.walk(tree):
+        if not isinstance(n, ast.Call):
+            continue
+        fn = n.func
+        # the two fan-out primitives take the name as their first argument …
+        if isinstance(fn, ast.Name) and fn.id in ("_first", "_concat_unique"):
+            a = n.args[0]
+            if isinstance(a, ast.Constant):
+                reached.add(a.value)
+        # … and the hand-rolled loops go through provider(p, "<name>")
+        if isinstance(fn, ast.Name) and fn.id == "provider" and len(n.args) > 1:
+            a = n.args[1]
+            if isinstance(a, ast.Constant):
+                reached.add(a.value)
+    assert reached, "no fan-outs found — the parse broke, not the contract"
+    undeclared = sorted(reached - set(plugins.PROVIDERS))
+    assert not undeclared, "fan-outs reach undeclared providers: %s" % undeclared
+    # and nothing may reach a plugin attribute by a bare getattr any more: that
+    # is the door the table exists to close
+    assert "getattr(p," not in src, "a fan-out bypassing plugins.provider()"
+    # every declared provider is actually used by some fan-out — a row nothing
+    # calls is a promise to plugin authors that nothing keeps
+    unused = sorted(set(plugins.PROVIDERS) - reached)
+    assert not unused, "PROVIDERS rows no fan-out calls: %s" % unused
+
+
+def test_plugin_providers_match_the_declared_arity():
+    """Every provider a plugin actually defines accepts the arity its fan-out
+    calls it with.
+
+    A signature that drifts is the second silent failure: the name resolves, the
+    call raises TypeError, and because most fan-outs are read-side (dashboards,
+    the scorebar) it surfaces as a broken card rather than a pointed error.
+    `min_args` is the smallest count any fan-out passes positionally; a provider
+    may accept more only with defaults (`context(path, main=False)`), and *args
+    accepts anything."""
+    import inspect
+    import plugins
+
+    seen = {}
+    for p in plugins.all_plugins():
+        for name, min_args in plugins.PROVIDERS.items():
+            fn = getattr(p, name, None)
+            if fn is None:
+                continue
+            seen.setdefault(name, []).append(p.__name__)
+            sig = inspect.signature(fn)
+            params = list(sig.parameters.values())
+            if any(q.kind is inspect.Parameter.VAR_POSITIONAL for q in params):
+                continue
+            positional = [q for q in params
+                          if q.kind in (inspect.Parameter.POSITIONAL_ONLY,
+                                        inspect.Parameter.POSITIONAL_OR_KEYWORD)]
+            required = sum(1 for q in positional
+                           if q.default is inspect.Parameter.empty)
+            where = "%s.%s%s" % (p.__name__, name, sig)
+            assert len(positional) >= min_args, \
+                "%s takes fewer than the %d args its fan-out passes" % (where, min_args)
+            assert required <= min_args, \
+                "%s requires more than the %d args its fan-out passes" % (where, min_args)
+    # the host implements nearly all of them; a table row NO plugin implements is
+    # dead weight that reads as supported
+    orphans = sorted(set(plugins.PROVIDERS) - set(seen))
+    assert not orphans, "declared providers no plugin implements: %s" % orphans

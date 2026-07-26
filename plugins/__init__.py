@@ -24,6 +24,62 @@ def all_plugins():
     return [claude_code, codex, otel]
 
 
+# --- the PROVIDER surface ------------------------------------------------------
+# The optional functions a plugin may expose, and the arity each fan-out calls
+# it with. A plugin implements as many as it has something to say about
+# (claude_code 19 of 20, codex 2, otel 1) and the fan-outs below skip the rest —
+# which is the whole point of an optional surface, and also its hazard: a
+# provider whose name is misspelled, or whose signature drifts from its
+# fan-out's call, is not an error anywhere. It is simply never found, and the
+# feature silently degrades to "no plugin answered" — the one failure mode a
+# duck-typed registry cannot report on its own.
+#
+# So the surface is DECLARED. This table is what `plugins.py` promises to call;
+# `tests/test_l1_contracts.py` checks it against reality in both directions:
+# every name a fan-out reaches for is listed here, and every provider a plugin
+# actually defines matches the listed arity. frontends/ has had this since it
+# had a `Frontend` base class and a contract test — plugins are the same problem
+# and had neither.
+#
+# `min_args` is the smallest number of positional arguments a fan-out ever
+# passes; a provider may accept more only with defaults (context() takes an
+# optional `main=`).
+PROVIDERS = {
+    "on_session_start": 3,   # (log, cwd, sid)      — attach watchers at SessionStart
+    "census": 1,             # (log)                — the scoreboard ✉ row
+    "activity": 2,           # (sid, agent_id)      — the drill-down timeline
+    "activity_since": 3,     # (sid, agent_id, pos) — its live increment
+    "monitors": 1,           # (sid)                — the monitors read model
+    "session_title": 1,      # (transcript_path)    — the display title
+    "title_and_rename": 1,   # (transcript_path)    — title + the tail rename
+    "set_session_title": 2,  # (transcript_path, name) — the rename write
+    "accounts": 0,           # ()                   — the switcher registry
+    "account_alias": 1,      # (slug)               — its launch command word
+    "model_windows": 0,      # (cache=)             — per-model weekly usage
+    #                          (keyword-only at the call site, hence 0)
+    "migration_target": 3,   # (cur_slug, cur_model, manual) — the ⇆ picker
+    "launch_argv": 2,        # (words, cmd)         — the login-shell wrapper
+    "slash_commands": 1,     # (cwd)                — the "/" menu's vocabulary
+    "config_dirs": 1,        # (cwd)                — the .claude/ ancestor walk
+    "effort_default": 2,     # (cwd, slug)          — the resolved effort level
+    "context": 1,            # (transcript_path)    — ctx saturation
+    "goal": 1,               # (transcript_path)    — the active /goal
+    "conversation": 2,       # (sid, pos)           — the main-thread records
+    "ask_preamble": 2,       # (sid, tool_use_id)   — the ask card's preamble
+}
+
+
+def provider(plugin, method):
+    """One plugin's implementation of a DECLARED provider, or None when it has
+    none. The single door every fan-out goes through, so an undeclared name
+    cannot be reached by accident — a typo in a fan-out raises here instead of
+    silently finding nothing on every plugin, which is exactly the failure the
+    PROVIDERS table exists to convert into noise."""
+    if method not in PROVIDERS:
+        raise KeyError("undeclared plugin provider: %r (see PROVIDERS)" % method)
+    return getattr(plugin, method, None)
+
+
 def _first(method, *args, default=None, truthy=False, **kwargs):
     """FIRST-plugin-wins fan-out primitive: iterate all_plugins(), skip those
     missing `method`, call it, and return the first usable answer; `default`
@@ -33,7 +89,7 @@ def _first(method, *args, default=None, truthy=False, **kwargs):
     propagate (the fan-out callers are read-side tools, not hooks); the
     per-function docstrings own the exact contract."""
     for p in all_plugins():
-        fn = getattr(p, method, None)
+        fn = provider(p, method)
         if fn is None:
             continue
         got = fn(*args, **kwargs)
@@ -49,7 +105,7 @@ def _concat_unique(method, key, *args):
     the method are skipped. Same read-side exception contract as _first()."""
     out, seen = [], set()
     for p in all_plugins():
-        fn = getattr(p, method, None)
+        fn = provider(p, method)
         if fn is None:
             continue
         for item in fn(*args) or []:
@@ -66,7 +122,7 @@ def on_session_start(log, cwd, sid):
     failure is audited and never blocks the host's SessionStart — same
     hooks-must-never-fail invariant as everything else."""
     for p in all_plugins():
-        fn = getattr(p, "on_session_start", None)
+        fn = provider(p, "on_session_start")
         if fn is None:
             continue
         try:
@@ -86,7 +142,7 @@ def census(log):
     hide which provider froze the row."""
     parts, events = [], []
     for p in all_plugins():
-        fn = getattr(p, "census", None)
+        fn = provider(p, "census")
         if fn is None:
             continue
         ps, ev = fn(log)
@@ -152,7 +208,7 @@ def title_and_rename(transcript_path):
     rename that fell out of the 64KB tail no longer 'rolls back' to the auto
     ai-title (docs/dashboard.md, *Web rename*)."""
     for p in all_plugins():
-        fn = getattr(p, "title_and_rename", None)
+        fn = provider(p, "title_and_rename")
         if fn is None:
             continue
         title, named = fn(transcript_path)
@@ -191,7 +247,7 @@ def model_windows(cache=None):
     as accounts(); {} when no plugin provides them / the feature is off."""
     out = {}
     for p in all_plugins():
-        fn = getattr(p, "model_windows", None)
+        fn = provider(p, "model_windows")
         if fn is None:
             continue
         for slug, wins in (fn(cache=cache) or {}).items():

@@ -178,11 +178,31 @@ its watcher to a Claude host; a plugin failure is audited and never blocks the
 host's SessionStart), `census(log)` (the scoreboard's ✉-row fan-out), and the
 read-side fan-outs (`activity`/`session_title`/`conversation` — first plugin
 that recognizes the key wins).
+**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty
+optional functions a plugin may expose and the arity each fan-out calls it with,
+and every lookup goes through `plugins.provider(plugin, name)` rather than a
+bare `getattr`. This is what `frontends/` has had all along in
+`frontends/base.Frontend` plus its contract test, and plugins are the same
+problem: a registry of optional duck-typed functions reached by name, where a
+misspelled provider or a signature that drifted from its caller is **not an
+error anywhere**. It is simply never found, and the feature degrades silently to
+"no plugin answered" — the one failure mode a duck-typed registry cannot report
+on its own. `provider()` raises `KeyError` on an undeclared name, and
+`tests/test_l1_contracts.py` checks the table against reality in both
+directions: every name a fan-out reaches for is declared (parsed out of the
+fan-outs themselves, so a new one can't skip the table), every declared row is
+actually called by one, every row is implemented by at least one plugin, and
+every implementation accepts the arity its fan-out passes. A plugin still
+implements only what it has something to say about — claude_code 19 of 20, codex
+2, otel 1.
+
 **Adding support for another agent tool** = a new `plugins/<tool>/` directory
 implementing whichever hooks it needs (`on_session_start` for a secondary
 source; its own entry scripts + hook wiring for a hook-driven host — Claude
 Code and now codex are both hosts, both driving the shared `core/hostpane.py`
 lifecycle) + one line in `all_plugins()` — core and the frontends don't change.
+A provider it wants that no fan-out has yet is a `PROVIDERS` row plus the
+fan-out; a provider it simply doesn't implement stays absent, as before.
 
 `frontends/` is the terminal layer. `frontends/base.py` defines the
 `Frontend` interface, organised into role slices with each slice's consumers
