@@ -667,6 +667,54 @@ def reaper(test_env):
 
 # ------------------------------------------------- no DB may land in the repo
 
+
+# --- the in-process dashboard server ------------------------------------------
+# Imported HERE rather than at module scope: conftest.py is loaded for the whole
+# suite (including the L1+ subprocess tests, which import nothing of the
+# dashboard), and pulling the server package in at collection time would put its
+# import graph on every run.
+# The L0 dashboard suite is one file per subject (test_l0_dash_*.py) over the
+# shared rig in tests/dashkit.py. This fixture is the ONE piece that cannot live
+# there: pytest resolves a fixture by NAME out of a test's signature, so an
+# imported one is both invisible to that resolution's reader and a redefinition
+# warning at every call site. It runs the real Handler on an ephemeral 127.0.0.1
+# port in a thread — never through serve() (no singleton lock, no real port
+# constant) — with every durable path relocated under tmp_path.
+@pytest.fixture
+def dash(monkeypatch, tmp_path):
+    from http.server import ThreadingHTTPServer
+
+    from core import paths as P
+    from dashboard import server as DS
+
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    # the durable global prefs DB (dashboard/prefs.py reads P.DASH_PREFS_DB
+    # fresh each call) — relocate so the suite never touches real ~/.claude
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "dash-prefs.db"))
+    # composer-attachment staging (paths.UPLOADS_DIR is import-time-captured
+    # under ~/.claude) — relocate so the upload endpoint never writes real home
+    monkeypatch.setattr(P, "UPLOADS_DIR", str(tmp_path / "uploads"))
+    # Isolate the global tab DB: core.tabs.TABDB is import-time-captured from
+    # /tmp, so without this every `API.tab_states()` read (the busy-tab guards,
+    # the notification watcher) sees the HOST machine's live kitty windows. A
+    # rewind test using window "36" would spuriously hit a real awaiting-bg tab
+    # and bail busy. Tests that need specific tab states monkeypatch
+    # DS.API.tab_states directly; this just makes the default empty + hermetic.
+    from core import tabs as _tabs
+    monkeypatch.setattr(_tabs, "TABDB", str(tmp_path / "claude-kitty-tab.db"))
+    # Hermetic default: never enumerate the REAL kitty windows from the read
+    # path (that would demote test sessions to not-live when the suite runs
+    # inside a live kitty session). None = "can't enumerate → keep the state-DB
+    # liveness signal"; a demotion test overrides this with a controlled map.
+    monkeypatch.setattr(DS.launch, "live_windows", lambda: None)
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), DS.Handler)
+    httpd.daemon_threads = True
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    yield "http://127.0.0.1:%d" % httpd.server_address[1]
+    httpd.shutdown()
+    httpd.server_close()
+
 def pytest_sessionfinish(session, exitstatus):
     """Fail the run if a test left a SQLite DB inside the repo working tree.
 

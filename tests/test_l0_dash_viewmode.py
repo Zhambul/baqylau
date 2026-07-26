@@ -1,0 +1,696 @@
+# tests/test_l0_dash_viewmode.py — L0 dashboard: the view modes (verbose / default / focus).
+#
+# One subject out of the former 8468-line L0 dashboard monolith; the
+# shared HTTP/audit helpers live in tests/dashkit.py and the in-process
+# server fixture (`dash`) in tests/conftest.py.
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import urllib.error
+import urllib.request
+
+import pytest
+from conftest import REPO
+
+if REPO not in sys.path:
+    sys.path.insert(0, REPO)
+
+import core.audit as A
+from core import ops as O
+from dashboard import opshtml
+from dashboard import prefs
+from dashboard import server as DS
+
+
+# ------------------------------------------------------------------ opshtml
+from dashkit import (_get, _get_json, _post, _state_rows)
+
+
+def _lbl(text, rgb, **kw):
+    return O.label(text, rgb, **kw)
+
+
+def test_actclass_classifies_main_session_blocks():
+    """The block-opening chip names the activity. The GLYPH alone can't: a
+    subagent launch header is also `▶ …`, so `▶` means a shell command only in
+    one of the semantic command colours (SLATE/ORANGE/RED) — a palette colour is
+    an agent. A finish chip (`■`) names NO class: it closes a block whose class
+    its opening chip already gave."""
+    from core import slots
+    from dashboard.opshtml import actclass as AC
+    assert AC.classify(_lbl("▶ foreground", O.SLATE, g="t1")) == ("bash", False)
+    assert AC.classify(_lbl("▷ background", O.ORANGE, g="t2")) == ("bg", False)
+    assert AC.classify(_lbl("◉ monitor · npm", slots.color("monitor", 1))) \
+        == ("monitor", False)
+    # the ▶ ambiguity, both ways
+    assert AC.classify(_lbl("▶ general-purpose · hunt", slots.color("sub", 0))) \
+        == ("agent", False)
+    assert AC.classify(_lbl("↻ Explore · sweep", slots.color("sub", 2))) \
+        == ("agent", False)
+    # a finish chip contributes only its outcome
+    assert AC.classify(_lbl("■ finished · 3.2s", O.SLATE, g="t1")) == (None, False)
+    # body ops inherit their block's class
+    assert AC.classify(O.code("git status", g="t1")) == (None, False)
+    assert AC.classify(O.gut("out", O.SLATE, g="t1")) == (None, False)
+
+
+def test_actclass_reads_failure_from_the_semantic_colour():
+    """`bad` is read STRUCTURALLY, from the shared semantic colours the
+    producers paint with (ops.RED / ops.ORANGE), never from the chip's words —
+    so a reworded chip can't silently stop reddening a collapsed run's dot. RED
+    is a failure anywhere; ORANGE only on a FINISH chip (it is also the
+    slot-less background header colour, which is no outcome at all)."""
+    from core import slots
+    from dashboard.opshtml import actclass as AC
+    assert AC.classify(_lbl("■ failed (exit 1) · 0.4s", O.RED, g="t1")) == (None, True)
+    assert AC.classify(_lbl("■ interrupted · 2.0s", O.ORANGE, g="t1")) == (None, True)
+    assert AC.classify(_lbl("■ finished · 1s", O.SLATE, g="t1")) == (None, False)
+    # ORANGE as a BG HEADER is not an outcome (the glyph is what separates them)
+    assert AC.classify(_lbl("▷ background", O.ORANGE, g="t2")) == ("bg", False)
+    # a monitor's red failure chip reddens its run too
+    assert AC.classify(_lbl("■ monitor died", O.RED, g="m1"))[1] is True
+    assert AC.classify(_lbl("◉ monitor", slots.color("monitor", 0)))[1] is False
+
+
+def test_actclass_file_one_liners_and_diffstat():
+    """File ops classify by the VERB, taken from its owner (tools.FILE_LABEL) —
+    Read folds away in default mode while Update/Write stay visible, so the
+    distinction is load-bearing. A mutation's `+A -R` is read here too (focus
+    mode's edit summary sums them), off the op rather than out of rendered HTML,
+    and a failed op is red with no counts to claim."""
+    from core import streamfmt as SF
+    from dashboard.opshtml import actclass as AC
+    read = O.line(SF.file_line("Read", "mirror.py", O.BLUE, extent="1-40"), view="v1")
+    upd = O.line(SF.file_line("Update", "ops.py", O.YELLOW, added=12, removed=3))
+    wr = O.line(SF.file_line("Write", "new.py", O.GREEN, added=40))
+    assert AC.classify(read) == ("read", False)
+    assert AC.classify(upd) == ("edit", False)
+    assert AC.classify(wr) == ("write", False)
+    assert AC.diffstat(upd) == (12, 3)
+    assert AC.diffstat(wr) == (40, 0)
+    assert AC.diffstat(O.line(SF.file_line("Update", "a.py", O.YELLOW, removed=4))) \
+        == (0, 4)
+    assert AC.diffstat(read) == (0, 0)
+    # a digit-bearing FILENAME is not a count (the parse anchors on the paren)
+    assert AC.diffstat(O.line(SF.file_line(
+        "Update", "app.05-session.js", O.YELLOW, added=7, removed=2))) == (7, 2)
+    # a FAILED read: red verb at the head of the line, still classified
+    assert AC.classify(O.line(SF.file_line("Read", "gone.py", O.BLUE,
+                                           failed=True))) == ("read", True)
+
+
+def test_actclass_warning_light_is_its_own_class():
+    """The audit warning light's `⚠ audit: …` one-liner must never be swallowed
+    by a collapse, so it classifies as its own act (which no mode folds)."""
+    from core import render as R
+    from dashboard.opshtml import actclass as AC
+    from dashboard.opshtml.actclass import ACT_WARN
+    line = O.line(R.DIM + "⚠ audit: claude-cmd-fmt.py: KeyError" + R.RST)
+    assert AC.classify(line) == (ACT_WARN, False)
+
+
+def test_actclass_never_raises_and_fails_toward_showing():
+    """A classification gap answers (None, False) — "not collapsible" — so junk
+    can only ever leave content VISIBLE, never hide it."""
+    from dashboard.opshtml import actclass as AC
+    for junk in ({}, {"t": "label"}, {"t": "line", "s": None},
+                 {"t": "label", "s": 5, "c": "nope"}, {"t": "weird", "s": "x"}):
+        assert AC.classify(junk) == (None, False)
+        assert AC.diffstat(junk) == (0, 0)
+
+
+def test_op_items_carry_act_bad_and_diffstat():
+    """The stream items the page renders carry the classification — `act`, `bad`
+    and (for mutations) `add`/`rem` — so the client never re-sniffs it out of the
+    HTML it was handed."""
+    from core import streamfmt as SF
+    items = opshtml.op_items([
+        O.label("▶ foreground", O.SLATE, g="g1"),
+        O.code("ls", g="g1"),
+        O.label("■ failed · 1s", O.RED, g="g1"),
+        O.line(SF.file_line("Update", "x.py", O.YELLOW, added=5, removed=2)),
+        O.line(SF.file_line("Read", "y.py", O.BLUE)),
+    ], key="k")
+    assert [it.get("act") for it in items] == ["bash", None, None, "edit", "read"]
+    assert [it.get("bad") for it in items] == [None, None, 1, None, None]
+    edit = items[3]
+    assert (edit["add"], edit["rem"]) == (5, 2)
+    assert "add" not in items[4] and "rem" not in items[4]   # a read has no counts
+
+
+def test_conversation_items_carry_the_msg_act(dash):
+    """Conversation text is stamped ACT_MSG with its `kind` beside it — focus
+    mode narrows on the kind (prompts and each turn's final reply survive)."""
+    from dashboard.read import mirror as M
+    items = M.conv_items([
+        {"kind": "prompt", "text": "hi", "ts": 1.0},
+        {"kind": "message", "text": "yo", "ts": 2.0},
+    ])
+    assert [it["act"] for it in items] == [opshtml.ACT_MSG, opshtml.ACT_MSG]
+    assert [it["kind"] for it in items] == ["prompt", "message"]
+
+
+def test_view_mode_pref_is_per_session_and_defaults_to_default(dash):
+    """The mode is stored per SESSION in the durable global prefs store, and an
+    untouched session reads VIEW_DEFAULT — `default`, the mode Claude Code's own
+    viewMode defaults to. Setting a session back to it DELETES the entry, so the
+    map stays the small set of overridden sessions rather than one row per session
+    ever opened."""
+    assert prefs.view_mode("vm1") == "default" == prefs.VIEW_DEFAULT
+    prefs.set_view_mode("vm1", "focus")
+    assert prefs.view_mode("vm1") == "focus"
+    assert prefs.view_mode("vm2") == "default"          # strictly per session
+    prefs.set_view_mode("vm1", "verbose")               # an override IS stored…
+    assert prefs.view_mode("vm1") == "verbose"
+    assert prefs.get(prefs.VIEW_MODE_KEY, {}) == {"vm1": "verbose"}
+    prefs.set_view_mode("vm1", "default")               # …and back is an absence
+    assert prefs.get(prefs.VIEW_MODE_KEY, {}) == {}
+    # junk in the store falls back to the default, never to a hidden-content mode
+    prefs.set(prefs.VIEW_MODE_KEY, {"vm1": "nonsense"})
+    assert prefs.view_mode("vm1") == prefs.VIEW_DEFAULT
+
+
+def test_viewmode_endpoint_persists_serves_and_validates(dash):
+    """POST /api/session/<sid>/viewmode stores the mode and the session payload
+    serves it back (not live-gated — a parked session re-opens at the mode you
+    left it in). A mode outside the vocabulary is a 400 input reject."""
+    A.session_start({"session_id": "vmses", "cwd": "/w", "transcript_path": ""})
+    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "default"
+    code, body = _post(dash + "/api/session/vmses/viewmode", {"mode": "verbose"})
+    assert code == 200 and json.loads(body) == {"ok": True, "mode": "verbose"}
+    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "verbose"
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/vmses/viewmode", {"mode": "tiny"})
+    assert e.value.code == 400
+    assert _get_json(dash + "/api/session/vmses")["view_mode"] == "verbose"  # unchanged
+
+
+def test_viewmode_endpoint_is_audited_and_guarded(dash, monkeypatch):
+    """It is a control-plane write like every other: audited as a `web-viewmode`
+    state_files row (the switch is invisible in the DB otherwise — "the dashboard
+    was hiding my commands" needs a row saying who asked), behind _post_guard,
+    and off in READONLY."""
+    A.session_start({"session_id": "vmaud", "cwd": "/w", "transcript_path": ""})
+    _post(dash + "/api/session/vmaud/viewmode", {"mode": "focus"})
+    rows = _state_rows("web-viewmode")
+    assert any(r.get("sid") == "vmaud" and r.get("mode") == "focus" for r in rows)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/vmaud/viewmode", {"mode": "focus"}, header=None)
+    assert e.value.code == 403
+    monkeypatch.setattr(DS.config, "READONLY", True)
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/vmaud/viewmode", {"mode": "focus"})
+    assert e.value.code == 403
+
+
+def test_act_vocabulary_matches_the_page_phrase_table(dash):
+    """The page's fold sets + summary fragments are keyed by actclass.ACTS
+    tokens. JS can't import the Python owner, so this is the seam that keeps the
+    two halves honest: every act the page folds must have a fragment to be
+    counted into (or map to one via VIEW_COUNTER), and no side may name a token
+    the other doesn't know. A fold with no fragment collapses blocks into a line
+    that says nothing about them."""
+    from dashboard.opshtml.actclass import ACTS
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    folds = dict(re.findall(r"\n  (verbose|default|focus): \[([^\]]*)\]", ses))
+    assert set(folds) == {"verbose", "default", "focus"}
+    fragments = re.findall(r'\n  \["([a-z-]+)", "', ses)
+    aliases = dict(re.findall(r'VIEW_COUNTER = \{ ([a-z]+): "([a-z-]+)" \}', ses))
+    assert fragments and folds["default"] and not folds["verbose"].strip()
+    for mode, body in folds.items():
+        for act in re.findall(r'"([a-z-]+)"', body):
+            assert act in ACTS, "%s folds unknown act %r" % (mode, act)
+            assert aliases.get(act, act) in fragments, \
+                "%s folds %r with no summary fragment" % (mode, act)
+    # the fragment keys are acts too (plus the two memory flavours, which are a
+    # file op's act + the ❖ memory tag, not acts of their own)
+    for key in fragments:
+        assert key in ACTS or key in ("mem-read", "mem-write"), key
+    # focus folds a SUPERSET of default: it is the stricter cut, always
+    assert set(re.findall(r'"([a-z-]+)"', folds["default"])) \
+        <= set(re.findall(r'"([a-z-]+)"', folds["focus"]))
+
+
+def test_page_view_modes_match_the_pref_vocabulary(dash):
+    """The three mode names are the wire vocabulary the endpoint validates
+    against (prefs.VIEW_MODES) — the page must not invent a fourth, must list them
+    in the same CONTROL order, and must agree on which one is the DEFAULT. The
+    list order and the default are deliberately decoupled: the control reads
+    densest-to-sparsest while an untouched session opens at `default`, so the page
+    taking VIEW_MODES[0] for the default (as it first did) is now a bug."""
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    names = re.search(r"const VIEW_MODES = \[([^\]]*)\]", ses).group(1)
+    assert tuple(re.findall(r'"([a-z]+)"', names)) == tuple(prefs.VIEW_MODES)
+    page_default = re.search(r'const VIEW_DEFAULT = "([a-z]+)"', ses).group(1)
+    assert page_default == prefs.VIEW_DEFAULT == "default"
+    assert "VIEW_MODES[0]" not in ses, "the default is not the first mode"
+
+
+def test_page_reads_the_served_act_instead_of_sniffing_glyphs(dash):
+    """The page used to classify a block by regexing the mirror's chip GLYPHS
+    (`CMD_GLYPH = /^\\s*[▶▷◉■]/`) out of the rendered HTML it had just been
+    handed. That table now has one owner, server-side (opshtml/actclass.py), and
+    the page reads its `act` stamp — so the glyph vocabulary must not reappear
+    in the client."""
+    code, index = _get(dash + "/")
+    assert code == 200
+    for part in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index))):
+        code, body = _get(dash + "/static/" + part)
+        assert code == 200
+        assert "CMD_GLYPH" not in body, part
+        assert "▶▷◉" not in body, "%s re-encodes the chip glyph table" % part
+
+
+def test_secondary_tab_sections_are_one_engine(tmp_path):
+    """Monitors and background jobs, EXECUTED rather than grepped:
+    tests/jsdom/sections.js drives the real SECTIONS engine in
+    app.11-chrome.js over the shared DOM shim.
+
+    They used to be fourteen near-identical function pairs 200 lines apart —
+    sortedMonitors/sortedJobs byte-identical but for a parameter name, and the
+    SECONDARY_POLL_MS constant already unified with a comment saying the rest had
+    been written twice. Folding them onto one descriptor is only safe if BOTH
+    still render what they rendered, and no Python test executes this file; a
+    grep cannot catch a jobs grid that says "no monitors in this session", a
+    breadcrumb pointing at the other list, or a poll left ticking for a section
+    with nothing live. Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "sections.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    assert d["kinds"] == ["monitors", "jobs", "memory"]
+    # each grid renders its own cards, in the shared order: live first, then
+    # most-recently-started
+    for kind, glyph in (("monitors", "◉"), ("jobs", "◷")):
+        g = d["grids"][kind]
+        assert g["cards"] == 2, kind
+        assert g["order"][0].endswith("live"), (kind, g["order"])
+        assert g["text"].startswith(glyph), (kind, g["text"])
+    # …and its OWN wording, which a shared engine is exactly what could lose
+    assert d["empty"] == {"monitors": "no monitors in this session",
+                          "jobs": "no background jobs in this session"}
+    assert d["crumbs"]["monitors"]["back"].endswith("/monitors")
+    assert d["crumbs"]["jobs"]["back"].endswith("/jobs")
+    assert d["crumbs"]["monitors"]["text"] == "◉ monitors›◉ watcher"
+    assert d["crumbs"]["jobs"]["text"] == "◷ jobs›◷ make build"
+    # the poll runs only while something is LIVE and that section is what you
+    # are looking at — its tab, or one item's drill-down
+    assert d["poll"] == {"liveOnTab": True, "liveOnDrill": True,
+                         "liveElsewhere": False, "deadOnTab": False}
+    # loadSection: one fetch on the section's own endpoint, the badge patched
+    # from the fetched length (anchor text AND the cached meta field), the grid
+    # painted. memory shares the fetch+badge half and repaints through its own
+    # paintMemory, so it has no grid of its own here.
+    assert d["fetched"] == {"monitors": ["/api/session/sid1/monitors"],
+                            "jobs": ["/api/session/sid1/jobs"],
+                            "memory": ["/api/session/sid1/memory"]}
+    assert d["badges"]["monitors"] == {"count": "2", "meta": 2, "painted": 2}
+    assert d["badges"]["jobs"] == {"count": "2", "meta": 2, "painted": 2}
+    assert d["badges"]["memory"] == {"count": "1", "meta": 1, "painted": None}
+
+
+def test_view_mode_engine_collapses_runs_and_words_them(dash):
+    """The COLLAPSE ITSELF, executed rather than grepped: tests/jsdom/viewmode.js
+    runs the real app.05-session.js engine over a DOM shim and reports what the
+    stream became. Everything else about the view modes can be checked from
+    Python, but "which adjacent items became one run", "what does the line say"
+    and "which dot" live only in the page — and a grep test can't tell a correct
+    run cut from an off-by-one. Skipped without `node` (the one JS-executing test
+    in the suite, never a build requirement — docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    harness = os.path.join(REPO, "tests", "jsdom", "viewmode.js")
+    app = os.path.join(REPO, "dashboard", "static", "app.05-session.js")
+    r = subprocess.run([node, harness, app], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    # verbose hides nothing and summarizes nothing — today's dashboard, unchanged
+    assert d["verbose"] == {"sums": 0, "shown": 11}
+    # default: adjacent read/command/agent activity collapses; the EDIT stays
+    # visible and BREAKS the run either side of it (the whole point — you always
+    # see what was changed), as do the conversation messages
+    assert d["default"]["sums"] == ["Read 1 file, ran 1 shell command",
+                                    "Ran 2 shell commands",
+                                    "Read 2 files, ran 1 shell command"]
+    assert d["default"]["shown"] == ["msg", "edit", "msg", "msg"]
+    # focus: your prompt + exactly ONE message — the one the turn ends on — and
+    # the activity merged into a single summary line. A settled turn (this story's
+    # tab is idle) shows that message at full weight; the mid-turn prose is gone.
+    assert d["focus"]["sums"] == \
+        ["Edited 1 file +12 -3, read 3 files, ran 4 shell commands"]
+    assert d["focus"]["shown"] == ["msg", "msg"]
+
+    # …and while the turn is STILL RUNNING that newest message is PROVISIONAL —
+    # greyed, because the result is still coming — going to full weight when the
+    # tab settles. Same story, same items, only the tab state differs; the older
+    # in-turn prose is hidden in both.
+    assert d["focusRunning"] == ["msg:dim", "msg"]
+    assert d["focusSettled"] == ["msg", "msg"]
+    # a PREVIOUS turn's reply is never provisional, even while a new turn runs
+    # (that turn has produced no message yet, so nothing there is in flight)
+    assert d["focusOlderTurn"] == ["msg", "msg", "msg"]
+
+    # Claude Code's wording, to the letter (docs/dashboard.md *View modes*):
+    # singular/plural units, fragment ORDER, capitalized first fragment only…
+    assert d["singular"] == "Read 1 file, ran 1 shell command"
+    assert d["plural"] == "Read 2 files, ran 2 shell commands"
+    # …the participle + trailing … while it runs, past tense when done…
+    assert d["live"]["text"] == "Reading 1 file, running 1 shell command…"
+    assert d["live"]["dot"] == "running" and d["live"]["timer"] == " · 30s"
+    # …memory ops worded as memories, not file reads, and agents before commands
+    assert d["memory"] == "Ran 1 agent, recalled 2 memories"
+    # a Write counts as an edit (Claude Code's own editFileCount), diffstats summed
+    assert d["editSummary"] == "Edited 2 files +52 -3, read 1 file, ran 1 shell command"
+
+    # a failure inside a collapsed run still shows: the dot goes red
+    assert d["failed"]["dot"] == "bad"
+    # the ⚠ audit warning never folds — and it splits the run it sits in
+    assert d["warnBreaksRuns"] == {"sums": 2, "shown": ["warn", "msg"]}
+
+    # An INJECTED prompt (a Stop hook's feedback, a loaded skill's body — the
+    # transcript's isMeta) is not something you said: verbose keeps it (it IS in
+    # the transcript), both non-verbose modes drop it, and it does NOT close the
+    # turn — so focus still shows exactly ONE final reply, not one per hook
+    # firing.
+    assert d["injected"]["verbose"] == 5
+    assert d["injected"]["default"] == ["msg", "msg", "msg"]   # prompt + 2 replies
+    # prompt + THE reply: still exactly ONE, so the hook firing did not
+    # manufacture a second turn-ending message
+    assert d["injected"]["focus"] == ["msg", "msg"]
+
+    # the summary is clickable BOTH ways (it stays put while expanded — it is the
+    # only way back), and a redundant pass is a no-op (the signature guard, which
+    # is what keeps a live stream from rebuilding the feed under a reader)
+    assert d["idempotent"] is True
+    # Expanding also MARKS what the run revealed, so the blocks read as belonging
+    # to the summary above them rather than as loose feed activity: every member
+    # carries the rail class ("R"), the OLDEST one closes it ("L"), and the
+    # message outside the run is untouched. Collapsing clears every mark — a
+    # stale one would draw a rail under a run that is no longer open.
+    assert d["expanded"] == {"shown": ["read", "bash", "bash", "msg"],
+                             "sums": ["1"],
+                             "marks": ["R-", "R-", "RL", "--"],
+                             # …and they arrive FOLDED (`data-open` 0): expanding
+                             # a summary answers "which actions were these", not
+                             # "dump every command's output" — which would be the
+                             # wall the collapse exists to remove
+                             "opens": ["0", "0", "0", "-"]}
+    # a block the USER opened is left alone, so the fold can't fight a manual
+    # toggle on the next pass (its `userset` mark is read off the DOM, because a
+    # history block has no entry in S.ses.blocks to carry the flag)
+    assert d["userOpened"] == ["-0", "U1", "-0", "--"]
+    assert d["recollapsed"] == {"shown": ["msg"], "sums": ["0"],
+                                "marks": ["--", "--", "--", "--"]}
+    # a run absorbing new items keeps its identity, so an expansion survives it
+    assert d["growth"] == {"sameKey": True, "stillOpen": True,
+                           "text": "Ran 3 shell commands"}
+    # and switching back leaves no residue
+    assert d["backToVerbose"] == {"sums": 0, "shown": 3}
+
+
+def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
+    """A message bubble grows to its content; only SKIMMED content gets a
+    fixed-height scroller. Both halves of that asymmetry are pinned here because
+    they are one decision made in two places: the server stopped eliding an
+    agent's message/result by line count (docs/subagents.md), and a `max-height`
+    + `overflow: auto` on the same text is that elision wearing a scrollbar —
+    which is exactly how the "why do I still have to scroll long messages"
+    report survived the server-side fix."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = dict((sel.strip(), body) for sel, body in
+                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+
+    # conversation text — the stream's message bubbles AND the drill-down's
+    # entries, capped together by one rule — grows to its content
+    conv = rules[".msg .md, .ent .bd .md"]
+    assert "max-height: none" in conv and "overflow: visible" in conv
+    # a subagent's ⇢ prompt / ⇠ result block body is conversation text too (in the
+    # web mirror an agent block is only ever those two)
+    agent = rules['.blk[data-act="agent"] > .bbody']
+    assert "max-height: none" in agent and "overflow: visible" in agent
+    # …while a generic block body (a command's output — skimmed) keeps its box
+    generic = rules[".bbody"]
+    assert "max-height: 480px" in generic and "overflow: auto" in generic
+
+
+def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
+    """Claude Code writes some turns in the USER's shape without the human
+    typing them, and marks them `isMeta`: a Stop hook's blocking feedback, a
+    resume nudge, and — the noisiest — a SKILL LOAD, whose whole SKILL.md body
+    arrives as an isMeta text block right after the Skill tool_result. They used
+    to render as "YOU" bubbles (a hook's feedback, or an entire skill, attributed
+    to the user). `<`-wrapped envelopes were already dropped; these are bare
+    prose, so only the flag can tell them apart. Carried through parse_line →
+    conversation → the wire item, where the view modes act on it."""
+    from plugins.claude_code import transcript as TR
+
+    def line(**kw):
+        return json.dumps(kw)
+
+    # parentUuid CHAINED: prompt-bearing records sharing one parent are a
+    # re-parented fork, i.e. a discarded branch (*Discarded prompts*), and the
+    # prune would legitimately drop all but the last.
+    real = line(type="user", message={"role": "user", "content": "do the thing"},
+                uuid="u1", timestamp="2026-07-25T10:00:00.000Z")
+    hook = line(type="user", isMeta=True, uuid="u2", parentUuid="u1",
+                timestamp="2026-07-25T10:00:01.000Z",
+                message={"role": "user", "content": "Stop hook feedback:\nwiki check"})
+    skill = line(type="user", isMeta=True, uuid="u3", parentUuid="u2",
+                 timestamp="2026-07-25T10:00:02.000Z",
+                 message={"role": "user", "content": [
+                     {"type": "text",
+                      "text": "Base directory for this skill: /x/.claude/skills/k\n\nbody"}]})
+    # parse_line carries the flag on BOTH shapes (plain string, and the list
+    # content a skill body arrives in)
+    assert TR.parse_line(real)["meta"] is False
+    assert TR.parse_line(hook)["meta"] is True
+    assert TR.parse_line(skill)["meta"] is True
+
+    tf = tmp_path / "t.jsonl"
+    tf.write_text(real + "\n" + hook + "\n" + skill + "\n", encoding="utf-8")
+    recs, _pos = TR.conversation(str(tf))
+    got = [(r["kind"], r.get("meta"), r["text"].split("\n")[0][:34]) for r in recs]
+    assert got == [
+        ("prompt", None, "do the thing"),
+        ("prompt", True, "Stop hook feedback:"),
+        ("prompt", True, "Base directory for this skill: /x/"),
+    ], got
+    # …and it reaches the page on the wire item the view modes read
+    items = DS.mirror.conv_items(recs)
+    assert [it.get("meta") for it in items] == [None, 1, 1]
+
+
+def test_load_older_keeps_its_promise_in_a_collapsing_mode(dash):
+    """"load older · 40 more" must deliver 40 more things to READ, not 40 raw
+    blocks that collapse to two lines — the reported bug. The server counts
+    BLOCKS and cannot do better: what a page leaves visible depends on the mode
+    and on runs that merge across the page boundary, both of which only the
+    client knows. So `loadOlder` loops until the visible count has risen by its
+    target, sizing each next page at the observed yield.
+
+    Driven through the real loop in tests/jsdom/viewmode.js against a stubbed
+    /history (see that file for the two content shapes and why)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "viewmode.js"),
+         os.path.join(REPO, "dashboard", "static", "app.05-session.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    # the page-size policy: aim at the shortfall at the observed yield, reach for
+    # the ceiling when a page yielded nothing, never go below one page
+    assert d["pageSize"] == {"yielded2of40": 400, "yielded10of40": 120,
+                             "yieldedNothing": 400, "alreadyThere": 40}
+
+    f = d["fills"]
+    # VERBOSE is untouched: one page IS 40 visible items, so no extra request
+    assert f["verbose"]["pages"] == 1 and f["verbose"]["gained"] == 40
+    # FOCUS over realistic history reaches the full 40 — in 2 requests, because
+    # the second is sized from the first's yield rather than creeping by 40
+    assert f["focus"]["gained"] >= 40 and f["focus"]["pages"] <= 3
+    assert f["focus"]["asked"][0] == 40 and f["focus"]["asked"][1] > 40
+    # a PATHOLOGICAL all-commands stretch cannot raise the visible count at all
+    # (every block merges into the run already at the boundary): the loop must
+    # spend its budget and stop cleanly, never spin, and must leave the button
+    # usable again
+    assert f["allCommands"]["pages"] == 6      # == OLDER_TRIES
+    assert f["allCommands"]["stuck"] is False
+    # and exhausted history stops it BEFORE the budget, on the same clean exit
+    assert f["exhausted"]["pages"] == 2 and f["exhausted"]["stuck"] is False
+
+
+
+def test_switching_into_a_collapsing_mode_fills_the_window(dash):
+    """Two different promises, often confused: the "load older · 40 more" BUTTON
+    aims at 40 visible items, while switching modes only tops the window up to
+    VIEW_FILL_MIN — collapsing a command-heavy tail can leave two lines on screen,
+    and the switch pulls enough history to have something to read.
+
+    Switching INTO verbose must pull nothing (it hides nothing, so the window is
+    already as full as the loaded data allows). The floor is 15, measured: at 6 a
+    switch to focus left ~11 visible on a real session (a third of a screen); 15
+    costs one more request for ~25, and 20 buys nothing 15 didn't."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "viewmode.js"),
+         os.path.join(REPO, "dashboard", "static", "app.05-session.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    code, src = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    floor = int(re.search(r"const VIEW_FILL_MIN = (\d+);", src).group(1))
+    assert floor >= 15, "a switch must leave more than a couple of lines"
+    assert d["switchFocus"]["visible"] >= floor, d["switchFocus"]
+    assert d["switchFocus"]["fills"] == 1, "one fill should be enough"
+    # …and switching to verbose pulls nothing at all
+    assert d["switchVerbose"] == {"visible": 2, "pages": 0, "fills": 0}
+
+def test_expanded_run_rail_is_styled_as_one_group(dash):
+    """The rail the engine marks has to be DRAWN, and drawn as a continuous
+    group: the open summary is the header (rounded on top only, its bottom margin
+    closed) and each revealed block indents under it sharing the rail colour,
+    with the vertical gaps closed so the line does not break between cards. These
+    rules must also come AFTER the `.stream > .opl/.ol/...` card rules they
+    override — equal specificity, so source ORDER is what decides."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    assert "--runrail:" in css, "the rail colour needs one owner in :root"
+    head = re.search(r"\.stream > \.vsum\[data-open=\"1\"\] \{([^}]*)\}", css)
+    run = re.search(r"\.stream > \.vrun \{([^}]*)\}", css)
+    assert head and run
+    assert "var(--runrail)" in head.group(1) and "var(--runrail)" in run.group(1)
+    assert "margin: 7px 0 0" in head.group(1), "the header must close its gap"
+    for prop in ("margin-top: 0", "margin-bottom: 0", "margin-left"):
+        assert prop in run.group(1), prop
+    cards = css.index(".stream > .opl, .stream > .ol")
+    assert cards < css.index(".stream > .vrun"), "the rail must override the cards"
+
+
+def test_interrupt_annotation_is_flagged_by_its_id_not_its_text(dash):
+    """`[Request interrupted by user]` (and the `… for tool use]` form) is another
+    user-SHAPED record Claude Code writes itself, so it was rendering as a YOU
+    bubble. It is NOT isMeta — measured across the corpus — but it does carry
+    `interruptedMessageId`, the id of the message it cut off, and THAT is what
+    flags it.
+
+    Deliberately not matched on the annotation's text: a Read of a doc that
+    mentions the marker, a grep hit, or a conversation about it is textually
+    identical, which is the exact false-positive class that once flipped tab
+    colours mid-turn (tabstatus.is_interrupt_line). An id-bearing field can't be
+    quoted."""
+    from plugins.claude_code import transcript as TR
+    for content in ("[Request interrupted by user]",
+                    [{"type": "text", "text": "[Request interrupted by user for tool use]"}]):
+        rec = TR.parse_line(json.dumps({
+            "type": "user", "interruptedMessageId": "msg_1",
+            "message": {"role": "user", "content": content}}))
+        assert rec["meta"] is True, content
+    # a real message that merely QUOTES the marker stays yours
+    quote = TR.parse_line(json.dumps({
+        "type": "user",
+        "message": {"role": "user",
+                    "content": "why is [Request interrupted by user] shown?"}}))
+    assert quote["kind"] == "prompt" and quote["meta"] is False
+
+
+def test_compaction_summary_is_flagged_by_its_field_not_its_text(dash, tmp_path):
+    """The post-/compact summary is the THIRD user-shaped record Claude Code
+    writes itself: a `compact_boundary` system line, then a `user` line carrying
+    the whole "This session is being continued…" recap as the new context. It is
+    neither isMeta nor interrupt-flagged, so it rendered as a YOU bubble holding
+    thousands of words — six of them, 11k-17k chars each, in one real session.
+    `isCompactSummary` flags it, so the non-verbose modes drop it like any other
+    injected turn (the flag reaches the page as the item's `meta`).
+
+    Matched on the boolean field, never the recap's opening sentence: that
+    sentence is ordinary English any conversation ABOUT compaction reproduces
+    verbatim — the same false-positive class as the interrupt annotation."""
+    from plugins.claude_code import transcript as TR
+    recap = "This session is being continued from a previous conversation.\n\nSummary:\n1. …"
+
+    def line(**kw):
+        return json.dumps(kw)
+
+    real = line(type="user", uuid="u1", timestamp="2026-07-25T10:00:00.000Z",
+                message={"role": "user", "content": "do the thing"})
+    bound = line(type="system", subtype="compact_boundary", uuid="u2",
+                 timestamp="2026-07-25T10:00:01.000Z",
+                 compactMetadata={"trigger": "manual", "preTokens": 9},
+                 content=None)
+    summ = line(type="user", isCompactSummary=True, uuid="u3", parentUuid="u2",
+                timestamp="2026-07-25T10:00:02.000Z",
+                message={"role": "user", "content": recap})
+    assert TR.parse_line(real)["meta"] is False
+    assert TR.parse_line(summ)["meta"] is True
+    # the same shape as a skill body (list content) is flagged too
+    assert TR.parse_line(line(type="user", isCompactSummary=True,
+                              message={"role": "user", "content": [
+                                  {"type": "text", "text": recap}]}))["meta"] is True
+    # …and a message that merely QUOTES the recap's opening stays yours
+    quote = TR.parse_line(line(type="user", message={"role": "user", "content":
+                               "why does " + recap + " show as mine?"}))
+    assert quote["kind"] == "prompt" and quote["meta"] is False
+
+    tf = tmp_path / "t.jsonl"
+    tf.write_text(real + "\n" + bound + "\n" + summ + "\n", encoding="utf-8")
+    recs, _pos = TR.conversation(str(tf))
+    # the boundary itself was never in this stream (only the drill-down timeline
+    # renders it); the summary is, flagged
+    assert [(r["kind"], r.get("meta")) for r in recs] == [
+        ("prompt", None), ("prompt", True)], recs
+    assert [it.get("meta") for it in DS.mirror.conv_items(recs)] == [None, 1]
+
+
+def test_view_mode_syncs_to_an_open_page_on_another_device(dash):
+    """The mode has always been stored SERVER-side and per-session, so opening
+    the session anywhere picks it up (`view_mode` on the payload). What this pins
+    is the other half: a page ALREADY open follows a switch made elsewhere, via a
+    `view-mode` SSE event on the slow cadence — same shape as the global alerts
+    toggle's `notify-config`. Without it, the phone's switch left the desktop on
+    the old density until a reload."""
+    A.session_start({"session_id": "vmsse", "cwd": "/w", "transcript_path": ""})
+    prefs.set_view_mode("vmsse", "focus")
+    seen = []
+    r = urllib.request.urlopen(dash + "/events/session/vmsse", timeout=20)
+    try:
+        deadline = time.time() + 15
+        event = None
+        while time.time() < deadline:
+            raw = r.readline()
+            if not raw:
+                break
+            line = raw.decode("utf-8", "replace").strip()
+            if line.startswith("event:"):
+                event = line.split(":", 1)[1].strip()
+            elif line.startswith("data:") and event == "view-mode":
+                seen.append(json.loads(line.split(":", 1)[1]).get("mode"))
+                if len(seen) == 1:            # the initial state…
+                    prefs.set_view_mode("vmsse", "verbose")   # …then a switch
+                if len(seen) == 2:
+                    break
+    finally:
+        r.close()
+    assert seen == ["focus", "verbose"], seen

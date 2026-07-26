@@ -1487,7 +1487,7 @@ suggestion is rendered with the faint SGR attribute** (`\x1b[22;2m`, param
 input content is faint* — `parse()` returns the faint text (wrapped lines
 joined, whitespace-normalized) or `None` when the box is empty or holds
 non-faint (real) input. `parse()` is a pure function over the screen string,
-unit-tested (`tests/test_l0_dashboard.py`); `probe()` wraps it with the
+unit-tested (`tests/test_l0_dash_probes.py`); `probe()` wraps it with the
 get-text call and audit-before-swallow (`A.error` on any failure).
 
 **Live-only, ephemeral, gated.** There is no kv and no persistence — a parked
@@ -5699,16 +5699,28 @@ dropped — the deeper fix would be per-chip in-place text updates.
 
 ## Testing
 
-`tests/test_l0_dashboard.py`: opshtml contract tests (escaping, SGR/OSC8,
-copy-link specs, lex/num gut bodies, and the rich tool renders — Bash
-highlight, Edit diff with escaped content, Write cap, Read one-liner, deflist,
-unknown-tool fallback), the server on an ephemeral in-process
-port (never through `serve()` — no singleton lock in tests) against data
-seeded via the real product APIs, and the notification watcher's transition
-logic. The lazy-backlog tests assert the tail limit + `oldest` cursor, that
-`/history` chains to exhaustion with the slices concatenating to the unlimited
-merge (no gap, no overlap), and that a straddling group is never duplicated.
-Import safety for both modules rides `test_import_safety.py`.
+The L0 dashboard suite is ONE FILE PER SUBJECT — it was a single 8468-line,
+355-test module, the largest file in the repo and the same monolith the
+dashboard package itself was decomposed out of:
+
+| file | subject |
+| --- | --- |
+| `tests/test_l0_dash_opshtml.py` | the ops→HTML presenter: escaping, SGR/OSC8, copy-link specs, lex/num gut bodies, and the rich tool renders (Bash highlight, Edit diff with escaped content, Write cap, Read one-liner, deflist, unknown-tool fallback) |
+| `tests/test_l0_dash_server.py` | the HTTP server on an ephemeral in-process port (never through `serve()` — no singleton lock in tests) against data seeded via the real product APIs: endpoints, payloads, routing, caching |
+| `tests/test_l0_dash_conversation.py` | session titles + the merged ops/conversation stream, incl. the lazy-backlog tests (the tail limit + `oldest` cursor, `/history` chaining to exhaustion with the slices concatenating to the unlimited merge — no gap, no overlap — and a straddling group never duplicated) |
+| `tests/test_l0_dash_notify.py` | the notification watcher's transition logic, presence, and the deferred alerts |
+| `tests/test_l0_dash_control.py` | the control plane: send / close / rename / launch / uploads |
+| `tests/test_l0_dash_dialogs.py` | the screen-driven dialogs — rewind, ask, plan — and the terminal→web draft sync |
+| `tests/test_l0_dash_probes.py` | dictation, the ghost-suggestion probe, and the single-owner grep tests |
+| `tests/test_l0_dash_viewmode.py` | the view modes (verbose / default / focus) |
+
+`tests/dashkit.py` holds what more than one of them needs (the HTTP helpers, the
+audit-row readers, the fake frontend) — imported BY NAME, so a reader can see
+where `_post` or `_FakeFE` came from. The one piece that cannot live there is
+the `dash` server fixture: pytest resolves a fixture by NAME out of a test's
+signature, so it sits in `tests/conftest.py` with the other hermetic-environment
+fixtures. Import safety for the dashboard modules rides
+`test_import_safety.py`.
 
 The view modes are the one feature whose core logic is not reachable from
 Python — the run cut lives in the page — so besides the usual classifier /
