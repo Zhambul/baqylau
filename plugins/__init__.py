@@ -80,20 +80,34 @@ def provider(plugin, method):
     return getattr(plugin, method, None)
 
 
-def _first(method, *args, default=None, truthy=False, **kwargs):
+def _not_none(got):
+    return got is not None
+
+
+def _first(method, *args, default=None, truthy=False, accept=None, **kwargs):
     """FIRST-plugin-wins fan-out primitive: iterate all_plugins(), skip those
     missing `method`, call it, and return the first usable answer; `default`
-    when none does. `truthy=False` (the norm) accepts the first result that is
-    `not None` — '' / [] / () ARE answers; `truthy=True` accepts the first
-    TRUTHY result — the empty default is then never an answer. Exceptions
-    propagate (the fan-out callers are read-side tools, not hooks); the
-    per-function docstrings own the exact contract."""
+    when none does. Exceptions propagate (the fan-out callers are read-side
+    tools, not hooks); the per-function docstrings own the exact contract.
+
+    What counts as "usable" is the one thing that varies, so it is a parameter:
+      `truthy=False` (the norm)  the first result that is `not None` — '' / []
+                                 / () ARE answers;
+      `truthy=True`              the first TRUTHY result — the empty default is
+                                 then never an answer;
+      `accept=<pred>`            an explicit predicate, for a result shape where
+                                 neither of those means what it looks like.
+                                 title_and_rename returns a PAIR, and a tuple is
+                                 always truthy — so its "did any plugin
+                                 recognize this file" test is `any(got)`, and it
+                                 hand-rolled the whole loop to say so."""
+    ok = accept or (bool if truthy else _not_none)
     for p in all_plugins():
         fn = provider(p, method)
         if fn is None:
             continue
         got = fn(*args, **kwargs)
-        if (bool(got) if truthy else got is not None):
+        if ok(got):
             return got
     return default
 
@@ -206,15 +220,14 @@ def title_and_rename(transcript_path):
     first plugin that RECOGNIZES the file answers; ('', '') when none does. The
     dashboard reconciles its durable web-rename override against tail_rename so a
     rename that fell out of the 64KB tail no longer 'rolls back' to the auto
-    ai-title (docs/dashboard.md, *Web rename*)."""
-    for p in all_plugins():
-        fn = provider(p, "title_and_rename")
-        if fn is None:
-            continue
-        title, named = fn(transcript_path)
-        if title or named:
-            return title, named
-    return "", ""
+    ai-title (docs/dashboard.md, *Web rename*).
+
+    The one fan-out with an explicit `accept`: the result is a PAIR, and every
+    tuple is truthy, so `truthy=True` would accept ('', '') from the first
+    plugin asked and never reach the second. `any` is the real test — a plugin
+    recognized the file iff it produced at least one of the two names."""
+    return _first("title_and_rename", transcript_path,
+                  default=("", ""), accept=any)
 
 
 def set_session_title(transcript_path, name):

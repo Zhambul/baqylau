@@ -285,6 +285,16 @@ charter fits, document the owner here, and (if cheap) add a grep test.
 
 ## Magic values and deliberate divergence
 
+- **A knob lives with its READER, not in a constants module.** The
+  dashboard's `config.py` is a REGISTRY for facts the whole tier shares or
+  that the page must be served (`UPLOAD_MAX`/`RENAME_MAX` via
+  `/api/limits`) — not a home for every constant in the package. A knob
+  exactly one module reads belongs to that module, the way
+  `notify/presence.py` owns `VIEW_TTL_S` and `http/post/interrupt.py` owns
+  the interrupt/verify timings: the module-qualified read rule then points
+  a test at the code the number actually governs. Same for a FUNCTION —
+  `clip_screen` is about captured screens, so it sits with the screen-drive
+  plumbing (`screendrive.py`), not beside the ports and cadences.
 - Any literal that is tuning (timeouts, thresholds, poll intervals), protocol
   (wire markers, versions, offsets), or appears twice gets a named constant
   with a one-line comment tying it to the terminal/OS behavior it encodes.

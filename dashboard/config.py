@@ -64,23 +64,6 @@ def extra_origins(raw):
     return {o.strip() for o in (raw or "").split(",") if o.strip()}
 
 
-SCREEN_CLIP = 2000     # cap on a bail's captured screen in an audit errors row
-
-
-def clip_screen(scr, cap=SCREEN_CLIP):
-    """Bound a captured `get_text` screen for the audit `errors` context while
-    keeping BOTH diagnostic ends. A plain `scr[-cap:]` kept only the TAIL, but a
-    `step:open` bail's discriminator — is the ☐/☒ header-chip bar present at the
-    TOP? — lives at the HEAD (dialog-too-tall vs footer-drift vs blank capture,
-    docs/dashboard.md *Web ask*): a WIDE window whose visible screen exceeds
-    `cap` would have an on-screen chip bar truncated away and read as
-    'off-screen'. Keep the head and the tail with a marker between."""
-    if not scr or len(scr) <= cap:
-        return scr
-    half = cap // 2
-    return scr[:half] + "\n…[%d chars elided]…\n" % (len(scr) - cap) + scr[-half:]
-
-
 ALLOWED_ORIGINS = ({"http://%s:%d" % (HOST, PORT), "http://localhost:%d" % PORT}
                    | extra_origins(os.environ.get("CLAUDE_DASH_ORIGINS")))
 # CLAUDE_DASH_READONLY=1 switches the control plane off entirely (every POST
@@ -177,25 +160,6 @@ NOTIFY_URL_BASE = (os.environ.get("CLAUDE_DASH_PUBLIC_URL")
 # NOT here: a dialog is up and typed text goes to the DIALOG, not the queue.
 QUEUE_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING)
 
-QUEUE_VERIFY_GAP_S = 0.5           # gap between the TWO screen captures whose
-#                                    equality decides "is a turn REALLY running"
-#                                    before post_message promises `queued`. The
-#                                    tab colour alone cannot promise it: Claude
-#                                    Code fires NO hook on cancel, so a turn
-#                                    cancelled AT THE TERMINAL (Esc-Esc) leaves
-#                                    the tab frozen on magenta and the send
-#                                    reports `queued` for a message the idle TUI
-#                                    submits instantly — pinning a ⧗ chip no
-#                                    prompt will ever drain (session bdeca061,
-#                                    2026-07-25). Same marker-free screen-DELTA
-#                                    liveness as the interrupt's verify (see
-#                                    INTERRUPT_RETRY_S for why no string is
-#                                    safe), and the same value for the same
-#                                    reason: a running turn animates its
-#                                    spinner/elapsed-timer/stream within it at
-#                                    every thinking level. Paid only on a
-#                                    QUEUE_TABS send, where the message is
-#                                    queueing anyway.
 
 # Tab states in which the session is MID-TURN — where an Escape means "stop the
 # turn" (post_interrupt), and where the rewind MENU is therefore unavailable
@@ -210,47 +174,6 @@ QUEUE_VERIFY_GAP_S = 0.5           # gap between the TWO screen captures whose
 # post_command's own awaiting-command 409.
 BUSY_TABS = (tabs.THINKING, tabs.WORKING, tabs.EXECUTING, tabs.AWAITING_BG)
 
-DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
-#                                    (ctrl+u/k) and the bracketed paste of the
-#                                    edited resend (post_message clear_draft)
-RESTORE_MATCH_CHARS = 40           # prefix length compared when deciding
-#                                    whether the input box now holds the message
-#                                    the just-pressed Escape took back
-#                                    (post_interrupt._restored_input, over
-#                                    suggestion.cmp_key — whitespace REMOVED, so
-#                                    the box's wrap points can't matter). A
-#                                    prefix, not the whole string, so a box that
-#                                    clipped a long tail still matches; long
-#                                    enough that two real prompts don't collide.
-
-# Interrupt verification (post_interrupt / _escape_press). A single synthesized
-# Escape via `kitten @ send-key` is only ~2/3 reliable (kitty reports no
-# per-window delivery), so a blind press silently misses — a fresh web-launched
-# turn ran to completion despite ok:true (2026-07-24, session a16a181f). A
-# BUSY-tab interrupt is now VERIFIED against Claude Code's working spinner
-# (WORKING_MARKERS) and re-pressed WHILE it is still up — but never on an idle
-# box (a stray Esc there could open /rewind). INTERRUPT_RETRY_S sits well above
-# the TUI's own ~150 ms double-Esc detection window, so two spaced retries never
-# read as a double-Esc (a lone late Esc at an idle prompt is a harmless no-op).
-INTERRUPT_TRIES = 4                # re-press passes on a still-live turn (a vim
-#                                    editorMode thinking-phase Esc only exits
-#                                    INSERT, so ≥2 presses are needed; extra
-#                                    headroom for the ~2/3 send-key reliability)
-INTERRUPT_RETRY_S = 0.5           # gap between the TWO screen captures whose
-#                                    equality decides "is the turn still live"
-#                                    (also the beat between re-presses — well
-#                                    above the TUI's own ~150 ms double-Esc
-#                                    window, so two never read as a double-Esc). A running Claude Code turn
-#                                    animates its spinner/elapsed-timer/stream
-#                                    within this window at EVERY thinking level;
-#                                    a stopped one is static. This screen-DELTA
-#                                    liveness deliberately replaces the earlier
-#                                    marker-string match (`esc to interrupt` /
-#                                    `tok/s`): glyphs animate, gerunds vary, and
-#                                    the thinking vs streaming phases differ, so
-#                                    no fixed literal is robust — but "the screen
-#                                    is still changing" is (docs/dashboard.md
-#                                    *Interrupt*, CLAUDE.md *Experimenting*).
 
 SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 

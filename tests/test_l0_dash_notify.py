@@ -403,7 +403,7 @@ def test_post_message_queued_is_verified_against_a_live_screen(dash, monkeypatch
     True. Both land in the web-send audit row (`live`/`queued`)."""
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.config, "QUEUE_VERIFY_GAP_S", 0.0)
+    monkeypatch.setattr(DS.post_interrupt, "QUEUE_VERIFY_GAP_S", 0.0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "88")
     A.session_start({"session_id": "msgv", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"88": "thinking"})

@@ -1325,7 +1325,7 @@ def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
     #             pre        i1a          i1b(changed)   i2a       i2b(same)
     fe.screens = ["✻ Alpha…", "✻ Alpha…", "✻ Bravo…", "❯ idle", "❯ idle"]
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
+    monkeypatch.setattr(DS.post_interrupt, "INTERRUPT_RETRY_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "78")
     A.session_start({"session_id": "intrv", "cwd": "/w", "transcript_path": ""})
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"78": "thinking"})
@@ -1345,7 +1345,7 @@ def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
     fe = _FakeFE()
     fe.screens = ["scr%d" % i for i in range(9)]   # every capture distinct = live
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.config, "INTERRUPT_RETRY_S", 0)
+    monkeypatch.setattr(DS.post_interrupt, "INTERRUPT_RETRY_S", 0)
     spawned = []
     monkeypatch.setattr(DS.SP, "spawn_detached",
                         lambda path, argv, log, env=None, purpose="", **kw:
@@ -1358,7 +1358,7 @@ def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
     assert e.value.code == 502
     assert spawned == []                          # no masking escape-recheck
     row = _last_state_file("intrn", "web-interrupt")
-    assert row["stopped"] is False and row["attempts"] == DS.config.INTERRUPT_TRIES + 1
+    assert row["stopped"] is False and row["attempts"] == DS.post_interrupt.INTERRUPT_TRIES + 1
 
 
 def test_post_rewind_idle_types_the_command(dash, monkeypatch):

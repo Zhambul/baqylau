@@ -12,12 +12,32 @@
 #     the bool. `fe` is passed in (this module touches no frontend directly),
 #     `sleep` is injectable so tests drive it without real waits, and the poll
 #     beat defaults to the drivers' shared 0.15s.
+#   - clip_screen: the audit-context bound every driver's bail applies to the
+#     screen it gave up on. It sat in dashboard/config.py, which is a knob
+#     registry — a FUNCTION about captured screens belongs with the capture
+#     plumbing, next to the callers that clip a StepError's `.screen`.
 #   - StepError: the common exception base. Every driver's error did the same
 #     `super().__init__(step + ": detail")` + `self.step = step`; the four keep
 #     DISTINCT names (post.py catches each by name) but share this base.
 import time
 
 POLL_S = 0.15   # shared screen re-read beat (each driver's own POLL_S == this)
+
+SCREEN_CLIP = 2000   # cap on a bail's captured screen in an audit errors row
+
+
+def clip_screen(scr, cap=SCREEN_CLIP):
+    """Bound a captured `get_text` screen for the audit `errors` context while
+    keeping BOTH diagnostic ends. A plain `scr[-cap:]` kept only the TAIL, but a
+    `step:open` bail's discriminator — is the ☐/☒ header-chip bar present at the
+    TOP? — lives at the HEAD (dialog-too-tall vs footer-drift vs blank capture,
+    docs/dashboard.md *Web ask*): a WIDE window whose visible screen exceeds
+    `cap` would have an on-screen chip bar truncated away and read as
+    'off-screen'. Keep the head and the tail with a marker between."""
+    if not scr or len(scr) <= cap:
+        return scr
+    half = cap // 2
+    return scr[:half] + "\n…[%d chars elided]…\n" % (len(scr) - cap) + scr[-half:]
 
 
 def poll_until(fe, win, pred, timeout, sleep=time.sleep, poll=POLL_S):

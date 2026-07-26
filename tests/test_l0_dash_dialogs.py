@@ -1395,7 +1395,7 @@ def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     # (paste_text) — a raw send here drops leading bytes (the measured mangle)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
-    monkeypatch.setattr(DS.config, "DRAFT_CLEAR_GAP_S", 0)
+    monkeypatch.setattr(DS.post_typing, "DRAFT_CLEAR_GAP_S", 0)
     monkeypatch.setenv("KITTY_WINDOW_ID", "71")
     A.session_start({"session_id": "cd1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/cd1/message",

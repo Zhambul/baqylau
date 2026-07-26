@@ -8,15 +8,22 @@ from core import sessionapi as API
 from core import tabs
 from core.noaudit import load_audit
 from dashboard import (confirmdialog, rewindmenu)
-from dashboard import config
 from dashboard.config import (BUSY_TABS,
                               EFFORTS,
                               QUEUE_TABS,
-                              MODEL_ARG_OK, clip_screen)
+                              MODEL_ARG_OK)
 from dashboard.control import launch
 from dashboard.read.session import (ask_pending, plan_pending)
+from dashboard.screendrive import clip_screen
 
 A = load_audit()
+
+DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
+#                                    (ctrl+u/k) and the bracketed paste of the
+#                                    edited resend (post_message clear_draft).
+#                                    Read only here, so it lives with its reader
+#                                    rather than in the shared knob registry —
+#                                    see the note in http/post/interrupt.py.
 
 
 class _TypingMixin:
@@ -109,7 +116,7 @@ class _TypingMixin:
             # kill the restored draft (both directions), settle, then paste
             fe.send_key(win, "ctrl+u")
             fe.send_key(win, "ctrl+k")
-            time.sleep(config.DRAFT_CLEAR_GAP_S)
+            time.sleep(DRAFT_CLEAR_GAP_S)
         # ALWAYS a bracketed paste, not a raw send: a raw send is delivered as
         # fast individual keystrokes and the TUI drops some depending on its
         # input state (reported live: "test" arrived as "t"; measured 8/8

@@ -12,13 +12,76 @@ from core import spawn as SP
 from core import tabs
 from core.noaudit import load_audit
 from dashboard import (suggestion)
-from dashboard import config
 from dashboard.config import (QUEUE_TABS)
 from dashboard.control import launch
 from dashboard.read import session as rsession
 from plugins.claude_code import transcript
 
 A = load_audit()
+
+# The gesture's own TUNING lives here, with its one reader, not in
+# dashboard/config.py. That module is the knob REGISTRY for facts the whole tier
+# shares (or that the PAGE must know, via /api/limits) — not a home for every
+# constant in the package. Nothing outside this module reads the four below, so
+# they follow the same rule presence.py's VIEW_TTL_S does: the owner keeps its
+# own knob, and a test patches the owner (`DS.post_interrupt.X`).
+
+QUEUE_VERIFY_GAP_S = 0.5           # gap between the TWO screen captures whose
+#                                    equality decides "is a turn REALLY running"
+#                                    before post_message promises `queued`. The
+#                                    tab colour alone cannot promise it: Claude
+#                                    Code fires NO hook on cancel, so a turn
+#                                    cancelled AT THE TERMINAL (Esc-Esc) leaves
+#                                    the tab frozen on magenta and the send
+#                                    reports `queued` for a message the idle TUI
+#                                    submits instantly — pinning a ⧗ chip no
+#                                    prompt will ever drain (session bdeca061,
+#                                    2026-07-25). Same marker-free screen-DELTA
+#                                    liveness as the interrupt's verify (see
+#                                    INTERRUPT_RETRY_S for why no string is
+#                                    safe), and the same value for the same
+#                                    reason: a running turn animates its
+#                                    spinner/elapsed-timer/stream within it at
+#                                    every thinking level. Paid only on a
+#                                    QUEUE_TABS send, where the message is
+#                                    queueing anyway.
+
+# Interrupt verification (post_interrupt / _escape_press). A single synthesized
+# Escape via `kitten @ send-key` is only ~2/3 reliable (kitty reports no
+# per-window delivery), so a blind press silently misses — a fresh web-launched
+# turn ran to completion despite ok:true (2026-07-24, session a16a181f). A
+# BUSY-tab interrupt is now VERIFIED by screen delta and re-pressed WHILE the
+# turn is still live — but never on an idle box (a stray Esc there could open
+# /rewind). INTERRUPT_RETRY_S sits well above the TUI's own ~150 ms double-Esc
+# detection window, so two spaced retries never read as a double-Esc.
+INTERRUPT_TRIES = 4                # re-press passes on a still-live turn (a vim
+#                                    editorMode thinking-phase Esc only exits
+#                                    INSERT, so ≥2 presses are needed; extra
+#                                    headroom for the ~2/3 send-key reliability)
+INTERRUPT_RETRY_S = 0.5            # gap between the TWO screen captures whose
+#                                    equality decides "is the turn still live"
+#                                    (also the beat between re-presses). A
+#                                    running Claude Code turn animates its
+#                                    spinner/elapsed-timer/stream within this
+#                                    window at EVERY thinking level; a stopped
+#                                    one is static. This screen-DELTA liveness
+#                                    deliberately replaces the earlier
+#                                    marker-string match (`esc to interrupt` /
+#                                    `tok/s`): glyphs animate, gerunds vary, and
+#                                    the thinking vs streaming phases differ, so
+#                                    no fixed literal is robust — but "the screen
+#                                    is still changing" is (docs/dashboard.md
+#                                    *Interrupt*, CLAUDE.md *Experimenting*).
+
+RESTORE_MATCH_CHARS = 40           # prefix length compared when deciding
+#                                    whether the input box now holds the message
+#                                    the just-pressed Escape took back
+#                                    (_restored_input, over suggestion.cmp_key —
+#                                    whitespace REMOVED, so the box's wrap points
+#                                    can't matter). A prefix, not the whole
+#                                    string, so a box that clipped a long tail
+#                                    still matches; long enough that two real
+#                                    prompts don't collide.
 
 # A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
 # `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
@@ -101,9 +164,9 @@ class _InterruptMixin:
         attempts, stopped = 1, None
         probes = [self._phase(pre, "pre-esc")]
         if ok and tab in QUEUE_TABS:
-            for _ in range(config.INTERRUPT_TRIES):
+            for _ in range(INTERRUPT_TRIES):
                 a = self._screen(fe, win)
-                time.sleep(config.INTERRUPT_RETRY_S)
+                time.sleep(INTERRUPT_RETRY_S)
                 b = self._screen(fe, win)
                 probes.append(self._phase(b, "post-esc%d" % attempts))
                 if a is None or b is None:   # can't read the screen — stop
@@ -179,7 +242,7 @@ class _InterruptMixin:
             return ""
         if not box:
             return ""
-        n = config.RESTORE_MATCH_CHARS
+        n = RESTORE_MATCH_CHARS
         hit = suggestion.cmp_key(box)[:n] == suggestion.cmp_key(last)[:n]
         # FLAG the record: a taken-back prompt is orphaned in the transcript but
         # has no SIBLING until the replacement message arrives, so until then it
@@ -230,7 +293,7 @@ class _InterruptMixin:
         this before promising `queued`; deliberately NOT folded together with
         _escape_press's own loop, which re-presses between captures."""
         a = self._screen(fe, win, why="send")
-        time.sleep(config.QUEUE_VERIFY_GAP_S)
+        time.sleep(QUEUE_VERIFY_GAP_S)
         b = self._screen(fe, win, why="send")
         if a is None or b is None:
             return None

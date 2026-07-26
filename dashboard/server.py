@@ -132,3 +132,8 @@ from dashboard.control.launch import (  # noqa: F401  -- facade re-export
 # and the tests reach through `dashboard.server`.
 from dashboard.http.handler import Handler, serve  # noqa: F401  -- facade re-export
 from dashboard.http import sse  # noqa: F401  -- DS.sse: the stream's channel tables
+# The two POST modules that own their OWN tuning knobs (the interrupt/verify
+# timings, the draft-clear settle) rather than parking them in config.py — a
+# test patches the owner, so it needs a handle on it.
+from dashboard.http.post import interrupt as post_interrupt  # noqa: F401
+from dashboard.http.post import typing as post_typing  # noqa: F401

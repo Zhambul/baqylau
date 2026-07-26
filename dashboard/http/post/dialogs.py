@@ -7,7 +7,7 @@ from functools import partial
 from core import state as ST
 from core.noaudit import load_audit
 from dashboard import (askdialog, plandialog)
-from dashboard.config import (clip_screen)
+from dashboard.screendrive import clip_screen
 from dashboard.control import launch
 from dashboard.read.mirror import (heal_stash)
 from dashboard.read.session import (ask_pending, plan_pending)
