@@ -98,7 +98,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   carrying the kv `key` at stake: **an `ok:True` gesture row next to a
   `dashboard prefs <op>` row IS the "it didn't stick" signature.** No prefs row
   either → the write really landed, so look client-side instead (the page's own
-  `web-client` `<gesture>.begin`/`.ok` pair, a stale cached `app.js` per
+  `web-client` `<gesture>.begin`/`.ok` pair, a stale cached SPA part per
   `boot.build` ≠ `hello.boot`, or a `stale`-guard drop for the draft endpoints).
   Note the read side is audited at most once per (op, key) per process, so ONE
   `dashboard prefs get` row means that key has been unreadable ever since — every
@@ -116,7 +116,7 @@ New always-audited swallow sites (previously silent — their absence used to ma
   mirror-log key (`data-cc="<key>/<g>/<what>"`); the backlog path stamps it
   correctly, so a symptom that vanishes on reload means the LIVE tick was
   stamping something else. Shipped exactly once (2026-07-25 → fixed 2026-07-26):
-  a `for key, count in _BADGE_COUNTS.items()` stanza inside `sse_session`'s tick
+  a `for key, count in <badge table>.items()` stanza inside `sse_session`'s tick
   loop rebound the loop's `key` local, so from the second tick on every live
   block carried `data-cc="memory/…"` — plus it rebound the tick counter to the
   memory-note count, so the SLOW cadence (`git status`, transcript probes, the
