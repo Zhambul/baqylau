@@ -23,6 +23,7 @@
 # in substream_render.py (the Renderer instance `REN`).
 import json, os, subprocess, sys, time
 
+from core import env as EV
 from core import ops as O
 from core import render as R
 from core import slots as claude_slots
@@ -144,12 +145,13 @@ def _init(argv):
                       spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer)
 
 
-# Context-fill thresholds (percent) for the live per-turn % shown on each turn:
-# < WARN green, < CRIT amber, else red. Tunable per workload via the env, same as
-# CLAUDE_MIRROR_BIAS — e.g. a [1m] session wants higher cutoffs.
-CTX_WARN = M.int_env("CLAUDE_MIRROR_CTX_WARN", 30)
-CTX_CRIT = M.int_env("CLAUDE_MIRROR_CTX_CRIT", 60)
-
+# There are deliberately NO context-fill THRESHOLDS here. The per-turn ctx tag
+# used to be colour-coded (< 30% green, < 60% amber, else red, via
+# CLAUDE_MIRROR_CTX_WARN/_CRIT); it is now painted as dark text INSIDE the
+# operation chip, whose solid background carries the identity hue, so an inline
+# threshold colour has nothing to colour (see ctx_tag below). The two constants
+# outlived that change as dead code with live-looking env knobs still documented
+# — removed here, and docs/subagents.md with them.
 RESOLVED_MODEL = None      # authoritative model id (with [1m]) read from the parent
 
 short_model = M.short_model
@@ -405,7 +407,7 @@ def make_parent_resolved(start):
         except Exception:
             parent_tail = None
     # Scan throttle (env knob is test-only — see docs/testing.md; unset, 2 s as always).
-    scan_s = float(os.environ.get("CLAUDE_STREAM_PARENT_SCAN_S") or 2.0)
+    scan_s = EV.env_float("CLAUDE_STREAM_PARENT_SCAN_S", 2.0)
     state = {"next": start + scan_s}         # next time the parent scan is allowed
 
     def parent_resolved():

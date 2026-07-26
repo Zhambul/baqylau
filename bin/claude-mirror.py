@@ -71,6 +71,7 @@ def _ensure_pygments():
 _ensure_pygments()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # repo root (this file lives in bin/)
+from core import env as EV
 from core import panescript as PS
 from core import paths as P
 from core import codefmt as CF
@@ -106,7 +107,7 @@ MAX_OPS = 8000
 # Trimming the ops list to this row budget therefore loses nothing that could
 # ever be scrolled to, and keeps every anchor/restore target reachable. Match
 # it to kitty.conf's scrollback_lines minus a screenful (default 5000 - 200).
-ROW_BUDGET = int(os.environ.get("CLAUDE_MIRROR_SCROLLBACK", "4800"))
+ROW_BUDGET = EV.env_int("CLAUDE_MIRROR_SCROLLBACK", 4800)
 
 OPS = []            # parsed ops (capped), for repaint-on-resize
 

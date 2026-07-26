@@ -28,6 +28,7 @@
 # reads as its own top-level stream (rule-bracketed) in the codex palette.
 import json, os, re, sys, time
 
+from core import env as EV
 from core import ops as O
 from core import render as R
 from core import state as S
@@ -419,7 +420,7 @@ def main(run):
 
     # rollout: close the block if no new turn starts within grace. Env override
     # exists solely for the test suite (docs/testing.md).
-    GRACE = float(os.environ.get("CLAUDE_CODEX_GRACE_S") or 8.0)
+    GRACE = EV.env_float("CLAUDE_CODEX_GRACE_S", 8.0)
     while True:
         pump()
         if S.parked(LOG):                        # session ended (state DB parked) -> stop

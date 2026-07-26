@@ -40,6 +40,7 @@ import glob, hashlib, json, os, re, subprocess, sys, tempfile, time
 from datetime import datetime, timedelta
 
 from core.slots import CODEX_PALETTE
+from core import env as EV
 from core import locks as LK
 from core import state as S
 from core.spawn import spawn_detached
@@ -88,11 +89,11 @@ def _init(argv):
     except Exception:
         REPO_ROOT = git_root(CWD)
 
-POLL = float(os.environ.get("CLAUDE_CODEX_WATCH_POLL_S") or 0.4)
+POLL = EV.env_float("CLAUDE_CODEX_WATCH_POLL_S", 0.4)
 SKEW = 5.0          # accept a run created up to this many seconds before we started
 # rollout: wait before deciding a thread has no companion job (env knob is
 # test-only — see docs/testing.md; unset, behavior is unchanged)
-RO_GRACE = float(os.environ.get("CLAUDE_CODEX_RO_GRACE_S") or 8.0)
+RO_GRACE = EV.env_float("CLAUDE_CODEX_RO_GRACE_S", 8.0)
 RO_UUID = re.compile(r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})")
 HOME = os.path.expanduser("~")
 

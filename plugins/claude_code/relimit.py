@@ -42,6 +42,7 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import frontends
+from core import env as EV
 from core import ops as O
 from core import state as St
 from core.noaudit import load_audit
@@ -54,14 +55,14 @@ A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub
 
 # Env overrides exist solely for the test suite (docs/testing.md) — real
 # sessions never set them, so the shipped cadence stays the literal defaults.
-CLOSE_TIMEOUT_S = float(os.environ.get("CLAUDE_RELIMIT_TIMEOUT_S") or 30)
+CLOSE_TIMEOUT_S = EV.env_float("CLAUDE_RELIMIT_TIMEOUT_S", 30)
                             # how long the migrator waits for the closed tab's
                             # SessionEnd to park the state DB before giving up
                             # (launching over a still-live session would have
                             # two processes fighting over one state DB)
-POLL_S = float(os.environ.get("CLAUDE_RELIMIT_POLL_S") or 0.3)
+POLL_S = EV.env_float("CLAUDE_RELIMIT_POLL_S", 0.3)
                             # the park-wait poll cadence
-COOLDOWN_S = float(os.environ.get("CLAUDE_RELIMIT_COOLDOWN_S") or 600)
+COOLDOWN_S = EV.env_float("CLAUDE_RELIMIT_COOLDOWN_S", 600)
                             # one migration attempt per session per this window
                             # — a relaunch that instantly re-hits a limit must
                             # not ping-pong tabs forever

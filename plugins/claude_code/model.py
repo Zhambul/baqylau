@@ -22,6 +22,7 @@ import json
 import os
 import time
 
+from core import env as EV
 from core import tail as TL
 
 # How much of a transcript's tail session_model() scans for the last assistant
@@ -94,14 +95,7 @@ def claude_dirs(start=None, nearest_only=False, env_pin=True, config=None):
     return dirs
 
 
-def int_env(name, default):
-    try:
-        return int((os.environ.get(name) or "").strip() or default)
-    except Exception:
-        return default
-
-
-DISABLE_1M = bool(int_env("CLAUDE_CODE_DISABLE_1M_CONTEXT", 0))
+DISABLE_1M = bool(EV.env_int("CLAUDE_CODE_DISABLE_1M_CONTEXT", 0))
 # Substrings of real model ids. Opus 5 (like Sonnet 5 / Fable 5) has NO 200k
 # variant — 1M is both its default and its maximum — so a PINNED `claude-opus-5`
 # must resolve here; only the bare `opus` alias below covered it before, and the

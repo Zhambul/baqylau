@@ -6,9 +6,9 @@
 # used (for on-device push routing). Live-only (no audit rows of their own — the
 # SUPPRESS they drive is what lands a notify-suppress row); the singleton server
 # means one dict is the whole truth.
-import os
 import time
 
+from core import env as EV
 from core import sessionapi as API
 from dashboard import prefs
 from dashboard.read.session import composer_draft
@@ -46,7 +46,7 @@ def composing(sid):
 # SERVED to the page (GET /api/limits, docs/dashboard.md *Served limits*): the
 # beat cadence is derived from this, so the knob must reach the browser — a
 # matching literal there silently broke suppression whenever this was lowered.
-VIEW_TTL_S = float(os.environ.get("CLAUDE_DASH_VIEW_TTL_S") or 20)
+VIEW_TTL_S = EV.env_float("CLAUDE_DASH_VIEW_TTL_S", 20)
 _VIEWING = {}                      # sid -> monotonic deadline (last beat + TTL)
 
 

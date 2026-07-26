@@ -6,14 +6,11 @@
 # stranger's listener and never spawns the receiver at all. Single-sited here —
 # a leaf module with no heavy deps, so launch.py's detach-fast path stays a
 # few-ms import.
-import os
+from core import env as EV
 
 DEFAULT_PORT = 4319
 
 
 def port():
     """The receiver's listen port: CLAUDE_OTEL_PORT, else 4319."""
-    try:
-        return int(os.environ.get("CLAUDE_OTEL_PORT") or DEFAULT_PORT)
-    except (TypeError, ValueError):
-        return DEFAULT_PORT
+    return EV.env_int("CLAUDE_OTEL_PORT", DEFAULT_PORT)

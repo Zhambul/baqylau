@@ -12,22 +12,23 @@ import os
 import time
 
 from core.noaudit import load_audit
+from core import env as EV
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
 # Env overrides exist solely for the test suite (docs/testing.md) — real
 # sessions never set them, so the shipped cadence stays the literal defaults.
-POLL_S = float(os.environ.get("CLAUDE_TAIL_POLL_S") or 0.4)
+POLL_S = EV.env_float("CLAUDE_TAIL_POLL_S", 0.4)
                             # main poll cadence of every tailer loop
-BACKSTOP_S = float(os.environ.get("CLAUDE_TAIL_BACKSTOP_S") or 6 * 3600)
+BACKSTOP_S = EV.env_float("CLAUDE_TAIL_BACKSTOP_S", 6 * 3600)
                             # absolute cap so a stuck/lost tailer can't run forever
-WAIT_POLL_S = float(os.environ.get("CLAUDE_TAIL_WAIT_POLL_S") or 0.2)
+WAIT_POLL_S = EV.env_float("CLAUDE_TAIL_WAIT_POLL_S", 0.2)
                             # wait_for's source-appearance poll — deliberately faster
                             # than POLL_S: it runs only until the file lands, and a
                             # snappier first line is worth the brief tighter loop
 # Worst-case bounds (env overrides are a test seam, like the cadences above,
 # but these two also guard real pathological sessions):
-PUMP_MAX_B = int(os.environ.get("CLAUDE_TAIL_PUMP_MAX_B") or 256 * 1024)
+PUMP_MAX_B = EV.env_int("CLAUDE_TAIL_PUMP_MAX_B", 256 * 1024)
                             # per-pump read ceiling: one pump ingests at most this many
                             # bytes; the rest stays in the file and `capped` tells the
                             # caller to pump again before trusting completion checks.
@@ -35,7 +36,7 @@ PUMP_MAX_B = int(os.environ.get("CLAUDE_TAIL_PUMP_MAX_B") or 256 * 1024)
                             # burst) and the size of any one emit — a multi-MB burst
                             # becomes a sequence of ≤256KB batches the renderer paints
                             # progressively instead of one monolithic op.
-LINE_MAX_B = int(os.environ.get("CLAUDE_TAIL_LINE_MAX_B") or 64 * 1024)
+LINE_MAX_B = EV.env_int("CLAUDE_TAIL_LINE_MAX_B", 64 * 1024)
                             # cap on ONE surfaced line, OPT-IN per tailer (the
                             # `line_max` ctor arg): a newline-free multi-MB line (a
                             # minified bundle, a base64 blob) otherwise grows `pending`

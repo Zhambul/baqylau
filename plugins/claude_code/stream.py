@@ -36,6 +36,7 @@
 # that same sentinel, so a failed rewrite never means silently losing the output.
 import glob, os, re, subprocess, sys, time
 
+from core import env as EV
 from core import mdrender as MDR
 from core import ops as O
 from core import render as R
@@ -237,8 +238,8 @@ _FENCE = re.compile(r"(?m)^[ \t]{0,3}(```|~~~)[^\n`]*$")
 # to appear (a monitor waits on process liveness instead — monitor_wait_file),
 # and how long to keep trying to identify the monitor's process (find_proc)
 # before concluding there is nothing to key liveness on.
-FIND_S = float(os.environ.get("CLAUDE_STREAM_FIND_S") or 12)
-PROCFIND_S = float(os.environ.get("CLAUDE_STREAM_PROCFIND_S") or 20)
+FIND_S = EV.env_float("CLAUDE_STREAM_FIND_S", 12)
+PROCFIND_S = EV.env_float("CLAUDE_STREAM_PROCFIND_S", 20)
 # Backstop for fg ONLY (and shorter than the tailers' shared 6h cap): an
 # interactive foreground command past 2h is far likelier a wedged tailer than
 # a real command, and its live fg slot row keeps the tab blue the whole time.
@@ -253,7 +254,7 @@ FG_BACKSTOP_S = 7200
 # whole wrap forever. Split the batch into multiple ≤128KB gut ops instead —
 # each op still a multi-line batch, never a per-line op (per-line ops were the
 # original design and the emit/txn overhead is why batching exists).
-OP_MAX_B = int(os.environ.get("CLAUDE_STREAM_OP_MAX_B") or 128 * 1024)
+OP_MAX_B = EV.env_int("CLAUDE_STREAM_OP_MAX_B", 128 * 1024)
 
 # Where Claude Code drops its tasks/<id>.output files for bg jobs and monitors.
 # This is Claude Code's OWN on-disk layout (empirical, macOS), not ours — so it
@@ -352,7 +353,7 @@ def wait_fg_src(run, start):
 # lags by up to one lsof duration + LSOF_MIN_S, which only delays writer-gone
 # (grace is 2s in production) and can never fire it early: the initial and
 # every failure answer is True ("assume still writing").
-LSOF_MIN_S = float(os.environ.get("CLAUDE_STREAM_LSOF_S") or 1.0)
+LSOF_MIN_S = EV.env_float("CLAUDE_STREAM_LSOF_S", 1.0)
 # Cap on one probe's runtime. Generous: a slow-but-successful lsof still yields
 # a REAL answer; a tight cap turns mere slowness into a poisoned permanent True.
 LSOF_TIMEOUT_S = 30
@@ -710,8 +711,8 @@ def make_is_done(tail, path, mon_pid, st):
                 ends, so we track that process — robust at ANY cadence, no
                 grace. Idle fallback only if the process was never found.
     """
-    GRACE = float(os.environ.get("CLAUDE_STREAM_GRACE_S") or
-                  (2.0 if KIND in ("bg", "fg") else 8.0))
+    GRACE = EV.env_float("CLAUDE_STREAM_GRACE_S",
+                         2.0 if KIND in ("bg", "fg") else 8.0)
     sentinel = ("done:" + (DONE or path + ".done")) if KIND == "fg" else None
     # mon_pid: already resolved by monitor_wait_file while waiting for a lazily
     # created output file. The find-deadline is keyed to NOW, not launch — the

@@ -60,6 +60,7 @@ from core.paths import BIN  # bin/, where the sibling ENTRY scripts live
 # filename, and argv[0] is what the audit records.
 SELF = os.path.join(BIN, "claude-tab-status.py")
 import frontends  # noqa: E402  (the terminal adapter — kitty today)
+from core import env as EV  # noqa: E402  (numeric env knobs, never raises)
 from core.noaudit import load_audit  # noqa: E402  (in-process; every write swallows + spools)
 
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
@@ -106,7 +107,7 @@ def _win():
 # its literal value —
 # written as `time.sleep(WATCH_POLL_S or <literal>)` so the defaults stay
 # greppable at their use sites.
-WATCH_POLL_S = float(os.environ.get("CLAUDE_WATCH_POLL_S") or 0)
+WATCH_POLL_S = EV.env_float("CLAUDE_WATCH_POLL_S", 0)
 
 # Watcher WALL-CLOCK ceilings, in seconds. The loop counts are derived at run
 # time from ceiling / actual poll interval, so tuning either the ceiling or the

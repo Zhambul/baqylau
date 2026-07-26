@@ -87,6 +87,7 @@ backed by grep-style regression tests that will fail the build):
 | File-op display name (bare basename / `✎` scratchpad icon / dim out-of-project dir), incl. the scratchpad path pattern | `core/streamfmt.file_display` |
 | Session-alive probe | `core/state.parked()` — a bare exists check, never a connect |
 | Detached-spawn mechanics (DEVNULL stdio + `start_new_session=True` + the `spawn`/`error` audit rows) | `core/spawn.spawn_detached` — `hookkit.spawn_streamer` is its bin/-name-resolving wrapper |
+| Reading a NUMERIC `CLAUDE_*` env knob (the missing/empty/unparseable/negative → default rule) | `core/env.py` — `env_float()`/`env_int()`. A raw `float(os.environ.get(X) or D)` is banned: it raises ValueError at IMPORT time, and for `core/tail.py` / `plugins/claude_code/stream.py` that import happens inside a HOOK, before any handler or `A.error` exists — the one spot the hooks-never-fail invariant cannot cover. Two modules had each grown a private guard for exactly this; ~20 sites had none |
 | Mirror-pane width default (`DEFAULT_BIAS`, the `CLAUDE_MIRROR_BIAS` fallback both hosts share) | `core/hostpane.py` |
 | Claude config dir default (`$CLAUDE_CONFIG_DIR` else `~/.claude`) | `plugins/claude_code/model.config_dir()` |
 | Subscription-account vocabulary: the switcher's env contract, `accounts.tsv` registry, per-account config-dir layout (`configs/<slug>`) | `plugins/claude_code/account.py` — `current()`/`registry()`/`alias_for()`/`config_dir_for()` |
