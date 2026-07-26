@@ -823,8 +823,16 @@ const VIEW_ELAPSED_MIN_S = 2;
 // visible items. VIEW_FILL_TRIES bounds how many TIMES that may fire per switch
 // — each one runs loadOlder(), which has its own OLDER_TRIES request budget, so
 // no fill can walk a long session's whole backlog.
+// 15, not the 6 this shipped with: 6 left a switch showing a third of a screen,
+// which reads as "the mode ate my session". Measured against a real long session
+// (the engine driven over the live /history — focus mode, the worst case): a
+// target of 6 spent 1 request and left 11 visible; 15 spends 2 and leaves ~25;
+// 20 costs the same two requests for the same 25. In default one page already
+// clears 15, so nothing changes there. The button's own promise is separate and
+// much larger (HISTORY_FETCH, 40) — a switch tops the window up, it does not
+// page.
 const VIEW_FILL_TRIES = 3;
-const VIEW_FILL_MIN = 6;
+const VIEW_FILL_MIN = 15;
 
 // Which counter one item feeds: its activity class, with memory-wiki file ops
 // (the ❖ ops, `data-mem`) routed to the memory fragments — Claude Code words

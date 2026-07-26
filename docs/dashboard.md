@@ -4874,10 +4874,20 @@ Mechanics worth knowing:
   visible items, so it never issues a second request. The button also stops
   saying "blocks" outside verbose, where the noun would be wrong.
 - **Auto-fill**: collapsing 80 blocks can leave two lines on screen, so a mode
-  switch tops the feed up to `VIEW_FILL_MIN` (6) visible items, at most
+  switch tops the feed up to `VIEW_FILL_MIN` (15) visible items, at most
   `VIEW_FILL_TRIES` (3) times per switch — through the SAME `loadOlder`, aimed at
   a smaller target. Two independent pagers would fight over `loadingOlder` and
-  double-fetch the boundary.
+  double-fetch the boundary. **A switch is not a page** — these are two different
+  promises, and conflating them is the natural reading of the UI ("is it really 40
+  when I switch?"): the button aims at 40 visible items, a switch only refills the
+  window. The floor is 15 rather than the 6 it shipped with, measured by driving
+  the real engine over the live `/history` on a long session: at 6 a switch into
+  focus spent one request and left ~11 visible (a third of a screen, which reads as
+  "the mode ate my session"); 15 spends two for ~25; 20 buys nothing 15 didn't. In
+  default one page already clears 15, so only focus pays the extra request.
+  Switching INTO verbose fills nothing — it hides nothing, so the window is
+  already as full as the loaded data allows (`test_switching_into_a_collapsing_
+  mode_fills_the_window` pins both halves).
 - The two axes are independent classes: `.fhide` is the kind filter's, `.vhide`
   the view mode's. One shared class would let either pass un-hide the other's
   items.

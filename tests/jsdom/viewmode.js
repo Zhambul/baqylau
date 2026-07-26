@@ -346,6 +346,25 @@ function runFill(name, mode, target, opts) {
   });
 }
 
+// ---- the MODE SWITCH's own fill (viewAutoFill), which is a different, much
+// smaller promise than the button's: switching to a collapsing mode tops the
+// window up to VIEW_FILL_MIN visible items. Nothing measured it before, and the
+// number is tuned (see its comment) — so drive the real path: a scene with older
+// history and almost nothing visible, switched, then drained.
+function switchScene(mode) {
+  // built in the OTHER mode and switched, like a real toggle — a scene rebuilt in
+  // its own mode would be stopped by the signature guard before the fill is reached
+  const ses = fillScene(mode === "verbose" ? "focus" : "verbose", {});
+  ses.view = mode;
+  sandbox.applyViewMode();                 // what setViewMode does, minus the POST
+  return Promise.resolve().then(() => new Promise(r => {
+    let n = 0;
+    const tick = () => (++n < 200 ? Promise.resolve().then(tick) : r());
+    tick();
+  })).then(() => ({ visible: sandbox.visibleCount(), pages: sandbox.__pages.length,
+                    fills: ses.viewFill }));
+}
+
 // ---- and the ORDER a loaded page lands in. The feed is newest-top, so a page
 // (served oldest->newest) must be laid out reversed, and each next page below the
 // last — otherwise the loaded stretch reads bottom-up while the live tail above
@@ -382,6 +401,8 @@ runFill("focus", "focus", 40)
   .then(() => runFill("allCommands", "focus", 40, { mix: false }))
   .then(() => runFill("exhausted", "focus", 40, { mix: false, exhaustAfter: 2 }))
   .then(orderScene)
+  .then(() => switchScene("focus")).then(r => { out.switchFocus = r; })
+  .then(() => switchScene("verbose")).then(r => { out.switchVerbose = r; })
   .then(() => {
     out.fills = fills;
     process.stdout.write(JSON.stringify(out, null, 1));

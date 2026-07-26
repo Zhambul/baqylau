@@ -8173,6 +8173,36 @@ def test_load_older_keeps_its_promise_in_a_collapsing_mode(dash):
     assert f["exhausted"]["pages"] == 2 and f["exhausted"]["stuck"] is False
 
 
+def test_switching_into_a_collapsing_mode_fills_the_window(dash):
+    """Two different promises, often confused: the "load older · 40 more" BUTTON
+    aims at 40 visible items, while switching modes only tops the window up to
+    VIEW_FILL_MIN — collapsing a command-heavy tail can leave two lines on screen,
+    and the switch pulls enough history to have something to read.
+
+    Switching INTO verbose must pull nothing (it hides nothing, so the window is
+    already as full as the loaded data allows). The floor is 15, measured: at 6 a
+    switch to focus left ~11 visible on a real session (a third of a screen); 15
+    costs one more request for ~25, and 20 buys nothing 15 didn't."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "viewmode.js"),
+         os.path.join(REPO, "dashboard", "static", "app.05-session.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    code, src = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    floor = int(re.search(r"const VIEW_FILL_MIN = (\d+);", src).group(1))
+    assert floor >= 15, "a switch must leave more than a couple of lines"
+    assert d["switchFocus"]["visible"] >= floor, d["switchFocus"]
+    assert d["switchFocus"]["fills"] == 1, "one fill should be enough"
+    # …and switching to verbose pulls nothing at all
+    assert d["switchVerbose"] == {"visible": 2, "pages": 0, "fills": 0}
+
+
 def test_a_loaded_history_page_lands_newest_first(dash):
     """The feed is newest-top and `/history` serves a page oldest->newest, so
     `appendOlder` must lay the page out REVERSED. Inserting it in arrival order
