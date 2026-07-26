@@ -1,8 +1,48 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
+//
+// THE frontend-audit channel, whole: the CLOG ring, the batched delivery, the
+// SSE up/down marks, the connection snapshot every batch carries, and the
+// optimistic-action beacons (optAudit / hintAudit / optPending / clientFail)
+// that report a client state whose real confirmation arrives async over SSE.
+//
+// It used to be half a channel. `clog`/`flushClog`/`sseMark` lived here while
+// `connInfo` — which `flushClog` calls on every batch — and the four beacons sat
+// at the tail of app.05-session.js, 1500 lines into a file about the session
+// VIEW; `clog`'s own doc comment was stranded there too, above nothing. So the
+// audit module called back into the session module, none of the six functions
+// was session code (`pendingCard` is used only by the dialogs, `clientFail` by
+// four other files), and the file names lied about where the concern lived.
+//
+// docs/dashboard.md *Frontend audit (clientlog)*.
 
+// The FRONTEND audit channel (clog → POST /api/clientlog → `web-client` state_files
+// rows, docs/dashboard.md *Frontend audit (clientlog)*). The server can only ever
+// see a control POST that ACTUALLY ARRIVED; a request the browser tried but that
+// never reached the handler (dropped by the tunnel, starved of a connection, queued
+// forever) is invisible server-side — the entire class of "still not closing" bugs
+// where /stop left no trace. This channel is the browser reporting what IT did:
+// each control gesture logs a begin/ok/fail lifecycle with timing + a connection
+// snapshot, delivered over the plain-fetch channel that IS proven to traverse the
+// tunnel (the same one /hint-audit and /message ride). Best-effort, batched,
+// never surfaces to the user.
+const CLOG = [];              // pending client-audit events (ring, oldest dropped)
+const CLOG_MAX = 100;         // cap so a delivery outage can't grow it unbounded
+const CLOG_FLUSH_MS = 500;    // debounce — coalesce a gesture's begin+ok into one POST
+const CLOG_RETRY_MS = 4000;   // re-flush backoff after a failed delivery
+let clogTimer = null;
+let clogBusy = false;         // re-entrancy guard — clog() is a no-op while a flush
+                              // is mid-build, so the audit can't recurse into itself
+const SSE_UP = {};            // stream label -> last up? — clog SSE only on TRANSITIONS
+
+// Append one frontend-audit event and schedule a batched flush. `ev` is a dotted
+// name (close.begin | close.ok | close.fail | close.reconciled …); `data` is a
+// small flat bag of scalars. Ring-capped so a delivery outage can't grow it.
+// SELF-GUARDING: the audit must never throw into the page — an exception here
+// would fire window.onerror → clog → … a feedback loop, and this very channel is
+// what CATCHES uncaught errors, so it must be the one thing that can't raise one.
 function clog(sid, ev, data) {
   if (clogBusy) return;                 // re-entrancy: don't log from inside a flush
   try {
@@ -56,207 +96,97 @@ function sseMark(label, up, extra) {
        Object.assign({ s: label }, extra || {}));
 }
 
-// The close POST rides the plain-fetch channel (postJSON — X-Claude-Dash header,
-// JSON body, a CLOSE_POST_MS timeout), tagged `audit:"close"` so its whole
-// transport lifecycle lands in the frontend audit (close.begin/ok/fail). This is
-// the transport PROVEN to traverse the tunnel (baqylau/dash.zhambyl.top): the
-// click's own /hint-audit beacon and the composer /message ride it and always
-// land, and every morning-era close (plain fetch) succeeded. navigator.sendBeacon
-// was tried instead and REGRESSED close — it returns true (queued) so we resolved
-// ok optimistically, but the queued beacon was then silently dropped by the
-// tunnel: no `web-stop`, no `web-reject`, just the 20s `web-hint … stale`. The
-// timeout turns a genuine upstream stall into a VISIBLE, retryable, audited
-// failure (close.fail transport + web-clientfail) instead of a silent hang.
-function closeSession(sid, via) {
-  const url = "/api/session/" + encodeURIComponent(sid) + "/stop";
-  return postJSON(url, {}, { timeout: CLOSE_POST_MS, audit: "close", sid,
-                             auditData: { via: via || "" } });
+/* ---------- optimistic-action beacons (the `web-hint` audit) ---------- */
+// The page shows several OPTIMISTIC states whose real confirmation arrives async
+// over SSE: the composer's greyed stand-in bubble (app.08-composer.js), a
+// closing session card (app.10-control.js), a greyed ask/plan card
+// (app.07-dialogs.js). Each is client-only, so the SERVER cannot see it — a
+// stuck greyed state (shown, never reconciled) leaves no trace by default.
+//
+// So each transition beacons a `web-hint` audit row (→ POST /hint-audit,
+// server-side A.state_file): `shown` on create, `reconciled` on the swap
+// (carrying wait_ms — the latency), `dropped` on a failure, and `stale` from a
+// watchdog when a stand-in outlives STALE_HINT_MS unreconciled (THE bug
+// signal). Audit-only, best-effort, never blocks or toasts.
+
+const STALE_HINT_MS = 20000;
+
+// Low-level optimistic-action audit beacon: ONE lifecycle transition of a
+// client action whose REAL confirmation arrives async over SSE (op = composer
+// bubble | close | answer | plan — docs/dashboard.md, *Optimistic UI & the
+// web-hint audit*). A stuck greyed state is invisible server-side without this.
+// Best-effort, never surfaces to the user.
+function optAudit(sid, op, phase, t0, extra) {
+  if (!sid) return;
+  const body = Object.assign(
+    { op, phase, wait_ms: Math.round(performance.now() - t0) }, extra || {});
+  postJSON("/api/session/" + encodeURIComponent(sid) + "/hint-audit", body)
+    .catch(() => {});   // a telemetry beacon must never surface to the user
 }
 
-// The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
-// the pinned queued bubble): the text with hard line breaks, textContent only —
-// never innerHTML, since an undelivered prompt must never interpret markup.
-// The leading "/command" of a message, when it NAMES a real command — the
-// deliberate cross-language twin of the server's `_lead_cmd`
-// (dashboard/opshtml/tools.py), which tints the transcript bubbles IT renders.
-// This one serves the two bubbles the page builds itself and the server never
-// sees: the optimistic stand-in and the ⧗ queued chip. The name list is the
-// SERVER's (meta.commands, from the same plugins.slash_commands the "/" menu
-// uses), so the two renderers can't disagree about what a real command is.
-function leadCmd(text) {
-  const names = (S.ses && S.ses.meta && S.ses.meta.commands) || null;
-  if (!names || !names.length || !(text || "").startsWith("/")) return "";
-  const m = /^\/(\S+)(?=\s|$)/.exec(text);
-  return m && names.indexOf(m[1]) >= 0 ? m[0] : "";
+// The composer bubble's beacon — op="composer", carries the message length.
+function hintAudit(pend, phase, extra) {
+  if (!pend || !pend.sid) return;
+  optAudit(pend.sid, "composer", phase, pend.t0,
+           Object.assign({ chars: (pend.text || "").length }, extra || {}));
 }
 
-function promptMd(text) {
-  const md = el("div", "md");
-  const p = el("p");
-  const tok = leadCmd(text);
-  (text || "").split("\n").forEach((line, i) => {
-    if (i) p.append(el("br"));
-    if (!i && tok)                       // the token can only lead the FIRST line
-      p.append(el("span", "cmdtok", tok), tnode(line.slice(tok.length)));
-    else
-      p.append(tnode(line));
-  });
-  md.append(p);
-  return md;
-}
-
-// Plain-text bubble mirroring opshtml.msg_html's .msg.prompt shape, minus the
-// rewind ↶ (a not-yet-delivered prompt isn't re-runnable).
-function pendingBubble(text) {
-  const d = el("div", "msg prompt pending");
-  d.append(el("span", "who", "you"));
-  d.append(promptMd(text));
-  return d;
-}
-
-// Create + track the optimistic stand-in for a send; returns its pend handle.
-function addPending(ses, text) {
-  const node = pendingBubble(text);
-  const w = ses.stream.querySelector(".waiting");
-  if (w) w.remove();
-  ses.stream.insertBefore(node, ses.stream.firstChild);
-  const pend = { text, node, ses, sid: S.cur, t0: performance.now(), timer: null };
-  ses.pending.push(pend);
-  hintAudit(pend, "shown");
-  // watchdog: a stand-in still unreconciled after STALE_HINT_MS is a stuck
-  // grey bubble — the failure this audit exists to catch. Fire the beacon once
-  // and KEEP the node (the user is still staring at grey; the row is the
-  // breadcrumb). Cleared by settlePending / leaveSession on a clean outcome.
-  pend.timer = setTimeout(() => {
-    pend.timer = null;
-    if (pend.ses.pending.indexOf(pend) >= 0) hintAudit(pend, "stale");
+// A tracked optimistic CARD action (close | answer | plan): beacons `shown` +
+// arms a stale watchdog; the caller holds the handle and calls .settle(phase,
+// extra) on the SSE reconcile (`reconciled`) or on failure (`dropped`). `id`
+// is the tool_use_id / sid the confirmation is matched against; `note` is the
+// greyed card's caption. Sibling of addPending (the composer bubble's own
+// tracker), minus the DOM node — the card flows grey an existing element.
+function optPending(sid, op, id, note) {
+  const p = { sid, op, id: id || "", note: note || "",
+              t0: performance.now(), timer: null, live: true };
+  optAudit(sid, op, "shown", p.t0);
+  p.timer = setTimeout(() => {
+    p.timer = null;
+    if (p.live) optAudit(sid, op, "stale", p.t0);   // stuck greyed — the bug signal
   }, STALE_HINT_MS);
-  return pend;
+  p.settle = (phase, extra) => {
+    if (!p.live) return;
+    p.live = false;
+    if (p.timer) { clearTimeout(p.timer); p.timer = null; }
+    optAudit(sid, op, phase, p.t0, extra);
+  };
+  return p;
 }
 
-// Tear a stand-in down (matched | queued | send-failed) and audit the outcome.
-function settlePending(pend, phase, extra) {
-  if (!pend) return;
-  if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
-  const i = pend.ses.pending.indexOf(pend);
-  if (i >= 0) pend.ses.pending.splice(i, 1);
-  if (pend.node) pend.node.remove();
-  hintAudit(pend, phase, extra);
+// Beacon a control-plane failure the PAGE saw (a "send failed" / "resume
+// failed" toast) into the audit — a `web-clientfail` row. The server audits
+// each gesture's outcome BEFORE its HTTP response returns, so a lost response
+// (server restart, tunnel reset, dropped connection) rejects the fetch and
+// toasts a failure even when the send SUCCEEDED — invisible to the audit
+// otherwise (docs/dashboard.md, *Client-observed send failures*). `err` is a
+// postJSON rejection: an HTTP-error body ({error}) → kind "http"; a raw
+// fetch TypeError (no .error) → kind "transport" (the audit-blind case). The
+// beacon rides the same tunnel that may have failed, so it's strictly
+// best-effort — the toast is the user-facing signal, this is the breadcrumb.
+function clientFail(sid, gesture, err, chars) {
+  if (!sid) return;
+  const http = !!(err && err.error);
+  const body = { gesture, kind: http ? "http" : "transport",
+                 error: (err && (err.error || err.message)) || "" };
+  if (http && typeof err.status === "number") body.status = err.status;
+  if (typeof chars === "number") body.chars = chars;
+  postJSON("/api/session/" + encodeURIComponent(sid) + "/client-fail", body)
+    .catch(() => {});   // a telemetry beacon must never surface to the user
 }
 
-function drainPending(items) {
-  const ses = S.ses;
-  if (!ses || !ses.pending || !ses.pending.length) return;
-  for (const it of items) {
-    if (it.t !== "msg" || it.kind !== "prompt") continue;
-    const real = (it.text || "").trim();
-    // suffix match (promptMatches — the one rule, shared with drainQueue and
-    // mirrored server-side): the delivered prompt may carry attachment mentions
-    // OR a terminal-restored draft in front of what we sent.
-    const i = ses.pending.findIndex(p => promptMatches(real, p.text));
-    if (i >= 0) settlePending(ses.pending[i], "reconciled");
-  }
-}
-
-/* ---------- the ask card (AskUserQuestion from the web) ---------- */
-// While Claude's question dialog is up in the terminal, the session SSE
-// carries the pending ask (the PreToolUse stash — plugins/claude_code/
-// ask_fmt.py) and this card mirrors it above the composer: option buttons
-// (radio marks + "pick one" for single-select, checkbox marks + "pick any"
-// for multiSelect — visually distinct so the mode is legible at a glance),
-// a free-text "type your own" per question (the dialog's "Type something"
-// row), a submit row (ALWAYS explicit — no auto-submit on a lone
-// single-select click; the web card favors review-before-send over the
-// TUI's one-keystroke feel), and "chat about this" (the dialog's own
-// decline-and-discuss).
-// Answers POST /answer, where the server drives the REAL dialog with
-// screen-verified key events (dashboard/askdialog.py). The card clears via
-// the SSE `ask` event when the answer's PostToolUse drops the stash.
-
-// ---- the pinned goal card (docs/dashboard.md, *Web goal*) -------------------
-// Claude Code's `/goal <condition>` built-in puts the session into autonomous
-// mode toward a completion condition. No hook fires for it, so the server scans
-// the transcript tail (session_goal → plugins.goal → transcript.goal_probe) and
-// pushes {condition, met} on the `goal` SSE event. Pinned at the very top of the
-// mirror tab (above tasks), amber while working and green "✓ achieved" once the
-// checker confirms; hidden when there is no active goal. Read-only — the goal is
-// set/cleared at the terminal (or via the composer's `/goal`), never here.
-
-function buildGoalCard() {
-  const wrap = el("div", "goalwrap");
-  S.ses.goalEl = wrap;
-  renderGoal();
-  return wrap;
-}
-
-function renderGoal() {
-  const ses = S.ses;
-  if (!ses || !ses.goalEl) return;
-  const wrap = ses.goalEl;
-  wrap.textContent = "";
-  const goal = (ses.meta && ses.meta.goal) || null;
-  wrap.hidden = !goal || !goal.condition;
-  if (wrap.hidden) return;
-  const met = !!goal.met;
-  const card = el("div", "goalcard" + (met ? " met" : ""));
-  const head = el("div", "goalhead");
-  head.append(el("span", "goalmark", met ? "✓" : "◎"));
-  head.append(el("span", "goaltitle", "goal"));
-  head.append(el("span", "goalstate", met ? "achieved" : "active"));
-  card.append(head);
-  card.append(el("div", "goalcond", goal.condition));
-  wrap.append(card);
-}
-
-// ---- the pinned tasks card (docs/dashboard.md, *Web tasks*) -----------------
-// The session's native task list (TaskCreate/TaskUpdate), pinned at the very
-// top of the mirror tab — fed by the `tasks` kv snapshot task_fmt.py re-reads
-// from Claude Code's on-disk task dir on every task-touching hook, so it works
-// live AND parked (the on-disk files are deleted at session end; the stash is
-// the only surviving record). Read-only: unlike ask/plan there is no dialog to
-// drive — the TUI has no modal to answer. Completed tasks render struck-through
-// and dimmed; the in_progress one carries the accent and shows its activeForm.
-
-function buildTasksCard() {
-  const wrap = el("div", "taskswrap");
-  S.ses.tasksEl = wrap;
-  renderTasks();
-  return wrap;
-}
-
-function renderTasks() {
-  const ses = S.ses;
-  if (!ses || !ses.tasksEl) return;
-  const wrap = ses.tasksEl;
-  wrap.textContent = "";
-  const tasks = (ses.meta && ses.meta.tasks) || null;
-  wrap.hidden = !tasks || !tasks.length;
-  if (wrap.hidden) return;
-  const done = tasks.filter(t => t.status === "completed").length;
-  const card = el("div", "taskscard");
-  const head = el("div", "taskshead");
-  head.append(el("span", "taskstitle", "tasks"));
-  head.append(el("span", "taskscount", done + "/" + tasks.length + " done"));
-  card.append(head);
-  const list = el("div", "tasklist");
-  tasks.forEach(t => {
-    const st = t.status === "completed" ? "done"
-             : t.status === "in_progress" ? "active" : "pend";
-    const row = el("div", "taskrow " + st);
-    row.append(el("span", "taskmark",
-                  st === "done" ? "✓" : st === "active" ? "▸" : "○"));
-    row.append(el("span", "taskid", "#" + (t.id || "?")));
-    const subj = el("span", "tasksubj", t.subject || "");
-    if (t.description) subj.title = t.description;
-    row.append(subj);
-    // the spinner label the TUI shows while a task runs
-    if (st === "active" && t.activeForm && t.activeForm !== t.subject)
-      row.append(el("span", "taskactive", t.activeForm + "…"));
-    if ((t.blockedBy || []).length)
-      row.append(el("span", "taskblocked",
-                    "⛓ " + t.blockedBy.map(b => "#" + b).join(" ")));
-    list.append(row);
-  });
-  card.append(list);
-  wrap.append(card);
+// A snapshot of the page's connection health, stamped on every clog batch — the
+// evidence for the connection-starvation theory (the page's long-lived SSE
+// EventSource streams eating the HTTP/1.1 pool). `es` is the count of SSE streams
+// we hold open right now (global always + the session view's own + the agent
+// drill-down's), `conn` whether the global stream is currently connected, `online`
+// / `vis` the browser's own network + tab-visibility state.
+function connInfo() {
+  return {
+    online: navigator.onLine !== false,
+    vis: document.visibilityState || "",
+    view: S.cur ? "session" : (S.pendingUI ? "launching" : "list"),
+    es: 1 + (S.cur ? 1 : 0) + (S.ses && S.ses.agentEs ? 1 : 0),
+    conn: $conn && $conn.dataset.on === "1" ? 1 : 0,
+  };
 }

@@ -1,7 +1,7 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
 
 function armJump(cwd, resumeSid, o) {
   o = o || {};
@@ -406,6 +406,99 @@ function suggest(input, all) {
   return { el: menu, key };
 }
 
+// The resume picker's PREVIEW POPUP — a component of its own, with its own
+// state (which session is shown, the mounted backdrop, the per-sid item cache)
+// and its own Escape handling. It was 75 lines inside resumePicker's 240-line
+// closure, sharing that scope only to reach `rows` and `list`; both are handed
+// in now, so what the popup owns is visible at a glance and the picker is back
+// to being about the LIST.
+//
+// `rowFor(sid)` gives the row record (for the title); `focusList()` returns
+// focus to the picker when the popup closes.
+function resumePreview(rowFor, focusList) {
+  let pvSid = "", pvBack = null;
+  const pvCache = new Map();
+
+  // A POPUP WINDOW over the form (a roomy, readable overlay — the inline panel
+  // was too cramped to read). It stacks above the new-session modal (.nspvback
+  // z-index > .nsback) and owns its own Escape/close so the form's
+  // document-level Esc handler doesn't fire underneath it
+  // (resumePreviewCleanup + a capturing keydown that stopPropagation()s).
+  // Closing returns focus to the row that opened it — focusList().
+  const close = () => {
+    if (!pvBack) return;
+    document.removeEventListener("keydown", pvKey, true);
+    pvBack.remove();
+    pvBack = null;
+    pvSid = "";
+    resumePreviewCleanup = null;
+    focusList();
+  };
+  const pvKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); close(); }
+  };
+
+  const show = (sid) => {
+    if (pvBack && pvSid === sid) {                  // space again on the same row closes
+      clog(sid, "resume.preview", { shown: 0 });
+      close();
+      return;
+    }
+    close();                                       // switching rows: replace the popup
+    pvSid = sid;
+    const r = rowFor(sid);
+    const title = (r && r.title) || shortSid(sid);
+    pvBack = el("div", "nspvback");
+    const panel = el("div", "nspvpanel");
+    const head = el("div", "nspvhead");
+    head.append(el("span", "nspvtitle", "preview · " + title));
+    const x = el("button", "nspvx", "✕");
+    x.title = "close (Esc)";
+    x.onclick = close;
+    head.append(x);
+    const body = el("div", "nspvbody");
+    body.append(el("div", "nspreview-empty", "loading…"));
+    panel.append(head, body);
+    pvBack.append(panel);
+    pvBack.onclick = (e) => { if (e.target === pvBack) close(); };
+    document.body.append(pvBack);
+    document.addEventListener("keydown", pvKey, true);   // preempt the form's Esc
+    resumePreviewCleanup = close;                        // form-close safety net
+    x.focus();                                           // so Esc/tab live in the popup
+
+    const render = (items) => { if (pvSid === sid && pvBack) renderPreview(body, items); };
+    if (pvCache.has(sid)) {
+      const items = pvCache.get(sid);
+      // record the item COUNT, not just "shown" — an empty-but-successful preview
+      // ("no mirror history") is otherwise indistinguishable in the audit from a
+      // rendered one (the blind spot that made the last diagnosis need a repro).
+      clog(sid, "resume.preview", { shown: 1, cached: 1, n: items.length });
+      render(items);
+      return;
+    }
+    // the recent mirror TAIL is /backlog (the newest TAIL_BLOCKS slice, the
+    // mirror tab's own on-load call) — NOT /history, which returns blocks OLDER
+    // than a cursor (before=0 → nothing: the "no mirror history" bug).
+    fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
+      .then(rp => rp.json())
+      .then(d => {
+        const items = (d && d.items) || [];
+        pvCache.set(sid, items);
+        clog(sid, "resume.preview", { shown: 1, cached: 0, n: items.length });
+        render(items);
+      })
+      .catch(() => {
+        clog(sid, "resume.preview.fail", {});
+        if (pvSid !== sid || !pvBack) return;
+        body.textContent = "";
+        body.append(el("div", "nspreview-empty", "preview unavailable"));
+      });
+  };
+
+  return { show, close, get sid() { return pvSid; } };
+}
+
+
 // The new-session resume picker (docs/dashboard.md *Resume picker*): a search
 // box + a scrollable list of a directory's recent sessions (GET /api/resumable,
 // up to RESUMABLE_MAX), each row carrying the session's model/effort/account. It
@@ -426,8 +519,7 @@ function resumePicker() {
   const list = el("div", "nsreslist");
   root.append(search, hint, list);
 
-  let rows = [], selSid = "", pvSid = "", lastCwd = "", qToken = 0, pvBack = null;
-  const pvCache = new Map();
+  let rows = [], selSid = "", lastCwd = "", qToken = 0;
 
   const paint = () => {
     list.textContent = "";
@@ -461,6 +553,15 @@ function resumePicker() {
   // update ONLY the selected-row highlight, in place — a full paint() would
   // recreate the row elements and DROP keyboard focus, so space (preview) and
   // the arrow keys would land nowhere after a pick (the "space did nothing" bug).
+  const preview = resumePreview(
+    (sid) => rows.find(x => x.sid === sid),
+    () => {
+      const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
+      if (r) r.focus();
+    });
+  const showPreview = (sid) => preview.show(sid);
+  const closePreview = () => preview.close();
+
   const applySel = () => {
     for (const row of list.querySelectorAll(".nsresrow"))
       row.classList.toggle("sel", row.dataset.sid === selSid);
@@ -478,83 +579,6 @@ function resumePicker() {
       model: r.model || "", effort: r.effort || "",
       account: (r.account && r.account.slug) || "", live: !!r.live });
     if (api.onSelect) api.onSelect(r);
-  };
-
-  // The preview is a POPUP WINDOW over the form (a roomy, readable overlay — the
-  // inline panel was too cramped to read). It stacks above the new-session modal
-  // (.nspvback z-index > .nsback) and owns its own Escape/close so the form's
-  // document-level Esc handler doesn't fire underneath it (resumePreviewCleanup
-  // + a capturing keydown that stopPropagation()s). Closing returns focus to the
-  // row that opened it.
-  const closePreview = () => {
-    if (!pvBack) return;
-    document.removeEventListener("keydown", pvKey, true);
-    pvBack.remove();
-    pvBack = null;
-    pvSid = "";
-    resumePreviewCleanup = null;
-    const r = list.querySelector(".nsresrow.sel") || list.querySelector(".nsresrow");
-    if (r) r.focus();
-  };
-  const pvKey = (e) => {
-    if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closePreview(); }
-  };
-
-  const showPreview = (sid) => {
-    if (pvBack && pvSid === sid) {                  // space again on the same row closes
-      clog(sid, "resume.preview", { shown: 0 });
-      closePreview();
-      return;
-    }
-    closePreview();                                // switching rows: replace the popup
-    pvSid = sid;
-    const r = rows.find(x => x.sid === sid);
-    const title = (r && r.title) || shortSid(sid);
-    pvBack = el("div", "nspvback");
-    const panel = el("div", "nspvpanel");
-    const head = el("div", "nspvhead");
-    head.append(el("span", "nspvtitle", "preview · " + title));
-    const x = el("button", "nspvx", "✕");
-    x.title = "close (Esc)";
-    x.onclick = closePreview;
-    head.append(x);
-    const body = el("div", "nspvbody");
-    body.append(el("div", "nspreview-empty", "loading…"));
-    panel.append(head, body);
-    pvBack.append(panel);
-    pvBack.onclick = (e) => { if (e.target === pvBack) closePreview(); };
-    document.body.append(pvBack);
-    document.addEventListener("keydown", pvKey, true);   // preempt the form's Esc
-    resumePreviewCleanup = closePreview;                 // form-close safety net
-    x.focus();                                           // so Esc/tab live in the popup
-
-    const render = (items) => { if (pvSid === sid && pvBack) renderPreview(body, items); };
-    if (pvCache.has(sid)) {
-      const items = pvCache.get(sid);
-      // record the item COUNT, not just "shown" — an empty-but-successful preview
-      // ("no mirror history") is otherwise indistinguishable in the audit from a
-      // rendered one (the blind spot that made the last diagnosis need a repro).
-      clog(sid, "resume.preview", { shown: 1, cached: 1, n: items.length });
-      render(items);
-      return;
-    }
-    // the recent mirror TAIL is /backlog (the newest TAIL_BLOCKS slice, the
-    // mirror tab's own on-load call) — NOT /history, which returns blocks OLDER
-    // than a cursor (before=0 → nothing: the "no mirror history" bug).
-    fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
-      .then(rp => rp.json())
-      .then(d => {
-        const items = (d && d.items) || [];
-        pvCache.set(sid, items);
-        clog(sid, "resume.preview", { shown: 1, cached: 0, n: items.length });
-        render(items);
-      })
-      .catch(() => {
-        clog(sid, "resume.preview.fail", {});
-        if (pvSid !== sid || !pvBack) return;
-        body.textContent = "";
-        body.append(el("div", "nspreview-empty", "preview unavailable"));
-      });
   };
 
   const rowKey = (e, r) => {
@@ -659,11 +683,24 @@ function resumePicker() {
   return api;
 }
 
-function openNewSession(prefillCwd, resumeSid) {
-  $modal.textContent = "";
-  const last = nsLast();
-  const panel = el("div", "nspanel");
-  panel.append(el("div", "nstitle", "new session"));
+// ---- the new-session form, in named phases -----------------------------------
+// openNewSession built the whole modal in one 344-line function — seven field
+// rows, their cross-wiring, the draft machinery and the launch, in a single
+// scope where every closure could see every local. That is the shape the Python
+// side is not allowed to have (docs/styleguide.md, *Module shape*: "long entry
+// main()s are named phases" — small functions named for what they do, sharing
+// ONE mutable context object), and there is no reason the page should.
+//
+// `F` is that context: each phase builds its own rows as plain locals — every
+// statement inside a phase is what it always was — and publishes onto F only
+// what a LATER phase needs. What a phase consumes it destructures at the top,
+// so the dependency between phases is a readable line rather than "somewhere in
+// the enclosing 344 lines". The one reference that cannot be destructured is
+// nsPrompt's Enter handler calling `F.go()`: the launch is defined two phases
+// later, and the closure resolved it at press time too.
+
+function nsDirField(F) {
+  const { prefillCwd, last } = F;
 
   // every picker/input row is a DIV, not a <label>: label activation forwards
   // any click on the row (title included) into the field — focusing it (or
@@ -679,6 +716,11 @@ function openNewSession(prefillCwd, resumeSid) {
   dir.value = prefillCwd || last.cwd || "";
   const sug = suggest(dir, nsSuggestDirs(S.sessions));
   dirRow.append(dir, sug.el);
+  Object.assign(F, { dirRow, dir, sug });
+}
+
+function nsConversation(F) {
+  const { dir, resumeSid } = F;
 
   // conversation: FRESH (a new conversation, the default) or RESUME one of this
   // directory's recent sessions. The old three-way "start from" dropdown is split
@@ -729,6 +771,11 @@ function openNewSession(prefillCwd, resumeSid) {
     dirTimer = setTimeout(() => picker.refresh(dir.value.trim(), "", "", false),
                           DIR_DEBOUNCE_MS);
   };
+  Object.assign(F, { picker, resumeRow, freshRow, fresh, syncFresh });
+}
+
+function nsPickers(F) {
+  const { last, dir, picker, fresh, syncFresh } = F;
 
   // model + effort side by side — concrete values only, no "default" entry
   // (the user always launches with explicit flags; the remembered last-used
@@ -828,11 +875,21 @@ function openNewSession(prefillCwd, resumeSid) {
     autoAcct();
   };
   syncFresh();                       // initial visibility + (if resuming) load
+  Object.assign(F, { modelRow, model, effortRow, effort, acctRow, acct });
+}
+
+function nsLayout(F) {
+  const { modelRow, effortRow, acctRow } = F;
 
   const split = el("div", "nssplit");
   split.append(modelRow, effortRow);
   const split2 = el("div", "nssplit");
   split2.append(acctRow);
+  Object.assign(F, { split, split2 });
+}
+
+function nsPrompt(F) {
+  const { dir } = F;
 
   const promptRow = el("label", "nsfield");
   promptRow.append(el("span", "nslabel", "first prompt (optional)"));
@@ -915,8 +972,13 @@ function openNewSession(prefillCwd, resumeSid) {
   dir.addEventListener("blur", settleDraftDir);
   prompt.onkeydown = (e) => {
     if (spm.key(e)) return;
-    if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); go(); }
+    if (!IS_IPAD && e.key === "Enter" && !e.shiftKey) { e.preventDefault(); F.go(); }
   };
+  Object.assign(F, { promptRow, prompt, pdic, nsTray, spm });
+}
+
+function nsActions(F) {
+  const { dir, sug, fresh, picker, prompt, pdic, nsTray, acct, model, effort } = F;
 
   const actions = el("div", "nsactions");
   const cancel = el("button", "nsbtn", "cancel");
@@ -981,6 +1043,12 @@ function openNewSession(prefillCwd, resumeSid) {
     if (sug.key(e)) return;
     if (e.key === "Enter") { e.preventDefault(); go(); }
   };
+  Object.assign(F, { actions, submit, go });
+}
+
+function nsMount(F) {
+  const { panel, dirRow, freshRow, resumeRow, split2, split, promptRow,
+          actions, dir, fresh, prompt } = F;
 
   panel.append(dirRow, freshRow, resumeRow, split2, split, promptRow, actions);
   const back = el("div", "nsback");
@@ -1005,122 +1073,21 @@ function openNewSession(prefillCwd, resumeSid) {
   if (!IS_IPAD && fresh.checked) (dir.value.trim() ? prompt : dir).focus();
 }
 
-$newbtn.onclick = () => openNewSession("");
-$statsbtn.onclick = () => { location.hash = "#/stats"; };
-
-/* ---------- global alerts toggle (header ◉/○, next to "+ session") ---------- */
-// The ONE master switch over EVERY dashboard notification — the cross-session
-// toasts / OS notifs AND the deferred Telegram / web-push alerts
-// (docs/dashboard.md *Global alerts toggle*). The state is server-side + durable
-// (dashboard/prefs.py `notify-enabled`), so it is cross-device / cross-session
-// and covers git worktrees; default ON. OFF overrides the per-session mutes.
-// Seeded from GET /api/notify-config on load, kept in sync across devices by the
-// `notify-config` SSE event (paintNotify is called from app.02-router.js).
-let notifyOn = true;
-function paintNotify() {
-  $notifytoggle.textContent = notifyOn ? "◉ alerts" : "○ alerts off";
-  $notifytoggle.classList.toggle("off", !notifyOn);
-  $notifytoggle.title = notifyOn
-    ? "All dashboard alerts ON — click to silence every session"
-    : "All dashboard alerts OFF — click to re-enable";
+// Open the new-session modal. `prefillCwd` seeds the directory field;
+// `resumeSid` opens straight onto that conversation in the resume picker.
+function openNewSession(prefillCwd, resumeSid) {
+  $modal.textContent = "";
+  const panel = el("div", "nspanel");
+  panel.append(el("div", "nstitle", "new session"));
+  const F = { prefillCwd, resumeSid, panel, last: nsLast() };
+  nsDirField(F);
+  nsConversation(F);
+  nsPickers(F);
+  nsLayout(F);
+  nsPrompt(F);
+  nsActions(F);
+  nsMount(F);
 }
-paintNotify();
-fetch("/api/notify-config").then(r => r.json())
-  .then(d => { notifyOn = d.enabled !== false; paintNotify(); })
-  .catch(() => {});
-$notifytoggle.onclick = () => {
-  const next = !notifyOn;
-  postJSON("/api/notify", { enabled: next })
-    .then(() => {
-      notifyOn = next;
-      paintNotify();
-      toast("done", next ? "alerts on" : "alerts off",
-            next ? "every session can notify" : "all sessions silenced");
-    })
-    .catch(e => toast("ask", "alerts toggle failed", (e && e.error) || ""));
-};
-
-/* ---------- fullscreen toggle ---------- */
-// Header ⛶ button: browser Fullscreen API on the whole document, with the
-// WebKit-prefixed fallback (iPadOS Safari ships only webkitRequestFullscreen).
-// Hidden where neither exists (iPhone Safari). State syncs on the
-// fullscreenchange event, not in the click handler, so Esc / the browser's
-// own exit path keeps the button honest.
-{
-  const $fsbtn = document.getElementById("fsbtn");
-  const root = document.documentElement;
-  const req = root.requestFullscreen || root.webkitRequestFullscreen;
-  const exit = document.exitFullscreen || document.webkitExitFullscreen;
-  const cur = () => document.fullscreenElement || document.webkitFullscreenElement;
-  if (!req) {
-    $fsbtn.hidden = true;
-  } else {
-    $fsbtn.onclick = () => {
-      const p = cur() ? exit.call(document) : req.call(root);
-      if (p && p.catch) p.catch(() => {});   // e.g. permission denied — no-op
-    };
-    const sync = () => { $fsbtn.title = cur() ? "exit fullscreen" : "fullscreen"; };
-    document.addEventListener("fullscreenchange", sync);
-    document.addEventListener("webkitfullscreenchange", sync);
-  }
-}
-
-/* ---------- readline-style editing keys (kitty-like) ---------- */
-// ⌃W deletes the word left of the cursor, ⌃A jumps to line start, ⌃E to line
-// end — the kitty/shell editing keys, in every dashboard text box (composer,
-// first prompt, directory, filter). One delegated listener: element handlers
-// (slash menu, suggest, filter-Esc) run first and none of them claim ⌃-keys.
-// Safe to preventDefault on macOS — the browser's own accelerators live on
-// ⌘, not ⌃ (and this beats the Cocoa text bindings only where behavior
-// differs anyway). Match on e.code so a non-QWERTY layout can't move the
-// keys. ⌃W dispatches an input event so autoGrow / the suggest and filter
-// oninput hooks see the edit.
-document.addEventListener("keydown", (e) => {
-  if (!e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
-  const t = e.target;
-  if (!t || (t.tagName !== "TEXTAREA" &&
-             !(t.tagName === "INPUT" && t.type === "text"))) return;
-  const v = t.value, s = t.selectionStart, se = t.selectionEnd;
-  if (e.code === "KeyW") {          // delete word (or the selection) leftward
-    let a = s, b = se;
-    if (a === b) {
-      while (a > 0 && /\s/.test(v[a - 1])) a--;
-      while (a > 0 && !/\s/.test(v[a - 1])) a--;
-    }
-    t.value = v.slice(0, a) + v.slice(b);
-    t.setSelectionRange(a, a);
-    t.dispatchEvent(new Event("input"));
-  } else if (e.code === "KeyA") {   // start of the current line
-    const p = s === 0 ? 0 : v.lastIndexOf("\n", s - 1) + 1;
-    t.setSelectionRange(p, p);
-  } else if (e.code === "KeyE") {   // end of the current line
-    const p = v.indexOf("\n", se);
-    t.setSelectionRange(p < 0 ? v.length : p, p < 0 ? v.length : p);
-  } else return;
-  e.preventDefault();
-});
-
-/* ---------- ⌃⇧←/→ cycle through live sessions (kitty's tab keys) ---------- */
-// Mirrors kitty's next/previous-tab shortcuts: step through the LIVE sessions
-// oldest-first (creation order, like the tab bar), wrapping at the ends. From
-// the list view or a parked session — nowhere in the cycle — → enters at the
-// first (oldest) live session and ← at the last. Deliberately not gated on
-// input focus: macOS claims ⌃←/→ (Spaces) but nothing claims ⌃⇧←/→, and in a
-// text box it shadows only a selection gesture that already lives on ⌥⇧/⌘⇧.
-document.addEventListener("keydown", (e) => {
-  if (!e.ctrlKey || !e.shiftKey || e.altKey || e.metaKey) return;
-  const dir = e.code === "ArrowRight" ? 1 : e.code === "ArrowLeft" ? -1 : 0;
-  if (!dir) return;
-  e.preventDefault();
-  const live = S.sessions.filter(r => r.live)
-    .sort((a, b) => (a.started_at || 0) - (b.started_at || 0));
-  if (!live.length) return;
-  const at = live.findIndex(r => r.sid === S.cur);
-  const to = at < 0 ? (dir > 0 ? 0 : live.length - 1)
-                    : (at + dir + live.length) % live.length;
-  if (live[to].sid !== S.cur)
-    location.hash = "#/s/" + encodeURIComponent(live[to].sid);
-});
 
 // Esc in a live session view = interrupt the agent (the terminal's own Esc,
 // via /interrupt → Frontend.send_key). Every overlay Escape (modal below,
@@ -1131,18 +1098,6 @@ document.addEventListener("keydown", (e) => {
 // excluded, no % ceiling for a manual click; docs/relimit.md *Manual
 // migrate*). The old tab closes and a new one opens; the sid forks on
 // resume and the adopt machinery + jump watch carry the page over.
-// Lock an immediate (no-confirm) control-plane action button for the duration
-// of its POST so a double-tap can't fire the terminal write twice — ⇆ migrate
-// would spawn two racing migrators, ■ stop would double-send Escape.
-// `run` returns the POST promise; `rest` restores the button's resting state
-// once it settles (default: re-enable; cancel re-derives from the tab). This
-// lives on the buttons, not the functions, because the Esc-key gesture has its
-// own escHold debounce and the functions are shared by both entry points.
-function lockDuring(btn, run, rest) {
-  btn.disabled = true;
-  run().finally(rest || (() => { btn.disabled = false; }));
-}
-
 // Returns the POST promise so the button wiring can disable itself for the
 // round-trip — a double-click on ⇆ migrate would otherwise spawn two racing
 // migrators (each closing the tab, each picking a target). The guard path

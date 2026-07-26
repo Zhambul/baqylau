@@ -480,7 +480,7 @@ def test_app_js_drains_through_the_shared_prompt_match(dash):
     served bundles keeps them from re-splitting."""
     code, core = _get(dash + "/static/app.00-core.js")
     assert code == 200 and "function promptMatches(" in core
-    for part in ("app.05-session.js", "app.06-clientlog.js"):
+    for part in ("app.05-session.js", "app.08-composer.js"):
         code, body = _get(dash + "/static/" + part)
         assert code == 200
         assert "promptMatches(" in body, part
@@ -591,7 +591,7 @@ def test_app_js_tints_the_client_built_prompt_bubbles(dash):
     tint — through the ONE shared promptMd, off the SERVER's name list
     (meta.commands), so the two renderers can't disagree about what a real
     command is. Static check on the served bundle + the payload field."""
-    code, body = _get(dash + "/static/app.06-clientlog.js")
+    code, body = _get(dash + "/static/app.08-composer.js")
     assert code == 200
     assert "function leadCmd(" in body and "leadCmd(text)" in body
     assert "meta.commands" in body, "the name list must come from the server"

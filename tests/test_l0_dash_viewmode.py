@@ -694,3 +694,43 @@ def test_view_mode_syncs_to_an_open_page_on_another_device(dash):
     finally:
         r.close()
     assert seen == ["focus", "verbose"], seen
+
+
+def test_new_session_form_phases_hand_off_everything(tmp_path):
+    """The new-session form, EXECUTED rather than grepped: tests/jsdom/
+    newsession.js builds the real modal from app.09-newsession.js over the
+    shared DOM shim, then drives the two gestures that reach across phases.
+
+    openNewSession was one 344-line function — the longest in the repo by a
+    factor of three, and the shape docs/styleguide.md forbids on the Python side
+    ("long entry main()s are named phases"). Splitting it means the phases hand
+    each other a context object instead of sharing one closure scope, and a
+    missed hand-off is invisible to every other check: `node --check` sees
+    syntax, not scope, and a grep cannot tell that nsDirField reads a
+    `prefillCwd` nobody destructured. It is a ReferenceError that fires the
+    first time a user opens the form — which is exactly what this caught while
+    the split was being made (twice).
+
+    So the assertions are the hand-offs: the form builds all seven field rows,
+    the fresh/resume toggle (whose handler lives one phase back from the phase
+    that calls it) runs both ways, and the launch — which reads dir, fresh,
+    picker, prompt, dictation, the attachment tray, account, model and effort,
+    i.e. five earlier phases at once — actually POSTs. Skipped without `node`
+    (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "newsession.js"),
+         os.path.join(REPO, "dashboard", "static", "app.09-newsession.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+    assert d["ok"], d["errors"]
+    # every phase produced its rows: directory, resume, fresh, account,
+    # model, effort, prompt
+    assert d["rows"] == 7, d
+    assert d["panel"] == 1 and d["prompt"] == 1 and d["actions"] == 1
+    # …and the launch reached the endpoint with the directory the form opened on
+    assert d["posted"] == ["/api/sessions/new"], d
+    assert d["launch_cwd"] == "/tmp/proj", d

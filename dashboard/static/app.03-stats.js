@@ -1,7 +1,7 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
 
 function onStats() {
   return location.hash.replace(/^#\/?/, "").split("/")[0] === "stats";

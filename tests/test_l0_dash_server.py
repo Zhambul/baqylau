@@ -1791,7 +1791,7 @@ def test_page_reads_the_served_limits_not_its_own_copies(dash):
     endpoint exists to end (the JS literals carried `mirrors the server's X`
     comments, and CLAUDE_DASH_VIEW_TTL_S broke the presence beat with no code
     change on either side)."""
-    parts = ("00-core", "08-composer", "10-control", "12-init")
+    parts = ("00-core", "08-composer", "10-control", "13-init")
     body = {}
     for p in parts:
         code, body[p] = _get(dash + "/static/app.%s.js" % p)
@@ -1801,8 +1801,8 @@ def test_page_reads_the_served_limits_not_its_own_copies(dash):
     assert "LIMITS.upload_max" in body["08-composer"]
     assert "LIMITS.rename_max" in body["10-control"]
     # the heartbeat is DERIVED from the served TTL, never a matching literal
-    assert "LIMITS.view_ttl_s" in body["12-init"]
-    assert "/api/limits" in body["12-init"]
+    assert "LIMITS.view_ttl_s" in body["13-init"]
+    assert "/api/limits" in body["13-init"]
 
 
 def test_prefs_mutate_map_accumulates_atomically(monkeypatch, tmp_path):

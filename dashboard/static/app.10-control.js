@@ -1,7 +1,7 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
 
 function migrateSession() {
   if (!S.cur) return Promise.resolve();
@@ -489,4 +489,35 @@ function startRenameHeader() {
   span.replaceChildren(inp);
   inp.focus();
   inp.select();
+}
+
+
+// Lock an immediate (no-confirm) control-plane action button for the duration
+// of its POST so a double-tap can't fire the terminal write twice — ⇆ migrate
+// would spawn two racing migrators, ■ stop would double-send Escape.
+// `run` returns the POST promise; `rest` restores the button's resting state
+// once it settles (default: re-enable; cancel re-derives from the tab). This
+// lives on the buttons, not the functions, because the Esc-key gesture has its
+// own escHold debounce and the functions are shared by both entry points.
+function lockDuring(btn, run, rest) {
+  btn.disabled = true;
+  run().finally(rest || (() => { btn.disabled = false; }));
+}
+
+
+// The close POST rides the plain-fetch channel (postJSON — X-Claude-Dash header,
+// JSON body, a CLOSE_POST_MS timeout), tagged `audit:"close"` so its whole
+// transport lifecycle lands in the frontend audit (close.begin/ok/fail). This is
+// the transport PROVEN to traverse the tunnel (baqylau/dash.zhambyl.top): the
+// click's own /hint-audit beacon and the composer /message ride it and always
+// land, and every morning-era close (plain fetch) succeeded. navigator.sendBeacon
+// was tried instead and REGRESSED close — it returns true (queued) so we resolved
+// ok optimistically, but the queued beacon was then silently dropped by the
+// tunnel: no `web-stop`, no `web-reject`, just the 20s `web-hint … stale`. The
+// timeout turns a genuine upstream stall into a VISIBLE, retryable, audited
+// failure (close.fail transport + web-clientfail) instead of a silent hang.
+function closeSession(sid, via) {
+  const url = "/api/session/" + encodeURIComponent(sid) + "/stop";
+  return postJSON(url, {}, { timeout: CLOSE_POST_MS, audit: "close", sid,
+                             auditData: { via: via || "" } });
 }

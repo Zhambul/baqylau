@@ -1,7 +1,7 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
 
 /* The session view's chrome, as NAMED PHASES (the styleguide's shape for a long
    builder — small functions named for what they build, one visible order):
@@ -1476,3 +1476,92 @@ function toggleView(anchor, key, gid) {
    debugging zoom/fit reports that headless WebKit can't reproduce. Doubles
    as a staleness probe: the overlay only exists in THIS build of app.js,
    so "no overlay" == the device is loading stale assets. */
+
+
+// ---- the pinned goal card (docs/dashboard.md, *Web goal*) -------------------
+// Claude Code's `/goal <condition>` built-in puts the session into autonomous
+// mode toward a completion condition. No hook fires for it, so the server scans
+// the transcript tail (session_goal → plugins.goal → transcript.goal_probe) and
+// pushes {condition, met} on the `goal` SSE event. Pinned at the very top of the
+// mirror tab (above tasks), amber while working and green "✓ achieved" once the
+// checker confirms; hidden when there is no active goal. Read-only — the goal is
+// set/cleared at the terminal (or via the composer's `/goal`), never here.
+
+function buildGoalCard() {
+  const wrap = el("div", "goalwrap");
+  S.ses.goalEl = wrap;
+  renderGoal();
+  return wrap;
+}
+
+function renderGoal() {
+  const ses = S.ses;
+  if (!ses || !ses.goalEl) return;
+  const wrap = ses.goalEl;
+  wrap.textContent = "";
+  const goal = (ses.meta && ses.meta.goal) || null;
+  wrap.hidden = !goal || !goal.condition;
+  if (wrap.hidden) return;
+  const met = !!goal.met;
+  const card = el("div", "goalcard" + (met ? " met" : ""));
+  const head = el("div", "goalhead");
+  head.append(el("span", "goalmark", met ? "✓" : "◎"));
+  head.append(el("span", "goaltitle", "goal"));
+  head.append(el("span", "goalstate", met ? "achieved" : "active"));
+  card.append(head);
+  card.append(el("div", "goalcond", goal.condition));
+  wrap.append(card);
+}
+
+// ---- the pinned tasks card (docs/dashboard.md, *Web tasks*) -----------------
+// The session's native task list (TaskCreate/TaskUpdate), pinned at the very
+// top of the mirror tab — fed by the `tasks` kv snapshot task_fmt.py re-reads
+// from Claude Code's on-disk task dir on every task-touching hook, so it works
+// live AND parked (the on-disk files are deleted at session end; the stash is
+// the only surviving record). Read-only: unlike ask/plan there is no dialog to
+// drive — the TUI has no modal to answer. Completed tasks render struck-through
+// and dimmed; the in_progress one carries the accent and shows its activeForm.
+
+function buildTasksCard() {
+  const wrap = el("div", "taskswrap");
+  S.ses.tasksEl = wrap;
+  renderTasks();
+  return wrap;
+}
+
+function renderTasks() {
+  const ses = S.ses;
+  if (!ses || !ses.tasksEl) return;
+  const wrap = ses.tasksEl;
+  wrap.textContent = "";
+  const tasks = (ses.meta && ses.meta.tasks) || null;
+  wrap.hidden = !tasks || !tasks.length;
+  if (wrap.hidden) return;
+  const done = tasks.filter(t => t.status === "completed").length;
+  const card = el("div", "taskscard");
+  const head = el("div", "taskshead");
+  head.append(el("span", "taskstitle", "tasks"));
+  head.append(el("span", "taskscount", done + "/" + tasks.length + " done"));
+  card.append(head);
+  const list = el("div", "tasklist");
+  tasks.forEach(t => {
+    const st = t.status === "completed" ? "done"
+             : t.status === "in_progress" ? "active" : "pend";
+    const row = el("div", "taskrow " + st);
+    row.append(el("span", "taskmark",
+                  st === "done" ? "✓" : st === "active" ? "▸" : "○"));
+    row.append(el("span", "taskid", "#" + (t.id || "?")));
+    const subj = el("span", "tasksubj", t.subject || "");
+    if (t.description) subj.title = t.description;
+    row.append(subj);
+    // the spinner label the TUI shows while a task runs
+    if (st === "active" && t.activeForm && t.activeForm !== t.subject)
+      row.append(el("span", "taskactive", t.activeForm + "…"));
+    if ((t.blockedBy || []).length)
+      row.append(el("span", "taskblocked",
+                    "⛓ " + t.blockedBy.map(b => "#" + b).join(" ")));
+    list.append(row);
+  });
+  card.append(list);
+  wrap.append(card);
+}

@@ -274,7 +274,7 @@ class _Base(BaseHTTPRequestHandler):
             # cached. See docs/dashboard.md *Cache-busting*.
             # stamp ?v= on every SPA part (app.NN-*.js) + style.css. The boot
             # audit record reads document.currentScript.src for this same ?v=,
-            # so the LAST part (app.12-init.js, where that record now lives) must
+            # so the LAST part (app.13-init.js, where that record now lives) must
             # carry it too — which this covers by stamping them all.
             data = re.sub(rb'(/static/app\.[0-9]{2}-[a-z]+\.js)',
                           rb'\1?v=' + BOOT_ID.encode(), data)

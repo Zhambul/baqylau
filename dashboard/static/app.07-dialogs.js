@@ -1,7 +1,22 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
+
+/* ---------- the ask card (AskUserQuestion from the web) ---------- */
+// While Claude's question dialog is up in the terminal, the session SSE
+// carries the pending ask (the PreToolUse stash — plugins/claude_code/
+// ask_fmt.py) and this card mirrors it above the composer: option buttons
+// (radio marks + "pick one" for single-select, checkbox marks + "pick any"
+// for multiSelect — visually distinct so the mode is legible at a glance),
+// a free-text "type your own" per question (the dialog's "Type something"
+// row), a submit row (ALWAYS explicit — no auto-submit on a lone
+// single-select click; the web card favors review-before-send over the
+// TUI's one-keystroke feel), and "chat about this" (the dialog's own
+// decline-and-discuss).
+// Answers POST /answer, where the server drives the REAL dialog with
+// screen-verified key events (dashboard/askdialog.py). The card clears via
+// the SSE `ask` event when the answer's PostToolUse drops the stash.
 
 function buildAskCard() {
   const wrap = el("div", "askwrap");
@@ -471,3 +486,17 @@ function micIcon() {
 
 let dictActive = null;             // the page-wide single live dictation
 function stopDictation() { if (dictActive) dictActive.stop(); }
+
+
+// A greyed "…" stand-in shown in place of the interactive ask/plan card while
+// an optimistic decision is in flight — the card analog of the composer's
+// greyed prompt bubble. Cleared when the SSE reconcile drops the stash (or on
+// failure, which re-renders the live card). `cls` = askcard | plancard.
+function pendingCard(cls, title, note) {
+  const card = el("div", cls + " pending");
+  const head = el("div", "askhead");
+  head.append(el("span", cls === "plancard" ? "plantitle" : "asktitle", title));
+  card.append(head);
+  card.append(el("div", "plandim", note));
+  return card;
+}

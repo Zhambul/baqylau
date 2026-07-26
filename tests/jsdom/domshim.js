@@ -13,6 +13,15 @@ class El {
     this.tag = tag; this.className = cls || ""; this.dataset = {};
     this.children = []; this.parentNode = null; this._text = text || "";
     this.onclick = null;
+    // enough of the event surface for the harnesses that DRIVE a form: the
+    // sources attach a few listeners (blur, input) and never dispatch them
+    this._on = {};
+    this.style = {};
+    this.addEventListener = (t, f) => { (this._on[t] = this._on[t] || []).push(f); };
+    this.removeEventListener = () => {};
+    this.dispatch = (t) => { for (const f of this._on[t] || []) f({}); };
+    this.focus = () => {};
+    this.blur = () => {};
     const self = this;
     this.classList = {
       add(c) { if (!self._cls().includes(c)) self.className = (self.className + " " + c).trim(); },

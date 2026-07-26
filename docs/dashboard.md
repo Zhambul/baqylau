@@ -53,7 +53,9 @@ dashboard/opshtml/          paint ops -> HTML (the web presenter), split by conc
                             ansi · ops · markdown · tools
 dashboard/static/           the single-page app (vanilla JS/CSS, no build step) —
                             app.NN-*.js parts loaded in order (classic scripts,
-                            one shared global scope; app.12-init.js runs last)
+                            one shared global scope; app.12-shell.js is the app
+                            FRAME — the header buttons + the page-wide keyboard;
+                            app.13-init.js runs last)
 ```
 
 The dashboard was decomposed from two monoliths (a ~4800-line `server.py` and a
@@ -563,7 +565,7 @@ at all**: set it below the page's fixed 8 s beat and every watched session's
 presence lapses between beats, which the deferred alert reads as "nobody is
 looking" and fires the off-device Telegram/push alert while you sit staring at
 the session (docs/dashboard.md *Telegram alerts*). So the server serves them and
-the page stops guessing: `loadLimits()` (app.12-init.js) fetches once at boot
+the page stops guessing: `loadLimits()` (app.13-init.js) fetches once at boot
 into the `LIMITS` object (app.00-core.js), and the consumers read `LIMITS.<k>` at
 use time, not at load time. The literals still in `LIMITS` are only the
 PRE-FETCH fallback — an attach or a rename in that one round-trip still behaves
@@ -1112,7 +1114,7 @@ multi-line prompt into two paragraphs).
 
 The two bubbles the PAGE builds itself — the optimistic stand-in and the ⧗
 queued chip — never pass through `msg_html`, so `promptMd` tints them
-client-side via `leadCmd` (app.06-clientlog.js), the deliberate cross-language
+client-side via `leadCmd` (app.08-composer.js), the deliberate cross-language
 twin of `_lead_cmd`. Its name list is the **server's**: `session_payload` ships
 `commands` (names only — the projection of the same provider) rather than
 having the page fetch its own, so both renderers agree by construction. That

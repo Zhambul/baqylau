@@ -123,6 +123,15 @@ endpoint, vocabulary parity) still cover everything reachable from Python. Addin
 a second such test is fine; adding a JS test FRAMEWORK is not the same decision
 and should be taken separately.
 
+A third drives the new-session FORM: `tests/jsdom/newsession.js` builds the real
+modal out of `app.09-newsession.js` and then presses its two cross-phase gestures
+(the fresh/resume toggle, the launch). `openNewSession` used to be one 344-line
+function; splitting it into named phases means each phase hands the next a
+context object, and a missed hand-off is a ReferenceError no other check can
+see — `node --check` reads syntax, not scope, and a grep cannot tell that a
+phase reads a name nobody passed it. It caught exactly that twice while the
+split was being made.
+
 There is now a second one, on the same terms: `tests/jsdom/sections.js` drives
 the SECTIONS engine (the monitors/jobs/memory secondary tabs in
 `app.11-chrome.js`) behind

@@ -4,7 +4,7 @@
 //
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
 //
 // Server-rendered op HTML (dashboard/opshtml/ — escaped there, the
 // neutralize() analog) is the ONLY thing inserted via innerHTML; everything
@@ -92,7 +92,7 @@ const LAUNCH_RESOLVE_TRIES = 12;
 const CLOSE_POST_MS = 12000;
 
 // The SERVER's numbers that the page has to agree with, fetched from
-// GET /api/limits at boot (loadLimits, app.12-init.js) — the owners are
+// GET /api/limits at boot (loadLimits, app.13-init.js) — the owners are
 // dashboard/config.py (upload/rename caps) and dashboard/notify/presence.py
 // (the presence TTL), and this is the one place the page keeps them:
 //
@@ -347,24 +347,6 @@ const DEVICE_ID = (() => {
 const DEVICE_LABEL = ((navigator.userAgentData && navigator.userAgentData.platform)
   || navigator.platform || "device").slice(0, 60);
 
-// The FRONTEND audit channel (clog → POST /api/clientlog → `web-client` state_files
-// rows, docs/dashboard.md *Frontend audit (clientlog)*). The server can only ever
-// see a control POST that ACTUALLY ARRIVED; a request the browser tried but that
-// never reached the handler (dropped by the tunnel, starved of a connection, queued
-// forever) is invisible server-side — the entire class of "still not closing" bugs
-// where /stop left no trace. This channel is the browser reporting what IT did:
-// each control gesture logs a begin/ok/fail lifecycle with timing + a connection
-// snapshot, delivered over the plain-fetch channel that IS proven to traverse the
-// tunnel (the same one /hint-audit and /message ride). Best-effort, batched,
-// never surfaces to the user.
-const CLOG = [];              // pending client-audit events (ring, oldest dropped)
-const CLOG_MAX = 100;         // cap so a delivery outage can't grow it unbounded
-const CLOG_FLUSH_MS = 500;    // debounce — coalesce a gesture's begin+ok into one POST
-const CLOG_RETRY_MS = 4000;   // re-flush backoff after a failed delivery
-let clogTimer = null;
-let clogBusy = false;         // re-entrancy guard — clog() is a no-op while a flush
-                              // is mid-build, so the audit can't recurse into itself
-const SSE_UP = {};            // stream label -> last up? — clog SSE only on TRANSITIONS
                               // (EventSource.onerror re-fires each reconnect attempt)
 
 function kfmt(n) {

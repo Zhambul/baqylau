@@ -1,7 +1,7 @@
 "use strict";
 // Part of the dashboard SPA — split from the former single app.js into ordered,
 // cohesive files (classic scripts share one global scope; load order is set in
-// index.html). See app.12-init.js for the boot/init sequence.
+// index.html). See app.13-init.js for the boot/init sequence.
 
 function dictation(ta, getCwd) {
   // Per-textarea controller — returns {btn, stop}; callers place the button.
@@ -598,6 +598,99 @@ function recallHistory(ses, ta, up) {
   return true;
 }
 
+// The PARKED composer's send — "resume & send" (docs/dashboard.md *Resume &
+// send*): relaunch the conversation through /api/sessions/new with the message
+// riding the launch ARGV, under the session's own account. Never typed into a
+// half-started TUI, so there is no readiness race.
+function composerResume(C, text, atts) {
+  const { ses, sid, meta, ta, btn, tray } = C;
+  const body = { cwd: meta.cwd, resume: S.cur, prompt: text };
+  if (atts.length) body.attachments = atts;
+  const slug = meta.account && meta.account.slug;
+  if (slug) body.account = slug;   // wake it under ITS account, silently
+  postJSON("/api/sessions/new", body, { audit: "resume-send", sid: S.cur })
+    .then(() => {
+      // the revived session appears via its own SessionStart (then forks
+      // sids — adopt); the armed jump follows it, same as a form resume.
+      // But the launch POST succeeding is not the session arriving — if it
+      // never boots, the composer stays disabled forever (the success path
+      // has no finally). onfail revives it when the watch times out so the
+      // typed message isn't trapped behind a dead box.
+      armJump(meta.cwd, S.cur, { onfail: () => {
+        if (S.ses !== ses || ses.composer !== ta) return;   // moved on
+        ta.disabled = false; btn.disabled = false;
+        saveComposerDraft(ses, sid);   // re-stash (send-start cleared it)
+        toast("ask", "resume timed out",
+              "the session never came back — your message is kept; try again");
+      } });
+      tray.clear();
+      toast("done", "resuming session", "your message starts the revived turn");
+    })
+    .catch(e => {
+      // the draft survives in the box — nothing is lost on a failed wake
+      // (re-persist it: send-start cleared the stash optimistically)
+      toast("ask", "resume failed", (e && e.error) || "");
+      clientFail(sid, "resume", e, text.length);
+      ta.disabled = false; btn.disabled = false; ta.focus();
+      saveComposerDraft(ses, sid);
+    });
+}
+
+
+// The LIVE composer's send: paste the message into the session's window, with
+// an optimistic greyed stand-in bubble until the real transcript prompt lands
+// over SSE.
+function composerSend(C, text, atts) {
+  const { ses, sid, ta, btn, tray, canSend } = C;
+  // After an interrupt took the message back (or a rewind restored one) the
+  // TUI holds it as a draft and this send must REPLACE it — but that fact is
+  // the SERVER's now (launch.tui_draft): a page variable didn't survive a
+  // reload while the TUI's draft did, and the next send pasted after the
+  // leftover ("testingtesting2", 2026-07-25). The flag stays as an immediate
+  // same-page hint; the server ORs its own record in either way.
+  const msg = { text };
+  if (atts.length) msg.attachments = atts;
+  if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }
+  // optimistic: show the message immediately (greyed) so there's no gap
+  // before its real transcript prompt arrives over SSE — drainPending swaps
+  // in the real bubble when it lands (see the optimistic-bubbles section).
+  // Only for typed text (empty send = attachments only: nothing to preview).
+  const pend = text ? addPending(ses, text) : null;
+  postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg,
+           { audit: "send", auditData: { chars: (text || "").length } })
+    .then(d => {
+      ta.value = ""; autoGrow(ta); tray.clear(); ses.histIdx = null;
+      if (d && d.queued) {
+        // queued mid-turn — the pinned ⧗ queued bubble owns this until
+        // delivery; drop the stand-in so the two representations don't double up
+        if (pend) settlePending(pend, "dropped", { reason: "queued" });
+        ses.queue.push({ text });
+        renderQueue();
+        saveQueue(ses);
+        toast("done", "message queued", "delivers when this turn ends");
+      } else {
+        toast("done", "message sent", "");
+      }
+    })
+    .catch(e => {
+      // send-start cleared the stash optimistically; the box keeps its text,
+      // so re-persist it — a reload mustn't lose an unsent message
+      if (pend) settlePending(pend, "dropped", { reason: "send-failed" });
+      toast("ask", "send failed", (e && e.error) || "");
+      clientFail(sid, "send", e, text.length);
+      saveComposerDraft(ses, sid);
+    })
+    .finally(() => {
+      // refocus for the next message — except on an iPad, where it would
+      // yank the on-screen keyboard back up after a button-tap send
+      if (ses.composer === ta) {
+        ta.disabled = !canSend; btn.disabled = !canSend;
+        if (!IS_IPAD) ta.focus();
+      }
+    });
+}
+
+
 function buildComposer() {
   const ses = S.ses;
   const meta = ses.meta || {};
@@ -666,6 +759,16 @@ function buildComposer() {
   const attachBtn = usable
     ? wireAttach(tray, ta, wrap, () => usable && !ta.disabled)
     : null;
+  // The two SEND PATHS were one 89-line closure whose parked branch bailed out
+  // of the middle of it. They share only the guards above, so each is its own
+  // function now and neither has to be read past to reach the other.
+  //
+  // C is the composer's context — the widgets and session facts both paths
+  // need. Same shape as the new-session form's phases: the closure scope was
+  // doing that passing implicitly, and only a reader could tell what each half
+  // actually touched.
+  const C = { ses, sid, meta, ta, btn, tray, canSend, canResume };
+
   const send = () => {
     dic.stop();          // the visible (validated) text is what sends
     const text = ta.value.trim();
@@ -675,85 +778,7 @@ function buildComposer() {
       return toast("ask", "attachment still uploading", "one moment…");
     ta.disabled = true; btn.disabled = true;
     clearComposerDraft(ses, sid);   // sending consumes the draft (both paths)
-    if (canResume) {
-      const body = { cwd: meta.cwd, resume: S.cur, prompt: text };
-      if (atts.length) body.attachments = atts;
-      const slug = meta.account && meta.account.slug;
-      if (slug) body.account = slug;   // wake it under ITS account, silently
-      postJSON("/api/sessions/new", body, { audit: "resume-send", sid: S.cur })
-        .then(() => {
-          // the revived session appears via its own SessionStart (then forks
-          // sids — adopt); the armed jump follows it, same as a form resume.
-          // But the launch POST succeeding is not the session arriving — if it
-          // never boots, the composer stays disabled forever (the success path
-          // has no finally). onfail revives it when the watch times out so the
-          // typed message isn't trapped behind a dead box.
-          armJump(meta.cwd, S.cur, { onfail: () => {
-            if (S.ses !== ses || ses.composer !== ta) return;   // moved on
-            ta.disabled = false; btn.disabled = false;
-            saveComposerDraft(ses, sid);   // re-stash (send-start cleared it)
-            toast("ask", "resume timed out",
-                  "the session never came back — your message is kept; try again");
-          } });
-          tray.clear();
-          toast("done", "resuming session", "your message starts the revived turn");
-        })
-        .catch(e => {
-          // the draft survives in the box — nothing is lost on a failed wake
-          // (re-persist it: send-start cleared the stash optimistically)
-          toast("ask", "resume failed", (e && e.error) || "");
-          clientFail(sid, "resume", e, text.length);
-          ta.disabled = false; btn.disabled = false; ta.focus();
-          saveComposerDraft(ses, sid);
-        });
-      return;
-    }
-    // After an interrupt took the message back (or a rewind restored one) the
-    // TUI holds it as a draft and this send must REPLACE it — but that fact is
-    // the SERVER's now (launch.tui_draft): a page variable didn't survive a
-    // reload while the TUI's draft did, and the next send pasted after the
-    // leftover ("testingtesting2", 2026-07-25). The flag stays as an immediate
-    // same-page hint; the server ORs its own record in either way.
-    const msg = { text };
-    if (atts.length) msg.attachments = atts;
-    if (ses.clearDraftNext) { msg.clear_draft = true; ses.clearDraftNext = false; }
-    // optimistic: show the message immediately (greyed) so there's no gap
-    // before its real transcript prompt arrives over SSE — drainPending swaps
-    // in the real bubble when it lands (see the optimistic-bubbles section).
-    // Only for typed text (empty send = attachments only: nothing to preview).
-    const pend = text ? addPending(ses, text) : null;
-    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/message", msg,
-             { audit: "send", auditData: { chars: (text || "").length } })
-      .then(d => {
-        ta.value = ""; autoGrow(ta); tray.clear(); ses.histIdx = null;
-        if (d && d.queued) {
-          // queued mid-turn — the pinned ⧗ queued bubble owns this until
-          // delivery; drop the stand-in so the two representations don't double up
-          if (pend) settlePending(pend, "dropped", { reason: "queued" });
-          ses.queue.push({ text });
-          renderQueue();
-          saveQueue(ses);
-          toast("done", "message queued", "delivers when this turn ends");
-        } else {
-          toast("done", "message sent", "");
-        }
-      })
-      .catch(e => {
-        // send-start cleared the stash optimistically; the box keeps its text,
-        // so re-persist it — a reload mustn't lose an unsent message
-        if (pend) settlePending(pend, "dropped", { reason: "send-failed" });
-        toast("ask", "send failed", (e && e.error) || "");
-        clientFail(sid, "send", e, text.length);
-        saveComposerDraft(ses, sid);
-      })
-      .finally(() => {
-        // refocus for the next message — except on an iPad, where it would
-        // yank the on-screen keyboard back up after a button-tap send
-        if (ses.composer === ta) {
-          ta.disabled = !canSend; btn.disabled = !canSend;
-          if (!IS_IPAD) ta.focus();
-        }
-      });
+    (canResume ? composerResume : composerSend)(C, text, atts);
   };
   // cosmetic busy hint: the send button reads "queue" while a turn is running
   // (kept fresh by the `tab` SSE event; the server's verdict stays authoritative)
@@ -825,3 +850,90 @@ function buildComposer() {
 // timeout: a launch that never produces a session (claude failed to start)
 // must not yank the browser somewhere minutes later.
 const JUMP_TIMEOUT_MS = 120000;
+
+
+/* ---------- optimistic prompt bubbles (this composer's own send) ---------- */
+// The .md body of a not-yet-delivered prompt bubble (the optimistic stand-in and
+// the pinned queued bubble): the text with hard line breaks, textContent only —
+// never innerHTML, since an undelivered prompt must never interpret markup.
+// The leading "/command" of a message, when it NAMES a real command — the
+// deliberate cross-language twin of the server's `_lead_cmd`
+// (dashboard/opshtml/tools.py), which tints the transcript bubbles IT renders.
+// This one serves the two bubbles the page builds itself and the server never
+// sees: the optimistic stand-in and the ⧗ queued chip. The name list is the
+// SERVER's (meta.commands, from the same plugins.slash_commands the "/" menu
+// uses), so the two renderers can't disagree about what a real command is.
+function leadCmd(text) {
+  const names = (S.ses && S.ses.meta && S.ses.meta.commands) || null;
+  if (!names || !names.length || !(text || "").startsWith("/")) return "";
+  const m = /^\/(\S+)(?=\s|$)/.exec(text);
+  return m && names.indexOf(m[1]) >= 0 ? m[0] : "";
+}
+
+function promptMd(text) {
+  const md = el("div", "md");
+  const p = el("p");
+  const tok = leadCmd(text);
+  (text || "").split("\n").forEach((line, i) => {
+    if (i) p.append(el("br"));
+    if (!i && tok)                       // the token can only lead the FIRST line
+      p.append(el("span", "cmdtok", tok), tnode(line.slice(tok.length)));
+    else
+      p.append(tnode(line));
+  });
+  md.append(p);
+  return md;
+}
+
+// Plain-text bubble mirroring opshtml.msg_html's .msg.prompt shape, minus the
+// rewind ↶ (a not-yet-delivered prompt isn't re-runnable).
+function pendingBubble(text) {
+  const d = el("div", "msg prompt pending");
+  d.append(el("span", "who", "you"));
+  d.append(promptMd(text));
+  return d;
+}
+
+// Create + track the optimistic stand-in for a send; returns its pend handle.
+function addPending(ses, text) {
+  const node = pendingBubble(text);
+  const w = ses.stream.querySelector(".waiting");
+  if (w) w.remove();
+  ses.stream.insertBefore(node, ses.stream.firstChild);
+  const pend = { text, node, ses, sid: S.cur, t0: performance.now(), timer: null };
+  ses.pending.push(pend);
+  hintAudit(pend, "shown");
+  // watchdog: a stand-in still unreconciled after STALE_HINT_MS is a stuck
+  // grey bubble — the failure this audit exists to catch. Fire the beacon once
+  // and KEEP the node (the user is still staring at grey; the row is the
+  // breadcrumb). Cleared by settlePending / leaveSession on a clean outcome.
+  pend.timer = setTimeout(() => {
+    pend.timer = null;
+    if (pend.ses.pending.indexOf(pend) >= 0) hintAudit(pend, "stale");
+  }, STALE_HINT_MS);
+  return pend;
+}
+
+// Tear a stand-in down (matched | queued | send-failed) and audit the outcome.
+function settlePending(pend, phase, extra) {
+  if (!pend) return;
+  if (pend.timer) { clearTimeout(pend.timer); pend.timer = null; }
+  const i = pend.ses.pending.indexOf(pend);
+  if (i >= 0) pend.ses.pending.splice(i, 1);
+  if (pend.node) pend.node.remove();
+  hintAudit(pend, phase, extra);
+}
+
+function drainPending(items) {
+  const ses = S.ses;
+  if (!ses || !ses.pending || !ses.pending.length) return;
+  for (const it of items) {
+    if (it.t !== "msg" || it.kind !== "prompt") continue;
+    const real = (it.text || "").trim();
+    // suffix match (promptMatches — the one rule, shared with drainQueue and
+    // mirrored server-side): the delivered prompt may carry attachment mentions
+    // OR a terminal-restored draft in front of what we sent.
+    const i = ses.pending.findIndex(p => promptMatches(real, p.text));
+    if (i >= 0) settlePending(ses.pending[i], "reconciled");
+  }
+}
