@@ -2,7 +2,6 @@
 # the web: AskUserQuestion (the ask card) and ExitPlanMode (the plan card). Both
 # match a pending kv stash before a single key is pressed, then drive the real
 # on-screen dialog through dashboard/askdialog.py / plandialog.py.
-import re
 from functools import partial
 
 from core import state as ST
@@ -14,12 +13,6 @@ from dashboard.read.mirror import (heal_stash)
 from dashboard.read.session import (ask_pending, plan_pending)
 
 A = load_audit()
-
-# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
-# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
-# `interrupt-probe` capture's phase; the interrupt's liveness decision is
-# screen-delta, so this pattern's version-fragility is harmless.
-_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
 
 
 class _DialogMixin:

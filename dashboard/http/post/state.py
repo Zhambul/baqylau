@@ -3,7 +3,6 @@
 # per-directory drafts, the notify mute + global toggle, the mirror view mode,
 # hidden directories, and the Web Push subscriptions. Some land in the session's
 # own kv, the rest in the durable global prefs store (dashboard/prefs.py).
-import re
 import time
 
 from core import state as ST
@@ -15,12 +14,6 @@ from dashboard.read.lists import (dir_live_sessions)
 from dashboard.notify.notifier import NOTIFIER
 
 A = load_audit()
-
-# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
-# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
-# `interrupt-probe` capture's phase; the interrupt's liveness decision is
-# screen-delta, so this pattern's version-fragility is harmless.
-_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
 
 
 class _StateMixin:

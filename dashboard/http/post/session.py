@@ -1,7 +1,6 @@
 # dashboard/http/post/session.py — the SESSION-LIFECYCLE POSTs: launch a new
 # tab (also the parked "resume & send" path), migrate a session to another
 # subscription account, and rename one.
-import re
 import threading
 import os
 import time
@@ -19,12 +18,6 @@ from dashboard.control import launch
 from dashboard.control.launch import launch_argv
 
 A = load_audit()
-
-# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
-# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
-# `interrupt-probe` capture's phase; the interrupt's liveness decision is
-# screen-delta, so this pattern's version-fragility is harmless.
-_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
 
 
 class _SessionMixin:

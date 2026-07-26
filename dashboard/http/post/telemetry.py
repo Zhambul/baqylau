@@ -3,7 +3,6 @@
 # failure, the per-gesture transport/SSE/JS-error timeline) plus the presence
 # heartbeats. Audit-only or in-memory; none of it writes session state or
 # surfaces an error to the page (docs/dashboard.md, *Frontend audit*).
-import re
 
 from core.noaudit import load_audit
 from dashboard.config import (CLIENTLOG_MAX)
@@ -11,12 +10,6 @@ from dashboard.http.base import valid_sid
 from dashboard.notify.presence import mark_device, mark_viewing
 
 A = load_audit()
-
-# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
-# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
-# `interrupt-probe` capture's phase; the interrupt's liveness decision is
-# screen-delta, so this pattern's version-fragility is harmless.
-_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
 
 
 class _TelemetryMixin:

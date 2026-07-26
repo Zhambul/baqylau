@@ -17,12 +17,6 @@ from dashboard.http.base import valid_sid
 
 A = load_audit()
 
-# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
-# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
-# `interrupt-probe` capture's phase; the interrupt's liveness decision is
-# screen-delta, so this pattern's version-fragility is harmless.
-_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
-
 
 class _FilesMixin:
     """Attachment staging, clipboard path resolution, dictation grants."""

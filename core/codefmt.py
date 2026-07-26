@@ -136,9 +136,6 @@ def _fmt_python(text):
     return lead + pretty + trail
 
 
-_BASH_SPLIT = ("&&", "||", "|", ";")
-
-
 def _fmt_bash(text):
     """Reflow a dense bash one-liner: break after top-level `&&` / `||` / `|` and turn
     `;` into a line break. Only touches genuine one-liners (already-multi-line commands,

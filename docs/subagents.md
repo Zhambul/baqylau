@@ -59,10 +59,14 @@ for the counters these streams feed).
     command (`hookkit.stream_env` → `CLAUDE_STREAM_CMD`) and the tailer decides
     (see *Where detection runs* in [mirror-pane.md](mirror-pane.md)) — so a subagent's `cat Foo.kt` colours too.
   - **Per-turn context fill.** Every assistant turn carries a `message.usage`, so the
-    streamer prints a colour-coded `<type> ctx N% · used/max` line once per turn —
-    `input + cache_creation + cache_read` tokens over the window (**< 30% green,
-    < 60% amber, else red**; thresholds tunable via `CLAUDE_MIRROR_CTX_WARN` /
-    `CLAUDE_MIRROR_CTX_CRIT`). The **window is derived from the model**, not a flag or
+    streamer prints a `<type> ctx N% · used/max` tag once per turn —
+    `input + cache_creation + cache_read` tokens over the window. It is painted as
+    **dark text inside the operation chip**, whose solid background already carries
+    the identity hue, so there is deliberately no inline threshold colour: the
+    earlier green/amber/red cutoffs (and their `CLAUDE_MIRROR_CTX_WARN` /
+    `CLAUDE_MIRROR_CTX_CRIT` knobs) are gone — they had in fact stopped being read
+    when the tag moved into the chip, and survived here as documentation for two
+    dead constants until 2026-07-26. The **window is derived from the model**, not a flag or
     self-correct: Haiku → 200k; `[1m]` / Opus 5 / Opus 4.6-4.8 / Sonnet 5 / Fable 5 /
     Sonnet 4.6 → 1M; older/unknown → 200k; `CLAUDE_CODE_DISABLE_1M_CONTEXT=1` caps at
     200k. Note the list keys on **pinned ids**, not just the aliases: Opus 5 has no

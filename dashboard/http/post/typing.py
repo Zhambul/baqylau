@@ -2,7 +2,6 @@
 # session's kitty window: message, quick command, stop (close the tab), and the
 # two rewind gestures. Every one of them resolves the AUTHORITATIVE live window
 # first (_resolve_live_window) and audits its own `web-*` state_files row.
-import re
 import time
 
 from core import sessionapi as API
@@ -18,12 +17,6 @@ from dashboard.control import launch
 from dashboard.read.session import (ask_pending, plan_pending)
 
 A = load_audit()
-
-# A Claude Code thinking-spinner gerund (a spinner glyph, then a word, then the
-# `…` ellipsis — e.g. `✻ Sock-hopping…`). DIAGNOSTIC ONLY: it labels an
-# `interrupt-probe` capture's phase; the interrupt's liveness decision is
-# screen-delta, so this pattern's version-fragility is harmless.
-_SPIN_RE = re.compile(r"[^\s\w]\s+\w[\w-]*…")
 
 
 class _TypingMixin:
