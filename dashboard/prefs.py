@@ -80,6 +80,20 @@ def _connect():
     return conn
 
 
+def _upsert(conn, key, obj):
+    """Write `obj` (JSON) under `key` on an OPEN connection — the one spelling
+    of this store's upsert, shared by set() and mutate_map(). Deliberately NOT
+    shared with core/state.py's identical statement: that is a DIFFERENT
+    database with a different lifecycle (per-session, never created by a read),
+    and the two kv tables match by convention, not by contract — a column added
+    to one must not silently propagate to the other. `ensure_ascii=False`
+    matches state's for the same reason it matters there: the values carry
+    non-ASCII prose and glyphs, and an escaped copy would not compare equal."""
+    conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
+                 "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
+                 (key, json.dumps(obj, ensure_ascii=False)))
+
+
 def get(key, default=None):
     """The stored value for `key` (JSON-decoded), or `default` when absent /
     unreadable."""
@@ -107,9 +121,7 @@ def set(key, obj):
         _audit_fail("connect", key)
         return False
     try:
-        conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                     (key, json.dumps(obj, ensure_ascii=False)))
+        _upsert(conn, key, obj)
         conn.commit()
         return True
     except Exception:
@@ -149,9 +161,7 @@ def mutate_map(key, fn):
             if not isinstance(d, dict):
                 d = {}
             fn(d)
-            conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
-                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                         (key, json.dumps(d, ensure_ascii=False)))
+            _upsert(conn, key, d)
             conn.commit()
             return d
         except Exception:

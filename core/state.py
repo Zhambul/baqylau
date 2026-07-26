@@ -518,35 +518,84 @@ def _rw(path):
         return None
 
 
+def _read_at(path, body, default):
+    """Run `body(conn)` against a fresh READ-ONLY connection to `path` and
+    return its result — or `default` for every miss: a missing/unopenable file
+    (`_ro` said None) or a raise inside the body. Closes the connection either
+    way.
+
+    The six path-keyed readers below were six copies of this
+    open / guard-None / try / except-default / finally-close frame, differing
+    only in the query and the miss value. As one frame the swallow contract is
+    stated once and a reader is just its query."""
+    conn = _ro(path)
+    if conn is None:
+        return default
+    try:
+        return body(conn)
+    except Exception:
+        return default
+    finally:
+        conn.close()
+
+
+def _write_at(path, body, default=False):
+    """The write twin of _read_at: `body(conn)` against a fresh mode=rw
+    connection (never CREATES — the file's existence is the session-alive
+    signal), `default` on any miss, connection closed either way. The body owns
+    its own commit, because one of the three (kv_cas_seq_at) commits through
+    `immediate()` rather than a bare conn.commit()."""
+    conn = _rw(path)
+    if conn is None:
+        return default
+    try:
+        return body(conn)
+    except Exception:
+        return default
+    finally:
+        conn.close()
+
+
+# The kv row's wire form, in one place: the upsert statement and the JSON
+# encoding of its value. Three writers used to spell both out — kv_set (the
+# cached live-path connection), kv_set_at / kv_cas_seq_at (the fresh per-call
+# ones). `ensure_ascii=False` is load-bearing, not taste: the values carry the
+# op vocabulary's non-ASCII glyphs and users' prose, and an escaped copy would
+# not compare equal to a value written by the other spelling.
+_KV_UPSERT = ("INSERT INTO kv(key, val) VALUES(?, ?) "
+              "ON CONFLICT(key) DO UPDATE SET val = excluded.val")
+
+
+def _kv_val(obj):
+    return json.dumps(obj, ensure_ascii=False)
+
+
+def _kv_read(conn, key):
+    """The decoded kv value for `key` on an OPEN connection, or None — the read
+    half of the same pair. kv_get, kv_at and the CAS guard's own read each
+    carried this SELECT + json.loads. Raises on a corrupt row: the two plain
+    readers want that (their frame turns it into their miss value), and the CAS
+    guard keeps its OWN catch at the call site, because there a corrupt row must
+    read as seq 0 so the write that follows heals it."""
+    row = conn.execute("SELECT val FROM kv WHERE key=?", (key,)).fetchone()
+    return json.loads(row[0]) if row else None
+
+
 def stats_at(path):
     """stats() over an explicit DB path (live or parked), read-only. {} when
     missing/unreadable — same silent-probe contract as tabs.sq()."""
-    conn = _ro(path)
-    if conn is None:
-        return {}
-    try:
-        return _stats_from(conn)
-    except Exception:
-        return {}
-    finally:
-        conn.close()
+    return _read_at(path, _stats_from, {})
 
 
 def agents_at(path):
     """Every per-agent record (the agents table) as {agent_id: {slot, desc, pos,
     done, start_ts}}, read-only over an explicit DB path. {} when missing."""
-    conn = _ro(path)
-    if conn is None:
-        return {}
-    try:
+    def read(conn):
         return {aid: {"slot": slot, "desc": desc, "pos": pos,
                       "done": done, "start_ts": ts}
                 for aid, slot, desc, pos, done, ts in conn.execute(
                     "SELECT agent_id, slot, desc, pos, done, start_ts FROM agents")}
-    except Exception:
-        return {}
-    finally:
-        conn.close()
+    return _read_at(path, read, {})
 
 
 def live_at(path):
@@ -561,18 +610,12 @@ def live_at(path):
     slots.claim() does (readers never write). [] when the file is missing. The
     `key` column IS the entry's identity (slot index or agent_id); `slot` is the
     palette index."""
-    conn = _ro(path)
-    if conn is None:
-        return []
-    try:
+    def read(conn):
         return [{"kind": kind, "key": key, "pid": pid, "slot": idx,
                  "start_ts": ts, "alive": pid_alive(pid)}
                 for kind, key, pid, idx, ts in conn.execute(
                     "SELECT kind, key, pid, idx, start_ts FROM live")]
-    except Exception:
-        return []
-    finally:
-        conn.close()
+    return _read_at(path, read, [])
 
 
 def kv_at(path, key):
@@ -580,16 +623,7 @@ def kv_at(path, key):
     session's kv rows (the click-to-view `view:<gid>` stashes) without the
     live-path connect(), which would CREATE the DB and fake the session-alive
     signal. None when missing/unreadable."""
-    conn = _ro(path)
-    if conn is None:
-        return None
-    try:
-        row = conn.execute("SELECT val FROM kv WHERE key=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else None
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    return _read_at(path, lambda conn: _kv_read(conn, key), None)
 
 
 def kv_del_at(path, key):
@@ -599,17 +633,11 @@ def kv_del_at(path, key):
     thread that created it, so a call from another thread silently no-ops
     inside its swallow. mode=rw (never creates — the file's existence is the
     session-alive signal). True when the row is gone, else False."""
-    conn = _rw(path)
-    if conn is None:
-        return False
-    try:
+    def write(conn):
         conn.execute("DELETE FROM kv WHERE key=?", (key,))
         conn.commit()
         return True
-    except Exception:
-        return False
-    finally:
-        conn.close()
+    return _write_at(path, write)
 
 
 def kv_set_at(path, key, obj):
@@ -619,19 +647,11 @@ def kv_set_at(path, key, obj):
     thread that created it, so a call from another thread silently no-ops
     inside its swallow. mode=rw (never creates — the file's existence is the
     session-alive signal). True on write, else False."""
-    conn = _rw(path)
-    if conn is None:
-        return False
-    try:
-        conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                     (key, json.dumps(obj, ensure_ascii=False)))
+    def write(conn):
+        conn.execute(_KV_UPSERT, (key, _kv_val(obj)))
         conn.commit()
         return True
-    except Exception:
-        return False
-    finally:
-        conn.close()
+    return _write_at(path, write)
 
 
 def kv_cas_seq_at(path, key, obj):
@@ -645,31 +665,22 @@ def kv_cas_seq_at(path, key, obj):
     the old read-then-kv_set_at guard missed — a queued send's clear lost to its
     own in-flight debounced save, 2026-07-22). mode=rw (never creates the DB).
     Returns "written", "stale" (rejected as older), or None (DB unreachable)."""
-    conn = _rw(path)
-    if conn is None:
-        return None
-    try:
+    def write(conn):
         with immediate(conn):
-            row = conn.execute("SELECT val FROM kv WHERE key=?",
-                               (key,)).fetchone()
-            prev_seq = 0
-            if row:
-                try:
-                    prev = json.loads(row[0])
-                    prev_seq = (prev.get("seq") if isinstance(prev, dict) else 0) or 0
-                except Exception:
-                    prev_seq = 0
+            try:
+                prev = _kv_read(conn, key)
+            except Exception:
+                # a CORRUPT stored row reads as seq 0 so the write below HEALS
+                # it — deliberately NOT the outer frame's hard miss, which would
+                # make every save of this key fail forever
+                prev = None
+            prev_seq = (prev.get("seq") if isinstance(prev, dict) else 0) or 0
             seq = (obj.get("seq") if isinstance(obj, dict) else 0) or 0
             if seq and prev_seq and seq < prev_seq:
                 return "stale"
-            conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
-                         "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                         (key, json.dumps(obj, ensure_ascii=False)))
+            conn.execute(_KV_UPSERT, (key, _kv_val(obj)))
         return "written"
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    return _write_at(path, write, None)
 
 
 def ops_at(path, after_id=0):
@@ -677,16 +688,10 @@ def ops_at(path, after_id=0):
     twin of ops_after() (which serves the live session through the cached writer
     connection). Same decode-and-skip contract; no reset probe (a parked DB is
     never recreated under a reader)."""
-    conn = _ro(path)
-    if conn is None:
-        return after_id, []
-    try:
+    def read(conn):
         rows = _select_ops(conn, after_id)
         return (rows[-1][0] if rows else after_id), _decode_ops(rows)
-    except Exception:
-        return after_id, []
-    finally:
-        conn.close()
+    return _read_at(path, read, (after_id, []))
 
 
 def hand_peek_at(path, key):
@@ -696,16 +701,11 @@ def hand_peek_at(path, key):
     without the live-path connect(), which would CREATE the DB and fake the
     session-alive signal). Never consumes: a reader must not eat the record the
     real consumer (PostToolUse) is waiting for. None when missing/unreadable."""
-    conn = _ro(path)
-    if conn is None:
-        return None
-    try:
-        row = conn.execute("SELECT val FROM handoffs WHERE key=?", (key,)).fetchone()
+    def read(conn):
+        row = conn.execute("SELECT val FROM handoffs WHERE key=?",
+                           (key,)).fetchone()
         return json.loads(row[0]) if row else None
-    except Exception:
-        return None
-    finally:
-        conn.close()
+    return _read_at(path, read, None)
 
 
 def transcript_fold(log, fold):
@@ -775,8 +775,7 @@ def kv_get(log, key):
     if conn is None:
         return None
     try:
-        row = conn.execute("SELECT val FROM kv WHERE key=?", (key,)).fetchone()
-        return json.loads(row[0]) if row else None
+        return _kv_read(conn, key)
     except Exception:
         return None
 
@@ -786,9 +785,7 @@ def kv_set(log, key, obj):
     if conn is None:
         return False
     try:
-        conn.execute("INSERT INTO kv(key, val) VALUES(?, ?) "
-                     "ON CONFLICT(key) DO UPDATE SET val = excluded.val",
-                     (key, json.dumps(obj, ensure_ascii=False)))
+        conn.execute(_KV_UPSERT, (key, _kv_val(obj)))
         conn.commit()
         return True
     except Exception:
