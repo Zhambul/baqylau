@@ -241,7 +241,7 @@ def test_unknown_command_prints_usage(test_env):
     docstring + the COMMANDS-derived command list, so it can't go stale) and
     exit 0. The old `__doc__ or …` fallback was dead: the header was a comment
     block, so users only ever saw 'see module docstring for usage'."""
-    from core import audit as A
+    from core import auditcli as A          # the read/report tier owns the CLI
     for args in (("definitely-not-a-command",), ()):
         p = cli(test_env, *args)
         assert p.returncode == 0, p.stderr
@@ -278,8 +278,12 @@ def test_sql_command_is_read_only(test_env):
 
 def test_swallow_set_derived_from_command_table():
     """The shim's never-fail-loudly set is WRITE_COMMANDS, derived from the one
-    command table — the hand-maintained copy it replaced had already drifted."""
-    from core import audit as A
+    command table — the hand-maintained copy it replaced had already drifted.
+
+    Both live in core/auditcli.py: bin/claude-audit.py imports THAT module, so a
+    table that stayed behind in core/audit.py would leave the shim swallowing
+    nothing."""
+    from core import auditcli as A
     assert A.WRITE_COMMANDS == {n for n, (_, w) in A.COMMANDS.items() if w}
     for name, (fn, write) in A.COMMANDS.items():
         assert callable(fn), name
@@ -319,7 +323,7 @@ def test_anomalies_registry_smoke(test_env):
     """Every registry entry is well-formed and its SQL executes against the
     real schema (a bad query would blind the whole triage path)."""
     import sqlite3
-    from core import audit as A
+    from core import auditcli as A
     poison(test_env,                # force schema creation via the product path
            "INSERT INTO errors(ts,session_id,script,func,traceback,context,pid)"
            " VALUES(1,?,'x.py','f','tb','{}',1)", (SID,))

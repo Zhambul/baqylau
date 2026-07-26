@@ -74,16 +74,20 @@ def test_load_audit_returns_real_module():
 def test_no_module_bypasses_load_audit():
     """core/noaudit.py is the ONE audit-import-degradation helper: no other
     module may define its own _NoAudit-style stub, and every module gets its
-    audit handle via load_audit() rather than importing core.audit directly
-    (bin/claude-audit.py, the audit CLI entry over the audit module itself, is
-    the sole sanctioned direct import). Grep-style pin, like the semantic
-    colour-table test in test_l5_render.py."""
+    audit handle via load_audit() rather than importing core.audit directly.
+
+    Two sanctioned direct importers, both of them the CLI: core/auditcli.py (the
+    read/report tier — it IS a layer over the audit module, and a degrading stub
+    would leave its queries with nothing to query) and bin/claude-audit.py, its
+    entry. Grep-style pin, like the semantic colour-table test in
+    test_l5_render.py."""
     import os
     import re
     stub_pat = re.compile(r"class\s+_?NoAudit\b")
     imp_pat = re.compile(r"^\s*from core import audit\b|^\s*import core\.audit\b",
                          re.MULTILINE)
-    allowed_import = {"core/noaudit.py", "bin/claude-audit.py"}
+    allowed_import = {"core/noaudit.py", "core/auditcli.py",
+                      "bin/claude-audit.py"}
     offenders = []
     for root, dirs, files in os.walk(REPO):
         dirs[:] = [d for d in dirs if d not in

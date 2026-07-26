@@ -99,7 +99,12 @@ supersedes `render.markdown()` and falls back to it when `wenmode` is absent),
 pygments, no background panel), `coderender.py` (a generic `CodeStreamer(lexer)`
 that colours a source file — `.py`/`.java`/`.kt`/`.sh` — via the pygments lexer
 named by its extension in `LANGS`; reuses `render.pick`), `audit.py` (the audit
-trail — was `claude_audit.py`), `ops.py` (paint ops, `emit`, the scoreboard
+trail's WRITE path — the tables, the migrations, the `A.*` row writers, the
+spool degradation; imported by every hook process on every event, which is why
+its read/report half is `auditcli.py` — the `bin/claude-audit.py` subcommands,
+the `ANOMALY_SECTIONS` catalogue and the row formatters, 638 lines that no hook
+runs. `auditcli` imports `audit` through the public `A.connect()`, never the
+reverse), `ops.py` (paint ops, `emit`, the scoreboard
 counters/parts, the semantic colour table — the tool-agnostic half of the old
 `claude_ops.py`), `hostpane.py` (the tool-AGNOSTIC host mirror lifecycle —
 open/close the mirror pane + scoreboard bar, create/restore/park the state DB;

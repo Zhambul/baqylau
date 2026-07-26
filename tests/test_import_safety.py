@@ -138,6 +138,35 @@ def test_per_event_imports_stay_off_the_heavy_renderers():
             % (module, ", ".join(heavy)))
 
 
+_CLI_TIER_PROG = """
+import sys
+sys.argv = ["import-direction-test"]
+import %s
+assert "core.auditcli" not in sys.modules, (
+    "the audit's read/report tier reached the write path's import graph")
+print("OK")
+"""
+
+
+def test_the_audit_write_path_never_imports_its_report_tier():
+    """core/audit.py is imported by EVERY hook process on EVERY event; its
+    read/report tier (core/auditcli.py — the ANOMALY_SECTIONS catalogue, the row
+    formatters, the command table) is imported by exactly one caller,
+    bin/claude-audit.py.
+
+    The dependency runs auditcli -> audit and must never invert. The regression
+    direction is the one that looks harmless: a query helper in auditcli that
+    audit.py "just needs", or a convenience re-export added so an old
+    `A.cli_timeline` call site keeps working — either would put 638 lines of
+    reporting back on the per-event path and undo the split. Pinned as an
+    outcome (the module is absent from sys.modules), not as a grep."""
+    for module in ["core.audit", "core.noaudit"] + _PER_EVENT:
+        r = subprocess.run([sys.executable, "-c", _CLI_TIER_PROG % module],
+                           cwd=REPO, capture_output=True, text=True,
+                           timeout=30, check=False)
+        assert r.returncode == 0, "%s pulls in core.auditcli:\n%s" % (module, r.stderr)
+
+
 _STREAM_PROG = """
 import sys, os
 sys.argv = ["import-safety-test"]          # no argv contract available

@@ -30,7 +30,7 @@ stuck blue or a block never closed, the evidence evaporated with the processes.
   per-session table including `pane_events` (once omitted from the prune loops,
   which grew it unboundedly with permanently orphaned rows).
 
-What's recorded (all tables keyed by `session_id`, written by `core/audit.py`):
+What's recorded (all tables keyed by `session_id`, written by `core/audit.py` — the read/report side, every `bin/claude-audit.py` subcommand plus the `ANOMALY_SECTIONS` catalogue, lives in `core/auditcli.py`, which imports it and is imported by nothing but the CLI entry):
 
 | table | one row per |
 |---|---|
