@@ -20,7 +20,7 @@ from plugins.claude_code import memory as MEM
 A = load_audit()
 
 
-def _heal_stash(sid, log, sdb, key, step):
+def heal_stash(sid, log, sdb, key, step):
     """An endpoint's `open` bail means the dialog is GONE while the stash
     lingers (resolved in the terminal; the turn-boundary clear hasn't fired
     yet) — drop the stash so the page's card clears on the next SSE tick
@@ -48,7 +48,7 @@ def _enrich_entry(ent):
     `output_html`. Raw fields are left untouched (the API shape stays additive;
     app.js falls back to pre(text)/JSON when a field is absent — an older
     provider, or a tool with no rich render). The ONE post-processor both the
-    REST timelines (_mdify) and the live SSE increments run."""
+    REST timelines (mdify) and the live SSE increments run."""
     t = ent.get("t")
     if t in ("message", "prompt", "recap"):
         ent["html"] = opshtml.md_html(ent.get("text", ""))
@@ -65,20 +65,20 @@ def _enrich_entry(ent):
     return ent
 
 
-def _enrich_entries(entries):
+def enrich_entries(entries):
     for ent in entries:
         _enrich_entry(ent)
     return entries
 
 
-def _mdify(tl):
+def mdify(tl):
     """Enrich a whole timeline dict (plugins.activity result) in place — the
     REST /activity and /agent post-processor. See _enrich_entry."""
-    _enrich_entries((tl or {}).get("entries", []))
+    enrich_entries((tl or {}).get("entries", []))
     return tl
 
 
-def _conv_items(recs, cmds=()):
+def conv_items(recs, cmds=()):
     """Conversation records -> stream items. Additively carry `kind`
     (prompt|message|teammsg|question|answer|recap) and, for prompts, the raw `text`:
     the page's queued-message chips match a DELIVERED prompt against what they
@@ -137,7 +137,7 @@ def merge_live(ops, recs, key="", cmds=()):
     while i < len(ops) and j < len(recs):
         ot, rt = ops[i].get("_ts"), recs[j].get("ts")
         if rt is not None and (ot is None or rt < ot):
-            items.extend(_conv_items([recs[j]], cmds))
+            items.extend(conv_items([recs[j]], cmds))
             j += 1
         else:
             items.extend(opshtml.op_items([ops[i]], key))
@@ -145,7 +145,7 @@ def merge_live(ops, recs, key="", cmds=()):
     for op in ops[i:]:
         items.extend(opshtml.op_items([op], key))
     if j < len(recs):
-        items.extend(_conv_items(recs[j:], cmds))
+        items.extend(conv_items(recs[j:], cmds))
     return items
 
 
@@ -278,12 +278,12 @@ def _snap(entries, start):
 
 def _render_window(entries, start, key, cmds=()):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
-    op_items, msg entries through _conv_items. Only the windowed slice is
+    op_items, msg entries through conv_items. Only the windowed slice is
     rendered — the whole point of the block cut."""
     out = []
     for _slot, kind, obj in entries[start:]:
         out.extend(opshtml.op_items([obj], key) if kind == "op"
-                   else _conv_items([obj], cmds))
+                   else conv_items([obj], cmds))
     return out
 
 

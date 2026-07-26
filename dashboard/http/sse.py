@@ -18,15 +18,15 @@ from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.control import launch
 from dashboard.notify.notifier import NOTIFIER
 from dashboard.read.lists import (sessions_payload,
-                                  _row_key, _wire_row)
+                                  row_key, wire_row)
 from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
-                                 session_title, _session_slug)
-from dashboard.read.mirror import (merged_backlog, merge_live, _enrich_entries)
+                                 session_title, session_slug)
+from dashboard.read.mirror import (merged_backlog, merge_live, enrich_entries)
 from dashboard.read.session import (agents_ctx, agents_model_effort,
-                                    memory_count, visible_agents, _ask_draft,
-                                    _ask_pending, _ask_wire, _composer_draft, _composer_queue,
-                                    _plan_pending, _session_tasks,
-                                    _input_box, _SUGGEST_TABS)
+                                    memory_count, visible_agents, ask_draft,
+                                    ask_pending, ask_wire, composer_draft, composer_queue,
+                                    plan_pending, session_tasks,
+                                    input_box, SUGGEST_TABS)
 
 A = load_audit()
 
@@ -121,7 +121,7 @@ _SLOW_CHANS = (
     # the pinned tasks card — a task create / status flip re-stashes the
     # `tasks` kv (task_fmt.py). Slow: tasks change per-hook, not per-keystroke,
     # and nobody is blocked waiting on this card, unlike ask/plan
-    _Chan("tasks", "tasks", lambda c: _session_tasks(c.sid), "tasks"),
+    _Chan("tasks", "tasks", lambda c: session_tasks(c.sid), "tasks"),
     # the pinned goal card — the active `/goal` scanned from the transcript
     # tail (read-side, no hook fires). Slow, for the same reason as tasks
     _Chan("goal", "goal", lambda c: session_goal(c.tpath), "goal"),
@@ -130,11 +130,11 @@ _SLOW_CHANS = (
     # page skips the repaint while its own box has focus). Slow: a draft is
     # convenience state, no one is blocked on it (unlike the dialogs)
     _Chan("composer_draft", "composer-draft",
-          lambda c: _composer_draft(c.sid), "draft"),
+          lambda c: composer_draft(c.sid), "draft"),
     # the pending queued-message chips — so a reload / another device restores
     # what the TUI still holds unqueued (convenience state, like the draft)
     _Chan("composer_queue", "composer-queue",
-          lambda c: _composer_queue(c.sid), "queue"),
+          lambda c: composer_queue(c.sid), "queue"),
     # the mirror's VIEW MODE — so switching density on the phone re-renders the
     # desktop page already open on this session, instead of it holding the old
     # mode until a reload. The pref itself has always been server-side and
@@ -205,7 +205,7 @@ class _SseMixin:
         local, so building it every tick is side-effect free). Returns False
         when the client dropped — the caller MUST `return` on False.
 
-        Sites whose payload is EXPENSIVE or gated (e.g. `ask`'s _ask_wire
+        Sites whose payload is EXPENSIVE or gated (e.g. `ask`'s ask_wire
         transcript read, built only when the ask changed) stay INLINE — folding
         them here would build the payload on every unchanged tick."""
         if value != prev.get(key):
@@ -257,17 +257,17 @@ class _SseMixin:
         viewer — deltas are a few KB/min; the sid set + order pin the list
         layout, so a delta can always merge in place by sid), plus every
         `notify` toast the watcher pushes. Row diffs are paused-blind
-        (_row_key) and rows are wire-stripped (_wire_row)."""
+        (row_key) and rows are wire-stripped (wire_row)."""
         self._sse_start()
         q = NOTIFIER.register()
         try:
             if not self._sse("hello", {"boot": BOOT_ID}):
                 return
             beat = time.monotonic()
-            wire = [_wire_row(r) for r in sessions_payload()]
+            wire = [wire_row(r) for r in sessions_payload()]
             if not self._sse("sessions", wire):
                 return
-            keys = {r["sid"]: _row_key(r) for r in wire}
+            keys = {r["sid"]: row_key(r) for r in wire}
             while True:
                 drained = False
                 try:
@@ -278,8 +278,8 @@ class _SseMixin:
                             return
                 except queue.Empty:
                     pass
-                wire = [_wire_row(r) for r in sessions_payload()]
-                cur = {r["sid"]: _row_key(r) for r in wire}
+                wire = [wire_row(r) for r in sessions_payload()]
+                cur = {r["sid"]: row_key(r) for r in wire}
                 if list(cur) != list(keys):
                     # a session appeared/vanished or the order moved — the
                     # delta contract can't express that; full resync
@@ -367,7 +367,7 @@ class _SseMixin:
                 ctx.adopt(API.session_row(sid) or {})
                 # resolved up front so the agent cards' inherit-default effort
                 # matches the effort quick-button pushed below (one resolve)
-                ctx.eff = plugins.effort_default(ctx.cwd, _session_slug(sid))
+                ctx.eff = plugins.effort_default(ctx.cwd, session_slug(sid))
                 if not self._push_chans(_SLOW_CHANS, prev, ctx):
                     return
             # -- fast channels -------------------------------------------------
@@ -378,21 +378,21 @@ class _SseMixin:
             # the pending modal-dialog cards (fast cadence — the dialog just
             # appeared and the user is waiting); None clears each card
             # change-detect on the RAW stash (a cheap kv read); enrich with the
-            # preamble only when it actually changed (_ask_wire reads the
+            # preamble only when it actually changed (ask_wire reads the
             # transcript — see there)
-            ask = _ask_pending(sid)
+            ask = ask_pending(sid)
             if ask != prev["ask"]:
                 prev["ask"] = ask
-                if not self._sse("ask", {"ask": _ask_wire(sid, ask)}):
+                if not self._sse("ask", {"ask": ask_wire(sid, ask)}):
                     return
             # the unsubmitted-selections draft — so a card open on ANOTHER
             # device tracks this one's edits (the writer suppresses its own
             # echo by `origin`). Only meaningful while an ask is open;
-            # _ask_draft returns None once it's gone, clearing the peer.
-            draft = _ask_draft(sid, ask) if ask else None
+            # ask_draft returns None once it's gone, clearing the peer.
+            draft = ask_draft(sid, ask) if ask else None
             if not self._push_changed(prev, "ask_draft", "ask-draft", draft, {"draft": draft}):
                 return
-            plan = _plan_pending(sid)
+            plan = plan_pending(sid)
             if not self._push_changed(prev, "plan", "plan", plan, {"plan": plan}):
                 return
             # the greyish input-box ghost suggestion (docs/dashboard.md, *Web
@@ -406,11 +406,11 @@ class _SseMixin:
             # the DIALOG's input, not the message box — never read it as one.
             if slow and (ctx.tab != tabs.AWAITING_COMMAND
                          and ask is None and plan is None):
-                ghost, box = _input_box(sid)
+                ghost, box = input_box(sid)
                 # the ghost only exists on a SETTLED tab, and only matters while
                 # the web box is empty (a draft the user is editing elsewhere
                 # would fight it)
-                sug = (ghost if (ctx.tab in _SUGGEST_TABS
+                sug = (ghost if (ctx.tab in SUGGEST_TABS
                                  and prev["composer_draft"] is None) else None)
                 # …the typed half is wanted on ANY tab: typing a follow-up while
                 # Claude works is the main reason to reach for another device,
@@ -434,7 +434,7 @@ class _SseMixin:
     def sse_agent(self, sid, aid, pos):
         """One agent's LIVE drill-down timeline (docs/dashboard.md): appends
         `entries` (new increment entries, server-enriched exactly like the REST
-        /agent endpoint — the shared _enrich_entries) and `resolve`
+        /agent endpoint — the shared enrich_entries) and `resolve`
         (cross-increment tool resolutions — [(tool_use_id, output, failed), …]
         the client applies by data-tool-id) events as the agent's transcript
         grows from byte cursor `pos`, plus heartbeats; stops cleanly on client
@@ -450,7 +450,7 @@ class _SseMixin:
             if got is not None:
                 entries, resolutions, pos = got
                 if entries:
-                    _enrich_entries(entries)
+                    enrich_entries(entries)
                     if not self._sse("entries", {"pos": pos,
                                                  "entries": entries}):
                         return

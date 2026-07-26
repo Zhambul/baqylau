@@ -15,12 +15,12 @@ from dashboard import config, dictate, prefs, webpush
 from dashboard.config import RESUMABLE_MAX
 from dashboard.notify import presence
 from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_payload,
-                                  stats_payload, _wire_row)
+                                  stats_payload, wire_row)
 from dashboard.read.mirror import (history, merged_backlog, note_payload,
                                    ops_payload, view_payload, HISTORY_BLOCKS,
-                                   _mdify)
-from dashboard.read.session import (session_payload, _stamp_agent_cost)
-from dashboard.http.base import _qint, _qstr, _sid
+                                   mdify)
+from dashboard.read.session import (session_payload, stamp_agent_cost)
+from dashboard.http.base import _qint, _qstr, valid_sid
 
 A = load_audit()
 
@@ -95,7 +95,7 @@ class _GetMixin:
         fixed = self._FIXED_GET.get(tuple(api))
         if fixed:
             return getattr(self, fixed)(url)
-        if len(api) >= 2 and api[0] == "session" and _sid(api[1]):
+        if len(api) >= 2 and api[0] == "session" and valid_sid(api[1]):
             return self.route_session(url, api[1], api[2:])
         return self._not_found()
 
@@ -107,11 +107,11 @@ class _GetMixin:
         arity AND its own cursor query params, so the shapes are the routing."""
         if not rest:
             return self.sse_global()
-        if len(rest) == 2 and rest[0] == "session" and _sid(rest[1]):
+        if len(rest) == 2 and rest[0] == "session" and valid_sid(rest[1]):
             return self.sse_session(rest[1], _qint(url, "after"),
                                     _qint(url, "mpos"))
         if len(rest) == 3 and rest[0] == "agent" \
-                and _sid(rest[1]) and _sid(rest[2]):
+                and valid_sid(rest[1]) and valid_sid(rest[2]):
             return self.sse_agent(rest[1], rest[2], _qint(url, "pos"))
         return self._not_found()
 
@@ -137,7 +137,7 @@ class _GetMixin:
 
     # -- the fixed read endpoints --
     def get_sessions(self, url):
-        return self._json([_wire_row(r) for r in sessions_payload()])
+        return self._json([wire_row(r) for r in sessions_payload()])
 
     def get_accounts(self, url):
         return self._json(accounts_payload())
@@ -265,12 +265,12 @@ class _GetMixin:
                            "oldest": oldest, "items": items})
 
     def get_activity(self, sid, url):
-        return self._json(_mdify(plugins.activity(sid)) or {"entries": []})
+        return self._json(mdify(plugins.activity(sid)) or {"entries": []})
 
     def get_agent(self, sid, aid):
-        tl = _mdify(plugins.activity(sid, aid))
+        tl = mdify(plugins.activity(sid, aid))
         if tl is not None:
-            _stamp_agent_cost(tl)
+            stamp_agent_cost(tl)
         return self._json(tl if tl is not None else {"entries": []})
 
     def get_errors(self, sid, url):

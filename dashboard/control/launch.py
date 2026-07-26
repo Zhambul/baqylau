@@ -5,7 +5,7 @@
 # active Frontend resolver, the live-window map (which sids have an open kitty
 # tab), the new-session argv, and the post-launch macOS focus/appearance
 # watches. Imported by the read model (which needs the live-window map) and the
-# HTTP handlers (which drive the writes). The one reverse edge — _launch_wake
+# HTTP handlers (which drive the writes). The one reverse edge — launch_wake
 # nudging the notifier — is a lazy import, so this module stays a leaf.
 import re
 import subprocess
@@ -20,7 +20,7 @@ from core.noaudit import load_audit
 A = load_audit()
 
 
-def _frontend():
+def frontend():
     """The active Frontend for a CONTROL-PLANE write, or None when no terminal
     control channel resolves. The dashboard may be started OUTSIDE kitty (its
     lifecycle is deliberately independent — docs/dashboard.md), so resolve=True
@@ -49,7 +49,7 @@ _LIVE_GRACE_S = 10.0   # a just-started session is EXEMPT from the missing-windo
 #                        demotion for this long. Its audit `sessions` row (with
 #                        kitty_window_id) is written a beat BEFORE its pane is
 #                        tagged claude_session=<sid> (split.cmd_open runs
-#                        A.session_start then tag_window), and _live_windows is
+#                        A.session_start then tag_window), and live_windows is
 #                        memoized up to _LIVE_TTL on top — so a fresh launch would
 #                        momentarily miss the tagged-window map and get demoted to
 #                        not-live, flashing "parked" on a brand-new session (and
@@ -61,7 +61,7 @@ _LIVE_GRACE_S = 10.0   # a just-started session is EXEMPT from the missing-windo
 #                        briefly, which the next tick past the grace corrects.
 
 
-def _within_live_grace(row):
+def within_live_grace(row):
     """True while `row`'s session is inside the just-started grace (see
     _LIVE_GRACE_S) — used to SUPPRESS the missing-window demotion. A parked
     minimal row carries no started_at (None → False), but those never reach the
@@ -70,7 +70,7 @@ def _within_live_grace(row):
     return bool(st) and (time.time() - st) < _LIVE_GRACE_S
 
 
-def _live_windows():
+def live_windows():
     """{sid: window_id} for every kitty pane CURRENTLY tagged
     claude_session=<sid> — the authoritative 'which sessions have an OPEN tab'.
     One `kitten @ ls`, memoized for _LIVE_TTL. None when no frontend resolves
@@ -95,7 +95,7 @@ def _live_windows():
     now = time.monotonic()
     if now - _LIVE_WINS["ts"] < _LIVE_TTL:
         return _LIVE_WINS["val"]
-    fe = _frontend()
+    fe = frontend()
     val = None
     if fe is not None:
         try:
@@ -120,7 +120,7 @@ def demote_if_dead(row, live_wins, sid=None, target=None):
     an empty/failed `ls` is can't-tell, keep the state-DB signal), it EVER had
     a window (a headless/daemon session legitimately has none), that window is
     no longer tagged `claude_session=<sid>` (`sid not in live_wins`), and it is
-    PAST the just-started grace (`_within_live_grace` — a fresh launch's pane
+    PAST the just-started grace (`within_live_grace` — a fresh launch's pane
     isn't tagged yet). Otherwise a tab closed without a SessionEnd (crash /
     kill -9, or a leaked DB) leaves the state DB intact and the session
     masquerades as running with a since-reused window id (docs/dashboard.md
@@ -138,7 +138,7 @@ def demote_if_dead(row, live_wins, sid=None, target=None):
         target = row
     if (target.get("live") and live_wins is not None
             and row.get("kitty_window_id") and sid not in live_wins
-            and not _within_live_grace(row)):
+            and not within_live_grace(row)):
         target["live"] = False
 
 
@@ -174,7 +174,7 @@ STEALWATCH_POLLS = 60              # ~30s — outlives the whole session startup
                                    # stragglers measured past 12s)
 
 
-def _front_app():
+def front_app():
     """The frontmost macOS app's bundle id, or "" (non-mac / any failure)."""
     if sys.platform != "darwin":
         return ""
@@ -216,7 +216,7 @@ def _clip_has_image():
     return any(f in info for f in _CLIP_IMAGE_FLAVORS)
 
 
-def _clear_clipboard_image():
+def clear_clipboard_image():
     """If the macOS clipboard holds an IMAGE, empty it — so Claude Code can't
     auto-attach it to a web-delivered message (docs/dashboard.md *Clipboard-image
     guard*). Returns True iff it cleared. No-op (False) off macOS or on a
@@ -393,11 +393,11 @@ def type_command(fe, win, text):
     Code attach whatever IMAGE is on the board (docs/dashboard.md
     *Clipboard-image guard*), so no caller may paste without it — folding the
     two together here is the point of the single owner."""
-    clip = _clear_clipboard_image()
+    clip = clear_clipboard_image()
     return bool(fe.paste_text(win, text)), clip
 
 
-def _steal_watch(before, terminal_app):
+def steal_watch(before, terminal_app):
     """The post-launch focus watch (a daemon thread — the HTTP response never
     waits on it): record each TRANSITION of the frontmost app onto the
     terminal during the watch window, purely for the audit trail. Observes,
@@ -411,7 +411,7 @@ def _steal_watch(before, terminal_app):
     steals, prev = [], before
     for _ in range(STEALWATCH_POLLS):
         time.sleep(STEALWATCH_POLL_S)
-        now = _front_app()
+        now = front_app()
         if not now:
             continue
         if now == terminal_app and prev != terminal_app:
@@ -442,7 +442,7 @@ LAUNCHWAKE_MAX_S = 15.0            # claude boot measured ~2s; 15s covers a cold
 #                                    machine without leaving a zombie poller
 
 
-def _launch_wake(win, cwd, t0):
+def launch_wake(win, cwd, t0):
     """The post-launch appearance watch (a daemon thread — the HTTP response
     never waits on it). Ends with ONE `web-launch-wake` state_files row either
     way: found (`sid`, `waited_s` = launch→appearance latency, the dashboard's

@@ -19,7 +19,7 @@
 import re
 
 from core.noaudit import load_audit
-from core.render import _ANSI, strip_ansi
+from core.render import ANSI_RE, strip_ansi
 
 A = load_audit()
 
@@ -54,7 +54,7 @@ def _faint_chars(s):
     i, n, faint = 0, len(s), False
     while i < n:
         if s[i] == "\x1b":
-            m = _ANSI.match(s, i)
+            m = ANSI_RE.match(s, i)
             if m:
                 sgr = _SGR.fullmatch(m.group(0))
                 if sgr:

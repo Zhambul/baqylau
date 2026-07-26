@@ -336,7 +336,7 @@ def test_ask_unhosted_session_creates_no_ghost_db(run_hook, test_env, session):
 ASK_PLAN = {"plan": "# Plan\n1. do it", "planFilePath": "/tmp/p.md"}
 
 
-def _plan_pending(s):
+def plan_pending(s):
     rows = s.query_state("SELECT val FROM kv WHERE key='plan-pending'")
     return json.loads(rows[0][0]) if rows else None
 
@@ -346,7 +346,7 @@ def test_plan_pretool_stashes_pending(run_hook, test_env, session):
     _seed_state_db(run_hook, s)
     run_hook(HOOK, P.base(s, "PreToolUse", tool_name="ExitPlanMode",
                           tool_use_id="toolu_plan1", tool_input=ASK_PLAN))
-    pend = _plan_pending(s)
+    pend = plan_pending(s)
     assert pend == {"tool_use_id": "toolu_plan1", "plan": "# Plan\n1. do it",
                     "planFilePath": "/tmp/p.md"}
     assert any(a == "plan-pending" and '"write"' in c
@@ -365,7 +365,7 @@ def test_plan_posttool_clears_only_its_key(run_hook, test_env, session):
     run_hook(HOOK, P.base(s, "PostToolUse", tool_name="ExitPlanMode",
                           tool_use_id="toolu_plan1", tool_input=ASK_PLAN,
                           tool_response=ASK_PLAN))
-    assert _plan_pending(s) is None
+    assert plan_pending(s) is None
     assert _pending(s) is not None          # the ask stash survived
     run_hook(HOOK, P.stop(s))               # boundary clears the rest
     assert _pending(s) is None

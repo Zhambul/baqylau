@@ -10,7 +10,7 @@ from core import state as ST
 from core.noaudit import load_audit
 from dashboard import (prefs)
 from dashboard.config import (EFFORTS,
-                              _MODEL_OK)
+                              MODEL_OK)
 from dashboard.read.lists import (dir_live_sessions)
 from dashboard.notify.notifier import NOTIFIER
 
@@ -66,7 +66,7 @@ class _StateMixin:
         # (one BEGIN IMMEDIATE — read-check-write can't be interleaved), or the
         # guard's read and its write straddle a peer thread's write. A CLEAR
         # stores a whitespace-only box as an empty-text TOMBSTONE (not a delete)
-        # so its seq survives to reject a later straggler; _composer_draft reads
+        # so its seq survives to reject a later straggler; composer_draft reads
         # a tombstone as None.
         draft = {"text": text if text.strip() else "", "origin": origin,
                  "seq": seq}
@@ -147,7 +147,7 @@ class _StateMixin:
         if isinstance(cwd, str) and cwd:
             rec["cwd"] = cwd
         model = body.get("model")
-        if isinstance(model, str) and _MODEL_OK.match(model):
+        if isinstance(model, str) and MODEL_OK.match(model):
             rec["model"] = model
         effort = body.get("effort")
         if effort in EFFORTS:
@@ -344,7 +344,7 @@ class _StateMixin:
         # platform string) let the Notifier route the on-device push to the ONE
         # device you most recently used instead of every subscription. Optional
         # (a legacy client omits them → the sub is stored untagged, and routing
-        # degrades to send-all for it — see _mru_push_targets).
+        # degrades to send-all for it — see mru_push_targets).
         dev = body.get("device")
         dev = dev if isinstance(dev, str) and dev else None
         label = body.get("label")

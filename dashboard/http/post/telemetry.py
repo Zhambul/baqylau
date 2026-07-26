@@ -7,8 +7,8 @@ import re
 
 from core.noaudit import load_audit
 from dashboard.config import (CLIENTLOG_MAX)
-from dashboard.http.base import _sid
-from dashboard.notify.presence import _mark_device, _mark_viewing
+from dashboard.http.base import valid_sid
+from dashboard.notify.presence import mark_device, mark_viewing
 
 A = load_audit()
 
@@ -164,7 +164,7 @@ class _TelemetryMixin:
             if not ev:
                 continue
             esid = e.get("sid")
-            esid = esid if isinstance(esid, str) and _sid(esid) else ""
+            esid = esid if isinstance(esid, str) and valid_sid(esid) else ""
             # a blank/invalid sid is a session-LESS row (a launch, a boot
             # record): the global stream, empty log/path — never a derived key.
             log, sdb = self._audit_target(esid)[1:] if esid else ("", "")
@@ -189,7 +189,7 @@ class _TelemetryMixin:
         RIGHT NOW (docs/dashboard.md *Telegram alerts*). The client sends it on
         a timer ONLY while the page is visible + focused + showing this session,
         so the mere arrival is the signal — it refreshes the in-memory
-        `_VIEWING` deadline (`_mark_viewing`, fresh for VIEW_TTL_S) that the
+        `_VIEWING` deadline (`mark_viewing`, fresh for VIEW_TTL_S) that the
         deferred Telegram alert checks at send time to tell 'watching the
         dashboard' from 'walked away'. Types NOTHING and writes NO session
         state; NOT audited per-beat (ephemeral live-only presence, like the SSE
@@ -198,7 +198,7 @@ class _TelemetryMixin:
         `{}` body is fine — the URL's sid IS the payload)."""
         if self._post_guard() is None:
             return
-        _mark_viewing(sid)
+        mark_viewing(sid)
         return self._json({"ok": True})
 
     def post_presence(self):
@@ -218,8 +218,8 @@ class _TelemetryMixin:
             return
         dev = body.get("device")
         if isinstance(dev, str) and dev:
-            _mark_device(dev)
+            mark_device(dev)
         sid = body.get("sid")
         if isinstance(sid, str) and sid:
-            _mark_viewing(sid)
+            mark_viewing(sid)
         return self._json({"ok": True})

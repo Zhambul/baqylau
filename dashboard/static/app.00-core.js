@@ -426,7 +426,7 @@ function lastActive(row) { return row.last_active || row.started_at || 0; }
 function orderKey(row) { return row.started_at || lastActive(row); }
 // The PROJECT DIRECTORY a session belongs to: the server's `group_dir` — its
 // frozen ORIGINAL cwd resolved to its linked-worktree OWNER (read/meta.py
-// `_group_dir`) — with row.cwd as the fallback for legacy/parked rows pushed
+// `group_dir`) — with row.cwd as the fallback for legacy/parked rows pushed
 // before the field existed. The ONE client-side implementation, shared by the
 // list's grouping and the new-session directory picker so both name the same
 // folder: a session running in `.claude/worktrees/<name>/` (EnterWorktree, or
@@ -468,7 +468,7 @@ function copySid(sid) {
 // Does a DELIVERED transcript prompt carry what the composer sent? The one
 // match rule behind both reconcilers — drainQueue (the ⧗ queued chips) and
 // drainPending (the greyed optimistic bubbles). Deliberate twin of the server's
-// dashboard/read/session._chip_delivered (which reconciles the persisted chips
+// dashboard/read/session.chip_delivered (which reconciles the persisted chips
 // against the transcript), since JS can't import it — keep the two in step.
 //
 // A SUFFIX match, not exact: what we sent can arrive with anything prepended,

@@ -13,7 +13,7 @@ from core.noaudit import load_audit
 from dashboard import (clipboard, dictate)
 from dashboard import config
 from dashboard.config import (IMAGE_MIMES)
-from dashboard.http.base import _sid
+from dashboard.http.base import valid_sid
 
 A = load_audit()
 
@@ -46,7 +46,7 @@ class _FilesMixin:
         if body is None:
             return
         sid = body.get("sid")
-        sid = sid if isinstance(sid, str) and _sid(sid) else ""
+        sid = sid if isinstance(sid, str) and valid_sid(sid) else ""
         # Audit target: the uploader's session when we have a sid, else the
         # GLOBAL stream — an empty log/path, exactly like web-launch/ns-prefs.
         # NOT P.mirror_log(""), which is not a global key at all: with no sid it
@@ -158,7 +158,7 @@ class _FilesMixin:
         if body is None:
             return
         sid = body.get("sid")
-        sid = sid if isinstance(sid, str) and _sid(sid) else ""
+        sid = sid if isinstance(sid, str) and valid_sid(sid) else ""
         log, sdb = self._audit_target(sid)[1:] if sid else ("", "")
         names = body.get("names")
         if not isinstance(names, list) or not names \

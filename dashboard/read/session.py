@@ -13,7 +13,7 @@ from dashboard import opshtml, prefs, suggestion
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
                                  session_goal, session_kv, session_title,
-                                 _session_slug)
+                                 session_slug)
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import memory as MEM
 from plugins.claude_code import model as M
@@ -66,7 +66,7 @@ def agents_model_effort(agents, effort):
     return agents
 
 
-def _stamp_agent_cost(tl):
+def stamp_agent_cost(tl):
     """Stamp a subagent drill-down payload with `cost` — approximate USD for its
     OWN token rollup, priced from `usage` + the run's last model via the shared
     accountant (the web per-agent scoreboard's ≈cost, docs/dashboard.md *Subagent
@@ -129,7 +129,7 @@ def session_payload(sid):
     # stashed slug picks the config dir — accounts each carry their own
     # settings.json)
     data["effort"] = plugins.effort_default(data.get("cwd") or "",
-                                            _session_slug(sid))
+                                            session_slug(sid))
     # the agent cards' per-agent model·effort — reuses the ctx just stamped, so
     # the session effort resolved above is its inherit-default
     agents_model_effort(data["agents"], data["effort"])
@@ -142,22 +142,22 @@ def session_payload(sid):
     # LIVE window (the pane currently tagged claude_session=<sid>), NOT the
     # audit row's start-time id — kitty reuses window ids, so a leaked/parked
     # "live" session would otherwise show a stop button that closes an
-    # unrelated tab (see _live_windows). A session whose state DB lingers but
+    # unrelated tab (see live_windows). A session whose state DB lingers but
     # whose window is gone (closed without a SessionEnd) is demoted to not-live.
-    live_wins = launch._live_windows()
+    live_wins = launch.live_windows()
     row = API.session_row(sid) or {}
     # the live flag lives on `data` (API.session), but the window id + grace
     # come from the audit `row` (session_row carries no `live` key) — so the
     # shared demotion reads/clears `data` while checking `row`'s window.
     launch.demote_if_dead(row, live_wins, sid, target=data)
     data["kitty_window_id"] = (live_wins or {}).get(sid, "") if data.get("live") else ""
-    data["ask"] = _ask_wire(sid, _ask_pending(sid)) if data.get("live") else None
-    data["ask_draft"] = _ask_draft(sid, data["ask"]) if data.get("ask") else None
-    data["plan"] = _plan_pending(sid) if data.get("live") else None
+    data["ask"] = ask_wire(sid, ask_pending(sid)) if data.get("live") else None
+    data["ask_draft"] = ask_draft(sid, data["ask"]) if data.get("ask") else None
+    data["plan"] = plan_pending(sid) if data.get("live") else None
     # deliberately NOT live-gated: the `tasks` kv survives park (Claude Code
     # deletes the on-disk task files at session end — the stash is the only
     # record left), so a parked session still shows its final task list
-    data["tasks"] = _session_tasks(sid)
+    data["tasks"] = session_tasks(sid)
     # deliberately NOT live-gated: the active /goal lives in the transcript
     # (which persists past park, unlike the task files), so a parked session
     # still shows its final/achieved goal — read-side, no hook (docs/dashboard.md
@@ -165,8 +165,8 @@ def session_payload(sid):
     data["goal"] = session_goal(data.get("transcript_path") or "")
     # deliberately NOT live-gated: the composer stays usable on a PARKED
     # session (the resume-&-send door), so its draft must restore there too
-    data["composer_draft"] = _composer_draft(sid)
-    data["composer_queue"] = _composer_queue(sid)
+    data["composer_draft"] = composer_draft(sid)
+    data["composer_queue"] = composer_queue(sid)
     # deliberately NOT live-gated: the Telegram-alert opt-out is a dashboard
     # pref (docs/dashboard.md, *Telegram alerts*), so the header toggle reflects
     # + flips it live AND parked
@@ -194,17 +194,17 @@ def _dialog_pending(sid, key):
     return pending if isinstance(pending, dict) else None
 
 
-def _ask_pending(sid):
+def ask_pending(sid):
     return _dialog_pending(sid, "ask-pending")
 
 
-def _ask_wire(sid, ask):
+def ask_wire(sid, ask):
     """The pending ask ENRICHED for the page: `preamble_html` — Claude's prose
     LEAD-IN to the question (the text framing it, which the terse dialog stash
     omits; plugins.ask_preamble over the transcript), rendered with the
     msg-bubble md_html (escape-first, the neutralize() analog). So the "why"
     Claude gave rides ON the ask card, not just as a detached stream bubble
-    (docs/dashboard.md, *Web ask*). Kept OUT of _ask_pending — that is the
+    (docs/dashboard.md, *Web ask*). Kept OUT of ask_pending — that is the
     per-tick SSE change-detection poll and must stay a cheap kv read; the
     transcript is touched only when the ask actually changes / on session open.
     Defensive: a preamble read that fails must never block the question from
@@ -220,14 +220,14 @@ def _ask_wire(sid, ask):
     return ask
 
 
-def _ask_draft(sid, ask=None):
+def ask_draft(sid, ask=None):
     """The unsubmitted ask answers (the `ask-draft` kv — written by the web
     ask card so a device switch / reopen restores in-progress selections),
     but ONLY when it still matches the OPEN ask: a draft left over from a
     replaced/answered question is ignored (ask_fmt.py clears it on the turn
     boundary anyway). Read-only (kv_at). None when there's no ask, no draft,
     or a tool_use_id mismatch."""
-    ask = ask if ask is not None else _ask_pending(sid)
+    ask = ask if ask is not None else ask_pending(sid)
     if not ask:
         return None
     draft = session_kv(sid, "ask-draft")
@@ -238,7 +238,7 @@ def _ask_draft(sid, ask=None):
     return draft
 
 
-def _composer_draft(sid):
+def composer_draft(sid):
     """The UNSENT composer text (the `composer-draft` kv — written by the web
     composer so a device switch / reopen / return-to-session restores the
     half-typed message, docs/dashboard.md, *Web composer draft*). Read-only
@@ -254,10 +254,10 @@ def _composer_draft(sid):
 # the tab states where Claude has SETTLED and its input box may hold a ghost
 # suggestion — green (done, your turn) and grey (idle). A busy/asking tab never
 # shows one, so we don't screen-scrape then.
-_SUGGEST_TABS = (tabs.AWAITING_RESPONSE, tabs.IDLE)
+SUGGEST_TABS = (tabs.AWAITING_RESPONSE, tabs.IDLE)
 
 
-def _input_box(sid):
+def input_box(sid):
     """A LIVE session's input box, read straight off the TUI screen (no hook
     fires for either half): (ghost, typed) — the faint pre-filled 'suggested
     answer' Claude Code shows when a turn settles (docs/dashboard.md, *Web ghost
@@ -267,10 +267,10 @@ def _input_box(sid):
     ask/plan so we only screen-scrape when the box is worth reading — this just
     resolves the authoritative live window (the memoized claude_session=<sid>
     map, never a reused start-time id) and probes it ONCE for both."""
-    fe = launch._frontend()
+    fe = launch.frontend()
     if fe is None:
         return None, None
-    win = (launch._live_windows() or {}).get(sid)
+    win = (launch.live_windows() or {}).get(sid)
     if not win:
         return None, None
     return suggestion.probe_box(fe, win, sid)
@@ -287,7 +287,7 @@ def _delivered_prompts(sid):
             if r.get("kind") == "prompt" and (r.get("text") or "").strip()]
 
 
-def _chip_delivered(text, delivered):
+def chip_delivered(text, delivered):
     """True when a queued ⧗ chip's / optimistic bubble's text matches a
     DELIVERED prompt. THE match rule for reconciling web-composer stand-ins
     against the transcript — owner of the fact, mirrored in app.js
@@ -308,7 +308,7 @@ def _chip_delivered(text, delivered):
     return bool(c) and any(d.endswith(c) for d in delivered)
 
 
-def _composer_queue(sid):
+def composer_queue(sid):
     """The still-PENDING queued messages (the `composer-queue` kv — the ⧗ chips
     the composer shows for messages typed mid-turn that the TUI queued and has
     not yet delivered). Browser memory alone lost these on a reload (the "gone
@@ -332,7 +332,7 @@ def _composer_queue(sid):
     if not items:
         return None
     delivered = _delivered_prompts(sid)
-    kept = [it for it in items if not _chip_delivered((it or {}).get("text"), delivered)]
+    kept = [it for it in items if not chip_delivered((it or {}).get("text"), delivered)]
     if not kept:
         return None
     out = dict(q)
@@ -340,7 +340,7 @@ def _composer_queue(sid):
     return out
 
 
-def _session_tasks(sid):
+def session_tasks(sid):
     """The session's task-list snapshot — the `tasks` kv task_fmt.py re-reads
     from Claude Code's on-disk task dir on every task-touching hook (docs/
     dashboard.md, *Web tasks*). A list of task records ({id, subject, status,
@@ -351,7 +351,7 @@ def _session_tasks(sid):
     return tasks if isinstance(tasks, list) and tasks else None
 
 
-def _plan_pending(sid):
+def plan_pending(sid):
     """The pending plan, ENRICHED for the page: `plan_html` (the markdown
     rendered server-side, the msg-bubble md_html — escape-first)."""
     pending = _dialog_pending(sid, "plan-pending")
@@ -361,7 +361,7 @@ def _plan_pending(sid):
     return pending
 
 
-def _last_prompt_rec(sid):
+def last_prompt_rec(sid):
     """The session's LAST main-thread user prompt as (text, uuid) — what an
     early interrupt hands back into the input, so the page can prefill its
     composer with it and the server can FLAG that record as taken back
@@ -382,6 +382,6 @@ def _last_prompt_rec(sid):
     return "", ""
 
 
-def _last_prompt(sid):
-    """The last prompt's TEXT alone (see _last_prompt_rec)."""
-    return _last_prompt_rec(sid)[0]
+def last_prompt(sid):
+    """The last prompt's TEXT alone (see last_prompt_rec)."""
+    return last_prompt_rec(sid)[0]

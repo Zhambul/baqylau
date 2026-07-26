@@ -2,7 +2,7 @@
 #
 # The response/SSE/guard machinery every route shares: gzip-aware _send, the
 # JSON + SSE framing, the CORS/preflight/origin control-plane guard, the static
-# whitelist server, and the _sid/_qint/_qstr request parsers. The concrete
+# whitelist server, and the valid_sid/_qint/_qstr request parsers. The concrete
 # Handler (http/handler.py) inherits this and mixes GET/POST/SSE in.
 import gzip
 import json
@@ -16,7 +16,7 @@ from core import sessionapi as API
 from core.noaudit import load_audit
 from dashboard import config
 from dashboard.config import (BOOT_ID, CLIENTLOG_FIELD_MAX, CLIENTLOG_STR_MAX,
-                              GZIP_MIN, POST_HEADER, POST_MAX, STATIC, STATIC_DIR, _SID_OK)
+                              GZIP_MIN, POST_HEADER, POST_MAX, STATIC, STATIC_DIR, SID_OK)
 
 A = load_audit()
 
@@ -297,8 +297,8 @@ class _Base(BaseHTTPRequestHandler):
         return self._send(200, data, ctype)
 
 
-def _sid(s):
-    return bool(_SID_OK.match(s or ""))
+def valid_sid(s):
+    return bool(SID_OK.match(s or ""))
 
 
 def _qint(url, name):

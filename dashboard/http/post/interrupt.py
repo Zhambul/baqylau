@@ -169,7 +169,7 @@ class _InterruptMixin:
         the prefix, rather than the whole string, keeps a box that clipped the
         tail from reading as a mismatch. A miss just yields "" — the interrupt
         still succeeded, the page simply doesn't prefill."""
-        last, uid = rsession._last_prompt_rec(sid)
+        last, uid = rsession.last_prompt_rec(sid)
         if not last:
             return ""
         try:

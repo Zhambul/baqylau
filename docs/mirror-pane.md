@@ -537,7 +537,7 @@ many large Reads no longer pins all their content for its life (the durable
   differs), it re-tagged the host window `claude_session=<nested>`, then at its
   own (usually seconds-later) SessionEnd it untagged the window and closed the
   panes — orphaning the real session's mirror AND dropping it off the web
-  dashboard, whose `_live_windows` liveness scan keys on the now-vanished
+  dashboard, whose `live_windows` liveness scan keys on the now-vanished
   `claude_session` tag (observed live 2026-07-22: three `/goal` runs in
   `/private/tmp/goaltest` nested in a baqylau session's tab; the pane-hijack
   anomaly fired). "One tab holds exactly one host session", so a live different-sid

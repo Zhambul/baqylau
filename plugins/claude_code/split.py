@@ -423,7 +423,7 @@ def cmd_open():                              # SessionStart (payload on stdin)
     # OUTER session's mirror as "stale" (its sid differs), re-tag the host window
     # to itself, then UNTAG + close the panes at its own SessionEnd — orphaning
     # the real session's mirror and dropping it off the dashboard (its
-    # claude_session tag is gone, so _live_windows sees no live pane). "One tab
+    # claude_session tag is gone, so live_windows sees no live pane). "One tab
     # holds exactly one host session", so a live different-sid host in this tab is
     # the outer owner, not something stale to replace. Skip the whole lifecycle —
     # no sweep, no pane, no re-tag — exactly as the daemon/headless start above and

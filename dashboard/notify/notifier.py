@@ -21,7 +21,7 @@ from dashboard.config import (GLOBAL_TICK_S, NOTIFY_STATES,
                               SESSIONS_LIMIT, SLOW_EVERY)
 from dashboard.control import launch
 from dashboard.notify import presence
-from dashboard.read.meta import canon_cwd, session_title, _group_dir
+from dashboard.read.meta import canon_cwd, session_title, group_dir
 
 A = load_audit()
 
@@ -81,7 +81,7 @@ class Notifier:
         # here, not per-scan: a hunt for kitty's socket is a subprocess, and a
         # missing terminal control channel degrades cleanly to None → no
         # dialog-activity signal, alerts fire as before.
-        self.fe = launch._frontend()
+        self.fe = launch.frontend()
 
     def _dialog_region(self, win):
         """The AskUserQuestion dialog pane's text on window `win`, or None when
@@ -120,7 +120,7 @@ class Notifier:
         nag. Two channels: the kitty TAB is frontmost on your screen
         (`fe.tab_focused` — `is_focused`, so a web-spawned synthetic tab in a
         BACKGROUNDED kitty does NOT count, verified empirically), or a BROWSER
-        is actively viewing the session (a fresh `_web_viewing` heartbeat).
+        is actively viewing the session (a fresh `web_viewing` heartbeat).
         Returns the suppress reason (`tab-focused` / `web-viewing`) or None;
         best-effort — a terminal read miss / no channel degrades to None.
 
@@ -136,7 +136,7 @@ class Notifier:
                 return "tab-focused"
         except Exception:
             pass
-        if presence._web_viewing(sid):
+        if presence.web_viewing(sid):
             return "web-viewing"
         return None
 
@@ -165,7 +165,7 @@ class Notifier:
         # frozen start_cwd -> its worktree owner), so a session that cd'd away
         # is still named by where it started (_git_resolve is cached, cheap)
         cwd = canon_cwd(row.get("cwd") or "")
-        home = _group_dir(canon_cwd(row.get("start_cwd") or "") or cwd)
+        home = group_dir(canon_cwd(row.get("start_cwd") or "") or cwd)
         return {
             "kind": kind, "state": state, "sid": row.get("sid"),
             "cwd": cwd,
@@ -259,7 +259,7 @@ class Notifier:
             entry = self.pending[win]
             sid = entry.get("sid")
             if (cur.get(win) != entry["state"]
-                    or presence._session_ended(sid) or presence._composing(sid)):
+                    or presence.session_ended(sid) or presence.composing(sid)):
                 self._drop(win)                # you reacted — no row (see _drop)
                 continue
             # You answering AT THE TERMINAL — typing a free-text answer or
@@ -308,7 +308,7 @@ class Notifier:
 
         DEVICE-FIRST, TELEGRAM-IF-IGNORED. Two stages per armed entry:
           1. after the grace window, the ON-DEVICE push goes to the one device
-             you most recently used (_webpush → _mru_push_targets); the entry
+             you most recently used (_webpush → mru_push_targets); the entry
              STAYS armed, now with an escalate_at ESCALATE_S in the future.
           2. if it survives to escalate_at — you STILL did nothing with the
              session (any reaction / look already dropped it in _cancel_armed) —
@@ -412,7 +412,7 @@ class Notifier:
 
     def _webpush(self, entry):
         """Send the on-device alert as a Web Push to the ONE device you most
-        recently used (`_mru_push_targets`) — NOT every subscription, so a
+        recently used (`mru_push_targets`) — NOT every subscription, so a
         session going done/asking buzzes the device you're working on, not your
         iPad and Mac at once (docs/dashboard.md, *Web push* / *Device routing*).
         Dispatched on a detached daemon thread: the crypto + network round-trips
@@ -427,7 +427,7 @@ class Notifier:
         presence age — so "the wrong device buzzed" is answerable from the DB."""
         if not webpush.enabled():
             return False
-        subs, decision = presence._mru_push_targets()
+        subs, decision = presence.mru_push_targets()
         # The routing decision is audited whenever there was ANYTHING to weigh
         # (at least one subscription) — even the no-target edge — so a missing
         # push is never a mystery. No subs at all = nothing to route, no row.

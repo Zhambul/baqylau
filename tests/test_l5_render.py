@@ -149,7 +149,7 @@ def test_semantic_color_table_not_reencoded_by_producers():
 
 
 # ---------------------------------------------------------------------------
-# _ANSI / _CTRL shared-fragment pins. Both regexes are composed from the named
+# ANSI_RE / _CTRL shared-fragment pins. Both regexes are composed from the named
 # fragments _CSI_RE/_OSC_RE/_C1_RE (plus _CTRL's own _DCS_RE) so the wrap/strip
 # path and the security-critical neutralize() replay-safety path cannot drift.
 
@@ -165,9 +165,9 @@ def test_ansi_ctrl_patterns_equal_historic_literals():
                 r"|\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"
                 r"|\x1b[PX^_][^\x1b]*(?:\x1b\\|\x07)?"
                 r"|\x1b[@-Z\\-_]")
-    assert R._ANSI.pattern == old_ansi
+    assert R.ANSI_RE.pattern == old_ansi
     assert R._CTRL.pattern == old_ctrl
-    assert R._ANSI.flags == R._CTRL.flags
+    assert R.ANSI_RE.flags == R._CTRL.flags
 
 
 def test_strip_ansi_behaviour():

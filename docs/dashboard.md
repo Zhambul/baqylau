@@ -270,9 +270,9 @@ Decisions inherited from the sessionapi design review (docs/sessionapi.md's
   (`dashboard/notify/presence.py`), which are not memos but have the identical
   key-set shape — one entry per session / per browser ever seen. `_VIEWING`
   (sid → beat deadline) is bounded EXACTLY rather than by an LRU, because an
-  entry past its deadline is dead by definition: `_mark_viewing` sweeps the
+  entry past its deadline is dead by definition: `mark_viewing` sweeps the
   expired ones on every beat, so what remains is one key per session actually
-  being watched and nothing live is ever dropped. (`_web_viewing` GC's only the
+  being watched and nothing live is ever dropped. (`web_viewing` GC's only the
   ONE key it is asked about, and the notifier asks only about ARMED sessions —
   so before the sweep, every session you ever opened without an alert sat there
   for the life of the process.) `_DEVICE_SEEN` cannot be swept — no beat ever
@@ -426,7 +426,7 @@ a **Read** as `streamfmt.file_line`'s `verb(name)[ extent]` one-liner (extent fr
 `tools.read_extent`); and **Grep/Glob/WebFetch/WebSearch/Task/SendMessage** as a
 definition list of their fields (long values first-lined). Unknown tools return
 `None`, so the timeline keeps its escaped-JSON fallback. The enrichment is the
-same additive post-processing markdown uses (`server._mdify`): tool entries gain
+same additive post-processing markdown uses (`server.mdify`): tool entries gain
 `input_html` and — only where it differs from a plain `<pre>` (Bash output, which
 may carry ANSI) — `output_html`; raw `input`/`output` stay untouched, and `app.js`
 falls back to the JSON dump / plain `<pre>` when a field is absent. Escape-first
@@ -467,13 +467,13 @@ reflow for free and keeps the no-build rule.
 | `/api/notify-config` | `{enabled}` — the GLOBAL alerts master switch (`prefs.notify_enabled()`, default ON); the list page's `#notifytoggle` seeds its ◉/○ label from this on load (*Global alerts toggle* below) |
 | `POST /api/notify` | **control plane** (a FIXED route, distinct from `/api/session/<sid>/notify`): `{"enabled": bool}` → write the durable global `notify-enabled` pref, audit a `notify-global` `state_files` row, and push a `notify-config` SSE event so every other open page repaints; the ONE master switch over all toasts/OS notifs + Telegram/web-push, overriding per-session mutes when OFF (*Global alerts toggle* below); 400 non-bool |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (a `QUEUE_TABS` tab colour VERIFIED against a live screen, `_turn_live` — a terminal-side cancel freezes the colour mid-turn); 409 headless, 400 empty, 503 no terminal |
-| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `_MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
+| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
 | `POST /api/clipboard/files` | **local-machine read** (no terminal write, nothing staged): `{"names": [basename, …], "sid"?}` → `{paths: [abs, …]}`, the FULL paths of those files on the host's pasteboard (`dashboard/clipboard.py`). The one way a pasted file becomes a usable path instead of an upload — the browser only ever sees a basename (*Web attachments* → *Pasting a copied FILE*). Returns paths ONLY when the basenames match exactly (`clipboard.match` — a remote device's clipboard is not the host's); a miss is a 200 with `[]`, audited either way as a `web-clipboard` row; 400 missing/non-string `names` |
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "device", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); every row carries this browser's `device` id (device-attributable — the frontend side of notification *Device routing*); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a heartbeat DERIVED from the served `view_ttl_s` (TTL/2.5, *Served limits* above) while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
-| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `_launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
+| `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
@@ -665,7 +665,7 @@ and the verdict (`tab`/`live`/`queued`) ride the `web-send` audit row. The page 
 queued send as a ⧗ chip under the composer (and the send button reads
 "queue" while busy — a cosmetic client-side mirror of `QUEUE_TABS`; the
 server's verdict is the chip authority). A chip is removed when its prompt
-record actually arrives in the stream — `_conv_items` items additively carry
+record actually arrives in the stream — `conv_items` items additively carry
 `kind` and, for prompts, the raw `text`, and `drainQueue` matches on
 text — because the transcript is the ONE delivery signal: tab transitions are
 useless (green flips busy again the instant a queued prompt starts
@@ -941,7 +941,7 @@ grab it but drops bytes, so it isn't a usable delivery. baqylau delivers every
 web message via bracketed paste (`paste_text`) — so every send/launch is exposed.
 It is undocumented Claude Code behaviour (v2.1.x, no opt-out flag). The fix, since
 the paste itself does the grab and can't be dodged, is to **empty an IMAGE
-clipboard right before each web send/launch** (`_clear_clipboard_image` — macOS
+clipboard right before each web send/launch** (`clear_clipboard_image` — macOS
 `osascript`, gated on `_clip_has_image` so a TEXT clipboard is left untouched;
 best-effort, no-op off macOS). Wired ahead of every bracketed paste
 (`post_message`, `post_command`, the ask-chat send) and, when a launch carries a
@@ -1189,7 +1189,7 @@ for). `send()` clears it immediately (both the /message path and the parked
 *resume & send* path — `clearComposerDraft`, so the adopted resumed session
 doesn't re-show the just-sent text) and re-persists it on a send FAILURE (the
 box keeps its text, so a reload must not lose it). An emptied box POSTs empty
-text, which clears the stash; `_composer_draft` treats a blank stash as None so
+text, which clears the stash; `composer_draft` treats a blank stash as None so
 the card clears everywhere. Works for LIVE and PARKED sessions alike —
 `state_db_for` resolves the parked copy — since the composer itself is usable
 in both. Best-effort throughout: a failed save retries on the next edit and the
@@ -1330,7 +1330,7 @@ empty list deletes the stash. This is display persistence only — the message
 itself lives in the TUI's queue regardless; the pinned bubble just stops vanishing.
 
 **The delivery match is a SUFFIX match, not an exact one** — one rule with one
-owner, `_chip_delivered` server-side and its deliberate twin `promptMatches` in
+owner, `chip_delivered` server-side and its deliberate twin `promptMatches` in
 `app.00-core.js` (JS can't import it), used by *both* client reconcilers
 (`drainQueue` for the ⧗ chips, `drainPending` for the greyed optimistic
 bubbles). A suffix, because what the composer sent can arrive with anything
@@ -1358,9 +1358,9 @@ reloaded *before* its message was delivered, every later page load re-seeded it
 from the kv (`buildQueuePin`), found the delivered prompt already sitting in the
 backlog, and had no fresh item to drain it against — a ⧗ queued bubble stuck
 forever even though Claude Code received and answered the message (the "still
-shows as queued after it was delivered" report). `_composer_queue` now drops any
+shows as queued after it was delivered" report). `composer_queue` now drops any
 entry whose prompt already appears among the transcript's delivered prompts
-(`_delivered_prompts` / `_chip_delivered`, the shared suffix match above) before
+(`_delivered_prompts` / `chip_delivered`, the shared suffix match above) before
 it ever seeds the page. Read-only — the server can't rewrite the kv (`mode=ro`), so
 the stale rows are pruned by the client's next `saveQueue` once this filtered
 list seeds it.
@@ -1368,7 +1368,7 @@ list seeds it.
 **Sends into an open modal are refused.** A message pasted while an
 AskUserQuestion / ExitPlanMode dialog is up goes INTO the dialog, not the
 queue, and is lost (perturbing the dialog too). `post_message` now checks
-`_ask_pending`/`_plan_pending` and returns a 409 `modal` with no paste,
+`ask_pending`/`plan_pending` and returns a 409 `modal` with no paste,
 pointing the user at the ask/plan card above; the composer keeps its text. Once
 the dialog resolves, the send goes through normally.
 
@@ -1493,12 +1493,12 @@ get-text call and audit-before-swallow (`A.error` on any failure).
 **Live-only, ephemeral, gated.** There is no kv and no persistence — a parked
 session has no TUI, hence no suggestion. `sse_session` probes on the SLOW
 cadence and emits a `suggestion` SSE event only on change, but only when a
-suggestion could plausibly be there: the tab is **settled** (`_SUGGEST_TABS` —
+suggestion could plausibly be there: the tab is **settled** (`SUGGEST_TABS` —
 green *done* or grey *idle*; a busy/asking tab never shows one), there is no
-pending ask/plan modal, and the web composer box is empty (`_composer_draft`
+pending ask/plan modal, and the web composer box is empty (`composer_draft`
 None) — otherwise we don't screen-scrape at all (nothing to surface, and a
 probe would fight a draft the user is editing elsewhere). The live window is
-resolved through the memoized `claude_session=<sid>` map (`_live_windows`),
+resolved through the memoized `claude_session=<sid>` map (`live_windows`),
 never a reused start-time id.
 
 **Frontend: placeholder + accept key.** `applySuggestion` stores the value on
@@ -1735,7 +1735,7 @@ argument form (plus the confirm auto-answer above) does the job.
 
 Server side (`post_command`) the vocabulary is CLOSED — `{"cmd": "compact"}`
 (argless), `{"cmd": "model", "arg"}` with the arg validated against
-`_MODEL_ARG_OK` (`_MODEL_OK`'s one-clean-word alphabet plus the CLI's literal
+`MODEL_ARG_OK` (`MODEL_OK`'s one-clean-word alphabet plus the CLI's literal
 `[1m]` context suffix, e.g. `sonnet[1m]`), `{"cmd": "effort", "arg"}` against
 `EFFORTS`; anything else is `400` and never reaches the terminal (free-form
 text is the composer's job — this endpoint exists so a *button* can't be
@@ -1791,7 +1791,7 @@ readable.
 
 `POST /api/sessions/new` `{"cwd", "model"?, "effort"?, "prompt"?}` validates
 `cwd` is an existing directory (`os.path.isdir`, else `400`), `model` against
-`_MODEL_OK` (one clean argv word — an alias like `opus` or a full id like
+`MODEL_OK` (one clean argv word — an alias like `opus` or a full id like
 `claude-fable-5`; the form offers the aliases, the API takes any id) and
 `effort` against `EFFORTS` (the CLI's `low`…`max` levels), then
 `Frontend.launch_tab(cwd, launch_argv(["--model", m?, "--effort", e?,
@@ -1848,7 +1848,7 @@ frontmost app, `open -b` the browser back whenever kitty takes over) shipped
 stealing focus from the user *deliberately* switching to kitty inside the
 watch window, so it yanked the user back to the browser when they genuinely
 wanted the terminal, and the bouncing itself was jarring. What survives is a
-**passive steal watch** (`_steal_watch`, a daemon thread; skipped off-mac,
+**passive steal watch** (`steal_watch`, a daemon thread; skipped off-mac,
 when the frontend has no `app_id()`, or when the terminal was already
 frontmost at click time): it captures the frontmost app's bundle id before
 the launch (`lsappinfo` — plain LaunchServices, no TCC/automation prompts),
@@ -1872,7 +1872,7 @@ registry fan-out) — the rate-limit migration (docs/relimit.md) composes the
 exact same launch, so the server's `launch_argv` is a thin delegation. The
 server may have no resolvable kitty
 socket at all (started outside kitty) — `frontends.get(resolve=True).usable()`
-is `False`, `_frontend()` returns `None`, and every control-plane endpoint
+is `False`, `frontend()` returns `None`, and every control-plane endpoint
 returns a clean `503`, never a 500 traceback.
 
 **Liveness = an OPEN tab, not a lingering state DB.** A session's `live` flag
@@ -1880,7 +1880,7 @@ is *not* just "its `/tmp` state DB exists" — that only means the session was
 never PARKED, and a tab closed WITHOUT a SessionEnd (crash / `kill -9`, or a
 leaked test DB) leaves the state DB intact, so the session would masquerade as
 running with a `kitty_window_id` that kitty has since REUSED for an unrelated
-tab. Both payloads therefore reconcile against `_live_windows()` — one
+tab. Both payloads therefore reconcile against `live_windows()` — one
 `kitten @ ls` (memoized `_LIVE_TTL`, 5s) mapping each pane's
 `claude_session=<sid>` user-var → its window id, the authoritative "which
 sessions have an open tab". The TTL can be that loose because every consumer
@@ -1906,14 +1906,14 @@ call passes a separate `target` dict because its liveness comes from
 `kitten_ls` swallows EVERY failure — a timeout, an rc≠0, a transient socket
 hiccup — into an empty list and never raises (`frontends/kitty.py`), so a failed
 scan is indistinguishable from a genuinely empty desktop and the `except`
-guarding `_live_windows` can never catch it. Trusting an empty result as
+guarding `live_windows` can never catch it. Trusting an empty result as
 authoritative meant one socket hiccup returned `{}` (not `None`), which — since
 `{} is not None` — passed the demotion guard and flipped EVERY running session
 to not-live; a session that is live-but-not-parked renders **gone** on its card
 (`row.parked ? "parked" : "gone"`), so all cards momentarily flashed "gone"
 while the sessions were working, self-healing on the next `_LIVE_TTL` tick once
 kitty answered. Because a running dashboard implies kitty HAS windows, an empty
-tree is virtually always a failed `ls` — so `_live_windows` now maps an
+tree is virtually always a failed `ls` — so `live_windows` now maps an
 empty/failed `ls()` to `None` (can't-tell, keep the state-DB signal), reserving
 `{}` for a real non-empty tree that carries no `claude_session` tags. (The same
 transient failure IS audited on the tab-status side as a `kitten @ failed rc=N`
@@ -1924,14 +1924,14 @@ so that transition is the correlating tell.)
 above has a race at the START of a session: the audit `sessions` row (carrying
 `kitty_window_id`) is written a beat BEFORE the pane is tagged
 `claude_session=<sid>` (`split.cmd_open` runs `A.session_start`, then
-`tag_window`), and `_live_windows` is memoized up to `_LIVE_TTL` (5s) on top —
+`tag_window`), and `live_windows` is memoized up to `_LIVE_TTL` (5s) on top —
 so for a few seconds a fresh launch has a window id but isn't in the tagged-window
 map, and the naive demotion flips it to not-live: the card flashes **parked** and
 the session-detail header (whose `meta` is fetched ONCE at open — the launch jump
 navigates straight into it) *froze* on that reading, leaving the parked chip stuck
 on and every live-gated action (stop/cancel/rewind/close/quick-commands) missing —
 so the just-launched session couldn't even be closed. Two fixes, both needed:
-`_within_live_grace` EXEMPTS a session from the missing-window demotion for
+`within_live_grace` EXEMPTS a session from the missing-window demotion for
 `_LIVE_GRACE_S` (10s) after its `started_at` (covers boot + the memo TTL; a
 session that dies within its first 10s only shows live until the next tick past
 the grace), and the client's `updateHeadFromList` now re-syncs `meta.live` /
@@ -2244,7 +2244,7 @@ Deliberate choices, and why:
   deliberately-named session. No raw-socket fast path (deliberately
   different from `set_tab_color`): this is a rare user action, not the
   blocking hook path.
-- **Input hygiene:** control bytes are stripped (`_NAME_CTRL`) — the name
+- **Input hygiene:** control bytes are stripped (`NAME_CTRL`) — the name
   goes verbatim into a `set-tab-title` argument and the picker, the exact
   OSC/CSI injection class `render.neutralize()` exists for — and capped at
   `RENAME_MAX` (120); empty-after-cleaning is 400. A name starting with `-`
@@ -2484,7 +2484,7 @@ resuming, a searchable/scrollable **resume picker** (`resumePicker`, app.js). It
 replaces the old three-way "start from" dropdown: there is **no `--continue`** —
 resuming the most-recent row IS "continue" (the picker auto-selects the newest
 row on load, and `↻ resume` preselects its own session). Only `claude --resume
-<sid>` is emitted; `body.resume` still validates against `_SID_OK` (one clean
+<sid>` is emitted; `body.resume` still validates against `SID_OK` (one clean
 argv word) and rides as a positional `"$@"` word ahead of `--model`/`--effort`/
 prompt, so the injection story is unchanged (the endpoint still ACCEPTS a
 `continue` bool for compatibility, but the form never sends it, and
@@ -2576,7 +2576,7 @@ card ("claude may have failed to start") instead of a silent give-up. The
 composer's resume-&-send deliberately does NOT open the pending view — the
 user is already looking at the session being revived.
 
-*The `wake` fast path (server).* On a successful launch `_launch_wake` (a
+*The `wake` fast path (server).* On a successful launch `launch_wake` (a
 daemon thread, `LAUNCHWAKE_POLL_S`/`LAUNCHWAKE_MAX_S`) polls the sessions
 head for the launched session — by `kitty_window_id` when the launch reported
 one (exact across fresh/resume/continue: the audit's SessionStart upsert
@@ -2860,7 +2860,7 @@ hand-rolled the pairing; every other site only READS the maps.
 dashboard launch jumps straight to the new sid, but its kitty pane isn't tagged
 `claude_session=<sid>` for a moment, so `/api/session` momentarily reports
 `live:true` with a BLANK `kitty_window_id` (`session_payload` resolves the
-window through `_live_windows`, empty until the pane is tagged). The client gates
+window through `live_windows`, empty until the pane is tagged). The client gates
 the composer AND the `✕ close` button on `meta.live && meta.kitty_window_id`, and
 that partial meta fails BOTH the send gate (`live && window`) and the resume
 gate (`!live`) — so the box locked and the close button never rendered until a
@@ -2878,7 +2878,7 @@ those two disagreed (`""` resolved vs a raw id), so it read a spurious "window
 moved" and rebuilt the header EVERY list tick, fighting `loadMeta` and flickering
 the action-buttons row on/off 2–3× until the pane tagged. Fixed at the source:
 `sessions_payload` now reconciles a LIVE row's `kitty_window_id` to the same
-`_live_windows` resolution `session_payload` uses (blank until tagged, then the
+`live_windows` resolution `session_payload` uses (blank until tagged, then the
 same id) — so the two endpoints agree, the compare is apples-to-apples, and the
 row appears exactly once when the window resolves. The demotion check still runs
 on the RAW id first (it needs "this row ever claimed a window"); a not-live row
@@ -2930,7 +2930,7 @@ walk `parse_line`'s blocks with the same non-empty-text rule). It reaches
 the page via `plugins.ask_preamble(sid, tool_use_id)` (the registry fan-out,
 same sid resolution as `conversation`), rendered by the server to
 `preamble_html` (the msg-bubble `md_html`, escape-first) and enriched onto
-the ask payload in `_ask_wire` — kept OUT of `_ask_pending`, which is the
+the ask payload in `ask_wire` — kept OUT of `ask_pending`, which is the
 per-tick SSE change-detection poll and must stay a cheap kv read, so the
 transcript is touched only when the ask actually changes / on session open.
 A pure read-model addition over the already-audited transcript (no new hook,
@@ -2972,7 +2972,7 @@ tracks the edits live (`applyAskDraft`). Each page stamps its writes with
 a per-load `origin` (`CLIENT_ID`) and ignores the SSE echo of its OWN
 `origin`, so a device never clobbers its own typing; a peer's `origin`
 differs and IS applied (last-writer-wins, which is right for a shared
-draft). `_ask_draft` only returns the draft while it still matches the
+draft). `ask_draft` only returns the draft while it still matches the
 open ask — a stale one is ignored — and `ask_fmt.py` clears `ask-draft`
 on the SAME boundary as `ask-pending` (its PostToolUse, or the turn
 boundary), so it never outlives its question. Best-effort throughout: a
@@ -3003,11 +3003,11 @@ into a fresh kitty window, or a transient blank/partial `get_text` — bailed
 immediately with `step: open` on an ask that was genuinely up and never
 answered (session `0247ebb2`, 2026-07-21). It now polls like the rest. And
 every `AskError` carries the SCREEN it saw (`e.screen`); `post_answer` folds
-it (via `_clip_screen`) into the `dashboard answer (<step>)` audit `errors`
+it (via `clip_screen`) into the `dashboard answer (<step>)` audit `errors`
 row's `screen` field, because the bail otherwise records only its outcome — a
 step:open can't be told apart after the fact (dialog too tall for the visible
 screen · a `FOOT`/`REVIEW` footer-string drift after a Claude Code upgrade · a
-blank capture) without the pixels. `_clip_screen` keeps BOTH ends of a long
+blank capture) without the pixels. `clip_screen` keeps BOTH ends of a long
 capture (head + tail, `SCREEN_CLIP` = 2000) rather than a plain `[-2000:]`
 tail: a step:open's discriminator is whether the ☐/☒ chip bar is at the TOP,
 so a wide window whose visible screen exceeds the cap must not have that top
@@ -3204,7 +3204,7 @@ dialog exactly as it was (an Escape bail would REJECT a plan the user
 may still want to approve) — PlanError → 409 with `step`. An `open` bail
 (the dialog is gone while the stash lingers — resolved in the terminal,
 the turn-boundary clear not yet fired) **self-heals the stash**
-(`_heal_stash` → `state.kv_del_at`, the explicit-path fresh-connection
+(`heal_stash` → `state.kv_del_at`, the explicit-path fresh-connection
 delete: the request runs on a handler THREAD, where kv_del's cached
 connection would silently no-op under sqlite's check_same_thread), so
 the page's card clears on the next SSE tick; the same heal applies to
@@ -3452,7 +3452,7 @@ The unit is a **session** (one audit `sessions` row = one "commit"). Four panels
 - **When you work** — the day×hour punch card: a 7×24 grid of bubbles whose
   RADIUS ∝ sessions started in that slot (size encoding, GitHub's punch card).
 - **Projects** — one card per project (grouped exactly like the list — `start_cwd`
-  canonicalised + resolved to its worktree owner via `_group_dir`), each with a
+  canonicalised + resolved to its worktree owner via `group_dir`), each with a
   90-day sparkline and token/cost/error counters.
 
 **Data + optimization.** Everything is computed SERVER-side (single-owner rule;
@@ -3867,7 +3867,7 @@ tick.
 The sessions view groups by PROJECT directory — the server's `group_dir`
 (app.js keys on it; `group_dir || cwd` for legacy/parked rows that predate it).
 `group_dir` is the session's FROZEN original cwd resolved to its linked-worktree
-owner: `_group_dir(start_cwd)` in server.py walks the `.git` files (via
+owner: `group_dir(start_cwd)` in server.py walks the `.git` files (via
 `_git_resolve`, never the dirty subprocess) exactly as `git_info` does, but
 returns the worktree owner (`root`) or the dir itself. Two consequences:
 
@@ -3883,7 +3883,7 @@ returns the worktree owner (`root`) or the dir itself. Two consequences:
   group key is pinned. *Why not the live cwd:* a `cd` into a subdir, `/tmp`, or
   another repo silently re-aggregated the whole card mid-session — the reported
   bug this pinning fixes. `start_cwd` is server-internal (it only feeds
-  `group_dir`) and is stripped from the wire by `_wire_row`.
+  `group_dir`) and is stripped from the wire by `wire_row`.
 
 A parked session whose worktree was since REMOVED degrades to its own
 start-cwd-keyed group (`_git_resolve` returns null once the `.git` file is
@@ -4059,7 +4059,7 @@ state and burning layout for rows that hadn't changed.
 
 Both halves are fixed independently:
 
-- **Server — the paused-blind diff, per row (`_row_key`).** Each wire row's
+- **Server — the paused-blind diff, per row (`row_key`).** Each wire row's
   change-detection key is the row minus `stats.paused`. Only the DIFF is
   blind: a pushed row still carries the exact value. This is
   behavior-preserving for the card's ⏱ chip because that shows elapsed
@@ -4077,7 +4077,7 @@ Both halves are fixed independently:
   by sid (`S.sessions[i] = row`) — safe precisely because membership/order
   moves always arrive as full snapshots. During activity that's a few
   hundred bytes per tick instead of ~77KB. Wire rows are also stripped of
-  `transcript_path` and `log` (`_wire_row`, both here and on
+  `transcript_path` and `log` (`wire_row`, both here and on
   `/api/sessions`) — server-side paths the client never reads, ~20% of the
   snapshot. An open page running PRE-delta JS ignores `sessions-delta` and
   freezes until refresh — the `hello` BOOT_ID toast on reconnect covers the
@@ -4477,7 +4477,7 @@ the incremental companion to `activity()`, sharing timeline()'s per-record entry
 builder (`transcript._fold_record`, the single owner of the record→entry
 mapping). It returns `(entries, resolutions, new_pos)` and the SSE pushes two
 event kinds: `entries` (the new increment's entries, server-enriched by the same
-`_enrich_entries` the REST endpoints run — markdown/rich-tool HTML) added to the
+`enrich_entries` the REST endpoints run — markdown/rich-tool HTML) added to the
 list in the render's order (prepended newest-first, per the ordering note above),
 and `resolve`
 (`[(tool_use_id, output, failed), …]`). A `resolve` exists because a tool_use in
@@ -5024,13 +5024,13 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
 - Each subsequent scan **cancels** any armed entry whose tab has **left** its
   armed state — you answered (→ busy), the turn resumed, or the session closed
   (its window vanished from the tab table) — OR whose session has **ended**
-  (audit `ended_at` set, `_session_ended`): you closed/quit it on the dashboard,
+  (audit `ended_at` set, `session_ended`): you closed/quit it on the dashboard,
   so you were satisfied and moved on and the alert (its deep link would open a
   dead session) is moot. The `ended_at` check is the robust one the win-vanish
   test can miss — a stale tab row can linger past a close, and a reused kitty
   window id can even re-match the armed state under a DIFFERENT session. It is
   ALSO cancelled while you're **composing** a reply — a non-empty unsent web
-  composer draft (`_composing` over `_composer_draft`): typing a draft means
+  composer draft (`composing` over `composer_draft`): typing a draft means
   you're already on it, so an alert would just nag. That is the "did I react?"
   test: reacting is the tab moving off red/green, the session being gone, or an
   unsent draft in hand — decided deliberately over "did the page get viewed"
@@ -5105,7 +5105,7 @@ skill (`~/.claude/skills/notify/scripts/notify.py` → a Telegram bot), gated on
 - An entry that **survives** past the grace window is delivered in TWO stages —
   **device-first, Telegram-if-ignored** (*Device routing*, below):
   - **Stage 1 (on-device):** a Web Push to the ONE device you most recently used
-    (`_mru_push_targets`), NOT every subscription — so a session going done/asking
+    (`mru_push_targets`), NOT every subscription — so a session going done/asking
     buzzes the device you're working on, never your iPad and Mac at once. The
     entry stays armed with an `escalate_at` = now + `CLAUDE_DASH_ESCALATE_S`
     (default 300 s / 5 min).
@@ -5210,7 +5210,7 @@ time). Either channel arms the pending alert (`NOTIFY_TELEGRAM or NOTIFY_WEBPUSH
 NOT fanned out to every subscription (which put the SAME alert on your iPad AND
 your Mac at once). Instead:
 - **Stage 1** sends the Web Push to the ONE device you most recently used
-  (`_mru_push_targets`): every subscription is tagged at subscribe time with a
+  (`mru_push_targets`): every subscription is tagged at subscribe time with a
   stable `device` id (app.js `DEVICE_ID`, persisted in `localStorage`) + a
   `label`; the ~8s `/api/presence` beat stamps `_DEVICE_SEEN[device]` while that
   device's dashboard is visible + focused (from ANY view); the push goes to the
@@ -5288,7 +5288,7 @@ The pieces:
   `POST /api/push/subscribe`. Stored (upserted by endpoint) in the durable global
   prefs store (`push-subs` kv — per-DEVICE, not per-session), the `device`/`label`
   saved ALONGSIDE the wire fields (`webpush.send` ignores the extras) so
-  `_mru_push_targets` can route by device. `POST /api/push/unsubscribe` (and a
+  `mru_push_targets` can route by device. `POST /api/push/unsubscribe` (and a
   server-side prune on a `gone` send) drops
   it.
 - **The send** — `Notifier._webpush` builds the `{title, body, sid, kind, url}`
@@ -5543,7 +5543,7 @@ off the enriched `ses.agents` row, so the swap is instant on click; the drill-do
 fetch (`/api/session/<sid>/agent/<aid>`) then feeds its `usage` **and** the
 server-priced `cost` back up through `renderTimelineInto`'s `onData` callback,
 and the scoreboard repaints with tokens + cost. Per-agent **cost** is stamped
-server-side by `_stamp_agent_cost` (`accounting.cost_usd` over the agent's usage +
+server-side by `stamp_agent_cost` (`accounting.cost_usd` over the agent's usage +
 last model) — the ONLY per-agent cost figure there is, since OTEL `costs()` is
 aggregate by `query_source` (main/subagent/auxiliary), never attributable to a
 single `agent_id`. `agentFocus` is cleared by any full `renderSessionChrome` (a

@@ -13,9 +13,9 @@ from dashboard import config
 from dashboard.config import (BUSY_TABS,
                               EFFORTS,
                               QUEUE_TABS,
-                              _MODEL_ARG_OK, _clip_screen)
+                              MODEL_ARG_OK, clip_screen)
 from dashboard.control import launch
-from dashboard.read.session import (_ask_pending, _plan_pending)
+from dashboard.read.session import (ask_pending, plan_pending)
 
 A = load_audit()
 
@@ -89,7 +89,7 @@ class _TypingMixin:
         # the dialog and the text is lost (the "my queued message vanished mid
         # ask" report, 2026-07-19). Refuse with a clear pointer to the card; the
         # composer keeps its text (the page re-persists the draft on error).
-        if _ask_pending(sid) or _plan_pending(sid):
+        if ask_pending(sid) or plan_pending(sid):
             A.state_file(log, sdb, "web-send",
                          {"win": win, "chars": len(text), "ok": False,
                           "blocked": "modal"})
@@ -127,7 +127,7 @@ class _TypingMixin:
         # empty an IMAGE clipboard first — a bracketed paste makes Claude Code
         # attach whatever image is on the board (docs/dashboard.md *Clipboard-
         # image guard*); no-op on a text clipboard / off macOS.
-        clip = launch._clear_clipboard_image()
+        clip = launch.clear_clipboard_image()
         launch.note_send(sid)      # our paste is about to sit in the box for a
         #                            beat — the draft sync must not read it back
         ok = bool(fe.paste_text(win, text))
@@ -156,7 +156,7 @@ class _TypingMixin:
         the TUI's switch-confirm menu, auto-answered Yes below — the reply's
         `confirm` field). A FIXED
         vocabulary, 400 on anything else — the arg is validated
-        (_MODEL_ARG_OK / EFFORTS) precisely because it is typed into a
+        (MODEL_ARG_OK / EFFORTS) precisely because it is typed into a
         terminal, and compact takes no arg (the closed vocabulary IS the
         point; free-form text is the composer's job). Delivery matches
         post_message (bracketed paste + CR via the live claude_session
@@ -172,7 +172,7 @@ class _TypingMixin:
         if cmd == "compact" and not arg:
             text = "/compact"
         elif cmd == "model" and isinstance(arg, str) \
-                and _MODEL_ARG_OK.match(arg):
+                and MODEL_ARG_OK.match(arg):
             text = "/model " + arg
         elif cmd == "effort" and arg in EFFORTS:
             text = "/effort " + arg
@@ -367,7 +367,7 @@ class _TypingMixin:
             # the screen the failing step gave up on, clipped — without it a
             # `step: "open"` row cannot tell "the menu never opened" from "our
             # marker stopped matching a menu that did" (the 2026-07-25 drift)
-            seen = _clip_screen(e.screen) if e.screen else ""
+            seen = clip_screen(e.screen) if e.screen else ""
             A.error(log, "dashboard rewind-to (%s)" % e.step,
                     {"sid": sid, "win": win, "mode": mode, "detail": str(e),
                      "screen": seen})
@@ -412,7 +412,7 @@ class _TypingMixin:
         changing which check responds first."""
         extra = extra or {}
         row, log, sdb = self._audit_target(sid)
-        fe = launch._frontend()
+        fe = launch.frontend()
         if fe is None:
             A.error(log, "dashboard %s (no terminal)" % verb, {"sid": sid})
             A.state_file(log, sdb, action, {"win": "", **extra, "ok": False})

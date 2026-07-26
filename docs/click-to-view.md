@@ -281,7 +281,7 @@ recorded poisoned history is defused too, with no data scrubbing. Why not the al
   the line you clicked; *renderer-side mouse reporting* was already rejected
   for the copy links; *hiding via mutable op rows* breaks the append-only
   `ops` contract that resume/park/restore depends on. The OSC 8 sequences the
-  producers now bake into `line`/`gut` text required teaching `render._ANSI`
+  producers now bake into `line`/`gut` text required teaching `render.ANSI_RE`
   to match whole OSC sequences (before the 2-char branch that ate just
   `\x1b]`), so hyperlinks are zero-width to `wrap_gutter`/`dwidth` and vanish
   from `strip_ansi` copies.

@@ -44,7 +44,7 @@ function connectGlobal() {
     // full-snapshot path alone
     checkJump();
   });
-  // the launch-wake fast path: the server's _launch_wake watcher spotted the
+  // the launch-wake fast path: the server's launch_wake watcher spotted the
   // session a web launch produced and named its sid — the page that armed the
   // matching jump navigates NOW, without waiting for the row to ride a
   // snapshot. Every open page receives every wake, so ownership is checked:

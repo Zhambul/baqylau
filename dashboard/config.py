@@ -66,7 +66,7 @@ def extra_origins(raw):
 SCREEN_CLIP = 2000     # cap on a bail's captured screen in an audit errors row
 
 
-def _clip_screen(scr, cap=SCREEN_CLIP):
+def clip_screen(scr, cap=SCREEN_CLIP):
     """Bound a captured `get_text` screen for the audit `errors` context while
     keeping BOTH diagnostic ends. A plain `scr[-cap:]` kept only the TAIL, but a
     `step:open` bail's discriminator — is the ☐/☒ header-chip bar present at the
@@ -152,7 +152,7 @@ NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
 # Effectively off anyway when the crypto backend is missing (webpush.enabled()).
 NOTIFY_WEBPUSH = (os.environ.get("CLAUDE_DASH_NOTIFY_WEBPUSH") or "1") != "0"
 # The on-device push goes to the ONE device you most recently used (see
-# _mru_push_targets), not every subscription — so a session going done/asking
+# mru_push_targets), not every subscription — so a session going done/asking
 # alerts only the device you're working on, never all of them at once. Telegram
 # then ESCALATES: it fires as a nudge only if, ESCALATE_S after that on-device
 # push, you STILL haven't acted on the session (a reaction / a look drops the
@@ -261,7 +261,7 @@ INTERRUPT_RETRY_S = 0.5           # gap between the TWO screen captures whose
 #                                    is still changing" is (docs/dashboard.md
 #                                    *Interrupt*, CLAUDE.md *Experimenting*).
 
-_SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
+SID_OK = re.compile(r"^[A-Za-z0-9._-]+$")     # a mirror-log key, post-sanitize
 
 # This process's identity, sent as the global SSE `hello` event. A page that
 # reconnects and sees a DIFFERENT boot id knows the server restarted under it
@@ -272,16 +272,16 @@ BOOT_ID = str(int(time.time() * 1000))
 # --- control-plane validation vocabulary (the /command, rename, new-session
 # endpoints) --------------------------------------------------------------------
 EFFORTS = ("low", "medium", "high", "xhigh", "max")   # claude --effort levels
-_MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
+MODEL_OK = re.compile(r"^[A-Za-z0-9._-]+$")   # an alias or full model id — one
                                                # clean argv word, nothing else
 # The scoreboard's quick-command row (post_command, docs/dashboard.md *Web
-# quick commands*): model args are _MODEL_OK's one-clean-word alphabet plus
+# quick commands*): model args are MODEL_OK's one-clean-word alphabet plus
 # the CLI's literal `[1m]` context suffix (`/model sonnet[1m]`); effort args
 # are the same EFFORTS levels the launch form validates.
-_MODEL_ARG_OK = re.compile(r"^[A-Za-z0-9._-]+(\[1m\])?$")
+MODEL_ARG_OK = re.compile(r"^[A-Za-z0-9._-]+(\[1m\])?$")
 RENAME_MAX = 120     # rename display cap — picker/tab truncate anyway; a
                      # protocol-abuse guard on the appended record, not a format limit
-_NAME_CTRL = re.compile(r"[\x00-\x1f\x7f]+")   # control bytes never enter a name:
+NAME_CTRL = re.compile(r"[\x00-\x1f\x7f]+")   # control bytes never enter a name:
                                                # it goes VERBATIM to set-tab-title
                                                # and the picker — the OSC/CSI
                                                # injection class neutralize() exists for

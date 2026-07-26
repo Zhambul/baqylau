@@ -15,7 +15,7 @@ from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS
 from dashboard.control import launch
 from dashboard.read.cache import MEMO_CAP, _db_cached
 from dashboard.read.meta import (canon_cwd, git_info, session_ctx,
-                                 session_title, _group_dir, _session_slug)
+                                 session_title, group_dir, session_slug)
 
 
 def _last_active(row, sdb):
@@ -64,11 +64,11 @@ def sessions_payload():
     display title (plugins.session_title over the transcript), and
     `last_active` (the recency chip / group order / archive boundary —
     _last_active). `live` is
-    corrected to require an OPEN tab (see _live_windows): a session whose state
+    corrected to require an OPEN tab (see live_windows): a session whose state
     DB lingers but whose tab is gone (closed without a SessionEnd — crash/kill,
     or a leaked DB) is demoted to not-live so it can't masquerade as running."""
     tabstates = API.tab_states()
-    live_wins = launch._live_windows()
+    live_wins = launch.live_windows()
     out = []
     for row in API.sessions(SESSIONS_LIMIT):
         sdb = API.session_db(row)      # the live DB, else its durable park
@@ -76,7 +76,7 @@ def sessions_payload():
         # is the single owner of the check; docs/dashboard.md *Liveness*).
         launch.demote_if_dead(row, live_wins)
         # Reconcile the window id to the SAME live-RESOLVED value session_payload
-        # serves (from _live_windows), so the two endpoints never disagree. The
+        # serves (from live_windows), so the two endpoints never disagree. The
         # list used to return the RAW start-time audit id while /api/session
         # returns the resolved id (blank until the pane is tagged claude_session=
         # <sid>) — two different id-spaces. The client's updateHeadFromList
@@ -100,7 +100,7 @@ def sessions_payload():
         # to its linked-worktree owner. Distinct from row.git (live cwd) on
         # purpose — so worktrees still aggregate under their main checkout AND a
         # mid-session cd never moves a card between groups.
-        row["group_dir"] = _group_dir(
+        row["group_dir"] = group_dir(
             canon_cwd(row.get("start_cwd") or "") or row["cwd"])
         row["last_active"] = _last_active(row, sdb)
         out.append(row)
@@ -145,7 +145,7 @@ def resumable_payload(cwd, limit, q=""):
         return []
     ql = (q or "").strip().lower()
     labels = {a.get("slug"): a.get("label") for a in plugins.accounts()}
-    live_wins = launch._live_windows()
+    live_wins = launch.live_windows()
     canon = {}                                   # memo: realpath is a syscall/row
     out = []
     for row in API.sessions(RESUMABLE_SCAN):
@@ -162,7 +162,7 @@ def resumable_payload(cwd, limit, q=""):
         # live session 409s anyway, but the row marks it so the picker can flag it.
         launch.demote_if_dead(row, live_wins, sid)
         ctx = session_ctx(row.get("transcript_path") or "", main=True)
-        slug = _session_slug(sid)
+        slug = session_slug(sid)
         out.append({
             "sid": sid,
             "title": title,
@@ -178,7 +178,7 @@ def resumable_payload(cwd, limit, q=""):
     return out
 
 
-def _wire_row(r):
+def wire_row(r):
     """A sessions row as the PAGE consumes it: minus `transcript_path`, `log`
     and `start_cwd` — server-side values the client never reads (start_cwd only
     feeds group_dir server-side; the page groups on group_dir), ~20% of the
@@ -189,7 +189,7 @@ def _wire_row(r):
             if k not in ("transcript_path", "log", "start_cwd")}
 
 
-def _row_key(wire_row):
+def row_key(wire_row):
     """ONE wire row's change-detection key: the row minus stats['paused'].
     The scorebar accrues that float ~once per second for every session
     sitting at a prompt (its awaiting-pause accumulator), which would make
@@ -302,7 +302,7 @@ def stats_payload():
 
     Sessions group under the SAME key the list page uses — start_cwd (the frozen
     original cwd), symlink-canonicalised and resolved to its linked-worktree owner
-    (_group_dir) — so worktrees fold under their main checkout. Pulse windows
+    (group_dir) — so worktrees fold under their main checkout. Pulse windows
     (7d/30d/all) and per-project sparkline series are folded from the same rows in
     one pass; the heatmap buckets are left client-side so the scale self-normalises
     without a round-trip."""
@@ -321,10 +321,10 @@ def stats_payload():
     # the SESSIONS_LIMIT discovery depth always covers it.
     live_sids = {r["sid"] for r in sessions_payload() if r.get("live")}
     # resolve each row's grouping key ONCE (canon_cwd is a realpath syscall,
-    # _group_dir a cached .git walk) and reuse it for both the project cards and
+    # group_dir a cached .git walk) and reuse it for both the project cards and
     # every pulse window.
     for r in rows:
-        r["_key"] = _group_dir(canon_cwd(r.get("start_cwd") or "")) or ""
+        r["_key"] = group_dir(canon_cwd(r.get("start_cwd") or "")) or ""
     projects = {}
     for r in rows:
         key = r["_key"]

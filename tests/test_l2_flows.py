@@ -1047,7 +1047,7 @@ def test_f10c_nested_claude_start_skips_pane(run_hook, test_env, session,
     swept the OUTER session's mirror as "stale" (its sid differs), re-tagged the
     host window to itself, then untagged + closed the panes at its own SessionEnd
     — orphaning the real session's mirror AND dropping it off the dashboard (the
-    host's claude_session tag was gone, so _live_windows saw no live pane). One
+    host's claude_session tag was gone, so live_windows saw no live pane). One
     tab holds exactly one host session, so the nested run skips the whole
     lifecycle (like a daemon/headless start)."""
     outer = session.make()                   # the real, live session in this tab
@@ -1065,7 +1065,7 @@ def test_f10c_nested_claude_start_skips_pane(run_hook, test_env, session,
     assert any(w["user_vars"].get("claude_mirror") == outer.sid
                for w in fake_kitten.windows()), "outer session's mirror was hijacked"
     # the host window still points at the OUTER session — the dashboard liveness
-    # tag (_live_windows) that the hijack destroyed.
+    # tag (live_windows) that the hijack destroyed.
     assert any(w["user_vars"].get("claude_session") == outer.sid
                for w in fake_kitten.windows()), "host window re-tagged away from outer"
     assert not os.path.exists(nested.state_db), "nested session grew a state DB"

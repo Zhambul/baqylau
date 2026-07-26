@@ -164,7 +164,7 @@ def _git_resolve(cwd):
 
 def _resolve_git(cwd):
     """The _git_resolve result for cwd behind the _GIT memo, shared by git_info
-    and _group_dir. The stored sentinel is `False` = 'not yet resolved', kept
+    and group_dir. The stored sentinel is `False` = 'not yet resolved', kept
     DISTINCT from a legitimately cached None/{} so a genuine no-checkout result
     is cached (not re-resolved every call)."""
     hit = _GIT.get(cwd, False)
@@ -222,7 +222,7 @@ def git_info(cwd):
             "dirty": _git_dirty(cwd)}
 
 
-def _group_dir(cwd):
+def group_dir(cwd):
     """The directory a session GROUPS under on the list page: its linked-
     worktree OWNER (so N worktrees of one repo aggregate under the main
     checkout, as git_info's `root` did), else `cwd` itself. Fed the session's
@@ -304,7 +304,7 @@ def session_cmds(sid):
     return cmd_names(canon_cwd(row.get("cwd") or ""))
 
 
-def _session_slug(sid):
+def session_slug(sid):
     """The session's subscription-account slug from its statusline stash
     ('' for the default account / no stash) — resolves WHICH user-level
     settings the effort read consults."""

@@ -81,11 +81,17 @@ from dashboard import config  # noqa: F401  -- DS.config: the knob surface + pat
 from dashboard.notify import notifier, presence  # noqa: F401  -- module handles for tests
 from dashboard.notify.notifier import NOTIFIER, Notifier  # noqa: F401
 from dashboard.notify.presence import (  # noqa: F401  -- facade re-export
-    VIEW_TTL_S, _DEVICE_SEEN, _VIEWING, _composing, _device_seen, _mark_device,
-    _mark_viewing, _mru_push_targets, _session_ended, _web_viewing,
+    VIEW_TTL_S, composing, device_seen, mark_device, mark_viewing,
+    mru_push_targets, session_ended, web_viewing,
 )
 # NOTE: VIEW_TTL_S is the one number here a test must patch on the OWNER
-# (`DS.presence.VIEW_TTL_S`) — this alias is a read handle, like the maps.
+# (`DS.presence.VIEW_TTL_S`) — this alias is a read handle.
+#
+# The two in-memory presence MAPS are deliberately NOT re-exported: they are
+# module STATE, not surface, and a test that reaches them says so by naming
+# their owner (`DS.presence._VIEWING`). A flat alias would also be a trap of the
+# same shape as a flat config knob — it binds the object, so a rebind on the
+# owner would leave the alias pointing at the old dict.
 
 
 # The read-side presentation model lives in dashboard/read/ (lists / session /
@@ -94,28 +100,28 @@ from dashboard.notify.presence import (  # noqa: F401  -- facade re-export
 from dashboard.read import lists, mirror, session  # noqa: F401  -- module handles for tests
 from dashboard.read.lists import (  # noqa: F401  -- facade re-export
     accounts_payload, dir_live_sessions, sessions_payload, stats_payload,
-    _row_key,
+    row_key,
 )
 from dashboard.read.meta import (  # noqa: F401  -- facade re-export
-    canon_cwd, session_title, _group_dir, _session_slug,
+    canon_cwd, session_title, group_dir, session_slug,
 )
 from dashboard.read.session import (  # noqa: F401  -- facade re-export
-    session_payload, _ask_pending, _chip_delivered, _composer_draft,
-    _composer_queue, _last_prompt, _plan_pending,
+    session_payload, ask_pending, chip_delivered, composer_draft,
+    composer_queue, last_prompt, plan_pending,
 )
 from dashboard.read.mirror import (  # noqa: F401  -- facade re-export
-    history, merge_live, merged_backlog, view_payload, _conv_items,
-    _enrich_entries, _mdify,
+    history, merge_live, merged_backlog, view_payload, conv_items,
+    enrich_entries, mdify,
 )
 
 
 # The terminal-facing control machinery lives in dashboard/control/launch.py;
 # the control-plane validation constants moved to config.py. Callers reach the
-# frontend/live-window resolvers MODULE-QUALIFIED (launch._frontend /
-# launch._live_windows) so a test patches the one owning module.
+# frontend/live-window resolvers MODULE-QUALIFIED (launch.frontend /
+# launch.live_windows) so a test patches the one owning module.
 from dashboard.control import launch  # noqa: F401
 from dashboard.control.launch import (  # noqa: F401  -- facade re-export
-    launch_argv, _clear_clipboard_image, _launch_wake, _within_live_grace,
+    launch_argv, clear_clipboard_image, launch_wake, within_live_grace,
 )
 
 

@@ -30,7 +30,7 @@
 from urllib.parse import unquote, urlparse
 
 from core.noaudit import load_audit
-from dashboard.http.base import _sid
+from dashboard.http.base import valid_sid
 from dashboard.http.post.dialogs import _DialogMixin
 from dashboard.http.post.files import _FilesMixin
 from dashboard.http.post.interrupt import _InterruptMixin
@@ -121,7 +121,7 @@ class _PostMixin(_TypingMixin, _InterruptMixin, _DialogMixin, _StateMixin,
         api = parts[1:] if parts[:1] == ["api"] else None
         if api is None:
             return self._json({"error": "not found"}, 404)
-        if len(api) == 3 and api[0] == "session" and _sid(api[1]) \
+        if len(api) == 3 and api[0] == "session" and valid_sid(api[1]) \
                 and api[2] in self._SESSION_POST:
             return self._SESSION_POST[api[2]](self, api[1])
         fixed = self._FIXED_POST.get(tuple(api))

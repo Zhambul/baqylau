@@ -456,7 +456,7 @@ def dash(monkeypatch, tmp_path):
     # path (that would demote test sessions to not-live when the suite runs
     # inside a live kitty session). None = "can't enumerate → keep the state-DB
     # liveness signal"; a demotion test overrides this with a controlled map.
-    monkeypatch.setattr(DS.launch, "_live_windows", lambda: None)
+    monkeypatch.setattr(DS.launch, "live_windows", lambda: None)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), DS.Handler)
     httpd.daemon_threads = True
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
@@ -775,7 +775,7 @@ def test_resumable_endpoint_dir_scoped_enriched(dash, monkeypatch):
     A.session_start({"session_id": "rz1", "cwd": "/proj", "transcript_path": ""})
     A.session_start({"session_id": "rz2", "cwd": "/proj", "transcript_path": ""})
     # rz2 ran under acc1 — the account kv the statusline stashes; writing it also
-    # creates the state DB _session_slug reads
+    # creates the state DB session_slug reads
     S.kv_set(P.mirror_log("rz2"), "account", {"slug": "acc1"})
     A.session_start({"session_id": "rz3", "cwd": "/other", "transcript_path": ""})
 
@@ -836,7 +836,7 @@ def test_http_backlog_endpoint(dash):
 
 
 def test_live_windows_memoized_by_ttl(monkeypatch):
-    """_live_windows runs ONE `kitten @ ls` per _LIVE_TTL window and serves
+    """live_windows runs ONE `kitten @ ls` per _LIVE_TTL window and serves
     the memo in between (the ~21ms subprocess was the server's largest
     recurring cost when the TTL sat under the 1s tick). Read-side only by
     design — control-plane POSTs never touch this map, they re-scan via
@@ -852,13 +852,13 @@ def test_live_windows_memoized_by_ttl(monkeypatch):
                 for t in osw.get("tabs", []):
                     for w in t.get("windows", []):
                         yield osw, t, w
-    monkeypatch.setattr(DS.launch, "_frontend", lambda: FE())
+    monkeypatch.setattr(DS.launch, "frontend", lambda: FE())
     monkeypatch.setattr(DS.launch, "_LIVE_WINS", {"ts": -1e9, "val": None})
-    assert DS.launch._live_windows() == {"sX": "7"}
-    assert DS.launch._live_windows() == {"sX": "7"}      # within TTL → memo, no scan
+    assert DS.launch.live_windows() == {"sX": "7"}
+    assert DS.launch.live_windows() == {"sX": "7"}      # within TTL → memo, no scan
     assert len(calls) == 1                        # ONE ls per TTL (tree reused)
     DS.launch._LIVE_WINS["ts"] -= DS.launch._LIVE_TTL + 1       # age the memo past the TTL
-    assert DS.launch._live_windows() == {"sX": "7"}
+    assert DS.launch.live_windows() == {"sX": "7"}
     assert len(calls) == 2
 
 
@@ -873,9 +873,9 @@ def test_live_windows_empty_ls_is_cant_tell(monkeypatch):
             return []                     # the swallowed-failure signature
         def iter_windows(self, tree=None):
             raise AssertionError("must not iterate an empty tree")
-    monkeypatch.setattr(DS.launch, "_frontend", lambda: FE())
+    monkeypatch.setattr(DS.launch, "frontend", lambda: FE())
     monkeypatch.setattr(DS.launch, "_LIVE_WINS", {"ts": -1e9, "val": None})
-    assert DS.launch._live_windows() is None            # not {} → no wrongful demotion
+    assert DS.launch.live_windows() is None            # not {} → no wrongful demotion
 
 
 def _notifier_for_asking(monkeypatch, screen, delay=999):
@@ -887,8 +887,8 @@ def _notifier_for_asking(monkeypatch, screen, delay=999):
     asking = next(s for s, k in DS.config.NOTIFY_STATES.items() if k == "asking")
     cur = {"states": {}}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
-    monkeypatch.setattr(DS.presence, "_session_ended", lambda sid: False)
-    monkeypatch.setattr(DS.presence, "_composing", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "session_ended", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "composing", lambda sid: False)
     monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
     monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", delay)
@@ -1069,11 +1069,11 @@ def test_mru_push_targets_picks_most_recent_device(monkeypatch):
     monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
     clock = [100.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
-    DS._DEVICE_SEEN.clear()
-    DS._mark_device("ipad")
+    DS.presence._DEVICE_SEEN.clear()
+    DS.mark_device("ipad")
     clock[0] = 200
-    DS._mark_device("mac")                       # mac is now most-recent
-    targets, decision = DS._mru_push_targets()
+    DS.mark_device("mac")                       # mac is now most-recent
+    targets, decision = DS.mru_push_targets()
     assert [s["endpoint"] for s in targets] == ["https://push/mac"]
     # the decision dict feeds the notify-route audit: chosen device + every
     # candidate's presence age, so "wrong device buzzed" is answerable
@@ -1081,9 +1081,9 @@ def test_mru_push_targets_picks_most_recent_device(monkeypatch):
     ages = {c["device"]: c["age_s"] for c in decision["candidates"]}
     assert ages["mac"] == 0.0 and ages["ipad"] == 100.0
     clock[0] = 300
-    DS._mark_device("ipad")                      # ...and now the iPad
-    assert [s["endpoint"] for s in DS._mru_push_targets()[0]] == ["https://push/ipad"]
-    DS._DEVICE_SEEN.clear()
+    DS.mark_device("ipad")                      # ...and now the iPad
+    assert [s["endpoint"] for s in DS.mru_push_targets()[0]] == ["https://push/ipad"]
+    DS.presence._DEVICE_SEEN.clear()
 
 
 def test_mru_push_targets_legacy_untagged_sends_all(monkeypatch):
@@ -1093,7 +1093,7 @@ def test_mru_push_targets_legacy_untagged_sends_all(monkeypatch):
     subs = [{"endpoint": "https://push/x", "keys": {}},
             {"endpoint": "https://push/y", "keys": {}}]
     monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
-    targets, decision = DS._mru_push_targets()
+    targets, decision = DS.mru_push_targets()
     assert targets == subs and decision["legacy"] is True and decision["target"] is None
 
 
@@ -1105,8 +1105,8 @@ def test_webpush_audits_route_decision(monkeypatch):
     subs = [{"endpoint": "https://p/mac", "keys": {}, "device": "mac", "label": "macOS"},
             {"endpoint": "https://p/ipad", "keys": {}, "device": "ipad", "label": "iPad"}]
     monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
-    DS._DEVICE_SEEN.clear()
-    DS._mark_device("mac")                       # mac is the MRU device
+    DS.presence._DEVICE_SEEN.clear()
+    DS.mark_device("mac")                       # mac is the MRU device
     audited = []
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
     n = DS.Notifier()
@@ -1118,7 +1118,7 @@ def test_webpush_audits_route_decision(monkeypatch):
     assert routes[0]["target"] == "mac" and routes[0]["sid"] == "s7"
     ages = {c["device"]: c["age_s"] for c in routes[0]["candidates"]}
     assert set(ages) == {"mac", "ipad"} and ages["mac"] == 0.0
-    DS._DEVICE_SEEN.clear()
+    DS.presence._DEVICE_SEEN.clear()
 
 
 def test_webpush_send_row_carries_device(monkeypatch):
@@ -1171,8 +1171,8 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
     done = next(s for s, k in DS.config.NOTIFY_STATES.items() if k == "done")
     cur = {"states": {}}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
-    monkeypatch.setattr(DS.presence, "_session_ended", lambda sid: False)
-    monkeypatch.setattr(DS.presence, "_composing", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "session_ended", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "composing", lambda sid: False)
     monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
     monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", delay)
@@ -1264,8 +1264,8 @@ def test_notify_suppressed_when_web_viewing(monkeypatch):
     off-device alert is dropped — you're watching the dashboard."""
     screen = {"txt": _done_screen("\x1b[m❯\xa0")}
     n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=0)
-    DS._VIEWING.pop("sX", None)
-    DS._mark_viewing("sX")                   # a fresh viewing beat
+    DS.presence._VIEWING.pop("sX", None)
+    DS.mark_viewing("sX")                   # a fresh viewing beat
     try:
         n.scan()                             # baseline
         cur["states"] = {"9": done}
@@ -1274,7 +1274,7 @@ def test_notify_suppressed_when_web_viewing(monkeypatch):
         assert any(a[2] == "notify-suppress"
                    and a[3].get("reason") == "web-viewing" for a in audited)
     finally:
-        DS._VIEWING.pop("sX", None)
+        DS.presence._VIEWING.pop("sX", None)
 
 
 def test_notify_muted_drop_is_audited(monkeypatch):
@@ -1314,18 +1314,18 @@ def test_notify_reaction_drop_leaves_no_row(monkeypatch):
 
 def test_web_viewing_presence_expires(monkeypatch):
     """The viewing presence is TTL'd: a beat marks the sid fresh, and once the
-    deadline passes (`_web_viewing` GC's it) presence is gone — so the alert
+    deadline passes (`web_viewing` GC's it) presence is gone — so the alert
     reverts to firing when you stop watching."""
     monkeypatch.setattr(DS.presence, "VIEW_TTL_S", 20)
     clock = [1000.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
-    DS._VIEWING.pop("sZ", None)
-    assert DS._web_viewing("sZ") is False
-    DS._mark_viewing("sZ")
-    assert DS._web_viewing("sZ") is True
+    DS.presence._VIEWING.pop("sZ", None)
+    assert DS.web_viewing("sZ") is False
+    DS.mark_viewing("sZ")
+    assert DS.web_viewing("sZ") is True
     clock[0] += 21                            # past the TTL
-    assert DS._web_viewing("sZ") is False
-    assert "sZ" not in DS._VIEWING            # GC'd on the miss
+    assert DS.web_viewing("sZ") is False
+    assert "sZ" not in DS.presence._VIEWING            # GC'd on the miss
 
 
 def test_presence_maps_stay_bounded(monkeypatch):
@@ -1333,7 +1333,7 @@ def test_presence_maps_stay_bounded(monkeypatch):
     key-set leak `read/cache.py` bounds its memos against, one dict per session /
     per browser ever seen.
 
-    _VIEWING is swept EXACTLY: `_web_viewing` only drops the one key it is asked
+    _VIEWING is swept EXACTLY: `web_viewing` only drops the one key it is asked
     about (and the notifier only asks about ARMED sessions), so the beat itself
     reaps the expired ones — nothing live is ever dropped, and only sessions
     actually being watched remain. _DEVICE_SEEN has no expiry by design (the MRU
@@ -1343,27 +1343,27 @@ def test_presence_maps_stay_bounded(monkeypatch):
     monkeypatch.setattr(DS.presence, "VIEW_TTL_S", 20)
     clock = [5000.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
-    DS._VIEWING.clear()
+    DS.presence._VIEWING.clear()
     for i in range(50):                       # 50 sessions viewed, none re-asked
-        DS._mark_viewing("old%d" % i)
-    assert len(DS._VIEWING) == 50
+        DS.mark_viewing("old%d" % i)
+    assert len(DS.presence._VIEWING) == 50
     clock[0] += 21                            # every one of them lapsed
-    DS._mark_viewing("live1")                 # …the next beat reaps them
-    assert set(DS._VIEWING) == {"live1"}
-    DS._mark_viewing("live2")                 # a still-fresh entry SURVIVES
-    assert set(DS._VIEWING) == {"live1", "live2"}
-    assert DS._web_viewing("live1") is True
+    DS.mark_viewing("live1")                 # …the next beat reaps them
+    assert set(DS.presence._VIEWING) == {"live1"}
+    DS.mark_viewing("live2")                 # a still-fresh entry SURVIVES
+    assert set(DS.presence._VIEWING) == {"live1", "live2"}
+    assert DS.web_viewing("live1") is True
 
-    DS._DEVICE_SEEN.clear()
+    DS.presence._DEVICE_SEEN.clear()
     cap = DS.presence.DEVICE_SEEN_CAP
     for i in range(cap + 10):
         clock[0] += 1
-        DS._mark_device("dev%d" % i)
-    assert len(DS._DEVICE_SEEN) == cap
-    assert "dev0" not in DS._DEVICE_SEEN                  # oldest beat evicted
-    assert DS._device_seen("dev0") == float("-inf")       # …reads as never seen
+        DS.mark_device("dev%d" % i)
+    assert len(DS.presence._DEVICE_SEEN) == cap
+    assert "dev0" not in DS.presence._DEVICE_SEEN                  # oldest beat evicted
+    assert DS.device_seen("dev0") == float("-inf")       # …reads as never seen
     newest = "dev%d" % (cap + 9)
-    assert max(DS._DEVICE_SEEN, key=DS._device_seen) == newest   # MRU intact
+    assert max(DS.presence._DEVICE_SEEN, key=DS.device_seen) == newest   # MRU intact
 
 
 def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
@@ -1483,10 +1483,10 @@ def test_notify_done_suppressed_when_seen_earlier_then_left(monkeypatch):
     cur["states"] = {"9": done}
     n.scan()                                  # arm — not watching yet
     assert "9" in n.pending
-    DS._VIEWING.pop("sX", None)
-    DS._mark_viewing("sX")                    # you GLANCE at the final message
+    DS.presence._VIEWING.pop("sX", None)
+    DS.mark_viewing("sX")                    # you GLANCE at the final message
     n.scan()                                  # per-scan 'seen it' → dropped
-    DS._VIEWING.pop("sX", None)               # the glance is over; you moved on
+    DS.presence._VIEWING.pop("sX", None)               # the glance is over; you moved on
     assert "9" not in n.pending
     assert any(a[2] == "notify-suppress"
                and a[3].get("reason") == "web-viewing" for a in audited)
@@ -1507,10 +1507,10 @@ def test_notify_asking_still_fires_after_earlier_glance(monkeypatch):
     cur["states"] = {"9": asking}
     n.scan()                                  # arm
     assert "9" in n.pending
-    DS._VIEWING.pop("sX", None)
-    DS._mark_viewing("sX")                    # you GLANCE at the ask on the dashboard
+    DS.presence._VIEWING.pop("sX", None)
+    DS.mark_viewing("sX")                    # you GLANCE at the ask on the dashboard
     n.scan()                                  # NOT cancelled — asking ignores a glance
-    DS._VIEWING.pop("sX", None)               # ...and you leave without answering
+    DS.presence._VIEWING.pop("sX", None)               # ...and you leave without answering
     assert "9" in n.pending
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0)
     n.scan()                                  # send time, not looking now → fires
@@ -1535,7 +1535,7 @@ def _pump_global(r, got):
 
 
 def test_global_sse_diff_is_paused_blind(dash, monkeypatch):
-    """The global stream's per-row change detection (_row_key) ignores
+    """The global stream's per-row change detection (row_key) ignores
     stats['paused'] — the scorebar's ~1/s awaiting-pause accumulator made the
     snapshot differ on EVERY tick, forcing a full resend + client list
     re-render per second on an idle dashboard. A paused-only bump must push
@@ -1837,7 +1837,7 @@ def test_composer_draft_persist_payload_and_sse(dash, monkeypatch):
     assert data and json.loads(data)["draft"]["origin"] == "devA"
     # an emptied / whitespace-only box clears the stash → payload None (the
     # kv keeps an empty-text TOMBSTONE so a later stale seq can be rejected —
-    # _composer_draft reads a tombstone as None either way)
+    # composer_draft reads a tombstone as None either way)
     code, _ = _post(dash + "/api/session/cdr1/composer-draft",
                     {"text": "   ", "origin": "devA"})
     assert code == 200
@@ -1949,7 +1949,7 @@ def test_composer_queue_reconciles_delivered_chips(dash, monkeypatch, tmp_path):
     matches NEW stream items, so a chip persisted by a client that then closed /
     reloaded before delivery re-seeded from the kv forever — buildQueueBar found
     the delivered prompt already in the backlog with no fresh item to drain it.
-    `_composer_queue` now drops any chip whose prompt appears among the
+    `composer_queue` now drops any chip whose prompt appears among the
     transcript's delivered prompts (exact, or the tolerant attachment-prefix
     match `@path\\n<text>`), while a still-pending chip survives."""
     tr = tmp_path / "cq.jsonl"
@@ -2307,7 +2307,7 @@ def test_hide_dir_refused_when_directory_has_a_live_session(dash):
     sessions still hides, and the same directory becomes hideable once its
     session parks."""
     # a LIVE session in /w — its state DB exists (any writer creates it), so
-    # sessions_payload reports live=True (the fixture's _live_windows→None keeps
+    # sessions_payload reports live=True (the fixture's live_windows→None keeps
     # the state-DB liveness signal, no window demotion)
     A.session_start({"session_id": "hidelive", "cwd": "/w", "transcript_path": ""})
     S.kv_set(P.mirror_log("hidelive"), "seed", 1)      # create the state DB → live
@@ -2548,7 +2548,7 @@ def test_http_agent_timeline(dash, tmp_path):
     assert kinds == ["message", "tool"] and d["model"] == "claude-x"
     tool = d["entries"][1]
     assert tool["tool"] == "Bash" and tool["output"] == "listing"
-    # _mdify enriches the tool entry additively: a Bash command gets a
+    # mdify enriches the tool entry additively: a Bash command gets a
     # highlighted input_html; the raw input stays untouched.
     assert "<pre class=\"oc\">" in tool["input_html"]
     assert tool["input"] == {"command": "ls"}
@@ -2763,7 +2763,7 @@ def test_sse_agent_streams_entries(dash, tmp_path):
     kinds = [e["t"] for e in d["entries"]]
     assert kinds == ["message", "tool"]
     tool = d["entries"][1]
-    assert "<pre class=\"oc\">" in tool["input_html"]   # _enrich_entries ran
+    assert "<pre class=\"oc\">" in tool["input_html"]   # enrich_entries ran
 
 
 def test_activity_entries_carry_markdown_html(dash, tmp_path):
@@ -3338,7 +3338,7 @@ def test_notifier_telegram_suppressed_while_composing(monkeypatch, tmp_path):
     clock = [0.0]
     monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
     draft = {"s7": {"text": "half-written reply"}}   # sid -> draft (or absent)
-    monkeypatch.setattr(DS.presence, "_composer_draft", lambda sid: draft.get(sid))
+    monkeypatch.setattr(DS.presence, "composer_draft", lambda sid: draft.get(sid))
     sent = []
     n = DS.Notifier()
     monkeypatch.setattr(n, "_telegram", lambda entry, *a: sent.append(entry))
@@ -3451,34 +3451,34 @@ def test_notify_mute_behind_post_guard(dash, monkeypatch):
 
 def test_viewing_heartbeat_marks_presence(dash):
     """POST /api/session/<sid>/viewing (an empty body) marks the session as
-    being watched — `_web_viewing` flips true — so the deferred alert can
+    being watched — `web_viewing` flips true — so the deferred alert can
     suppress. Behind the control-plane guard: a missing header is 403."""
-    DS._VIEWING.pop("vh1", None)
-    assert DS._web_viewing("vh1") is False
+    DS.presence._VIEWING.pop("vh1", None)
+    assert DS.web_viewing("vh1") is False
     code, body = _post(dash + "/api/session/vh1/viewing", {})
     assert code == 200 and json.loads(body)["ok"] is True
-    assert DS._web_viewing("vh1") is True
+    assert DS.web_viewing("vh1") is True
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/vh1/viewing", {}, header=None)
     assert e.value.code == 403
-    DS._VIEWING.pop("vh1", None)
+    DS.presence._VIEWING.pop("vh1", None)
 
 
 def test_presence_beat_marks_device_and_viewing(dash):
     """POST /api/presence marks BOTH device presence (for on-device push
     routing) and, when a sid rides along, session viewing (for suppression).
     Behind the control-plane guard: a missing header is 403."""
-    DS._DEVICE_SEEN.pop("devQ", None)
-    DS._VIEWING.pop("pv1", None)
+    DS.presence._DEVICE_SEEN.pop("devQ", None)
+    DS.presence._VIEWING.pop("pv1", None)
     code, body = _post(dash + "/api/presence", {"device": "devQ", "sid": "pv1"})
     assert code == 200 and json.loads(body)["ok"] is True
-    assert DS._device_seen("devQ") != float("-inf")   # device recorded
-    assert DS._web_viewing("pv1") is True             # session viewing recorded
+    assert DS.device_seen("devQ") != float("-inf")   # device recorded
+    assert DS.web_viewing("pv1") is True             # session viewing recorded
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/presence", {"device": "x"}, header=None)
     assert e.value.code == 403
-    DS._DEVICE_SEEN.pop("devQ", None)
-    DS._VIEWING.pop("pv1", None)
+    DS.presence._DEVICE_SEEN.pop("devQ", None)
+    DS.presence._VIEWING.pop("pv1", None)
 
 
 def test_add_push_subscription_stores_device_and_label(monkeypatch, tmp_path):
@@ -3624,17 +3624,17 @@ def test_clear_clipboard_image_only_when_image(monkeypatch):
     # an image on the clipboard → detected and cleared
     fake_run.info = "«class PNGf», 70, «class utf8», 3"
     calls.clear()
-    assert DS._clear_clipboard_image() is True
+    assert DS.clear_clipboard_image() is True
     assert any('set the clipboard to ""' in " ".join(c) for c in calls)
     # a text-only clipboard → left alone (no set-clipboard command issued)
     fake_run.info = "«class utf8», 12"
     calls.clear()
-    assert DS._clear_clipboard_image() is False
+    assert DS.clear_clipboard_image() is False
     assert not any("set the clipboard" in " ".join(c) for c in calls)
     # off macOS → never even probes
     monkeypatch.setattr(DS.launch.sys, "platform", "linux")
     calls.clear()
-    assert DS._clear_clipboard_image() is False and calls == []
+    assert DS.clear_clipboard_image() is False and calls == []
 
 
 def test_post_message_runs_clipboard_guard(dash, monkeypatch):
@@ -3645,7 +3645,7 @@ def test_post_message_runs_clipboard_guard(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "42")
     A.session_start({"session_id": "msgclip", "cwd": "/w", "transcript_path": ""})
     calls = []
-    monkeypatch.setattr(DS.launch, "_clear_clipboard_image",
+    monkeypatch.setattr(DS.launch, "clear_clipboard_image",
                         lambda: calls.append(1) or True)
     code, _ = _post(dash + "/api/session/msgclip/message", {"text": "hi"})
     assert code == 200
@@ -3734,7 +3734,7 @@ def test_post_message_settled_tab_skips_the_screen_probe(dash, monkeypatch):
 
 
 def test_chip_delivered_matches_a_glued_prefix():
-    """The delivered-prompt match rule (`_chip_delivered` — owner of the fact,
+    """The delivered-prompt match rule (`chip_delivered` — owner of the fact,
     twinned in app.js `promptMatches`) is a SUFFIX match, because what the
     composer sent can arrive with anything prepended:
 
@@ -3746,7 +3746,7 @@ def test_chip_delivered_matches_a_glued_prefix():
       bdeca061, 2026-07-25: `testing` + the sent text arrived as one prompt).
 
     Empty chip text must never match (it would reconcile every chip away)."""
-    D = DS._chip_delivered
+    D = DS.chip_delivered
     assert D("hello", ["hello"])                        # exact
     assert D("hello", ["@a.png\nhello"])                # attachment mentions
     assert D("hello", ["testinghello"])                 # restored draft, glued
@@ -3762,7 +3762,7 @@ def test_app_js_drains_through_the_shared_prompt_match(dash):
     """Both client reconcilers — drainQueue (the ⧗ queued chips) and
     drainPending (the greyed optimistic bubbles) — must go through the ONE
     shared `promptMatches` rule, the deliberate twin of the server's
-    `_chip_delivered`. Three copies of this match drifted apart once (the
+    `chip_delivered`. Three copies of this match drifted apart once (the
     newline-only tolerance that pinned a chip forever); a static check on the
     served bundles keeps them from re-splitting."""
     code, core = _get(dash + "/static/app.00-core.js")
@@ -3815,7 +3815,7 @@ def test_app_js_slash_menu_matches_on_contains(dash):
 
 
 def test_conv_items_carry_kind_and_prompt_text():
-    items = DS._conv_items([
+    items = DS.conv_items([
         {"kind": "prompt", "text": "do the thing"},
         {"kind": "message", "text": "on it"},
         {"kind": "teammsg", "text": "hi", "sender": "reviewer"},
@@ -4069,7 +4069,7 @@ def test_post_message_blocked_while_dialog_open(dash, monkeypatch):
 
 class _NoTermFE:
     """A frontend with no reachable control channel (dashboard started outside
-    kitty) → _frontend() returns None → a clean 503, never a 500."""
+    kitty) → frontend() returns None → a clean 503, never a 500."""
 
     def usable(self):
         return False
@@ -4810,7 +4810,7 @@ class _WatchAudit:
 
 @pytest.fixture(autouse=True)
 def _fast_launch_wake(monkeypatch):
-    """Every successful /api/sessions/new spawns a _launch_wake poller thread;
+    """Every successful /api/sessions/new spawns a launch_wake poller thread;
     at the product's 15s budget one would outlive its test and keep polling the
     shared audit DB while later tests run. Clamp the budget module-wide; the
     wake tests below re-raise it themselves."""
@@ -4820,13 +4820,13 @@ def _fast_launch_wake(monkeypatch):
 
 def _watch_rig(monkeypatch, fronts, bundle="app.term"):
     """Wire the steal watch for a test: a _FakeFE with an OS app id, a
-    scripted _front_app sequence (call 1 = the pre-launch capture, the rest =
+    scripted front_app sequence (call 1 = the pre-launch capture, the rest =
     the watch polls; the last value repeats), a fast poll cadence, a recorded
     audit. Returns (fe, rows) — rows collects the watch's audit content."""
     fe = _FakeFE()
     fe.bundle_id = bundle
     seq = list(fronts)
-    monkeypatch.setattr(DS.launch, "_front_app",
+    monkeypatch.setattr(DS.launch, "front_app",
                         lambda: seq.pop(0) if len(seq) > 1 else seq[0])
     monkeypatch.setattr(DS.launch, "STEALWATCH_POLL_S", 0.005)
     aud = _WatchAudit(DS.launch.A)
@@ -4871,7 +4871,7 @@ def test_new_session_watch_off_without_app_id(dash, monkeypatch, tmp_path):
     fe = _FakeFE()                                     # bundle_id stays ""
     _inject_fe(monkeypatch, fe)
     probed = []
-    monkeypatch.setattr(DS.launch, "_front_app", lambda: probed.append(1) or "x")
+    monkeypatch.setattr(DS.launch, "front_app", lambda: probed.append(1) or "x")
     code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
     assert code == 200 and probed == []
 
@@ -5083,7 +5083,7 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     # a session whose state DB lingers but whose tab is gone must NOT show live
     monkeypatch.setenv("KITTY_WINDOW_ID", "11")
     A.session_start({"session_id": "ghost", "cwd": "/w", "transcript_path": ""})
-    # backdate past the just-started grace (_within_live_grace) so the missing-
+    # backdate past the just-started grace (within_live_grace) so the missing-
     # window demotion applies — this test is the LEAKED/CRASHED lingering
     # session, not a brand-new launch (that case is covered separately below)
     A._connect().execute("UPDATE sessions SET started_at=? WHERE session_id=?",
@@ -5092,13 +5092,13 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
     log = P.mirror_log("ghost")
     O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
     # window enumeration returns a map WITHOUT this sid → tab is closed
-    monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"other": "99"})
+    monkeypatch.setattr(DS.launch, "live_windows", lambda: {"other": "99"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
     assert row["live"] is False                # demoted — the requirement
     ov = _get_json(dash + "/api/session/ghost")
     assert ov["live"] is False and ov["kitty_window_id"] == ""
     # when the tab IS open (sid in the map) it stays live and controllable
-    monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"ghost": "11"})
+    monkeypatch.setattr(DS.launch, "live_windows", lambda: {"ghost": "11"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "ghost")
     assert row["live"] is True
     # the LIST serves the SAME live-RESOLVED window id as /api/session (not the
@@ -5113,7 +5113,7 @@ def test_closed_tab_not_marked_live(dash, monkeypatch):
 def test_fresh_session_within_grace_stays_live(dash, monkeypatch):
     # a JUST-started session whose pane isn't tagged claude_session=<sid> yet
     # (the startup tag-race: A.session_start writes the sessions row before
-    # split.tag_window runs, and _live_windows is memoized on top) must NOT be
+    # split.tag_window runs, and live_windows is memoized on top) must NOT be
     # demoted to not-live during _LIVE_GRACE_S — else the card flashes "parked"
     # and the detail header (meta fetched once) froze on it, uncloseable.
     monkeypatch.setenv("KITTY_WINDOW_ID", "12")
@@ -5122,7 +5122,7 @@ def test_fresh_session_within_grace_stays_live(dash, monkeypatch):
     O.emit(log, O.label("x", (1, 2, 3)))       # create the state DB (state-DB live)
     # window map WITHOUT this sid — the pane hasn't been tagged yet — but the
     # session started just now, so the grace keeps it live and controllable
-    monkeypatch.setattr(DS.launch, "_live_windows", lambda: {"other": "99"})
+    monkeypatch.setattr(DS.launch, "live_windows", lambda: {"other": "99"})
     row = next(r for r in _get_json(dash + "/api/sessions") if r["sid"] == "fresh")
     assert row["live"] is True                 # inside the grace — not demoted
     # mid-tag-race the list's window id is "" (live-resolved, pane not tagged yet)
@@ -5301,7 +5301,7 @@ def test_post_interrupt_reports_the_taken_back_message(dash, monkeypatch):
     A.session_start({"session_id": "tb1", "cwd": "/w", "transcript_path": ""})
     S.kv_set(P.mirror_log("tb1"), "seed", 1)   # the state DB must EXIST: the
     #   stash writes through kv_set_at, which never creates one
-    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+    monkeypatch.setattr(DS.session, "last_prompt_rec",
                         lambda sid: ("testing the take-back\nwith a second line",
                                      "u-taken"))
     code, body = _post(dash + "/api/session/tb1/interrupt", {})
@@ -5507,7 +5507,7 @@ def test_take_back_makes_the_next_send_replace_the_tui_draft(dash, monkeypatch):
     A.session_start({"session_id": "td1", "cwd": "/w", "transcript_path": ""})
     S.kv_set(P.mirror_log("td1"), "seed", 1)   # the state DB must EXIST: the
     #   stash writes through kv_set_at, which never creates one
-    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+    monkeypatch.setattr(DS.session, "last_prompt_rec",
                         lambda sid: ("testing", "u-tb"))
     _post(dash + "/api/session/td1/interrupt", {})
     assert DS.launch.tui_draft("td1") == "testing"      # recorded server-side
@@ -5534,7 +5534,7 @@ def test_post_interrupt_leaves_a_terminal_draft_alone(dash, monkeypatch):
     A.session_start({"session_id": "tb2", "cwd": "/w", "transcript_path": ""})
     S.kv_set(P.mirror_log("tb2"), "seed", 1)   # the state DB must EXIST: the
     #   stash writes through kv_set_at, which never creates one
-    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+    monkeypatch.setattr(DS.session, "last_prompt_rec",
                         lambda sid: ("an unrelated prompt", "u-other"))
     code, body = _post(dash + "/api/session/tb2/interrupt", {})
     assert code == 200 and json.loads(body)["restored"] == ""
@@ -5552,7 +5552,7 @@ def test_post_interrupt_empty_box_is_a_plain_stop(dash, monkeypatch):
     A.session_start({"session_id": "tb3", "cwd": "/w", "transcript_path": ""})
     S.kv_set(P.mirror_log("tb3"), "seed", 1)   # the state DB must EXIST: the
     #   stash writes through kv_set_at, which never creates one
-    monkeypatch.setattr(DS.session, "_last_prompt_rec",
+    monkeypatch.setattr(DS.session, "last_prompt_rec",
                         lambda sid: ("a prompt that ran", "u-ran"))
     code, body = _post(dash + "/api/session/tb3/interrupt", {})
     assert code == 200 and json.loads(body)["restored"] == ""
@@ -7585,7 +7585,7 @@ def test_canon_cwd_collapses_symlinked_repo(tmp_path):
 
 
 def test_group_dir_resolves_worktree_owner(tmp_path):
-    """_group_dir — the list's grouping-key resolver — maps a session's cwd to
+    """group_dir — the list's grouping-key resolver — maps a session's cwd to
     the directory it files under: a linked-worktree cwd resolves to its OWNING
     main checkout (so N worktrees of one repo aggregate as one project), a main
     checkout / non-checkout resolves to itself, '' stays ''. File-reads only, no
@@ -7597,11 +7597,11 @@ def test_group_dir_resolves_worktree_owner(tmp_path):
     wt = tmp_path / "wt1"
     wt.mkdir()
     (wt / ".git").write_text("gitdir: %s\n" % (repo / ".git" / "worktrees" / "wt1"))
-    assert DS._group_dir(str(wt)) == str(repo)           # worktree -> owning checkout
-    assert DS._group_dir(str(repo)) == str(repo)         # main checkout -> itself
+    assert DS.group_dir(str(wt)) == str(repo)           # worktree -> owning checkout
+    assert DS.group_dir(str(repo)) == str(repo)         # main checkout -> itself
     plain = tmp_path / "plain"
-    assert DS._group_dir(str(plain)) == str(plain)       # non-checkout -> itself
-    assert DS._group_dir("") == ""
+    assert DS.group_dir(str(plain)) == str(plain)       # non-checkout -> itself
+    assert DS.group_dir("") == ""
 
 
 def test_app_js_groups_and_suggests_through_the_shared_group_key(dash):
@@ -7797,7 +7797,7 @@ def test_modal_stash_match_has_one_owner_per_dialog():
     handler moving out of it can't take a third copy along."""
     src = "\n".join(t for f, t in _dash_py("dashboard/http/post"))
     # the mismatch test itself: exactly twice, once per guard (they spell it
-    # identically). post_message's `_ask_pending(sid) or _plan_pending(sid)`
+    # identically). post_message's `ask_pending(sid) or plan_pending(sid)`
     # asks a DIFFERENT question — "is ANY modal up" (a paste would go into the
     # dialog) — and matches no id, so the stash READS are not what's counted.
     assert src.count('!= (pending.get("tool_use_id")') == 2
@@ -7948,7 +7948,7 @@ def test_conversation_items_carry_the_msg_act(dash):
     """Conversation text is stamped ACT_MSG with its `kind` beside it — focus
     mode narrows on the kind (prompts and each turn's final reply survive)."""
     from dashboard.read import mirror as M
-    items = M._conv_items([
+    items = M.conv_items([
         {"kind": "prompt", "text": "hi", "ts": 1.0},
         {"kind": "message", "text": "yo", "ts": 2.0},
     ])
@@ -8294,7 +8294,7 @@ def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
         ("prompt", True, "Base directory for this skill: /x/"),
     ], got
     # …and it reaches the page on the wire item the view modes read
-    items = DS.mirror._conv_items(recs)
+    items = DS.mirror.conv_items(recs)
     assert [it.get("meta") for it in items] == [None, 1, 1]
 
 
@@ -8492,7 +8492,7 @@ def test_compaction_summary_is_flagged_by_its_field_not_its_text(dash, tmp_path)
     # renders it); the summary is, flagged
     assert [(r["kind"], r.get("meta")) for r in recs] == [
         ("prompt", None), ("prompt", True)], recs
-    assert [it.get("meta") for it in DS.mirror._conv_items(recs)] == [None, 1]
+    assert [it.get("meta") for it in DS.mirror.conv_items(recs)] == [None, 1]
 
 
 def test_view_mode_syncs_to_an_open_page_on_another_device(dash):

@@ -14,7 +14,7 @@ from core.noaudit import load_audit
 from dashboard import (prefs)
 from dashboard import config
 from dashboard.config import (EFFORTS,
-                              _MODEL_OK, _NAME_CTRL, _SID_OK)
+                              MODEL_OK, NAME_CTRL, SID_OK)
 from dashboard.control import launch
 from dashboard.control.launch import launch_argv
 
@@ -38,7 +38,7 @@ class _SessionMixin:
         terminal resolves; else the launch, with `--resume <sid>`/`--continue`
         and `--model`/`--effort` riding as positional "$@" words ahead of the
         prompt. The response carries the new tab's window id when the terminal
-        reports one, and a _launch_wake watcher thread hurries the session's
+        reports one, and a launch_wake watcher thread hurries the session's
         SSE appearance (see its block). Audited as a `web-launch` state_files
         row (no session db exists yet, so its log/path are empty; `win` = the
         launched window)."""
@@ -52,7 +52,7 @@ class _SessionMixin:
                                 {"cwd": cwd})
         model, effort = body.get("model"), body.get("effort")
         if model is not None and (
-                not isinstance(model, str) or not _MODEL_OK.match(model)):
+                not isinstance(model, str) or not MODEL_OK.match(model)):
             return self._reject_input("web-launch", "bad model", "invalid model",
                                 {"model": model})
         if effort is not None and effort not in EFFORTS:
@@ -65,7 +65,7 @@ class _SessionMixin:
         # machinery and the page's jump watch both handle that on their own.
         resume, cont = body.get("resume"), body.get("continue")
         if resume is not None and (
-                not isinstance(resume, str) or not _SID_OK.match(resume)):
+                not isinstance(resume, str) or not SID_OK.match(resume)):
             return self._reject_input("web-launch", "bad resume", "invalid resume id",
                                 {"resume": resume})
         if cont not in (None, False, True):
@@ -100,7 +100,7 @@ class _SessionMixin:
         opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
                 "resume": resume or "", "cont": bool(cont),
                 "account": acct or "", "attachments": len(attachments)}
-        fe = launch._frontend()
+        fe = launch.frontend()
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
             A.state_file("", "", "web-launch", dict(opts, ok=False))
@@ -145,13 +145,13 @@ class _SessionMixin:
         # ALREADY frontmost at click time (nothing to steal) or the frontend
         # has no OS app identity (the inert stub, off-mac).
         term = fe.app_id()
-        before = launch._front_app() if term else ""
+        before = launch.front_app() if term else ""
         # a launch carrying a first prompt makes Claude Code's TUI read the
         # clipboard at startup and attach any image to that auto-submitted
         # message (docs/dashboard.md *Clipboard-image guard*) — empty an image
         # clipboard first so the startup grab finds nothing. Only when there's a
         # prompt (a bare launch auto-submits nothing, so nothing to attach to).
-        clip = launch._clear_clipboard_image() if prompt.strip() else False
+        clip = launch.clear_clipboard_image() if prompt.strip() else False
         # launch_tab: the new window's id on success when the terminal reports
         # one (kitty prints it), bare True when it doesn't, falsy on failure.
         got = fe.launch_tab(cwd, argv)
@@ -164,10 +164,10 @@ class _SessionMixin:
         # the SSE wake watch (see the block above the Handler class): hurry
         # the launched session's appearance to every connected page — and hand
         # the launching page its sid — the moment SessionStart lands.
-        threading.Thread(target=launch._launch_wake, args=(win, cwd, time.time()),
+        threading.Thread(target=launch.launch_wake, args=(win, cwd, time.time()),
                          daemon=True, name="web-launch-wake").start()
         if before and before != term:
-            threading.Thread(target=launch._steal_watch, args=(before, term),
+            threading.Thread(target=launch.steal_watch, args=(before, term),
                              daemon=True, name="web-launch-steal-watch").start()
         # `win` lets the page match the launched session exactly (its jump
         # watch compares kitty_window_id); "" when the terminal didn't report
@@ -211,7 +211,7 @@ class _SessionMixin:
             A.state_file(log, "", "web-migrate",
                          {"ok": False, "reason": "unknown sid"})
             return self._json({"error": "unknown session"}, 404)
-        fe = launch._frontend()
+        fe = launch.frontend()
         if fe is None:
             A.error(log, "dashboard migrate (no terminal)", {"sid": sid})
             A.state_file(log, sdb, "web-migrate",
@@ -270,7 +270,7 @@ class _SessionMixin:
         if not isinstance(name, str):
             return self._reject_input("web-rename", "bad name", "empty name",
                                       {"type": type(name).__name__}, sid=sid)
-        name = _NAME_CTRL.sub(" ", name).strip()[:config.RENAME_MAX].strip()
+        name = NAME_CTRL.sub(" ", name).strip()[:config.RENAME_MAX].strip()
         if not name:
             return self._reject_input("web-rename", "empty name", "empty name",
                                       {"raw": body.get("name")}, sid=sid)
@@ -281,7 +281,7 @@ class _SessionMixin:
                          {"win": "", "chars": len(name), "ok": False,
                           "reason": "no transcript"})
             return self._json({"error": "no transcript"}, 409)
-        fe = launch._frontend()
+        fe = launch.frontend()
         win = (fe.window_for_session(sid) or "") if fe else ""
         tab = (API.tab_states().get(win) or "") if win else ""
         try:

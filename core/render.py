@@ -113,20 +113,24 @@ def unescape(s):
 # visible text — producers now bake hyperlinks into gut/line text (the file-op
 # click-to-view links), so wrap/strip must treat the whole sequence as
 # zero-width.
-# Named fragments shared by _ANSI (wrap/strip) and _CTRL (neutralize) — a single
+# Named fragments shared by ANSI_RE (wrap/strip) and _CTRL (neutralize) — a single
 # source so the two compiled patterns cannot drift apart (neutralize() is the
 # replay-safety path; see its comment below).
 _CSI_RE = r"\x1b\[[0-9;:?]*[ -/]*[@-~]"                # CSI
 _OSC_RE = r"\x1b\][^\x1b\x07]*(?:\x07|\x1b\\)"         # OSC (BEL/ST)
 _C1_RE = r"\x1b[@-Z\\-_]"                              # other 2-char C1
 
-_ANSI = re.compile(_CSI_RE + "|" + _OSC_RE + "|" + _C1_RE)
+# PUBLIC (no underscore): the compiled escape scanner is part of this module's
+# vocabulary, not an internal. dashboard/suggestion.py walks a raw ANSI capture
+# with it, and a name marked private that another PACKAGE imports tells the next
+# reader the opposite of the truth (styleguide, *Public surface*).
+ANSI_RE = re.compile(_CSI_RE + "|" + _OSC_RE + "|" + _C1_RE)
 
 
 def strip_ansi(s):
     """The visible text of an ANSI-styled string (what claude-copy.py puts on the
     clipboard from a gut op — colours/emphasis are display styling, not content)."""
-    return _ANSI.sub("", s)
+    return ANSI_RE.sub("", s)
 
 
 # Control sequences that would EXECUTE in the pane when painted. The mirror
@@ -191,7 +195,7 @@ def wrap_gutter(text, width, gut, gw, bg=None):
         # hard-broken. `active` re-asserts the live SGR colour after every wrap.
         col, active, pending_sp, i, n = 0, "", "", 0, len(line)
         while i < n:
-            m = _ANSI.match(line, i)
+            m = ANSI_RE.match(line, i)
             if m:
                 seq = m.group(0)
                 pieces.append(seq)
@@ -201,12 +205,12 @@ def wrap_gutter(text, width, gut, gw, bg=None):
                 continue
             if line[i] in " \t":                  # accumulate a whitespace run
                 j = i
-                while j < n and line[j] in " \t" and not _ANSI.match(line, j):
+                while j < n and line[j] in " \t" and not ANSI_RE.match(line, j):
                     j += 1
                 pending_sp += line[i:j]; i = j
                 continue
             j = i                                 # a word: a run of non-space, non-ANSI
-            while j < n and line[j] not in " \t" and not _ANSI.match(line, j):
+            while j < n and line[j] not in " \t" and not ANSI_RE.match(line, j):
                 j += 1
             word = line[i:j]; i = j
             ww = dwidth(word)
@@ -264,7 +268,7 @@ def emphasize(text):
         return text
     out = []
     for line in text.split("\n"):
-        vis = _ANSI.sub("", line)
+        vis = ANSI_RE.sub("", line)
         if _BANNER_EQ.match(vis) or _BANNER_SYM.match(vis):
             out.append(BANNER + line + RST)
         else:

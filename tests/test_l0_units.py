@@ -2203,3 +2203,78 @@ def test_connect_refuses_a_relative_db_path(tmp_path, monkeypatch):
     log = str(tmp_path / "claude-mirror-abs.log")
     assert S.kv_set(log, "k", {"v": 1})
     assert S.kv_get(log, "k") == {"v": 1}
+
+
+def test_no_private_name_crosses_a_package_boundary():
+    """A leading underscore means "internal to this module's PACKAGE" — and
+    nothing may reach one from outside that package.
+
+    The convention had quietly stopped meaning anything in `dashboard/`: 61
+    underscore-prefixed names were being imported or attribute-accessed across
+    module boundaries, including the most public function in the whole control
+    plane (`launch._frontend`, nine call sites, the one door every write handler
+    reaches the terminal through). A reader could not tell a module's supported
+    surface from its internals, which is the entire job the underscore has.
+
+    The rule this pins is deliberately the PACKAGE, not the module: a mixin
+    composed by its own package's `__init__` (`_TypingMixin`), an intra-package
+    helper (`opshtml.ansi._esc`, `read/cache._db_cached`), and `core/locks.py`
+    borrowing `core/state._connect` are all legitimate — they are the inside of
+    one unit. Crossing OUT of it is not.
+
+    Deliberately a name-level check over the import graph, not a grep for
+    `_`-prefixed identifiers: the same underscore is right one directory away
+    and wrong the next, so only the pair (definer, user) decides."""
+    import ast
+    import os
+
+    roots = ("core", "plugins", "dashboard", "frontends")
+    own, srcs = {}, {}
+    for root in roots:
+        for dirpath, dirs, files in os.walk(os.path.join(REPO, root)):
+            dirs[:] = [d for d in dirs if d != "__pycache__"]
+            for f in sorted(files):
+                if not f.endswith(".py"):
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, f), REPO)
+                with open(os.path.join(dirpath, f), encoding="utf-8") as fh:
+                    srcs[rel] = fh.read()
+                names = set()
+                for n in ast.parse(srcs[rel]).body:
+                    if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef,
+                                      ast.ClassDef)) and n.name.startswith("_"):
+                        names.add(n.name)
+                    elif isinstance(n, ast.Assign):
+                        for t in n.targets:
+                            for nn in ast.walk(t):
+                                if isinstance(nn, ast.Name) and nn.id.startswith("_"):
+                                    names.add(nn.id)
+                own[rel] = names
+
+    def module_of(rel):                    # "dashboard/read/meta.py" -> dotted
+        return rel[:-3].replace("/", ".").replace(".__init__", "")
+
+    by_module = {module_of(r): r for r in own}
+    # The one documented exception, and the shape any future one must have: a
+    # package's COMPOSER assembling its own mixin. `dashboard/http/post/` is a
+    # sub-package of the HTTP layer whose only reason to exist is to be composed
+    # into Handler, and `_PostMixin` is deliberately not instantiable API — the
+    # underscore is telling the truth there. (base/get/sse need no entry: they
+    # sit in the same directory as the composer.)
+    allowed = {("dashboard/http/handler.py", "_PostMixin")}
+    offenders = []
+    for rel, src in srcs.items():
+        pkg = os.path.dirname(rel)
+        for n in ast.walk(ast.parse(src)):
+            if not (isinstance(n, ast.ImportFrom) and n.module):
+                continue
+            target = by_module.get(n.module)
+            if not target or os.path.dirname(target) == pkg:
+                continue                   # same package — its own inside
+            for a in n.names:
+                if a.name.startswith("_") and a.name in own[target] \
+                        and (rel, a.name) not in allowed:
+                    offenders.append("%s imports %s from %s" % (rel, a.name, target))
+    assert not offenders, (
+        "private names reached from outside their package:\n  "
+        + "\n  ".join(sorted(offenders)))

@@ -8,10 +8,10 @@ from functools import partial
 from core import state as ST
 from core.noaudit import load_audit
 from dashboard import (askdialog, plandialog)
-from dashboard.config import (_clip_screen)
+from dashboard.config import (clip_screen)
 from dashboard.control import launch
-from dashboard.read.mirror import (_heal_stash)
-from dashboard.read.session import (_ask_pending, _plan_pending)
+from dashboard.read.mirror import (heal_stash)
+from dashboard.read.session import (ask_pending, plan_pending)
 
 A = load_audit()
 
@@ -41,7 +41,7 @@ class _DialogMixin:
         `_reject_input`, `action` naming the row). `count=False` skips only the
         last one — post_answer's `chat: true` declines the questions instead of
         answering them, so it carries no answers at all."""
-        pending = _ask_pending(sid)
+        pending = ask_pending(sid)
         if not pending:
             self._json({"error": "no pending question"}, 409)
             return None, None
@@ -140,7 +140,7 @@ class _DialogMixin:
                                             count=not chat)
         if pending is None:
             return
-        fe = launch._frontend()
+        fe = launch.frontend()
         if fe is None:
             A.error(log, "dashboard answer (no terminal)", {"sid": sid})
             A.state_file(log, sdb, "web-answer",
@@ -156,13 +156,13 @@ class _DialogMixin:
         except askdialog.AskError as e:
             ctx = {"sid": sid, "win": win, "chat": chat, "detail": str(e)}
             if e.screen is not None:      # the pixels the failing step saw
-                ctx["screen"] = _clip_screen(e.screen)
+                ctx["screen"] = clip_screen(e.screen)
             A.error(log, "dashboard answer (%s)" % e.step, ctx)
             A.state_file(log, sdb, "web-answer",
                          {"win": win, "ok": False, "chat": chat,
                           "step": e.step,
                           "tool_use_id": pending.get("tool_use_id") or ""})
-            _heal_stash(sid, log, sdb, "ask-pending", e.step)
+            heal_stash(sid, log, sdb, "ask-pending", e.step)
             return self._json({"error": str(e), "step": e.step}, 409)
         A.state_file(log, sdb, "web-answer",
                      {"win": win, "ok": True, "chat": chat,
@@ -176,7 +176,7 @@ class _DialogMixin:
         msg = body.get("message")
         resp = {"ok": True, "chat": chat}
         if chat and isinstance(msg, str) and msg.strip():
-            clip = launch._clear_clipboard_image()      # clipboard-image guard, as post_message
+            clip = launch.clear_clipboard_image()      # clipboard-image guard, as post_message
             sent = bool(fe.paste_text(win, msg))
             A.state_file(log, sdb, "web-send",
                          {"win": win, "chars": len(msg), "ok": sent,
@@ -196,7 +196,7 @@ class _DialogMixin:
         if body is None:
             return none
         log, sdb = self._audit_target(sid)[1:]
-        pending = _plan_pending(sid)
+        pending = plan_pending(sid)
         if not pending:
             self._json({"error": "no pending plan"}, 409)
             return none
@@ -205,7 +205,7 @@ class _DialogMixin:
             self._json({"error": "plan expired — a newer plan replaced it "
                         "(refresh)"}, 409)
             return none
-        fe = launch._frontend()
+        fe = launch.frontend()
         if fe is None:
             A.error(log, "dashboard plan (no terminal)", {"sid": sid})
             self._json({"error": "no terminal available"}, 503)
@@ -228,7 +228,7 @@ class _DialogMixin:
         try:
             opts = plandialog.options(fe, win)
         except plandialog.PlanError as e:
-            _heal_stash(sid, log, sdb, "plan-pending", e.step)
+            heal_stash(sid, log, sdb, "plan-pending", e.step)
             return self._json({"error": str(e), "step": e.step}, 409)
         return self._json({"ok": True, "options": opts})
 
@@ -279,7 +279,7 @@ class _DialogMixin:
             A.state_file(log, sdb, "web-plan",
                          {"win": win, "ok": False, "kind": kind,
                           "step": e.step, "tool_use_id": tid})
-            _heal_stash(sid, log, sdb, "plan-pending", e.step)
+            heal_stash(sid, log, sdb, "plan-pending", e.step)
             return self._json({"error": str(e), "step": e.step}, 409)
         A.state_file(log, sdb, "web-plan",
                      {"win": win, "ok": True, "kind": kind,
