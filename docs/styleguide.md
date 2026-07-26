@@ -37,6 +37,23 @@ in a comment at the site and in the commit message.
   root, **and `frontends/`** (for its control plane — the two write endpoints
   reach the terminal through `frontends.get()`); nothing imports `dashboard/`
   except its bin/ entry and tests. `bin/` scripts may import anything.
+- **"the `plugins` registry root" has a written-down exception list.** Five
+  dashboard modules reach a `plugins/claude_code/` module directly, and each is
+  deliberate: the web presenter of Claude Code's own tool payloads
+  (`opshtml/actclass.py`, `opshtml/tools.py` — the single-owner `FILE_LABEL` /
+  file-op shapes, on a per-op render path where a fan-out per lookup would be
+  the wrong trade), the memory tab (`read/mirror.py`, `read/session.py` — a
+  claude_code feature end to end, whose scope gate this table already assigns to
+  `read/session.memory_scope`), and the take-back stash's observation half
+  (`http/post/interrupt.py`, likewise already assigned below). The list is
+  `DASHBOARD_PLUGIN_REACHES` in `tests/test_l1_contracts.py` and it is enforced
+  in both directions — a new reach fails until it is routed through a provider
+  or added with a reason, and a row nothing reaches any more fails as stale.
+  Before the list the rule above and the ownership rows below simply
+  contradicted each other, which is worse than either: nothing told a reader
+  which reaches were sanctioned. `PROVIDERS` says WHAT a plugin may be asked;
+  this says WHO may ask it directly — the same pair `frontends/` has had all
+  along (`test_no_caller_outside_frontends_uses_kitty_internals`).
 - Surface shared by two plugins goes in `core/` (that's why `streamfmt.py`
   exists) — never solved by a cross-plugin import or by copy-paste.
 - Terminals are reached only through the `Frontend` interface

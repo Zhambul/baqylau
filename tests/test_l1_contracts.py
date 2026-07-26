@@ -672,3 +672,114 @@ def test_plugin_providers_match_the_declared_arity():
     # dead weight that reads as supported
     orphans = sorted(set(plugins.PROVIDERS) - set(seen))
     assert not orphans, "declared providers no plugin implements: %s" % orphans
+
+
+# --- the dashboard -> plugin BOUNDARY ---------------------------------------------
+# `plugins.PROVIDERS` says WHAT a plugin may be asked; this says WHO may ask it
+# directly. frontends/ has had both halves for a long time (the `Frontend` base
+# class plus test_no_caller_outside_frontends_uses_kitty_internals); plugins had
+# only the first, so the layering rule CLAUDE.md and docs/styleguide.md both
+# state — the dashboard imports core, the plugins REGISTRY ROOT, and frontends —
+# had drifted at seven sites with nothing to notice, and the styleguide's own
+# ownership table sanctioned five of them in passing. Two statements that
+# disagree are worse than either: a reader cannot tell a deliberate reach from
+# a fresh one.
+#
+# So the exceptions are a LIST, with a reason each, and a new reach fails here
+# until it is either routed through a provider or written down.
+DASHBOARD_PLUGIN_REACHES = {
+    # The web PRESENTER of Claude Code's own tool payloads. op_items renders ops
+    # a claude_code formatter produced, so the file-op verb table and the
+    # payload shapes are the same single-owner facts the terminal mirror reads
+    # (docs/styleguide.md rows for tools.FILE_LABEL / the file-op payload
+    # shapes). Routing them through a provider would mean a fan-out per lookup
+    # inside a per-op render loop.
+    "dashboard/opshtml/actclass.py": {"plugins.claude_code.tools"},
+    "dashboard/opshtml/tools.py": {"plugins.claude_code.tools"},
+    # The memory tab IS a claude_code feature end to end: the vault root, the
+    # project scope gate and the note/backlink readers all belong to
+    # plugins/claude_code/memory.py, and the styleguide names read/session
+    # .memory_scope as the dashboard-side APPLICATION of that gate.
+    "dashboard/read/mirror.py": {"plugins.claude_code.memory"},
+    "dashboard/read/session.py": {"plugins.claude_code.memory",
+                                  "plugins.claude_code.model",
+                                  "plugins.claude_code.accounting"},
+    # The take-back stash's writer half — the styleguide's own row says "the
+    # dashboard's post_interrupt supplies the observation" while transcript.py
+    # owns both halves of the stash.
+    "dashboard/http/post/interrupt.py": {"plugins.claude_code.transcript"},
+}
+
+
+def test_no_dashboard_module_reaches_a_plugin_internal_off_the_allowlist():
+    """Every `from plugins.<tool> import ...` inside dashboard/ is on the
+    allowlist above, with the module it reaches.
+
+    The rule is that the dashboard talks to plugins through the registry root
+    (`import plugins` + the PROVIDERS fan-outs) — that is what lets a second
+    host tool answer the same question. Each exception here is a fact that is
+    genuinely Claude-Code-specific AND sits on a per-op render path or is a
+    single-owner table the styleguide already assigns; the point of the list is
+    that a new one has to be argued rather than typed."""
+    import ast
+    import os
+
+    from conftest import REPO
+
+    offenders = []
+    dash = os.path.join(REPO, "dashboard")
+    for root, dirs, files in os.walk(dash):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, REPO)
+            with open(path, encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), path)
+            allowed = DASHBOARD_PLUGIN_REACHES.get(rel, set())
+            for n in ast.walk(tree):
+                mod = None
+                if isinstance(n, ast.ImportFrom) and (n.module or "").startswith("plugins."):
+                    mod = n.module
+                elif isinstance(n, ast.Import):
+                    for a in n.names:
+                        if a.name.startswith("plugins."):
+                            mod = a.name
+                if mod is None:
+                    continue
+                # `from plugins.claude_code import tools as T` names the package
+                # in `module` and the module in `names` — normalise both spellings
+                if isinstance(n, ast.ImportFrom):
+                    for a in n.names:
+                        full = mod if mod.count(".") > 1 else mod + "." + a.name
+                        if full not in allowed and mod not in allowed:
+                            offenders.append("%s:%d: %s" % (rel, n.lineno, full))
+                elif mod not in allowed:
+                    offenders.append("%s:%d: %s" % (rel, n.lineno, mod))
+    assert offenders == [], (
+        "dashboard modules reaching plugin internals off the allowlist "
+        "(route it through plugins.PROVIDERS, or add it to "
+        "DASHBOARD_PLUGIN_REACHES with a reason):\n" + "\n".join(offenders))
+
+
+def test_the_dashboard_plugin_allowlist_has_no_stale_rows():
+    """A row nobody needs any more is the other half of the drift: it keeps
+    saying a coupling exists after it has been routed through a provider, so
+    the next reader re-learns a shape the repo no longer has."""
+    import os
+
+    from conftest import REPO
+
+    stale = [rel for rel in DASHBOARD_PLUGIN_REACHES
+             if not os.path.isfile(os.path.join(REPO, rel))]
+    assert stale == [], "allowlist rows for files that no longer exist: %s" % stale
+    unused = []
+    for rel, mods in DASHBOARD_PLUGIN_REACHES.items():
+        with open(os.path.join(REPO, rel), encoding="utf-8") as fh:
+            src = fh.read()
+        for mod in sorted(mods):
+            leaf = mod.rsplit(".", 1)[1]
+            if ("import " + leaf) not in src and mod not in src:
+                unused.append((rel, mod))
+    assert unused == [], "allowlist rows nothing reaches any more: %s" % unused
