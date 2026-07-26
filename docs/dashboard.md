@@ -451,7 +451,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). The four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) are one TABLE — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
+| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
 | `GET /api/session/<sid>/jobs` | the session's background Bash jobs (command + lifecycle state, merging audit streams + ops) for the jobs tab (*Jobs tab*); output via the `/copy/<task>/out` endpoint |
 | `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
@@ -4179,6 +4179,51 @@ the sessions row) — so the loop re-reads the row on the slow cadence before
 polling `tab_states()`. Without this, a stream opened before the resume
 polled the dead window's lingering tab state forever: the page showed the
 old window's green while the real tab sat magenta (shipped).
+
+### The stream's pushed fields are a CHANNEL TABLE
+
+Everything `sse_session` sends *other than* `ops` is a row of `_SLOW_CHANS` /
+`_FAST_CHANS` (`dashboard/http/sse.py`): the `prev`-map key holding its
+last-sent value, the SSE event name, a producer over the per-tick context
+(`_Tick`), and the wire WRAPPER — a field name when the value rides inside a
+one-key dict (`{"tab": tab}`), `None` when it goes on the wire verbatim.
+`_push_chans` walks a table in order, sending only what changed;
+**the per-connection `prev` map is DERIVED from the tables** (`_prev_map`)
+rather than written beside them.
+
+Four fields stay INLINE and own their `prev` slot through `_INLINE_KEYS`, each
+for a reason a table row can't express: `ask`'s wire payload is a transcript
+read built only when the raw stash changed, `ask_draft` is meaningful only
+while an ask is open, `suggestion` is gated on tab + dialogs + draft and
+carries the terminal-draft sync's side effect, and `term_box` is never *sent*
+at all — it is only the sync's previous-value slot.
+
+*Why not twenty stanzas.* It was twenty, and the cost was not cosmetic. The
+loop body carried twenty locals in one flat 200-line scope, and the tab-badge
+stanza inside it read `for key, count in _BADGE_COUNTS.items(): n = count(…)`
+— rebinding **two** names the loop depended on:
+
+* `key`, the session's mirror-log key resolved once before the loop, is what
+  every rendered op's ⧉ copy / click-to-view link is stamped with
+  (`data-cc="<key>/<g>/<what>"`). From the second tick on, every
+  **live-streamed** block was stamped `memory` (the badge table's last row), so
+  its links resolved to a session that does not exist — an empty copy, a 404
+  view, and a `dashboard copy (state DB gone)` errors row lighting the ⚠ chip
+  in every session's scorebar. A reload masked it: the backlog path passes the
+  key *before* the loop.
+* `n`, the tick counter behind `n % SLOW_EVERY`, became the memory-note count,
+  so the SLOW cadence turned into a function of the data — with 4 notes the
+  "slow" block (a `git status`, the transcript probes, the ghost-suggestion
+  `kitten @ get-text` screen scrape) ran on *every* 0.6s tick. Invisible for
+  most sessions only because `memory` is project-scoped and returns 0 there.
+
+Shipped 2026-07-25 in the commit that folded the four badge stanzas into
+`_BADGE_COUNTS` — a correct refactor that the surrounding scope made unsafe.
+As table rows there is no loop variable left to collide, and the `prev` literal
+that had already lost `view_mode` is derived. Pinned by
+`test_live_ops_carry_the_session_key_not_a_badge_name` (which fails on the old
+code with `data-cc="memory/…"`) and
+`test_session_stream_channels_are_a_derived_table`.
 
 ### Discarded prompts (the transcript is a TREE, not a list)
 

@@ -124,3 +124,4 @@ from dashboard.control.launch import (  # noqa: F401  -- facade re-export
 # dashboard/http/handler.py; server.py re-exports the entry points bin/ (serve)
 # and the tests reach through `dashboard.server`.
 from dashboard.http.handler import Handler, serve  # noqa: F401  -- facade re-export
+from dashboard.http import sse  # noqa: F401  -- DS.sse: the stream's channel tables

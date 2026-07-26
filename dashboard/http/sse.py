@@ -3,6 +3,7 @@
 # sse_global (the sessions list + notification fan-out), sse_session (one
 # session's mirror/scoreboard/cards deltas), sse_agent (a subagent's timeline) —
 # long-lived generators polling the read model + the NOTIFIER queue.
+import collections
 import queue
 import time
 
@@ -32,6 +33,166 @@ A = load_audit()
 _UNSET = object()               # "no explicit payload" — _push_changed sends the compared value
 
 
+# The tab-badge counts pushed on the slow cadence: each is a CHEAP count (an
+# audit COUNT / the streams keystone / a kv read — never a transcript parse),
+# wired to a {"count": n} event of the same name, sent only on change. Four
+# copies of one shape were four near-identical stanzas 30 lines long; as a
+# table, adding a badge is a row and the shape can't drift. The full detail
+# behind every one of them stays on its REST endpoint, fetched when the tab
+# opens (/errors, /monitors, /jobs, /memory).
+#
+# Values are (sid, cwd) callables, not bound API functions: the lookup has to
+# happen at CALL time so a patched sessionapi moves the pushed number too
+# (the module-qualified read rule), and `memory` needs a different owner than
+# the others — its badge is project-SCOPED, and that gate belongs to the read
+# model it shares with the overview payload, not to this loop.
+_BADGE_COUNTS = {
+    # ⚠ swallowed errors — the web sibling of the scorebar's errwatch chip;
+    # a COUNT, no tracebacks
+    "errors": lambda sid, cwd: API.error_count(sid),
+    # distinct monitors — a new Monitor launch bumps it
+    "monitors": lambda sid, cwd: API.monitor_count(sid),
+    # distinct background jobs — a new bg launch bumps it
+    "jobs": lambda sid, cwd: API.job_count(sid),
+    # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
+    "memory": lambda sid, cwd: memory_count(sid, cwd),
+}
+
+
+# --- the per-session stream's pushed CHANNELS ---------------------------------
+# One row per field sse_session pushes on change: the `prev`-map key holding its
+# last-sent value, the SSE event name, a producer over the per-tick context
+# (_Tick), and the wire WRAPPER — a field name when the value rides inside a
+# one-key dict ({"tab": tab}), None when it goes on the wire verbatim.
+#
+# A TABLE rather than twenty hand-written `if not self._push_changed(...):
+# return` stanzas (styleguide: registries over ladders). Three things follow
+# from it: the `prev` map is DERIVED (`_prev_map`) instead of a hand-maintained
+# literal that had already drifted — `view_mode` was pushed but never listed —
+# adding a channel is one row, and the loop body stops carrying twenty locals in
+# one flat 200-line scope. That scope was not cosmetic: the badge stanza it
+# replaces was a `for key, count in ...: n = count(...)` nested INSIDE the tick
+# loop, and it clobbered both the session's mirror-log `key` (so every
+# live-streamed block's ⧉ copy / click-to-view link was stamped with the last
+# badge name instead of the session) and the tick counter `n` (so the slow
+# cadence became a function of the memory-note count). As rows there are no
+# loop variables left to collide.
+_Chan = collections.namedtuple("_Chan", "key event value wrap")
+
+
+def _badge_chan(name, count):
+    """One badge as a channel row ({"count": n}, event named for the badge). A
+    named factory, not an inline lambda: the producer must close over THIS
+    row's callable, not over the comprehension's loop variable (ruff B023)."""
+    return _Chan(name, name, lambda c: count(c.sid, c.cwd), "count")
+
+
+def _badge_chans():
+    """The four tab-badge counts as channel rows. Built from `_BADGE_COUNTS` so
+    the badges keep their single table — this only teaches the stream how to
+    push them."""
+    return tuple(_badge_chan(name, fn) for name, fn in _BADGE_COUNTS.items())
+
+
+# SLOW cadence (every SLOW_EVERY ticks): re-resolves, transcript probes, counts
+# and convenience state — nothing here is something a user waits on. ORDER is
+# preserved from the stanzas these replace (a client reads the events in
+# arrival order).
+_SLOW_CHANS = (
+    _Chan("agents", "agents",
+          lambda c: agents_model_effort(
+              agents_ctx(visible_agents(API.agents(c.sid))), c.eff), None),
+    # the main thread's context saturation — the stats row's ctx chip, live
+    # (the transcript grew → the (path, size) cache re-probes)
+    _Chan("ctx", "ctx", lambda c: session_ctx(c.tpath, main=True), "ctx"),
+    # the header's title — a web rename or a fresh auto ai-title (the
+    # (path, size)-cached session_title makes the probe a getsize when
+    # nothing grew)
+    _Chan("title", "title", lambda c: session_title(c.tpath), "title"),
+    # the header's git chip — a checkout/branch switch, or a removed worktree
+    _Chan("git", "git", lambda c: git_info(c.cwd), "git"),
+    # the effort quick-button — a terminal-side /effort saves to settings and
+    # shows up here (c.eff is resolved once per slow tick, before the agent
+    # cards' inherit-default stamp reads the same value)
+    _Chan("effort", "effort", lambda c: c.eff, "effort"),
+    _Chan("costs", "costs", lambda c: API.costs(c.sid), None),
+    _Chan("running", "running", lambda c: API.running(c.sid), None),
+) + _badge_chans() + (
+    # the pinned tasks card — a task create / status flip re-stashes the
+    # `tasks` kv (task_fmt.py). Slow: tasks change per-hook, not per-keystroke,
+    # and nobody is blocked waiting on this card, unlike ask/plan
+    _Chan("tasks", "tasks", lambda c: _session_tasks(c.sid), "tasks"),
+    # the pinned goal card — the active `/goal` scanned from the transcript
+    # tail (read-side, no hook fires). Slow, for the same reason as tasks
+    _Chan("goal", "goal", lambda c: session_goal(c.tpath), "goal"),
+    # the unsent composer draft — so a composer open on ANOTHER device tracks
+    # this one's edits (the writer suppresses its own echo by `origin`; the
+    # page skips the repaint while its own box has focus). Slow: a draft is
+    # convenience state, no one is blocked on it (unlike the dialogs)
+    _Chan("composer_draft", "composer-draft",
+          lambda c: _composer_draft(c.sid), "draft"),
+    # the pending queued-message chips — so a reload / another device restores
+    # what the TUI still holds unqueued (convenience state, like the draft)
+    _Chan("composer_queue", "composer-queue",
+          lambda c: _composer_queue(c.sid), "queue"),
+    # the mirror's VIEW MODE — so switching density on the phone re-renders the
+    # desktop page already open on this session, instead of it holding the old
+    # mode until a reload. The pref itself has always been server-side and
+    # per-session (dashboard/prefs.py, docs/dashboard.md *View modes*); this is
+    # only what makes an OPEN page follow it. A prefs read is a tiny kv SELECT
+    _Chan("view_mode", "view-mode", lambda c: prefs.view_mode(c.sid), "mode"),
+)
+
+# FAST cadence (every tick): the two fields whose LATENCY is the point. `fgrun`
+# resembles the `running` ribbon but cannot join it — the elapsed counts
+# client-side, so what the event is really for is the START and the END, and on
+# the slow cadence a finished command would keep counting for seconds after its
+# "■ finished · 3.2s" chip already landed. One hand-off peek per tick (a single
+# indexed SELECT + a pid probe), pushed only on change.
+_FAST_CHANS = (
+    _Chan("tab", "tab", lambda c: c.tab, "tab"),
+    _Chan("fgrun", "fgrun", lambda c: API.fg_running(c.sid), "fg"),
+)
+
+# Channels that stay INLINE in the loop and so own their own `prev` slot: the
+# dialogs (`ask`'s wire payload is a transcript read, built only when the raw
+# stash changed; `ask_draft` is meaningful only while an ask is open), the
+# gated ghost `suggestion`, `stats` (pushed off the conversation cursor, not a
+# cadence), and `term_box` — which is never SENT at all, only remembered, as
+# the terminal-draft sync's previous-value slot.
+_INLINE_KEYS = ("stats", "ask", "ask_draft", "plan", "suggestion", "term_box")
+
+
+def _prev_map():
+    """A fresh last-sent map for one connection: every channel key plus the
+    inline ones, all None. DERIVED from the tables — the literal it replaces
+    was hand-maintained and had already lost `view_mode`."""
+    return dict.fromkeys(
+        [c.key for c in _SLOW_CHANS + _FAST_CHANS] + list(_INLINE_KEYS))
+
+
+class _Tick:
+    """The per-tick facts the channel producers read — the single mutable
+    context object a named-phase loop shares (styleguide, *Module shape*).
+    `sdb`/`tab` are refreshed every tick; the slow prologue additionally
+    re-resolves the session row and stamps `win`/`cwd`/`tpath`/`eff`."""
+
+    __slots__ = ("sid", "sdb", "win", "cwd", "tpath", "eff", "tab")
+
+    def __init__(self, sid, row):
+        self.sid = sid
+        self.sdb = self.tab = self.win = self.eff = ""
+        self.adopt(row)
+
+    def adopt(self, row):
+        """Take the per-session facts off a freshly-read `sessions` row. `win`
+        is sticky: a resume moves the session to a NEW kitty window, but a row
+        that momentarily reports none must not blank the one we have."""
+        self.win = str(row.get("kitty_window_id") or "") or self.win
+        self.cwd = row.get("cwd") or ""
+        self.tpath = row.get("transcript_path") or ""
+
+
 class _SseMixin:
 
     def _push_changed(self, prev, key, event, value, payload=_UNSET):
@@ -53,30 +214,20 @@ class _SseMixin:
                 return False
         return True
 
-    # The tab-badge counts pushed on the slow cadence: each is a CHEAP count (an
-    # audit COUNT / the streams keystone / a kv read — never a transcript parse),
-    # wired to a {"count": n} event of the same name, sent only on change. Four
-    # copies of one shape were four near-identical stanzas 30 lines long; as a
-    # table, adding a badge is a row and the shape can't drift. The full detail
-    # behind every one of them stays on its REST endpoint, fetched when the tab
-    # opens (/errors, /monitors, /jobs, /memory).
-    #
-    # Values are (sid, cwd) callables, not bound API functions: the lookup has to
-    # happen at CALL time so a patched sessionapi moves the pushed number too
-    # (the module-qualified read rule), and `memory` needs a different owner than
-    # the others — its badge is project-SCOPED, and that gate belongs to the read
-    # model it shares with the overview payload, not to this loop.
-    _BADGE_COUNTS = {
-        # ⚠ swallowed errors — the web sibling of the scorebar's errwatch chip;
-        # a COUNT, no tracebacks
-        "errors": lambda sid, cwd: API.error_count(sid),
-        # distinct monitors — a new Monitor launch bumps it
-        "monitors": lambda sid, cwd: API.monitor_count(sid),
-        # distinct background jobs — a new bg launch bumps it
-        "jobs": lambda sid, cwd: API.job_count(sid),
-        # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
-        "memory": lambda sid, cwd: memory_count(sid, cwd),
-    }
+    # The badge table's home is module level (the channel rows are derived from
+    # it); it stays reachable here as the documented handle.
+    _BADGE_COUNTS = _BADGE_COUNTS
+
+    def _push_chans(self, chans, prev, ctx):
+        """Push every channel in `chans` that changed, in table order. Returns
+        False when the client dropped — the caller MUST `return` on False, the
+        same contract as _push_changed and _keepalive."""
+        for ch in chans:
+            value = ch.value(ctx)
+            payload = _UNSET if ch.wrap is None else {ch.wrap: value}
+            if not self._push_changed(prev, ch.key, ch.event, value, payload):
+                return False
+        return True
 
     def _keepalive(self, beat, force=False):
         """The per-tick keep-alive: send a heartbeat comment iff HEARTBEAT_S has
@@ -147,43 +298,43 @@ class _SseMixin:
             NOTIFIER.unregister(q)
 
     def sse_session(self, sid, after, mpos=0):
-        """One session's live stream: `ops` (rendered HTML — ops AND the
-        main-thread conversation from byte cursor `mpos`, interleaved by ts via
-        merge_live so a turn's text keeps its place relative to its command),
-        `stats`, `agents`, `tab`, `costs`, `running` (the live slot ribbon),
-        `fgrun` (the in-flight foreground command's block id + start, which the
-        mirror ticks a live elapsed chip from),
-        `errors` (the ⚠ swallowed-error count) — each sent only on change. A
-        FRESH connection (after=0, mpos=0) gets the ts-merged backlog as its
-        first ops event; a reconnect resumes both cursors. The delta merge is
-        the increment-side twin of the backlog merge, so live and reload agree
-        (they diverged once — see docs/dashboard.md, the ts-interleave note)."""
+        """One session's live stream. The `ops` event carries rendered HTML —
+        ops AND the main-thread conversation from byte cursor `mpos`,
+        interleaved by ts via merge_live so a turn's text keeps its place
+        relative to its command; a FRESH connection (after=0, mpos=0) gets the
+        ts-merged backlog as its first one and a reconnect resumes both cursors.
+        The delta merge is the increment-side twin of the backlog merge, so live
+        and reload agree (they diverged once — see docs/dashboard.md, the
+        ts-interleave note).
+
+        Everything else the stream pushes is a CHANNEL — see `_SLOW_CHANS` /
+        `_FAST_CHANS` for the table and its cadences, and `_INLINE_KEYS` for the
+        four that stay in this loop because their payload is expensive, gated,
+        or (term_box) never sent at all. Every channel is sent only on change.
+
+        The loop is three named phases per tick: `mirror` (the two cursors),
+        `slow`/`fast` (the channel tables), `dialogs` (the inline four)."""
         self._sse_start()
         last = after
-        prev = {"stats": None, "agents": None, "tab": None, "costs": None,
-                "running": None, "fgrun": None, "errors": None,
-                "ask": None, "plan": None,
-                "ctx": None, "git": None, "title": None, "effort": None,
-                "tasks": None, "ask_draft": None, "composer_draft": None,
-                "term_box": None,
-                "composer_queue": None, "monitors": None, "jobs": None,
-                "memory": None, "suggestion": None, "goal": None}
+        prev = _prev_map()
         row = API.session_row(sid) or {}
-        win = str(row.get("kitty_window_id") or "")
+        ctx = _Tick(sid, row)
+        # The mirror-log KEY of this session — what the ⧉ copy / click-to-view
+        # links in every rendered op are stamped with. A tick-loop LOCAL once,
+        # which the badge stanza's `for key, ...` then clobbered from the second
+        # tick on; it lives on nothing but this name now, and no loop in here
+        # binds it (see the _SLOW_CHANS header).
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
-        # the prompt bubbles' `/command` tint: resolved per tick off the cwd
-        # (a TTL memo — a command file added mid-session starts tinting without
-        # a reconnect), never per bubble
-        cwd = row.get("cwd") or ""
         if not after and not mpos:
             last, mpos, oldest, items = merged_backlog(sid, key)
             if items and not self._sse("ops", {"last": last, "mpos": mpos,
                                                "oldest": oldest, "items": items}):
                 return
-        n, beat = 0, time.monotonic()
+        tick, beat = 0, time.monotonic()
         while True:
-            sdb = API.state_db_for(sid)
-            last2, ops = API.ops_at(sdb, last) if sdb else (last, [])
+            # -- mirror: the two cursors, interleaved into ONE ops event ------
+            ctx.sdb = API.state_db_for(sid)
+            last2, ops = API.ops_at(ctx.sdb, last) if ctx.sdb else (last, [])
             # Poll BOTH cursors, then interleave the delta by ts into ONE event
             # (merge_live) — emitting ops and msgs as two separate arrival-order
             # events prepended a turn's preceding text ABOVE its command in the
@@ -194,120 +345,36 @@ class _SseMixin:
             if got:
                 recs, mpos = got            # advance the transcript cursor always
             if ops or recs:
+                # the prompt bubbles' `/command` tint is resolved per tick off
+                # the cwd (a TTL memo — a command file added mid-session starts
+                # tinting without a reconnect), never per bubble
                 if not self._sse("ops", {"last": last2, "mpos": mpos,
                                          "items": merge_live(ops, recs, key,
-                                                             cmd_names(cwd))}):
+                                                             cmd_names(ctx.cwd))}):
                     return
                 last = last2
             if recs:
-                st = API.stats_at(sdb)
+                st = API.stats_at(ctx.sdb)
                 if not self._push_changed(prev, "stats", "stats", st):
                     return
-            if n % SLOW_EVERY == 0:
+            slow = tick % SLOW_EVERY == 0
+            # -- slow channels -------------------------------------------------
+            if slow:
                 # a resume moves the session to a NEW kitty window (the
                 # SessionStart upsert refreshes the sessions row) — re-resolve,
                 # or a stream opened before the move polls the dead window's
                 # lingering tab state forever (green while kitty is magenta)
-                row = API.session_row(sid) or {}
-                win = str(row.get("kitty_window_id") or "") or win
+                ctx.adopt(API.session_row(sid) or {})
                 # resolved up front so the agent cards' inherit-default effort
                 # matches the effort quick-button pushed below (one resolve)
-                eff = plugins.effort_default(row.get("cwd") or "",
-                                             _session_slug(sid))
-                agents = agents_model_effort(
-                    agents_ctx(visible_agents(API.agents(sid))), eff)
-                if not self._push_changed(prev, "agents", "agents", agents):
+                ctx.eff = plugins.effort_default(ctx.cwd, _session_slug(sid))
+                if not self._push_chans(_SLOW_CHANS, prev, ctx):
                     return
-                # the main thread's context saturation — the stats row's ctx
-                # chip, live (the transcript grew → the (path, size) cache
-                # re-probes; pushed only on change like everything else here)
-                ctx = session_ctx(row.get("transcript_path") or "", main=True)
-                if not self._push_changed(prev, "ctx", "ctx", ctx, {"ctx": ctx}):
-                    return
-                # the header's title, live — a web rename or a fresh auto
-                # ai-title shows on the slow cadence (the (path, size)-cached
-                # session_title makes the probe a getsize when nothing grew)
-                t = session_title(row.get("transcript_path") or "")
-                if not self._push_changed(prev, "title", "title", t, {"title": t}):
-                    return
-                # the header's git chip, live — a checkout/branch switch (or a
-                # removed worktree) shows on the slow cadence
-                git = git_info(row.get("cwd") or "")
-                if not self._push_changed(prev, "git", "git", git, {"git": git}):
-                    return
-                # the effort quick-button, live — a terminal-side /effort
-                # saves to settings and shows here on the slow cadence
-                # (eff resolved above, before the agent-card stamp)
-                if not self._push_changed(prev, "effort", "effort", eff, {"effort": eff}):
-                    return
-                costs = API.costs(sid)
-                if not self._push_changed(prev, "costs", "costs", costs):
-                    return
-                run = API.running(sid)
-                if not self._push_changed(prev, "running", "running", run):
-                    return
-                # the tab badges, live (_BADGE_COUNTS) — four cheap COUNTs, one
-                # shape, pushed only on change
-                for key, count in self._BADGE_COUNTS.items():
-                    n = count(sid, cwd)
-                    if not self._push_changed(prev, key, key, n, {"count": n}):
-                        return
-                # the pinned tasks card, live — a task create / status flip
-                # re-stashes the `tasks` kv (task_fmt.py) and shows on the
-                # slow cadence (tasks change per-hook, not per-keystroke;
-                # nobody is blocked waiting on this card, unlike ask/plan)
-                tasks = _session_tasks(sid)
-                if not self._push_changed(prev, "tasks", "tasks", tasks, {"tasks": tasks}):
-                    return
-                # the pinned goal card, live — the active `/goal` scanned from
-                # the transcript tail (session_goal, read-side, no hook fires).
-                # Slow cadence like tasks: a goal changes per-turn, not per-
-                # keystroke, and nobody is blocked waiting on this card
-                goal = session_goal(row.get("transcript_path") or "")
-                if not self._push_changed(prev, "goal", "goal", goal, {"goal": goal}):
-                    return
-                # the unsent composer draft — so a composer open on ANOTHER
-                # device tracks this one's edits (the writer suppresses its own
-                # echo by `origin`; the page skips the repaint while its own
-                # box has focus). Slow cadence: a draft is convenience state, no
-                # one is blocked on it (unlike the ask/plan dialogs below).
-                cdraft = _composer_draft(sid)
-                if not self._push_changed(prev, "composer_draft", "composer-draft",
-                                          cdraft, {"draft": cdraft}):
-                    return
-                # the pending queued-message chips — so a reload / another
-                # device restores what the TUI still holds unqueued (slow
-                # cadence, convenience state like the draft above)
-                cqueue = _composer_queue(sid)
-                if not self._push_changed(prev, "composer_queue", "composer-queue",
-                                          cqueue, {"queue": cqueue}):
-                    return
-                # the mirror's VIEW MODE — so switching density on the phone
-                # re-renders the desktop page already open on this session,
-                # instead of it holding the old mode until a reload. The pref
-                # itself has always been server-side and per-session
-                # (dashboard/prefs.py, docs/dashboard.md *View modes*); this is
-                # only what makes an OPEN page follow it. Slow cadence, and a
-                # prefs read is a tiny kv SELECT — pushed only on change, like the
-                # global alerts toggle's `notify-config`.
-                vmode = prefs.view_mode(sid)
-                if not self._push_changed(prev, "view_mode", "view-mode",
-                                          vmode, {"mode": vmode}):
-                    return
-            tab = (API.tab_states().get(win) or "") if win else ""
-            if not self._push_changed(prev, "tab", "tab", tab, {"tab": tab}):
+            # -- fast channels -------------------------------------------------
+            ctx.tab = (API.tab_states().get(ctx.win) or "") if ctx.win else ""
+            if not self._push_chans(_FAST_CHANS, prev, ctx):
                 return
-            # the in-flight foreground command ({g, start_ts}) — the mirror
-            # ticks a live elapsed chip on that block. FAST cadence, unlike the
-            # `running` ribbon it resembles: the elapsed counts client-side, so
-            # what this event is really for is the START and the END, and on the
-            # slow cadence a finished command would keep counting for seconds
-            # after its "■ finished · 3.2s" chip already landed. One hand-off
-            # peek per tick (a single indexed SELECT + a pid probe), pushed only
-            # on change.
-            fgrun = API.fg_running(sid)
-            if not self._push_changed(prev, "fgrun", "fgrun", fgrun, {"fg": fgrun}):
-                return
+            # -- dialogs + the gated ghost suggestion --------------------------
             # the pending modal-dialog cards (fast cadence — the dialog just
             # appeared and the user is waiting); None clears each card
             # change-detect on the RAW stash (a cheap kv read); enrich with the
@@ -337,13 +404,13 @@ class _SseMixin:
             # the probe would fight a draft the user is editing elsewhere).
             # A MODAL dialog (red tab / pending ask/plan) makes the `❯` region
             # the DIALOG's input, not the message box — never read it as one.
-            if n % SLOW_EVERY == 0 and (tab != tabs.AWAITING_COMMAND
-                                        and ask is None and plan is None):
+            if slow and (ctx.tab != tabs.AWAITING_COMMAND
+                         and ask is None and plan is None):
                 ghost, box = _input_box(sid)
                 # the ghost only exists on a SETTLED tab, and only matters while
                 # the web box is empty (a draft the user is editing elsewhere
                 # would fight it)
-                sug = (ghost if (tab in _SUGGEST_TABS
+                sug = (ghost if (ctx.tab in _SUGGEST_TABS
                                  and prev["composer_draft"] is None) else None)
                 # …the typed half is wanted on ANY tab: typing a follow-up while
                 # Claude works is the main reason to reach for another device,
@@ -361,7 +428,7 @@ class _SseMixin:
             beat, alive = self._keepalive(beat)
             if not alive:
                 return
-            n += 1
+            tick += 1
             time.sleep(TICK_S)
 
     def sse_agent(self, sid, aid, pos):

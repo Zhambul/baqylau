@@ -107,6 +107,25 @@ New always-audited swallow sites (previously silent — their absence used to ma
   Rows before 2026-07-25 don't exist at all: that build swallowed all five sites
   silently, so absence of evidence on an old session proves nothing.
 
+- **The dashboard's ⧉ copy copies nothing / click-to-view 404s — but only on
+  blocks that streamed in LIVE, and a reload fixes it.** Look for `errors` rows
+  `func='dashboard copy (state DB gone)'` and `state_files` `action='web-view'`
+  with `ok:False`, then read the `web-copy` row's own `gid` — if the group id is
+  real but the request still found no state DB, the SESSION KEY in the link was
+  wrong, not the group. Every rendered op is stamped with the session's
+  mirror-log key (`data-cc="<key>/<g>/<what>"`); the backlog path stamps it
+  correctly, so a symptom that vanishes on reload means the LIVE tick was
+  stamping something else. Shipped exactly once (2026-07-25 → fixed 2026-07-26):
+  a `for key, count in _BADGE_COUNTS.items()` stanza inside `sse_session`'s tick
+  loop rebound the loop's `key` local, so from the second tick on every live
+  block carried `data-cc="memory/…"` — plus it rebound the tick counter to the
+  memory-note count, so the SLOW cadence (`git status`, transcript probes, the
+  ghost-suggestion screen scrape) could run on every 0.6s tick. The pushed
+  fields are a channel TABLE now (docs/dashboard.md, *The stream's pushed fields
+  are a channel table*); a recurrence would mean a new loop variable in that
+  body. Note the spurious `dashboard copy (state DB gone)` rows light the ⚠ chip
+  in EVERY session, so this can also present as unexplained global errors.
+
 - **A block shows in the terminal mirror but is missing from the web dashboard's
   stream (or the reverse asymmetry)**: FIRST rule out the VIEW MODE (docs/dashboard.md
   *View modes*, since 2026-07-25) — in `default` the web stream collapses runs of

@@ -1397,6 +1397,81 @@ def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
     assert table["errors"]("s1", off) == 3
 
 
+def test_session_stream_channels_are_a_derived_table():
+    """Everything the per-session stream pushes on change is a CHANNEL row
+    (`_SLOW_CHANS` / `_FAST_CHANS`), and the per-connection last-sent map is
+    DERIVED from those tables plus the inline keys — not a hand-written literal
+    beside them.
+
+    The literal had already drifted: `view_mode` was pushed every slow tick but
+    never listed, so its slot only existed because `_push_changed` reads through
+    `prev.get`. A derived map cannot drift, and the table is what let the loop
+    stop carrying twenty locals in one flat scope (see the live-ops test below
+    for what that scope cost)."""
+    chans = DS.sse._SLOW_CHANS + DS.sse._FAST_CHANS
+    keys = [c.key for c in chans]
+    assert len(keys) == len(set(keys)), keys          # one slot per channel
+    m = DS.sse._prev_map()
+    assert set(m) == set(keys) | set(DS.sse._INLINE_KEYS)
+    assert all(v is None for v in m.values())
+    assert "view_mode" in m                           # the one the literal lost
+    # the four badges are rows of this table, still sharing the one badge table
+    assert [c.key for c in chans if c.key in DS.sse._BADGE_COUNTS] \
+        == list(DS.sse._BADGE_COUNTS)
+    # a wrapped channel names ONE field; a verbatim one names none
+    for c in chans:
+        assert c.wrap is None or (isinstance(c.wrap, str) and c.wrap)
+
+
+def test_live_ops_carry_the_session_key_not_a_badge_name(dash):
+    """Every op the stream appends LIVE is stamped with the session's own
+    mirror-log key — the key its ⧉ copy / click-to-view links resolve against
+    (`data-cc="<key>/<g>/<what>"`).
+
+    Regression (shipped 2026-07-25, bcc00a3): the tab-badge stanza inside the
+    tick loop was `for key, count in _BADGE_COUNTS.items()`, which rebound the
+    loop's own `key` local — the session's mirror-log key, resolved once before
+    the loop. From the SECOND tick on every live-streamed block was stamped
+    `memory` (the badge table's last row), so its copy link resolved to a
+    session that does not exist: an empty copy, a 404 view, and a `dashboard
+    copy (state DB gone)` errors row lighting the ⚠ chip — while a reload read
+    fine, because the backlog path passes the key before the loop. The same
+    stanza rebound the tick counter to the memory-note count, making the SLOW
+    cadence a function of the data (4 notes ⇒ every 'slow' probe, including the
+    ghost-suggestion screen scrape, ran every tick). Both names are gone: the
+    badges are table rows now, and no loop in the tick body binds either."""
+    sid = "cckey"
+    A.session_start({"session_id": sid, "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log(sid)
+    seen = []
+    r = _req(dash + "/events/session/%s?after=0&mpos=0" % sid, timeout=20)
+    try:
+        pending = None
+        O.emit(log, O.label("▶ one", (1, 2, 3), g="g1"))
+        for raw in r:
+            line = raw.decode("utf-8", "replace").rstrip("\n")
+            if line.startswith("event: "):
+                pending = line[len("event: "):]
+            elif line.startswith("data: ") and pending == "ops":
+                items = json.loads(line[len("data: "):])["items"]
+                html = "".join(it["html"] for it in items)
+                if "data-cc" not in html:
+                    continue
+                seen.append(html)
+                if len(seen) == 1:
+                    # a SECOND op, necessarily delivered on a LATER tick — the
+                    # tick from which the clobbered key used to show up
+                    O.emit(log, O.label("▶ two", (1, 2, 3), g="g2"))
+                else:
+                    break
+    finally:
+        r.close()
+    assert len(seen) == 2, seen
+    for html in seen:
+        assert 'data-cc="%s/' % sid in html, html
+        assert "memory/" not in html
+
+
 def test_notify_done_suppressed_when_seen_earlier_then_left(monkeypatch):
     """The user's rule: 'if I've SEEN the final message on the dashboard, no
     notification.' A done arm is checked EVERY scan while armed (not only at
