@@ -214,7 +214,7 @@ def hide_dir(key, ts):
 # legitimate key (the form opened with no directory yet).
 #
 # `seq` is the writer's wall clock, same STALE-WRITE GUARD as the composer draft
-# (dashboard/http/post.py post_composer_draft), applied PER ENTRY: a debounced
+# (dashboard/http/post/state.py post_composer_draft), applied PER ENTRY: a debounced
 # save in flight when the launch clears the box must not resurrect it by landing
 # later. A clear is a TOMBSTONE (empty text at the newer seq), never a delete, so
 # its seq survives to reject that straggler.

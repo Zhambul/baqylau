@@ -33,10 +33,21 @@ dashboard/control/          launch.py — the terminal-facing control machinery
                             (Frontend resolver, live-window map, launch argv,
                             macOS focus/appearance watches)
 dashboard/http/             the HTTP layer: base (send/SSE/guard/static + query
-                            parsers) · get (GET read plane) · post (POST control
-                            plane) · sse (the SSE streams) · handler
-                            (Handler = base+mixins, + serve())
+                            parsers) · get (GET read plane) · post/ (POST control
+                            plane, a PACKAGE — below) · sse (the SSE streams) ·
+                            handler (Handler = base+mixins, + serve())
                             BOTH planes route through registries (below)
+dashboard/http/post/        the control plane, one module per concern, composed
+                            into _PostMixin by its __init__ (which is the router
+                            and nothing else): typing (message/command/stop/
+                            rewind — the ones that reach a live TUI) · interrupt
+                            (THE stop gesture + its screen-delta probes) ·
+                            dialogs (the ask + plan cards) · state (drafts,
+                            prefs, mutes, view mode, hidden dirs, push — no
+                            terminal touched) · telemetry (the browser's
+                            beacons + presence) · files (attachments, clipboard
+                            paths, dictation grants) · session (new/migrate/
+                            rename)
 dashboard/opshtml/          paint ops -> HTML (the web presenter), split by concern:
                             ansi · ops · markdown · tools
 dashboard/static/           the single-page app (vanilla JS/CSS, no build step) —
@@ -66,7 +77,7 @@ and pass while changing nothing. Pinned by
 
 ### Routing: both planes are registries
 
-`http/get.py` and `http/post.py` dispatch the same way (the styleguide's tables
+`http/get.py` and `http/post/` dispatch the same way (the styleguide's tables
 over if/elif ladders):
 
 | table | key | handler signature |
@@ -79,7 +90,22 @@ over if/elif ladders):
 Adding an endpoint is a table line plus a named method whose docstring is its
 design note. The GET signatures are uniform so the dispatch stays a `getattr` —
 most fixed handlers ignore `url`, and passing it always is cheaper than a
-per-endpoint argument decision. What deliberately stays *explicit* (matched by
+per-endpoint argument decision.
+
+**The POST tables hold the handler FUNCTIONS, not method-name strings.** That is
+what let the control plane split: a table that can only name methods of `self`
+forces every handler into one class, and the POST plane had grown to 45 methods
+across twelve unrelated subjects in a single 2000-line file. Registering
+`_TypingMixin.post_message` instead of `"post_message"` lets the table span the
+`post/` modules, and makes an unresolvable handler an ImportError at start-up
+rather than a 500 on the one request that hits that row. (The mixins compose
+rather than becoming free functions on purpose: handlers routinely need a helper
+belonging to another concern — `post_message` calls files.py's
+`_attachment_paths`, everything calls base.py's `_post_guard` /
+`_reject_input` / `_audit_target` — and composition keeps each of those an
+ordinary `self.` call instead of a threaded-through handler argument.) Pinned by
+`test_post_registries_hold_functions_from_every_mixin`, which also checks every
+row is reachable on the composed `Handler` and has the table's arity. What deliberately stays *explicit* (matched by
 shape in `route`/`route_events`/`route_session`, not by table) is everything
 whose trailing segment is a **name** rather than a verb — `/api/session/<sid>/`
 `agent/<aid>`, `view/<gid>`, `copy/<gid>/<what>` — plus the `/events/*` streams,

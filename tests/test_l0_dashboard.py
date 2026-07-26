@@ -7726,14 +7726,49 @@ def test_audit_target_triple_has_one_owner():
                     "dashboard/http/sse.py"], hits
 
 
+def test_post_registries_hold_functions_from_every_mixin():
+    """Both POST tables map to the HANDLER FUNCTIONS, not to method-name
+    strings resolved by getattr.
+
+    The strings were what forced all 45 handlers into one class — a table that
+    can only name methods of `self` cannot span modules — and that is how the
+    control plane reached 2000 lines of twelve unrelated subjects. They also
+    turned a typo into a 500 on the one request that happened to hit that row,
+    whereas an unresolvable function name is now an ImportError at start-up.
+
+    Every row must also still be reachable on the composed Handler: registering
+    `_TypingMixin.post_message` is only correct because Handler inherits it."""
+    import types
+    tables = {"session": DS.Handler._SESSION_POST, "fixed": DS.Handler._FIXED_POST}
+    seen_modules = set()
+    for which, table in tables.items():
+        for key, fn in table.items():
+            assert isinstance(fn, types.FunctionType), (which, key, fn)
+            assert getattr(DS.Handler, fn.__name__, None) is fn, (which, key)
+            seen_modules.add(fn.__module__)
+    # the split is real: the rows come from the per-concern modules, not one file
+    assert len(seen_modules) >= 6, sorted(seen_modules)
+    assert all(m.startswith("dashboard.http.post.") for m in seen_modules), \
+        sorted(seen_modules)
+    # arity: session verbs take (self, sid), fixed paths take (self)
+    for key, fn in DS.Handler._SESSION_POST.items():
+        assert fn.__code__.co_argcount == 2, (key, fn.__code__.co_varnames)
+    for key, fn in DS.Handler._FIXED_POST.items():
+        assert fn.__code__.co_argcount == 1, (key, fn.__code__.co_varnames)
+
+
 def test_session_scoped_rejects_resolve_their_target_by_sid():
     """A session-scoped input reject files its row through `_reject_input(...,
     sid=sid)` — never a hand-passed `log=`. Handing it a re-derived key made a
     handler's reject row and its SUCCESS row disagree for a forked sid (see the
     _reject_input docstring) and dropped `path` besides. post_upload is the one
     sanctioned `log=`/`path=` caller: its sid is OPTIONAL, so it resolves the
-    target once (global '' when absent) and passes it down."""
-    src = dict(_dash_py("dashboard/http"))["dashboard/http/post.py"]
+    target once (global '' when absent) and passes it down.
+
+    Scans the whole control plane: post/ is a PACKAGE (router + one module per
+    concern), so a per-file assertion would go blind the moment a handler moves
+    between them."""
+    src = "\n".join(t for f, t in _dash_py("dashboard/http/post"))
     assert "P.mirror_log(sid)" not in src, "a reject re-deriving the audit key"
     calls = []
     for m in re.finditer(r"_reject_input\(", src):     # balanced-paren scan: the
@@ -7757,8 +7792,10 @@ def test_modal_stash_match_has_one_owner_per_dialog():
     place: `_ask_stash` for the two ask endpoints (answer / ask-draft),
     `_plan_guard` for the two plan ones. The ask side used to hand-roll it at
     both call sites, which is how the two ended up answering a stale card with
-    different HTTP bodies."""
-    src = dict(_dash_py("dashboard/http"))["dashboard/http/post.py"]
+    different HTTP bodies. Both guards and all four callers live in
+    dashboard/http/post/dialogs.py; the scan covers the whole package so a
+    handler moving out of it can't take a third copy along."""
+    src = "\n".join(t for f, t in _dash_py("dashboard/http/post"))
     # the mismatch test itself: exactly twice, once per guard (they spell it
     # identically). post_message's `_ask_pending(sid) or _plan_pending(sid)`
     # asks a DIFFERENT question — "is ANY modal up" (a paste would go into the
@@ -7771,11 +7808,12 @@ def test_modal_stash_match_has_one_owner_per_dialog():
 
 def test_live_or_parked_state_db_has_one_owner():
     """Choosing between the live state DB and its park is core.sessionapi's
-    (state_db_for / session_db) — no dashboard module may re-derive it. post.py
-    is the one hit: its unknown-sid 404 probes BOTH files without choosing
-    between them, which is a different question ("did this sid ever exist")."""
+    (state_db_for / session_db) — no dashboard module may re-derive it.
+    post/session.py is the one hit: post_migrate's unknown-sid 404 probes BOTH
+    files without choosing between them, which is a different question ("did
+    this sid ever exist")."""
     hits = [f for f, src in _dash_py("dashboard") if "parked_db" in src]
-    assert hits == ["dashboard/http/post.py"], hits
+    assert hits == ["dashboard/http/post/session.py"], hits
 
 
 def test_session_kv_read_has_one_owner():
