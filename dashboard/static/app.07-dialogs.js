@@ -30,9 +30,15 @@ function buildAskCard() {
 // — so a TYPED answer can't be driven (askdialog._require_type_row). The card
 // routes typed answers on such asks through "Chat about this" instead
 // (docs/dashboard.md, *Web ask*).
+// Does THIS question use the preview layout? Its options' previews are what
+// costs the TUI dialog its free-text row, so this is the per-question test
+// submitAsk escalates on. The ask-WIDE askHasPreview below is only for asking
+// "does the card need the preview treatment at all".
+function qHasPreview(q) {
+  return (q && q.options || []).some(o => o && o.preview);
+}
 function askHasPreview(ask) {
-  return (ask && ask.questions || []).some(
-    q => (q.options || []).some(o => o && o.preview));
+  return (ask && ask.questions || []).some(qHasPreview);
 }
 
 function renderAsk() {
@@ -260,9 +266,34 @@ function submitAsk(ask, answers, chat) {
       ? t : "";
   };
   let message = "";
-  if (!chat && answers && askHasPreview(ask)) {
-    const typed = answers.map(effOther).filter(Boolean);
-    if (typed.length) { chat = true; message = typed.join("\n"); }
+  if (!chat && answers) {
+    // Escalate PER QUESTION, not per ask. Only a question whose OWN options
+    // carry previews lacks a free-text row in the TUI dialog; a typed answer on
+    // an ordinary question rides as `other` exactly as it always could. The
+    // test used to be askHasPreview(ask) — true if ANY option ANYWHERE in the
+    // ask had a preview — so one preview on question 1 hijacked typed text on
+    // question 4.
+    const typed = answers
+      .map((a, i) => (qHasPreview(qs[i]) ? effOther(a, i) : ""))
+      .filter(Boolean);
+    if (typed.length) {
+      chat = true;
+      // …and carry the PICKED answers into the message alongside the typed
+      // ones. A chat escalation sends no `answers` array at all, so everything
+      // selected on the other questions used to be discarded in silence: one
+      // typed word beat every option chosen, and the tool saw "no answer
+      // provided" (observed 2026-07-26 — four rounds of answers lost).
+      // Escalating is unavoidable (the dialog cannot take that text), losing
+      // the rest is not, so the message states the whole submission.
+      message = answers.map((a, i) => {
+        const q = qs[i] || {};
+        const vals = (a.selected || []).slice();
+        const t = effOther(a, i);         // already knows if the text counts
+        if (t) vals.push(t);
+        if (!vals.length) return "";      // unanswered questions say nothing
+        return (q.header || q.question || ("q" + (i + 1))) + ": " + vals.join(", ");
+      }).filter(Boolean).join("\n");
+    }
   }
   const body = { tool_use_id: ask.tool_use_id || "" };
   if (chat) { body.chat = true; if (message) body.message = message; }

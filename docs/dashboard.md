@@ -3128,13 +3128,36 @@ mark (the option) and so never recognized it had reached Chat, dead-looping
   Option targeting is unaffected: the down-from-top walk stops at the clean
   single-`❯` option row before it ever descends into the two-`❯` state (pinned
   by `test_cursor_to_reaches_chat_in_two_cursor_preview_layout`);
-- the card detects a preview question (`askHasPreview` — any option with a
-  `preview`) and, on a TYPED answer, routes it through "Chat about this" AND
-  carries the typed text as `message` in the `/answer` body. `post_answer`
-  presses chat, waits for the dialog to close, then delivers the text as a
-  normal message (`fe.paste_text`, a `web-send` row `via: ask-chat`) — so the
-  custom answer reaches the session. Selecting an *option* still drives
-  normally;
+- the card detects a preview question (`qHasPreview` — that question's own
+  options carrying a `preview`) and, on a TYPED answer to THAT question, routes
+  it through "Chat about this" AND carries the typed text as `message` in the
+  `/answer` body. `post_answer` presses chat, waits for the dialog to close,
+  then delivers the text as a normal message (`fe.paste_text`, a `web-send` row
+  `via: ask-chat`) — so the custom answer reaches the session. Selecting an
+  *option* still drives normally;
+
+  **The escalation is PER QUESTION, and it never discards picked answers**
+  (fixed 2026-07-26; pinned by `test_ask_submit_never_discards_picked_answers`
+  over `tests/jsdom/asksubmit.js`). Both halves were wrong and together they
+  ate a user's answers four times running:
+
+    * the test was the ask-WIDE `askHasPreview(ask)` — true if ANY option
+      ANYWHERE in the ask had a preview — so a preview on question 1 hijacked
+      typed text on question 4, a question with an ordinary layout that has a
+      perfectly good free-text row;
+    * and a chat escalation sends **no `answers` array at all**, so every
+      option picked on every other question went with it. One typed word beat
+      four answered questions, the tool received "no answer provided", and
+      nothing in the UI said so.
+
+  The tell in the audit is a `web-answer` with `chat:true` sitting next to a
+  tiny `web-send` `via: ask-chat`, where a genuine submission would have
+  carried `answers`. Escalating is unavoidable when the dialog cannot accept
+  the text; losing the rest is not, so the `message` now states the WHOLE
+  submission (`header: value, value` per answered question). This is exactly
+  the class of bug a grep cannot see — it is about which branch a compound
+  condition takes and what that branch omits from the body — hence the
+  harness that executes `submitAsk` and asserts on the POST body;
 - `askdialog._require_type_row` remains a fast-fail belt-and-suspenders
   (`step: type`) for the free-text path, which the card no longer takes on a
   preview question (it routes to chat instead).

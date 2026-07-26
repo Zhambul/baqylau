@@ -2018,3 +2018,70 @@ def test_notifier_ignores_windowless_transitions(monkeypatch):
     monkeypatch.setattr(DS.API, "tab_states", lambda: seq.pop(0))
     n.scan(); n.scan()
     assert q.empty()
+
+
+def test_ask_submit_never_discards_picked_answers():
+    """submitAsk, EXECUTED rather than grepped: tests/jsdom/asksubmit.js drives
+    the real function over the DOM shim and reports the POST body it builds.
+
+    The bug this pins (2026-07-26): the escalate-to-chat test was
+    `askHasPreview(ask)` — true if ANY option ANYWHERE in the ask carried a
+    preview — and a chat escalation sends no `answers` array at all. So a
+    preview on question 1 plus typed text on question 4 discarded questions
+    1-3's real selections and the tool saw "no answer provided". Four rounds of
+    a user's answers were lost before the audit rows gave it away (a
+    `web-answer chat:true` next to a 7-char `web-send`, where a genuine
+    submission would have carried `answers`).
+
+    Two invariants, both un-greppable (they are about which branch a compound
+    condition takes and what that branch leaves out of the body):
+      * escalation is PER QUESTION — only a question whose own options carry
+        previews lacks a free-text row in the TUI dialog;
+      * when escalation does happen it is not silent data loss — the message
+        carries every question's picked values, not just the typed text.
+    Skipped without `node` (docs/testing.md)."""
+    import shutil
+    import subprocess
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "asksubmit.js"),
+         os.path.join(REPO, "dashboard", "static", "app.07-dialogs.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    # THE REGRESSION: typed text on a NON-preview question must not hijack the
+    # submission just because some OTHER question is preview-laid-out.
+    b = d["typed_on_plain_question"]
+    assert "chat" not in b, b
+    assert [a["selected"] for a in b["answers"]] == [["top"], ["white"], ["sid"]]
+    assert b["answers"][2]["other"] == "testing"   # multiSelect: text is additive
+
+    # picks with no typed text anywhere: an ordinary answer submission
+    assert "chat" not in d["picks_only"]
+
+    # typed text ON a preview question DOES escalate (the dialog cannot take
+    # it) — but the message must state the WHOLE submission, not just the text
+    b = d["typed_on_preview_question"]
+    assert b["chat"] is True
+    for frag in ("my own dock", "white", "sid", "vmodes"):
+        assert frag in b["message"], (frag, b["message"])
+
+    # a single all-preview question: escalates, message is the typed answer
+    assert d["all_preview_typed"]["chat"] is True
+    assert "custom" in d["all_preview_typed"]["message"]
+
+    # no previews at all: typed text has always ridden as `other`
+    b = d["no_preview_typed"]
+    assert "chat" not in b
+    assert b["answers"][0]["other"] == "freeform"
+
+    # a chosen single-select option still beats dormant typed text (other:"")
+    b = d["option_beats_dormant_text"]
+    assert b["answers"][0] == {"selected": ["white"], "other": ""}
+
+    # explicit "chat about this" is untouched: no answers, no message
+    b = d["explicit_chat"]
+    assert b["chat"] is True and "answers" not in b and "message" not in b

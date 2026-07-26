@@ -139,7 +139,21 @@ the SECTIONS engine (the monitors/jobs/memory secondary tabs in
 those two tabs were fourteen near-identical function pairs that got folded onto
 one descriptor, and a grep cannot tell that the jobs grid still says "no
 background jobs" rather than the monitors wording, or that the poll still stops
-when nothing is live. The DOM shim the two harnesses share lives in
+when nothing is live.
+
+And a fourth: `tests/jsdom/asksubmit.js` runs `submitAsk` out of
+`app.07-dialogs.js` and reports the POST body it builds, behind
+`test_ask_submit_never_discards_picked_answers`. It exists because that
+function can silently send LESS than you answered: an ask-wide preview test
+plus a chat escalation that omits `answers` threw away every picked option the
+moment one word was typed (docs/dashboard.md, *Web ask*). That is a bug about
+which branch a compound condition takes and what the branch leaves out of the
+body — invisible to a grep, and invisible to the Python suite too, since no
+server round-trip is involved. Executing the function and asserting on the body
+is the only thing that catches it; the harness is checked against the OLD
+source as well, to confirm it fails there.
+
+The DOM shim these harnesses share lives in
 `tests/jsdom/domshim.js` (`El` + `domGlobals()`): a copy per harness would be
 exactly the duplication these harnesses were written to catch. Note that a
 `const` at a source's top level is a LEXICAL binding and never becomes a
