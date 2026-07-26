@@ -1065,3 +1065,56 @@ def test_goal_probe_ignores_list_content_quoting_the_command(tmp_path):
                  "</command-args> in the output"}]}}) + "\n",
                  encoding="utf-8")
     assert TR.goal_probe(str(p)) is None
+
+
+# ------------------------------------------------- the two presenters' registries
+
+def test_both_transcript_presenters_cover_every_record_kind():
+    """`parse_line`'s record vocabulary is DECLARED (`KINDS`), and each of the
+    two presenters that dispatch on it accounts for every kind — the timeline
+    fold (`_FOLD`) totally, the conversation stream (`_CONV`) by handling or
+    EXPLICITLY skipping.
+
+    Both were parallel elif ladders, 60 and 90 lines, over the same vocabulary:
+    `conversation()` for the dashboard's message stream and `_fold_record()` for
+    the drill-down timeline. Adding a record kind meant editing two chains in two
+    places with nothing saying so, and a forgotten one is silent — the record
+    simply never appears, which is indistinguishable from a transcript that
+    didn't contain it. As registries checked against one declared vocabulary,
+    a new kind fails here until both sides have said what they do with it, and
+    a DROP has to be written down rather than implied by absence."""
+    kinds = set(TR.KINDS)
+    assert kinds, "the record vocabulary must not be empty"
+    # the timeline is full-fidelity: it has something to say about every kind
+    assert set(TR._FOLD) == kinds
+    # the message stream handles or deliberately drops each, and never both
+    assert set(TR._CONV) | TR._CONV_SKIP == kinds
+    assert not (set(TR._CONV) & TR._CONV_SKIP)
+    # …and neither table may invent a kind parse_line cannot produce
+    assert set(TR._CONV) <= kinds and TR._CONV_SKIP <= kinds
+
+
+def test_declared_kinds_are_the_kinds_parse_line_actually_emits():
+    """KINDS is checked against parse_line itself, not just against the tables —
+    otherwise the three could agree with each other and all be wrong. One line
+    per declared kind, parsed for real."""
+    samples = {
+        "bad": "{nope",
+        "compact": _l({"type": "system", "subtype": "compact_boundary",
+                       "compactMetadata": {}}),
+        "recap": _l({"type": "system", "subtype": "away_summary",
+                     "content": "you were away"}),
+        "prompt": _l({"type": "user", "message": {"content": "hello"}}),
+        "teammsg": _l({"type": "user", "message": {"content":
+                       '<teammate-message teammate_id="bob">hi</teammate-message>'}}),
+        "results": _l({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1", "content": "out"}]}}),
+        "assistant": _l({"type": "assistant", "message": {"content": [], "id": "m1"}}),
+        "monitor_event": _l({"type": "queue-operation", "content":
+                             "<task-notification><task-id>t</task-id>"
+                             "<event>tick</event></task-notification>"}),
+    }
+    assert set(samples) == set(TR.KINDS), "sample set drifted from KINDS"
+    for kind, line in samples.items():
+        rec = TR.parse_line(line)
+        assert rec is not None and rec["kind"] == kind, (kind, rec)

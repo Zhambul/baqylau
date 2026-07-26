@@ -204,6 +204,18 @@ def _injected(o):
                 or o.get("isCompactSummary"))
 
 
+# Every `kind` parse_line can return — the record vocabulary of this module,
+# declared so the two PRESENTERS below can be checked against it rather than
+# each quietly knowing its own subset. `conversation()` (the dashboard's message
+# stream) and `_fold_record()` (the drill-down timeline) both dispatch on it,
+# and both used to do so as long elif ladders: adding a kind meant editing two
+# places, and forgetting one was silent. They are registries now, and
+# tests/test_l1e_transcript.py asserts every kind here is either handled or
+# EXPLICITLY skipped by each.
+KINDS = ("bad", "compact", "recap", "prompt", "teammsg", "results",
+         "assistant", "monitor_event")
+
+
 def parse_line(s):
     """One transcript JSONL line -> a typed record (see the module header)."""
     try:
@@ -764,6 +776,123 @@ def _format_questions(tool_input):
     return "\n\n".join(blocks)
 
 
+class _Conv:
+    """The per-record context conversation()'s handlers share: the growing
+    output list, the current line's (ts, uid, par), and the running tool_use
+    `anchor` — which only the assistant handler advances. A single mutable
+    context object shared by named phases, the same shape the long entry
+    main()s use (docs/styleguide.md, *Module shape*)."""
+
+    __slots__ = ("out", "anchor", "ts", "uid", "par")
+
+    def __init__(self):
+        self.out, self.anchor = [], None
+        self.ts = self.uid = self.par = None
+
+    def add(self, kind, text, **extra):
+        """Append one conversation record. Every record carries `anchor` and
+        `ts`; `extra` is the per-kind remainder."""
+        self.out.append(dict({"kind": kind, "text": text,
+                              "anchor": self.anchor, "ts": self.ts}, **extra))
+
+    def add_prompt(self, text, meta):
+        """A user-prompt record, dropping the `<`-wrapped plumbing (a teammate
+        wrapper, a command/caveat envelope — never something the user typed).
+        `meta` means CLAUDE CODE injected the turn (`Stop hook feedback: …`, a
+        resume nudge, a loaded skill body): carried, not dropped — it IS part of
+        the conversation and belongs in the verbose stream, but a consumer that
+        promises "what YOU said" (the dashboard's focus mode) has to be able to
+        tell. Both prompt-bearing kinds (a plain `prompt`, and the `texts` of a
+        `results` record) go through here, which is what keeps that rule single."""
+        t = (text or "").strip()
+        if not t or t.startswith("<"):
+            return
+        extra = {"par": self.par, "uid": self.uid}
+        if meta:
+            extra["meta"] = True
+        self.add("prompt", t, **extra)
+
+
+def _conv_prompt(rec, cx):
+    cx.add_prompt(rec["text"], rec.get("meta"))
+
+
+def _conv_recap(rec, cx):
+    cx.add("recap", rec["text"])
+
+
+def _conv_teammsg(rec, cx):
+    cx.add("teammsg", rec["body"], sender=rec["sender"])
+
+
+def _conv_results(rec, cx):
+    # an AskUserQuestion ANSWER is a tool_result, not plain user text, so it
+    # lands in `blocks` — which this stream otherwise drops (tool results are
+    # the terminal mirror's job, as ops). Surface it so a web-submitted answer
+    # actually shows in the dashboard mirror (the "my answer didn't appear"
+    # report, 2026-07-19). The toolUseResult sidecar is a dict carrying
+    # `answers` for exactly this tool; the tool_result content string is Claude
+    # Code's clean "Your questions have been answered: …" recap
+    # (docs/dashboard.md, *Web ask*).
+    tur = rec.get("tur")
+    if isinstance(tur, dict) and "answers" in tur:
+        qa = _answer_pairs(tur)
+        for blk in rec["blocks"]:
+            txt = result_text(blk.get("content")).strip()
+            if txt:
+                cx.add("answer", txt, qa=qa)
+    for text in rec["texts"]:
+        kind, sender, body = classify_user_text(text)
+        if kind == "teammsg":
+            cx.add("teammsg", body, sender=sender)
+        else:
+            cx.add_prompt(text, rec.get("meta"))
+
+
+def _conv_assistant(rec, cx):
+    for bkind, blk in rec["blocks"]:
+        if bkind == "text":
+            if blk.strip():
+                cx.add("message", blk.strip())
+            continue
+        # the AskUserQuestion tool_use IS the question Claude asked — surface it
+        # so the transcript records the Q alongside the answer (_conv_results
+        # above). Every OTHER tool_use is the terminal mirror's job (rendered as
+        # ops); here it only anchors the conversation records that follow it.
+        if blk.get("name") == "AskUserQuestion":
+            q = _format_questions(blk.get("input") or {})
+            if q:
+                cx.add("question", q)
+        if blk.get("id"):
+            cx.anchor = blk["id"]
+
+
+# conversation()'s dispatch over parse_line's record KINDS — a registry, not a
+# ladder (docs/styleguide.md). It is the SECOND presenter to dispatch on this
+# vocabulary; _fold_record (the drill-down timeline) is the other, and the two
+# were parallel 60-90 line elif chains, so a new record kind had to be added to
+# both with nothing saying so. Both are tables now, and
+# test_both_transcript_presenters_cover_every_record_kind checks each against
+# KINDS — which is why the skips below are DECLARED rather than implied by
+# absence.
+_CONV = {
+    "prompt":    _conv_prompt,
+    "recap":     _conv_recap,
+    "teammsg":   _conv_teammsg,
+    "results":   _conv_results,
+    "assistant": _conv_assistant,
+}
+
+# Kinds conversation() deliberately drops, each for its own reason:
+_CONV_SKIP = {
+    "bad",            # an unparseable line — nothing to say in a message stream
+    "compact",        # a compaction BOUNDARY is structure, not conversation
+    "monitor_event",  # already on the ops stream via claude-stream.py; emitting
+    #                   it here too would DOUBLE every monitor event (see the
+    #                   monitor_event record in the module header)
+}
+
+
 def conversation(path, pos=0, suspects=()):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
     (docs/dashboard.md): every prompt / assistant message / teammate message /
@@ -808,78 +937,15 @@ def conversation(path, pos=0, suspects=()):
     dead = _dead_uuids([(u, p) for r, _t, u, p in parsed if _prompt_bearing(r)],
                        lines, suspects,
                        {p for _r, _t, _u, p in parsed if p})
-    out, anchor = [], None
+    cx = _Conv()
     for rec, ts, uid, par in parsed:
         if uid in dead:
             continue
-        kind = rec["kind"]
-        if kind == "prompt":
-            t = rec["text"].strip()
-            if t and not t.startswith("<"):        # command/caveat wrappers
-                p = {"kind": "prompt", "text": t, "anchor": anchor,
-                     "ts": ts, "par": par, "uid": uid}
-                # Claude Code injected this turn rather than the human typing it
-                # (`Stop hook feedback: …`, a resume nudge). Carried, not
-                # dropped: it IS part of the conversation and belongs in the
-                # verbose stream — but a consumer that promises "what YOU said"
-                # (the dashboard's focus mode) needs to be able to tell.
-                if rec.get("meta"):
-                    p["meta"] = True
-                out.append(p)
-        elif kind == "recap":
-            out.append({"kind": "recap", "text": rec["text"],
-                        "anchor": anchor, "ts": ts})
-        elif kind == "teammsg":
-            out.append({"kind": "teammsg", "text": rec["body"],
-                        "sender": rec["sender"], "anchor": anchor, "ts": ts})
-        elif kind == "results":
-            # an AskUserQuestion ANSWER is a tool_result, not plain user text,
-            # so it lands in `blocks` — which this stream otherwise drops (tool
-            # results are the terminal mirror's job, as ops). Surface it so a
-            # web-submitted answer actually shows in the dashboard mirror (the
-            # "my answer didn't appear" report, 2026-07-19). The toolUseResult
-            # sidecar is a dict carrying `answers` for exactly this tool; the
-            # tool_result content string is Claude Code's clean "Your questions
-            # have been answered: …" recap (docs/dashboard.md, *Web ask*).
-            tur = rec.get("tur")
-            if isinstance(tur, dict) and "answers" in tur:
-                qa = _answer_pairs(tur)
-                for blk in rec["blocks"]:
-                    txt = result_text(blk.get("content")).strip()
-                    if txt:
-                        out.append({"kind": "answer", "text": txt, "qa": qa,
-                                    "anchor": anchor, "ts": ts})
-            for text in rec["texts"]:
-                k, a, b = classify_user_text(text)
-                if k == "teammsg":
-                    out.append({"kind": "teammsg", "text": b, "sender": a,
-                                "anchor": anchor, "ts": ts})
-                elif text.strip() and not text.strip().startswith("<"):
-                    p = {"kind": "prompt", "text": text.strip(),
-                         "anchor": anchor, "ts": ts, "par": par, "uid": uid}
-                    if rec.get("meta"):      # an injected turn — a skill body
-                        p["meta"] = True
-                    out.append(p)
-        elif kind == "assistant":
-            for bkind, blk in rec["blocks"]:
-                if bkind == "text":
-                    if blk.strip():
-                        out.append({"kind": "message", "text": blk.strip(),
-                                    "anchor": anchor, "ts": ts})
-                elif bkind == "tool":
-                    # the AskUserQuestion tool_use IS the question Claude asked —
-                    # surface it so the transcript records the Q alongside the
-                    # answer (the `results` branch above). Every OTHER tool_use is
-                    # the terminal mirror's job (rendered as ops); here it only
-                    # anchors the conversation records that follow it.
-                    if blk.get("name") == "AskUserQuestion":
-                        q = _format_questions(blk.get("input") or {})
-                        if q:
-                            out.append({"kind": "question", "text": q,
-                                        "anchor": anchor, "ts": ts})
-                    if blk.get("id"):
-                        anchor = blk["id"]
-    return out, new_pos
+        handler = _CONV.get(rec["kind"])
+        if handler is not None:               # else a _CONV_SKIP kind
+            cx.ts, cx.uid, cx.par = ts, uid, par
+            handler(rec, cx)
+    return cx.out, new_pos
 
 
 TAKEN_BACK_KEY = "takeback"      # state-DB kv: uuids Claude Code handed back
@@ -1010,70 +1076,120 @@ def ask_preamble_for(sid, tool_use_id):
 
 # --- the drill-down timeline (full fidelity — deliberately UNCAPPED) ---------------
 
-def _fold_record(rec, entries, pend, acc, on_unresolved, ACC):
-    """Fold ONE parse_line record into the timeline accumulators — the single
-    per-record entry builder shared by timeline() and timeline_since() (the
-    styleguide single-owner rule: the record-shape → entry mapping lives here,
-    nowhere else). `entries` gains the record's entries in transcript order;
-    `pend` maps a tool_use id → its (mutable) tool entry so a later tool_result
-    patches `output`/`failed` in place; `acc` (keys "usage_last"/"model"/"tot"
-    [5]/"bad") carries the usage-fold cursor + rollup + bad-line count.
+class _Fold:
+    """The accumulators the timeline handlers share — the drill-down's twin of
+    _Conv. `entries` gains the record's entries in transcript order; `pend` maps
+    a tool_use id → its (mutable) tool entry so a later tool_result patches
+    `output`/`failed` in place; `acc` (keys "usage_last"/"model"/"tot"[5]/"bad")
+    carries the usage-fold cursor + rollup + bad-line count; `ACC` is the
+    deferred accounting module and `on_unresolved` the per-caller hook below."""
 
-    on_unresolved(entries, tool_use_id, output, failed) fires — INLINE, so its
-    entry keeps its position within a results record — for a tool_result whose
-    tool_use isn't in `pend`. The two callers diverge only here: whole-file
-    timeline() appends an orphan-result entry (the tool_use genuinely never
-    appeared); timeline_since() records a cross-increment resolution (the
-    tool_use was in an EARLIER increment, already serialized and sent)."""
-    kind = rec["kind"]
-    if kind == "bad":
-        acc["bad"] += 1
-    elif kind == "compact":
-        entries.append({"t": "compact", "meta": rec["meta"]})
-    elif kind == "recap":
-        entries.append({"t": "recap", "text": rec["text"]})
-    elif kind == "prompt":
-        entries.append({"t": "prompt", "text": rec["text"].strip()})
-    elif kind == "teammsg":
-        entries.append({"t": "teammsg", "sender": rec["sender"],
-                        "body": rec["body"]})
-    elif kind == "monitor_event":
-        entries.append({"t": "monitor", "task": rec["task"],
-                        "summary": rec["summary"], "event": rec.get("event"),
-                        "status": rec.get("status")})
-    elif kind == "results":
-        for blk in rec["blocks"]:
-            out = result_text(blk.get("content"))
-            failed = bool(blk.get("is_error"))
-            e = pend.pop(blk.get("tool_use_id"), None)
-            if e is None:
-                on_unresolved(entries, blk.get("tool_use_id"), out, failed)
-            else:
-                e["output"] = out
-                e["failed"] = failed
-        for text in rec["texts"]:
-            tkind, a, b = classify_user_text(text)
-            if tkind == "teammsg":
-                entries.append({"t": "teammsg", "sender": a, "body": b})
-            else:
-                entries.append({"t": "prompt", "text": text.strip()})
-    elif kind == "assistant":
-        if rec["usage"] is not None:
-            acc["model"] = rec["model"] or acc["model"]
-            d, acc["usage_last"] = ACC.usage_fold(
-                rec["id"], ACC.usage_fields(rec["usage"]), acc["usage_last"])
-            for i in range(5):
-                acc["tot"][i] += d[i]
-        for bkind, blk in rec["blocks"]:
-            if bkind == "text":
-                if blk.strip():
-                    entries.append({"t": "message", "text": blk.strip()})
-            else:
-                e = {"t": "tool", "tool": blk.get("name") or "",
-                     "input": blk.get("input") or {}, "id": blk.get("id")}
-                entries.append(e)
-                if blk.get("id"):
-                    pend[blk["id"]] = e
+    __slots__ = ("entries", "pend", "acc", "on_unresolved", "ACC")
+
+    def __init__(self, on_unresolved, ACC):
+        self.entries, self.pend = [], {}
+        self.acc = {"usage_last": None, "model": None,
+                    "tot": [0, 0, 0, 0, 0], "bad": 0}
+        self.on_unresolved, self.ACC = on_unresolved, ACC
+
+    def add(self, t, **fields):
+        self.entries.append(dict({"t": t}, **fields))
+
+
+def _fold_bad(rec, st):
+    st.acc["bad"] += 1
+
+
+def _fold_compact(rec, st):
+    st.add("compact", meta=rec["meta"])
+
+
+def _fold_recap(rec, st):
+    st.add("recap", text=rec["text"])
+
+
+def _fold_prompt(rec, st):
+    st.add("prompt", text=rec["text"].strip())
+
+
+def _fold_teammsg(rec, st):
+    st.add("teammsg", sender=rec["sender"], body=rec["body"])
+
+
+def _fold_monitor(rec, st):
+    st.add("monitor", task=rec["task"], summary=rec["summary"],
+           event=rec.get("event"), status=rec.get("status"))
+
+
+def _fold_results(rec, st):
+    for blk in rec["blocks"]:
+        out = result_text(blk.get("content"))
+        failed = bool(blk.get("is_error"))
+        e = st.pend.pop(blk.get("tool_use_id"), None)
+        if e is None:
+            # INLINE, so the hook's entry keeps its position within this record
+            st.on_unresolved(st.entries, blk.get("tool_use_id"), out, failed)
+        else:
+            e["output"] = out
+            e["failed"] = failed
+    for text in rec["texts"]:
+        tkind, sender, body = classify_user_text(text)
+        if tkind == "teammsg":
+            st.add("teammsg", sender=sender, body=body)
+        else:
+            st.add("prompt", text=text.strip())
+
+
+def _fold_assistant(rec, st):
+    if rec["usage"] is not None:
+        st.acc["model"] = rec["model"] or st.acc["model"]
+        d, st.acc["usage_last"] = st.ACC.usage_fold(
+            rec["id"], st.ACC.usage_fields(rec["usage"]), st.acc["usage_last"])
+        for i in range(5):
+            st.acc["tot"][i] += d[i]
+    for bkind, blk in rec["blocks"]:
+        if bkind == "text":
+            if blk.strip():
+                st.add("message", text=blk.strip())
+            continue
+        e = {"t": "tool", "tool": blk.get("name") or "",
+             "input": blk.get("input") or {}, "id": blk.get("id")}
+        st.entries.append(e)
+        if blk.get("id"):
+            st.pend[blk["id"]] = e
+
+
+# The timeline's dispatch over parse_line's record KINDS — the drill-down twin
+# of _CONV above, and unlike it, TOTAL: every kind maps to a handler, because a
+# full-fidelity timeline has something to say about all of them (see _CONV_SKIP
+# for the message stream's three deliberate drops). The record-shape → entry
+# mapping lives here and nowhere else (styleguide single-owner rule); timeline()
+# and timeline_since() share it, diverging only in `on_unresolved`.
+_FOLD = {
+    "bad":           _fold_bad,
+    "compact":       _fold_compact,
+    "recap":         _fold_recap,
+    "prompt":        _fold_prompt,
+    "teammsg":       _fold_teammsg,
+    "monitor_event": _fold_monitor,
+    "results":       _fold_results,
+    "assistant":     _fold_assistant,
+}
+
+
+def _fold_record(rec, st):
+    """Fold ONE parse_line record into the timeline accumulators `st` (a _Fold),
+    via the _FOLD registry. Shared by timeline() and timeline_since().
+
+    st.on_unresolved(entries, tool_use_id, output, failed) fires for a
+    tool_result whose tool_use isn't in `pend`. The two callers diverge only
+    there: whole-file timeline() appends an orphan-result entry (the tool_use
+    genuinely never appeared); timeline_since() records a cross-increment
+    resolution (the tool_use was in an EARLIER increment, already serialized and
+    sent)."""
+    handler = _FOLD.get(rec["kind"])
+    if handler is not None:
+        handler(rec, st)
 
 
 def _read(path, pos, on_unresolved):
@@ -1084,8 +1200,7 @@ def _read(path, pos, on_unresolved):
     unreadable path yields ([], fresh-acc, pos) (callers guard existence)."""
     from plugins.claude_code import accounting as ACC   # deferred: keep parse_line import-light
     lines, new_pos = _complete_lines(path, pos)
-    entries, pend = [], {}
-    acc = {"usage_last": None, "model": None, "tot": [0, 0, 0, 0, 0], "bad": 0}
+    st = _Fold(on_unresolved, ACC)
     for s in lines:
         s = s.strip()
         if not s:
@@ -1093,8 +1208,8 @@ def _read(path, pos, on_unresolved):
         rec = parse_line(s)
         if rec is None:
             continue
-        _fold_record(rec, entries, pend, acc, on_unresolved, ACC)
-    return entries, acc, new_pos
+        _fold_record(rec, st)
+    return st.entries, st.acc, new_pos
 
 
 def _append_orphan(entries, tool_use_id, output, failed):
