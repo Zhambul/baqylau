@@ -252,8 +252,8 @@ function leaveSession() {
   if (S.ses) {
     if (S.ses.es) S.ses.es.close();
     closeAgentStream();
-    clearMonitorPoll();
-    clearJobPoll();
+    clearSectionPoll("monitors");
+    clearSectionPoll("jobs");
     if (S.ses.timer) clearTimeout(S.ses.timer);
     if (S.ses.poll) clearInterval(S.ses.poll);
     if (S.ses.fgTimer) clearInterval(S.ses.fgTimer);   // the live fg elapsed tick

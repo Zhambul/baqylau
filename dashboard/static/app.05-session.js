@@ -173,9 +173,11 @@ function connectSession(sid) {
   es.addEventListener("running", (e) => { if (!S.ses) return; S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("fgrun", (e) => { setFgRun((JSON.parse(e.data) || {}).fg || null); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
-  es.addEventListener("monitors", (e) => { updateMonCount(JSON.parse(e.data).count | 0); });
-  es.addEventListener("jobs", (e) => { updateJobCount(JSON.parse(e.data).count | 0); });
-  es.addEventListener("memory", (e) => { updateMemCount(JSON.parse(e.data).count | 0); });
+  // the three secondary-tab badges are one shape (SECTIONS, app.11-chrome.js):
+  // patch the count, and refresh that list when its tab is the one open
+  for (const kind of ["monitors", "jobs", "memory"])
+    es.addEventListener(kind, (e) =>
+      updateSectionCount(kind, JSON.parse(e.data).count | 0));
   es.addEventListener("ask", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;

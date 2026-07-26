@@ -19,8 +19,8 @@ function renderSessionChrome(tab) {
   ses.agentFocus = null;      // a full session/tab render is never agent-focused
   ses.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
   ses.jobFocus = null;        // …nor background-job-focused
-  clearMonitorPoll();         // leaving the monitors tab stops its live poll
-  clearJobPoll();
+  clearSectionPoll("monitors");   // leaving a secondary tab stops its live poll
+  clearSectionPoll("jobs");
   const meta = ses.meta || {};
   // the Memory tab only exists for in-scope (aggregator-adapters) sessions — a
   // deep-link / stale bookmark to it elsewhere falls back to the mirror
@@ -348,24 +348,20 @@ function chromeBody(ses, tab, body) {
     ses.agentsGrid = wrap;
     body.append(wrap);
     updateAgents();
-  } else if (tab === "monitors") {
+  } else if (tab === "monitors" || tab === "jobs") {
+    // the two grid sections are one machine (SECTIONS) — same cached-or-
+    // placeholder paint, same (re)fetch that also starts the live poll
+    const sec = SECTIONS[tab];
     const wrap = el("div", "sgrid");
-    ses.monitorsGrid = wrap;
+    ses[sec.grid] = wrap;
     body.append(wrap);
-    if (ses.monitors) renderMonitorsGrid();   // cached from a prior fetch
-    else wrap.append(el("div", "empty", "loading monitors…"));
-    loadMonitors();                            // (re)fetch fresh + start the live poll
-  } else if (tab === "jobs") {
-    const wrap = el("div", "sgrid");
-    ses.jobsGrid = wrap;
-    body.append(wrap);
-    if (ses.jobs) renderJobsGrid();
-    else wrap.append(el("div", "empty", "loading jobs…"));
-    loadJobs();
+    if (ses[sec.list]) renderSectionGrid(tab);   // cached from a prior fetch
+    else wrap.append(el("div", "empty", "loading " + sec.label + "…"));
+    loadSection(tab);                     // (re)fetch fresh + start the live poll
   } else if (tab === "memory") {
     if (!ses.memory) body.append(el("div", "empty", "loading memory…"));
     paintMemory();                        // grid, or the note viewer if one is open
-    loadMemory();
+    loadSection("memory");
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -677,12 +673,6 @@ function monitorStatus(m) {
   return ["ended", "st-ok"];
 }
 
-function sortedMonitors(mons) {
-  // live first, then most-recently-started on top
-  return [...mons].sort((x, y) => (!!y.live - !!x.live)
-    || ((y.started_at || 0) - (x.started_at || 0)));
-}
-
 function monitorCard(m) {
   const [sttxt, stcls] = monitorStatus(m);
   const card = el("a", "acard");
@@ -704,109 +694,169 @@ function monitorCard(m) {
   return card;
 }
 
-function renderMonitorsGrid() {
-  const ses = S.ses;
-  if (!(ses && ses.tab === "monitors" && ses.monitorsGrid && ses.monitorsGrid.isConnected))
-    return;
-  ses.monitorsGrid.textContent = "";
-  const mons = ses.monitors || [];
-  if (!mons.length) {
-    ses.monitorsGrid.append(el("div", "empty", "no monitors in this session"));
-    return;
-  }
-  for (const m of sortedMonitors(mons)) ses.monitorsGrid.append(monitorCard(m));
+/* ---------- secondary list tabs: the ONE engine ----------------------------
+
+   Monitors and background jobs are the same machine, and it was written twice:
+   fourteen near-identical function pairs 200 lines apart, several of them
+   byte-identical apart from a parameter name (sortedMonitors/sortedJobs). Fetch
+   a list from /api/session/<sid>/<api>, cache it on S.ses, render a card grid or
+   one item's detail, poll while anything in it is live, keep a tab badge. The
+   SECTIONS descriptor names the seven things that actually differ; everything
+   below is generic over it. (The SECONDARY_POLL_MS constant had already been
+   unified for exactly this reason — the constant, and then nothing else.)
+
+   Memory is a member too, for its fetch + badge, but it renders through its own
+   paintMemory (a grid OR an open note viewer) and has no per-item drill-down —
+   `repaint` and the absence of `detail` are what say so. */
+
+const SECTIONS = {
+  monitors: {
+    api: "monitors", list: "monitors", grid: "monitorsGrid",
+    focus: "monitorFocus", poll: "monPoll", tabEl: "monTab",
+    countField: "monitor_count", route: "m", glyph: "◉", label: "monitors",
+    empty: "no monitors in this session", missing: "monitor not found",
+    name: (m) => m.description || m.command || m.task,
+    card: (m) => monitorCard(m), detail: (wrap, m) => renderMonitorDetail(wrap, m),
+  },
+  jobs: {
+    api: "jobs", list: "jobs", grid: "jobsGrid",
+    focus: "jobFocus", poll: "jobPoll", tabEl: "jobTab",
+    countField: "job_count", route: "j", glyph: "◷", label: "jobs",
+    empty: "no background jobs in this session", missing: "job not found",
+    name: (j) => firstLine(j.command) || j.task,
+    card: (j) => jobCard(j), detail: (wrap, j) => renderJobDetail(wrap, j),
+  },
+  memory: {
+    api: "memory", list: "memory", tabEl: "memTab", countField: "memory_count",
+    label: "memory",
+    // the grid repaints only when it is the thing on screen — an open note
+    // viewer stays put while the list refreshes underneath it
+    repaint: () => { if (!noteOpen()) paintMemory(); },
+  },
+};
+
+/* live-first, then most-recently-started on top — the order every section
+   grid uses */
+function sortedItems(items) {
+  return [...items].sort((x, y) => (!!y.live - !!x.live)
+    || ((y.started_at || 0) - (x.started_at || 0)));
 }
 
-function loadMonitors() {
-  const ses = S.ses, sid = S.cur;
+/* Is the memory tab showing an open note rather than its grid? */
+function noteOpen() {
+  const ses = S.ses;
+  return !!(ses && ses.noteTrail && ses.noteTrail.length);
+}
+
+function loadSection(kind) {
+  const sec = SECTIONS[kind], ses = S.ses, sid = S.cur;
   if (!ses || !sid) return;
-  fetch("/api/session/" + encodeURIComponent(sid) + "/monitors")
+  fetch("/api/session/" + encodeURIComponent(sid) + "/" + sec.api)
     .then(r => r.json())
     .then(d => {
       if (S.cur !== sid || !S.ses) return;
-      S.ses.monitors = d.monitors || [];
-      setMonCount(S.ses.monitors.length);
-      if (S.ses.monitorFocus) repaintMonitorDetail();
-      else renderMonitorsGrid();
-      scheduleMonitorPoll();
+      S.ses[sec.list] = d[sec.api] || [];
+      setSectionCount(kind, S.ses[sec.list].length);
+      if (sec.repaint) { sec.repaint(); return; }
+      if (S.ses[sec.focus]) repaintSectionDetail(kind);
+      else renderSectionGrid(kind);
+      scheduleSectionPoll(kind);
     })
     .catch(() => {});
 }
 
-// The secondary tabs (monitors / jobs) poll while something in them is still
-// live — ONE cadence, not two: they are the same fact (a background list the SSE
-// doesn't push, refreshed only while you're looking at it), and it was written
-// twice, in two functions 200 lines apart. Slow on purpose — these are GETs
+function renderSectionGrid(kind) {
+  const sec = SECTIONS[kind], ses = S.ses;
+  if (!(ses && ses.tab === kind && ses[sec.grid] && ses[sec.grid].isConnected))
+    return;
+  ses[sec.grid].textContent = "";
+  const items = ses[sec.list] || [];
+  if (!items.length) {
+    ses[sec.grid].append(el("div", "empty", sec.empty));
+    return;
+  }
+  for (const it of sortedItems(items)) ses[sec.grid].append(sec.card(it));
+}
+
+// The secondary tabs poll while something in them is still live — ONE cadence,
+// not two: they are the same fact (a background list the SSE doesn't push,
+// refreshed only while you're looking at it). Slow on purpose — these are GETs
 // outside the SSE, and the tab is only polled while focused/live.
 const SECONDARY_POLL_MS = 4000;
 
-function scheduleMonitorPoll() {
-  clearMonitorPoll();
-  const ses = S.ses;
+function scheduleSectionPoll(kind) {
+  const sec = SECTIONS[kind], ses = S.ses;
+  clearSectionPoll(kind);
   if (!ses) return;
-  const live = (ses.monitors || []).some(m => m.live);
-  // keep the list / detail fresh while a monitor is still firing events
-  if (live && (ses.tab === "monitors" || ses.monitorFocus))
-    ses.monPoll = setInterval(loadMonitors, SECONDARY_POLL_MS);
+  const live = (ses[sec.list] || []).some(x => x.live);
+  // keep the list / detail fresh while something is still firing
+  if (live && (ses.tab === kind || ses[sec.focus]))
+    ses[sec.poll] = setInterval(() => loadSection(kind), SECONDARY_POLL_MS);
 }
 
-function clearMonitorPoll() {
-  if (S.ses && S.ses.monPoll) { clearInterval(S.ses.monPoll); S.ses.monPoll = null; }
+function clearSectionPoll(kind) {
+  const sec = SECTIONS[kind], ses = S.ses;
+  if (ses && ses[sec.poll]) { clearInterval(ses[sec.poll]); ses[sec.poll] = null; }
 }
 
-// the ◉ monitors tab badge, live — the cheap `monitors` SSE count (a new launch
-// bumps it) OR the exact list length once /monitors is fetched (setMonCount).
-function updateMonCount(n) {
-  const ses = setTabBadge("monitor_count", "monTab", n);
-  // a new monitor arrived while the tab is open -> refresh the list
-  if (ses && ses.tab === "monitors") loadMonitors();
+/* The tab badge: the cheap eager SSE count (a new launch bumps it) or the exact
+   list length once fetched. updateSectionCount is the SSE half — it also
+   refreshes the list when that tab is the one open. */
+function setSectionCount(kind, n) {
+  const sec = SECTIONS[kind];
+  return setTabBadge(sec.countField, sec.tabEl, n);
 }
 
-function setMonCount(n) {
-  setTabBadge("monitor_count", "monTab", n);
+function updateSectionCount(kind, n) {
+  const ses = setSectionCount(kind, n);
+  const showing = kind === "memory" ? !noteOpen() : true;
+  if (ses && ses.tab === kind && showing) loadSection(kind);
 }
 
-function showMonitor(sid, task) {
-  if (S.cur !== sid) showSession(sid, "monitors");
+/* Open one item's drill-down (router #/s/<sid>/<route>/<task>). */
+function showSection(kind, sid, task) {
+  const sec = SECTIONS[kind];
+  if (S.cur !== sid) showSession(sid, kind);
   const ses = S.ses;
   if (!ses) return;
   closeAgentStream();
-  clearMonitorPoll();
-  ses.tab = "monitor:" + task;
-  ses.monitorFocus = task;
-  // no tab-bar entry is "monitor:<task>", so light the `monitors` tab (the same
-  // "you are here" cue the agents drill-down restores on its tab)
+  clearSectionPoll(kind);
+  ses.tab = kind.slice(0, -1) + ":" + task;      // "monitor:<task>" / "job:<task>"
+  ses[sec.focus] = task;
+  // no tab-bar entry is "<kind>:<task>", so light the section's own tab (the
+  // same "you are here" cue the agents drill-down restores on its tab)
+  const re = new RegExp("\\/" + kind + "$");
   $view.querySelectorAll(".tabs a").forEach(a =>
-    a.classList.toggle("on", /\/monitors$/.test(a.getAttribute("href") || "")));
+    a.classList.toggle("on", re.test(a.getAttribute("href") || "")));
   updateRunning();
-  if (ses.monitors) repaintMonitorDetail();
-  else loadMonitors();          // direct navigation / reload — fetch then paint
+  if (ses[sec.list]) repaintSectionDetail(kind);
+  else loadSection(kind);        // direct navigation / reload — fetch then paint
 }
 
-function repaintMonitorDetail() {
-  const ses = S.ses;
-  if (!ses || !ses.monitorFocus || !ses.body) return;
-  const task = ses.monitorFocus;
-  const m = (ses.monitors || []).find(x => x.task === task);
+function repaintSectionDetail(kind) {
+  const sec = SECTIONS[kind], ses = S.ses;
+  if (!ses || !ses[sec.focus] || !ses.body) return;
+  const task = ses[sec.focus];
+  const item = (ses[sec.list] || []).find(x => x.task === task);
   ses.body.textContent = "";
-  ses.body.append(monitorCrumbs(S.cur, m || { task: task }));
+  ses.body.append(sectionCrumbs(kind, S.cur, item || { task: task }));
   const wrap = el("div");
   ses.body.append(wrap);
-  if (!m) { wrap.append(el("div", "empty", "monitor not found")); return; }
-  renderMonitorDetail(wrap, m);
-  scheduleMonitorPoll();        // live monitor -> keep its detail refreshing
+  if (!item) { wrap.append(el("div", "empty", sec.missing)); return; }
+  sec.detail(wrap, item);
+  scheduleSectionPoll(kind);     // still live -> keep its detail refreshing
 }
 
-/* The monitor breadcrumb — ◉ monitors (back to the list) › this monitor. */
-function monitorCrumbs(sid, m) {
+/* The drill-down breadcrumb — <glyph> <label> (back to the list) › this item. */
+function sectionCrumbs(kind, sid, item) {
+  const sec = SECTIONS[kind];
   const nav = el("div", "crumbs");
   const back = el("a", "crumb");
-  back.href = "#/s/" + encodeURIComponent(sid) + "/monitors";
-  back.title = "back to the monitors list";
-  back.append(el("span", "cg", "◉"), tnode(" monitors"));
+  back.href = "#/s/" + encodeURIComponent(sid) + "/" + kind;
+  back.title = "back to the " + sec.label + " list";
+  back.append(el("span", "cg", sec.glyph), tnode(" " + sec.label));
   const cur = el("span", "crumb cur");
-  cur.append(el("span", "cg", "◉"),
-             tnode(" " + (m.description || m.command || m.task)));
+  cur.append(el("span", "cg", sec.glyph), tnode(" " + sec.name(item)));
   nav.append(back, el("span", "csep", "›"), cur);
   return nav;
 }
@@ -877,11 +927,6 @@ function jobStatus(j) {
   return ["finished", "st-ok"];   // writer-gone / vanished = normal completion
 }
 
-function sortedJobs(jobs) {
-  return [...jobs].sort((x, y) => (!!y.live - !!x.live)
-    || ((y.started_at || 0) - (x.started_at || 0)));
-}
-
 function jobCard(j) {
   const [sttxt, stcls] = jobStatus(j);
   const card = el("a", "acard");
@@ -899,83 +944,7 @@ function jobCard(j) {
   return card;
 }
 
-function renderJobsGrid() {
-  const ses = S.ses;
-  if (!(ses && ses.tab === "jobs" && ses.jobsGrid && ses.jobsGrid.isConnected)) return;
-  ses.jobsGrid.textContent = "";
-  const jobs = ses.jobs || [];
-  if (!jobs.length) {
-    ses.jobsGrid.append(el("div", "empty", "no background jobs in this session"));
-    return;
-  }
-  for (const j of sortedJobs(jobs)) ses.jobsGrid.append(jobCard(j));
-}
-
-function loadJobs() {
-  const ses = S.ses, sid = S.cur;
-  if (!ses || !sid) return;
-  fetch("/api/session/" + encodeURIComponent(sid) + "/jobs")
-    .then(r => r.json())
-    .then(d => {
-      if (S.cur !== sid || !S.ses) return;
-      S.ses.jobs = d.jobs || [];
-      setJobCount(S.ses.jobs.length);
-      if (S.ses.jobFocus) repaintJobDetail();
-      else renderJobsGrid();
-      scheduleJobPoll();
-    })
-    .catch(() => {});
-}
-
-function scheduleJobPoll() {
-  clearJobPoll();
-  const ses = S.ses;
-  if (!ses) return;
-  const live = (ses.jobs || []).some(j => j.live);
-  if (live && (ses.tab === "jobs" || ses.jobFocus))
-    ses.jobPoll = setInterval(loadJobs, SECONDARY_POLL_MS);
-}
-
-function clearJobPoll() {
-  if (S.ses && S.ses.jobPoll) { clearInterval(S.ses.jobPoll); S.ses.jobPoll = null; }
-}
-
-function updateJobCount(n) {
-  const ses = setTabBadge("job_count", "jobTab", n);
-  if (ses && ses.tab === "jobs") loadJobs();   // a new job arrived, tab open
-}
-
-function setJobCount(n) {
-  setTabBadge("job_count", "jobTab", n);
-}
-
 /* ---------- memory tab (the memory-wiki notes a session touched) ---------- */
-
-function loadMemory() {
-  const ses = S.ses, sid = S.cur;
-  if (!ses || !sid) return;
-  fetch("/api/session/" + encodeURIComponent(sid) + "/memory")
-    .then(r => r.json())
-    .then(d => {
-      if (S.cur !== sid || !S.ses) return;
-      S.ses.memory = d.memory || [];
-      setMemCount(S.ses.memory.length);
-      // repaint the grid only when it's showing (a note viewer stays put)
-      if (S.ses.tab === "memory" && !(S.ses.noteTrail && S.ses.noteTrail.length))
-        paintMemory();
-    })
-    .catch(() => {});
-}
-
-function setMemCount(n) {
-  setTabBadge("memory_count", "memTab", n);
-}
-
-function updateMemCount(n) {          // live SSE badge patch
-  const ses = setTabBadge("memory_count", "memTab", n);
-  if (ses && ses.tab === "memory" && !(ses.noteTrail && ses.noteTrail.length))
-    loadMemory();                     // a new note was touched with the grid open
-}
 
 /* Paint the memory tab body: the note grid, or the note viewer when a note
    (or a followed [[wikilink]]) is open. */
@@ -1107,49 +1076,6 @@ function noteCrumbs(trail) {
       nav.append(a);
     }
   });
-  return nav;
-}
-
-function showJob(sid, task) {
-  if (S.cur !== sid) showSession(sid, "jobs");
-  const ses = S.ses;
-  if (!ses) return;
-  closeAgentStream();
-  clearJobPoll();
-  ses.tab = "job:" + task;
-  ses.jobFocus = task;
-  $view.querySelectorAll(".tabs a").forEach(a =>
-    a.classList.toggle("on", /\/jobs$/.test(a.getAttribute("href") || "")));
-  updateRunning();
-  if (ses.jobs) repaintJobDetail();
-  else loadJobs();
-}
-
-function repaintJobDetail() {
-  const ses = S.ses;
-  if (!ses || !ses.jobFocus || !ses.body) return;
-  const task = ses.jobFocus;
-  const j = (ses.jobs || []).find(x => x.task === task);
-  ses.body.textContent = "";
-  ses.body.append(jobCrumbs(S.cur, j || { task: task }));
-  const wrap = el("div");
-  ses.body.append(wrap);
-  if (!j) { wrap.append(el("div", "empty", "job not found")); return; }
-  renderJobDetail(wrap, j);
-  scheduleJobPoll();
-}
-
-/* The job breadcrumb — ◷ jobs (back to the list) › this job. */
-function jobCrumbs(sid, j) {
-  const nav = el("div", "crumbs");
-  const back = el("a", "crumb");
-  back.href = "#/s/" + encodeURIComponent(sid) + "/jobs";
-  back.title = "back to the jobs list";
-  back.append(el("span", "cg", "◷"), tnode(" jobs"));
-  const cur = el("span", "crumb cur");
-  cur.append(el("span", "cg", "◷"),
-             tnode(" " + (firstLine(j.command) || j.task)));
-  nav.append(back, el("span", "csep", "›"), cur);
   return nav;
 }
 

@@ -4534,8 +4534,24 @@ distinct-monitor `streams` COUNT (`sessionapi.monitor_count`, no transcript
 parse), pushed on change, so a new `Monitor` launch bumps it like the `errors`
 badge. The card **list** is fetched lazily on tab-open (`/api/session/<sid>/
 monitors` — one transcript parse) and, while any monitor is `live`, re-fetched on
-a light client poll (`scheduleMonitorPoll`, `SECONDARY_POLL_MS` — the ONE cadence both secondary tabs share); the poll stops when none is live
-or you leave the tab. (No dedicated per-event SSE increment — a monitor's live
+a light client poll (`scheduleSectionPoll`, `SECONDARY_POLL_MS`); the poll stops when none is live
+or you leave the tab.
+
+Monitors, jobs and memory are ONE engine, not three: the `SECTIONS` descriptor
+in `app.11-chrome.js` names what differs (endpoint, the `S.ses` field the list
+caches into, the grid/poll/tab-anchor fields, the route letter, the glyph and
+label, the empty-list wording, the card and detail renderers, the item's display
+name) and `loadSection` / `renderSectionGrid` / `scheduleSectionPoll` /
+`clearSectionPoll` / `showSection` / `repaintSectionDetail` / `sectionCrumbs` /
+`setSectionCount` / `updateSectionCount` are generic over it. It was written
+twice — fourteen near-identical function pairs 200 lines apart, `sortedMonitors`
+and `sortedJobs` byte-identical apart from a parameter name — and the
+`SECONDARY_POLL_MS` constant had already been unified with a comment noting the
+rest had not. Memory is a member for its fetch and badge only: it repaints
+through its own `paintMemory` (a note grid OR an open note viewer) and has no
+per-item drill-down, which its `repaint` hook and missing `detail`/`grid` fields
+are what say. Executed, not grepped, by `tests/jsdom/sections.js`
+(docs/testing.md). (No dedicated per-event SSE increment — a monitor's live
 events already stream into the *mirror* tab as ops; the monitors tab is the
 state-and-history view.)
 

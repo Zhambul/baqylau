@@ -136,8 +136,11 @@ function route() {
     S.pendingUI = false;
     const sid = decodeURIComponent(parts[1]);
     if (parts[2] === "a" && parts[3]) return showAgent(sid, decodeURIComponent(parts[3]));
-    if (parts[2] === "m" && parts[3]) return showMonitor(sid, decodeURIComponent(parts[3]));
-    if (parts[2] === "j" && parts[3]) return showJob(sid, decodeURIComponent(parts[3]));
+    // the two drill-downs route through the one section engine (SECTIONS)
+    if (parts[2] === "m" && parts[3])
+      return showSection("monitors", sid, decodeURIComponent(parts[3]));
+    if (parts[2] === "j" && parts[3])
+      return showSection("jobs", sid, decodeURIComponent(parts[3]));
     return showSession(sid, parts[2] || "mirror");
   }
   if (parts[0] === "launching") {

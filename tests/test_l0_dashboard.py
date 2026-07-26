@@ -8031,6 +8031,60 @@ def test_page_reads_the_served_act_instead_of_sniffing_glyphs(dash):
         assert "▶▷◉" not in body, "%s re-encodes the chip glyph table" % part
 
 
+def test_secondary_tab_sections_are_one_engine(tmp_path):
+    """Monitors and background jobs, EXECUTED rather than grepped:
+    tests/jsdom/sections.js drives the real SECTIONS engine in
+    app.11-chrome.js over the shared DOM shim.
+
+    They used to be fourteen near-identical function pairs 200 lines apart —
+    sortedMonitors/sortedJobs byte-identical but for a parameter name, and the
+    SECONDARY_POLL_MS constant already unified with a comment saying the rest had
+    been written twice. Folding them onto one descriptor is only safe if BOTH
+    still render what they rendered, and no Python test executes this file; a
+    grep cannot catch a jobs grid that says "no monitors in this session", a
+    breadcrumb pointing at the other list, or a poll left ticking for a section
+    with nothing live. Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "sections.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    assert d["kinds"] == ["monitors", "jobs", "memory"]
+    # each grid renders its own cards, in the shared order: live first, then
+    # most-recently-started
+    for kind, glyph in (("monitors", "◉"), ("jobs", "◷")):
+        g = d["grids"][kind]
+        assert g["cards"] == 2, kind
+        assert g["order"][0].endswith("live"), (kind, g["order"])
+        assert g["text"].startswith(glyph), (kind, g["text"])
+    # …and its OWN wording, which a shared engine is exactly what could lose
+    assert d["empty"] == {"monitors": "no monitors in this session",
+                          "jobs": "no background jobs in this session"}
+    assert d["crumbs"]["monitors"]["back"].endswith("/monitors")
+    assert d["crumbs"]["jobs"]["back"].endswith("/jobs")
+    assert d["crumbs"]["monitors"]["text"] == "◉ monitors›◉ watcher"
+    assert d["crumbs"]["jobs"]["text"] == "◷ jobs›◷ make build"
+    # the poll runs only while something is LIVE and that section is what you
+    # are looking at — its tab, or one item's drill-down
+    assert d["poll"] == {"liveOnTab": True, "liveOnDrill": True,
+                         "liveElsewhere": False, "deadOnTab": False}
+    # loadSection: one fetch on the section's own endpoint, the badge patched
+    # from the fetched length (anchor text AND the cached meta field), the grid
+    # painted. memory shares the fetch+badge half and repaints through its own
+    # paintMemory, so it has no grid of its own here.
+    assert d["fetched"] == {"monitors": ["/api/session/sid1/monitors"],
+                            "jobs": ["/api/session/sid1/jobs"],
+                            "memory": ["/api/session/sid1/memory"]}
+    assert d["badges"]["monitors"] == {"count": "2", "meta": 2, "painted": 2}
+    assert d["badges"]["jobs"] == {"count": "2", "meta": 2, "painted": 2}
+    assert d["badges"]["memory"] == {"count": "1", "meta": 1, "painted": None}
+
+
 def test_view_mode_engine_collapses_runs_and_words_them(dash):
     """The COLLAPSE ITSELF, executed rather than grepped: tests/jsdom/viewmode.js
     runs the real app.05-session.js engine over a DOM shim and reports what the

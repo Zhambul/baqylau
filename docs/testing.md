@@ -122,3 +122,18 @@ calls, `vm`-runs the REAL `app.05-session.js`, and prints a JSON verdict that
 endpoint, vocabulary parity) still cover everything reachable from Python. Adding
 a second such test is fine; adding a JS test FRAMEWORK is not the same decision
 and should be taken separately.
+
+There is now a second one, on the same terms: `tests/jsdom/sections.js` drives
+the SECTIONS engine (the monitors/jobs/memory secondary tabs in
+`app.11-chrome.js`) behind
+`test_secondary_tab_sections_are_one_engine`. It exists for the same reason —
+those two tabs were fourteen near-identical function pairs that got folded onto
+one descriptor, and a grep cannot tell that the jobs grid still says "no
+background jobs" rather than the monitors wording, or that the poll still stops
+when nothing is live. The DOM shim the two harnesses share lives in
+`tests/jsdom/domshim.js` (`El` + `domGlobals()`): a copy per harness would be
+exactly the duplication these harnesses were written to catch. Note that a
+`const` at a source's top level is a LEXICAL binding and never becomes a
+property of the `vm` global the way a `function` declaration does — a harness
+that needs one appends its own `globalThis.X = X` to the evaluated text so both
+share a scope.
