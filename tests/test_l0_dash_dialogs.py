@@ -1541,7 +1541,7 @@ def test_stats_payload_aggregates_cross_session(dash, monkeypatch):
                     {"metric": "cost", "query_source": "main", "type": "", "value": 0.25}])
     A.error("stB1", "boom", {"where": "test"})          # one error under beta
 
-    DS.lists._STATS_AGG["v"] = None                     # bypass the wall-clock memo
+    DS.lists._STATS_AGG.clear()                 # bypass the wall-clock memo
     d = _get_json(dash + "/api/stats")
     assert d["total_sessions"] == 4
     # windows: all=4, 30d=3 (drops the 40d-old alpha), 7d=3

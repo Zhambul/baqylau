@@ -13,7 +13,7 @@ from core import sessionapi as API
 from dashboard import config
 from dashboard.config import (RESUMABLE_SCAN, SESSIONS_LIMIT, STATS_TOP_PROJECTS)
 from dashboard.control import launch
-from dashboard.read.cache import MEMO_CAP, _db_cached
+from dashboard.read.cache import MEMO_CAP, _db_cached, ttl_cached
 from dashboard.read.meta import (canon_cwd, git_info, session_ctx,
                                  session_title, group_dir, session_slug)
 
@@ -288,27 +288,19 @@ def accounts_payload():
     return out
 
 
-_STATS_AGG = {"t": 0.0, "v": None}   # wall-clock memo for stats_payload (config.STATS_TTL_S)
+# The stats aggregate's TTL memo (read/cache.ttl_cached, keyed by the single
+# key "" — the payload takes no arguments). A whole-corpus scan has no cheap
+# fingerprint, so bounded staleness is the only freshness rule available; the
+# bound is config.STATS_TTL_S. `.clear()` is the documented bypass (the tests
+# use it).
+_STATS_AGG = {}
 
 
-def stats_payload():
-    """The GitHub-Insights-style cross-session Stats page (GET /api/stats): the
-    contribution heatmap (sessions/day), a per-window Pulse summary, the day×hour
-    punch card, and per-project cards. Everything is computed SERVER-side (single-
-    owner rule; the JS only renders) from core.sessionapi.activity_stats (the audit
-    tables). A read-only aggregate — no writes, no audit rows (like accounts_payload,
-    ctx saturation, and the goal probe). Memo-cached for config.STATS_TTL_S so re-opening
-    the page doesn't re-scan the whole history.
-
-    Sessions group under the SAME key the list page uses — start_cwd (the frozen
-    original cwd), symlink-canonicalised and resolved to its linked-worktree owner
-    (group_dir) — so worktrees fold under their main checkout. Pulse windows
-    (7d/30d/all) and per-project sparkline series are folded from the same rows in
-    one pass; the heatmap buckets are left client-side so the scale self-normalises
-    without a round-trip."""
+def _stats_compute():
+    """stats_payload's body — the whole-corpus fold, run on a memo MISS. Split
+    from the public entry so the caching rule is one line there instead of a
+    hand-rolled deadline check around a 60-line function."""
     now = time.time()
-    if _STATS_AGG["v"] is not None and now - _STATS_AGG["t"] < config.STATS_TTL_S:
-        return _STATS_AGG["v"]
     agg = API.activity_stats()
     rows = agg["sessions"]
     # "active" is GENUINE liveness, not `ended_at IS NULL`. Claude Code fires no
@@ -368,5 +360,22 @@ def stats_payload():
     out = {"generated_at": now, "total_sessions": agg["total_sessions"],
            "daily": agg["daily"], "punch": agg["punch"],
            "windows": windows, "projects": proj_list}
-    _STATS_AGG["t"], _STATS_AGG["v"] = now, out
     return out
+
+
+def stats_payload():
+    """The GitHub-Insights-style cross-session Stats page (GET /api/stats): the
+    contribution heatmap (sessions/day), a per-window Pulse summary, the day×hour
+    punch card, and per-project cards. Everything is computed SERVER-side (single-
+    owner rule; the JS only renders) from core.sessionapi.activity_stats (the audit
+    tables). A read-only aggregate — no writes, no audit rows (like accounts_payload,
+    ctx saturation, and the goal probe). Memo-cached for config.STATS_TTL_S so
+    re-opening the page doesn't re-scan the whole history.
+
+    Sessions group under the SAME key the list page uses — start_cwd (the frozen
+    original cwd), symlink-canonicalised and resolved to its linked-worktree owner
+    (group_dir) — so worktrees fold under their main checkout. Pulse windows
+    (7d/30d/all) and per-project sparkline series are folded from the same rows in
+    one pass; the heatmap buckets are left client-side so the scale self-normalises
+    without a round-trip."""
+    return ttl_cached(_STATS_AGG, "", config.STATS_TTL_S, _stats_compute)

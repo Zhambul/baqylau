@@ -313,7 +313,7 @@ def test_stats_active_counts_only_live_sessions(dash):
     A.session_start({"session_id": "sadone", "cwd": "/w", "transcript_path": ""})
     A.session_end({"session_id": "sadone"}, "other")
 
-    DS.lists._STATS_AGG["v"] = None                 # bypass the wall-clock memo
+    DS.lists._STATS_AGG.clear()                 # bypass the wall-clock memo
     win = _get_json(dash + "/api/stats")["windows"]["all"]
     assert win["sessions"] == 4
     assert win["active"] == 2      # only the two live ones, NOT the stranded row

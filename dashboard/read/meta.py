@@ -9,12 +9,11 @@
 # read-only per-session kv read (session_kv) every card/draft reader shares.
 import os
 import subprocess
-import time
 
 import plugins
 from core import sessionapi as API
 from dashboard import prefs
-from dashboard.read.cache import MEMO_CAP
+from dashboard.read.cache import MEMO_CAP, size_cached, ttl_cached
 
 _TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, title): a title
 #                   only changes when the file grows, so (path, size) is the
@@ -45,26 +44,6 @@ def _rename_override(tpath):
     return prefs.renamed_title(base[:-len(".jsonl")])
 
 
-def _size_cached(cache, tpath, compute, empty=None):
-    """Read-through a (path, size) memo (a read/cache.py BoundedLRU): `empty`
-    for a falsy path or an unstatable file, the cached value while the file's
-    size is unchanged, else `compute()` (a zero-arg callable) stored under the
-    new size. The one owner of the getsize/OSError guard + size-match hit that
-    session_title/session_ctx/session_goal share."""
-    if not tpath:
-        return empty
-    try:
-        size = os.path.getsize(tpath)
-    except OSError:
-        return empty
-    hit = cache.get(tpath)
-    if hit and hit[0] == size:
-        return hit[1]
-    v = compute()
-    cache[tpath] = (size, v)
-    return v
-
-
 def session_title(tpath):
     def compute():
         title, tail_named = plugins.title_and_rename(tpath)
@@ -80,7 +59,7 @@ def session_title(tpath):
             if override:
                 title = override
         return title
-    return _size_cached(_TITLES, tpath, compute, empty="")
+    return size_cached(_TITLES, tpath, compute, empty="")
 
 
 _GIT = API.BoundedLRU(MEMO_CAP)   # cwd -> the _git_resolve result (None = not a
@@ -109,20 +88,16 @@ def _git_dirty(cwd):
     unstaged/untracked alike). --no-optional-locks keeps this read-only
     observer from touching the index; None = unknown (no git, timeout, or a
     broken/fake checkout), which renders as no marker."""
-    now = time.monotonic()
-    hit = _DIRTY.get(cwd)
-    if hit and hit[0] > now:
-        return hit[1]
-    try:
-        res = subprocess.run(
-            ["git", "-c", "core.quotePath=false", "--no-optional-locks",
-             "status", "--porcelain"],
-            cwd=cwd, capture_output=True, timeout=DIRTY_TIMEOUT_S)
-        dirty = bool(res.stdout.strip()) if res.returncode == 0 else None
-    except (OSError, subprocess.SubprocessError):
-        dirty = None
-    _DIRTY[cwd] = (now + DIRTY_TTL_S, dirty)
-    return dirty
+    def probe():
+        try:
+            res = subprocess.run(
+                ["git", "-c", "core.quotePath=false", "--no-optional-locks",
+                 "status", "--porcelain"],
+                cwd=cwd, capture_output=True, timeout=DIRTY_TIMEOUT_S)
+            return bool(res.stdout.strip()) if res.returncode == 0 else None
+        except (OSError, subprocess.SubprocessError):
+            return None
+    return ttl_cached(_DIRTY, cwd, DIRTY_TTL_S, probe)
 
 
 def _git_resolve(cwd):
@@ -249,7 +224,7 @@ _CTX = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, ctx): same
 def session_ctx(tpath, main=False):
     """plugins.context() (the {used, window, pct, model} saturation of the
     file's last turn) behind the (path, size) cache; None when unknown."""
-    return _size_cached(_CTX, tpath, lambda: plugins.context(tpath, main=main))
+    return size_cached(_CTX, tpath, lambda: plugins.context(tpath, main=main))
 
 
 _GOAL = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, goal): same
@@ -262,7 +237,7 @@ def session_goal(tpath):
     """plugins.goal() (the session's active `/goal` as {condition, met}, the
     pinned goal card's source) behind the (path, size) cache; None when there's
     no active goal / unknown."""
-    return _size_cached(_GOAL, tpath, lambda: plugins.goal(tpath))
+    return size_cached(_GOAL, tpath, lambda: plugins.goal(tpath))
 
 
 _CMDS = API.BoundedLRU(MEMO_CAP)   # cwd -> (monotonic expiry, frozenset(names)).
@@ -283,16 +258,14 @@ def cmd_names(cwd):
     and the menu can never disagree about what a real command is."""
     if not cwd:
         return frozenset()
-    now = time.monotonic()
-    hit = _CMDS.get(cwd)
-    if hit and hit[0] > now:
-        return hit[1]
-    try:
-        names = frozenset(c.get("name") or "" for c in plugins.slash_commands(cwd))
-    except Exception:
-        names = frozenset()          # discovery is best-effort: no tint, no failure
-    _CMDS[cwd] = (now + CMDS_TTL_S, names)
-    return names
+
+    def walk():
+        try:
+            return frozenset(c.get("name") or ""
+                             for c in plugins.slash_commands(cwd))
+        except Exception:
+            return frozenset()       # discovery is best-effort: no tint, no failure
+    return ttl_cached(_CMDS, cwd, CMDS_TTL_S, walk)
 
 
 def session_cmds(sid):
