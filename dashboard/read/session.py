@@ -4,6 +4,7 @@
 # pending AskUserQuestion / ExitPlanMode / composer-draft / ghost-suggestion /
 # tasks / queue cards. Read-only; the per-session metadata comes from
 # read/meta.py, the live window from control/launch.py.
+import collections
 import os
 
 import plugins
@@ -98,19 +99,54 @@ def memory_count(sid, cwd):
     return API.memory_count(sid) if memory_scope(cwd) else 0
 
 
+# --- the secondary tabs' BADGE COUNTS: one row per badge, one owner ---------------
+# Each badge is a CHEAP count (an audit COUNT / the streams keystone / a kv read
+# — never a transcript parse), so both the overview payload and the per-tick SSE
+# can carry it; the full detail behind every one stays on its REST endpoint,
+# fetched when the tab opens (/errors, /monitors, /jobs, /memory).
+#
+# The row carries BOTH names the fact travels under, because they differ: the
+# payload field is `<thing>_count` (the page reads meta.error_count) while the
+# SSE event is the bare `<thing>` (the page listens for "errors"). That
+# divergence is a wire fact, not a choice worth re-litigating — the page's
+# SECTIONS table already bridges it with a `countField`. What it is NOT worth is
+# two server-side enumerations of the same four facts: session_payload set the
+# `_count` keys and http/sse.py's own table produced the events, so adding a
+# badge meant editing both, in different vocabularies, with nothing to say so.
+# Here the pair is declared once and both sides derive from it.
+#
+# Values are (sid, cwd) callables, not bound API functions: the lookup has to
+# happen at CALL time so a patched sessionapi moves the served number too (the
+# module-qualified read rule), and `memory` needs a different owner than the
+# others — its badge is project-SCOPED, and that gate belongs to this read model
+# (which the overview payload and the SSE badge table must not each re-apply).
+_Badge = collections.namedtuple("_Badge", "event field count")
+
+BADGES = (
+    # ⚠ swallowed errors — the web sibling of the scorebar's errwatch chip;
+    # a COUNT, no tracebacks
+    _Badge("errors", "error_count", lambda sid, cwd: API.error_count(sid)),
+    # distinct monitors — a new Monitor launch bumps it
+    _Badge("monitors", "monitor_count", lambda sid, cwd: API.monitor_count(sid)),
+    # distinct background jobs — a new bg launch bumps it
+    _Badge("jobs", "job_count", lambda sid, cwd: API.job_count(sid)),
+    # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
+    _Badge("memory", "memory_count", lambda sid, cwd: memory_count(sid, cwd)),
+)
+
+
 def session_payload(sid):
-    """One session's overview — session() plus the error count the ⚠ badge
-    shows (full rows stay behind /errors) and the display title."""
+    """One session's overview — session() plus the secondary tabs' badge counts
+    (BADGES; the full rows stay behind /errors, /monitors, /jobs, /memory) and
+    the display title."""
     data = API.session(sid)
     data["agents"] = agents_ctx(visible_agents(data.get("agents") or []))
-    data["error_count"] = API.error_count(sid)
-    data["monitor_count"] = API.monitor_count(sid)   # the monitors tab badge
-    data["job_count"] = API.job_count(sid)           # the jobs tab badge
     # the Memory tab is SCOPED: only sessions inside the enabled project
     # (aggregator-adapters) get it. The flag gates the tab client-side (hidden
     # off-scope); the count still rides along (0 off-scope — nothing recorded).
     data["memory_scope"] = memory_scope(data.get("cwd") or "")
-    data["memory_count"] = memory_count(sid, data.get("cwd") or "")
+    for b in BADGES:
+        data[b.field] = b.count(sid, data.get("cwd") or "")
     data["title"] = session_title(data.get("transcript_path") or "")
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude

@@ -925,11 +925,19 @@ def test_presence_maps_stay_bounded(monkeypatch):
 
 
 def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
-    """The session tab badges are a TABLE (`_BADGE_COUNTS`) — four cheap counts
-    with one shape, pushed on change — not four hand-written stanzas.
+    """The session tab badges are a TABLE (`read/session.BADGES`) — four cheap
+    counts with one shape — not four hand-written stanzas, and not two
+    enumerations either.
+
+    Each row carries BOTH names the fact travels under: the payload field
+    (`error_count`, what session_payload sets and the page reads off `meta`) and
+    the SSE event (`errors`, what the stream pushes). Those genuinely differ on
+    the wire, and while the table lived in http/sse.py the two sides were
+    enumerated separately — the events here, the `*_count` keys in
+    session_payload — so a new badge meant two edits in two vocabularies.
 
     Its `memory` row is the interesting one: that badge is project-SCOPED, and
-    the gate now has ONE owner (`read/session.memory_count`) shared with the
+    the gate has ONE owner (`read/session.memory_count`) shared with the
     overview payload. The two readings had drifted apart — the payload reported 0
     off-scope while the stream kept pushing the real count, for a tab the page
     never builds there."""
@@ -944,15 +952,19 @@ def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
     assert rsession.memory_count("s1", str(proj)) == 5
     assert rsession.memory_count("s1", off) == 0
     assert rsession.memory_scope(str(proj)) is True and rsession.memory_scope(off) is False
-    # the stream's row IS that owner — not its own API call beside it
-    table = DS.Handler._BADGE_COUNTS
-    assert set(table) == {"errors", "monitors", "jobs", "memory"}
-    assert table["memory"]("s1", str(proj)) == 5
-    assert table["memory"]("s1", off) == 0
+    table = {b.event: b for b in rsession.BADGES}
+    # the (SSE event, payload field) pairs, pinned — the two spellings the same
+    # fact travels under, declared once here and derived by both sides
+    assert [(b.event, b.field) for b in rsession.BADGES] == [
+        ("errors", "error_count"), ("monitors", "monitor_count"),
+        ("jobs", "job_count"), ("memory", "memory_count")]
+    # the stream's row IS the scope owner — not its own API call beside it
+    assert table["memory"].count("s1", str(proj)) == 5
+    assert table["memory"].count("s1", off) == 0
     # every row resolves its count at CALL time, so a patched sessionapi moves
     # the pushed number (a class-body-bound callable would have frozen it)
     monkeypatch.setattr(rsession.API, "error_count", lambda sid: 3)
-    assert table["errors"]("s1", off) == 3
+    assert table["errors"].count("s1", off) == 3
 
 
 def test_session_stream_channels_are_a_derived_table():
@@ -973,9 +985,15 @@ def test_session_stream_channels_are_a_derived_table():
     assert set(m) == set(keys) | set(DS.sse._INLINE_KEYS)
     assert all(v is None for v in m.values())
     assert "view_mode" in m                           # the one the literal lost
-    # the four badges are rows of this table, still sharing the one badge table
-    assert [c.key for c in chans if c.key in DS.sse._BADGE_COUNTS] \
-        == list(DS.sse._BADGE_COUNTS)
+    # the four badges are rows of this table, derived from the read model's
+    # BADGES (one owner) — and their `prev` slot is the PAYLOAD field, so a
+    # connection's last-sent map speaks the same vocabulary the initial payload
+    # used rather than a second one
+    from dashboard.read import session as rsession
+    fields = [b.field for b in rsession.BADGES]
+    assert [c.key for c in chans if c.key in fields] == fields
+    assert [c.event for c in chans if c.key in fields] \
+        == [b.event for b in rsession.BADGES]
     # a wrapped channel names ONE field; a verbatim one names none
     for c in chans:
         assert c.wrap is None or (isinstance(c.wrap, str) and c.wrap)
@@ -987,7 +1005,7 @@ def test_live_ops_carry_the_session_key_not_a_badge_name(dash):
     (`data-cc="<key>/<g>/<what>"`).
 
     Regression (shipped 2026-07-25, bcc00a3): the tab-badge stanza inside the
-    tick loop was `for key, count in _BADGE_COUNTS.items()`, which rebound the
+    tick loop was `for key, count in the badge table's items()`, which rebound the
     loop's own `key` local — the session's mirror-log key, resolved once before
     the loop. From the SECOND tick on every live-streamed block was stamped
     `memory` (the badge table's last row), so its copy link resolved to a

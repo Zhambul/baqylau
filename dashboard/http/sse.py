@@ -22,8 +22,8 @@ from dashboard.read.lists import (sessions_payload,
 from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
                                  session_title, session_slug)
 from dashboard.read.mirror import (merged_backlog, merge_live, enrich_entries)
-from dashboard.read.session import (agents_ctx, agents_model_effort,
-                                    memory_count, visible_agents, ask_draft,
+from dashboard.read.session import (BADGES, agents_ctx, agents_model_effort,
+                                    visible_agents, ask_draft,
                                     ask_pending, ask_wire, composer_draft, composer_queue,
                                     plan_pending, session_tasks,
                                     input_box, SUGGEST_TABS)
@@ -33,30 +33,20 @@ A = load_audit()
 _UNSET = object()               # "no explicit payload" — _push_changed sends the compared value
 
 
-# The tab-badge counts pushed on the slow cadence: each is a CHEAP count (an
-# audit COUNT / the streams keystone / a kv read — never a transcript parse),
-# wired to a {"count": n} event of the same name, sent only on change. Four
-# copies of one shape were four near-identical stanzas 30 lines long; as a
-# table, adding a badge is a row and the shape can't drift. The full detail
-# behind every one of them stays on its REST endpoint, fetched when the tab
-# opens (/errors, /monitors, /jobs, /memory).
+# The tab-badge counts pushed on the slow cadence ride the read model's own
+# BADGES table (dashboard/read/session.py) — one row per badge carrying BOTH
+# names the fact travels under: the payload field (`error_count`) and the SSE
+# event (`errors`). Each is a CHEAP count (an audit COUNT / the streams
+# keystone / a kv read — never a transcript parse), wired here to a
+# {"count": n} event, sent only on change.
 #
-# Values are (sid, cwd) callables, not bound API functions: the lookup has to
-# happen at CALL time so a patched sessionapi moves the pushed number too
-# (the module-qualified read rule), and `memory` needs a different owner than
-# the others — its badge is project-SCOPED, and that gate belongs to the read
-# model it shares with the overview payload, not to this loop.
-_BADGE_COUNTS = {
-    # ⚠ swallowed errors — the web sibling of the scorebar's errwatch chip;
-    # a COUNT, no tracebacks
-    "errors": lambda sid, cwd: API.error_count(sid),
-    # distinct monitors — a new Monitor launch bumps it
-    "monitors": lambda sid, cwd: API.monitor_count(sid),
-    # distinct background jobs — a new bg launch bumps it
-    "jobs": lambda sid, cwd: API.job_count(sid),
-    # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
-    "memory": lambda sid, cwd: memory_count(sid, cwd),
-}
+# Four copies of one shape were four near-identical stanzas 30 lines long; as a
+# table, adding a badge is a row and the shape can't drift. It used to be a
+# table HERE, though, which left the counts enumerated twice server-side — once
+# as events in this file and once as `*_count` keys in session_payload — so a
+# new badge meant two edits in two vocabularies with nothing saying so. The
+# table moved to the read model (which owns the memory badge's project SCOPE
+# gate anyway) and this file now only teaches the stream how to push it.
 
 
 # --- the per-session stream's pushed CHANNELS ---------------------------------
@@ -80,18 +70,20 @@ _BADGE_COUNTS = {
 _Chan = collections.namedtuple("_Chan", "key event value wrap")
 
 
-def _badge_chan(name, count):
+def _badge_chan(badge):
     """One badge as a channel row ({"count": n}, event named for the badge). A
     named factory, not an inline lambda: the producer must close over THIS
-    row's callable, not over the comprehension's loop variable (ruff B023)."""
-    return _Chan(name, name, lambda c: count(c.sid, c.cwd), "count")
+    row's callable, not over the comprehension's loop variable (ruff B023).
+    The `prev` key is the badge's PAYLOAD field, so a connection's last-sent map
+    reads in the same vocabulary the initial payload used."""
+    return _Chan(badge.field, badge.event,
+                 lambda c: badge.count(c.sid, c.cwd), "count")
 
 
 def _badge_chans():
-    """The four tab-badge counts as channel rows. Built from `_BADGE_COUNTS` so
-    the badges keep their single table — this only teaches the stream how to
-    push them."""
-    return tuple(_badge_chan(name, fn) for name, fn in _BADGE_COUNTS.items())
+    """The tab-badge counts as channel rows — derived from the read model's
+    BADGES table, which owns the (event, field, count) triple."""
+    return tuple(_badge_chan(b) for b in BADGES)
 
 
 # SLOW cadence (every SLOW_EVERY ticks): re-resolves, transcript probes, counts
@@ -213,10 +205,6 @@ class _SseMixin:
             if not self._sse(event, value if payload is _UNSET else payload):
                 return False
         return True
-
-    # The badge table's home is module level (the channel rows are derived from
-    # it); it stays reachable here as the documented handle.
-    _BADGE_COUNTS = _BADGE_COUNTS
 
     def _push_chans(self, chans, prev, ctx):
         """Push every channel in `chans` that changed, in table order. Returns
