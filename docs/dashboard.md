@@ -27,7 +27,8 @@ dashboard/read/             the read model: meta (per-session title/git/ctx/goal
                             · cache · lists (sessions/resumable/accounts/stats)
                             · session (one session's detail + ask/plan/composer
                             cards) · mirror (op-stream -> HTML backlog/history)
-dashboard/notify/           presence signals (presence.py) + the tab-diff Notifier
+dashboard/notify/           presence signals (presence.py), the /events fan-out
+                            bus (broker.py) + the tab-diff Notifier
                             / toast / off-device-alert fan-out (notifier.py)
 dashboard/control/          launch.py — the terminal-facing control machinery
                             (Frontend resolver, live-window map, launch argv,

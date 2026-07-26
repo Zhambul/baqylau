@@ -11,7 +11,7 @@ from dashboard import (prefs)
 from dashboard.config import (EFFORTS,
                               MODEL_OK)
 from dashboard.read.lists import (dir_live_sessions)
-from dashboard.notify.notifier import NOTIFIER
+from dashboard.notify.broker import BROKER
 
 A = load_audit()
 
@@ -265,7 +265,7 @@ class _StateMixin:
                                       "enabled must be a boolean", {"enabled": on})
         prefs.set_notify_enabled(on)
         A.state_file("", "", "notify-global", {"enabled": on})
-        NOTIFIER.push("notify-config", {"enabled": on})
+        BROKER.push("notify-config", {"enabled": on})
         return self._json({"ok": True, "enabled": on})
 
     def post_hide_dir(self):

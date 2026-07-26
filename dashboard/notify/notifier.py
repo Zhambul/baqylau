@@ -1,4 +1,4 @@
-# dashboard/notify/notifier.py — the tab-diff watcher + /events fan-out.
+# dashboard/notify/notifier.py — the tab-diff watcher.
 #
 # One daemon thread diffs the global tab DB once a second, pushes the in-page
 # toast/OS-notification on every asking/done transition, and drives the deferred
@@ -6,8 +6,10 @@
 # sent only if you didn't react within the grace window). Reads the notify knobs
 # LIVE from config (config.NOTIFY_*) and the "need alerting" signals from
 # presence — so a test patches config / presence, not this module.
+#
+# The /events FAN-OUT it publishes on is broker.py, not this class: sse_global
+# and launch_wake want a bus, not a watcher.
 import os
-import queue
 import subprocess
 import sys
 import threading
@@ -21,14 +23,15 @@ from dashboard.config import (GLOBAL_TICK_S, NOTIFY_STATES,
                               SESSIONS_LIMIT, SLOW_EVERY)
 from dashboard.control import launch
 from dashboard.notify import presence
+from dashboard.notify.broker import BROKER, Broker
 from dashboard.read.meta import canon_cwd, session_title, group_dir
 
 A = load_audit()
 
 
 class Notifier:
-    """The tab-DB diff watcher + the /events fan-out. Clients register a
-    Queue; the watcher thread pushes ('notify', payload) on every asking/done
+    """The tab-DB diff watcher. Once a second it diffs the global tab table and
+    publishes ('notify', payload) on its Broker for every asking/done
     transition (the in-page toast + OS notification). Also keeps the win ->
     session map the payloads are named from (refreshed on the slow cadence —
     sessions come and go rarely).
@@ -40,9 +43,11 @@ class Notifier:
     state, the session ends (you closed it / moved on), or you're composing a
     reply to it (an unsent web draft = you're already on it)."""
 
-    def __init__(self):
-        self.clients = set()
-        self.lock = threading.Lock()
+    def __init__(self, broker=None):
+        # The bus this watcher publishes on. NOTIFIER takes the process-wide
+        # singleton; a test-constructed Notifier gets its OWN, so a suite's
+        # instances can't feed each other's queues.
+        self.broker = broker if broker is not None else Broker()
         self.prev = None               # None = not yet baselined; distinct from
         #                                {} (a real empty screen — all tabs gone)
         self.winmap = {}
@@ -50,24 +55,16 @@ class Notifier:
         self.fe = None                 # cached Frontend for the dialog-region
         #                                read (refreshed on the slow cadence)
 
+    # The bus surface, kept as delegations: a Notifier IS a publisher to its
+    # callers, and the watcher's own pushes read better as self.push(...).
     def register(self):
-        q = queue.Queue(maxsize=100)
-        with self.lock:
-            self.clients.add(q)
-        return q
+        return self.broker.register()
 
     def unregister(self, q):
-        with self.lock:
-            self.clients.discard(q)
+        self.broker.unregister(q)
 
     def push(self, event, payload):
-        with self.lock:
-            clients = list(self.clients)
-        for q in clients:
-            try:
-                q.put_nowait((event, payload))
-            except queue.Full:
-                pass                       # a stalled client just misses toasts
+        self.broker.push(event, payload)
 
     def refresh_winmap(self):
         m = {}
@@ -234,7 +231,15 @@ class Notifier:
                 continue
             self.push("notify", payload)   # immediate in-page toast + OS notif
             if config.NOTIFY_TELEGRAM or config.NOTIFY_WEBPUSH:   # arm the deferred off-device
-                self.pending[win] = dict(payload, armed_at=now, state=state)
+                # `notified`/`escalate_at` are seeded HERE, at the arm, even
+                # though only the stage-1 push sets them for real: _fire_due
+                # reads entry["escalate_at"] on the escalating branch, and
+                # leaving the key absent made that read safe only by an
+                # invariant held in another method (escalating <=> notified is
+                # not None <=> escalate_at was written). An armed entry now has
+                # its whole shape from the start.
+                self.pending[win] = dict(payload, armed_at=now, state=state,
+                                         notified=None, escalate_at=0.0)
                 # ANCHOR the deferred lifecycle: every armed alert ends in
                 # exactly one of suppress / route+send (+escalate) / telegram,
                 # all keyed back to this `notify-arm` row (a silent disappearance
@@ -482,4 +487,4 @@ class Notifier:
 
 
 
-NOTIFIER = Notifier()
+NOTIFIER = Notifier(BROKER)   # publishes on the process-wide bus

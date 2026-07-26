@@ -75,10 +75,11 @@ from dashboard import config  # noqa: F401  -- DS.config: the knob surface + pat
 
 
 # --- notification watcher ----------------------------------------------------
-# The presence signals + the tab-diff Notifier live in dashboard/notify/;
-# server.py re-exports the presence helpers its POST handlers call and the
-# NOTIFIER singleton the SSE + launch-wake paths push to.
-from dashboard.notify import notifier, presence  # noqa: F401  -- module handles for tests
+# The presence signals, the /events BROKER and the tab-diff Notifier live in
+# dashboard/notify/; server.py re-exports the presence helpers its POST handlers
+# call, the bus the SSE + launch-wake paths push to, and the watcher singleton.
+from dashboard.notify import broker, notifier, presence  # noqa: F401  -- module handles for tests
+from dashboard.notify.broker import BROKER, Broker  # noqa: F401
 from dashboard.notify.notifier import NOTIFIER, Notifier  # noqa: F401
 from dashboard.notify.presence import (  # noqa: F401  -- facade re-export
     VIEW_TTL_S, composing, device_seen, mark_device, mark_viewing,

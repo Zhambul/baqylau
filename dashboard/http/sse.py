@@ -2,7 +2,7 @@
 #
 # sse_global (the sessions list + notification fan-out), sse_session (one
 # session's mirror/scoreboard/cards deltas), sse_agent (a subagent's timeline) —
-# long-lived generators polling the read model + the NOTIFIER queue.
+# long-lived generators polling the read model + the notify BROKER's queue.
 import collections
 import queue
 import time
@@ -16,7 +16,7 @@ from dashboard import config
 from dashboard import prefs
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.control import launch
-from dashboard.notify.notifier import NOTIFIER
+from dashboard.notify.broker import BROKER
 from dashboard.read.lists import (sessions_payload,
                                   row_key, wire_row)
 from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
@@ -247,7 +247,7 @@ class _SseMixin:
         `notify` toast the watcher pushes. Row diffs are paused-blind
         (row_key) and rows are wire-stripped (wire_row)."""
         self._sse_start()
-        q = NOTIFIER.register()
+        q = BROKER.register()
         try:
             if not self._sse("hello", {"boot": BOOT_ID}):
                 return
@@ -283,7 +283,7 @@ class _SseMixin:
                 if not alive:
                     return
         finally:
-            NOTIFIER.unregister(q)
+            BROKER.unregister(q)
 
     def sse_session(self, sid, after, mpos=0):
         """One session's live stream. The `ops` event carries rendered HTML —

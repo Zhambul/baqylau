@@ -6,7 +6,7 @@
 # tab), the new-session argv, and the post-launch macOS focus/appearance
 # watches. Imported by the read model (which needs the live-window map) and the
 # HTTP handlers (which drive the writes). The one reverse edge — launch_wake
-# nudging the notifier — is a lazy import, so this module stays a leaf.
+# nudging the notify BROKER — is a lazy import, so this module stays a leaf.
 import re
 import subprocess
 import sys
@@ -429,7 +429,8 @@ def steal_watch(before, terminal_app):
 # SessionStart). Without a nudge the global SSE loop only notices the new
 # sessions row on its next GLOBAL_TICK_S poll, adding up to a full second of
 # dead air on top. This watch polls the sessions head at a fast cadence and,
-# the moment the launched session appears, pushes a `wake` into NOTIFIER —
+# the moment the launched session appears, pushes a `wake` onto the notify
+# BROKER (the bus, not the watcher — this needs one push, not a state machine) —
 # the sse_global loops block on that queue, so every connected page both
 # receives the `wake` (the launching page jumps straight to the sid it
 # carries) and rebuilds/pushes the sessions snapshot NOW instead of at the
@@ -465,8 +466,9 @@ def launch_wake(win, cwd, t0):
         if not sid:
             time.sleep(LAUNCHWAKE_POLL_S)
     if sid:
-        from dashboard.notify.notifier import NOTIFIER  # the singleton lives here
-        NOTIFIER.push("wake", {"sid": sid, "win": win, "cwd": cwd})
+        # deferred import (cycle break): the notify tier imports this module
+        from dashboard.notify.broker import BROKER
+        BROKER.push("wake", {"sid": sid, "win": win, "cwd": cwd})
     A.state_file("", "", "web-launch-wake",
                  {"sid": sid, "win": win, "cwd": cwd, "ok": bool(sid),
                   "waited_s": round(time.time() - t0, 3)})
