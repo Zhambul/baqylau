@@ -8221,6 +8221,54 @@ def test_interrupt_annotation_is_flagged_by_its_id_not_its_text(dash):
     assert quote["kind"] == "prompt" and quote["meta"] is False
 
 
+def test_compaction_summary_is_flagged_by_its_field_not_its_text(dash, tmp_path):
+    """The post-/compact summary is the THIRD user-shaped record Claude Code
+    writes itself: a `compact_boundary` system line, then a `user` line carrying
+    the whole "This session is being continued…" recap as the new context. It is
+    neither isMeta nor interrupt-flagged, so it rendered as a YOU bubble holding
+    thousands of words — six of them, 11k-17k chars each, in one real session.
+    `isCompactSummary` flags it, so the non-verbose modes drop it like any other
+    injected turn (the flag reaches the page as the item's `meta`).
+
+    Matched on the boolean field, never the recap's opening sentence: that
+    sentence is ordinary English any conversation ABOUT compaction reproduces
+    verbatim — the same false-positive class as the interrupt annotation."""
+    from plugins.claude_code import transcript as TR
+    recap = "This session is being continued from a previous conversation.\n\nSummary:\n1. …"
+
+    def line(**kw):
+        return json.dumps(kw)
+
+    real = line(type="user", uuid="u1", timestamp="2026-07-25T10:00:00.000Z",
+                message={"role": "user", "content": "do the thing"})
+    bound = line(type="system", subtype="compact_boundary", uuid="u2",
+                 timestamp="2026-07-25T10:00:01.000Z",
+                 compactMetadata={"trigger": "manual", "preTokens": 9},
+                 content=None)
+    summ = line(type="user", isCompactSummary=True, uuid="u3", parentUuid="u2",
+                timestamp="2026-07-25T10:00:02.000Z",
+                message={"role": "user", "content": recap})
+    assert TR.parse_line(real)["meta"] is False
+    assert TR.parse_line(summ)["meta"] is True
+    # the same shape as a skill body (list content) is flagged too
+    assert TR.parse_line(line(type="user", isCompactSummary=True,
+                              message={"role": "user", "content": [
+                                  {"type": "text", "text": recap}]}))["meta"] is True
+    # …and a message that merely QUOTES the recap's opening stays yours
+    quote = TR.parse_line(line(type="user", message={"role": "user", "content":
+                               "why does " + recap + " show as mine?"}))
+    assert quote["kind"] == "prompt" and quote["meta"] is False
+
+    tf = tmp_path / "t.jsonl"
+    tf.write_text(real + "\n" + bound + "\n" + summ + "\n", encoding="utf-8")
+    recs, _pos = TR.conversation(str(tf))
+    # the boundary itself was never in this stream (only the drill-down timeline
+    # renders it); the summary is, flagged
+    assert [(r["kind"], r.get("meta")) for r in recs] == [
+        ("prompt", None), ("prompt", True)], recs
+    assert [it.get("meta") for it in DS.mirror._conv_items(recs)] == [None, 1]
+
+
 def test_view_mode_syncs_to_an_open_page_on_another_device(dash):
     """The mode has always been stored SERVER-side and per-session, so opening
     the session anywhere picks it up (`view_mode` on the payload). What this pins

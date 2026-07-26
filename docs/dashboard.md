@@ -4676,7 +4676,8 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   feature from greying one bubble.
 
 Both non-verbose modes additionally drop **injected prompts** — turns written in
-the USER's shape that the human never typed, which Claude Code marks `isMeta`:
+the USER's shape that the human never typed (`transcript._injected`, three
+structural marks). The first is `isMeta`:
 a **Stop hook's blocking feedback**, a **loaded skill's whole SKILL.md body**
 (injected as a text block right after the `Skill` tool_result — the noisiest of
 them), and the resume nudge `Continue from where you left off.`. They used to
@@ -4698,6 +4699,23 @@ false-positive class `tabstatus.is_interrupt_line` documents at length — a Rea
 a doc that mentions the marker, a grep hit, or a conversation about it is
 textually identical to the real thing, and that once flipped tab colours mid-turn.
 An id-bearing field cannot be quoted.
+
+The third mark is `isCompactSummary` — the **compaction summary**. After a
+`/compact` (or an auto-compaction) Claude Code writes a `compact_boundary` system
+record and then, as the new context, a `user` record holding the whole
+`This session is being continued from a previous conversation…` recap. It is a
+user turn only in shape: the human did not type it, and it is *enormous* — the
+six in one measured session ran 11k–17k characters each, so every compaction
+dropped a wall of prose into the feed under a `YOU` label. Like the annotation it
+is NOT isMeta, hence its own mark, and like the other two it is matched
+structurally: the summary's opening sentence is ordinary English that any
+conversation about compaction reproduces verbatim, while the boolean field cannot
+be quoted. Verbose still shows it (it is in the transcript, and it IS what the
+model now sees); default and focus drop it. The `compact_boundary` record itself
+never reached this stream — only the drill-down timeline renders it, as its own
+`context compacted` line — so nothing marks the boundary in the mirror, which is
+deliberate: the collapse is about what you read, and the boundary's one fact
+(context was compacted) is already on the ctx-saturation bar.
 
 Verbose deliberately keeps them: it shows the transcript as it is, and they ARE
 in it. An injected prompt also does **not close the turn** for focus mode's

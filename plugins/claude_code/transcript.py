@@ -31,11 +31,13 @@
 #       a plain `user` string OR a `queued_command` attachment (the delivered
 #       form of a message queued mid-turn; commandMode=="prompt" only).
 #       `meta` means the record is shaped like a user turn but the HUMAN DID NOT
-#       TYPE IT — Claude Code injected it (see _injected for the two structural
+#       TYPE IT — Claude Code injected it (see _injected for the three structural
 #       marks it reads). Seen carrying `Stop hook feedback: …` (a Stop hook's
 #       blocking output), a loaded skill's whole SKILL.md body, `Continue from
 #       where you left off.` (a resume nudge), the `<local-command-caveat>`
-#       envelope, and `[Request interrupted by user…]` (the cancel annotation). The `<`-wrapped ones are dropped by
+#       envelope, `[Request interrupted by user…]` (the cancel annotation), and
+#       the post-/compact summary (`This session is being continued from a
+#       previous conversation…`). The `<`-wrapped ones are dropped by
 #       conversation() anyway; the bare-prose ones are indistinguishable from a
 #       real prompt WITHOUT this flag, which is why it is now carried rather
 #       than dropped: the dashboard's focus mode promises "your prompt", and a
@@ -173,7 +175,7 @@ def _strip_recap_hint(text):
 def _injected(o):
     """Whether this user-shaped record was written by CLAUDE CODE rather than
     typed by the human — the `meta` flag on the prompt/results records below.
-    Two structural marks, no text matching:
+    Three structural marks, no text matching:
 
       isMeta               a Stop hook's blocking feedback, a loaded skill's
                            whole SKILL.md body, the `Continue from where you
@@ -182,14 +184,22 @@ def _injected(o):
                            annotation, which carries the id of the message it
                            cut off. It is NOT isMeta (measured across the
                            transcript corpus, both the bare and the `for tool
-                           use` form), so it needed its own mark.
+                           use` form), so it needed its own mark;
+      isCompactSummary     the COMPACTION SUMMARY — the multi-thousand-word
+                           "This session is being continued from a previous
+                           conversation…" recap Claude Code writes after
+                           /compact (or an auto-compaction) and replays as the
+                           new context. It follows a `compact_boundary` system
+                           record and is likewise NOT isMeta, so it too needed
+                           its own mark.
 
     Deliberately NOT matched on the annotation's TEXT, which would re-run the
     false-positive class tabstatus.is_interrupt_line documents at length: any
     growth that merely QUOTES the marker — a Read of a doc that mentions it, a
     grep hit, a conversation about it — is textually identical to the real
-    thing. The id-bearing field cannot be quoted."""
-    return bool(o.get("isMeta") or o.get("interruptedMessageId"))
+    thing. The id-bearing/boolean fields cannot be quoted."""
+    return bool(o.get("isMeta") or o.get("interruptedMessageId")
+                or o.get("isCompactSummary"))
 
 
 def parse_line(s):

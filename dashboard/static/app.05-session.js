@@ -755,8 +755,9 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 //
 // Both non-verbose modes also drop INJECTED prompts — user-shaped turns Claude
 // Code wrote itself (a Stop hook's feedback, a loaded skill's body, a resume
-// nudge; `data-injected`, from the transcript's isMeta). Verbose keeps them: it
-// shows the transcript as it is, and they are genuinely in it.
+// nudge, the post-/compact summary; `data-injected`, from transcript._injected).
+// Verbose keeps them: it shows the transcript as it is, and they are genuinely
+// in it.
 //
 // Must match dashboard/prefs.py VIEW_MODES / VIEW_DEFAULT (grep-tested). The
 // list is in CONTROL order (densest to sparsest); the default is NOT its first
@@ -947,12 +948,13 @@ function applyViewMode() {
     const kind = elem.dataset.kind;
     if (kind === "messages") {
       const mk = elem.dataset.msg || "";
-      // An INJECTED prompt (Claude Code's isMeta — a Stop hook's feedback, a
-      // loaded skill's whole SKILL.md body, a resume nudge) is not something
-      // you said, so neither non-verbose mode shows it, and it does NOT close
-      // the turn: the reply that follows it belongs to the prompt you actually
-      // typed, and treating it as a boundary would surface a second "final"
-      // reply per hook firing.
+      // An INJECTED prompt (a Stop hook's feedback, a loaded skill's whole
+      // SKILL.md body, a resume nudge, the thousands-of-words summary a
+      // /compact replays as the new context) is not something you said, so
+      // neither non-verbose mode shows it, and it does NOT close the turn: the
+      // reply that follows it belongs to the prompt you actually typed, and
+      // treating it as a boundary would surface a second "final" reply per
+      // injection.
       if (elem.dataset.injected) return "hide";
       if (mk === "prompt") { sawReply = false; inNewestTurn = false; return "show"; }
       if (mode === "focus" && mk === "message") {
