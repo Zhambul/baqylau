@@ -65,6 +65,27 @@ deliberate, not incidental:
 
 Besides literal states, hooks pass these **dispatch modes**:
 
+Each mode is one row of `plugins/claude_code/tabstatus.py`'s `DISPATCHES` table
+(it was a single 215-line if-ladder once). A handler is called `handler(args)`,
+where `args` is the dispatch's extra argv words — parsed ONCE by `entry()` from
+`sys.argv[2:]` (or handed to `dispatch()` by an in-process caller) and passed
+down. It returns the literal state to paint, `(state, reason)` when it has
+something to say about WHY, or `None` for "no change / exit silently"; every
+bail path audits itself first.
+
+*Why not globals.* Five handlers used to re-read `sys.argv[2]`/`[3]`/`[4]`
+inside their bodies, which made the table's uniform zero-arg signature a lie and
+made those five untestable without patching a process-global. The **reason**
+was worse: it was a module global `REASON`, written by four handlers and read
+by `main()` when it wrote its one `tab_transitions` row — an out-of-band return
+channel that `dispatch()` (the in-process entry, called on hook events) did not
+save and restore the way it does the injected payload, so a second dispatch in
+one process could attribute a stale reason to a fresh transition. `AUDIT_SID`
+and `MLOG` stay module state on purpose: they are the invocation's session
+IDENTITY, which `audit_tx()` and the long watcher loops read well after a
+handler returned. Pinned by
+`test_dispatch_handlers_take_args_and_return_their_reason`.
+
 The tab tracks the **main session only**: any `PreToolUse`/`PostToolUse` carrying an
 `agent_id` is a subagent's / teammate's *own* inner tool call and is **ignored**, so
 it never flips the tab while the main session is thinking or has handed back to you.

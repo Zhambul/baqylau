@@ -343,6 +343,15 @@ QUOTED_IN_TOOL_RESULT = (
 )
 
 
+def _resolved(got):
+    """A dispatch handler's result as a bare STATE. Handlers return the literal
+    state to paint, `(state, reason)` when they have something to say about WHY
+    (the reason rides the one tab_transitions row main() writes), or None. The
+    reason used to be a module GLOBAL these tests never saw; it is a return
+    value now, so unwrap here rather than at every assertion."""
+    return got[0] if isinstance(got, tuple) else got
+
+
 def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None,
                           queued=False, quoted_at=None):
     """Run run_interruptwatch in-process, fully sequenced (no timing races):
@@ -393,7 +402,50 @@ def _drive_interruptwatch(monkeypatch, tmp_path, states, interrupt_at=None,
     monkeypatch.setattr(T, "watcher_del", lambda *a, **k: None)
     monkeypatch.setattr(T, "tab_get", fake_tab_get)
     monkeypatch.setattr(T, "WATCH_POLL_S", 0.001)
-    return T.run_interruptwatch(str(transcript)), ended.get("reason"), reasons
+    return (_resolved(T.run_interruptwatch(str(transcript))),
+            ended.get("reason"), reasons)
+
+
+def test_dispatch_handlers_take_args_and_return_their_reason():
+    """Two properties the DISPATCHES table only pretends to have unless pinned.
+
+    (1) Uniform signature. Every entry is called the same way — `handler(args)`
+    — where `args` is the dispatch's argv words, parsed ONCE by entry(). Five
+    handlers used to re-read `sys.argv[2]`/`[3]`/`[4]` from inside their bodies,
+    so the table's apparent zero-arg contract was a lie and those five could not
+    be exercised without patching a process-global.
+
+    (2) The reason is a RETURN VALUE. Why the resolved state was chosen belongs
+    to the one tab_transitions row main() writes; as the module global `REASON`
+    it was an out-of-band channel that four handlers wrote and dispatch() — the
+    in-process entry, called on hook events — did NOT save/restore alongside the
+    payload it does, so a second dispatch in one process could attribute a stale
+    reason to a fresh transition."""
+    import inspect
+    import sys as _sys
+    from conftest import REPO
+    if REPO not in _sys.path:
+        _sys.path.insert(0, REPO)
+    import plugins.claude_code.tabstatus as T
+
+    assert not hasattr(T, "REASON"), "the reason is a return value, not a global"
+    for name, fn in T.DISPATCHES.items():
+        sig = inspect.signature(fn)
+        assert list(sig.parameters) == ["args"], (name, sig)
+        assert sig.parameters["args"].default == (), name
+    # resolve() normalises both shapes, so a handler with nothing to say stays a
+    # one-liner and main() always gets a pair
+    assert T.resolve("idle") == ("idle", "")
+    T.DISPATCHES["__probe_bare"] = lambda args=(): "working"
+    T.DISPATCHES["__probe_pair"] = lambda args=(): ("working", "because")
+    T.DISPATCHES["__probe_none"] = lambda args=(): None
+    try:
+        assert T.resolve("__probe_bare") == ("working", "")
+        assert T.resolve("__probe_pair") == ("working", "because")
+        assert T.resolve("__probe_none") == (None, "")
+    finally:
+        for k in ("__probe_bare", "__probe_pair", "__probe_none"):
+            T.DISPATCHES.pop(k, None)
 
 
 def test_interruptwatch_survives_stale_preturn_green(monkeypatch, tmp_path):
@@ -534,17 +586,18 @@ def _drive_escaperecheck(monkeypatch, tmp_path, states, grow_at=None,
                         '{"type":"user","message":{"content":"new prompt"}}\n')
         return states[min(tick["n"], len(states) - 1)]
 
-    argv = ["claude-tab-status.py", "escape-recheck",
-            "/tmp/claude-mirror-sess-esc.log", str(transcript)]
+    # the dispatch WORDS, passed as a value — entry() parses sys.argv[2:] once
+    # and hands them down, so a handler never reads argv and this driver no
+    # longer has to fake a process-wide argv to exercise one function
+    args = ("/tmp/claude-mirror-sess-esc.log", str(transcript))
     if baseline is not None:
-        argv.append(str(baseline))
-    monkeypatch.setattr(_sys, "argv", argv)
+        args += (str(baseline),)
     monkeypatch.setattr(T, "WIN", "9")
     monkeypatch.setattr(T, "A", _A())
     monkeypatch.setattr(T, "tab_get", fake_tab_get)
     monkeypatch.setattr(T, "WATCH_POLL_S", 0.001)
     monkeypatch.setattr(T, "ESCAPE_GRACE_S", 0.02)   # keep the full-grace path fast
-    return T.d_escape_recheck(), reasons
+    return _resolved(T.d_escape_recheck(args)), reasons
 
 
 def test_escaperecheck_flips_dead_magenta(monkeypatch, tmp_path):

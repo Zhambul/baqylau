@@ -147,8 +147,17 @@ def _dur_label(sec):
 # every hook event, whose argv belongs to claude-hook.py, not this shim.
 DISPATCH = ""             # the raw arg, before the dispatch blocks rewrite it
 AUDIT_SID = ""            # set by dispatches that learn the session_id
-REASON = ""               # why the final state was chosen (set by dispatch blocks)
 MLOG = ""                 # this session's mirror-log KEY (state DB derives from it)
+#
+# There is deliberately NO `REASON` global. Why the resolved state was chosen is
+# a handler's RESULT — it belongs to the one transition row main() writes — so a
+# handler returns `(state, reason)` and main() takes it as a value. As a global
+# it was an out-of-band return channel that four handlers wrote, one function
+# read, and dispatch() (the in-process entry, called on hook events) did NOT
+# save/restore alongside the payload it does — so a second dispatch in one
+# process could attribute a stale reason to a fresh transition. AUDIT_SID/MLOG
+# stay module state on purpose: they are this invocation's session IDENTITY,
+# which audit_tx() and the watcher loops read long after the handler returned.
 
 
 def audit_tx(prev, new, applied, reason):
@@ -296,21 +305,24 @@ def read_payload():
     return HK.payload_or_stdin()
 
 
-def _ensure_win():
+def _ensure_win(args=()):
     """Resolve WIN when KITTY_WINDOW_ID is absent (a daemon-origin session's
     hook processes carry a scrubbed env — same sessions whose sid can fork on
     resume, see adopt.py): the pane split.py tagged claude_session=<sid> at
     SessionStart (or adopt retagged) IS this session's window. Must run before
     resolve() — the dispatch handlers themselves consult WIN (d_notify's
-    mid-turn check, d_stop's bg path, the watchers' tab_get loops)."""
+    mid-turn check, d_stop's bg path, the watchers' tab_get loops).
+
+    `args` is the dispatch's argv words, handed down from the entry like every
+    other consumer of them — there is no sys.argv read below entry()."""
     global WIN
     if _win() or not _fe().usable():
         return
     sid = ""
     if DISPATCH in ("bg-recheck", "bg-watch", "agent-start", "escape-recheck"):
-        sid = sid_from_key(sys.argv[2] if len(sys.argv) > 2 else "")
+        sid = sid_from_key(args[0] if args else "")
     elif DISPATCH == "interrupt-watch":
-        t = sys.argv[2] if len(sys.argv) > 2 else ""
+        t = args[0] if args else ""
         sid = os.path.basename(t)[:-len(".jsonl")] if t.endswith(".jsonl") else ""
     else:
         try:
@@ -331,7 +343,7 @@ def run_bgwatch(mlog):
     bg-watch that dies mid-poll is exactly the "tab stuck blue forever" bug, and
     without a stream row its death was invisible. SIGKILL leaves the row open,
     which the `streams that never ended` anomaly then flags."""
-    global MLOG, AUDIT_SID, REASON
+    global MLOG, AUDIT_SID
     MLOG = mlog
     AUDIT_SID = sid_from_key(MLOG)
     if not _win():
@@ -361,8 +373,9 @@ def run_bgwatch(mlog):
             reason = f"gave-up-after-{_dur_label(BGWATCH_MAX_S)} (markers still live)"
             return None
         reason = "cleared-to-green"
-        REASON = f"bg-watch: no live markers across ~{_dur_label(BG_MISS_GRACE_N * poll)} of checks"
-        return AWAITING_RESPONSE
+        return AWAITING_RESPONSE, (
+            f"bg-watch: no live markers across "
+            f"~{_dur_label(BG_MISS_GRACE_N * poll)} of checks")
     finally:
         watcher_del("bgwatch", _win())
         try:
@@ -435,7 +448,7 @@ def run_interruptwatch(transcript):
     interaction. Tails the transcript for the synthetic "[Request interrupted by
     user]" line Claude Code appends the instant a cancel happens, for the whole
     turn (exits on green/idle/cleared), and flips green within one ~0.5s tick."""
-    global AUDIT_SID, REASON
+    global AUDIT_SID
     if not (_win() and transcript):
         return None
     # The transcript filename IS the session id (~/.claude/projects/<slug>/<sid>.jsonl).
@@ -554,8 +567,8 @@ def run_interruptwatch(transcript):
         # magenta (thinking/working) or red (awaiting-command): no other signal
         # covers a cancel here -> flip green.
         reason = "interrupt-detected-flipped-green"
-        REASON = "interrupt-watch: [Request interrupted by user] in transcript"
-        return AWAITING_RESPONSE
+        return AWAITING_RESPONSE, (
+            "interrupt-watch: [Request interrupted by user] in transcript")
     finally:
         watcher_del("interruptwatch", _win())
         try:
@@ -566,16 +579,19 @@ def run_interruptwatch(transcript):
 
 # --- dispatch -> resolved state ---------------------------------------------------
 # One handler per dispatch mode, wired in the DISPATCHES table at the bottom (was a
-# single 215-line if-ladder). Each returns the literal state to paint, or None for
-# 'no change / exit silently' (all bail paths audit themselves first). Handlers set
-# the module globals MLOG / AUDIT_SID / REASON that main()'s paint + audit path uses.
+# single 215-line if-ladder). Each takes the dispatch's extra argv words as `args`
+# (parsed ONCE by the caller — a handler never reads sys.argv) and returns the
+# literal state to paint, `(state, reason)` when it has something to say about WHY,
+# or None for 'no change / exit silently' (all bail paths audit themselves first).
+# MLOG / AUDIT_SID stay module state — this invocation's session IDENTITY, which
+# audit_tx() and the watcher loops read after the handler has returned.
 
-def d_stop():
+def d_stop(args=()):
     """Stop: it's your turn (green) — unless a background command/monitor Claude
     launched is still running, in which case Claude is awaiting that job, not you,
     so show blue (awaiting-bg). Red is reserved for Claude asking you a question
     (the notify dispatch), never for the turn merely ending."""
-    global MLOG, AUDIT_SID, REASON
+    global MLOG, AUDIT_SID
     p = read_payload()
     # A Stop with an agent_id is an AGENT's stop, never the lead's -> ignore,
     # same as pretool/posttool. agent_type is NOT such a signal: a main session
@@ -593,28 +609,26 @@ def d_stop():
         # A background command / monitor is still running — Claude is awaiting
         # it (not waiting on you), shown BLUE (same as a running foreground
         # command), via a distinct state name so the recheck/watch can target it.
-        REASON = f"stop: live tailer row(s) in {MLOG}.state.db"
+        reason = f"stop: live tailer row(s) in {MLOG}.state.db"
         # There's no "background finished" hook, and the per-job bg-recheck only
         # fires from that job's claude-stream.py tailer — so an UNTRACKED job
         # (tailer died, or a job with none) finishing would leave the tab stuck
         # blue. The detached watcher polls until no bg job remains, then flips
         # this stale blue green.
         ensure_bgwatch()
-        return AWAITING_BG
+        return AWAITING_BG, reason
     if re.search(r'"status"\s*:\s*"running"', json.dumps(p)):
         # No live tailer marker, but the Stop payload's own background_tasks list
         # says a teammate/background task is still RUNNING. Markers are burst-
         # scoped — a teammate idling between tasks has released its streamer —
         # so the payload is the more truthful signal here: Claude is awaiting
         # the team, not you. Stay blue.
-        REASON = "stop: payload background_tasks reports status=running"
         ensure_bgwatch()
-        return AWAITING_BG
-    REASON = "stop: nothing running"
-    return AWAITING_RESPONSE
+        return AWAITING_BG, "stop: payload background_tasks reports status=running"
+    return AWAITING_RESPONSE, "stop: nothing running"
 
 
-def d_agent_start():
+def d_agent_start(args=()):
     """agent-start (called by claude-subagent-fmt.py when a background TEAMMATE
     begins a task): the main session is now awaiting that teammate, so the tab
     goes BLUE — even if the lead's turn had already ended (green). Without this,
@@ -627,28 +641,27 @@ def d_agent_start():
     task in the background must not erase the one visual cue that you're needed
     (d_notify makes red win over its bg check for the same reason). No watcher is
     needed while red: answering the prompt resumes the normal state flow."""
-    global MLOG, AUDIT_SID, REASON
-    MLOG = sys.argv[2] if len(sys.argv) > 2 else ""
+    global MLOG, AUDIT_SID
+    MLOG = args[0] if args else ""
     AUDIT_SID = sid_from_key(MLOG)
     cur = tab_get(_win()) if _win() else ""
     if cur == AWAITING_COMMAND:
         audit_tx(cur, "", 0,
                  "agent-start: red (awaiting-command) wins — user's answer still needed")
         return None
-    REASON = "agent-start: main session now awaiting a subagent/teammate"
     ensure_bgwatch()
-    return AWAITING_BG
+    return AWAITING_BG, "agent-start: main session now awaiting a subagent/teammate"
 
 
-def d_bg_watch():
-    return run_bgwatch(sys.argv[2] if len(sys.argv) > 2 else "")
+def d_bg_watch(args=()):
+    return run_bgwatch(args[0] if args else "")
 
 
-def d_interrupt_watch():
-    return run_interruptwatch(sys.argv[2] if len(sys.argv) > 2 else "")
+def d_interrupt_watch(args=()):
+    return run_interruptwatch(args[0] if args else "")
 
 
-def d_bg_recheck():
+def d_bg_recheck(args=()):
     """bg-recheck (called by claude-stream.py when a background job/monitor/live
     foreground stream finishes): there's no "background finished" hook, so the
     bg-running blue would linger until the next exchange. Flip that *stale*
@@ -662,9 +675,9 @@ def d_bg_recheck():
     tailer (claude-cmd-pre.py) DOES notice its process died (has_writer goes
     false) and calls bg-recheck right then — a fast, reliable signal for exactly
     this case, so we honour it here too."""
-    global MLOG, AUDIT_SID, REASON
-    MLOG = sys.argv[2] if len(sys.argv) > 2 else ""   # this session's log key
-    kind = sys.argv[3] if len(sys.argv) > 3 else ""   # fg / bg / monitor / sub
+    global MLOG, AUDIT_SID
+    MLOG = args[0] if args else ""                    # this session's log key
+    kind = args[1] if len(args) > 1 else ""           # fg / bg / monitor / sub
     AUDIT_SID = sid_from_key(MLOG)
     cur = tab_get(_win()) if _win() else ""
     # Clearing EXECUTING exists SOLELY for the cancelled-foreground-command
@@ -695,7 +708,7 @@ def d_bg_recheck():
        (cur2 == EXECUTING and kind != "fg"):
         audit_tx(cur2, "", 0, f"bg-recheck({kind}): state moved on in the gap")
         return None
-    REASON = f"bg-recheck({kind}): no live markers remain"
+    reason = f"bg-recheck({kind}): no live markers remain"
     # A finishing SUBAGENT/TEAMMATE (kind=sub) does NOT mean it's your turn:
     # Claude Code re-invokes the main session to process the teammate's result
     # the instant it completes, so the main is about to TAKE OVER, not hand back
@@ -704,10 +717,10 @@ def d_bg_recheck():
     # WORKING (magenta) so the tab reflects the main resuming; its subsequent
     # Stop sets green once that follow-up turn genuinely ends. Untracked shell
     # jobs (fg/bg/monitor) don't re-invoke the main, so those still go green.
-    return WORKING if kind == "sub" else AWAITING_RESPONSE
+    return (WORKING if kind == "sub" else AWAITING_RESPONSE), reason
 
 
-def d_escape_recheck():
+def d_escape_recheck(args=()):
     """escape-recheck (spawned by the web dashboard after a successful
     /interrupt Escape into a MAGENTA tab): recovery for the mid-thinking
     cancel gap interrupt-watch documents as deliberately unhandled — an Esc
@@ -731,8 +744,8 @@ def d_escape_recheck():
     grace window repaints the same magenta invisibly (main()'s dedup skips
     the identical colour and tab rows carry no ts), so a user who interrupts
     and immediately re-prompts would get green painted over a live think.
-    That's why the recheck ALSO watches the TRANSCRIPT (argv[3]) from the
-    PRESS-TIME baseline (argv[4], stat'd by the dashboard right before the
+    That's why the recheck ALSO watches the TRANSCRIPT (`args[1]`) from the
+    PRESS-TIME baseline (`args[2]`, stat'd by the dashboard right before the
     send_key, so not even the spawn-latency sub-second is blind) — but only
     for `"type":"user"` RECORDS, not raw growth: a new prompt lands as a
     user record the moment it's submitted, and an interrupt that had
@@ -744,9 +757,9 @@ def d_escape_recheck():
     magenta until a second gesture's recheck flipped it). User record ⇒ a
     real signal owns the tab ⇒ bail; metadata-only growth or total silence
     ⇒ the turn is dead ⇒ flip."""
-    global MLOG, AUDIT_SID, REASON
-    MLOG = sys.argv[2] if len(sys.argv) > 2 else ""   # this session's log key
-    transcript = sys.argv[3] if len(sys.argv) > 3 else ""
+    global MLOG, AUDIT_SID
+    MLOG = args[0] if args else ""                    # this session's log key
+    transcript = args[1] if len(args) > 1 else ""
     AUDIT_SID = sid_from_key(MLOG)
     start = tab_get(_win()) if _win() else ""
     if start not in (THINKING, WORKING):
@@ -761,7 +774,7 @@ def d_escape_recheck():
             return 0
 
     try:
-        pos = int(sys.argv[4])              # press-time baseline from the dashboard
+        pos = int(args[2])                  # press-time baseline from the dashboard
     except (IndexError, ValueError):
         pos = tsize()                       # fallback: our own start is close enough
     poll = WATCH_POLL_S or 0.25
@@ -788,25 +801,24 @@ def d_escape_recheck():
                              "real signals own it")
                     return None
                 pos += end + 1              # metadata-only growth: keep waiting
-    REASON = (f"escape-recheck: web Esc into {start} left no turn-over signal "
-              f"for {_dur_label(ESCAPE_GRACE_S)} — mid-thinking cancel gap")
-    return AWAITING_RESPONSE
+    return AWAITING_RESPONSE, (
+        f"escape-recheck: web Esc into {start} left no turn-over signal "
+        f"for {_dur_label(ESCAPE_GRACE_S)} — mid-thinking cancel gap")
 
 
-def d_thinking():
+def d_thinking(args=()):
     """UserPromptSubmit: besides the literal colour (handled by the paint table
     at the bottom, as before), starts this turn's interrupt-watch — see its
     dispatch above — so a cancel with no Bash/subagent tool involved still
     clears the tab promptly."""
-    global AUDIT_SID, REASON
+    global AUDIT_SID
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
-    REASON = "prompt submitted"
     ensure_interruptwatch(p.get("transcript_path") or "")
-    return THINKING
+    return THINKING, "prompt submitted"
 
 
-def d_notify():
+def d_notify(args=()):
     """Notification: Claude wants your attention. If it's asking you for a
     DECISION (a permission / tool-approval prompt), that's awaiting-command
     (red). Otherwise it's just "waiting for your input" — your turn — which is
@@ -815,15 +827,15 @@ def d_notify():
     blue (awaiting-bg). In an agent team, teammate messages / idle pings fire
     notifications constantly, and treating those as "your turn" was what turned
     the tab green while teammates were clearly still working."""
-    global MLOG, AUDIT_SID, REASON
+    global MLOG, AUDIT_SID
     p = read_payload()
     msg = str(p.get("message") or "")
     AUDIT_SID = (p.get("session_id") or "").strip()
     if AUDIT_SID:
         MLOG = log_for_sid(AUDIT_SID)
     if re.search(r"[Pp]ermission|[Aa]pprov|confirmation", msg):
-        REASON = f"notify: permission/approval prompt: {msg}"
-        return AWAITING_COMMAND       # -> red (wins over bg)
+        # -> red (wins over bg)
+        return AWAITING_COMMAND, f"notify: permission/approval prompt: {msg}"
     # If the MAIN session is mid-turn (busy/executing), this notification is a
     # teammate ping ("finished", IDLE, mail) — NOT your turn. The last
     # teammate finishing used to slip through the bg check below and paint
@@ -834,22 +846,20 @@ def d_notify():
         audit_tx(cur, "", 0, f"notify: main mid-turn, teammate ping ignored: {msg}")
         return None
     if bg_command_running():
-        REASON = f"notify: bg/teammates still running: {msg}"
         ensure_bgwatch()                # teammates/bg still running -> blue, not green
-        return AWAITING_BG
+        return AWAITING_BG, f"notify: bg/teammates still running: {msg}"
     if cur == AWAITING_BG:
         # The tab was blue (awaiting the team) and a bg job just finished,
         # firing this notification. In an agent team the main session is
         # re-invoked to process the finished teammate's result -> it's TAKING
         # OVER, not your turn. Go magenta (working); the main's next Stop sets
         # green once it truly hands back to you.
-        REASON = f"notify: bg finished, main taking over: {msg}"
-        return WORKING
-    REASON = f"notify: your turn: {msg}"
-    return AWAITING_RESPONSE          # genuinely your turn -> green
+        return WORKING, f"notify: bg finished, main taking over: {msg}"
+    # genuinely your turn -> green
+    return AWAITING_RESPONSE, f"notify: your turn: {msg}"
 
 
-def d_pretool():
+def d_pretool(args=()):
     """PreToolUse: the tab tracks the MAIN session ONLY, so an event carrying an
     agent_id (a SUBAGENT's / TEAMMATE's own inner tool call) is IGNORED — it must
     not flip the tab while the main session is doing something else (thinking, or
@@ -862,32 +872,31 @@ def d_pretool():
       - the Task/Agent tool             -> launching/awaiting an agent -> blue.
       - AskUserQuestion / ExitPlanMode  -> Claude is asking YOU -> red.
       - every other tool (Edit/Read/Write/MCP/...) -> WORKING (magenta)."""
-    global AUDIT_SID, REASON
+    global AUDIT_SID
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
     if p.get("agent_id"):
         return None                     # subagent/teammate inner call -> don't touch the tab
     tool = p.get("tool_name") or ""
-    REASON = f"pretool: {tool}"
+    reason = f"pretool: {tool}"
     if tool in ("AskUserQuestion", "ExitPlanMode"):
-        return AWAITING_COMMAND       # Claude is asking YOU -> red
+        return AWAITING_COMMAND, reason   # Claude is asking YOU -> red
     if tool in ("Bash", "Task", "Agent"):
-        return EXECUTING              # shell command / awaiting an agent -> blue
-    return WORKING                    # other tool -> magenta (busy)
+        return EXECUTING, reason          # shell command / awaiting an agent -> blue
+    return WORKING, reason                # other tool -> magenta (busy)
 
 
-def d_posttool():
+def d_posttool(args=()):
     """PostToolUse / PostToolUseFailure: after a tool finishes. An event with an
     agent_id is a SUBAGENT's / TEAMMATE's own tool finishing -> IGNORE it (the
     tab tracks the main session only). Otherwise it's the main agent between
     tools -> WORKING (magenta)."""
-    global AUDIT_SID, REASON
+    global AUDIT_SID
     p = read_payload()
     AUDIT_SID = (p.get("session_id") or "").strip()
     if p.get("agent_id"):
         return None                     # subagent/teammate inner call -> don't touch the tab
-    REASON = "posttool: main agent between tools"
-    return WORKING
+    return WORKING, "posttool: main agent between tools"
 
 
 DISPATCHES = {
@@ -904,11 +913,20 @@ DISPATCHES = {
 }
 
 
-def resolve(state):
-    """Map a dispatch mode to the literal state to paint (see DISPATCHES)."""
+def resolve(state, args=()):
+    """Map a dispatch mode to `(literal state to paint, reason)` — see
+    DISPATCHES. `args` is the dispatch's extra argv words, parsed ONCE by the
+    caller (entry()/dispatch()) and passed in; a handler never reads sys.argv,
+    which is what made half of this table untestable without patching argv and
+    made its uniform zero-arg signature a lie.
+
+    A handler may return None (no change), a bare state, or `(state, reason)`;
+    the tuple is normalised here so a handler with nothing to say stays a
+    one-liner."""
     handler = DISPATCHES.get(state)
     if handler:
-        return handler()
+        got = handler(args)
+        return got if isinstance(got, tuple) else (got, "")
     # A literal state (SessionStart's `idle`, SessionEnd's `clear`, the manual
     # smoke cycle): attribute its transition row when a hook payload is present.
     # These rows used to land with session_id="" — which left the SessionEnd
@@ -924,7 +942,7 @@ def resolve(state):
                 MLOG = log_for_sid(P.sanitize_sid(sid))
     except Exception:
         pass
-    return state                            # already a literal state (or clear/reset)
+    return state, ""                        # already a literal state (or clear/reset)
 
 
 # --- painting -----------------------------------------------------------------
@@ -938,9 +956,15 @@ def resolve(state):
 # core/tabs.py — the paint contract shared by every frontend.
 
 
-def main(state):
-    _ensure_win()                            # daemon-origin env has no KITTY_WINDOW_ID
-    state = resolve(state)
+def main(state, args=()):
+    """Resolve `state` (a dispatch mode or a literal) and paint the tab.
+
+    `args` is the dispatch's extra argv words — the log key, the transcript
+    path, the recheck kind. They are parsed ONCE at the entry (entry() from
+    sys.argv, dispatch() from its caller) and handed down, so no handler reads
+    argv and every one of them is callable from a test with a plain tuple."""
+    _ensure_win(args)                        # daemon-origin env has no KITTY_WINDOW_ID
+    state, reason = resolve(state, args)
     if state is None:
         return
 
@@ -986,41 +1010,45 @@ def main(state):
     # state came along. Leaving the row unchanged keeps the next same-state event
     # eligible to retry the paint.
     if rc == 0:
-        audit_tx(prev_state, state, 1, REASON)
+        audit_tx(prev_state, state, 1, reason)
         if state in COLORS:
             tab_set(_win(), state)
         else:
             tab_clear(_win())
     else:
         audit_tx(prev_state, state, 0,
-                 (f"{REASON} — " if REASON else "")
+                 (f"{reason} — " if reason else "")
                  + f"kitten @ failed rc={rc} — state row unchanged")
 
 
-def dispatch(state, payload):
+def dispatch(state, payload, args=()):
     """In-process entry for the single per-event dispatcher (dispatch.py): paint
     the tab for `state` (idle/thinking/pretool/posttool/notify/stop/clear) against
     the dispatcher-injected payload, instead of reading argv[1] + stdin. The
     detached watcher sub-dispatches (bg-watch / interrupt-watch / bg-recheck /
     agent-start) still re-invoke the shim by filename with argv, so they keep the
-    entry() argv path."""
+    entry() argv path — which is why `args` exists here too: the dispatch words
+    reach main() as a value on BOTH paths."""
     global DISPATCH
     DISPATCH = state                       # DISPATCH labels the tab_transitions row
     prev = HK.injected()                   # under dispatch.py route() this is `payload`
     HK.set_payload(payload)                # already, but a direct caller needs the inject
     try:
-        main(state)
+        main(state, args)
     finally:
         HK.set_payload(prev)
 
 
 def entry():
-    # The standalone-shim argv contract: claude-tab-status.py <state> [...].
-    # Parsed HERE (not at import) so importing this module reads no argv.
+    # The standalone-shim argv contract: claude-tab-status.py <state> [words…].
+    # Parsed HERE (not at import) so importing this module reads no argv — and
+    # parsed ONCE: the dispatch words used to be re-read out of sys.argv[2:]
+    # inside five handlers, which made the DISPATCHES table's uniform signature
+    # a lie and every one of those handlers untestable without patching argv.
     global DISPATCH
     DISPATCH = sys.argv[1] if len(sys.argv) > 1 else ""
     try:
-        main(DISPATCH)
+        main(DISPATCH, tuple(sys.argv[2:]))
     except Exception:
         try:
             A.error(AUDIT_SID or MLOG, "main")   # audit the swallow, then stay silent
