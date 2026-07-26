@@ -233,6 +233,14 @@ FIVE_HOUR_S = 5 * 3600      # the 5h window length — the rolled-over fallback
                             # when a snapshot has no resets_at
 SEVEN_DAY_S = 7 * 86400     # the 7d window length — same fallback role
 
+LOGGED_OUT_GRACE_S = 60     # how much NEWER than a `logged-out` stamp a usage
+                            # snapshot must be to count as a re-login and clear
+                            # it (logged_out_active). Not a window length — a
+                            # margin against the dying session's OWN post-turn
+                            # status-line render, measured ~0.3s after the stamp
+                            # (see the function); anything in the tens of
+                            # seconds separates that from a real re-login
+
 # Scheduling knobs for the new-session default-account picker (sched_score,
 # docs/dashboard.md *Default account*). Objective (b): maximise total work
 # extracted across accounts per week, so we BURN perishable weekly quota first.
@@ -490,16 +498,30 @@ def logged_out_active(stamp, usage):
     state — i.e. no SUCCESSFUL session has run under it since. Unlike a
     rate-limit, being logged out has no reset epoch; the clear signal is a
     re-login, which (being a `/login` session) captures a fresh status-line
-    `usage` snapshot. So the stamp is active exactly while it is at least as
-    fresh as the account's freshest usage snapshot: within the dead session the
-    status line was captured at the prompt BEFORE the turn died on auth (older
-    ts), and any later working session's snapshot is newer (clears it). No
-    snapshot at all (never captured) → the stamp stands. relimit stamps it on a
-    StopFailure error='authentication_failed'; account._rank and the dashboard
-    pill gate on this (docs/relimit.md *Logged-out accounts*)."""
+    `usage` snapshot. So the stamp is active while no usage snapshot is more
+    than LOGGED_OUT_GRACE_S newer than it. No snapshot at all (never captured)
+    → the stamp stands. relimit stamps it on a StopFailure
+    error='authentication_failed'; account._rank and the dashboard pill gate on
+    this (docs/relimit.md *Logged-out accounts*).
+
+    Why the GRACE margin and not a plain `stamp.ts >= usage.ts`: the original
+    predicate assumed the dead session's own status line was captured at the
+    prompt BEFORE the turn died on auth (older ts). It isn't — Claude Code
+    re-renders the status line at the END of every turn, INCLUDING a failed one,
+    so the dying session stashed a `usage` snapshot ~0.3s AFTER its own stamp and
+    the badge self-cleared instantly (session 518b6f4d, 2026-07-26: stamp
+    ts=…534.026, usage ts=…534.328). That snapshot's CONTENT can't be screened
+    either — it carries the account's last-known percentages, which look
+    perfectly healthy. The margin also survives repeated failed turns (each
+    restamps, and its post-mortem render is again only ~0.3s later); the cost is
+    that a re-login inside the SAME session clears the flag only on the first
+    status-line render past the margin. A stricter "proof of a successful turn"
+    signal (a clean Stop / an OTEL datapoint under that account) was considered
+    and rejected as stickier: a bare `/login` produces no turn to prove."""
     if not stamp:
         return False
-    return (stamp.get("ts") or 0) >= ((usage or {}).get("ts") or 0)
+    return ((stamp.get("ts") or 0) + LOGGED_OUT_GRACE_S
+            >= ((usage or {}).get("ts") or 0))
 
 
 def model_available(hit, model, now=None):

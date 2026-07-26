@@ -3725,8 +3725,12 @@ shows a pill when it has usage **or** a logged-out flag (it otherwise hides
 usage-less accounts).
 
 **Clears on re-login, no hook.** Logging back in is itself a session; its
-status-line `usage` snapshot is newer than the stamp, and `logged_out_active`
-(ts-vs-freshest-usage) drops the flag the moment that newer snapshot lands.
+status-line `usage` snapshot lands more than `sessionapi.LOGGED_OUT_GRACE_S`
+(60s) after the stamp, and `logged_out_active` drops the flag then. The grace
+margin is load-bearing, not slop: the DYING session re-renders its own status
+line ~0.3s after the failed turn, and a bare ts comparison let that snapshot
+clear the badge before it was ever painted (docs/relimit.md *Why the grace
+margin*).
 
 **Not auto-selected.** The new-session picker never auto-selects a logged-out
 account (`autoAcct` filters them out, falling back to the full list only if ALL

@@ -215,12 +215,33 @@ free, and touches no credentials — the house-style event signal.
 
 **Clearing (a re-login).** Being logged out has no reset epoch, so the stamp is
 cleared **read-side**: `sessionapi.logged_out_active(stamp, usage)` reports it
-active only while the stamp is at least as fresh as the account's freshest
-status-line `usage` snapshot. Within the dead session the status line was
-captured at the prompt *before* the turn died (older `ts`); a later successful
-session — and a `/login` **is** a session — captures a newer snapshot that
-supersedes the stamp. So logging back in clears the flag automatically, with no
-dedicated hook and no write.
+active until the account's freshest status-line `usage` snapshot is more than
+`sessionapi.LOGGED_OUT_GRACE_S` (60s) **newer** than the stamp. A later
+successful session — and a `/login` **is** a session — captures such a snapshot
+and supersedes the stamp, so logging back in clears the flag automatically, with
+no dedicated hook and no write.
+
+**Why the grace margin** (fixed 2026-07-26, session `518b6f4d`). The predicate
+was originally the plain `stamp.ts >= usage.ts`, on the assumption that within
+the dead session the status line had been captured at the prompt *before* the
+turn died (older `ts`). **It hasn't:** Claude Code re-renders its status line at
+the END of every turn, *including a failed one*, so `claude-statusline.py`
+stashed a `usage` snapshot **~0.3s after** the stamp (`logged-out` ts `…534.026`,
+`usage` ts `…534.328`) and the dying session **self-cleared its own badge**
+instantly — the write half looked perfect in the audit (`state_files`
+`action='logged-out'` + the `auth_failed: stamped logged-out` decision row +
+the anomalies hit) while the dashboard never showed a thing. Screening by the
+snapshot's *content* is not possible: it carries the account's last-known
+percentages, which read as perfectly healthy. The margin also survives repeated
+failed turns (each restamps, and its post-mortem render is again only ~0.3s
+later); its cost is that a re-login *inside the same session* clears the flag
+only on the first status-line render past the margin.
+
+**Why not "proof of a successful turn"** (a clean `Stop` or an OTEL datapoint
+under that account, newer than the stamp) — considered and rejected as the
+clear signal: it is strictly stickier, because a bare `/login` produces no turn
+to prove, so the badge would outlive the re-login until unrelated work happened
+to run on that account.
 
 **Where it surfaces.** `sessionapi.account_usage` files the `logged-out` stamp
 per slug (freshest wins, under the stamp's OWN slug — same reasoning as

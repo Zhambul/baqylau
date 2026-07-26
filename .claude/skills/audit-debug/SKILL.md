@@ -1897,13 +1897,20 @@ New always-audited swallow sites (previously silent — their absence used to ma
   session has DIED on it since it was logged out (the flag only lights on the
   event — launch a session under it, or it stays clean), OR the session was
   UNHOSTED (no state DB — the stamp is skipped with `auth_failed: no live state
-  DB`, never creating the DB), OR a FRESHER `usage` snapshot for the slug
-  post-dates the stamp so `sessionapi.logged_out_active` cleared it (the pill
-  clears on the next successful/`/login` session by design — compare the
-  `logged-out` stamp `ts` against the account's newest `usage` kv `ts`).
-  **Badge STUCK after re-login**: the clearing usage snapshot never landed
-  (no status-line capture under the account since — the account kv `usage.ts`
-  is older than the stamp). Do NOT reach for a token probe: probing is unreliable
+  DB`, never creating the DB), OR a `usage` snapshot for the slug that post-dates
+  the stamp by more than `sessionapi.LOGGED_OUT_GRACE_S` (60s) cleared it — the
+  pill clears on the next successful/`/login` session by design, so compare the
+  `logged-out` stamp `ts` against the account's newest `usage` kv `ts`
+  (`kv_at(<state db>, 'usage')` across the slug's recent sessions, newest wins).
+  A snapshot only a FRACTION of a second newer is the dying session's own
+  post-turn status-line render, NOT a re-login: that used to self-clear the badge
+  ~0.3s after it was stamped (session `518b6f4d`, fixed 2026-07-26 with the grace
+  margin — docs/relimit.md *Why the grace margin*), and it is the reason the write
+  half can look perfect in the audit (stamp row + decision + anomaly hit) while
+  the dashboard shows nothing. **Badge STUCK after re-login**: the clearing usage
+  snapshot never landed (no status-line capture under the account since — the
+  account kv `usage.ts` is older than the stamp), or it landed INSIDE the grace
+  margin (a `/login` in the same session, cleared on the next render past it). Do NOT reach for a token probe: probing is unreliable
   (a rotated cached access token reads valid post-logout) and dangerous (a
   refresh-grant call can rotate/orphan the keychain token and log the account
   out) — docs/relimit.md *Logged-out accounts*.

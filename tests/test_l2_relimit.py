@@ -183,16 +183,32 @@ def test_authentication_failed_needs_a_live_state_db(run_hook, rl_env, session):
 
 
 def test_logged_out_active_clears_on_a_fresher_usage_snapshot():
-    """The read-side clear: a `logged-out` stamp is active while it is at least
-    as fresh as the account's freshest usage snapshot; a later successful
+    """The read-side clear: a `logged-out` stamp is active until a usage snapshot
+    lands more than LOGGED_OUT_GRACE_S newer than it — a later successful
     session's snapshot (a re-login) clears it (core.sessionapi)."""
     from core import sessionapi as API
     now = time.time()
+    grace = API.LOGGED_OUT_GRACE_S
     stamp = {"slug": "c2", "ts": now}
     assert API.logged_out_active(stamp, None) is True          # never captured
     assert API.logged_out_active(stamp, {"ts": now - 10}) is True   # older usage
-    assert API.logged_out_active(stamp, {"ts": now + 10}) is False  # re-login
+    assert API.logged_out_active(
+        stamp, {"ts": now + grace + 10}) is False                   # re-login
     assert API.logged_out_active(None, {"ts": now}) is False        # no stamp
+
+
+def test_logged_out_active_survives_the_dying_sessions_own_status_line():
+    """The dead session re-renders its status line at the END of the failed turn,
+    so its OWN `usage` snapshot lands a fraction of a second AFTER the stamp —
+    which used to self-clear the badge instantly (session 518b6f4d, 2026-07-26).
+    LOGGED_OUT_GRACE_S is exactly that margin."""
+    from core import sessionapi as API
+    now = time.time()
+    stamp = {"slug": "c1", "ts": now}
+    assert API.logged_out_active(stamp, {"ts": now + 0.301}) is True
+    # and a repeated failed turn (restamp + its own post-mortem render) too
+    assert API.logged_out_active({"slug": "c1", "ts": now + 30},
+                                 {"ts": now + 30.3}) is True
 
 
 def test_kill_switch_stamps_but_never_migrates(run_hook, rl_env, hosted,
@@ -518,11 +534,11 @@ def test_pick_target_skips_a_logged_out_account(monkeypatch, tmp_path):
                               "ts": now}, "limit_hit": None, "logged_out": None}}
     monkeypatch.setattr(API, "account_usage", lambda limit=50, cache=None: fresh)
     assert ACC.pick_target("c1", None)["slug"] == "c2"      # least-used wins
-    # c2 logged out (stamp at least as fresh as its usage) → skipped
+    # c2 logged out (no usage snapshot past the grace margin) → skipped
     fresh["c2"]["logged_out"] = {"slug": "c2", "ts": now}
     assert ACC.pick_target("c1", None)["slug"] == "c3"
-    # a re-login (fresher usage snapshot) clears the skip
-    fresh["c2"]["usage"]["ts"] = now + 5
+    # a re-login (usage snapshot past LOGGED_OUT_GRACE_S) clears the skip
+    fresh["c2"]["usage"]["ts"] = now + API.LOGGED_OUT_GRACE_S + 5
     assert ACC.pick_target("c1", None)["slug"] == "c2"
 
 
