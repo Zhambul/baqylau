@@ -47,6 +47,36 @@ LINE_MAX_B = int(os.environ.get("CLAUDE_TAIL_LINE_MAX_B") or 64 * 1024)
                             # break json.loads and silently drop events.
 
 
+def tail_lines(path, nbytes):
+    """The last `nbytes` of `path` as complete byte lines — the bounded
+    BACKWARDS read every read-side probe over a big JSONL file shares. None
+    when the file can't be read (the callers' own miss value).
+
+    The subtlety this owns is FileTailer's, approached from the other end: a
+    mid-file seek lands in the MIDDLE of a line, so the window's first line is
+    TORN and must be dropped — but only when the file is actually bigger than
+    the window, or the drop eats the file's real first line.
+
+    Bytes, not text. Callers pre-filter with byte substring tests
+    (`b'"usage"' in raw`) before paying for a json.loads, and splitting on
+    b"\\n" rather than str.splitlines() is what keeps a `\\u2028` inside a JSON
+    string from splitting a record in half.
+
+    Four probes re-encoded this loop — three in plugins/claude_code/
+    transcript.py (the title, ctx and goal tail scans) and one in model.py —
+    three of them carrying their own copy of the torn-line comment. Fixing the
+    rule meant finding all four."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, os.SEEK_END)
+            size = fh.tell()
+            fh.seek(max(0, size - nbytes))
+            lines = fh.read().split(b"\n")
+    except OSError:
+        return None
+    return lines[1:] if size > nbytes else lines
+
+
 class FileTailer:
     """Byte-position tailer over one growing file.
 

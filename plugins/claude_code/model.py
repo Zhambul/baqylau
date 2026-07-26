@@ -22,6 +22,8 @@ import json
 import os
 import time
 
+from core import tail as TL
+
 # How much of a transcript's tail session_model() scans for the last assistant
 # turn: the latest turn is near the end, so a bounded read stays cheap even on
 # long sessions.
@@ -254,24 +256,19 @@ def session_model(tpath):
     the last assistant turn in its transcript. Gives a precise version for agents
     that INHERIT, before the agent's own first turn reveals it. Tail-scan only
     (TAIL_SCAN_BYTES — see its comment)."""
-    try:
-        with open(tpath, "rb") as fh:
-            fh.seek(0, 2)
-            size = fh.tell()
-            fh.seek(max(0, size - TAIL_SCAN_BYTES))
-            chunk = fh.read().decode("utf-8", "replace")
-        last = None
-        for line in chunk.splitlines():
-            if '"assistant"' in line and '"model"' in line:
-                try:
-                    m = (json.loads(line).get("message") or {}).get("model")
-                except Exception:
-                    continue
-                if m:
-                    last = m
-        return last
-    except Exception:
+    lines = TL.tail_lines(tpath, TAIL_SCAN_BYTES)
+    if lines is None:
         return None
+    last = None
+    for line in lines:
+        if b'"assistant"' in line and b'"model"' in line:
+            try:
+                m = (json.loads(line).get("message") or {}).get("model")
+            except Exception:
+                continue
+            if m:
+                last = m
+    return last
 
 
 def parent_resolved_model(tpath, agent_id):

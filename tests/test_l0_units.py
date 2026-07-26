@@ -1654,6 +1654,33 @@ def _tail_mod():
     return T
 
 
+def test_tail_lines_drops_only_a_genuinely_torn_first_line(tmp_path):
+    """`tail_lines` is the ONE owner of the bounded BACKWARDS read the read-side
+    transcript probes share (the title / ctx / goal scans and model.py's
+    session_model — four hand-rolled copies, three carrying their own torn-line
+    comment).
+
+    The rule it owns: a mid-file seek lands inside a line, so the window's first
+    line is TORN and must go — but only when the file is bigger than the window,
+    or the drop eats the file's real first record."""
+    T = _tail_mod()
+    p = tmp_path / "t.jsonl"
+    p.write_bytes(b'{"n":1}\n{"n":2}\n{"n":3}\n')
+    # window >= file: nothing is torn, so nothing is dropped (the trailing
+    # newline yields the usual empty last element)
+    assert T.tail_lines(str(p), 1 << 20) == [b'{"n":1}', b'{"n":2}', b'{"n":3}', b'']
+    # window < file: the first (torn) line goes
+    got = T.tail_lines(str(p), 17)
+    assert b'{"n":1}' not in got and b'{"n":3}' in got
+    # bytes, split on b"\n" only — a   inside a JSON string is NOT a record
+    # boundary (str.splitlines() would have cut the record in half)
+    p2 = tmp_path / "sep.jsonl"
+    p2.write_bytes('{"s":"a b"}\n'.encode("utf-8"))
+    assert T.tail_lines(str(p2), 1 << 20)[0] == '{"s":"a b"}'.encode("utf-8")
+    # unreadable -> None (each caller's own miss value), never a raise
+    assert T.tail_lines(str(tmp_path / "nope"), 100) is None
+
+
 def test_pump_cap_drains_backlog_across_pumps(tmp_path, monkeypatch):
     T = _tail_mod()
     monkeypatch.setattr(T, "PUMP_MAX_B", 4096)

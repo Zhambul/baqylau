@@ -70,6 +70,8 @@ import os
 import re
 from datetime import datetime
 
+from core import tail as TL
+
 # A message DELIVERED to a teammate appears in its transcript as a plain user
 # record whose text is wrapped in <teammate-message teammate_id="<sender>" …>BODY
 # </teammate-message> (the very first one is the lead's spawn prompt).
@@ -323,16 +325,9 @@ def _title_records(path):
     window (docs/session-naming-findings.md): `agent-name`/`agentName` is the
     /rename custom name, `ai-title`/`aiTitle` the auto title Claude Code's OSC
     tab title mirrors. '' / '' when absent or unreadable."""
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - TITLE_TAIL_B))
-            lines = fh.read().split(b"\n")
-    except OSError:
+    lines = TL.tail_lines(path, TITLE_TAIL_B)
+    if lines is None:
         return "", ""
-    if size > TITLE_TAIL_B:
-        lines = lines[1:]                   # first line of a mid-file seek is torn
     named, ai = "", ""
     for raw in lines:
         if b'"agent-name"' not in raw and b'"ai-title"' not in raw:
@@ -474,16 +469,9 @@ def context_probe(path, main=False):
     phantom shrink over the main thread's fill — the same main/agent split as
     accounting.bump_transcript vs fold_usage."""
     from plugins.claude_code import model as M   # deferred: keep parse_line import-light
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - CTX_TAIL_B))
-            lines = fh.read().split(b"\n")
-    except OSError:
+    lines = TL.tail_lines(path, CTX_TAIL_B)
+    if lines is None:
         return None
-    if size > CTX_TAIL_B:
-        lines = lines[1:]                   # first line of a mid-file seek is torn
     for raw in reversed(lines):
         if b'"usage"' not in raw or b'"assistant"' not in raw:
             continue
@@ -529,16 +517,9 @@ def goal_probe(path):
     post-dates the last attachment ends it (None); `/goal status` is a query and
     is skipped. A goal set writes its attachment right AFTER its command record,
     so the attachment is seen first and wins."""
-    try:
-        with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            fh.seek(max(0, size - CTX_TAIL_B))
-            lines = fh.read().split(b"\n")
-    except OSError:
+    lines = TL.tail_lines(path, CTX_TAIL_B)
+    if lines is None:
         return None
-    if size > CTX_TAIL_B:
-        lines = lines[1:]                       # first line of a mid-file seek is torn
     for raw in reversed(lines):
         is_status = b'"goal_status"' in raw
         is_cmd = b'<command-name>/goal</command-name>' in raw

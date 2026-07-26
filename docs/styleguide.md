@@ -75,6 +75,7 @@ backed by grep-style regression tests that will fail the build):
 | Audit table set | `core/audit._SCHEMA` — derive lists (`prunable_tables()`, `WRITE_COMMANDS`), never hand-copy |
 | CSI/OSC escape grammar | the named fragments in `core/render.py` composing `_ANSI`/`_CTRL` |
 | Pygments lexer instances (construction compiles token tables; instances are stateless per get_tokens — reusable) | `core/render.lexer(name)` — the one lazy per-process cache; per-call `SomeLexer()`/`get_lexer_by_name` construction is a bug |
+| The bounded BACKWARDS read of a big JSONL file (last N bytes as complete lines) + the drop-the-torn-first-line rule | `core/tail.tail_lines` — FileTailer's discipline from the other end; the four read-side probes that each re-encoded it (`transcript._title_records`/`context_probe`/`goal_probe`, `model.session_model`) go through it, and the WINDOW SIZE stays per-probe (`TITLE_TAIL_B`/`CTX_TAIL_B`/`TAIL_SCAN_BYTES` — deliberately different, each tied to how far back its record can sit) |
 | Tailer worst-case caps: per-pump read ceiling + `capped` re-pump contract, opt-in surfaced-line cap + elision marker | `core/tail.py` (`PUMP_MAX_B`/`LINE_MAX_B`); the per-op byte ceiling (`OP_MAX_B`, `verbatim_batches`) is `plugins/claude_code/stream.py`'s |
 | Tailer env contract `CLAUDE_STREAM_*` | `hookkit.stream_env()` — launchers pass the raw command, never the render decision |
 | Usage dedup + Σ-row arithmetic | `accounting.usage_fold` + `ops.split_tokens` |
