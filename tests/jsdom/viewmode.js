@@ -126,12 +126,17 @@ const sandbox = {
     const p = sandbox.__pages.length, items = [];
     for (let i = 0; i < blocks; i++) {
       const id = "old" + p + "-" + i;
+      // every served item carries an AGE MARKER `h<page>_<index>` (the server
+      // sends a page oldest->newest, so a higher index is NEWER) — readable off
+      // a stray's className and out of a block's chip text, which is how the
+      // ordering verdict below reconstructs the feed's final order
+      const mk = "h" + p + "_" + i;
       if (sandbox.__mix && i % 5 === 0)
         items.push({ g: null, t: "msg", kind: i % 10 ? "message" : "prompt",
-                     act: "msg", html: "<div class=\"msg\">x</div>" });
+                     act: "msg", html: "<div class=\"msg " + mk + "\">x</div>" });
       else
         items.push({ g: id, t: "label", act: "bash",
-                     html: "<span class=\"chip\">x</span>" });
+                     html: "<span class=\"chip\">" + mk + "</span>" });
     }
     const oldest = p >= sandbox.__exhaustAfter ? 0 : 5;
     return Promise.resolve({ json: () => Promise.resolve({ items, oldest }) });
@@ -341,10 +346,42 @@ function runFill(name, mode, target, opts) {
   });
 }
 
+// ---- and the ORDER a loaded page lands in. The feed is newest-top, so a page
+// (served oldest->newest) must be laid out reversed, and each next page below the
+// last — otherwise the loaded stretch reads bottom-up while the live tail above
+// it reads top-down. Read the age markers the stub stamps: the expected sequence
+// is page 1 newest->oldest, then page 2 newest->oldest.
+function orderScene() {
+  const ses = fillScene("focus", { exhaustAfter: 2 });   // exactly two pages
+  return Promise.resolve(sandbox.loadOlder(40)).then(() => new Promise(r => {
+    let n = 0;
+    const tick = () => (++n < 50 ? Promise.resolve().then(tick) : r());
+    tick();
+  })).then(() => {
+    const marks = [];
+    for (const c of ses.stream.children) {
+      const m = /h(\d+)_(\d+)/.exec(c.className) || /h(\d+)_(\d+)/.exec(c.textContent);
+      if (m) marks.push([+m[1], +m[2]]);
+    }
+    // pages must arrive in order, and each page's own items newest-first
+    let pagesAscend = true, withinDescend = true;
+    for (let i = 1; i < marks.length; i++) {
+      const [pp, pi] = marks[i - 1], [p, i2] = marks[i];
+      if (p < pp) pagesAscend = false;
+      else if (p === pp && i2 > pi) withinDescend = false;
+    }
+    out.olderOrder = { items: marks.length, pages: sandbox.__pages.length,
+                       pagesAscend, withinDescend,
+                       head: marks.slice(0, 3).map(m => m.join("_")),
+                       tail: marks.slice(-3).map(m => m.join("_")) };
+  });
+}
+
 runFill("focus", "focus", 40)
   .then(() => runFill("verbose", "verbose", 40))
   .then(() => runFill("allCommands", "focus", 40, { mix: false }))
   .then(() => runFill("exhausted", "focus", 40, { mix: false, exhaustAfter: 2 }))
+  .then(orderScene)
   .then(() => {
     out.fills = fills;
     process.stdout.write(JSON.stringify(out, null, 1));

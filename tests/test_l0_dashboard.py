@@ -8173,6 +8173,35 @@ def test_load_older_keeps_its_promise_in_a_collapsing_mode(dash):
     assert f["exhausted"]["pages"] == 2 and f["exhausted"]["stuck"] is False
 
 
+def test_a_loaded_history_page_lands_newest_first(dash):
+    """The feed is newest-top and `/history` serves a page oldest->newest, so
+    `appendOlder` must lay the page out REVERSED. Inserting it in arrival order
+    made every loaded stretch read bottom-up while the live tail above it read
+    top-down — the "order of messages is backwards" report.
+
+    Long-latent (only an explicit "load older" click reached it), then made
+    routine by the collapsing modes' auto-fill, which pulls a page on every
+    session open. Verified by reading the AGE MARKERS the /history stub stamps
+    on each served item back out of the final DOM."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "viewmode.js"),
+         os.path.join(REPO, "dashboard", "static", "app.05-session.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    o = json.loads(r.stdout)["olderOrder"]
+
+    assert o["pages"] == 2 and o["items"] == 100, o    # both pages, all landed
+    # each page's own items newest-first…
+    assert o["withinDescend"] is True, o
+    assert o["head"] == ["1_39", "1_38", "1_37"], o    # page 1: newest at the top
+    # …and page 2 (older still) entirely BELOW page 1, ending on the oldest item
+    assert o["pagesAscend"] is True, o
+    assert o["tail"] == ["2_2", "2_1", "2_0"], o
+
+
 def test_expanded_run_rail_is_styled_as_one_group(dash):
     """The rail the engine marks has to be DRAWN, and drawn as a continuous
     group: the open summary is the header (rounded on top only, its bottom margin

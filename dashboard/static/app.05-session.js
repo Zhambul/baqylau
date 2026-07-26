@@ -466,16 +466,26 @@ function appendItems(items) {
 // tail). A group that STRADDLES the load boundary (already live in the map) has
 // its older ops appended into the existing card body at the end — acceptable;
 // older ops trail the newer ones (docs/dashboard.md).
+//
+// The page is laid out REVERSED (`tops`, filled in server order, inserted last
+// first), because the feed is newest-top and a page is only a page: inserting it
+// in arrival order made the loaded stretch read bottom-up (oldest first) while
+// the live tail above it read top-down — the "order is backwards" report. Each
+// item taking the position a live top-prepend would have given it is what makes
+// the whole feed monotonic across the boundary, and a block still holds the
+// position of its FIRST op with its body top-down, exactly like appendItems.
 function appendOlder(items) {
   const st = S.ses.stream;
   const local = new Map();                       // g -> block, for this chunk only
+  const tops = [];                               // this page's top-level nodes,
+  //                                                oldest->newest (server order)
   const frag = document.createDocumentFragment();
   for (const it of items) {
     if (!it.g) {
       const tmp = el("div");
       tmp.innerHTML = it.html;
       const elem = tmp.firstElementChild;
-      if (elem) { stampItem(elem, it); frag.append(elem); }
+      if (elem) { stampItem(elem, it); tops.push(elem); }
       continue;
     }
     const live = S.ses.blocks.get(it.g);         // straddling group: fold in-place
@@ -492,12 +502,13 @@ function appendOlder(items) {
       b.root.dataset.vk = String(++S.ses.viewSeq);
       b.root.dataset.vt = String(Date.now() / 1000);
       local.set(it.g, b);
-      frag.append(b.root);
+      tops.push(b.root);
     }
     fillBlock(b, it);
     refineBlockKind(b, it);
     applyFilterTo(b.root);
   }
+  for (let i = tops.length - 1; i >= 0; i--) frag.append(tops[i]);
   if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
   else st.append(frag);
   applyViewMode();
@@ -507,7 +518,12 @@ function appendOlder(items) {
 // Render a self-contained mirror snapshot into an ARBITRARY container (the
 // resume-picker's preview panel), not the live #stream. Same server items
 // ({g,t,html}, oldest->newest) and same block grouping as appendOlder, but into
-// a throwaway local map (never S.ses), no filters/eviction. Blocks render FOLDED
+// a throwaway local map (never S.ses), no filters/eviction. DELIBERATELY the
+// other direction — don't unify: this paints in arrival order, so the preview
+// reads oldest->newest (chronological). It is a short standalone tail read
+// top-down, not a feed being prepended to, and nothing lands in it after the
+// render — the newest-top convention (and appendOlder's page reversal) exists
+// for a stream that keeps growing at one end. Blocks render FOLDED
 // (like history) — a compact scannable peek: command/file/agent blocks collapse
 // to their one-line summary, while conversation messages (ungrouped items) show
 // inline in full; a click on any block header expands it.

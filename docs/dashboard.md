@@ -4309,7 +4309,23 @@ the live `S.ses.blocks` map or the `KEEP_OPEN` window (they are history, not the
 live tail); a straddling group already in the live map has its older ops folded
 into that card's body at the end (older ops trail — acceptable). Filters apply to
 lazily loaded items (`appendOlder` runs the shared `applyFilterTo`). The button
-hides once `/history` reports `oldest == 0`. Past a 3000-child cap, each live
+hides once `/history` reports `oldest == 0`.
+
+**A page is laid out REVERSED — the whole feed is one descending sequence.** The
+server sends a page oldest→newest and the feed is newest-top, so `appendOlder`
+collects the page's top-level nodes (`tops`, in server order) and inserts them
+LAST FIRST: each item takes the position a live top-prepend would have given it, a
+block still holds the position of its FIRST op with its body reading top-down, and
+successive pages (older still) stack below. Inserting a page in arrival order
+instead made the loaded stretch read bottom-up while the live tail above it read
+top-down — the "order of messages is backwards" report. It stayed latent for as
+long as only an explicit click reached that path; the collapsing modes' auto-fill
+(*The three view modes* below) pulls a page on every session open, which turned a
+rarely-seen inversion into the normal way the feed looked. It also fed focus mode
+a mis-ordered feed underneath: its "newest message per turn" cut walks the DOM
+top-down and trusts that direction. Asserted end-to-end by the JS harness —
+`/history` stamps an age marker on every served item and the test reads the final
+DOM order back out (`test_a_loaded_history_page_lands_newest_first`). Past a 3000-child cap, each live
 arrival trims the feed's oldest DOM nodes off the bottom, skipping over the
 pinned `.loadmore` button (it must stay the last child) and evicting a trimmed
 block card from the live `S.ses.blocks` map so a straggler op for that group
