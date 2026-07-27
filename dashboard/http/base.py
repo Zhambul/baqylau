@@ -9,7 +9,7 @@ import json
 import os
 import re
 from http.server import BaseHTTPRequestHandler
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, urlparse
 
 from core import paths as P
 from core import sessionapi as API
@@ -35,12 +35,14 @@ class _Base(BaseHTTPRequestHandler):
                 return "q=0" not in tok or "q=0." in tok
         return False
 
-    def _send(self, code, body, ctype="application/json"):
+    def _send(self, code, body, ctype="application/json", cache="no-store"):
         # Everything routed through _send is text (JSON/HTML/CSS/JS/plain), so
         # it all compresses; SSE never comes here (it holds the response open
         # and writes incremental frames, which buffering would break). Vary is
         # set whenever the body could vary by encoding, even when this response
         # stays plain, so a shared cache keys the two variants apart.
+        # `cache` defaults to no-store — only static() overrides it, for the
+        # ?v=<BOOT_ID>-versioned assets (config.CACHE_STATIC).
         data = body if isinstance(body, bytes) else body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", ctype)
@@ -49,7 +51,7 @@ class _Base(BaseHTTPRequestHandler):
             data = gzip.compress(data)
             self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(data)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.end_headers()
         try:
             self.wfile.write(data)
@@ -294,7 +296,16 @@ class _Base(BaseHTTPRequestHandler):
             # installed-app glyph comes from here, not from index.html.
             data = re.sub(rb'(/static/icon-[a-z0-9-]+\.png)',
                           rb'\1?v=' + BOOT_ID.encode(), data)
-        return self._send(200, data, ctype)
+        # A fetch under the CURRENT boot's ?v=<BOOT_ID> stamp may be cached hard
+        # (config.CACHE_STATIC): the URL changes on every restart, and the bytes
+        # behind it only change via a restart (the "does NOT hot-reload"
+        # contract). This is what keeps a refresh from re-pulling all 14 SPA
+        # parts through the tunnel — the burst that overflowed the accept queue
+        # and half-loaded the page (docs/dashboard.md *Cache-busting*).
+        # index.html and sw.js are fetched un-stamped, so they stay no-store.
+        v = (parse_qs(urlparse(self.path).query).get("v") or [""])[0]
+        cache = config.CACHE_STATIC if v == BOOT_ID else "no-store"
+        return self._send(200, data, ctype, cache=cache)
 
 
 def valid_sid(s):

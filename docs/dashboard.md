@@ -494,21 +494,44 @@ global) pushed over a held response — no websockets dependency, and
 
 ## Cache-busting (`?v=<BOOT_ID>`)
 
-Static responses are sent `Cache-Control: no-store`, but that only asks a
-browser not to cache — it can't EVICT bytes already cached, and a remote client
-(mobile Safari especially, or a CDN in front — the public origin is a Cloudflare
-tunnel) can keep serving a stale `app.js`/`style.css` across a dashboard restart.
-That is exactly the "does NOT hot-reload" hazard (CLAUDE.md): a fix shipped, the
-origin served it, the phone kept the pre-fix bytes (the *memory wikilinks don't
-follow on mobile* report was really this — the fix was live at the origin the
-whole time). So `static()` rewrites the sub-resource URLs in `index.html` to
-`/static/app.js?v=<BOOT_ID>` / `/static/style.css?v=<BOOT_ID>` (`BOOT_ID` is
-bumped every server start). `index.html` is itself `no-store` AND is the main
-document a reload always refetches, so each restart hands the browser fresh
-`?v=` URLs that nothing (browser or CDN, which key by full URL incl. query) has
-cached. The `?v=` is a cache key only — `do_GET` parses the path (query
+Un-versioned static responses are sent `Cache-Control: no-store`, but that only
+asks a browser not to cache — it can't EVICT bytes already cached, and a remote
+client (mobile Safari especially, or a CDN in front — the public origin is a
+Cloudflare tunnel) can keep serving a stale `app.js`/`style.css` across a
+dashboard restart. That is exactly the "does NOT hot-reload" hazard (CLAUDE.md):
+a fix shipped, the origin served it, the phone kept the pre-fix bytes (the
+*memory wikilinks don't follow on mobile* report was really this — the fix was
+live at the origin the whole time). So `static()` rewrites the sub-resource URLs
+in `index.html` to `/static/app.js?v=<BOOT_ID>` / `/static/style.css?v=<BOOT_ID>`
+(`BOOT_ID` is bumped every server start). `index.html` is itself `no-store` AND
+is the main document a reload always refetches, so each restart hands the browser
+fresh `?v=` URLs that nothing (browser or CDN, which key by full URL incl. query)
+has cached. The `?v=` is a cache key only — `do_GET` parses the path (query
 stripped), so `static()` still serves the same file. A hard reload is no longer
 required for a remote page to pick up new JS/CSS; a normal reload suffices.
+
+**A fetch stamped with the CURRENT boot's `?v=` is served immutable**
+(`config.CACHE_STATIC`, `public, max-age=31536000, immutable`) rather than
+no-store — the stamp already IS the invalidation (it changes on restart, and the
+bytes behind a static URL only change via a restart), so `no-store` on the
+stamped URLs bought nothing and cost a full re-fetch of every asset on every
+reload. That cost turned out to be a real failure, not just latency (the
+2026-07-27 *"on refresh: js not loaded / css not loaded / 502"* report): a
+reload re-pulled all 14 `app.NN-*.js` parts + `style.css` + the first API calls
+as ONE parallel burst of ~16 cloudflared→origin connections, and the server's
+accept backlog was the socketserver DEFAULT OF FIVE — the kernel resets every
+connection past the queue, cloudflared logs *"Unable to reach the origin
+service … connection reset by peer"* (`~/Library/Logs/dash-tunnel.log`) and
+answers 502. A 502 on the document is the visible *Bad gateway*; a 502 on one
+JS part is worse — the page half-loads and throws a `ReferenceError` per
+missing global (`stopDictation` in the audited `js.error` rows = `app.07`
+never arrived), the "js not loaded" symptom. Two fixes, both load-bearing:
+`Server.request_queue_size = config.BACKLOG` (128 — a class attribute, since
+`listen()` runs inside the constructor), and the immutable stamp above, which
+shrinks a warm reload to `index.html` + API calls so a tunnel blip can no
+longer brick the page (the cached parts load regardless). A STALE `?v=` (an
+old boot's) still serves the current file but no-store — only the
+currently-advertised URL is promised immutable.
 
 The same stamp covers the **icons** — `apple-touch-icon.png`, the `icon-*.png`
 set, and the `manifest.webmanifest` URL in `index.html`, plus the manifest's OWN

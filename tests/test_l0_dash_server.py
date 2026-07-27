@@ -51,6 +51,31 @@ def test_http_root_and_static_whitelist(dash):
     assert e.value.code == 404
 
 
+def test_versioned_static_cache_headers(dash):
+    """An asset fetched under the CURRENT boot's ?v=<BOOT_ID> stamp is
+    immutable-cacheable at that URL (config.CACHE_STATIC) — the tunnel-502 fix:
+    every refresh used to re-pull all 14 no-store SPA parts in one parallel
+    burst, which overflowed the accept queue and cloudflared turned the resets
+    into 502s / half-loaded pages (docs/dashboard.md *Cache-busting*). Anything
+    un-stamped or stale-stamped (index.html, sw.js, an old boot's ?v=) stays
+    no-store."""
+    v = "?v=" + DS.config.BOOT_ID
+    with urllib.request.urlopen(dash + "/static/app.00-core.js" + v,
+                                timeout=10) as r:
+        assert r.headers["Cache-Control"] == DS.config.CACHE_STATIC
+    for path in ("/", "/sw.js", "/static/app.00-core.js",
+                 "/static/app.00-core.js?v=stale"):
+        with urllib.request.urlopen(dash + path, timeout=10) as r:
+            assert r.headers["Cache-Control"] == "no-store", path
+
+
+def test_server_accept_backlog_raised():
+    # the socketserver default backlog of 5 resets a tunnel refresh burst (~16
+    # parallel connections); the real server class must keep it raised
+    assert DS.Server.request_queue_size == DS.config.BACKLOG
+    assert DS.config.BACKLOG >= 64
+
+
 def test_favicon_ico_served_at_root_and_undeclared(dash):
     # the RASTER fallback favicon lives at the root path clients auto-probe when
     # the declared data-URI SVG icon is unusable (iOS Safari supports SVG

@@ -682,8 +682,6 @@ def reaper(test_env):
 # constant) — with every durable path relocated under tmp_path.
 @pytest.fixture
 def dash(monkeypatch, tmp_path):
-    from http.server import ThreadingHTTPServer
-
     from core import paths as P
     from dashboard import server as DS
 
@@ -708,8 +706,9 @@ def dash(monkeypatch, tmp_path):
     # inside a live kitty session). None = "can't enumerate → keep the state-DB
     # liveness signal"; a demotion test overrides this with a controlled map.
     monkeypatch.setattr(DS.launch, "live_windows", lambda: None)
-    httpd = ThreadingHTTPServer(("127.0.0.1", 0), DS.Handler)
-    httpd.daemon_threads = True
+    # the REAL server class (daemon_threads + the raised accept backlog), not a
+    # bare ThreadingHTTPServer — so the suite exercises what serve() runs
+    httpd = DS.Server(("127.0.0.1", 0), DS.Handler)
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     yield "http://127.0.0.1:%d" % httpd.server_address[1]
     httpd.shutdown()

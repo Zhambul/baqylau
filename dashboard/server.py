@@ -130,7 +130,7 @@ from dashboard.control.launch import (  # noqa: F401  -- facade re-export
 # The ~2400-line Handler was split into base/get/post/sse mixins composed in
 # dashboard/http/handler.py; server.py re-exports the entry points bin/ (serve)
 # and the tests reach through `dashboard.server`.
-from dashboard.http.handler import Handler, serve  # noqa: F401  -- facade re-export
+from dashboard.http.handler import Handler, Server, serve  # noqa: F401  -- facade re-export
 from dashboard.http import sse  # noqa: F401  -- DS.sse: the stream's channel tables
 # The two POST modules that own their OWN tuning knobs (the interrupt/verify
 # timings, the draft-clear settle) rather than parking them in config.py — a

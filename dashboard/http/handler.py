@@ -13,7 +13,7 @@ from core import locks
 from core import paths as P
 from core.noaudit import load_audit
 from core.tail import stream_lifecycle
-from dashboard.config import HOST, LOCK_KEY, PORT
+from dashboard.config import BACKLOG, HOST, LOCK_KEY, PORT
 from dashboard.http.base import _Base
 from dashboard.http.get import _GetMixin
 from dashboard.http.post import _PostMixin
@@ -28,6 +28,14 @@ UPLOAD_TTL_S = 7 * 24 * 3600      # composer attachments older than this are pru
 class Handler(_GetMixin, _PostMixin, _SseMixin, _Base):
     protocol_version = "HTTP/1.1"
     server_version = "claude-dash"
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+    # the stdlib default backlog of 5 RSTs the tunnel's refresh bursts — the
+    # "502 / half-loaded page" failure (config.BACKLOG). Class attribute, not a
+    # post-construction assignment: listen() runs inside __init__.
+    request_queue_size = BACKLOG
 
 
 def _prune_uploads():
@@ -71,12 +79,11 @@ def serve():
                           ctx={"port": PORT},
                           on_exit=lambda: locks.lock_release(P.DASH_DB, LOCK_KEY)) as run:
         try:
-            httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+            httpd = Server((HOST, PORT), Handler)
         except OSError:
             run.end("port-busy")
             A.error("", "dashboard serve (port busy)", {"port": PORT})
             return 1
-        httpd.daemon_threads = True
         _prune_uploads()
         threading.Thread(target=NOTIFIER.run, daemon=True).start()
 

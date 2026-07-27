@@ -31,6 +31,19 @@ STATS_TOP_PROJECTS = 8             # top-N projects in each Pulse window's bar l
 RESUMABLE_MAX = 25                 # new-session resume picker: rows shown per dir
 RESUMABLE_SCAN = 2000              # …and how deep it discovers to search history
 GZIP_MIN = 1024                    # compress a _send body only at/above this size
+# The listen(2) backlog. The socketserver default is FIVE, and a page refresh
+# through the cloudflared tunnel is a parallel burst of ~16 origin connections
+# (the 14 app.NN-*.js parts + style.css + the first API calls) — every
+# connection past the queue is reset by the kernel, which cloudflared surfaces
+# as "connection reset by peer" → a 502 for the document, or a half-loaded page
+# throwing one ReferenceError per missing part (docs/dashboard.md
+# *Cache-busting*; found from ~/Library/Logs/dash-tunnel.log, 2026-07-27).
+BACKLOG = 128
+# Versioned static assets (?v=<BOOT_ID>, see http/base.py static()) are
+# immutable AT THAT URL: the stamp changes on every restart, and static bytes
+# only change via a restart (the "does NOT hot-reload" contract, CLAUDE.md), so
+# a browser may keep them for the max year. Everything else stays no-store.
+CACHE_STATIC = "public, max-age=31536000, immutable"
 POST_MAX = 64 * 1024               # request-body cap for the control-plane POSTs
 # The composer-attachment upload endpoint (post_upload) carries base64-encoded
 # bytes, so it gets its OWN, larger cap — ~14 MiB admits a base64-inflated 10 MB
