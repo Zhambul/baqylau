@@ -136,31 +136,121 @@ def _fmt_python(text):
     return lead + pretty + trail
 
 
+# Bash BLOCK STRUCTURE, for the reflow's indentation. Keyword classes, not a
+# parser: an opener goes on its own line and puts the body one level in, a closer
+# comes back out, and `else`/`elif` sit at the opener's level between the two.
+# All six are `Token.Keyword` to the lexer, which is what makes them safe to key
+# on — `echo "done"` is a string token and never matches.
+#
+# Braces are deliberately NOT here. `{`/`}` would be the obvious pair to add, but
+# they are also `${VAR}` and `awk '{print}'`, and telling a block brace from a
+# parameter expansion needs the parser this is not.
+_BASH_OPEN = ("do", "then")
+_BASH_CLOSE = ("done", "fi")
+_INDENT = "  "
+
+
 def _fmt_bash(text):
-    """Reflow a dense bash one-liner: break after top-level `&&` / `||` / `|` and turn
-    `;` into a line break. Only touches genuine one-liners (already-multi-line commands,
-    heredocs, and `case` bodies are left as the author wrote them). Operators inside
-    strings/comments are skipped — the lexer classifies them, so `echo "a && b"` is safe.
-    Returns the text unchanged when nothing top-level was found."""
+    """Reflow a dense bash one-liner: break after top-level `&&` / `||` / `|`, turn `;`
+    into a line break, put each block keyword on its own line, and INDENT — a block's
+    body one level in from its `do`/`then`, and a `&&`-chain's continuation one level in
+    from the line it continues (so `a; b` reads as two statements and `a && b` as one
+    thing spanning two lines).
+
+    Only touches genuine one-liners (already-multi-line commands, heredocs, and `case`
+    bodies are left as the author wrote them). Operators inside strings/comments are
+    skipped — the lexer classifies them, so `echo "a && b"` is safe. Returns the text
+    unchanged when nothing top-level was found.
+
+    Structure without indentation is only half-readable: breaking `for …; do a; b; done`
+    into five flush-left lines says WHERE the statements are but not which of them are
+    the loop's body ("more readable, but it's still missing indentation")."""
     if "\n" in text or "<<" in text or ";;" in text:
         return text
     try:
         toks = [(str(tt), v) for _, tt, v in R_lexer("bash").get_tokens_unprocessed(text)]
     except Exception:
         return text
-    out, broke = [], False
+    lines, cur = [], []
+    depth = 0          # block nesting — how far the CURRENT statement is indented
+    cont = 0           # this line continues the previous one (a && / || / | chain)
+    dedent = 0         # …and this one sits one level out (an `elif` condition)
+    keep = 0           # the next `then` closes an `elif`, so it must not re-indent
+    broke = False
+
+    def emit():
+        """Close the accumulating line at its computed indent (blank lines dropped)."""
+        nonlocal cur, dedent
+        s = "".join(cur).strip()
+        cur = []
+        if s:
+            lines.append(_INDENT * max(0, depth - dedent + cont) + s)
+        dedent = 0
+
     for s, v in toks:
         st = v.strip()
-        code_tok = not s.startswith(("Token.Literal.String", "Token.String", "Token.Comment"))
-        if code_tok and st in ("&&", "||", "|"):
-            out.append(st + "\n"); broke = True; continue
-        if code_tok and st == ";":
-            out.append("\n"); broke = True; continue
-        out.append(v)
+        # a string/comment token is never structure, whatever it spells
+        if not st or s.startswith(("Token.Literal.String", "Token.String",
+                                   "Token.Comment")):
+            cur.append(v)
+            continue
+        if st in ("&&", "||", "|"):
+            cur.append(st)
+            emit()
+            cont, broke = 1, True
+            continue
+        if st == ";":
+            emit()
+            cont, broke = 0, True
+            continue
+        # A block keyword is only STRUCTURE in command position — bash's own rule
+        # for its reserved words, and the lexer doesn't apply it: `echo done`
+        # tokenises that `done` as a Keyword exactly like a loop's does, and
+        # without this test `sleep 30; echo done` reflowed to three lines with
+        # `done` dedented as if it closed something. Command position is simply
+        # "nothing accumulated on this line yet"; a closer additionally needs a
+        # block to close.
+        at_start = not "".join(cur).strip()
+        if not (s.startswith("Token.Keyword") and at_start):
+            cur.append(v)
+            continue
+        if st in _BASH_CLOSE + ("else", "elif") and depth <= 0:
+            cur.append(v)
+            continue
+        if st in _BASH_OPEN:
+            emit()
+            cont, broke = 0, True
+            out = depth - 1 if (st == "then" and keep) else depth
+            lines.append(_INDENT * max(0, out) + st)
+            if not (st == "then" and keep):
+                depth += 1
+            keep = 0
+            continue
+        if st in _BASH_CLOSE:
+            emit()
+            cont, broke = 0, True
+            depth = max(0, depth - 1)
+            lines.append(_INDENT * depth + st)
+            continue
+        if st == "else":
+            emit()
+            cont, broke = 0, True
+            lines.append(_INDENT * max(0, depth - 1) + st)
+            continue
+        if st == "elif":
+            # …starts a line that is still being accumulated (`elif [ -f x ]`),
+            # one level out, and whose `then` re-opens the SAME block rather
+            # than nesting a new one
+            emit()
+            cont, broke = 0, True
+            dedent, keep = 1, 1
+            cur.append(v)
+            continue
+        cur.append(v)
+    emit()
     if not broke:
         return text
-    res = re.sub(r"[ \t]*\n[ \t]*", "\n", "".join(out))   # trim ws around the new breaks
-    return re.sub(r"\n{2,}", "\n", res).strip("\n") or text
+    return "\n".join(lines) or text
 
 
 def format_code(code):

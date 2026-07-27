@@ -11,7 +11,35 @@ from core import render as R
 
 
 def test_format_code_reflows_dense_bash_oneliner():
-    assert CF.format_code("a && b || c; d") == "a &&\nb ||\nc\nd"
+    # a CHAIN's continuations are indented under the line they continue; a `;`
+    # starts a new statement back at the left margin. The indent is what says
+    # which of the four lines are one command.
+    assert CF.format_code("a && b || c; d") == "a &&\n  b ||\n  c\nd"
+
+
+def test_format_code_indents_bash_blocks():
+    """A block's body sits one level in from its `do`/`then`, and the keywords get
+    their own lines — structure without indentation says WHERE the statements are
+    but not which of them are the loop's body."""
+    assert CF.format_code("for i in 1 2; do echo $i; sleep 1; done; echo end") == (
+        "for i in 1 2\ndo\n  echo $i\n  sleep 1\ndone\necho end")
+    assert CF.format_code("if [ -f a ]; then echo y; elif [ -f b ]; then echo m; "
+                          "else echo n; fi") == (
+        "if [ -f a ]\nthen\n  echo y\nelif [ -f b ]\nthen\n  echo m\n"
+        "else\n  echo n\nfi")
+    # …and nesting compounds, each level from the one that opened it
+    assert CF.format_code("while x; do for f in *; do wc $f; done; done") == (
+        "while x\ndo\n  for f in *\n  do\n    wc $f\n  done\ndone")
+
+
+def test_format_code_block_keywords_only_in_command_position():
+    """`done`/`then`/`fi` are bash RESERVED WORDS, not words: they are structure
+    only at the start of a statement. The lexer does not apply that rule — it
+    tokenises the `done` in `echo done` as a Keyword exactly like a loop's — so
+    without the test, `sleep 30; echo done` reflowed to three lines with `done`
+    dedented as though it closed a block that was never opened."""
+    assert CF.format_code("sleep 30; echo done") == "sleep 30\necho done"
+    assert CF.format_code("echo do; echo fi") == "echo do\necho fi"
 
 
 def test_format_code_leaves_multiline_and_strings_alone():

@@ -851,6 +851,26 @@ const SECTIONS = {
   },
 };
 
+/* Drop the cached rows of every section that FOLLOWS AGENT SCOPE, on a scope
+   change. Their contents belong to the scope that fetched them, and the tab
+   badge prefers a cached list's LENGTH to the served count (the list is the
+   authority once you've opened the tab) — so entering an agent kept showing the
+   previous scope's numbers until you opened that tab yourself, which is the one
+   thing the badge exists to save you from ("the counter for the monitors and the
+   background jobs are not getting properly updated when I go to subagents").
+   Table-driven, so a future scoped section is covered by its own `scoped` flag;
+   memory is session-wide and its cache survives. */
+function resetScopedSections() {
+  const ses = S.ses;
+  if (!ses) return;
+  for (const [kind, sec] of Object.entries(SECTIONS)) {
+    if (!sec.scoped) continue;
+    clearSectionPoll(kind);
+    ses[sec.list] = null;
+    ses[sec.focus] = null;
+  }
+}
+
 /* live-first, then most-recently-started on top — the order every section
    grid uses */
 function sortedItems(items) {

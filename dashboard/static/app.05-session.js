@@ -55,6 +55,7 @@ function showSession(sid, tab, agent) {
     // filtered client-side — the server decides what is in scope, once.
     S.ses.agent = agent;
     resetStream();
+    resetScopedSections();
     loadSessionData(sid);
   }
   S.ses.tab = tab;

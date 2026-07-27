@@ -87,9 +87,32 @@ coloured block.
 
 **Dense one-liners are pretty-printed before highlighting.** A compressed command
 is reflowed into readable multi-line form — **bash** breaks after top-level `&&` /
-`||` / `|` and turns `;` into a line break; **embedded Python** (`-c` args + heredoc
-bodies) is reformatted via `ast`, so `python3 -c "import os;x=1;print(x)"` becomes
-three real lines. It's width-INDEPENDENT (real newlines the renderer still wraps), so
+`||` / `|`, turns `;` into a line break, gives each block keyword its own line and
+**indents**; **embedded Python** (`-c` args + heredoc bodies) is reformatted via
+`ast`, so `python3 -c "import os;x=1;print(x)"` becomes three real lines.
+
+```
+for i in $(seq 1 12); do echo "tick $i"; sleep 2; done
+```
+```
+for i in $(seq 1 12)
+do
+  echo "tick $i"
+  sleep 2
+done
+```
+
+Two indents, two meanings: a block's body sits one level in from its `do`/`then`
+(closed by `done`/`fi`, with `else`/`elif` back out at the opener's level), and a
+`&&`-chain's continuation sits one level in from the line it continues — so
+`a; b` reads as two statements and `a && b` as one thing spanning two lines.
+Without the indent the break says WHERE the statements are but not which of them
+are the loop's body. The block keywords are only structure in **command
+position**, which is bash's own rule for its reserved words and not one the lexer
+applies: `echo done` tokenises that `done` as a keyword exactly like a loop's, and
+reflowed it as a dedented line closing a block that was never opened. Braces are
+deliberately left out of the block set — `{`/`}` are also `${VAR}` and
+`awk '{print}'`, and telling them apart needs a real parser. It's width-INDEPENDENT (real newlines the renderer still wraps), so
 it runs **once at op creation** (`ops.code` → `render.format_code`), not
 in the paint loop. Best-effort and conservative — operators inside quotes (`git commit
 -m "a && b"`), background `&`, redirections, bash heredocs, `case` bodies, and Python

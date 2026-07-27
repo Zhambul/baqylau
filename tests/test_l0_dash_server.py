@@ -233,6 +233,10 @@ def test_agent_scope_survives_what_the_page_repaints(dash):
     # …and the two secondary-tab drill-downs render their identity panel through
     # ONE builder, so "a monitor and a job look the same" is structural
     assert chrome.count("detailInfo(") == 3          # the builder + its two callers
+    # …and the scoped tabs' cached lists die with the scope that fetched them,
+    # or their badges keep showing the previous agent's counts
+    assert "function resetScopedSections()" in chrome
+    assert "resetScopedSections();" in session
 
 
 def test_no_dead_page_functions(dash):

@@ -4976,7 +4976,17 @@ badge counters took `(sid, cwd)` and never the agent, so every scope showed the
 LEAD's numbers — an agent with 19 background jobs read `jobs 1`, one with 8
 monitors had no badge at all, and its background work looked like it simply
 wasn't there. The lists behind those tabs had been scoped from the start; only
-the number that tells you to click was not. **Memory** and **errors** do not
+the number that tells you to click was not.
+
+The client half is `resetScopedSections()`, called beside `resetStream()` on a
+scope change: a badge prefers the CACHED list's length to the served count (once
+you have opened a tab, its list is the authority), so those caches have to die
+with the scope that fetched them — otherwise entering an agent showed the
+previous scope's numbers until you opened the tab yourself, which is exactly the
+work the badge exists to save you. Driven off the same `scoped` flag, so memory's
+session-wide cache survives.
+
+**Memory** and **errors** do not
 follow the agent — a memory note is the team's and an error belongs to a script,
 neither has an agent dimension — so in scope they keep showing the session's,
 with a quiet `session-wide` note on the tab bar rather than an ambiguous
@@ -5252,8 +5262,9 @@ Syntax highlighting needs a lexer, which the page has no way to run — so it ha
 to be server-side, and doing it anywhere but the mirror's own owner would be a
 second implementation of "how a command looks". And the **pretty-print** comes
 free with it: `format_code` breaks a dense one-liner after top-level `&&` / `||`
-/ `|`, turns `;` into a line break and reformats embedded python in its own
-language. That pass already ran for every mirror block (`core.ops.code()` does it
+/ `|`, turns `;` into a line break, indents block bodies and chain continuations
+(docs/mirror-pane.md, *Dense one-liners are pretty-printed*) and reformats
+embedded python in its own language. That pass already ran for every mirror block (`core.ops.code()` does it
 at op creation — width-independent work belongs to the producer); these two tabs
 simply weren't reaching it, so a 200-character one-liner sat as one unbroken grey
 line in the drill-down while the same command three tabs over was coloured across
