@@ -18,22 +18,22 @@ function dictation(ta, getCwd, sid) {
   btn.append(micIcon());
   dictAvailable().then(ok => { btn.hidden = !ok; });
   let live = null;
+  // `live` only exists once we are CAPTURING, and getting there is async — so
+  // it cannot be the whole re-entrancy guard: two quick presses would other-
+  // wise run two pipelines, and the second would orphan the first's mic.
+  let starting = false;
 
   async function start() {
-    if (ta.disabled || live) return;
+    if (ta.disabled || live || starting) return;
+    starting = true;
     stopDictation();               // one mic page-wide
     btn.classList.add("wait");
+    const t0 = performance.now();  // the press — every timing below is from it
+    const since = () => Math.round(performance.now() - t0);
     // AudioContext FIRST, synchronously in the click's gesture chain — iOS
     // Safari creates gesture-less contexts suspended and keeps them so
     const ctx = new AudioContext();
     if (ctx.state === "suspended") ctx.resume();
-    // Mic permission and token mint are independent (the sample rate comes
-    // from the ctx, which exists already) — run them CONCURRENTLY to shave
-    // ~300–500ms off every activation. allSettled, not all: if one leg fails
-    // the other may still resolve later, and a granted-after-failure stream
-    // must be released or the tab's mic indicator sticks on. (First-ever use
-    // can sit >30s in the permission prompt and outlive the JWT — the ws
-    // then fails its handshake and toasts; the retry has a warm permission.)
     // What we will actually PUT ON THE WIRE — not what the hardware runs at.
     // The worklet resamples to DICT_RATE (see DICT_WORKLET: native-rate PCM
     // saturated an iPad's uplink and the lag then grew with every sentence);
@@ -44,25 +44,39 @@ function dictation(ta, getCwd, sid) {
     const tokBody = { sample_rate: outRate };
     const cwd = getCwd && getCwd();
     if (cwd) tokBody.cwd = cwd;    // keys the project keyterms layer
-    const [ms, mt] = await Promise.allSettled([
-      navigator.mediaDevices.getUserMedia(
-        { audio: { echoCancellation: true, noiseSuppression: true } }),
-      postJSON("/api/dictate/token", tokBody),
-    ]);
-    if (ms.status === "rejected" || mt.status === "rejected") {
-      if (ms.status === "fulfilled")
-        ms.value.getTracks().forEach(t => t.stop());
-      ctx.close();
+
+    // THREE independent legs, all started here inside the click's gesture
+    // chain, none waiting on another (docs/dashboard.md *Instant-on mic*).
+    // What used to be a CHAIN — mic+token, then the socket handshake, then the
+    // worklet compile — meant the mic went live only after a tunnel round trip,
+    // our server's own call to Deepgram, AND a wss handshake from the device
+    // had all completed in series. Nothing about compiling a worklet or asking
+    // for the microphone depends on any of that. Capture now begins the moment
+    // the first two land, and the token/socket finish on their own time with
+    // the preroll covering the difference.
+    if (!dictWorkletURL)
+      dictWorkletURL = URL.createObjectURL(
+        new Blob([DICT_WORKLET], { type: "text/javascript" }));
+    const micP = navigator.mediaDevices.getUserMedia(
+      { audio: { echoCancellation: true, noiseSuppression: true } });
+    const modP = ctx.audioWorklet.addModule(dictWorkletURL);
+    const tokP = postJSON("/api/dictate/token", tokBody);
+    // A leg that fails cancels nothing, so a stream granted AFTER some other
+    // leg failed must still be released or the tab's mic indicator sticks on.
+    // (First-ever use can sit >30s in the permission prompt and outlive the
+    // JWT — the ws then fails its handshake and toasts; the retry has a warm
+    // permission.) The bare .catch()es keep an unobserved rejection from
+    // reaching window.onunhandledrejection while its real handler is below.
+    micP.catch(() => {});
+    tokP.catch(() => {});
+    modP.catch(() => {});
+    const abort = (title, detail) => {     // failed BEFORE we ever captured
+      micP.then(s => s.getTracks().forEach(t => t.stop()), () => {});
+      if (ctx.state !== "closed") ctx.close();
       btn.classList.remove("wait");
-      if (ms.status === "rejected")
-        toast("ask", "microphone blocked",
-              "allow mic access for this site and retry");
-      else
-        toast("ask", "dictation unavailable",
-              (mt.reason && mt.reason.error) || "token mint failed");
-      return;
-    }
-    const stream = ms.value, tok = mt.value;
+      starting = false;
+      toast("ask", title, detail);
+    };
 
     // The splice: everything before/after the caret at mic-start stays put;
     // dictated text grows between them as committed (finalized) + interim
@@ -78,8 +92,40 @@ function dictation(ta, getCwd, sid) {
       // transcribed (its Results carry the segment's own audio clock). The
       // difference splits cleanly in two, which is the whole point — see lag().
       sent: 0, proc: 0, maxQueue: 0, maxSvc: 0, warned: false, timer: null,
+      // instant-on bookkeeping: when capture began and when the socket opened
+      // (both ms from the press), and whether stop() beat the socket
+      armed: 0, opened: 0, closeOnOpen: false,
     };
     const bps = outRate * 2;   // linear16 mono: bytes of wire per second of audio
+
+    // THE PREROLL. Audio captured before the socket is ready waits here instead
+    // of being dropped on the floor, and goes out in one burst the instant the
+    // socket opens — Deepgram consumes a stream, and does not care that its
+    // first seconds arrived faster than real time. This is what makes the mic
+    // usable the moment it turns red: the gap between pressing and connecting
+    // stops costing you the words you said during it.
+    let ws = null;
+    const preroll = [];
+    let held = 0;                                  // bytes currently held
+    const HOLD_MAX = DICT_PREROLL_MAX_S * bps;
+    const push = (buf) => { ws.send(buf); st.sent += buf.byteLength / 2; };
+    const pump = (buf) => {
+      // a stopped or torn-down mic takes no new audio — the graph can deliver
+      // one more message after ctx.close() is asked for, and a send() on a
+      // closed socket throws
+      if (st.stopping || st.closed) return;
+      if (ws && ws.readyState === 1) return push(buf);
+      preroll.push(buf);
+      held += buf.byteLength;
+      // A safety valve, not a policy: if the socket is still not up after a
+      // MINUTE the dictation is already failing (the JWT itself is ~30s). The
+      // oldest goes first only because something has to.
+      while (held > HOLD_MAX) held -= preroll.shift().byteLength;
+    };
+    const flush = () => {
+      while (preroll.length) push(preroll.shift());
+      held = 0;
+    };
     // WHERE the delay lives, measured rather than guessed:
     //   queue   — audio sitting in OUR WebSocket send buffer, i.e. uplink we
     //             cannot keep up with. This is the one WE can fix.
@@ -119,20 +165,27 @@ function dictation(ta, getCwd, sid) {
       st.suffix = ta.value.slice(p);
       st.committed = ""; st.interim = "";
     };
-    ta.addEventListener("input", onEdit);
 
+    let stream = null;
     const finish = () => {         // the ws is done, clean or not
       if (st.closed) return;
       st.closed = true;
       if (st.timer) { clearInterval(st.timer); st.timer = null; }
       // the summary is what makes a session comparable to the next one — the
-      // WORST backlog we ever reached, not whatever the last sample caught
+      // WORST backlog we ever reached, not whatever the last sample caught.
+      // arm_ms/open_ms are the press-to-ready pair: how long until we were
+      // HEARING you, and how long until the socket could carry it.
       clog(sid || "", "dictate.stop", {
         rate: outRate, spoke_s: +(st.sent / outRate).toFixed(1),
         max_queue_s: +st.maxQueue.toFixed(2), max_svc_s: +st.maxSvc.toFixed(2),
+        arm_ms: st.armed, open_ms: st.opened,
       });
-      stream.getTracks().forEach(t => t.stop());   // tab mic indicator OFF
+      if (stream) stream.getTracks().forEach(t => t.stop());  // mic light OFF
       if (ctx.state !== "closed") ctx.close();
+      // finish() can now run while a socket is still CONNECTING (stop before
+      // it came up, or the stop grace expiring), so it owns the close — a
+      // socket left to open after we're done would stream into the void
+      if (ws) { try { ws.close(); } catch (e) { /* already closed */ } }
       // commit a dangling interim — but never resurrect text into a box
       // something else (the composer's post-send clear) rewrote meanwhile
       if (st.interim && ta.value === st.lastPainted) {
@@ -140,12 +193,82 @@ function dictation(ta, getCwd, sid) {
         paint();
       }
       ta.removeEventListener("input", onEdit);
-      btn.classList.remove("rec", "wait");
+      btn.classList.remove("rec", "wait", "pre");
       if (dictActive === live) dictActive = null;
       live = null;
     };
+    // CloseStream makes Deepgram flush the last partial as a final (painted by
+    // onmessage) and close; the timer is the failsafe.
+    const closeStream = () => {
+      try { ws.send('{"type":"CloseStream"}'); } catch (e) { return finish(); }
+      setTimeout(() => {
+        try { ws.close(); } catch (e) { /* already closed */ }
+        finish();
+      }, DICT_FLUSH_MS);
+    };
 
-    let ws;
+    /* ---- ARM: the mic goes live here, with no socket in sight ------------ */
+    try {
+      stream = await micP;
+    } catch (e) {
+      abort("microphone blocked", "allow mic access for this site and retry");
+      return;
+    }
+    try {
+      await modP;
+      const src = ctx.createMediaStreamSource(stream);
+      const sink = new AudioWorkletNode(ctx, "dictate-pcm",
+                                        { processorOptions: { outRate } });
+      sink.port.onmessage = (e) => pump(e.data);
+      src.connect(sink);
+      sink.connect(ctx.destination);   // pull the graph; outputs are silence
+    } catch (e) {
+      abort("dictation failed", "audio pipeline error");
+      return;
+    }
+    st.armed = since();
+    // the re-anchor listener belongs to a RUNNING dictation — registered here
+    // rather than at the top so a press that never armed (mic denied, worklet
+    // failed) leaves nothing attached to the textarea
+    ta.addEventListener("input", onEdit);
+    // .rec now means what it says — YOUR VOICE IS BEING KEPT. `.pre` rides
+    // along until the socket is up, so the button can be honest about the one
+    // thing still missing without pretending it isn't listening.
+    btn.classList.remove("wait");
+    btn.classList.add("rec", "pre");
+    // live from the moment we are capturing, not from the moment we connect:
+    // the button must toggle to stop, and stopDictation() must be able to
+    // reach this mic, during the whole pre-socket window
+    starting = false;
+    live = {
+      stop() {
+        if (st.stopping || st.closed) return;
+        st.stopping = true;
+        btn.classList.remove("rec", "pre");
+        if (ws && ws.readyState === 1) return closeStream();
+        // Stop beat the socket. If anything was SAID, the preroll is holding
+        // it and the connection is still coming — let it land and deliver the
+        // words rather than throwing away a sentence you already spoke. If
+        // nothing was said, there is nothing to wait for (and no reason to pay
+        // for a connection).
+        if (!preroll.length) return finish();
+        st.closeOnOpen = true;
+        setTimeout(finish, DICT_STOP_GRACE_MS);    // it never came up
+      },
+    };
+    dictActive = live;
+
+    /* ---- CONNECT: on its own time, with the preroll covering the gap ----- */
+    let tok;
+    try {
+      tok = await tokP;
+    } catch (e) {
+      finish();
+      toast("ask", "dictation unavailable",
+            (e && e.error) || "token mint failed");
+      return;
+    }
+    if (st.closed) return;         // stopped (or gave up) while minting
     try {
       ws = new WebSocket(tok.ws_url, ["bearer", tok.token]);
     } catch (e) {
@@ -179,72 +302,41 @@ function dictation(ta, getCwd, sid) {
       if (dropped)
         toast("ask", "dictation ended", "connection to Deepgram closed");
     };
-    ws.onopen = async () => {
-      try {
-        if (!dictWorkletURL)
-          dictWorkletURL = URL.createObjectURL(
-            new Blob([DICT_WORKLET], { type: "text/javascript" }));
-        await ctx.audioWorklet.addModule(dictWorkletURL);
-        const src = ctx.createMediaStreamSource(stream);
-        const sink = new AudioWorkletNode(ctx, "dictate-pcm",
-                                          { processorOptions: { outRate } });
-        sink.port.onmessage = (e) => {
-          if (ws.readyState === 1 && !st.stopping) {
-            ws.send(e.data);
-            st.sent += e.data.byteLength / 2;   // linear16: 2 bytes a sample
-          }
-        };
-        src.connect(sink);
-        sink.connect(ctx.destination);   // pull the graph; outputs are silence
-        btn.classList.remove("wait");
-        btn.classList.add("rec");
-        clog(sid || "", "dictate.start",
-             { rate: outRate, native: Math.round(ctx.sampleRate) });
-        st.timer = setInterval(() => {
-          const l = lag();
-          if (l.queue > st.maxQueue) st.maxQueue = l.queue;
-          if (l.svc > st.maxSvc) st.maxSvc = l.svc;
-          clog(sid || "", "dictate.lag", {
-            queue_s: +l.queue.toFixed(2), svc_s: +l.svc.toFixed(2),
-            sent_s: +l.sent.toFixed(1), buffered: ws.bufferedAmount,
-          });
-          // Say it out loud, once. A backlog this deep means the text you are
-          // watching is seconds behind your mouth and will only fall further —
-          // that is worth knowing WHILE you speak, not after you send.
-          if (!st.warned && l.queue > DICT_BACKLOG_WARN_S) {
-            st.warned = true;
-            clog(sid || "", "dictate.backlog", { queue_s: +l.queue.toFixed(2) });
-            toast("ask", "dictation lagging",
-                  "slow upload — the text is behind your voice");
-          }
-        }, DICT_LAG_MS);
-      } catch (e) {
-        try { ws.close(); } catch (e2) { /* already closed */ }
-        finish();
-        toast("ask", "dictation failed", "audio pipeline error");
-      }
-    };
-
-    live = {
-      stop() {
-        if (st.stopping || st.closed) return;
-        st.stopping = true;
-        btn.classList.remove("rec");
-        if (ws.readyState === 1) {
-          // CloseStream makes Deepgram flush the last partial as a final
-          // (painted by onmessage) and close; the timer is the failsafe
-          try { ws.send('{"type":"CloseStream"}'); } catch (e) { finish(); }
-          setTimeout(() => {
-            try { ws.close(); } catch (e) { /* already closed */ }
-            finish();
-          }, 2000);
-        } else {
-          try { ws.close(); } catch (e) { /* never opened */ }
-          finish();
+    ws.onopen = () => {
+      // the stop grace can expire before a slow handshake lands: we are done,
+      // and this socket has nothing left to carry
+      if (st.closed) { try { ws.close(); } catch (e) { /* racing */ } return; }
+      const heldS = held / bps;      // what the preroll saved, in seconds
+      flush();                       // everything said so far, in one burst
+      st.opened = since();
+      btn.classList.remove("pre");
+      // arm_ms vs open_ms IS the instant-on measurement: the first is the wait
+      // you feel, the second the wait you used to feel. preroll_s is the speech
+      // that would have been lost between them.
+      clog(sid || "", "dictate.start", {
+        rate: outRate, native: Math.round(ctx.sampleRate),
+        arm_ms: st.armed, open_ms: st.opened, preroll_s: +heldS.toFixed(2),
+      });
+      if (st.closeOnOpen) return closeStream();   // stop() got here first
+      st.timer = setInterval(() => {
+        const l = lag();
+        if (l.queue > st.maxQueue) st.maxQueue = l.queue;
+        if (l.svc > st.maxSvc) st.maxSvc = l.svc;
+        clog(sid || "", "dictate.lag", {
+          queue_s: +l.queue.toFixed(2), svc_s: +l.svc.toFixed(2),
+          sent_s: +l.sent.toFixed(1), buffered: ws.bufferedAmount,
+        });
+        // Say it out loud, once. A backlog this deep means the text you are
+        // watching is seconds behind your mouth and will only fall further —
+        // that is worth knowing WHILE you speak, not after you send.
+        if (!st.warned && l.queue > DICT_BACKLOG_WARN_S) {
+          st.warned = true;
+          clog(sid || "", "dictate.backlog", { queue_s: +l.queue.toFixed(2) });
+          toast("ask", "dictation lagging",
+                "slow upload — the text is behind your voice");
         }
-      },
+      }, DICT_LAG_MS);
     };
-    dictActive = live;
   }
 
   btn.onclick = () => { if (live) live.stop(); else start(); };

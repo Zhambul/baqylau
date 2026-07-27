@@ -591,6 +591,13 @@ let dictWorkletURL = null;
 const DICT_LAG_MS = 5000;         // one lag sample per 5s of dictation
 const DICT_BACKLOG_WARN_S = 3;    // queued audio that earns the one-shot toast
 
+// Instant-on (docs/dashboard.md *Instant-on mic*): capture starts the moment
+// the mic and the worklet are ready and everything said before the socket
+// opens is held here, so the press-to-speak gap stops being a gap.
+const DICT_PREROLL_MAX_S = 60;    // held audio cap — a safety valve, not a budget
+const DICT_FLUSH_MS = 2000;       // failsafe close after CloseStream
+const DICT_STOP_GRACE_MS = 6000;  // stop-before-open: how long we still deliver
+
 function micIcon() {
   const NS = "http://www.w3.org/2000/svg";
   const svg = document.createElementNS(NS, "svg");

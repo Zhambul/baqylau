@@ -24,7 +24,14 @@ class El {
     this.blur = () => {};
     const self = this;
     this.classList = {
-      add(c) { if (!self._cls().includes(c)) self.className = (self.className + " " + c).trim(); },
+      // varargs, like the real DOM: `add("rec", "pre")` must add BOTH — a
+      // single-arg shim silently dropped the second and made a correct source
+      // look broken (the mic's capturing-but-not-connected state)
+      add(...cs) {
+        for (const c of cs)
+          if (!self._cls().includes(c))
+            self.className = (self.className + " " + c).trim();
+      },
       remove(...cs) {
         self.className = self._cls().filter(x => !cs.includes(x)).join(" ");
       },

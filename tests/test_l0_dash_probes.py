@@ -309,6 +309,48 @@ def test_dictation_worklet_resamples_to_the_model_rate():
     assert d["thru"]["maxerr"] < 0.001, d      # 16k hardware: untouched
 
 
+def test_dictation_captures_before_the_socket_opens():
+    """The dictation STARTUP, EXECUTED rather than grepped: tests/jsdom/
+    dictstart.js drives the real `dictation()` against a controllable mic /
+    token / socket, so the harness decides WHEN a chunk of audio appears
+    relative to the connection.
+
+    "The mic takes a long time to be ready" was fixed by starting capture
+    before the socket exists and holding the audio in a preroll
+    (docs/dashboard.md *Instant-on mic*) — which turns a straight-line async
+    function into a state machine whose orderings only occur against a slow
+    network, and every one of them loses SPEECH when it breaks. So the
+    assertions are the orderings: audio captured pre-open is held and flushed
+    IN ORDER (a preroll that flushed backwards would read as a mic that
+    mis-transcribes); stop() before the socket opens still connects, flushes,
+    and only THEN sends CloseStream (the common short-dictation case over a
+    slow link — press, six words, stop); stop() with nothing said opens no
+    connection at all; and a denied mic leaves no textarea listener, no button
+    state, and a released re-entrancy latch so the next press retries.
+
+    Also pinned here: the rate reaching the mint and the rate reaching the
+    worklet are the same 16000, since that decision now has two consumers.
+    Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    static = os.path.join(REPO, "dashboard", "static")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "dictstart.js"),
+         os.path.join(static, "app.07-dialogs.js"),
+         os.path.join(static, "app.08-composer.js")],
+        capture_output=True, text=True, timeout=60)
+    d = json.loads(r.stdout)
+    assert d["ok"], d["errors"]
+    assert r.returncode == 0, r.stderr
+    # the load-bearing orderings, restated here so a reader of the test file
+    # sees WHAT was proven without opening the harness
+    assert d["a_flushed"] == ["pcm:100", "pcm:200", "pcm:300"], d
+    assert d["b_order"] == ["pcm:100", "pcm:200", '{"type":"CloseStream"}'], d
+    assert d["c_no_socket"] == 0 and d["c_mic_released"] is True, d
+    assert d["d_no_input_listener"] == 0 and d["d_retry_armed"] is True, d
+
+
 def test_dictation_lag_is_split_into_queue_and_service():
     """The lag telemetry has to attribute the delay, not just measure it —
     "dictation is slow" was unanswerable from the DB because the server mints a

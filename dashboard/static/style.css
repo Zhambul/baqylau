@@ -881,6 +881,12 @@ body.in-session #accounts { display: none; }
   50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--exec) 15%, transparent); }
 }
 .micbtn.rec { color: var(--ask); animation: micpulse 1.6s ease-in-out infinite; }
+/* CAPTURING, socket not up yet (docs/dashboard.md *Instant-on mic*): the icon
+   is already .rec red because your voice IS being kept — the preroll is
+   holding it — while the ring keeps the .wait blue that says the connection
+   is still coming. Composed from the two states that already exist rather
+   than inventing a third colour for "half ready". */
+.micbtn.rec.pre { animation: micwait 1.1s ease-in-out infinite; }
 @keyframes micpulse {
   0%, 100% { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 55%, transparent); }
   50%      { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ask) 15%, transparent); }

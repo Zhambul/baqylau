@@ -3543,6 +3543,64 @@ tracks (the tab's mic indicator must go off). Deliberately NO auto-stop on
 silence — an open mic costs $0.0077/min and auto-stop mid-thought is the
 annoying failure mode.
 
+### Instant-on mic
+
+The second half of the same report (2026-07-27): *"it takes a lot of time for
+the microphone to be in a ready state — I want to dictate as soon as I press
+the button."*
+
+**The wait was a CHAIN, and most of it didn't need to be.** Activation used to
+run: mic permission ∥ token mint → **wss handshake** → **worklet compile** →
+graph → `.rec`. Only the first pair was concurrent. So the mic went live only
+after a tunnel round trip to our server, the server's *own* HTTPS call to
+Deepgram's `/v1/auth/grant`, a wss handshake from the device, *and* an
+`addModule()` compile had all completed **in series** — and nothing about
+compiling a worklet or asking for the microphone depends on any of that. All
+three legs now start together inside the click's gesture chain, and **capture
+begins when the mic and the worklet are ready** — typically the permission
+grant alone. The token and the socket finish on their own time.
+
+**The preroll is what makes that safe.** Audio captured before the socket is
+ready is *held* (`DICT_PREROLL_MAX_S`, a safety valve rather than a budget —
+the JWT itself is only ~30s) and flushed in one burst the instant the socket
+opens. Deepgram consumes a *stream* and does not care that its first seconds
+arrived faster than real time. So the press-to-connect gap stops costing you
+the words you said during it: **speak the moment the button turns red.**
+
+**The button tells the truth about both halves.** `.rec` (red, pulsing) now
+means *your voice is being kept*; the `.pre` modifier keeps the `.wait` blue
+ring while the connection is still coming up — composed from the two states
+that already existed rather than inventing a third colour for "half ready".
+
+**Stop is honest about the pre-open window too.** Pressing stop before the
+socket opens does **not** throw the sentence away: if anything was said, the
+connection is allowed to finish, the preroll flushes, and *then* `CloseStream`
+goes out, so a short dictation over a slow link (press · six words · stop —
+the case that used to lose everything) still lands. If nothing was said there
+is nothing to wait for and no connection is opened at all. A
+`DICT_STOP_GRACE_MS` failsafe covers a handshake that never lands.
+
+Consequences that had to be handled, each of which is a test in
+`tests/jsdom/dictstart.js`: `live` is now published at *arm* time (the button
+must toggle to stop, and `stopDictation()` must be able to reach this mic,
+during the whole pre-socket window); a `starting` latch covers the async gap
+before `live` exists, since two quick presses would otherwise run two
+pipelines and orphan the first's mic; the re-anchor `input` listener is
+registered at arm rather than at press, so a denied mic leaves nothing
+attached to the textarea; and `finish()` now owns closing a socket that may
+still be *connecting*.
+
+One deliberate trade: since `.rec` can precede the first transcript, you can
+now speak and hit send before any text exists. That degrades gracefully rather
+than sending a truncated message — `send()` already bails on an empty box, so
+nothing goes out and the words land in the composer a moment later. The
+principle is unchanged: **the visible, validated text is what sends.**
+
+Measured by `arm_ms` (press → capturing, the wait you still feel) and
+`open_ms` (press → socket, the wait you used to feel) on the `dictate.start`
+and `dictate.stop` clientlog events, with `preroll_s` recording the speech
+that would have been lost between them.
+
 ### Dictation lag
 
 The reported symptom (2026-07-27): *"I say a lot of words and it takes some
@@ -3599,13 +3657,17 @@ they add up to the delay you actually see:
   segment's `start` + `duration`). This one is theirs, and should be roughly
   constant.
 
-Events: `dictate.start` `{rate, native}` (the native rate is what proves the
-resampler is engaged on that device), `dictate.lag`
+Events: `dictate.start` `{rate, native, arm_ms, open_ms, preroll_s}` (the
+native rate is what proves the resampler is engaged on that device; the two
+`_ms` figures are the *Instant-on mic* measurement — `arm_ms` is press →
+capturing, `open_ms` press → socket, and their gap is what the preroll
+covers), `dictate.lag`
 `{queue_s, svc_s, sent_s, buffered}`, a one-shot `dictate.backlog` +
 **toast** when `queue_s` passes `DICT_BACKLOG_WARN_S` — worth knowing *while*
 you speak, not after you send — and `dictate.stop`
-`{rate, spoke_s, max_queue_s, max_svc_s}`, the maxima rather than whatever the
-last sample happened to catch, so one session is comparable to the next.
+`{rate, spoke_s, max_queue_s, max_svc_s, arm_ms, open_ms}`, the maxima rather
+than whatever the last sample happened to catch, so one session is comparable
+to the next (`open_ms` 0 there = the socket never came up at all).
 Collapsing the two into a single "lag" number would put the next report right
 back at guessing. Read them with:
 
