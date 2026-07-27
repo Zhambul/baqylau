@@ -58,11 +58,13 @@ ACT_TEAM    = "team"      # …the same, for an agent-TEAM member (a named, mail
 ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
 ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
 ACT_SKILL   = "skill"     # a Skill invocation (✦ / `Skill(<name>)`)
+ACT_TOOL    = "tool"      # any OTHER tool call (· ToolSearch / WebFetch / Grep …)
 ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
 ACT_MSG     = "msg"       # conversation text (stamped by read.mirror, not here)
 
 ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
-        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_SKILL, ACT_WARN, ACT_MSG)
+        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_SKILL, ACT_TOOL,
+        ACT_WARN, ACT_MSG)
 
 # The main session's own command colours — the semantic table, imported. A chip
 # in any of these is main-session command activity; anything else is a palette
@@ -288,18 +290,21 @@ _AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
 # The markers on an agent's own PROSE blocks — the brief it was handed, its
 # assistant text, its final result. core/streamfmt owns all three.
 _PROSE_MARKS = (SF.MARK_PROMPT[0], SF.MARK_RESULT[0], SF.MARK_MESSAGE[0])
-# …and the fourth, which needs a word as well as a glyph: an INCOMING piece of
-# team mail is part of the agent's conversation and lands in its transcript as a
-# `teammsg` record, so it is prose. An OUTGOING one is not — the transcript has
-# no record of a SendMessage, so dropping the op would lose it entirely. The
+# …and mail, in BOTH directions: an agent's team mail is its conversation, and the
+# transcript holds all of it — an INCOMING message as a `teammsg` record, an
+# OUTGOING one as the SendMessage tool_use conversation() reads back for an agent
+# (transcript.mail_send). So both headers are prose and both drop, which is what
+# replaces the terminal's coloured pill over a 12-line excerpt with the same
+# message bubble the incoming one already got, holding the WHOLE message. The
 # direction is only legible from the kind word, whose owner is core/streamfmt
 # (MAIL_FROM/MAIL_TO), never re-spelled here.
-_MAIL_IN = (SF.MARK_MAIL + " " + SF.MAIL_FROM % "").rstrip()
+_MAIL_MARKS = tuple((SF.MARK_MAIL + " " + w % "").rstrip()
+                    for w in (SF.MAIL_FROM, SF.MAIL_TO))
 
 
 def prose_block(op):
     """True for the header of an agent's own PROSE block (`⇢ prompt`,
-    `✎ message`, `⇠ result`, `✉ from <peer>`) — the blocks AGENT SCOPE drops
+    `✎ message`, `⇠ result`, `✉ from|to <peer>`) — the blocks AGENT SCOPE drops
     because it reads that agent's conversation from its transcript instead
     (docs/dashboard.md *Agent scope*).
 
@@ -326,7 +331,7 @@ def prose_block(op):
         if tuple(op.get("c") or ()) not in _AGENT_RGB:
             return False
         text = lead_head(_plain(op))
-        return text[:1] in _PROSE_MARKS or text.startswith(_MAIL_IN)
+        return text[:1] in _PROSE_MARKS or text.startswith(_MAIL_MARKS)
     except Exception:
         return False                    # unreadable: keep it (fail toward showing)
 
@@ -393,9 +398,14 @@ def as_lead(op):
     stripped = lead_head(text)
     c = tuple(out.get("c") or ())
     # a command-family header in an AGENT palette: the lead paints that block in a
-    # semantic colour, and the colour is what cmd_note/classify gate on
+    # semantic colour, and the colour is what cmd_note/classify gate on. `·` — a
+    # GENERIC tool block — is in the set although the lead has no equivalent (its
+    # hooks paint no tool but Bash/files/monitors/skills/mail): it is the same
+    # thing, one call the agent made, and without the recolour it was the last
+    # block in scope still wearing the terminal's coloured pill.
     recolour = c in _AGENT_RGB and stripped[:1] in (
-        _GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS, _GLYPH_FINISH)
+        _GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS, _GLYPH_FINISH,
+        _GLYPH_TOOL)
     if stripped == text and not recolour and out.get("outer") is None:
         return out                      # already in the lead's shape
     out = dict(out)
@@ -441,7 +451,14 @@ def cmd_note(op):
             return rest, CQ_CLOSE
         if head == _GLYPH_WS:
             return rest, CQ_SUB
-        if head in (_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR):
+        if head in (_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_TOOL):
+            # …`·` included: a generic tool block (`· ToolSearch`) reads as
+            # `⏺ ToolSearch` with its request AND its result behind the click —
+            # the same quiet line every other block kind gets. It can only reach
+            # here in AGENT SCOPE, where as_lead has recoloured it: in the session
+            # view an agent's tool block is producer-source-stamped and dropped,
+            # and pre-`src` history keeps its chip (nothing there says WHOSE call
+            # it was except the colour).
             return ("" if rest == _CMD_KIND_MUTE else rest), CQ_OPEN
         return None
     except Exception:
@@ -599,6 +616,16 @@ def _classify(op):
         # is the main session's work, a palette hue would be somebody's stream.
         if tuple(op.get("c") or ()) in _SKILL_RGB:
             return ACT_SKILL, bad
+    if head == _GLYPH_TOOL:
+        # · <name> — an agent's GENERIC tool call (substream_render._use_other).
+        # No colour gate, unlike ▶/◉: `·` is that producer's alone (no palette
+        # wears it, no other block opens with it), and by the time this runs in
+        # agent scope as_lead has already recoloured it to the lead's SLATE — a
+        # palette test would answer differently in the two views for one op.
+        # Its own class rather than the agent fallback below: in scope every row
+        # is that agent's, so folding a ToolSearch into "ran 1 teammate" named
+        # the wrong thing entirely.
+        return ACT_TOOL, bad
     if head == _GLYPH_BG:
         return ACT_BG, bad
     if head == _GLYPH_BASH:

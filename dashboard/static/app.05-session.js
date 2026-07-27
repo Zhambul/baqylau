@@ -788,6 +788,9 @@ const ACT_KIND = {
   // a SKILL is work the session did, not a file or an agent — it files under the
   // commands chip, the kind filter's catch-all for "the session doing something"
   skill: "commands",
+  // …and so does any OTHER tool call (ToolSearch, WebFetch, Grep — an agent's
+  // `· <name>` block): same reasoning, the session doing something.
+  tool: "commands",
 };
 
 function refineBlockKind(b, it) {
@@ -985,6 +988,10 @@ const VIEW_FRAGMENTS = [
   // a SKILL, in the same shape (Claude Code has no fragment of its own for one): it
   // shows as a line in default and is counted here in focus, `used 2 skills`
   ["skill", "using", "used", "skill", "skills"],
+  // …and every OTHER tool call an agent makes (`· ToolSearch`), which only agent
+  // scope ever shows — `used 3 tools`. Deliberately generic: the block's own line
+  // names WHICH tool, and a per-tool fragment table would have to grow forever.
+  ["tool", "using", "used", "tool", "tools"],
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],

@@ -453,6 +453,53 @@ def test_conversation_surfaces_ask_question_and_answer(tmp_path):
     assert ans["text"].startswith("Your questions have been answered")
 
 
+def _mail_tx(tmp_path):
+    """A transcript whose one turn SENDS a piece of team mail (a SendMessage
+    tool_use) — the shape both conversation() reads and the substream paints."""
+    p = tmp_path / "mail.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "delivering the report"},
+            {"type": "tool_use", "id": "t1", "name": "SendMessage",
+             "input": {"to": "main", "summary": "review",
+                       "message": "line1\n" * 40 + "last"}}]},
+         "timestamp": "2026-07-27T00:00:01.000Z"},
+    ]), encoding="utf-8")
+    return p
+
+
+def test_conversation_surfaces_an_outgoing_message_only_when_asked(tmp_path):
+    # An outgoing SendMessage is the OTHER half of a conversation whose incoming
+    # half is already a `teammsg` record — but only an AGENT read asks for it
+    # (conversation_for's `sends`), because the LEAD's sends are already mirror
+    # rows that this transcript cannot match: mail_fmt.py writes one for every
+    # teammate's send too, and the lead's transcript sees only its own.
+    p = _mail_tx(tmp_path)
+    lead, _ = TR.conversation(str(p), 0)
+    assert [r["kind"] for r in lead] == ["message"]
+    agent, _ = TR.conversation(str(p), 0, sends=True)
+    assert [r["kind"] for r in agent] == ["message", "sendmsg"]
+    sent = agent[-1]
+    assert sent["to"] == "main"
+    # …and it carries the WHOLE message. The op the substream paints for the same
+    # send is capped to 12 lines for the terminal pane; the bubble is why the web
+    # no longer ends at "… (29 more lines)".
+    assert sent["text"].endswith("last") and sent["text"].count("\n") == 40
+    assert sent["anchor"] is None          # no tool ran before it in this turn
+
+
+def test_mail_send_reads_a_structured_message_body():
+    # `message` may be a plain string OR content blocks — one owner reads that
+    # shape (transcript.mail_send) for both the substream's chip and the web's
+    # bubble, so a .strip() can never meet a dict (it crashed the streamer once).
+    assert TR.mail_send({"to": "main", "message": "hi"}) == ("main", "hi")
+    assert TR.mail_send({"recipient": "team-lead",
+                         "content": [{"type": "text", "text": "hi"}]}) \
+        == ("team-lead", "hi")
+    assert TR.mail_send({}) == ("?", "")
+    assert TR.mail_send(None) == ("?", "")
+
+
 def test_conversation_answer_carries_qa_pairs(tmp_path):
     # Claude Code's REAL toolUseResult carries `answers` as a {question:
     # answer_string} map (+ `questions` for headers) — the answer record carries

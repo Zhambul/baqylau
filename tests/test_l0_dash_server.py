@@ -2475,8 +2475,10 @@ def test_agent_scope_reads_pre_field_history_like_the_present(dash, tmp_path):
     # the agent's own PROSE — its assistant text and the mail it was SENT — is
     # dropped: the transcript merge is where a scope reads conversation from
     assert "my prose" not in html and "your brief" not in html
-    # …but mail it SENT has no transcript record at all, so the op is all there is
-    assert "my report" in html
+    # …and so is the mail it SENT: an agent's read of its own transcript surfaces
+    # the SendMessage as a `sendmsg` record (transcript.mail_send), so the op would
+    # be a second, 12-line-capped copy of the bubble
+    assert "my report" not in html
     # the file one-liner reads as the LEAD's: no name, and the same `line` shape
     # (a gut op names no activity class, so agent reads were unfilterable)
     reads = [i for i in items if i.get("act") == "read"]
@@ -2497,10 +2499,18 @@ def test_agent_scope_strips_a_generic_tool_header(dash, tmp_path):
     op = dict(op, s=SF.compose(op))
     op.pop("who"), op.pop("tags")
     O.emit(log, op, src="sub:agT")
+    O.emit(log, O.gut("→ loaded tool: SendMessage", rgb, g="gt"), src="sub:agT")
     items = _get_json(dash + "/api/session/scope4/backlog?agent=agT")["items"]
     html = " ".join(i["html"] for i in items)
     assert "ToolSearch" in html
     assert "rev-ui" not in html and "opus-5" not in html and "132k" not in html
+    # …and it reads as every OTHER block in scope does: the quiet `⏺ <name>` line,
+    # not the terminal's coloured pill, classed as a TOOL call rather than folded
+    # into "ran 1 teammate". Its result is in the same block (one click).
+    head = items[0]
+    assert head["quiet"] == "open" and head["act"] == "tool"
+    assert "class=\"chip\"" not in html
+    assert [i["g"] for i in items] == ["gt", "gt"]
 
 
 def test_jobs_and_monitors_are_lead_only_until_scoped(dash, tmp_path):

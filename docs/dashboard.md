@@ -4851,13 +4851,30 @@ transcript for an id, and the merge is otherwise untouched — so an agent's pro
 becomes message bubbles exactly as the lead's does, and everything built on that
 (the view modes, focus mode's prompt/final-reply rule, the ⧉ links) works in
 scope without knowing scope exists. The agent's prose OPS are dropped in exchange
-(`actclass.prose_block`: the `⇢ prompt`, `✎ message`, `⇠ result` and `✉ from
+(`actclass.prose_block`: the `⇢ prompt`, `✎ message`, `⇠ result` and `✉ from|to
 <peer>` headers, each with its body, by copy group) — the substream paints them
 because the terminal pane has no other channel for an agent's text, but here they
-would be the one thing rendered twice. Direction matters for mail: an incoming
-message is also a transcript `teammsg` record, an OUTGOING `✉ to <peer>` has no
-record at all and is kept, which is why `core/streamfmt` owns the two direction
-words (`MAIL_FROM`/`MAIL_TO`) rather than the substream spelling them inline.
+would be the one thing rendered twice.
+
+**Mail is conversation, in both directions** (*Team mail* below for the mail
+plumbing itself). An INCOMING message is already a transcript `teammsg` record;
+an OUTGOING one is the `SendMessage` tool_use, which `conversation()` surfaces as
+a `sendmsg` record when the read asks for it (`transcript.mail_send` owns the
+(recipient, body) shape — the substream's chip reads the same function). Both
+render as the ordinary message bubble, with the direction as the only difference:
+`✉ from team-lead` / `✉ to main`, worded from `core/streamfmt`'s `MAIL_FROM` /
+`MAIL_TO` so the producer's chip and the web's label cannot drift. That is what
+replaced a coloured pill over a black inset holding twelve lines of a report:
+the op carries a pane-sized excerpt (`CAP_SENDMSG`), the transcript carries the
+whole message.
+
+Only an AGENT read asks for `sendmsg`. The LEAD's outgoing mail is already a
+first-class mirror row that its transcript cannot match — `mail_fmt.py` fires on
+every send *including every teammate's* (the ops are unstamped, so the session
+view is the team's whole mail census), while the lead's transcript sees only the
+lead's own sends. Adding the bubble there would double exactly those and leave
+the teammates' rows unmatched, so `conversation_for` passes `sends=bool(
+agent_id)` — the mirror image of the take-back stash, which is the lead's alone.
 
 **One normalisation, not a second render path.** `actclass.as_lead` runs right
 after the scope filter and is THE only place agent scope differs from the session
@@ -4874,6 +4891,24 @@ bar, and turn a file one-liner's `gut` op into the `line` op the lead's file ops
 are (same click-to-view and memory tags, and a gut op names no activity class, so
 an agent's reads and edits were unfilterable) — leaves one vocabulary for
 everything below.
+
+That includes the block kind the lead has NO equivalent of: a GENERIC tool call
+(`· ToolSearch`, `· WebFetch` — the lead's hooks paint only Bash, file ops,
+monitors, skills and mail, so nothing in the session view opens with `·`). It is
+recoloured like the rest and joins the quiet register through the same
+`cmd_note`, reading `⏺ ToolSearch` with its request AND its result behind one
+click. Two things had to change for that: `·` is a header marker in `cmd_note`
+(only reachable in scope, since an agent's tool block is `src`-stamped and
+dropped in the session view), and it gets its own activity class `ACT_TOOL`
+(`used 3 tools`) — falling through to the agent fallback made a ToolSearch fold
+into `ran 1 teammate`, which names the wrong thing entirely in a view where every
+row is that one agent's. The RESULT joining the block is a producer fix, not a
+presenter one: `substream_render._use_other` now mints the copy group
+unconditionally and parks it in `pend`, because a generic tool — unlike a Bash
+block, whose `tool_use_id` IS the group — has no id-keyed op for its result to
+key on, and ungrouped it landed in the feed as a loose row beside its own block
+("I should see the result of the ToolSearch"). History predates that group, so an
+old session's result still shows as the loose row directly under the header.
 
 The name and the tags are not string surgery: producers carry them as the op's
 own `who`/`tags` FIELDS (`core/ops.py`), which the terminal composes at paint
@@ -5585,7 +5620,10 @@ Known duplication: for mail a TEAMMATE sent, the terminal shows the body twice �
 the teammate's own `✉ to <who>` substream block, once on the session's message row.
 Accepted, because the web mirror drops the substream copy (it is `src`-stamped) and mail
 the LEAD sent has no substream block at all, so the message row is the only place either
-surface can show it.
+surface can show it. In that teammate's OWN scope the same send is a message bubble read
+back from its transcript, uncapped (*Agent scope*) — a third rendering of one message,
+and deliberately so: they answer three different questions (what the pane shows, what the
+team passed around, what this agent said).
 
 Because they are classes now, both collapsing modes fold them and need words for
 them:

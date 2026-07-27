@@ -40,7 +40,7 @@ def heal_stash(sid, log, sdb, key, step):
 
 def conv_items(recs, cmds=()):
     """Conversation records -> stream items. Additively carry `kind`
-    (prompt|message|teammsg|question|answer|recap) and, for prompts, the raw `text`:
+    (prompt|message|teammsg|sendmsg|question|answer|recap) and, for prompts, the raw `text`:
     the page's queued-message chips match a DELIVERED prompt against what they
     sent — the transcript's prompt record is the one true delivery signal (tab
     transitions are useless: green flips busy again the instant a queued
@@ -58,8 +58,13 @@ def conv_items(recs, cmds=()):
         # `kind` beside it is what the focus mode narrows on (prompts and the
         # turn's final reply survive, mid-turn prose does not).
         it = {"g": None, "t": "msg", "kind": r["kind"], "act": opshtml.ACT_MSG,
+              # the PEER of a mail record, whichever way it went: `sender` on the
+              # one that came in, `to` on the one that went out. One slot, because
+              # the bubble's label is chosen by the KIND (msg_html) — the peer is
+              # the same fact in both directions.
               "html": opshtml.msg_html(r["kind"], r.get("text", ""),
-                                       r.get("sender", ""), r.get("qa"),
+                                       r.get("sender") or r.get("to") or "",
+                                       r.get("qa"),
                                        r.get("par") or "", cmds,
                                        r.get("meta"))}
         if r["kind"] == "prompt":

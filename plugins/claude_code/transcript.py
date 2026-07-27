@@ -144,6 +144,28 @@ def result_text(content):
     return str(content)
 
 
+def mail_send(inp):
+    """A SendMessage tool_use INPUT -> (recipient, message text) — the shape of an
+    OUTGOING piece of team mail as it appears in a transcript.
+
+    One owner because two presenters read it: the substream paints the `✉ to <peer>`
+    block from it, and conversation() surfaces the same call as a `sendmsg` record
+    (the web's message bubble, which is where the UNCAPPED text comes from).
+
+    `message`/`content` may be a plain string OR a structured content block (dict, or
+    a list of them), so it is normalised through result_text — a raw .strip() on a
+    dict is what crashed the streamer mid-run once, dropping the agent's un-bumped
+    token tail. The recipient is what the SENDER typed, which can differ from the
+    recipient's inbox name ("main" vs "team-lead"); mail_fmt.py's note on joining by
+    msg_id applies here too."""
+    if not isinstance(inp, dict):
+        return "?", ""
+    to = inp.get("to") or inp.get("recipient") or "?"
+    text = result_text(inp.get("message") or inp.get("content")
+                       or inp.get("summary") or "")
+    return str(to), text
+
+
 def input_summary(inp):
     """Compact "key: value" view of a tool's input, so the REQUEST is visible
     (e.g. a WebSearch query, a WebFetch url)."""
@@ -839,11 +861,12 @@ class _Conv:
     context object shared by named phases, the same shape the long entry
     main()s use (docs/styleguide.md, *Module shape*)."""
 
-    __slots__ = ("out", "anchor", "ts", "uid", "par")
+    __slots__ = ("out", "anchor", "ts", "uid", "par", "sends")
 
-    def __init__(self):
+    def __init__(self, sends=False):
         self.out, self.anchor = [], None
         self.ts = self.uid = self.par = None
+        self.sends = sends
 
     def add(self, kind, text, **extra):
         """Append one conversation record. Every record carries `anchor` and
@@ -919,6 +942,20 @@ def _conv_assistant(rec, cx):
             q = _format_questions(blk.get("input") or {})
             if q:
                 cx.add("question", q)
+        # …and, for a read that asked for them (`sends`), a SendMessage tool_use IS
+        # an outgoing message — the other half of a conversation whose INCOMING half
+        # already arrives as a `teammsg` record. It is not surfaced by default
+        # because the LEAD's outgoing mail is already a first-class mirror row that
+        # the lead's transcript cannot match: mail_fmt.py fires on EVERY send,
+        # including every teammate's, while this transcript sees only the lead's own
+        # (docs/dashboard.md *Team mail*). An AGENT read has no such row — agent
+        # scope drops the substream's prose ops and takes that agent's conversation
+        # from here — so it asks, and gets the message in full rather than the
+        # pane-sized excerpt the op carries.
+        elif cx.sends and blk.get("name") == "SendMessage":
+            to, text = mail_send(blk.get("input") or {})
+            if text.strip():
+                cx.add("sendmsg", text.strip(), to=to)
         if blk.get("id"):
             cx.anchor = blk["id"]
 
@@ -949,11 +986,13 @@ _CONV_SKIP = {
 }
 
 
-def conversation(path, pos=0, suspects=()):
+def conversation(path, pos=0, suspects=(), sends=False):
     """The MAIN-THREAD conversation for the dashboard's merged mirror stream
     (docs/dashboard.md): every prompt / assistant message / teammate message /
     recap (Claude Code's away-summary) — plus, for AskUserQuestion, the
-    `question` Claude asked and the `answer` the user submitted — from byte
+    `question` Claude asked and the `answer` the user submitted, and with
+    `sends`, the `sendmsg` outgoing mail this identity sent (_conv_assistant
+    says why that one is asked for rather than always on) — from byte
     `pos` on, in transcript order, each carrying `ts`
     — the line's
     `timestamp` as an epoch float (None when absent) — and `anchor`, the id of
@@ -993,7 +1032,7 @@ def conversation(path, pos=0, suspects=()):
     dead = _dead_uuids([(u, p) for r, _t, u, p in parsed if _prompt_bearing(r)],
                        lines, suspects,
                        {p for _r, _t, _u, p in parsed if p})
-    cx = _Conv()
+    cx = _Conv(sends)
     for rec, ts, uid, par in parsed:
         if uid in dead:
             continue
@@ -1135,11 +1174,15 @@ def conversation_for(sid, pos=0, agent_id=""):
 
     The take-back stash is the LEAD's alone: it records prompts the terminal
     handed back after an interrupt, which only ever happens to the human's input
-    (docs/dashboard.md *Interrupt*)."""
+    (docs/dashboard.md *Interrupt*). Outgoing MAIL is the mirror image — an
+    AGENT's alone, because the lead's sends are already mirror rows that cover
+    every teammate's too (see _conv_assistant); both are the same one-line
+    statement of what this identity's stream is missing."""
     path = agent_path(sid, agent_id)
     if not path:
         return None
-    return conversation(path, pos, taken_back(sid) if not agent_id else ())
+    return conversation(path, pos, taken_back(sid) if not agent_id else (),
+                        sends=bool(agent_id))
 
 
 def ask_preamble(path, tool_use_id):

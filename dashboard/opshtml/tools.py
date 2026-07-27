@@ -7,6 +7,7 @@ import html
 import json
 import re
 
+from core import streamfmt as SF
 from dashboard.opshtml.ansi import ansi_html, _esc
 from dashboard.opshtml.markdown import md_html
 from dashboard.opshtml.ops import _code_block
@@ -84,7 +85,10 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
-    interleaves them — docs/dashboard.md). kind: prompt | message | teammsg |
+    interleaves them — docs/dashboard.md). kind: prompt | message | teammsg (a
+    piece of team mail that came IN) | sendmsg (…one that went OUT — an agent's
+    own SendMessage, read back from its transcript so the bubble holds the WHOLE
+    message where the mirror op holds a 12-line excerpt) |
     question (the AskUserQuestion Claude asked — its text + offered options) |
     answer (the answer the user submitted — the "my answer didn't appear" fix;
     both are `you`/`claude` bubbles WITHOUT the rewind affordance, since neither
@@ -107,10 +111,17 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
     that a bubble saying YOU over a hook's feedback, a loaded skill, or another
     session's mail is a lie about who said it (docs/dashboard.md, *View modes*)."""
     system = bool(meta) and kind == "prompt"
+    # The two MAIL kinds are one bubble in two directions, and the label is the only
+    # thing that says which: `✉ from team-lead` came in, `✉ to main` went out
+    # ("make it the same as general claude message but with certain labels showing
+    # who sending to whom"). Both directions read the SAME `sender` slot — the PEER,
+    # whoever they are — and the words are core/streamfmt's (MAIL_FROM/MAIL_TO), the
+    # same pair the producer words its chip with, so the two surfaces cannot drift.
     who = {"prompt": "you", "message": "claude",
            "question": "claude ▸ asks you", "answer": "you ▸ answered",
-           "recap": "↩ recap"} \
-        .get(kind) or ("✉ " + (sender or "team"))
+           "recap": "↩ recap",
+           "sendmsg": SF.MARK_MAIL + " " + SF.MAIL_TO % (sender or "team")} \
+        .get(kind) or (SF.MARK_MAIL + " " + SF.MAIL_FROM % (sender or "team"))
     if system:
         who = "⚙ system"
     extra = ""

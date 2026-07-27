@@ -62,13 +62,17 @@ def test_unknown_tool_falls_to_generic(monkeypatch):
     monkeypatch.setattr(SR.O, "new_group", lambda log: "g1")
     r = make_renderer()
     r.on_tool_use({"name": "NoSuchTool", "input": {"query": "hi"}, "id": "t9"})
-    assert r.pend["t9"] == ("other", "")            # generic branch took it
+    # the generic branch took it, and parked the block's copy group: a generic
+    # tool has no tool_use_id-keyed op, so this is the only way its RESULT can
+    # join the request behind one click
+    assert r.pend["t9"] == ("other", "g1")
     assert r.tool_n == 1
     assert any("NoSuchTool" in str(op) for op in emitted)
-    # Its result renders the generic body (no crash, no special handler).
+    # Its result renders the generic body (no crash, no special handler) — INTO
+    # that group, or it lands in the feed as a loose row beside its own block.
     r.on_tool_result({"tool_use_id": "t9", "content": "hello"})
     assert "t9" not in r.pend
-    assert any("hello" in str(op) for op in emitted)
+    assert any("hello" in str(op) and op.get("g") == "g1" for op in emitted)
     assert not bumps                                # only fg commands bump here
 
 

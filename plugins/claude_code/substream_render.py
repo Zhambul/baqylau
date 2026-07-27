@@ -368,13 +368,11 @@ class Renderer:
     def _use_sendmsg(self, name, inp, tid, ctx):
         # Mail this teammate sends to another teammate / the lead. Show recipient +
         # the message body; the tool_result is just a "{success:true,…}" ack (noise),
-        # so it's suppressed in on_tool_result.
-        to = inp.get("to") or inp.get("recipient") or "?"
-        # message/content may be a plain string OR a structured content block
-        # (dict / list of blocks) — normalise through result_text so .strip() never
-        # hits a dict (that AttributeError crashed the streamer mid-run, dropping the
-        # agent's un-bumped token tail; reconcile_spend recovers it, but don't crash).
-        text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
+        # so it's suppressed in on_tool_result. The (recipient, text) pair comes from
+        # its owner (TR.mail_send) — the web reads the same call out of the transcript
+        # as a message bubble, and the two must not disagree about which field holds
+        # the body.
+        to, text = TR.mail_send(inp)
         g = O.new_group(self.log)
         O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_TO % to, ctx, g=g, lk=O.COPY_ALL),
                self.gutter(cap(text.strip(), CAP_SENDMSG), g=g))
@@ -389,12 +387,19 @@ class Renderer:
         self.pend[tid] = ("agent", "")
 
     def _use_other(self, name, inp, tid, ctx):
+        # A group is minted UNCONDITIONALLY, even for a request-less tool, because
+        # the block's other half is its RESULT — emitted at the tool_result, which
+        # has no group of its own to fall back on (unlike a Bash block, whose
+        # tool_use_id IS the group). Carried through `pend` so _res_body can put the
+        # answer behind the same click as the question; ungrouped, it landed in the
+        # feed as a loose row of its own and the block you clicked held only the
+        # query ("I should see the result of the ToolSearch").
+        g = O.new_group(self.log)
         req = input_summary(inp)                 # show the request (e.g. the query/url)
-        g = O.new_group(self.log) if req else None
-        O.emit(self.log, self.chip("·", name or "tool", ctx, g=g, lk=O.COPY_ALL if g else None))
+        O.emit(self.log, self.chip("·", name or "tool", ctx, g=g, lk=O.COPY_ALL))
         if req:
             O.emit(self.log, self.gutter(cap(req, CAP_TOOL_REQ), g=g))
-        self.pend[tid] = ("other", "")
+        self.pend[tid] = ("other", g)
 
     # tool name -> use handler; unknown names fall to _use_other. File tools share
     # one deferred handler (rendered at the result, which carries extent/range).
@@ -465,8 +470,12 @@ class Renderer:
         # fg / other: show the command's output (banners emphasised — this is real
         # command output, unlike the messages/prompts that share gutter()).
         # fg output joins this command's ⧉ copy group (the tool_use_id) so ⧉out copies it.
+        # A generic tool's output joins ITS block the same way — through the group
+        # `_use_other` minted and parked in `pend` (there is no tool_use_id-keyed op
+        # for it to key on). `cmd` is that group for an "other", the command for an
+        # "fg": the pend payload is per-kind by design (a "file" carries a tuple).
         txt = result_text(b.get("content"))
-        g = tid if kind == "fg" else None
+        g = tid if kind == "fg" else (cmd or None)
         body = txt.rstrip("\n")
         if body:
             O.emit(self.log, O.gut(R.emphasize(R.unescape(cap(body, CAP_BODY))), self.rgb, g=g))

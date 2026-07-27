@@ -281,6 +281,21 @@ def test_msg_html_renders_markdown_body():
     assert "<strong>bold</strong>" in h
 
 
+def test_msg_html_mail_is_one_bubble_labelled_by_direction():
+    """Team mail is ONE bubble in two directions — the same general message
+    bubble, with the label as the only thing saying which way it went. Both
+    directions read the same peer slot, and the words are core/streamfmt's
+    (MAIL_FROM/MAIL_TO), the pair the producer words its chip with."""
+    from core import streamfmt as SF
+    inc = opshtml.msg_html("teammsg", "your brief", "team-lead")
+    out = opshtml.msg_html("sendmsg", "my report", "main")
+    assert 'class="msg teammsg"' in inc and 'class="msg sendmsg"' in out
+    assert SF.MARK_MAIL + " " + SF.MAIL_FROM % "team-lead" in inc
+    assert SF.MARK_MAIL + " " + SF.MAIL_TO % "main" in out
+    # …and the body is the ordinary markdown bubble, never a command-output box
+    assert "<div class=\"md\">" in out and "my report" in out
+
+
 def test_msg_html_prompt_stamps_tree_position():
     # data-par is the prompt's parentUuid — what the page's dropSuperseded
     # matches siblings on to drop a bubble the terminal discarded. Only prompts
