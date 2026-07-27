@@ -1388,13 +1388,29 @@ body.modal-open { overflow: hidden; }
   background: var(--panel); padding: 7px 13px; margin: 7px 0;
 }
 
-/* ---- an EXPANDED run: header + rail ------------------------------------- */
+/* ---- an EXPANDED run: header + ONE rail --------------------------------- */
 /* Clicking a collapsed summary reveals the blocks it stood for, and those blocks
    need to read as BELONGING to it — otherwise they land in the feed looking like
    any other activity and you can't tell where the expansion ends. So the summary
-   becomes a group header and its blocks share a left rail: indented, gaps closed
-   so the rail is continuous, and rounded off at the oldest member.
-   docs/dashboard.md *View modes* */
+   becomes a group header and its blocks share a left rail: gaps closed so the
+   rail is continuous, and rounded off at the oldest member.
+   docs/dashboard.md *View modes*
+
+   ONE rail, at ONE x — the members are NOT indented (`margin: 0`, not the
+   `0 0 0 13px` this shipped with). Indenting them drew a SECOND vertical line
+   13px right of the header's, starting a row lower: two parallel rails, neither
+   spanning the group, which is precisely what read as broken ("the left side
+   gutter it looks broken … there's a shift to the right … and the gutter of those
+   actions also shift to the right"). Sharing the header's left edge makes the two
+   borders one unbroken line from the header's top to the last member's bottom.
+   And ONE text column with it: every row in the group — the header and each member,
+   whatever kind of row it is — gives up 2px of its own left padding to the rail's
+   2px border, so all of them land on the feed's usual 13px text column. Nothing
+   moves horizontally when a summary is clicked, at all: the header stays put and
+   the revealed rows line up directly under it. (Left at each row's own 13px, the
+   members sat 2px right of the header — too small to read as an indent, exactly
+   large enough to read as a mistake.) The rail plus the header's panel fill are
+   what say "these belong together"; an indent is not needed to say it. */
 .stream > .vsum[data-open="1"] {
   background: var(--panel); color: var(--text-soft);
   border-left: 2px solid var(--runrail);
@@ -1406,20 +1422,41 @@ body.modal-open { overflow: hidden; }
    only wins on EQUAL specificity. `.blk`'s `margin: 7px 0` is one class and loses,
    but an AGENT NOTE's box (`.stream > .blk[data-note]`, and again with
    `[data-open="1"]`) is three and four — so its shorthand reset margin-left to 0 and
-   reopened the vertical gaps, and a run of agent notes expanded into rows sitting
-   13px left of every other member with the rail broken into segments ("the alignment
-   of elements is off when I expand the summaries"). The view-mode classes are an
-   OUTER LAYER over row styling; where they collide with a row's own box they must
-   win regardless of how specific that row rule is, which is what `!important` says.
+   reopened the vertical gaps, and a run of agent notes expanded into rows out of line
+   with every other member and the rail broken into segments ("the alignment of elements
+   is off when I expand the summaries"). The view-mode classes are an OUTER LAYER over
+   row styling; where they collide with a row's own box they must win regardless of how
+   specific that row rule is, which is what `!important` says.
    Asserted as a property by test_the_run_rail_outranks_a_rows_own_margin. */
 .stream > .vrun {
-  margin: 0 0 0 13px !important;
+  margin: 0 !important;
   border-left: 2px solid var(--runrail);
-  border-radius: 0 var(--r) var(--r) 0;
+  border-radius: 0;
 }
+/* …and INSIDE the group the rail is the container, so a member drops its own card:
+   the tile edges cut the rail into segments and made the group read as a stack of
+   loose plates under a bar rather than one column. Only the rows that are always
+   one line (a file-op one-liner, a chip line) — a `.blk` keeps its card for the
+   body it reveals if you open one inside the group. */
+.stream > .opl.vrun, .stream > .ol.vrun,
+.stream > .og.vrun, .stream > .ogut.vrun {
+  box-shadow: none; background: none;
+}
+/* the 2px the rail's border takes, given back out of each row's own left padding, so
+   the whole group sits on the feed's 13px text column (see the note above). Per row
+   KIND, because that padding lives at a different depth in each: on a block it is the
+   header's, on a loose row the row's own. Equal specificity with `.blk[data-note] >
+   .bhead` and `.blk[data-quiet] > .bhead`, so this must stay BELOW them. */
+.stream > .blk.vrun > .bhead,
+.stream > .opl.vrun, .stream > .ol.vrun,
+.stream > .og.vrun, .stream > .ogut.vrun { padding-left: 11px; }
 /* the oldest member closes the run — important too, or the rule above (now
-   important) would out-cascade it */
-.stream > .vrun.vrun-last { margin-bottom: 8px !important; }
+   important) would out-cascade it — and it rounds the rail off at the bottom, the
+   mirror of the header's rounded top */
+.stream > .vrun.vrun-last {
+  margin-bottom: 8px !important;
+  border-radius: 0 0 var(--r) var(--r);
+}
 /* ⧉ copy links only materialize on hover — ambient noise otherwise */
 .cl { opacity: 0; transition: opacity .12s; }
 .bhead:hover .cl, .ol:hover .cl, .bbody:hover .cl { opacity: 1; }

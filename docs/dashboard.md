@@ -5491,9 +5491,25 @@ Mechanics worth knowing:
 - **Expanding leaves the summary in place** (caret `▾`): it is the only way back
   to collapsed, and it keeps naming what the revealed blocks are. It also becomes
   the group's HEADER: the blocks it revealed are marked `.vrun` (`.vrun-last` on
-  the oldest) and share an indented left rail whose vertical gaps are closed, so
-  the group reads as one connected stack and you can see where the expansion ENDS
-  — without it, revealed blocks land in the feed looking like any other activity.
+  the oldest) and share a left rail whose vertical gaps are closed, so the group
+  reads as one connected stack and you can see where the expansion ENDS — without
+  it, revealed blocks land in the feed looking like any other activity.
+
+  **ONE rail, at one x, on one text column — nothing shifts when you click.** The
+  members were INDENTED 13px at first, which drew a SECOND vertical line beside the
+  header's own and a row lower: two parallel rails, neither spanning the group
+  (*"the left side gutter looks broken … there's a shift to the right … and the
+  gutter of those actions also shift to the right"*). Now every row in the group —
+  header and members — sits at the same left edge, so the two borders ARE one
+  unbroken line, and each gives up 2px of its own left padding to the rail's 2px
+  border so the whole group lands on the feed's usual 13px text column. Left at
+  their own 13px the members sat 2px right of the header: too small to read as an
+  indent, exactly large enough to read as a mistake. Members also drop their own
+  CARD (`box-shadow`/fill) when they are single-line rows — the tile edges cut the
+  rail into segments and made the group read as loose plates under a bar — while a
+  `.blk` keeps its card for the body it reveals if you open one inside the group.
+  The rail plus the header's panel fill are what say "these belong together"; an
+  indent is not needed to say it.
   The marks are classes, not a wrapper element: SSE inserts by position, the block
   map holds live references, and the eviction sweep walks top-level children, so
   re-parenting into a container would break all three. Every mark is cleared at

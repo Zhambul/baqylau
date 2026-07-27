@@ -1611,12 +1611,31 @@ def test_expanded_run_rail_is_styled_as_one_group(dash):
     assert head and run
     assert "var(--runrail)" in head.group(1) and "var(--runrail)" in run.group(1)
     assert "margin: 7px 0 0" in head.group(1), "the header must close its gap"
-    # one shorthand: the block-axis gaps closed AND the indent, in a single
-    # declaration that a row rule's own `margin` shorthand cannot half-override
-    assert re.search(r"margin:\s*0 0 0 13px", run.group(1)), \
-        "the rail must close its gaps and indent in one shorthand"
+    # ONE rail, at ONE x: the members share the header's left edge, so the two
+    # borders are a single unbroken line. Indenting them (`margin: 0 0 0 13px`, as
+    # this shipped) drew a SECOND line 13px over and a row lower — two parallel
+    # rails, neither spanning the group ("the left side gutter looks broken … there's
+    # a shift to the right … and the gutter of those actions also shift to the right")
+    assert re.search(r"margin:\s*0\s*!important", run.group(1)), \
+        "the rail must close its gaps without indenting (one line, one x)"
+    assert "13px" not in run.group(1), "an indent is what broke the rail"
+    # …and ONE text column with it: every row gives its 2px border back out of its own
+    # left padding, so header and members land on the feed's 13px column. Per row KIND,
+    # since that padding lives at a different depth in each.
+    give = re.search(r"([^}]*\.vrun[^{}]*)\{\s*padding-left: 11px", css)
+    assert give, "the group must give the rail's 2px back out of each row's padding"
+    for sel in (".blk.vrun > .bhead", ".opl.vrun"):
+        assert sel in give.group(1), sel
+    # the header's own 11px is the other half of that column
+    assert "padding-left: 11px" in head.group(1)
+    # a single-line member drops its card, or the tile edges cut the rail up
+    flat = re.search(r"\.stream > \.opl\.vrun[^{}]*\{([^}]*)\}", css)
+    assert flat and "box-shadow: none" in flat.group(1)
     cards = css.index(".stream > .opl, .stream > .ol")
     assert cards < css.index(".stream > .vrun"), "the rail must override the cards"
+    # the padding give-back ties with `.blk[data-note] > .bhead` on specificity, so it
+    # only wins by coming later — same trap as the cards above
+    assert css.index('.stream > .blk[data-note] > .bhead') < css.index(give.group(1))
 
 
 def test_interrupt_annotation_is_flagged_by_its_id_not_its_text(dash):
