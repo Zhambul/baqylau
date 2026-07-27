@@ -516,15 +516,30 @@ class Notifier:
         self._track(entry, channels.send_telegram(entry, reason))
 
     def _needs_you_count(self):
-        """How many tabs are in a needs-you state (red asking + green done) right
-        now — the app-icon badge count (docs/dashboard.md *Installed-app polish*),
+        """How many LIVE sessions need you (red asking + green done) right now —
+        the app-icon badge count (docs/dashboard.md *Installed-app polish*),
         carried in the push so the service worker sets the badge while the app is
-        closed. Same source as the tab watcher; NOTIFY_STATES is the red/green
-        vocabulary."""
+        closed.
+
+        The `live` half is load-bearing, not a refinement. The tab DB is keyed by
+        kitty WINDOW and its rows outlive the sessions that wrote them: red and
+        green are RESTING states, so a session whose terminal went away without a
+        SessionEnd (kitty quit, window closed mid-turn) leaves its row sitting on
+        one forever. Counting the raw table therefore counts history — measured
+        148 on a machine with exactly 1 session actually asking. The badge is
+        supposed to answer "how many things are waiting for me", the browser's own
+        `needsYouCount` has always filtered on `r.live`, and the pushed number
+        silently disagreed with it: an icon stuck at three digits that no
+        retraction could ever bring down, since decrementing 149 to 148 is
+        invisible. `winmap` is the win -> session map (newest session wins a
+        window), so intersecting it with the live tab states asks the same
+        question the page does."""
         try:
-            return sum(1 for st in API.tab_states().values() if st in NOTIFY_STATES)
+            states = API.tab_states()
         except Exception:
             return 0
+        return sum(1 for win, row in self.winmap.items()
+                   if row.get("live") and states.get(win) in NOTIFY_STATES)
 
     def _webpush(self, entry):
         """Send the on-device alert (channels.send_webpush) and track it.

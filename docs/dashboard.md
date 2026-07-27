@@ -6433,9 +6433,22 @@ gates the chrome-assuming ones):
   cleared at 0. `updateBadge` rides the SAME `sessions` snapshot the attention
   strip does (called from `renderAttention`), so while the app is OPEN the badge
   tracks live. While the app is CLOSED the push service worker sets it from a
-  `badge` field the server stamps into every push (`Notifier._needs_you_count`
-  over the tab DB — the same red/green `NOTIFY_STATES` vocabulary). The two can
-  briefly disagree; opening the app re-syncs from the live snapshot.
+  `badge` field the server stamps into every push (`Notifier._needs_you_count`).
+  The two can briefly disagree by a tick; opening the app re-syncs from the live
+  snapshot.
+
+  **Both sides must apply the SAME `live` filter, and the server's once didn't.**
+  `_needs_you_count` counted every row of the tab DB in a red/green state. But
+  the tab DB is keyed by kitty WINDOW and its rows outlive the sessions that
+  wrote them — red and green are RESTING states, so a session whose terminal went
+  away without a SessionEnd (kitty quit, window closed mid-turn) leaves its row
+  parked on one indefinitely. The pushed badge was therefore counting history:
+  measured **148** on a machine with exactly **1** session actually asking, while
+  the in-app badge (which has always filtered `r.live`) said 1. The iPad icon sat
+  at three digits and no retraction could bring it down, since decrementing 149
+  to 148 is invisible. The count now intersects the notifier's `winmap` (win →
+  session, newest wins) with the live tab states, which is the same question
+  `needsYouCount` asks in the page.
 - **Real home-screen icon + manifest.** `dashboard/static/manifest.webmanifest`
   (linked from index.html, served off `/static/`) gives the app its name,
   `display: standalone`, theme color, and PNG icons (`icon-{192,512}.png` +

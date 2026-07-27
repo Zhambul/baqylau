@@ -416,9 +416,18 @@ New always-audited swallow sites (previously silent — their absence used to ma
 - **A Telegram message / iPad banner that never went away after I dealt with the session**
   (docs/dashboard.md *Alert retraction* — since 2026-07-27 a delivered alert is TAKEN BACK
   once the session stops needing you: the message is `deleteMessage`d, a resolve push
-  closes the banner). Start at the **`notify-retract`** row for the sid (global rows — match
-  `json_extract(content,'$.sid')`, or just run the canned anomaly **"off-device alert left
-  behind (notify-retract not ok)"**). Read it in this order:
+  closes the banner). **Check the credentials FIRST** — the canned anomaly **"Telegram alert
+  sent that can never be retracted (no bot credentials)"** (`telegram-notify` with
+  `retractable:false`). Without `~/.config/telegram/{bot-token,chat-id}` the send degrades to
+  the detached `notify` script, whose `message_id` goes to DEVNULL, so NO Telegram message
+  can ever be deleted and no `notify-retract channel:telegram` row will ever exist. This was
+  the cause the first time it was reported (2026-07-28), it is silent, and it disables the
+  headline behaviour — so rule it out before suspecting the retraction machinery. Fix: create
+  the two files AND restart the dashboard (they are read per call, but the handles for
+  already-sent alerts live in the old process's memory, so in-flight alerts stay unretractable).
+  Then read the **`notify-retract`** row for the sid (global rows — match
+  `json_extract(content,'$.sid')`, or run the canned anomaly **"off-device alert left
+  behind (notify-retract not ok)"**), in this order:
   - **A row with `outcome: failed`** = we tried and the wire refused. For `channel:
     telegram` that is the Bot API (a >48h-old message can no longer be deleted —
     `telegram.DELETE_WINDOW_S`; check `age_s`); for `channel: webpush` the paired

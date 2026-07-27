@@ -267,6 +267,21 @@ ANOMALY_SECTIONS = [
     # paired `telegram-notify` row's `retractable` flag.
     # NB the notify rows are GLOBAL (session_id=''), so the sid is matched inside
     # the JSON rather than on the column.
+    # A Telegram alert that COULD NEVER be retracted — the send went out over the
+    # legacy detached `notify` script, whose `message_id` goes to DEVNULL, so no
+    # `deleteMessage` is possible and no notify-retract row will ever follow
+    # (docs/dashboard.md *Alert retraction*). It is not an error: the script path
+    # is the deliberate degrade when `~/.config/telegram/{bot-token,chat-id}` are
+    # absent, and an alert that reaches you beats one that doesn't. But it is
+    # SILENT — the only trace is this flag — and it disables the headline
+    # behaviour, so "my Telegram message wasn't deleted" must land here before
+    # anyone goes looking for a bug in the retraction machinery. Fix: create the
+    # two credential files and RESTART the dashboard (it reads them per call, but
+    # the handles for already-sent alerts live in the old process's memory).
+    ("Telegram alert sent that can never be retracted (no bot credentials)",
+     "SELECT ts, content FROM state_files WHERE action='telegram-notify' "
+     "AND json_extract(content, '$.sid')=? "
+     "AND json_extract(content, '$.retractable')=0", 1),
     ("off-device alert left behind (notify-retract not ok)",
      "SELECT ts, content FROM state_files WHERE action='notify-retract' "
      "AND json_extract(content, '$.sid')=? "

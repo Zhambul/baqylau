@@ -985,3 +985,40 @@ def test_a_wedged_retraction_still_ages_out(monkeypatch, tmp_path):
     assert n.sent == []
     rows = [a[3] for a in audited if a[2] == "notify-retract"]
     assert rows and rows[-1]["outcome"] == "expired" and rows[-1]["reason"] == "ttl"
+
+
+def test_badge_counts_only_live_sessions(monkeypatch):
+    """The pushed app-icon badge must count LIVE sessions needing you, not raw
+    tab rows. Red/green are RESTING states and the tab DB is keyed by kitty
+    window, so a session whose terminal went away without a SessionEnd leaves its
+    row sitting on one forever — measured 148 stale rows against 1 real ask, an
+    icon stuck at three digits that no retraction could bring down. Same
+    predicate as the browser's own needsYouCount (`r.live` + the state)."""
+    n = DS.Notifier()
+    n.winmap = {
+        "1": {"sid": "live-asking", "live": True},
+        "2": {"sid": "live-done", "live": True},
+        "3": {"sid": "live-busy", "live": True},
+        "4": {"sid": "dead-but-still-red", "live": False},
+        "5": {"sid": "dead-but-still-green", "live": False},
+    }
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {
+        "1": "awaiting-command", "2": "awaiting-response", "3": "working",
+        "4": "awaiting-command", "5": "awaiting-response",
+        "99": "awaiting-command",          # a window no session maps to at all
+    })
+    assert n._needs_you_count() == 2
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {})
+    assert n._needs_you_count() == 0
+
+
+def test_badge_survives_an_unreadable_tab_table(monkeypatch):
+    """It rides every push payload, so a tab-DB read miss must degrade to 0, not
+    raise into the watcher."""
+    n = DS.Notifier()
+    n.winmap = {"1": {"sid": "s", "live": True}}
+
+    def boom():
+        raise OSError("tab db gone")
+    monkeypatch.setattr(DS.API, "tab_states", boom)
+    assert n._needs_you_count() == 0
