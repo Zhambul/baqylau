@@ -18,8 +18,8 @@ from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_
                                   stats_payload, wire_row)
 from dashboard.read.mirror import (history, merged_backlog, note_payload,
                                    ops_payload, view_payload, HISTORY_BLOCKS,
-                                   mdify)
-from dashboard.read.session import (session_payload, stamp_agent_cost)
+                                   TAIL_BLOCKS)
+from dashboard.read.session import session_payload
 from dashboard.http.base import _qint, _qstr, valid_sid
 
 A = load_audit()
@@ -66,7 +66,7 @@ class _GetMixin:
     }
     _SESSION_GET = {
         "ops": "get_ops", "history": "get_history", "backlog": "get_backlog",
-        "activity": "get_activity", "errors": "get_errors",
+        "errors": "get_errors",
         "monitors": "get_monitors", "jobs": "get_jobs", "memory": "get_memory",
         "note": "get_note",
     }
@@ -104,30 +104,31 @@ class _GetMixin:
 
     def route_events(self, url, rest):
         """The SSE streams (/events/…). Not table-matched: each form has its own
-        arity AND its own cursor query params, so the shapes are the routing."""
+        arity AND its own cursor query params, so the shapes are the routing.
+
+        Agent scope has NO stream of its own — it is `?agent=` on the session
+        stream, so a scoped page still gets one connection carrying the tab
+        colour, scoreboard and cards alongside that agent's mirror."""
         if not rest:
             return self.sse_global()
         if len(rest) == 2 and rest[0] == "session" and valid_sid(rest[1]):
             return self.sse_session(rest[1], _qint(url, "after"),
-                                    _qint(url, "mpos"))
-        if len(rest) == 3 and rest[0] == "agent" \
-                and valid_sid(rest[1]) and valid_sid(rest[2]):
-            return self.sse_agent(rest[1], rest[2], _qint(url, "pos"))
+                                    _qint(url, "mpos"), _qstr(url, "agent"))
         return self._not_found()
 
     def route_session(self, url, sid, rest):
         """One session's read plane (/api/session/<sid>/…), `sid` already
         validated. The one-segment verbs come from _SESSION_GET; the rest stay
-        explicit because their trailing segment is a NAME (an agent id, a stash
-        gid, a copy selector), not a verb a table could key on."""
+        explicit because their trailing segment is a NAME (a stash gid, a copy
+        selector), not a verb a table could key on. An AGENT is not among them:
+        agent scope is a `?agent=` filter on the ordinary session reads, not an
+        endpoint of its own (docs/dashboard.md *Agent scope*)."""
         if not rest:
             return self._json(session_payload(sid))
         if len(rest) == 1:
             verb = self._SESSION_GET.get(rest[0])
             if verb:
                 return getattr(self, verb)(sid, url)
-        if len(rest) == 2 and rest[0] == "agent":
-            return self.get_agent(sid, rest[1])
         if len(rest) == 2 and rest[0] == "view":
             return self.get_view(sid, rest[1])
         if len(rest) == 3 and rest[0] == "copy" \
@@ -238,8 +239,13 @@ class _GetMixin:
         return self._json(prefs.hidden_dirs())
 
     # -- one session's read endpoints --
+    # `?agent=<id>` re-points the mirror/monitors/jobs reads at ONE agent
+    # (docs/dashboard.md *Agent scope*). Absent = the session view, which is the
+    # LEAD agent's own work: main-agent-only ops, and jobs/monitors it launched
+    # itself. The value is never trusted as a path or SQL — it is only ever
+    # compared against ids the read model produced.
     def get_ops(self, sid, url):
-        last, items = ops_payload(sid, _qint(url, "after"))
+        last, items = ops_payload(sid, _qint(url, "after"), _qstr(url, "agent"))
         return self._json({"last": last, "items": items})
 
     def get_history(self, sid, url):
@@ -249,7 +255,8 @@ class _GetMixin:
         # len(entries), and _snap then indexes entries[len] → IndexError → 500
         # (crafted-request crash).
         oldest, items = history(sid, key, _qint(url, "before"),
-                               max(1, _qint(url, "blocks") or HISTORY_BLOCKS))
+                                max(1, _qint(url, "blocks") or HISTORY_BLOCKS),
+                                _qstr(url, "agent"))
         return self._json({"oldest": oldest, "items": items})
 
     def get_backlog(self, sid, url):
@@ -260,27 +267,25 @@ class _GetMixin:
         SSE, which then only streams increments (the reconnect contract)."""
         row = API.session_row(sid)
         key = P.sid_from_log(row["log"]) if row else sid
-        last, mpos, oldest, items = merged_backlog(sid, key)
+        last, mpos, oldest, items = merged_backlog(sid, key, TAIL_BLOCKS,
+                                                   _qstr(url, "agent"))
         return self._json({"last": last, "mpos": mpos,
                            "oldest": oldest, "items": items})
-
-    def get_activity(self, sid, url):
-        return self._json(mdify(plugins.activity(sid)) or {"entries": []})
-
-    def get_agent(self, sid, aid):
-        tl = mdify(plugins.activity(sid, aid))
-        if tl is not None:
-            stamp_agent_cost(tl)
-        return self._json(tl if tl is not None else {"entries": []})
 
     def get_errors(self, sid, url):
         return self._json(API.errors(sid))
 
     def get_monitors(self, sid, url):
-        return self._json({"monitors": plugins.monitors(sid) or []})
+        """Monitors of the session — the LEAD's own by default, one agent's with
+        `?agent=`. Every row is attributed (sessionapi.nested_owners), so the
+        filter is a scope check, not a guess."""
+        agent = _qstr(url, "agent")
+        rows = plugins.monitors(sid) or []
+        return self._json({"monitors": [m for m in rows
+                                        if (m.get("agent_id") or "") == agent]})
 
     def get_jobs(self, sid, url):
-        return self._json({"jobs": API.jobs(sid)})
+        return self._json({"jobs": API.jobs(sid, _qstr(url, "agent"))})
 
     def get_memory(self, sid, url):
         return self._json({"memory": API.memory(sid)})

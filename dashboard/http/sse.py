@@ -1,8 +1,10 @@
 # dashboard/http/sse.py — the Server-Sent-Events streams.
 #
-# sse_global (the sessions list + notification fan-out), sse_session (one
-# session's mirror/scoreboard/cards deltas), sse_agent (a subagent's timeline) —
-# long-lived generators polling the read model + the notify BROKER's queue.
+# sse_global (the sessions list + notification fan-out) and sse_session (one
+# session's mirror/scoreboard/cards deltas) — long-lived generators polling the
+# read model + the notify BROKER's queue. There is deliberately no third stream
+# for agent scope: it is `?agent=` on sse_session, so a scoped page holds ONE
+# connection (docs/dashboard.md *Agent scope*).
 import collections
 import queue
 import time
@@ -21,7 +23,8 @@ from dashboard.read.lists import (accounts_key, accounts_payload,
                                   sessions_payload, row_key, wire_row)
 from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
                                  session_title, session_slug)
-from dashboard.read.mirror import (merged_backlog, merge_live, enrich_entries)
+from dashboard.read.mirror import (agent_scope, merged_backlog, merge_live,
+                                   TAIL_BLOCKS)
 from dashboard.read.session import (BADGES, agents_ctx, agents_model_effort,
                                     visible_agents, ask_draft,
                                     ask_pending, ask_wire, composer_draft, composer_queue,
@@ -303,7 +306,7 @@ class _SseMixin:
         finally:
             BROKER.unregister(q)
 
-    def sse_session(self, sid, after, mpos=0):
+    def sse_session(self, sid, after, mpos=0, agent=""):
         """One session's live stream. The `ops` event carries rendered HTML —
         ops AND the main-thread conversation from byte cursor `mpos`,
         interleaved by ts via merge_live so a turn's text keeps its place
@@ -312,6 +315,12 @@ class _SseMixin:
         The delta merge is the increment-side twin of the backlog merge, so live
         and reload agree (they diverged once — see docs/dashboard.md, the
         ts-interleave note).
+
+        `agent` scopes the MIRROR channel to one agent (docs/dashboard.md *Agent
+        scope*) and nothing else: the tab colour, scoreboard, cards and dialogs a
+        scoped page shows are still the session's, so agent scope needs no second
+        connection. The conversation cursor is not advanced there — an agent's
+        stream is ops only, exactly as in the backlog.
 
         Everything else the stream pushes is a CHANNEL — see `_SLOW_CHANS` /
         `_FAST_CHANS` for the table and its cadences, and `_INLINE_KEYS` for the
@@ -331,8 +340,9 @@ class _SseMixin:
         # tick on; it lives on nothing but this name now, and no loop in here
         # binds it (see the _SLOW_CHANS header).
         key = P.sid_from_log(row.get("log") or P.mirror_log(sid))
+        scope = agent_scope(sid, agent)
         if not after and not mpos:
-            last, mpos, oldest, items = merged_backlog(sid, key)
+            last, mpos, oldest, items = merged_backlog(sid, key, TAIL_BLOCKS, agent)
             if items and not self._sse("ops", {"last": last, "mpos": mpos,
                                                "oldest": oldest, "items": items}):
                 return
@@ -346,7 +356,7 @@ class _SseMixin:
             # events prepended a turn's preceding text ABOVE its command in the
             # newest-top feed (the "messages come after commands" inversion; the
             # backlog path already ts-merges, so only the live tick was wrong).
-            got = plugins.conversation(sid, mpos)
+            got = None if agent else plugins.conversation(sid, mpos)
             recs = []
             if got:
                 recs, mpos = got            # advance the transcript cursor always
@@ -354,9 +364,9 @@ class _SseMixin:
                 # the prompt bubbles' `/command` tint is resolved per tick off
                 # the cwd (a TTL memo — a command file added mid-session starts
                 # tinting without a reconnect), never per bubble
-                if not self._sse("ops", {"last": last2, "mpos": mpos,
-                                         "items": merge_live(ops, recs, key,
-                                                             cmd_names(ctx.cwd))}):
+                items = merge_live(ops, recs, key, cmd_names(ctx.cwd), scope)
+                if items and not self._sse("ops", {"last": last2, "mpos": mpos,
+                                                   "items": items}):
                     return
                 last = last2
             if recs:
@@ -437,34 +447,3 @@ class _SseMixin:
             tick += 1
             time.sleep(TICK_S)
 
-    def sse_agent(self, sid, aid, pos):
-        """One agent's LIVE drill-down timeline (docs/dashboard.md): appends
-        `entries` (new increment entries, server-enriched exactly like the REST
-        /agent endpoint — the shared enrich_entries) and `resolve`
-        (cross-increment tool resolutions — [(tool_use_id, output, failed), …]
-        the client applies by data-tool-id) events as the agent's transcript
-        grows from byte cursor `pos`, plus heartbeats; stops cleanly on client
-        disconnect. `pos` is the cursor the /agent REST response handed the
-        client, so the first increment resumes exactly where the initial fetch
-        stopped — no gap, no overlap. A pair with no incremental provider
-        (codex declines) yields None forever, so the loop is a heartbeat-only
-        keep-alive until the client navigates away."""
-        self._sse_start()
-        beat = time.monotonic()
-        while True:
-            got = plugins.activity_since(sid, aid, pos)
-            if got is not None:
-                entries, resolutions, pos = got
-                if entries:
-                    enrich_entries(entries)
-                    if not self._sse("entries", {"pos": pos,
-                                                 "entries": entries}):
-                        return
-                if resolutions:
-                    if not self._sse("resolve", {"pos": pos,
-                                                 "resolutions": resolutions}):
-                        return
-            beat, alive = self._keepalive(beat)
-            if not alive:
-                return
-            time.sleep(TICK_S)

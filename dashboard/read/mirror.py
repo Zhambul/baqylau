@@ -117,7 +117,7 @@ def conv_items(recs, cmds=()):
     return out
 
 
-def merge_live(ops, recs, key="", cmds=()):
+def merge_live(ops, recs, key="", cmds=(), scope=None):
     """A LIVE SSE delta of new ops + new conversation recs -> ONE oldest->newest
     item list, interleaved by ts — the increment-side twin of _merge_order's
     placement rule. Without it the SSE loop emits ops and msgs as two separate
@@ -133,13 +133,18 @@ def merge_live(ops, recs, key="", cmds=()):
     A ts-less op/rec (pre-migration edge; live always stamps both) falls to the
     tail in arrival order. Runs of consecutive ops go to op_items in ONE call, for
     the same reason _render_window batches them: a group-less body op inherits its
-    class from the row in front of it, and a per-op call has none."""
+    class from the row in front of it, and a per-op call has none.
+
+    `scope` is the agent scope (opshtml.in_scope) — in agent scope `recs` is
+    always empty (the caller stops reading the main thread) and the ops are
+    filtered to that agent, so a tick carrying only the lead's ops renders to
+    nothing and sends no event."""
     items, i, j = [], 0, 0
     run = []                       # consecutive ops awaiting one batched render
 
     def flush():
         if run:
-            items.extend(opshtml.op_items(run, key))
+            items.extend(opshtml.op_items(run, key, scope=scope))
             run.clear()
 
     while i < len(ops) and j < len(recs):
