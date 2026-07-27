@@ -414,11 +414,21 @@ const MAX_BLOCK_BODY = 800;
 // oldest->newest (top-down), matching arrival order.
 function fillBlock(b, it) {
   if (it.t === "label") {
-    // A further label op on the block carrying the live elapsed chip IS this
-    // command's finish chip ("■ finished · 3.2s") — retire the ticker here
-    // rather than wait for the `fgrun` clear, so the counting number can never
-    // be seen still running next to the final duration.
-    if (S.ses && S.ses.fgRun && S.ses.fgRun.g === it.g) {
+    // A label op on the block carrying the live elapsed chip that CLOSES it is this
+    // command's finish chip ("■ finished · 3.2s") — retire the ticker here rather than
+    // wait for the `fgrun` clear, so the counting number can never be seen still
+    // running next to the final duration.
+    //
+    // The role test is load-bearing, not a refinement: an OPENER must never retire it.
+    // `cmd_pre` writes the fg-live record and the `▶ foreground` op in one hook run,
+    // and the `fgrun` event rides a FASTER cadence than the ops — so the ticker is
+    // routinely armed BEFORE the block exists (tickFgElapsed bails, "next tick"), and
+    // the opener then arrived to a matching `fgRun.g` and killed it. Permanently:
+    // `fgEnded` makes setFgRun refuse to resurrect that g. The ⏱ simply never painted
+    // ("for running foreground commands, I still want to see the live time"). Before
+    // the served roles existed this branch could not tell the two labels apart.
+    if (S.ses && S.ses.fgRun && S.ses.fgRun.g === it.g
+        && it.quiet !== "open" && it.quiet !== "sub") {
       fgClearChip(it.g);
       S.ses.fgEnded = it.g;
       S.ses.fgRun = null;
@@ -432,6 +442,11 @@ function fillBlock(b, it) {
       if (!b.root.dataset.quiet) {
         b.root.dataset.quiet = "1";
         b.root.dataset.out = "run";
+        // …and a ⏱ armed BEFORE the header knew its register moves to the slot it
+        // belongs in (the ticker picks the slot off this flag, and the flag can only
+        // be set by the op that arrives after it)
+        const live = b.chips.querySelector(".blive");
+        if (live) b.tail.append(live);
       }
       if (it.links && !b.links.childElementCount) b.links.innerHTML = it.links;
       if (it.quiet === "close") {

@@ -6039,11 +6039,26 @@ Deliberate choices, each rejecting something that was tried or considered:
   seconds *next to* its authoritative `■ finished · 3.2s` chip. One hand-off
   peek per 0.6s tick (a single indexed SELECT plus a pid probe), pushed only on
   change.
-- **The finish chip also retires the ticker, client-side.** `fillBlock` drops
-  the live chip when a further `label` op arrives on the ticking block — that op
-  IS the finish chip. Both signals ride the same 0.6s tick in no fixed order, so
-  whichever lands first wins; `S.ses.fgEnded` remembers the retired block id so a
-  late `fgrun` can't resurrect a ticker on a command already reported done.
+- **The finish chip also retires the ticker, client-side** — but only a chip that
+  CLOSES the block may. `fillBlock` drops the live chip when the block's `■ …` closer
+  arrives (the served role, `quiet === "close"` — *The quiet register*). Both signals
+  ride the same 0.6s tick in no fixed order, so whichever lands first wins;
+  `S.ses.fgEnded` remembers the retired block id so a late `fgrun` can't resurrect a
+  ticker on a command already reported done.
+
+  **The role test is the fix for the chip never appearing at all** (reported
+  2026-07-27: *"for running foreground commands, I still want to see the live time"*).
+  The rule used to be "any FURTHER label op on the ticking block is the finish chip",
+  which cannot tell an opener from a closer — and the opener routinely arrives with the
+  ticker already armed: `cmd_pre` writes the `fg-live` record and the `▶ foreground` op
+  in ONE hook run, the `fgrun` event rides a faster cadence than the ops, and
+  `tickFgElapsed` bails when the block does not exist yet ("next tick"). So the opener
+  landed on a matching `fgRun.g` and retired a chip that had never painted —
+  permanently, because `fgEnded` then refused every later `fgrun` for that block. Same
+  block, same `g`, and nothing in the DOM to show it had happened, which is why it read
+  as "the live time is gone" rather than as a race. Pinned from both arrival orders by
+  the jsdom scene (`fgLiveArmedFirst`/`fgLiveOpsFirst`), which drives the real
+  `setFgRun`/`fillBlock`/`tickFgElapsed`.
 - **Not derived from the ops' own `ts` column.** Every op row is timestamped, so
   the client *could* compute a block's start from its first op — but that gives
   no liveness: a block holding one chip is indistinguishable from one whose
@@ -6068,7 +6083,12 @@ Deliberate choices, each rejecting something that was tried or considered:
 Styling is `style.css` `.chip.blive` — deliberately NOT a filled `.chip` like
 its `▶`/`■` siblings: those are the session's own painted labels replayed from
 the ops stream, this one is the dashboard talking. Outlined, `--exec` blue,
-`tabular-nums` so the ticking seconds don't twitch the chip wider. Read-only
+`tabular-nums` so the ticking seconds don't twitch the chip wider. **Inside a quiet
+command header it joins that register** (`.blk[data-quiet] .chip.blive`): no outline, no
+accent, just the dim pulsing figure — and it sits in the `.btail` slot, the same column
+the final `finished · 91.4s` lands in, so the number does not jump across the line when
+the command ends. A ⏱ armed before the header knew its register is re-homed to that slot
+by the op that sets the flag. Read-only
 throughout, so it adds no audit rows (like the ctx bars and the goal card); the
 one producer change — `ts` in the record — is covered by the `state:fg-live`
 `state_files` row `cmd_pre` already writes with the record as its content.

@@ -590,6 +590,19 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
         == ["run", "ok", "bad"]
     assert [d["quietRun"]["tail"], d["quietOk"]["tail"]] == ["-", "cqt"]
 
+    # A RUNNING foreground command shows its live ⏱, in the slot the final duration
+    # lands in — and it must survive the order that killed it ("for running foreground
+    # commands, I still want to see the live time"): the `fgrun` event arms the ticker
+    # BEFORE the block's own ops arrive (a faster cadence, one hook run behind both), so
+    # the opener lands with `fgRun.g` already matching and used to retire the chip
+    # before it ever painted — permanently, since `fgEnded` refuses a resurrection.
+    # Only the `■ finished` CLOSER may retire it. Both arrival orders are pinned.
+    for got in (d["fgLiveArmedFirst"], d["fgLiveOpsFirst"]):
+        assert got["live"]["text"] == "⏱ 64s", got
+        assert got["live"]["inTail"], "the ⏱ belongs where the duration will land"
+        assert not got["afterFinish"], "the finish chip retires the ticker"
+        assert got["tail"] == "cqt", "…and replaces it with the real duration"
+
     # DEFAULT folds a monitor into the summary ("also monitors should be in the under
     # summary in default mode") and leaves a background job standing
     assert d["monitorDefault"] == {"sums": ["Watched 2 monitors"],

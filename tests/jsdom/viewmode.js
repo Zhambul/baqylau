@@ -437,6 +437,34 @@ function quietScene(closer) {
            tailInChips: b.chips.textContent.includes("cqt") };
 }
 
+// ---- and the LIVE ⏱ on a running foreground command, against the ORDER that broke
+// it: the `fgrun` event arms the ticker BEFORE the block's own ops arrive (a faster
+// cadence — cmd_pre writes the record and the `▶ foreground` op in one hook run), so
+// the opener lands with `fgRun.g` already matching. It must not retire the ticker; only
+// the `■ finished` CLOSER may. Drives the real setFgRun / fillBlock / tickFgElapsed.
+function fgScene(order) {
+  const ses = scene("verbose", [F.prompt]);
+  ses.blocks = new Map();
+  const b = sandbox.createBlock();
+  ses.stream.insertBefore(b.root, ses.stream.children[0]);
+  ses.blocks.set("t1", b);
+  const opener = { g: "t1", t: "label", quiet: "open",
+                   html: '<span class="anmark">D</span>' };
+  const arm = () => sandbox.setFgRun({ g: "t1", start_ts: Date.now() / 1000 - 64 });
+  const ops = () => sandbox.fillBlock(b, opener);
+  if (order === "fgrun-first") { arm(); ops(); } else { ops(); arm(); }
+  sandbox.tickFgElapsed();                       // the 1s tick that paints the number
+  const live = b.root.querySelector(".blive");
+  const before = { text: live ? live.textContent : "-",
+                   inTail: !!(live && live.parentNode === b.tail) };
+  // …and the finish chip retires it, replacing the ticking number with the real one
+  sandbox.fillBlock(b, { g: "t1", t: "label", quiet: "close",
+                         html: '<span class="cqt">finished · 1m04s</span>' });
+  return { live: before,
+           afterFinish: !!b.root.querySelector(".blive"),
+           tail: b.tail.querySelector(".cqt") ? "cqt" : "-" };
+}
+
 runFill("focus", "focus", 40)
   .then(() => runFill("verbose", "verbose", 40))
   .then(() => runFill("allCommands", "focus", 40, { mix: false }))
@@ -448,6 +476,8 @@ runFill("focus", "focus", 40)
   .then(() => { out.quietRun = quietScene(null); })
   .then(() => { out.quietOk = quietScene("ok"); })
   .then(() => { out.quietBad = quietScene("bad"); })
+  .then(() => { out.fgLiveArmedFirst = fgScene("fgrun-first"); })
+  .then(() => { out.fgLiveOpsFirst = fgScene("ops-first"); })
   .then(() => {
     out.fills = fills;
     process.stdout.write(JSON.stringify(out, null, 1));

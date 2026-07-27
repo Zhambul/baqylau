@@ -45,13 +45,25 @@ class El {
     }
     return out;
   }
+  // Inserting an ALREADY-PLACED node MOVES it — real DOM semantics, and load-bearing:
+  // the live ⏱ chip is re-homed from one header slot to another (fillBlock), and a shim
+  // that merely added it to the new parent left a phantom copy under the old one, so a
+  // later `remove()` looked like it had failed.
+  _adopt(k) {
+    if (k.parentNode && k.parentNode !== this) k.remove();
+    else if (k.parentNode === this) {
+      const at = this.children.indexOf(k);
+      if (at >= 0) this.children.splice(at, 1);
+    }
+    k.parentNode = this;
+    return k;
+  }
   append(...kids) {
-    for (const k of this._flat(kids)) { k.parentNode = this; this.children.push(k); }
+    for (const k of this._flat(kids)) this.children.push(this._adopt(k));
   }
   insertBefore(node, ref) {
     const at = this.children.indexOf(ref);
-    const kids = this._flat([node]);
-    for (const k of kids) k.parentNode = this;
+    const kids = this._flat([node]).map(k => this._adopt(k));
     this.children.splice(at < 0 ? this.children.length : at, 0, ...kids);
   }
   remove() {
