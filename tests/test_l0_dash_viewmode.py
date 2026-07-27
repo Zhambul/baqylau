@@ -103,6 +103,54 @@ def test_actclass_file_one_liners_and_diffstat():
                                            failed=True))) == ("read", True)
 
 
+def test_actclass_team_mail_and_task_rows_have_their_own_classes():
+    """Team mail and task rows are neither agents nor monitors, and reading them
+    as either is not cosmetic: `◉ read · …` fell into the MONITOR class, so a
+    lead session's focus summary announced "watched 7 monitors" that never
+    existed. Both are keyed on their PRODUCER's glyphs (imported, not respelled),
+    with `◉` disambiguated by colour exactly as `▶` is."""
+    from core import slots
+    from dashboard.opshtml import actclass as AC
+    from plugins.claude_code import msgs as MSGS
+    from plugins.claude_code import task_fmt as TASKS
+
+    mail_new = MSGS.event_ops([("new", "lead", "rev-ui", "check the diff")])
+    mail_read = MSGS.event_ops([("read", "lead", "rev-ui", "")])
+    assert [AC.classify(o)[0] for o in mail_new] == ["mail", None]   # chip + body
+    assert AC.classify(mail_read[0]) == ("mail", False)
+    # …and the ◉ ambiguity, both ways: mail wears the semantic colour, a monitor
+    # block's chip wears its slot's palette
+    assert AC.classify(_lbl("◉ monitor · npm", slots.color("monitor", 1))) \
+        == ("monitor", False)
+
+    for glyph in TASKS.GLYPHS:
+        assert AC.classify(_lbl(glyph + " task #3 · ship it", O.AMBER)) \
+            == ("task", False)
+
+
+def test_a_groupless_body_op_inherits_the_row_it_follows():
+    """"A body op inherits its block's class" has an edge the classifier alone
+    cannot serve: a body op with NO `g` has no block — it lands as a top-level row
+    of its own, unclassifiable, therefore never collapsible, therefore visible in
+    every mode however strict. Team mail is exactly that shape (a `●` chip
+    followed by the message body as a bare gutter), which is how a teammate's
+    message text sat in the middle of focus mode. op_items resolves it against the
+    item it follows — the only block it has."""
+    from dashboard import opshtml
+    from plugins.claude_code import msgs as MSGS
+
+    items = opshtml.op_items(MSGS.event_ops(
+        [("new", "lead", "rev-ui", "please send your final report")]))
+    assert [it.get("act") for it in items] == ["mail", "mail"]
+    # a GROUPED body still inherits from its own block, not from a neighbour…
+    grouped = opshtml.op_items([_lbl("▶ foreground", O.SLATE, g="t1"),
+                                O.gut("out", O.SLATE, g="t1")])
+    assert [it.get("act") for it in grouped] == ["bash", None]
+    # …and a body op with nothing before it stays unclassified (fail toward
+    # showing, never inherit out of thin air)
+    assert opshtml.op_items([O.gut("orphan", O.SLATE)])[0].get("act") is None
+
+
 def test_actclass_warning_light_is_its_own_class():
     """The audit warning light's `⚠ audit: …` one-liner must never be swallowed
     by a collapse, so it classifies as its own act (which no mode folds)."""
@@ -217,13 +265,21 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
     from dashboard.opshtml.actclass import ACTS
     code, ses = _get(dash + "/static/app.05-session.js")
     assert code == 200
-    folds = dict(re.findall(r"\n  (verbose|default|focus): \[([^\]]*)\]", ses))
-    assert set(folds) == {"verbose", "default", "focus"}
+
+    def table(name):
+        body = re.search(r"const %s = \{(.*?)\n\};" % name, ses, re.S).group(1)
+        got = dict((m, set(re.findall(r'"([a-z-]+)"', b)))
+                   for m, b in re.findall(r"\n  (verbose|default|focus): \[([^\]]*)\]",
+                                          body))
+        assert set(got) == {"verbose", "default", "focus"}, name
+        return got
+
+    folds, hides = table("VIEW_FOLD"), table("VIEW_HIDE")
     fragments = re.findall(r'\n  \["([a-z-]+)", "', ses)
     aliases = dict(re.findall(r'VIEW_COUNTER = \{ ([a-z]+): "([a-z-]+)" \}', ses))
-    assert fragments and folds["default"] and not folds["verbose"].strip()
-    for mode, body in folds.items():
-        for act in re.findall(r'"([a-z-]+)"', body):
+    assert fragments and folds["default"] and not folds["verbose"]
+    for mode, acts in folds.items():
+        for act in acts:
             assert act in ACTS, "%s folds unknown act %r" % (mode, act)
             assert aliases.get(act, act) in fragments, \
                 "%s folds %r with no summary fragment" % (mode, act)
@@ -231,9 +287,18 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
     # file op's act + the ❖ memory tag, not acts of their own)
     for key in fragments:
         assert key in ACTS or key in ("mem-read", "mem-write"), key
-    # focus folds a SUPERSET of default: it is the stricter cut, always
-    assert set(re.findall(r'"([a-z-]+)"', folds["default"])) \
-        <= set(re.findall(r'"([a-z-]+)"', folds["focus"]))
+
+    # HIDING is the second axis: a dropped act needs no fragment (nothing counts
+    # it), but it must be a real act, only focus may hide, and hiding and folding
+    # the same act in one mode is a contradiction — the disposition can only be
+    # one of them, and which one won would be decided by statement order.
+    assert not hides["verbose"] and not hides["default"]
+    for act in hides["focus"]:
+        assert act in ACTS, "focus hides unknown act %r" % act
+        assert act not in folds["focus"], "focus both folds and hides %r" % act
+    # focus is the stricter cut, always: every act default folds, focus either
+    # folds or hides
+    assert folds["default"] <= (folds["focus"] | hides["focus"])
 
 
 def test_page_view_modes_match_the_pref_vocabulary(dash):
@@ -354,6 +419,21 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     assert d["focus"]["sums"] == \
         ["Edited 1 file +12 -3, read 3 files, ran 4 shell commands"]
     assert d["focus"]["shown"] == ["msg", "msg"]
+
+    # TEAM PLUMBING — a lead session's agents, task rows and mail. Default folds
+    # them into its summary (they happened, and it says so in one line)…
+    assert d["teamDefault"]["sums"] == [
+        "Ran 1 agent",
+        "Ran 1 agent, ran 1 shell command, tracked 1 task, passed 2 messages"]
+    # …while focus drops them ENTIRELY: not a row, and — the part folding cannot
+    # do — not a counter either, so the summary names only what the turn did to
+    # the repo. This is the difference between "Ran 22 agents, watched 7 monitors"
+    # and a mode that shows your prompt, the change, and the answer.
+    assert d["teamFocus"]["sums"] == ["Edited 1 file +12 -3, ran 1 shell command"]
+    assert d["teamFocus"]["shown"] == ["msg", "msg"]
+    # a session that is ONLY plumbing collapses to the conversation alone — no
+    # summary line survives, because a hidden act is counted into nothing
+    assert d["teamOnly"] == {"sums": 0, "shown": ["msg", "msg"]}
 
     # …and while the turn is STILL RUNNING that newest message is PROVISIONAL —
     # greyed, because the result is still coming — going to full weight when the

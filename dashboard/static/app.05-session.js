@@ -788,8 +788,25 @@ const VIEW_DEFAULT = "default";
 // a classification gap fails toward SHOWING content, never toward hiding it.
 const VIEW_FOLD = {
   verbose: [],
-  default: ["bash", "read", "agent"],
-  focus: ["bash", "read", "agent", "bg", "monitor", "edit", "write"],
+  default: ["bash", "read", "agent", "task", "mail"],
+  focus: ["bash", "read", "bg", "monitor", "edit", "write"],
+};
+
+// …and what a mode drops ENTIRELY — no row, no summary fragment, not even a
+// counter. Folding says "this happened, here is a line for it"; hiding says
+// "this is not your conversation at all".
+//
+// Focus is the only mode that hides, and it hides the TEAM PLUMBING: a subagent's
+// launch/prompt/result blocks, task-list rows, and agent-team mail. On a lead
+// session those are most of the stream, and collapsing them still left focus
+// reading "Ran 22 agents, watched 7 monitors" over and over — a summary of work
+// you did not do in a mode whose promise is your prompt, what changed, and the
+// answer. The agents' own detail is not lost: it is a click away in the per-agent
+// drill-down, and both other modes still show it.
+const VIEW_HIDE = {
+  verbose: [],
+  default: [],
+  focus: ["agent", "task", "mail"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -807,6 +824,11 @@ const VIEW_FRAGMENTS = [
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],
+  // team plumbing — folded in default, hidden outright in focus (VIEW_HIDE).
+  // Not Claude Code vocabulary (it has no agent-team surface to word), so these
+  // two follow the same shape: an active participle and a plain past tense.
+  ["task", "tracking", "tracked", "task", "tasks"],
+  ["mail", "passing", "passed", "message", "messages"],
   ["mem-read", "recalling", "recalled", "memory", "memories"],
   ["mem-write", "writing", "wrote", "memory", "memories"],
 ];
@@ -960,6 +982,7 @@ function applyViewMode() {
   }
 
   const fold = VIEW_FOLD[mode] || [];
+  const drop = VIEW_HIDE[mode] || [];
   // DOM order is newest -> oldest, so "the first reply seen since the last
   // prompt" IS that turn's final one — which is the only assistant prose focus
   // mode keeps. A prompt closes the turn: items below it are the older one's.
@@ -1000,7 +1023,11 @@ function applyViewMode() {
       }
       return "show";
     }
-    return fold.includes(elem.dataset.act || "") ? "fold" : "show";
+    const act = elem.dataset.act || "";
+    // hidden BEFORE folded: a dropped class must not reach the counters, or the
+    // summary would still announce the very activity the mode exists to omit
+    if (drop.includes(act)) return "hide";
+    return fold.includes(act) ? "fold" : "show";
   });
 
   // PLAN first, mutate second: the runs are computed into a list, and the DOM is

@@ -109,24 +109,14 @@ def joiner(prev_kind, kind):
     return " " if kind == "fail" or (kind == "rem" and prev_kind == "add") else SEP
 
 
-# Mirror-event colours: a delivered/unread message is yellow, a read one green —
-# matching the ●/◉ glyphs the census row uses, so the two surfaces read as one system.
-MSG_NEW_RGB  = O.YELLOW
-MSG_READ_RGB = O.GREEN
-
-
-def emit_events(events):
-    """Surface inbox transitions in the MIRROR itself (not just the census): a chip +
-    summary gutter when a message is delivered (unread), a chip when it's read. Ops go
-    to the shared mirror log, so they interleave with the command stream."""
-    ops = []
-    for kind, frm, to, summ in events:
-        if kind == "new":
-            ops.append(O.label("● " + frm + " → " + to, MSG_NEW_RGB))
-            if summ:
-                ops.append(O.gut(summ, MSG_NEW_RGB))
-        else:                                        # read
-            ops.append(O.label("◉ read · " + frm + " → " + to, MSG_READ_RGB))
+def emit_events(ops):
+    """Surface inbox transitions in the MIRROR itself (not just the census): the
+    census fan-out hands back ready-made paint ops (a chip + summary gutter for a
+    delivery, a chip for a read) and this only emits them into the shared mirror
+    log, so they interleave with the command stream. The ops' SHAPE — glyphs and
+    colours — belongs to the plugin that produced the events, because the web
+    mirror reads it back to classify these rows as mail; this renderer serves
+    every host tool and knows nothing about teams."""
     if ops:
         O.emit(LOG, *ops)
 
@@ -345,15 +335,14 @@ def main():
         mt = St.version(LOG)                # state-DB change counter (was file mtime)
         if _winch or mt != mt_seen or now - last >= 1.0:   # 1s floor keeps ⏱ ticking
             _winch, mt_seen, last = False, mt, now
-            try:                            # poll inboxes: census parts + mirror events
-                mparts, events = PLUGINS.census(LOG)
+            try:                            # poll inboxes: census parts + mirror ops
+                mparts, mops = PLUGINS.census(LOG)
             except Exception:
                 # Audited: a crashing tracker otherwise freezes the ✉ row at
                 # stale/0 counts with zero trace in the audit DB.
                 A.error(LOG, "update_messages (✉ row frozen this tick)")
-                mparts, events = [], []
-            if events:
-                emit_events(events)         # surface arrivals/reads in the mirror pane
+                mparts, mops = [], []
+            emit_events(mops)               # surface arrivals/reads in the mirror pane
             if st is None:                  # not already read by the pause block
                 st = St.stats(LOG)          # atomic snapshot — shared with compose
             lines = compose(width(), mparts, st, nerr)

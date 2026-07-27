@@ -117,6 +117,8 @@ const F = {
   reply: { act: "msg", kind: "messages", msg: "message" },
   warn: { act: "warn", kind: "commands" },
   memread: { act: "read", kind: "memory" },
+  task: { act: "task", kind: "commands" },        // ✚/✓ task-list rows
+  mail: { act: "mail", kind: "commands" },        // ● team mail (header + body)
   // a user-SHAPED turn Claude Code injected: a Stop hook's feedback, a loaded
   // skill's SKILL.md body, a resume nudge (transcript isMeta)
   hookmsg: { act: "msg", kind: "messages", msg: "prompt", injected: 1 },
@@ -152,6 +154,19 @@ const dflt = scene("default", story);
 out.default = { sums: sums(dflt).map(s => s.text), shown: shown(dflt) };
 const foc = scene("focus", story);
 out.focus = { sums: sums(foc).map(s => s.text), shown: shown(foc) };
+
+// TEAM PLUMBING — a lead session's agents, task rows and mail. Default folds it
+// into the summary; focus drops it outright, counters included, and what is left
+// must be exactly the conversation plus the work the turn did to the repo.
+const team = [F.prompt, F.agent, F.mail, F.mail, F.task, F.fg, F.upd,
+              F.agent, F.reply];
+const teamD = scene("default", team), teamF = scene("focus", team);
+out.teamDefault = { sums: sums(teamD).map(s => s.text), shown: shown(teamD) };
+out.teamFocus = { sums: sums(teamF).map(s => s.text), shown: shown(teamF) };
+// …and a session that is ONLY plumbing collapses to the conversation alone —
+// no summary line at all, since a hidden act is not counted into one
+const onlyTeam = scene("focus", [F.prompt, F.agent, F.mail, F.task, F.reply]);
+out.teamOnly = { sums: sums(onlyTeam).length, shown: shown(onlyTeam) };
 
 // focus, mid-turn: the newest message is PROVISIONAL (greyed), older prose is
 // gone, and once the tab settles that same message is the result (full weight)

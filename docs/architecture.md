@@ -175,7 +175,7 @@ SessionStart handler — see [codex.md](codex.md) › *standalone*). The three
 `plugins/__init__.py` is the registry: `all_plugins()` (host first),
 `on_session_start(log, cwd, sid)` (SessionStart fan-out — how codex attaches
 its watcher to a Claude host; a plugin failure is audited and never blocks the
-host's SessionStart), `census(log)` (the scoreboard's ✉-row fan-out), and the
+host's SessionStart), `census(log)` (the scoreboard's ✉-row fan-out — returning `(parts, ops)`: the row's fragments plus ready-made mirror paint ops for this tick's team-mail transitions, so the tool-agnostic scorebar emits them without knowing the mail vocabulary), and the
 read-side fan-outs (`activity`/`session_title`/`conversation` — first plugin
 that recognizes the key wins).
 **The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty

@@ -38,6 +38,14 @@ A = O.A    # audit trail (real module, or a no-op stub if it failed to import)
 CREATED_RGB = O.AMBER   # a task entering the list
 DONE_RGB    = O.GREEN   # a task finished
 
+# The task line's opening GLYPHS — this module's vocabulary, and named because
+# the web mirror's classifier reads them back (dashboard/opshtml/actclass.py, the
+# `task` activity class): the glyph is what says "this row is a task", and a
+# second spelling of it there would drift the moment either changes.
+GLYPH_NEW  = "✚"        # a task created
+GLYPH_DONE = "✓"        # a task completed
+GLYPHS     = (GLYPH_NEW, GLYPH_DONE)
+
 KEY = "tasks"          # the state-DB kv stash the dashboard's tasks card reads
 
 
@@ -119,9 +127,9 @@ def main():
     # (NOT the "task_title" the docs mention; a speculative fallback on it was dropped).
     subj = d.get("task_subject") or d.get("task_description") or ""
     if ev == "TaskCompleted":
-        glyph, rgb = "✓", DONE_RGB
+        glyph, rgb = GLYPH_DONE, DONE_RGB
     else:                                    # TaskCreated (or anything task-ish)
-        glyph, rgb = "✚", CREATED_RGB
+        glyph, rgb = GLYPH_NEW, CREATED_RGB
     text = f"{glyph} task #{tid} · {subj}" if subj else f"{glyph} task #{tid}"
     O.emit(LOG, O.blank(), O.label(text, rgb))
     A.hook_event(d, decision=f"rendered: {text}; {snapshot(d, LOG)}")

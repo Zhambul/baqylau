@@ -694,7 +694,17 @@ DASHBOARD_PLUGIN_REACHES = {
     # (docs/styleguide.md rows for tools.FILE_LABEL / the file-op payload
     # shapes). Routing them through a provider would mean a fan-out per lookup
     # inside a per-op render loop.
-    "dashboard/opshtml/actclass.py": {"plugins.claude_code.tools"},
+    # …and the same argument for the two other producer vocabularies it reads
+    # BACK off a painted op: the task line's ✚/✓ glyphs (task_fmt) and team
+    # mail's ●/◉ + colours (msgs.event_ops). A paint op carries no "this is a
+    # task/mail row" field, so the classifier recovers the class from the glyph —
+    # which makes the glyph a shared fact needing ONE owner, and the owner is the
+    # producer. A provider fan-out cannot serve it: this is a comparison inside a
+    # per-op loop, and the ONLY alternative is respelling the glyphs here, which
+    # is exactly the drift that had `◉ read · …` classified as a MONITOR.
+    "dashboard/opshtml/actclass.py": {"plugins.claude_code.tools",
+                                      "plugins.claude_code.msgs",
+                                      "plugins.claude_code.task_fmt"},
     "dashboard/opshtml/tools.py": {"plugins.claude_code.tools"},
     # The memory tab IS a claude_code feature end to end: the vault root, the
     # project scope gate and the note/backlink readers all belong to

@@ -11,9 +11,14 @@
 
 def census(log):
     """The agent-team message census for the scoreboard's ✉ row — see msgs.py
-    (stateful inbox polling; returns (parts, events))."""
+    (stateful inbox polling). Returns (parts, ops): the census fragments, and the
+    mirror PAINT OPS for this tick's inbox transitions. The events become ops
+    HERE, inside the plugin that produced them, because their glyphs and colours
+    are a claude_code vocabulary the web mirror reads back (actclass's `mail`
+    class) — the pane renderer that emits them stays tool-agnostic."""
     from plugins.claude_code import msgs
-    return msgs.update_messages(log)
+    parts, events = msgs.update_messages(log)
+    return parts, msgs.event_ops(events)
 
 
 def activity(sid, agent_id=None):

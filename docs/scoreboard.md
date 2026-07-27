@@ -47,7 +47,12 @@ see [otel.md](otel.md).
     crashed recipient. The same tracker also **emits into the mirror stream** on each
     transition — a `● <from> → <to>` chip (+ summary) when a message is delivered, a
     `◉ read · <from> → <to>` chip when it's consumed — so arrivals/reads interleave with
-    the command stream. Both the census and the events miss transitions that happen
+    the command stream. The tracker BUILDS those ops itself (`msgs.event_ops`, returned
+    through the plugin's `census`), and this renderer only emits them: the glyphs and
+    colours are a claude_code vocabulary the web mirror reads back to classify these rows
+    as mail (docs/dashboard.md *View modes*), while the scorebar serves every host tool
+    and may not import a plugin's internals — and while it was the scorebar that spelled
+    `◉`, the classifier had to guess and read a mail-read notice as a MONITOR. Both the census and the events miss transitions that happen
     entirely while the mirror is toggled off (nothing is polling then) — an accepted gap
     for an ambient aid.
 

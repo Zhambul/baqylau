@@ -151,18 +151,22 @@ def on_session_start(log, cwd, sid):
 
 def census(log):
     """Scoreboard census fan-out (the ✉ row): concatenates every plugin's
-    (parts, events). Exceptions propagate — the one caller (claude-scorebar.py)
-    already wraps each tick in an audited try/except, and swallowing here would
-    hide which provider froze the row."""
-    parts, events = [], []
+    (parts, ops) — the census fragments for the row, and any mirror paint ops the
+    tick produced (team-mail arrivals/reads). Ops, not raw events: their glyphs
+    and colours are the producing plugin's vocabulary (read back by the web
+    mirror's classifier), so the pane renderer only emits what it is handed.
+    Exceptions propagate — the one caller (claude-scorebar.py) already wraps each
+    tick in an audited try/except, and swallowing here would hide which provider
+    froze the row."""
+    parts, ops = [], []
     for p in all_plugins():
         fn = provider(p, "census")
         if fn is None:
             continue
-        ps, ev = fn(log)
+        ps, o = fn(log)
         parts += list(ps)
-        events += list(ev)
-    return parts, events
+        ops += list(o)
+    return parts, ops
 
 
 def activity(sid, agent_id=None):

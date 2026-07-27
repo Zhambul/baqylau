@@ -6,6 +6,7 @@ import os
 import re
 import time
 
+from core import ops as O
 from core import paths as P
 from core import state as S
 
@@ -44,6 +45,42 @@ def team_dir(log):
 
 
 STALE_S = 60                    # an unread message sitting longer than this is "stale"
+
+# --- the MIRROR-EVENT vocabulary (this module owns it) ------------------------
+# Team mail surfaced in the mirror itself: a chip per arrival/read, plus the
+# arrival's summary as a gutter body. It lives HERE rather than in the scorebar
+# that paints it, because the web mirror has to read it back — a paint op carries
+# no "this is mail" fact, so dashboard/opshtml/actclass.py recovers the `mail`
+# activity class from exactly these glyphs and colours (the classifier can't
+# import bin/claude-scorebar.py: entry scripts are un-importable by design, which
+# is how the ◉ below came to be read as a MONITOR block and counted as one).
+#
+# The colours match the ●/◉ glyphs the census row uses, so the two surfaces read
+# as one system: a delivered/unread message is yellow, a read one green.
+MSG_NEW_RGB  = O.YELLOW
+MSG_READ_RGB = O.GREEN
+GLYPH_NEW  = "●"                # a message delivered (still unread)
+GLYPH_READ = "◉"                # …and consumed. NOTE: shared with a monitor
+#                                 block's chip, so the classifier disambiguates
+#                                 by colour (semantic == mail, slot palette ==
+#                                 monitor), exactly as it does for ▶.
+READ_PREFIX = GLYPH_READ + " read · "
+
+
+def event_ops(events):
+    """[(kind, from, to, summary)] transitions -> the mirror ops that show them.
+    Returns a list (possibly empty) for the caller to emit into the mirror log, so
+    the shape lives with the tracker that produces the events rather than with the
+    renderer that paints them."""
+    ops = []
+    for kind, frm, to, summ in events:
+        if kind == "new":
+            ops.append(O.label(GLYPH_NEW + " " + frm + " → " + to, MSG_NEW_RGB))
+            if summ:
+                ops.append(O.gut(summ, MSG_NEW_RGB))
+        else:                                        # read
+            ops.append(O.label(READ_PREFIX + frm + " → " + to, MSG_READ_RGB))
+    return ops
 
 
 def _msg_epoch(ts):

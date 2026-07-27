@@ -4836,8 +4836,8 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
 
 - **verbose** — every block, exactly as the dashboard rendered before this
   feature. Nothing is ever hidden.
-- **default** — runs of adjacent read/command/agent activity collapse into ONE
-  clickable summary line. File **mutations stay expanded**, so an Update/Write
+- **default** — runs of adjacent read/command/agent activity (plus task rows and
+  team mail) collapse into ONE clickable summary line. File **mutations stay expanded**, so an Update/Write
   always breaks the run and is always on screen; so do conversation messages and
   the ⚠ audit one-liner. **This is the default mode** (`prefs.VIEW_DEFAULT`), the
   same one Claude Code's `viewMode` defaults to — the dashboard reads like the
@@ -4850,7 +4850,7 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   `prefs.VIEW_DEFAULT`.
 - **focus** — your prompts and each turn's FINAL reply at full weight, its
   mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and a one-line
-  summary of the edits. Everything else folds.
+  summary of the edits. Everything else folds — or, for the team plumbing, goes.
 
   Mid-turn prose is greyed rather than dropped, which it was at first. Hiding it
   read as content VANISHING: only the NEWEST message in a turn is its "final"
@@ -4866,6 +4866,52 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   the obvious reading of "it's on screen, so it should end the run" — silently
   re-cut every focus-mode stream into more summary lines, which is a different
   feature from greying one bubble.
+
+**Two axes, not one: `VIEW_FOLD` and `VIEW_HIDE`.** Folding says "this happened,
+here is a line for it"; hiding says "this is not your conversation at all" — no
+row, no summary fragment, and (the part folding cannot do) *not a counter either*.
+Focus is the only mode that hides, and what it hides is the **team plumbing**: a
+subagent's launch/prompt/result blocks (`agent`), task-list rows (`task`) and
+agent-team mail (`mail`). Default folds all three into its summary line instead;
+verbose still shows every one.
+
+On a LEAD session that plumbing is most of the stream, and merely folding it left
+focus reading `Ran 22 agents, watched 7 monitors` over and over — a summary of
+work you did not do, in a mode whose whole promise is your prompt, what changed,
+and the answer. Hiding is checked BEFORE folding for that reason: a dropped class
+must not reach the counters, or the line would still announce the very activity
+the mode exists to omit. Nothing is lost — an agent's full detail was never in
+this stream anyway (it lives in the per-agent drill-down), and both other modes
+still show the blocks.
+
+Getting there needed the classifier to actually KNOW those rows, which it did not:
+
+- **Team mail had no class at all.** Its arrival chip is `● <from> → <to>` in
+  yellow and its read notice `◉ read · …` in green — and `◉` is *also* a monitor
+  block's glyph, so every read notice was classified `monitor` and counted as one
+  (that "watched 7 monitors" was mail). `●` fell through to the agent fallback.
+  Both are now `mail`, keyed on the glyphs + colours IMPORTED from their producer.
+  Which required moving that vocabulary out of `bin/claude-scorebar.py`: entry
+  scripts are un-importable by design, so as long as the painter owned the glyph
+  the classifier could only *guess* at it. `plugins/claude_code/msgs.py` now owns
+  the shape AND builds the ops (`event_ops`), the plugin's `census()` returns them
+  as ops rather than raw events, and the tool-agnostic scorebar just emits what it
+  is handed — it no longer knows what team mail looks like.
+- **A mail BODY could not inherit anything.** "A body op inherits its block's
+  class" is the classifier's rule, but mail is a `●` label followed by the message
+  text as a `gut` op with **no `g`** — no block to inherit from, so it landed as a
+  top-level row, unclassifiable, therefore never collapsible, therefore on screen
+  in every mode however strict. That is exactly how a teammate's message text sat
+  in the middle of focus mode. `op_items` now resolves a group-less body op
+  against the item it FOLLOWS, which is the only block it has. Read-side, so it
+  fixes parked history too — a producer-side regroup would only fix new sessions.
+- **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
+  basis (`task_fmt.GLYPHS`).
+
+Because they are classes now, `default` folds them and needs words for them:
+`tracked N tasks` and `passed N messages`. Neither is Claude Code vocabulary (it
+has no agent-team surface to word), so they follow the table's shape — an active
+participle and a plain past tense — and are marked as ours in `VIEW_FRAGMENTS`.
 
 Both non-verbose modes additionally drop **injected prompts** — turns written in
 the USER's shape that the human never typed (`transcript._injected`: three

@@ -37,6 +37,8 @@ import re
 
 from core import ops as O
 from core import render as R
+from plugins.claude_code import msgs as MSGS
+from plugins.claude_code import task_fmt as TASKS
 from plugins.claude_code.tools import FILE_LABEL
 
 # The `act` vocabulary — the closed set every stream item is classified into.
@@ -50,11 +52,13 @@ ACT_READ    = "read"      # a Read one-liner (native, or a collapsed code-read c
 ACT_EDIT    = "edit"      # an Update one-liner (Edit/MultiEdit/NotebookEdit)
 ACT_WRITE   = "write"     # a Write one-liner
 ACT_AGENT   = "agent"     # a subagent/teammate launch, prompt or result
+ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
+ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
 ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
 ACT_MSG     = "msg"       # conversation text (stamped by read.mirror, not here)
 
 ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
-        ACT_AGENT, ACT_WARN, ACT_MSG)
+        ACT_AGENT, ACT_TASK, ACT_MAIL, ACT_WARN, ACT_MSG)
 
 # The main session's own command colours — the semantic table, imported. A chip
 # in any of these is main-session command activity; anything else is a palette
@@ -68,6 +72,15 @@ _GLYPH_BG = "▷"
 _GLYPH_MONITOR = "◉"
 _GLYPH_RESUMED = "↻"       # a RESUMED subagent's launch header
 _GLYPH_FINISH = "■"
+
+# Team mail + task rows: the glyphs are their PRODUCERS' vocabulary, imported
+# rather than spelled again (msgs.event_ops paints the mail chips, task_fmt the
+# task line). `◉` is shared with a monitor block's chip and is disambiguated by
+# colour exactly as `▶` is — mail wears the semantic YELLOW/GREEN, a monitor
+# wears its slot's palette colour. Reading `◉ read · …` as a MONITOR is precisely
+# what happened before these classes existed: a team session's summary counted
+# its mail as "watched 7 monitors".
+_MAIL_RGB = (tuple(MSGS.MSG_NEW_RGB), tuple(MSGS.MSG_READ_RGB))
 
 # The file-op one-liner's shape, `verb(name)` — built FROM its owner's verb set
 # so the three verbs live in exactly one place (core/streamfmt.file_line paints
@@ -160,8 +173,15 @@ def _classify(op):
         return None, bad
     if head == _GLYPH_FINISH:
         return None, bad               # closes a block it does not name
+    mail = tuple(op.get("c") or ()) in _MAIL_RGB
+    if head == MSGS.GLYPH_NEW:
+        return ACT_MAIL, bad           # ● from → to (nothing else opens with ●)
     if head == _GLYPH_MONITOR:
-        return ACT_MONITOR, bad
+        # ◉ is shared: a mail READ notice wears mail's semantic colour, a monitor
+        # block's chip wears its slot palette (see _MAIL_RGB).
+        return (ACT_MAIL if mail else ACT_MONITOR), bad
+    if head in TASKS.GLYPHS:
+        return ACT_TASK, bad
     if head == _GLYPH_BG:
         return ACT_BG, bad
     if head == _GLYPH_BASH:
