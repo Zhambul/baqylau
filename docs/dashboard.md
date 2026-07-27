@@ -6096,7 +6096,13 @@ the ops stream, this one is the dashboard talking. Outlined, `--exec` blue,
 command header it joins that register** (`.blk[data-quiet] .chip.blive`): no outline, no
 accent, no glyph, just the dim pulsing figure — and it sits in the `.btail` slot, the
 same column the final `finished · 91.4s` lands in, so the number does not jump across
-the line when the command ends. A chip armed before the header knew its register is
+the line when the command ends. It also drops `.chip`'s `display: inline-block` +
+`overflow: hidden` for a plain text run, which is a BASELINE fix and not tidiness: per
+CSS an inline-block whose `overflow` is not `visible` takes its bottom margin edge as
+its baseline, so the box lined up while the digits inside rode ~2px high (*"this live
+timer is a little bit misaligned"* — measured in a browser: an 18px box beside the 16px
+text run it shares the line with). Inline, it has the same baseline as the `.cqt`
+duration that replaces it. A chip armed before the header knew its register is
 re-homed to that slot by the op that sets the flag. Read-only
 throughout, so it adds no audit rows (like the ctx bars and the goal card); the
 one producer change — `ts` in the record — is covered by the `state:fg-live`

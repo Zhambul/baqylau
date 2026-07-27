@@ -1296,8 +1296,15 @@ body.modal-open { overflow: hidden; }
 .blinks { margin-left: 4px; }
 /* the in-flight elapsed (`.chip.blive`) joins the register too: no outline, no accent and
    no glyph — just the dim ticking figure where the final duration will land (the ⏱ it
-   used to lead with was an emoji-capable codepoint, docs/dashboard.md *No emoji*) */
+   used to lead with was an emoji-capable codepoint, docs/dashboard.md *No emoji*).
+   `display: inline` is the load-bearing part, not tidiness: as a `.chip` it is an
+   inline-BLOCK with `overflow: hidden`, and per CSS such a box's baseline is its BOTTOM
+   MARGIN EDGE rather than its text — so the box aligned while the digits inside rode
+   ~2px above the command's baseline ("this live timer is a little bit misaligned";
+   measured in a browser, 18px box vs the 16px text run beside it). Inline, it IS a text
+   run, with the same baseline as the `.cqt` duration that replaces it. */
 .blk[data-quiet] .chip.blive {
+  display: inline; overflow: visible;
   border: none; color: var(--dim); padding: 0; font-weight: 400;
 }
 /* a GROUP-LESS quiet row (the `▷ backgrounded (ctrl+b)` notice) is a plain line too —

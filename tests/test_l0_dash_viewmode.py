@@ -864,7 +864,15 @@ def test_a_command_block_is_a_quiet_note_line_with_its_duration(dash):
     # the words are DIM, and nothing in the line is an accent colour
     assert "var(--dim)" in rules[".blk[data-quiet] .bsum, .blk[data-quiet] .btail,"
                                 " .blk[data-quiet] .cqt"]
-    assert "border: none" in rules[".blk[data-quiet] .chip.blive"]
+    live = rules[".blk[data-quiet] .chip.blive"]
+    assert "border: none" in live
+    # …and the ticking figure must be a TEXT RUN, not the inline-block a `.chip` is: an
+    # inline-block with `overflow: hidden` takes its BOTTOM MARGIN EDGE as its baseline
+    # (CSS), so the box aligned while the digits inside rode ~2px above the command's
+    # baseline ("this live timer is a little bit misaligned" — measured in a browser as
+    # an 18px box beside a 16px text run). Both properties are needed: `overflow` is
+    # what moves the baseline, `display` is what makes the padding/ellipsis moot.
+    assert "display: inline" in live and "overflow: visible" in live
     # the dot carries the outcome through the SAME rules an agent note's does — those
     # are keyed on `data-out` alone, so nothing new was needed for a command block
     assert '[data-out="ok"] .anmark { color: var(--green); }' in css
