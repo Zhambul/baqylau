@@ -2,14 +2,15 @@
 
 A localhost web UI over the whole session estate: every session (live and
 parked) with its mirror stream, scoreboard stats, agents, costs and errors —
-plus the two things a terminal pane can't give you: **drill-down into any
-agent's full activity timeline** and **toast/OS notifications across all
-sessions** when a session starts asking you something or finishes its turn.
+plus the two things a terminal pane can't give you: **agent scope** — the whole
+view re-pointed at any one subagent or teammate — and **toast/OS notifications
+across all sessions** when a session starts asking you something or finishes its
+turn.
 
 It is a CONSUMER, not a producer — read-only **except the control plane** (the
 write endpoints below): everything it *shows* comes through
 `core/sessionapi.py` (the one read-side door — [sessionapi.md](sessionapi.md))
-and `plugins.activity()`. It writes no session state directly; its only state
+and the `plugins` registry fan-outs. It writes no session state directly; its only state
 writes are its own singleton pid-lock and audit rows. The control plane does
 not write session state either — it drives the TERMINAL (types into a window /
 opens a tab) through the `Frontend` interface, and Claude Code's own hooks then
@@ -318,17 +319,18 @@ SECONDARY-source spawns only (a STANDALONE codex host's own rollout is the
 main agent — stamping it would blank that session's web mirror); the one
 in-hook-process producer of agent ops (a subagent's monitor header,
 `monitor_fmt`) passes the explicit `emit(src=)` kwarg. `op_items` drops
-stamped ops (and `server._cut_blocks` skips them when sizing the backlog
-window, so "newest N blocks" means N *visible* blocks). What survives of an
+stamped ops (and `read/mirror._cut_blocks` skips them when sizing the backlog
+window, so "newest N blocks" means N *visible* blocks — both through the ONE
+`opshtml.in_scope` predicate, so a window and its contents can never disagree). What survives of an
 agent is the lead's own record of it — the `subagent_fmt` launch header and
 finish chip — PLUS the two endpoints of the subagent's own contribution: its
 `⇢ prompt` and `⇠ result` blocks. Those are the one exception to the
 main-agent-only rule: the substream stamps them `web=1` (a keep-on-the-web
 override, `core/ops.py`'s "web" field) so `op_items` keeps them despite the
 `src` stamp, while everything in between (its messages, commands, file ops)
-stays drill-down only. The full detail lives in the per-agent drill-down
-(`plugins.activity()`), which reads transcripts, not ops. Why surface just
-those two: a subagent reads on the dashboard as "here's what I asked it, here's
+stays in that agent's OWN scope. The full detail is the same ops stream read
+with the filter inverted — see *Agent scope* below — not a second read model.
+Why surface just those two: a subagent reads on the dashboard as "here's what I asked it, here's
 what it gave back," without the wall of intermediate work the terminal pane
 shows inline. A surfaced prompt/result chip opens with the agent's label (not a
 `▶▷◉■` command glyph), so the client's heuristic classifier files it under the
@@ -394,10 +396,7 @@ alignment-class vocabulary (`ta-c`/`ta-r`), body rows pad/truncate to the
 header width, `\|` is a literal pipe, and the accepted subset limitation is
 that a bare `|` inside a backtick code span still splits the cell. Wide tables
 scroll horizontally inside their own `.md-tbl` wrapper instead of stretching
-the bubble. The timeline endpoints (`/activity`, `/agent`) add an
-`html` field to message/prompt/teammsg entries *additively* (the raw `text`
-stays), and `app.js` uses it via `innerHTML` (server-escaped by construction),
-falling back to `pre(text)` when absent.
+the bubble.
 
 **Recap bubbles** (Claude Code's away-summary). Claude Code writes a one-line
 summary of what happened while you were away — automatically after ~3 min idle,
@@ -409,15 +408,12 @@ subtype it reads), stripping the trailing `(disable recaps in /config)` hint
 (a terminal-only menu, noise in the web bubble) and dropping a hint-only /
 empty summary entirely. Both read models carry it: the merged mirror
 `conversation()` emits a `recap` bubble (`opshtml.msg_html` — an `↩ recap`
-label, cyan, no rewind ↶ since it isn't a re-runnable prompt), and the
-drill-down `timeline()` a `recap` entry (`app.js timelineEntry` — a `k-recap`
-chip). No new audit wiring: a recap is derived from the already-audited session
+label, cyan, no rewind ↶ since it isn't a re-runnable prompt). No new audit wiring: a recap is derived from the already-audited session
 transcript (its path is in the audit `sessions` row), like every other
 conversation record.
 
-**Rich tool rendering** (`opshtml.tool_html` / `tool_output_html`). A tool entry
-in the drill-down timeline used to dump its input as raw JSON; the presenter now
-renders the well-known built-in tools structurally, reusing the single owners of
+**Rich tool rendering** (`opshtml.tool_html` / `tool_output_html`). The
+presenter renders the well-known built-in tools structurally, reusing the single owners of
 their payload shapes rather than re-encoding them: a **Bash** command through
 `codefmt.render` → `ansi_html` (the same `_code_block` the `code` op uses) with a
 dim description; an **Edit/MultiEdit/NotebookEdit** input as a line-numbered
@@ -449,12 +445,10 @@ reflow for free and keeps the no-build rule.
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
 | `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree/root/dirty, below) |
-| `/api/session/<sid>` | overview: `session()` + error count + `ctx` + `git` + `view_mode` (the mirror density, *View modes* below); agent rows carry their own `ctx` |
-| `/api/session/<sid>/ops?after=N` | `{last, html: […]}` server-rendered ops |
-| `/api/session/<sid>/history?before=<opid>&blocks=N` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted) |
-| `/api/session/<sid>/backlog` | the initial newest-`TAIL_BLOCKS` slice (`merged_backlog`): `{last, mpos, oldest, items}` — the gzip-able GET twin of the SSE fresh-connect backlog; the page fetches this first, then connects the session SSE with the cursors (*Lazy backlog* below) |
-| `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
-| `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
+| `/api/session/<sid>[?agent=<aid>]` | overview: `session()` + error count + `ctx` + `git` + `view_mode` (the mirror density, *View modes* below); agent rows carry their own `ctx`. With `?agent=` it also carries `agent_usage` — that agent's token rollup + priced cost for the scoped scoreboard (*Agent scope*) |
+| `/api/session/<sid>/ops?after=N[&agent=<aid>]` | `{last, html: […]}` server-rendered ops; `agent` scopes them to that agent (*Agent scope*) |
+| `/api/session/<sid>/history?before=<opid>&blocks=N[&agent=<aid>]` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted); `agent` scopes them |
+| `/api/session/<sid>/backlog[?agent=<aid>]` | the initial newest-`TAIL_BLOCKS` slice (`merged_backlog`): `{last, mpos, oldest, items}` — the gzip-able GET twin of the SSE fresh-connect backlog; the page fetches this first, then connects the session SSE with the cursors (*Lazy backlog* below) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
 | `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `sched_score` (weekly-quota perishability) and `sched_ok` (5h safety gate) for the new-session default-account picker, plus the `five_hour_eff` figure `sched_ok` itself gates on (*Default account*), plus `limit_hit` (active rate-limit stamp else null) and `logged_out`/`logged_out_msg` (the account's login was revoked — *Logged-out accounts*); backs the new-session picker and the top usage strip; never blocks on the OAuth fetch — past its TTL the model-window cache serves the previous value while one background thread refreshes (*Per-model usage bars*), and changes reach open pages as the global stream's `accounts` event |
 | `/api/stats` | the **Stats / Insights** page (`stats_payload` over `sessionapi.activity_stats`): `{total_sessions, daily:[[day,n]], punch:[[dow,hour,n]], windows:{7d,30d,all}, projects:[…]}` — cross-session aggregates for the contribution heatmap, day×hour punch card, per-window Pulse summary, and per-project cards; server-computed + memo-cached (`STATS_TTL_S`), read-only (no audit rows) (*Stats / Insights* below) |
@@ -480,12 +474,11 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
-| `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
-| `GET /api/session/<sid>/jobs` | the session's background Bash jobs (command + lifecycle state, merging audit streams + ops) for the jobs tab (*Jobs tab*); output via the `/copy/<task>/out` endpoint |
+| `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
+| `GET /api/session/<sid>/monitors[?agent=<aid>]` | the Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*) |
+| `GET /api/session/<sid>/jobs[?agent=<aid>]` | the background Bash jobs (command + lifecycle state, merging audit streams + ops + the launch hook) for the jobs tab (*Jobs tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*); output via the `/copy/<group>/out` endpoint |
 | `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
 | `GET /api/session/<sid>/note?path=<abs>` / `?stem=<stem>` | one memory-wiki note rendered for the viewer (`{name, frontmatter, html, backlinks, missing}`); path-traversal-guarded to `~/wiki/01` (*Memory tab*) |
-| `/events/agent/<sid>/<aid>?pos=N` | one agent's LIVE timeline SSE: `entries` (new increment entries) + `resolve` (cross-increment tool results), from byte cursor `N` (see below) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
 global) pushed over a held response — no websockets dependency, and
@@ -4575,7 +4568,7 @@ in.
 ### What gets an inner scroll box, and what must not
 
 Read content is never boxed; skimmed content is. A **message bubble** (`.msg .md`,
-and the drill-down's `.ent .bd .md`) and a **subagent's `⇢ prompt` / `⇠ result`
+`.msg .md`) and a **subagent's `⇢ prompt` / `⇠ result`
 block body** (`.blk[data-act="agent"] > .bbody`) have NO `max-height`: they grow
 to their content and you scroll the feed. A **generic block body** keeps
 `.bbody`'s 480px scroller, because that is a command's output — the thing the
@@ -4598,84 +4591,101 @@ tab: its information architecture (a short *category* pill like `BASH`/`READ`
 with the detail in the summary). The mirror keeps its own richer pill (glyph +
 command/name) and what it shows — the request was the *look*, not the data.
 
-## Live agent timelines
+## Agent scope
 
-An agent's drill-down (`/api/session/<sid>/agent/<aid>`) is fetched once for its
-rich header (model / usage / tools) and its entries; a RUNNING agent's page then
-grows live over the `/events/agent/<sid>/<aid>` SSE, so you watch a subagent work
-without reloading. The client opens the SSE only when the agent looks live (its
-`agents` row has no `ended_at` — a parked transcript won't grow) and hands it the
-`pos` byte cursor the REST response carried (additive field, from
-`plugins.activity()`), so the stream resumes exactly where the fetch stopped —
-no gap, no overlap (the same race-free hand-off the per-session stream's
-`after`/`mpos` cursors use).
+Clicking a subagent or teammate does not open a separate view — it **re-points
+the session view at that agent**. `#/s/<sid>/a/<aid>/<tab>` is a real route, so a
+scoped page is linkable, survives a reload, and a monitor/job detail nests inside
+it (`…/a/<aid>/m/<task>`). The tab bar, the components and the stream engine are
+the session's own; what changes is a `?agent=<id>` on every read.
 
-**Ordering: newest-first.** The drill-down renders the transcript's chronological
-entries **reversed** (`renderTimelineInto`'s `newestFirst`), so a subagent's most
-recent message reads at the TOP — matching the main agent's mirror stream, which
-prepends (`appendItems`, `st.prepend`). The timeline head stays pinned above. The
-live SSE then *prepends* each new increment (in chronological order, so its newest
-lands topmost and the whole increment sits above older entries) — the mirror of
-the oldest-first append path. The same component still supports an oldest-first
-render (`renderTimelineInto` without `newestFirst`): the server's `/activity`
-main-thread endpoint (`plugins.activity(sid)`) is unchanged and test-covered,
-but the dashboard **no longer surfaces a `activity` tab** for it — it was a
-main-thread timeline that only duplicated the mirror tab's stream, so it was
-retired (2026-07-21).
+**What re-scopes, and what deliberately doesn't.** The **mirror**, **monitors**
+and **jobs** follow the agent. **Memory** and **errors** do not — a memory note
+is the team's and an error belongs to a script, neither has an agent dimension —
+so in scope they keep showing the session's, with a quiet `session-wide` note on
+the tab bar rather than an ambiguous silence. The **agents** tab also stays
+unscoped: a list of the session's agents is what you navigate *between* them
+with. The scoped mirror additionally drops the session's pinned cards (goal,
+tasks, plan, ask) and the **composer** — those are the lead's, and a composer
+that types to the lead while you are looking at an agent is a lie about what it
+does.
 
-Server-side the SSE polls `plugins.activity_since(sid, aid, pos)` at `TICK_S` —
-the incremental companion to `activity()`, sharing timeline()'s per-record entry
-builder (`transcript._fold_record`, the single owner of the record→entry
-mapping). It returns `(entries, resolutions, new_pos)` and the SSE pushes two
-event kinds: `entries` (the new increment's entries, server-enriched by the same
-`enrich_entries` the REST endpoints run — markdown/rich-tool HTML) added to the
-list in the render's order (prepended newest-first, per the ordering note above),
-and `resolve`
-(`[(tool_use_id, output, failed), …]`). A `resolve` exists because a tool_use in
-one increment can have its tool_result land in a LATER one — the entry was
-already serialized and sent, so it can't be patched in place; the client finds
-it by a `data-tool-id` attribute and fills in the result region (a `.tout` block
-kept separate for exactly this), or ignores it when no such entry is on the page
-(a genuine orphan whose tool_use it never saw — increments deliberately don't
-emit orphan-result entries, since a byte window can't distinguish the two). Usage
-is omitted from increments (the header's rollup is a whole-file figure; the
-message-id dedup cursor can't survive a per-call window). **codex has no
-incremental provider** (its rollout renderer lacks the parse split), so a codex
-run's drill-down stays fetch-once — the `activity_since` fan-out finds no provider
-and the SSE idles as a heartbeat keep-alive.
+**Outside scope the session view is the LEAD's own work.** `?agent=` absent
+means the main agent: main-agent-only ops (as it always was), and now jobs and
+monitors the lead launched itself, badge counts included. An agent's belong to
+that agent.
 
-### Monitor events in the drill-down
+**The mirror is the same pipeline with the filter inverted.** An agent's blocks
+are already in the ops stream, stamped `src: sub:<id>` / `team:<id>` — the
+terminal mirror paints them, the web drops them (*Main-agent-only* above).
+`opshtml.in_scope` is the ONE producer-source predicate: with no scope it keeps
+the unstamped (plus `web`-stamped) ops, with a scope it keeps only that agent's.
+`read/mirror.agent_scope` resolves the scope to a SET of exact `src` strings
+rather than passing the bare id, because the stamps are not uniform — a codex run
+is stamped `codex:<label>` while its agent id is the rollout basename
+(`sessionapi.codex_aid`), so its label is looked up off the run's row. In agent
+scope the main thread's **conversation is left out of the merge**: an agent's own
+messages are already ops, so merging the lead's prompts and replies in would put
+a second conversation inside the agent's stream.
 
-A `Monitor` tool launch shows in the timeline as an ordinary `tool` entry (name
-`Monitor`, its command/description in the input). Its **events** — which Claude
-Code writes to the transcript as `queue-operation` `<task-notification>` records
-(docs/streaming.md, *Monitor events in the transcript*) — become their own
-`{"t": "monitor"}` entries (`◉ monitor event` / `◉ monitor completed` pill, the
-event line in the body, cyan `.k-monitor` chip), interleaved in transcript order
-right after the launch. So the drill-down carries a monitor's *whole* story —
-launch, every event, and the stream-ended marker — including for a parked session
-viewed long after (the transcript is durable). These are **not** re-emitted into
-the mirror stream (`conversation()` drops them): the mirror already streams a
-monitor's events live as ops via `claude-stream.py`, so surfacing them from the
-transcript too would double them.
+**One SSE, not two.** Agent scope has no stream of its own — `?agent=` on
+`/events/session/<sid>` scopes the mirror channel only, so a scoped page still
+gets the tab colour, scoreboard, cards and dialogs on the same connection. Note
+the cursor still advances over out-of-scope ops (a tick carrying only the lead's
+work renders to nothing and sends no event), or the stream would re-read them
+forever.
+
+**The scoreboard swap** (below) keeps working: the scoped agent's token rollup +
+priced cost ride on the session payload as `agent_usage` whenever a `?agent=` is
+in play (`read/session.agent_usage` → `plugins.agent_usage` →
+`transcript.agent_usage`, folded through the shared `accounting.usage_fold`).
+It is per-request rather than a field on every agents row because it folds a
+whole transcript — paying that for all of a 28-agent session's rows on every
+overview would be absurd, and only the scoped one is ever shown. A codex run
+declines the fan-out: its tokens are folded from its rollout and priced at its
+footer, so there is nothing for the web to re-price.
+
+**Known gap: pre-stamp history.** Ops written before the `src` stamp carry no
+producer source, so an OLD parked session's agent scope shows an empty mirror.
+This is accepted deliberately — the drill-down timeline was the only view of that
+history, and it is gone.
+
+### What this replaced, and why
+
+Until 2026-07-27 an agent opened a **drill-down timeline**: `/api/session/<sid>/
+agent/<aid>` + `/events/agent/<sid>/<aid>`, backed by `plugins.activity()` /
+`activity_since()` over `transcript.timeline()` (and `codex/rollout.timeline()`),
+rendered by its own `renderTimelineInto`/`timelineEntry` stack. It was a SECOND
+presenter of the same transcript records the mirror already paints — a parallel
+entry vocabulary, its own SSE, its own enrichment pass, its own ordering rule —
+and everything around it stayed stubbornly session-level, so an agent's monitors
+and jobs were invisible while its messages had a whole view of their own.
+
+All of it is deleted. What the timeline could show that the scoped mirror cannot
+is nothing the mirror lacked — it is the same records, painted the way the rest
+of the product paints them. The one genuine loss is pre-stamp history, above.
 
 ### Breadcrumbs (back up the hierarchy)
 
-A subagent drill-down (`showAgent`) prepends an **agent-hierarchy breadcrumb**
-above the timeline — **◆ ‹main agent› › ◇ ‹subagent›** (`agentCrumbs`) — showing
-just the two agent nodes, because the hierarchy is one level deep (a session's
-flat agent list; an agent launching a sub-subagent is not modeled anywhere). The
-**main agent** node is a link to the session's mirror (`#/s/<sid>`) labelled by
-the session title — clicking it is how you go back to the main agent; the current
-**subagent** is the highlighted end pill. Rendered as a boxed bar (`.crumbs`), it
-sits in `ses.body` alongside a child wrapper that `renderTimelineInto` clears —
-the breadcrumb is outside that wrapper so the post-fetch rebuild doesn't wipe it.
-A drill-down also lights the **agents** tab (`showAgent` toggles `.on` onto the
-`…/agents` tab link): the `agent:<id>` pseudo-tab has no tab-bar entry of its
-own, so without this every tab went dark and there was no "you are here" cue —
-the breadcrumb and the lit agents tab now both carry it. (It deliberately does
-NOT re-surface the session/list rungs — those live on the brand link and the tab
-bar; the breadcrumb is purely the main→sub agent relationship.)
+Agent scope prepends an **agent-hierarchy breadcrumb** above the tab's body —
+**◆ ‹main agent› › ◇ ‹subagent›** (`agentCrumbs`) — showing just the two agent
+nodes, because the hierarchy is one level deep (a session's flat agent list; an
+agent launching a sub-subagent is not modeled anywhere). The **main agent** node
+is a link to the session's own mirror (`#/s/<sid>`) labelled by the session title
+— clicking it is how you leave scope; the current **agent** is the highlighted
+end pill. Rendered as a boxed bar (`.crumbs`), it sits at the top of `ses.body`,
+above whatever the open tab renders.
+
+### Monitor events
+
+A `Monitor` tool launch and its **events** — which Claude Code writes to the
+transcript as `queue-operation` `<task-notification>` records (docs/streaming.md,
+*Monitor events in the transcript*) — reach the web through the **monitors tab**
+(below), whose read model merges the transcript's per-monitor event list with the
+audit `streams` lifecycle row. They are deliberately **not** re-emitted into the
+mirror stream (`conversation()` drops them): the mirror already streams a
+monitor's events live as ops via `claude-stream.py`, so surfacing them from the
+transcript too would double them.
 
 ## Monitors tab
 
@@ -5076,11 +5086,9 @@ body op is in the batch and renders empty (`_empty_body`). Deliberately only *in
 batch*: a header whose body was cut off the end of a window is unknown, not empty, and
 must survive — the drop may never be a guess about an op it cannot see.
 
-Still visible in the **drill-down**: `transcript.timeline` folds that same roster
-record into a `prompt` entry, so an agent's activity timeline shows it as a bubble.
-Left alone deliberately — the timeline is the agent's full record, and the fold serves
-the main conversation view too, where a reminder rides along with text the human
-actually typed.
+Nothing else renders it any more: the drill-down timeline that used to fold the
+same roster record into a `prompt` entry is gone with the rest of that read model
+(*Agent scope*), and the scoped mirror shows the ops, which never carried it.
 
 Pre-`note` ops get the wording recovered read-side from the `⇢ prompt` / `⇠ result`
 MARKER (`core/streamfmt.MARK_*`, named there because two surfaces read it):
@@ -5359,9 +5367,8 @@ structurally: the summary's opening sentence is ordinary English that any
 conversation about compaction reproduces verbatim, while the boolean field cannot
 be quoted. Verbose still shows it (it is in the transcript, and it IS what the
 model now sees); default and focus drop it. The `compact_boundary` record itself
-never reached this stream — only the drill-down timeline renders it, as its own
-`context compacted` line — so nothing marks the boundary in the mirror, which is
-deliberate: the collapse is about what you read, and the boundary's one fact
+never reached this stream at all, so nothing marks the boundary in the mirror,
+which is deliberate: the collapse is about what you read, and the boundary's one fact
 (context was compacted) is already on the ctx-saturation bar.
 
 The fourth mark is the only one read out of TEXT: the **teammate-mail envelope**.
@@ -5978,7 +5985,7 @@ the dashboard's payloads — presentation policy; the API itself keeps
 reporting them (they're real state, and the audit `hook_events` decision
 string is the provenance). A row with at least one real field always shows;
 one that's merely thin (desc but no transcript yet) renders dim and stays
-clickable — the layout-derivation fallback in `plugins.activity` sometimes
+clickable — the layout-derivation fallback in `transcript.agent_path` sometimes
 finds a transcript the audit never saw.
 
 ## The "running now" ribbon
@@ -6108,18 +6115,18 @@ throughout, so it adds no audit rows (like the ctx bars and the goal card); the
 one producer change — `ts` in the record — is covered by the `state:fg-live`
 `state_files` row `cmd_pre` already writes with the record as its content.
 
-## Subagent scoreboard swap (drill in → the scoreboard becomes the agent's)
+## Subagent scoreboard swap (in scope → the scoreboard becomes the agent's)
 
-Clicking a subagent (an agent card, or the `#/s/<sid>/a/<aid>` route) doesn't
-just open the drill-down timeline — it **swaps the top scoreboard to that agent's
-own numbers**. `showAgent` sets `ses.agentFocus = {aid, data}`
-and repaints the header; `updateStatsRow` branches on `agentFocus` and calls
+Entering agent scope (an agent card, or the `#/s/<sid>/a/<aid>` route) **swaps
+the top scoreboard to that agent's own numbers**. `renderSessionChrome` derives
+`ses.agentFocus = {aid}` from the scope (rather than clearing it, so a tab switch
+inside scope stays in scope) and repaints the header; `updateStatsRow` branches on `agentFocus` and calls
 `renderAgentScoreboard` instead of the session totals — the prominent header
-**name** (`ses.projEl`) becomes the subagent's (`◇ ‹desc›` / `◈` for a teammate),
+**name** (`ses.projEl`) becomes the agent's (`◇ ‹desc›` / `◈` for a teammate),
 and the stats row shows status, `model·effort`, event count, `⏱` duration, the
 `Σ` token rollup, and `≈` cost, with the ctx row showing the agent's own ctx bar
-and a leading **← session** link that restores the session view (it points at
-`#/s/<sid>`, the mirror = the main agent). The session title returns when a full
+and a leading **← session** link that leaves scope (it points at `#/s/<sid>`,
+the mirror = the main agent). The session title returns when a full
 `renderSessionChrome` rebuilds the header on the way back (the name write is
 skipped mid-inline-rename). The running ribbon hides while focused (it's
 session-scoped).
@@ -6131,10 +6138,8 @@ the single owner of that display on the terminal side, so a per-site copy is a
 bug there too) and `paintCtxRow` (the ctx row is REPLACED on every repaint, and
 hidden when there's no occupancy figure). The one thing that legitimately differs
 is where the four counters come from: the session reads the stats row's
-`tk_in/tk_out/tk_read/tk_create`, an agent its drill-down `usage`
-`in/out/cache/create` — so each caller maps its own fields into `sigmaChip`. The
-agent timeline header (`timelineHead`) shows the same rollup through the same
-owner.
+`tk_in/tk_out/tk_read/tk_create`, an agent its `agent_usage`
+`in/out/cache/create` — so each caller maps its own fields into `sigmaChip`.
 
 The header **state indicator follows the focused agent too**: the badge pill
 (its text and colored dot) and the whole `.shead` state wash switch from the
@@ -6164,17 +6169,17 @@ no gap. The full `renderSessionChrome` rebuild on the way back restores every
 button.
 
 The fast-available fields (status/model/effort/events/ctx/duration) come straight
-off the enriched `ses.agents` row, so the swap is instant on click; the drill-down
-fetch (`/api/session/<sid>/agent/<aid>`) then feeds its `usage` **and** the
-server-priced `cost` back up through `renderTimelineInto`'s `onData` callback,
-and the scoreboard repaints with tokens + cost. Per-agent **cost** is stamped
-server-side by `stamp_agent_cost` (`accounting.cost_usd` over the agent's usage +
-last model) — the ONLY per-agent cost figure there is, since OTEL `costs()` is
-aggregate by `query_source` (main/subagent/auxiliary), never attributable to a
-single `agent_id`. `agentFocus` is cleared by any full `renderSessionChrome` (a
-tab switch or a return to the list), and the SSE `stats`/`costs`/`ctx` events that
-keep flowing are absorbed by the `updateStatsRow` branch — they repaint the agent
-view, never clobber it back to the session.
+off the enriched `ses.agents` row, so the swap is instant on click; the scoped
+session payload's `agent_usage` (fetched with the rest of the meta — no request of
+its own) then fills in the `Σ` tokens and `≈` cost. Per-agent **cost** is priced
+server-side by `read/session.agent_usage` (`accounting.cost_usd` over the agent's
+usage + last model) — the ONLY per-agent cost figure there is, since OTEL
+`costs()` is aggregate by `query_source` (main/subagent/auxiliary), never
+attributable to a single `agent_id`. `agentFocus` follows the scope, so leaving it
+(the ← session link, the breadcrumb, the list) restores the session scoreboard,
+and the SSE `stats`/`costs`/`ctx` events that keep flowing are absorbed by the
+`updateStatsRow` branch — they repaint the agent view, never clobber it back to
+the session.
 
 ## The live ⚠ error badge
 
@@ -6189,16 +6194,18 @@ grew.
 
 ## Codex runs in the agents list
 
-A session's codex runs ride the same agents list and drill-down, with no
+A session's codex runs ride the same agents list and the same scope, with no
 dashboard-side special-casing: `sessionapi.agents()` merges the audit
 `streams` rows of `kind='codex'` in the same row shape (kind `codex`, `desc`
 = the run label, `agent_id` = `sessionapi.codex_aid()` — synthesized from the
 stream's src_path basename, since codex tailers record no hook agent_id), and
-`/api/session/<sid>/agent/<aid>` reaches the codex `plugins.activity()`
-provider (`plugins/codex/rollout.timeline` — the same timeline dict shape as
-the claude one, see [sessionapi.md](sessionapi.md)). A companion job's `.log`
-run shows a card but has no parseable rollout — its drill-down renders the
-"no recorded activity" empty state, same as a transcript-less husk.
+its scoped mirror is the ops that run already painted. That last part needs one
+resolution step the others don't: a codex run is `src`-stamped `codex:<label>`
+while its agent id is the rollout basename, so `read/mirror.agent_scope` looks
+the label up off the run's row (*Agent scope*). A codex run exposes no
+`agent_usage` provider — its tokens are folded from the rollout and priced at
+its footer (`CODEX_PRICES`), so the scoped scoreboard simply shows no Σ/≈cost
+rather than a second, differently-derived figure.
 
 ## Design language
 

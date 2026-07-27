@@ -64,14 +64,15 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
     (the `turn_context`/`event_msg`/`response_item` grammar, exec-arguments
     decode, patch line counts, exit extraction, and `usage_split`, the one
     `total_token_usage` → fresh/out/cached mapping) — mirroring
-    `plugins/claude_code/transcript.py`. Two presenters consume its typed
+    `plugins/claude_code/transcript.py`. ONE presenter consumes its typed
     records: the stream's `Renderer.feed_rollout` (the mirror's capped,
     styled paint — byte-identical to the pre-split renderer, pinned by the
-    e2e codex suite) and `rollout.timeline()` (the UNCAPPED drill-down read
-    model behind the codex `plugins.activity()` provider — same dict shape
-    as the claude timeline, so the dashboard renders codex runs unchanged).
-    The provider resolves a run from the audit `streams` keystone
-    (`kind='codex'`, `src_path` = the rollout) via `sessionapi.codex_runs()`;
+    e2e codex suite). There was a second — `rollout.timeline()`, the uncapped
+    drill-down read model behind a codex `plugins.activity()` provider — and it
+    is gone with that whole read model: a codex run's web view is now the mirror
+    it already paints, scoped (docs/dashboard.md *Agent scope*), resolved from
+    the audit `streams` keystone (`kind='codex'`, `src_path` = the rollout) via
+    `sessionapi.codex_runs()`;
     the run's identity in the `agents()` list is `sessionapi.codex_aid()` —
     the src basename, extension stripped — since a codex run carries no hook
     `agent_id`. Companion `.log` runs are listed but have no drill-down

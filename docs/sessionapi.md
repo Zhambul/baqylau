@@ -91,36 +91,38 @@ Drill-down fidelity lives in the transcripts, and the only code that
 understood their record grammar was welded into the mirror renderer.
 `transcript.py` is the extracted **parse half**: `parse_line()` is the one
 owner of the record shapes (type discrimination, teammate-message unwrapping,
-content-block walk, `result_text` normalisation), and two presenters consume
-its records:
+content-block walk, `result_text` normalisation), and ONE presenter consumes its
+records: `substream_render.Renderer.handle_line` — the mirror's capped, styled
+paint (the existing substream suites are the equivalence pin). Side effects stay
+in the paint/lifecycle half: spawning a live fg tailer is something `_use_bash`
+does *with* a record, never something parsing does.
 
-- `substream_render.Renderer.handle_line` — the mirror's capped, styled paint
-  (unchanged output; the existing substream suites are the equivalence pin).
-  Side effects stay in the paint/lifecycle half: spawning a live fg tailer is
-  something `_use_bash` does *with* a record, never something parsing does.
-- `transcript.timeline()` — the **uncapped** drill-down entries, plus a usage
-  rollup deduped through the same `accounting.usage_fold` both accountants
-  use.
+There were TWO until 2026-07-27. The other was `transcript.timeline()` — the
+uncapped drill-down entries behind a `plugins.activity()` fan-out, a second
+vocabulary for the same records, rendered by its own client stack. The dashboard
+now shows an agent by SCOPING the mirror it already paints (docs/dashboard.md
+*Agent scope*), so that read model, its codex twin (`rollout.timeline()`), both
+fan-outs and the endpoints they served are gone. Two presenters of one grammar
+is a drift hazard the registry tests existed to contain; one presenter needs no
+containing.
 
-Consumers reach timelines via **`plugins.activity(sid, agent_id=None)`** — a
-registry fan-out like `census()` (optional per-plugin attr, first non-None
-wins). This is also how the dependency rule is honored: `core/sessionapi.py`
-imports no plugin; the tool-specific parsing stays in `plugins/claude_code/`,
-which imports the core API for path resolution (audit `streams` first, the
-`subagents/agent-<id>.jsonl` layout derivation as fallback). The parent
-transcript uses the same grammar, so `activity(sid)` with no agent returns
-the main thread's timeline; user turns that arrive as list-content text
-blocks (a parent-transcript shape the mirror deliberately never painted) are
-surfaced by `timeline()` only.
+What survives of it is deliberately narrow: **`plugins.agent_usage(sid,
+agent_id)`** — a registry fan-out like `census()` (optional per-plugin attr,
+first non-None wins) returning one agent's `{model, usage}`, folded through the
+same `accounting.usage_fold` both accountants use, for the web's per-agent
+scoreboard. It reads only assistant usage where the timeline built every entry
+in the file to arrive at the same two numbers. This is also how the dependency
+rule is honored: `core/sessionapi.py` imports no plugin; the tool-specific
+parsing stays in `plugins/claude_code/`, which imports the core API for path
+resolution (`transcript.agent_path`: audit `streams` first, the
+`subagents/agent-<id>.jsonl` layout derivation as fallback). **codex declines
+the fan-out** — a run's tokens are folded from its rollout and priced at its
+footer, so there is nothing for the web to re-price.
 
-**codex has the same split** (`plugins/codex/rollout.py` — the one owner of
-the rollout record shapes; `stream.py`'s `Renderer.feed_rollout` paints its
-typed records byte-identically to the pre-split renderer, pinned by the e2e
-codex suite). Its `timeline()` returns the SAME dict shape as the claude one,
-so the dashboard drill-down renders a codex run with zero special-casing
-(reasoning records and the task/turn lifecycle are deliberately not entries —
-the same fidelity line the claude timeline draws by dropping thinking
-blocks). There is still no durable sid→rollout index, and none is needed:
+**codex has the same parse/paint split** (`plugins/codex/rollout.py` — the one
+owner of the rollout record shapes; `stream.py`'s `Renderer.feed_rollout` paints
+its typed records byte-identically to the pre-split renderer, pinned by the e2e
+codex suite). There is still no durable sid→rollout index, and none is needed:
 recovery goes through the audit `streams` rows (`kind='codex'`, `src_path` =
 the rollout), read via `sessionapi.codex_runs()`. Because codex tailers
 record no hook `agent_id`, the read model synthesizes one —

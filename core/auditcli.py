@@ -236,6 +236,27 @@ ANOMALY_SECTIONS = [
      "SELECT ts, content FROM state_files WHERE session_id=? "
      "AND action='web-interrupt' "
      "AND json_extract(content, '$.stopped')=0", 1),
+    # A nested bg/monitor tailer whose OWNER can be resolved from neither
+    # source: not from its own streams row (hookkit.stream_env's
+    # CLAUDE_STREAM_AGENT, stamped by the three nested launch sites) and not
+    # from the launch hook the read model falls back to (sessionapi.
+    # nested_owners). Such a task is unattributable, so it reads as the LEAD's
+    # own on the dashboard's Jobs/Monitors tabs and never appears under the
+    # agent that ran it (docs/dashboard.md *Agent scope*). Scoped to tasks whose
+    # PostToolUse landed under an agent_id — a genuinely lead-launched job has
+    # no owner to find and is not an anomaly.
+    ("nested job/monitor with no resolvable owner (agent attribution lost)",
+     "SELECT s.kind, s.task_id, s.started_at FROM streams s "
+     "WHERE s.session_id=? AND s.kind IN ('bg','monitor') "
+     "AND (s.agent_id IS NULL OR s.agent_id='') "
+     "AND NOT EXISTS (SELECT 1 FROM hook_events h WHERE h.session_id=s.session_id "
+     "  AND h.hook='PostToolUse' AND h.tool_name IN ('Bash','Monitor') "
+     "  AND s.task_id IN ("
+     "    json_extract(h.payload,'$.tool_response.backgroundTaskId'),"
+     "    json_extract(h.payload,'$.tool_response.taskId'))) "
+     "AND EXISTS (SELECT 1 FROM hook_events h2 WHERE h2.session_id=s.session_id "
+     "  AND h2.agent_id != '' AND h2.hook='PostToolUse' "
+     "  AND h2.tool_name IN ('Bash','Monitor'))", 1),
     # handler != 'subscriber': the universal async subscriber records EVERY hook
     # event alongside the handler's own decision row, so counting both made every
     # normally-started agent look started-twice (a false positive on all sessions

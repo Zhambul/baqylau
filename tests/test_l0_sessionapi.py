@@ -405,6 +405,43 @@ def test_agent_usage_falls_back_to_layout_derivation(monkeypatch, tmp_path):
     assert plugins.agent_usage("act1", "missing-agent") is None
 
 
+def test_nested_owners_prefers_the_stream_stamp_over_the_launch_hook(tmp_path,
+                                                                     monkeypatch):
+    """Ownership of a nested job has two sources and a deliberate order: the
+    tailer's own `streams.agent_id` (hookkit.stream_env's CLAUDE_STREAM_AGENT)
+    is authoritative, and the launch hook recovers the HISTORY that predates
+    that stamp — plus the command, which an agent's job can never get from the
+    ops (it paints under the tool_use_id, not the backgroundTaskId)."""
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    A.session_start({"session_id": "own1", "cwd": str(tmp_path),
+                     "transcript_path": ""})
+    log = P.mirror_log("own1")
+    # STAMPED (a current tailer) — no hook row needed to attribute it
+    A.stream_end(A.stream_start(log, "bg", agent_id="agS", task_id="t-stamped"),
+                 "writer-gone")
+    # UNSTAMPED (history) — only the launch hook knows whose it was
+    A.stream_end(A.stream_start(log, "bg", task_id="t-old"), "writer-gone")
+    A.hook_event({"session_id": "own1", "hook_event_name": "PostToolUse",
+                  "tool_name": "Bash", "agent_id": "agH", "tool_use_id": "toolu_1",
+                  "tool_input": {"command": "echo old"},
+                  "tool_response": {"backgroundTaskId": "t-old"}},
+                 handler="claude-cmd-fmt.py")
+    owners = API.nested_owners("own1")
+    assert owners["t-old"]["agent_id"] == "agH"
+    assert owners["t-old"]["command"] == "echo old"
+    assert owners["t-old"]["tool_use_id"] == "toolu_1"
+    by_task = {j["task"]: j for j in API.jobs("own1", agent=None)}
+    assert by_task["t-stamped"]["agent_id"] == "agS"    # from the stream row
+    assert by_task["t-old"]["agent_id"] == "agH"        # from the launch hook
+    # scoping is EXACT — one agent's jobs never include a sibling's
+    assert [j["task"] for j in API.jobs("own1", agent="agS")] == ["t-stamped"]
+    assert [j["task"] for j in API.jobs("own1", agent="agH")] == ["t-old"]
+    assert API.jobs("own1", agent="") == []            # neither is the lead's
+    assert API.job_count("own1") == 0                  # …so the badge is 0
+    assert API.job_count("own1", "agS") == 1
+    assert API.job_count("own1", None) == 2
+
+
 # ------------------------------------------- account usage read model (relimit)
 
 def test_effective_five_hour_arithmetic():

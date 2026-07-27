@@ -15,7 +15,7 @@ frontends/   terminal adapters — import core/ at most
 plugins/     one directory per agent tool — import core/ + frontends/,
              never each other
 dashboard/   the web dashboard, a CONSUMER package (docs/dashboard.md) —
-             imports core/, the plugins registry root (plugins.activity()),
+             imports core/, the plugins registry root (its read fan-outs),
              AND frontends/ (for its control plane — the two write endpoints
              reach the terminal through frontends.get() the same way the bin/
              renderers do); nothing imports it back except its bin/ entry and
@@ -123,7 +123,7 @@ consumers: presentation-channel delegations to `core.state` (the mirror/
 scorebar's whole diet — same function objects, zero behavior change) plus a
 read model over the state DB (live + parked), the audit
 `sessions`/`streams`/`otel`/`errors` tables (fork-aware via `sid_chain()`),
-the tab DB, and — plugin-side, through `plugins.activity()` — the
+the tab DB, and — plugin-side, through the registry's read fan-outs — the
 transcripts; see [sessionapi.md](sessionapi.md)).
 
 `plugins/claude_code/` is the HOST-tool adapter — everything that reads
@@ -151,9 +151,9 @@ streamers (`stream.py`, `substream.py` — the latter's block rendering lives
 in `substream_render.py`: an import-safe `Renderer` class with per-tool-kind
 dispatch tables, into which the lifecycle module injects its identity and
 tailer hooks; its LINE PARSING lives in `transcript.py`, the parse half of
-the split — one record grammar owner shared with the drill-down
-`timeline()`/`plugins.activity()` read model, see
-[sessionapi.md](sessionapi.md)), the tab dispatch (`tabstatus.py` —
+the split and now its ONLY presenter — the drill-down timeline that was the
+second one is gone with agent scope, see [sessionapi.md](sessionapi.md)),
+the tab dispatch (`tabstatus.py` —
 maps hook payloads and streamer callbacks onto the `core/tabs.py` states),
 and the pane/session lifecycle (`split.py` — now a thin caller into
 `core/hostpane.py`, which it shares with the codex host). Each `bin/claude-*.py`
@@ -168,9 +168,9 @@ launcher), `watch.py` (the discovery watcher — in a Claude host it streams
 every repo codex run; given a `HOST_PID` it becomes a standalone session
 manager, streaming just this codex session's own rollout and owning teardown),
 `stream.py` (one tailer per codex run — the paint half), `rollout.py`
-(rollout-record parsing + the drill-down `timeline()`/`activity()` — the
-parse half of the codex parse/paint split, one record-grammar owner shared
-with the mirror renderer, see [sessionapi.md](sessionapi.md)), and
+(rollout-record parsing — the parse half of the codex parse/paint split, one
+record-grammar owner for the mirror renderer, see
+[sessionapi.md](sessionapi.md)), and
 `session.py` (the standalone-host
 SessionStart handler — see [codex.md](codex.md) › *standalone*). The three
 `claude-codex-*.py` entries plus `claude-codex-session.py` are thin shims in `bin/`.
