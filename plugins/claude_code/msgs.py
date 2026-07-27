@@ -49,7 +49,7 @@ STALE_S = 60                    # an unread message sitting longer than this is 
 
 # --- the MIRROR-EVENT vocabulary (this module owns it) ------------------------
 # Team mail surfaced in the mirror itself: a chip per arrival/read, plus the
-# arrival's summary as a gutter body. It lives HERE rather than in the scorebar
+# arrival's MESSAGE as a gutter body. It lives HERE rather than in the scorebar
 # that paints it, because the web mirror has to read it back — a paint op carries
 # no "this is mail" fact, so dashboard/opshtml/actclass.py recovers the `mail`
 # activity class from exactly these glyphs and colours (the classifier can't
