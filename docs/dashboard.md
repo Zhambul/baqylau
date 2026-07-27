@@ -5341,6 +5341,21 @@ Mechanics worth knowing:
   the top of each pass (`clearViewMarks`) — a leftover would rail a run that is no
   longer open.
 
+  The rail's geometry is `!important`, the second and only other place this
+  stylesheet allows it (the first is the hide classes, and it is the SAME hazard):
+  a row rule sets `margin` too, and being declared later only wins on EQUAL
+  specificity. `.blk`'s `margin: 7px 0` is one class and loses to `.stream > .vrun`,
+  but an AGENT NOTE's box is `.stream > .blk[data-note]` — three — and four with
+  `[data-open="1"]`, so its `margin` SHORTHAND reset the rail's `margin-left` to 0
+  and reopened the gaps: expanding a run of agent notes put every note 13px left of
+  every other member with the rail in disjoint segments (reported 2026-07-27 as *"the
+  alignment of elements is off when I expand the summaries"*). Nothing was wrong in
+  the JS — `.vrun` was on the right nodes — which is why the JS harness could never
+  see it and the check is a CSS property test instead
+  (`test_the_run_rail_outranks_a_rows_own_margin`): no `.stream >` row rule may
+  out-cascade the rail, however specific. The view-mode classes are an outer layer
+  over row styling, and that is what `!important` states here.
+
   The revealed blocks also arrive **folded** (`data-open="0"`), each showing just
   its header line. Expanding a summary asks *which actions were these*, not *dump
   every command's output* — a run of five commands opening at full body is the

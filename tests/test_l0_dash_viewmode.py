@@ -992,6 +992,48 @@ def test_hiding_a_row_beats_its_own_layout_rule(dash):
         "expected a later row rule with its own display (the reason for !important)"
 
 
+def test_the_run_rail_outranks_a_rows_own_margin(dash):
+    """The same trap as the hide above, one axis over — and it shipped, because the
+    rail's own comment said the collision was settled by source order. It was, for
+    `.blk` (one class): `.stream > .vrun` is two and wins. But an AGENT NOTE's box is
+    `.stream > .blk[data-note]` — THREE — and `[data-open="1"]` makes it four, so its
+    `margin` SHORTHAND reset the rail's `margin-left` to 0 and reopened the vertical
+    gaps it closes. Expanding a run of agent notes then put every note 13px left of
+    every other member with the rail in disjoint segments ("the alignment of elements
+    is off when I expand the summaries"). No JS bug: `.vrun` was on the right nodes
+    all along, which is why only a CSS-level check can catch it.
+
+    So the rail's geometry is `!important`, and this is the PROPERTY: no `.stream >`
+    row rule may out-cascade it, however specific it is or wherever it sits."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css)
+
+    rail = [body for sel, body in rules if sel.strip() == ".stream > .vrun"]
+    assert len(rail) == 1, "the run rail needs exactly one owning rule"
+    assert re.search(r"margin:[^;]*!important", rail[0]), \
+        "the rail's margins must outrank any row's own box"
+    # the run's oldest member closes it, and must outrank the (now important) rule above
+    last = [body for sel, body in rules if sel.strip() == ".stream > .vrun.vrun-last"]
+    assert len(last) == 1 and re.search(r"margin-bottom:[^;]*!important", last[0]), \
+        "vrun-last's margin must be important too, or the rail rule swallows it"
+
+    # …and the hazard is real, not hypothetical: at least one STREAM ROW rule sets a
+    # margin at HIGHER specificity than the rail (counting classes + attributes, which
+    # is what decides it here — no ids anywhere in this file)
+    def spec(sel):
+        return len(re.findall(r"\.[a-z0-9-]+|\[[^\]]+\]", sel))
+
+    railspec = spec(".stream > .vrun")
+    competing = [sel.strip() for sel, body in rules
+                 if sel.strip().startswith(".stream >")
+                 and re.search(r"(^|;|\s)margin(-left)?:", body)
+                 and spec(sel) > railspec]
+    assert competing, \
+        "expected a stream row rule with its own margin at higher specificity " \
+        "(the reason for !important)"
+
+
 def test_system_bubble_is_styled_and_is_not_a_rewind_target(dash):
     """The ⚙ SYSTEM flavour has to be DRAWN — a distinct, deliberately neutral
     colour (core/ops.py's SLATE, one `--sys` var rather than a hex per rule), so
@@ -1179,7 +1221,9 @@ def test_expanded_run_rail_is_styled_as_one_group(dash):
     closed) and each revealed block indents under it sharing the rail colour,
     with the vertical gaps closed so the line does not break between cards. These
     rules must also come AFTER the `.stream > .opl/.ol/...` card rules they
-    override — equal specificity, so source ORDER is what decides."""
+    override — equal specificity, so source ORDER is what decides there. Order is
+    NOT enough against a more specific row rule: that is the sibling property test,
+    test_the_run_rail_outranks_a_rows_own_margin."""
     code, css = _get(dash + "/static/style.css")
     assert code == 200
     assert "--runrail:" in css, "the rail colour needs one owner in :root"
@@ -1188,8 +1232,10 @@ def test_expanded_run_rail_is_styled_as_one_group(dash):
     assert head and run
     assert "var(--runrail)" in head.group(1) and "var(--runrail)" in run.group(1)
     assert "margin: 7px 0 0" in head.group(1), "the header must close its gap"
-    for prop in ("margin-top: 0", "margin-bottom: 0", "margin-left"):
-        assert prop in run.group(1), prop
+    # one shorthand: the block-axis gaps closed AND the indent, in a single
+    # declaration that a row rule's own `margin` shorthand cannot half-override
+    assert re.search(r"margin:\s*0 0 0 13px", run.group(1)), \
+        "the rail must close its gaps and indent in one shorthand"
     cards = css.index(".stream > .opl, .stream > .ol")
     assert cards < css.index(".stream > .vrun"), "the rail must override the cards"
 
