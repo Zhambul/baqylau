@@ -721,6 +721,9 @@ const ACT_KIND = {
   bash: "commands", bg: "commands", monitor: "commands", warn: "commands",
   agent: "agents", team: "agents", read: "files", edit: "files", write: "files",
   msg: "messages",
+  // a SKILL is work the session did, not a file or an agent — it files under the
+  // commands chip, the kind filter's catch-all for "the session doing something"
+  skill: "commands",
 };
 
 function refineBlockKind(b, it) {
@@ -895,7 +898,7 @@ const VIEW_FOLD = {
   verbose: [],
   default: ["bash", "read", "monitor", "task", "mail"],
   focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "team",
-          "task", "mail"],
+          "task", "mail", "skill"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -915,6 +918,9 @@ const VIEW_FRAGMENTS = [
   // follows the same shape and the note wording it must agree with
   // (core/streamfmt.TEAM_WORD): a named peer is not a one-shot delegate.
   ["team", "running", "ran", "teammate", "teammates"],
+  // a SKILL, in the same shape (Claude Code has no fragment of its own for one): it
+  // shows as a line in default and is counted here in focus, `used 2 skills`
+  ["skill", "using", "used", "skill", "skills"],
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],

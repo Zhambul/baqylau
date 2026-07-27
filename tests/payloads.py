@@ -162,6 +162,23 @@ def post_sendmessage(s, to="team-lead", summary="Money-cycle dedup complete",
     return d
 
 
+def post_skill(s, skill="slack", args="read https://slack/archives/p178",
+               agent_id=None, success=True, event="PostToolUse",
+               tid="toolu_sk1"):
+    """PostToolUse(Skill) — shape per the live capture 2026-07-27 (2.1.220, 294 of
+    them in the audit): tool_input {skill, args} and tool_response {success,
+    commandName, allowedTools}. Note what is NOT there: the skill's BODY. Claude Code
+    injects the loaded SKILL.md into the conversation as a user-shaped turn, so the
+    args are the only content a mirror row can put behind a click."""
+    d = base(s, event, tool_name="Skill", tool_use_id=tid,
+             tool_input={"skill": skill, "args": args},
+             tool_response={"success": success, "commandName": skill,
+                            "allowedTools": ["Bash"]})
+    if agent_id:
+        d["agent_id"] = agent_id
+    return d
+
+
 def notification(s, message="Claude needs your permission to use Bash"):
     return base(s, "Notification", message=message)
 

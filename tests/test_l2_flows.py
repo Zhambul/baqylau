@@ -828,6 +828,43 @@ def test_f8b_team_mail_message_row(run_hook, test_env, session, seed):
     oracle.assert_clean(test_env, s.sid, allow=("failed tools",))
 
 
+def test_f8c_skill_invocation_is_one_expandable_note(run_hook, test_env, session,
+                                                     seed):
+    """A Skill call gets a mirror block of its own: `⏺ Skill(slack)` on the web, the
+    ARGS behind the click. Nothing rendered skills at all before — the tool fires both
+    tool hooks (measured) but had no formatter, so a `/logs` or a model-invoked skill
+    left no trace in the mirror at all."""
+    from dashboard import opshtml
+    s = session.make()
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
+    run_hook("claude-skill-fmt.py",
+             P.post_skill(s, skill="slack", args="read the thread in #ops"))
+    text = s.ops_text()
+    assert "✦ skill · slack" in text                  # the terminal's own chip
+    assert "read the thread in #ops" in text           # …and the args behind it
+    oracle.assert_clean(test_env, s.sid)
+
+    # the WEB row: one quiet note line, `Skill(slack)`, holding the args
+    items = opshtml.op_items(s.ops(), s.sid)
+    note = next(i for i in items if i.get("act") == "skill")
+    assert "Skill(slack)" in note["html"] and 'class="anote"' in note["html"]
+    assert note["note"] == 1 and note["g"], "the args must be behind the click"
+    body = next(i for i in items if i["g"] == note["g"] and i["t"] == "gut")
+    assert "read the thread in #ops" in body["html"]
+
+    # a SUBAGENT's skill call is not the main session's row (the substream owns that
+    # stream), and a FAILED call still shows — reddened, and saying so
+    run_hook("claude-skill-fmt.py", P.post_skill(s, skill="notify", args="ping",
+                                                 agent_id="asub-1", tid="toolu_sk2"))
+    assert "notify" not in s.ops_text()
+    run_hook("claude-skill-fmt.py",
+             P.post_skill(s, skill="logs", args="prod errors", success=False,
+                          event="PostToolUseFailure", tid="toolu_sk3"))
+    failed = [i for i in opshtml.op_items(s.ops(), s.sid) if i.get("act") == "skill"]
+    assert any("Skill(logs) failed" in i["html"] and i.get("bad") for i in failed)
+    oracle.assert_clean(test_env, s.sid, allow=("failed tools",))
+
+
 # --------------------------------------------------------------------- F9
 
 def test_f9a_cancelled_fg_command_self_heals(run_hook, test_env, session):

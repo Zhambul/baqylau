@@ -57,6 +57,26 @@ def agent_note(label, verb, team=False, dur=""):
     return note + " · " + dur if dur else note
 
 
+# A SKILL invocation's marker and its web wording. `Skill(<name>)` is Claude Code's
+# own — verbatim what its transcript prints (`⏺ Skill(slack)`), asked for in exactly
+# that shape. Here, in core, for the same reason AGENT_WORD/TEAM_WORD are: the producer
+# (plugins/claude_code/skill_fmt.py) stamps the note and the web presenter reads the
+# marker back to classify the row (dashboard/opshtml/actclass.py), and a dashboard
+# module may not reach into a plugin for a string. `✦` is deliberately a glyph no other
+# producer writes — nothing else in the mirror opens with it.
+SKILL_MARK = "✦"
+SKILL_WORD = "Skill(%s)"
+
+
+def skill_note(name, failed=False):
+    """`Skill(slack)` — the web mirror's one-liner for a skill invocation, `Skill(slack)
+    failed` when the call did not succeed (the dot goes red beside it either way, from
+    the op's colour; the word is for the reader who is looking at the line, not the
+    dot)."""
+    note = SKILL_WORD % (name or "?")
+    return note + " failed" if failed else note
+
+
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
     """The block-header label op: '<who> <glyph> <kind>[  tag]…' in the stream's
     colour. `tags` are optional trailing chips (model/effort tag, ctx %) — empty

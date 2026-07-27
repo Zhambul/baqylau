@@ -121,6 +121,10 @@ _ROUTES = {
         # team mail comes from, and the send is the only moment the text exists (the
         # inbox poller sees a fraction of it — docs/dashboard.md, *Team mail*).
         _fmt("claude-mail-fmt.py", "mail_fmt", matcher="SendMessage"),
+        # a SKILL invocation -> one `⏺ Skill(<name>)` note line, the args behind the
+        # click (skill_fmt.py). The response carries no skill body — Claude Code
+        # injects the loaded SKILL.md as a user-shaped turn, not a tool result.
+        _fmt("claude-skill-fmt.py", "skill_fmt", matcher="Skill"),
         _ASK,
         # the task-list kv snapshot (web tasks card): a TaskUpdate status flip
         # (pending→in_progress, →completed, →deleted) fires NO dedicated hook —

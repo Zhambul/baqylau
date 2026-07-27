@@ -4930,6 +4930,36 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   re-cut every focus-mode stream into more summary lines, which is a different
   feature from greying one bubble.
 
+### Skills (`⏺ Skill(slack)`)
+
+A **Skill invocation** is one note line — `⏺ Skill(slack)` in Claude Code's own
+wording, with the ARGS it was called with behind the click. Asked for exactly so:
+*"I want skills in default mode to appear like this `⏺ Skill(slack)`, and in focus mode
+in the summary to appear, and in both places it is expandable"*. So `skill` is in
+`VIEW_FOLD.focus` and NOT in `default`: the line stands in default, folds into `Used 2
+skills` in focus, and is clickable in both (the fold reveals the line, the line reveals
+the args).
+
+Nothing rendered skills at all before this: the tool fires **both** tool hooks (294
+`PreToolUse` + 294 `PostToolUse` rows with `tool_name=Skill` sit in the audit) but had
+no formatter, so a `/logs` or a model-invoked skill left no trace in the mirror.
+
+The row needs no new page machinery — it is a NOTE block like an agent's or a message's,
+because the producer stamps the wording (`plugins/claude_code/skill_fmt.py`, on
+PostToolUse *and* PostToolUseFailure per the invariant). Its three page-side facts are
+its act's table rows: the `commands` filter chip, the `used N skills` fragment, and the
+fold above. Its terminal chip is `✦ skill · <name>` in the semantic table's own
+`VIOLET` — a glyph no other producer writes, which is what lets the classifier read the
+class back off it (`actclass.ACT_SKILL`) without a colour tie-break; the colour gate is
+still there so a stream-palette `✦` could never be claimed as the session's own.
+
+**What is NOT behind the click, and why:** the skill's BODY. `tool_response` is
+`{success, commandName, allowedTools}` — Claude Code injects the loaded `SKILL.md` into
+the conversation as a user-shaped turn (transcript `isMeta`, the mirror's
+`data-injected`), not as a tool result, so the args are the only content the row has.
+A skill invoked with no args gets a line with nothing behind it, and the note block's
+own empty-body guard makes it unclickable rather than opening an empty panel.
+
 **A MONITOR folds in default too** (`VIEW_FOLD.default`), asked for in those words:
 *"also monitors should be in the under summary in default mode"*. A monitor is a
 watcher you set up once and then read only if it fires, so its card standing open in

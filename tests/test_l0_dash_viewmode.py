@@ -596,6 +596,13 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
                                    "shown": ["msg", "msg"]}
     assert d["bgDefault"] == {"sums": [], "shown": ["msg", "bg", "msg"]}
 
+    # a SKILL stands as its own `⏺ Skill(<name>)` line in DEFAULT and is counted into
+    # the summary in FOCUS ("I want skills in default mode to appear like this ⏺
+    # Skill(slack), and in focus mode in the summary to appear")
+    assert d["skillDefault"] == {"sums": [],
+                                 "shown": ["msg", "skill", "skill", "msg"]}
+    assert d["skillFocus"] == {"sums": ["Used 2 skills"], "shown": ["msg", "msg"]}
+
     # the ⚠ audit warning never folds — and it splits the run it sits in
     assert d["warnBreaksRuns"] == {"sums": 2, "shown": ["warn", "msg"]}
 
@@ -849,6 +856,50 @@ def test_a_command_block_is_a_quiet_note_line_with_its_duration(dash):
     # are keyed on `data-out` alone, so nothing new was needed for a command block
     assert '[data-out="ok"] .anmark { color: var(--green); }' in css
     assert '[data-out="bad"] .anmark { color: var(--red); }' in css
+
+
+def test_a_skill_is_one_note_line_shown_in_default_and_counted_in_focus(dash):
+    """`⏺ Skill(slack)`, expandable, in both modes — asked for in those words: *"I want
+    skills in default mode to appear like this ⏺ Skill(slack), and in focus mode in the
+    summary to appear, and in both places it is expandable"*. Nothing rendered skills at
+    all before: the tool fires both tool hooks but had no formatter.
+
+    It needs no new page machinery — it is a NOTE block like an agent's or a message's
+    (the producer stamps the wording), which is what makes it one quiet line in default
+    with its args behind the click. The only page-side facts are its act's three table
+    rows: which filter chip it files under, which summary fragment counts it, and that
+    FOCUS folds it while DEFAULT does not."""
+    from dashboard.opshtml import actclass as AC
+    from core import slots
+    from plugins.claude_code import skill_fmt as SK
+
+    row = _lbl("✦ skill · slack", O.VIOLET, g="sk1")
+    row["note"] = "Skill(slack)"
+    assert AC.classify(row) == (AC.ACT_SKILL, False)
+    # a FAILED call is the same row in the shared failure colour — still a skill, and
+    # now `bad`, so a collapsed run's dot reddens for it
+    assert AC.classify(_lbl("✦ skill · logs", O.RED, g="sk2")) == (AC.ACT_SKILL, True)
+    # …but a ✦ in a STREAM palette is not the session's own row (nothing paints one
+    # today; the gate is what keeps that true)
+    assert AC.classify(_lbl("✦ skill · x", slots.color("sub", 0)))[0] != AC.ACT_SKILL
+    # the glyph and the wording have ONE owner each, in core (the producer stamps the
+    # note, the classifier reads the marker) — never respelled on either side
+    assert SK.SF.SKILL_MARK == "✦" and SK.SF.skill_note("slack") == "Skill(slack)"
+    assert SK.SF.skill_note("logs", failed=True) == "Skill(logs) failed"
+
+    item = opshtml.op_items([row], "sid")[0]
+    assert item["act"] == "skill" and item["note"] == 1
+    assert 'class="anote"' in item["html"] and "Skill(slack)" in item["html"]
+    assert "chip" not in item["html"]
+
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    fold = re.search(r"const VIEW_FOLD = \{(.*?)\n\};", ses, re.S).group(1)
+    modes = dict(re.findall(r"\n  (verbose|default|focus): \[([^\]]*)\]", fold))
+    assert '"skill"' in modes["focus"], "focus folds it into the summary"
+    assert '"skill"' not in modes["default"], "default keeps the line standing"
+    assert '["skill", "using", "used", "skill", "skills"]' in ses
+    assert re.search(r"skill: \"commands\"", ses)
 
 
 def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):

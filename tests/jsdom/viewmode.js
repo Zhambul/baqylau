@@ -126,6 +126,7 @@ const F = {
   warn: { act: "warn", kind: "commands" },
   memread: { act: "read", kind: "memory" },
   mon: { act: "monitor", kind: "commands" },      // ◉ a monitor block
+  skill: { act: "skill", kind: "commands" },      // ⏺ Skill(<name>)
   task: { act: "task", kind: "commands" },        // ✚/✓ task-list rows
   mail: { act: "mail", kind: "commands" },        // ● team mail (header + body)
   // a subagent's own blocks, both carrying its src id: one AGENT, four rows
@@ -225,6 +226,12 @@ const mons = scene("default", [F.prompt, F.mon, F.mon, F.reply]);
 out.monitorDefault = { sums: sums(mons).map(s => s.text), shown: shown(mons) };
 const jobs = scene("default", [F.prompt, { act: "bg", kind: "commands" }, F.reply]);
 out.bgDefault = { sums: sums(jobs).map(s => s.text), shown: shown(jobs) };
+
+// a SKILL stands as its own line in default and is COUNTED in focus
+const skD = scene("default", [F.prompt, F.skill, F.skill, F.reply]);
+const skF = scene("focus", [F.prompt, F.skill, F.skill, F.reply]);
+out.skillDefault = { sums: sums(skD).map(s => s.text), shown: shown(skD) };
+out.skillFocus = { sums: sums(skF).map(s => s.text), shown: shown(skF) };
 
 out.singular = sums(scene("default", [F.prompt, F.read, F.fg]))[0].text;
 out.plural = sums(scene("default",

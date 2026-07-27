@@ -57,11 +57,12 @@ ACT_AGENT   = "agent"     # a SUBAGENT launch, prompt or result (a one-shot dele
 ACT_TEAM    = "team"      # …the same, for an agent-TEAM member (a named, mailable peer)
 ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
 ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
+ACT_SKILL   = "skill"     # a Skill invocation (✦ / `Skill(<name>)`)
 ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
 ACT_MSG     = "msg"       # conversation text (stamped by read.mirror, not here)
 
 ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
-        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_WARN, ACT_MSG)
+        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_SKILL, ACT_WARN, ACT_MSG)
 
 # The main session's own command colours — the semantic table, imported. A chip
 # in any of these is main-session command activity; anything else is a palette
@@ -101,6 +102,9 @@ _CMD_KIND_MUTE = "foreground"
 # what happened before these classes existed: a team session's summary counted
 # its mail as "watched 7 monitors".
 _MAIL_RGB = (tuple(MSGS.MSG_NEW_RGB), tuple(MSGS.MSG_READ_RGB))
+
+# …and a SKILL row's two: its own semantic hue, and RED when the call failed.
+_SKILL_RGB = (tuple(O.VIOLET), tuple(O.RED))
 
 # The file-op one-liner's shape, `verb(name)` — built FROM its owner's verb set
 # so the three verbs live in exactly one place (core/streamfmt.file_line paints
@@ -407,6 +411,14 @@ def _classify(op):
         return (ACT_MAIL if mail else ACT_MONITOR), bad
     if head in TASKS.GLYPHS:
         return ACT_TASK, bad
+    if head == SF.SKILL_MARK:
+        # ✦ is this producer's alone (skill_fmt.py) — no palette wears it and nothing
+        # else in the mirror opens with it, so unlike ▶/◉ it needs no colour to
+        # disambiguate. The colour gate is still here for the same reason it is
+        # everywhere else: a semantic hue (its own VIOLET, or RED when the call failed)
+        # is the main session's work, a palette hue would be somebody's stream.
+        if tuple(op.get("c") or ()) in _SKILL_RGB:
+            return ACT_SKILL, bad
     if head == _GLYPH_BG:
         return ACT_BG, bad
     if head == _GLYPH_BASH:

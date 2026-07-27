@@ -286,6 +286,7 @@ GREEN  = (152, 195, 121)   # success / additions / a written file
 YELLOW = (229, 192, 123)   # modification / warning
 BLUE   = (97, 175, 239)    # a read
 AMBER  = (214, 153, 92)    # a task entering the list
+VIOLET = (198, 120, 221)   # a skill invocation
 
 
 def fmt_dur(sec, decimals=True):

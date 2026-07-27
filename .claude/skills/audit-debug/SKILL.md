@@ -1649,6 +1649,19 @@ New always-audited swallow sites (previously silent — their absence used to ma
   unhosted or already parked. The poller's `msg-transitions` rows are the SECOND source
   and now deliberately carry no text — a mail row with no message behind it is expected
   there and is not the bug (docs/dashboard.md *Team mail*).
+- **A skill invocation is missing from the mirror / shows no args** — since 2026-07-27
+  a `Skill` call gets its own row (`⏺ Skill(<name>)`, the args behind the click):
+  `hook_events` where `handler='claude-skill-fmt.py'`, one row per call, its `decision`
+  carrying `skill <name> (N chars of args)`. Both tool hooks fire for this tool, so a
+  MISSING row with a `subscriber` row for the same `tool_use_id` means the step crashed
+  (`errors` under `script='claude-skill-fmt.py'`); `ignored: subagent event` is correct
+  and expected for an agent's own skill call (the substream renders that stream), and
+  `ignored: no state DB` means the session was unhosted or already parked. `0 chars of
+  args` is not a bug — a skill invoked without args has nothing to put behind the click,
+  and the line is deliberately unclickable rather than opening an empty panel. Note the
+  skill's BODY is never in the payload: Claude Code injects the loaded `SKILL.md` as a
+  user-shaped turn (the mirror's `data-injected`), so "the row doesn't show the skill's
+  instructions" is by design (docs/dashboard.md *Skills*).
 - **Mirror resizes to the wrong width / preset lands far off** — the geometry
   walk (`frontends/kitty.py` `split_geometry`, reached via
   `plugins/claude_code/split.py mirror_geometry`) resolves the mirror's

@@ -21,6 +21,7 @@ ALL_HANDLERS = [
     ("claude-subagent-fmt.py", ("start",)),
     ("claude-subagent-fmt.py", ("stop",)),
     ("claude-task-fmt.py", ()),
+    ("claude-skill-fmt.py", ()),
     ("claude-stop-fmt.py", ()),
     ("claude-split.py", ("open",)),
     ("claude-split.py", ("close",)),
