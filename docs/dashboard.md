@@ -4920,6 +4920,29 @@ a TEAMMATE's spawn record is only reminders (its real instructions arrive as mai
 there is no brief to show), and the page also refuses a click that would reveal an
 empty panel.
 
+**…and a launch with no brief is not a ROW either.** Dropping the body left the
+header standing, which is a worse artefact than the one it fixed, because a launch
+opens the agent's transcript with **two** user records: the brief, then a record that
+is nothing but the addressable-teammates roster reminder (measured 2026-07-27,
+v2.1.220, on a 20-agent team — every launch, both records parsing as `prompt`). Each
+painted its own `⇢ prompt` block, so the feed carried two identical `Agent "Explore"
+launched` notes and only ONE of them opened onto anything: the reported *"why one is
+expandable where I can see the initial prompt and the other is not"*. Fixed at the
+PRODUCER — `substream_render.render_prompt` strips first and returns without emitting
+when nothing is left, so the block exists in neither surface (the terminal pane showed
+the same empty pair; a web-only drop would have left it there). Ops **already on
+disk** get the same drop read-side: `op_items` skips a `⇢ prompt` / `⇠ result` chip
+(`actclass.agent_brief` — the marker, so it holds for pre-`note` history too) whose
+body op is in the batch and renders empty (`_empty_body`). Deliberately only *in the
+batch*: a header whose body was cut off the end of a window is unknown, not empty, and
+must survive — the drop may never be a guess about an op it cannot see.
+
+Still visible in the **drill-down**: `transcript.timeline` folds that same roster
+record into a `prompt` entry, so an agent's activity timeline shows it as a bubble.
+Left alone deliberately — the timeline is the agent's full record, and the fold serves
+the main conversation view too, where a reminder rides along with text the human
+actually typed.
+
 Pre-`note` ops get the wording recovered read-side from the `⇢ prompt` / `⇠ result`
 MARKER (`core/streamfmt.MARK_*`, named there because two surfaces read it):
 `<who>` is the text before it, the tags after it are dropped, and there is no

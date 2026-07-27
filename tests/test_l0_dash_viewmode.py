@@ -913,6 +913,50 @@ def test_an_agents_brief_carries_no_injected_system_reminders(dash):
     assert "if (!b.body.childElementCount) return;" in ses
 
 
+def test_a_bodiless_launch_note_is_dropped_from_history():
+    """The other half of the roster record (see the producer's own test in L1c): a
+    launch opens the agent's transcript with TWO user records, and the second is
+    nothing but the addressable-teammates <system-reminder>. Live sessions no longer
+    paint that block at all, but the ops of a PARKED or long-running session are on
+    disk and no restart can re-stamp them — so the feed kept showing two identical
+    `Agent "X" launched` notes, one of which expanded onto nothing ("why one is
+    expandable where I can see the initial prompt and the other is not"): dropping
+    the reminder BODY (the sibling test above) left the header behind.
+
+    So the read side drops the header too, when the body beside it renders empty —
+    and, deliberately, only then: a header whose body is not in this batch is
+    UNKNOWN, not empty, and must survive."""
+    from core import ops as O
+    from core import slots
+    from core import streamfmt as SF
+    from dashboard import opshtml
+    rgb = slots.color("sub", 0)
+
+    def pair(text, g):
+        return [SF.chip("Explore", *SF.MARK_PROMPT, rgb, g=g, web=True,
+                        note='Agent "Explore" launched'),
+                O.gut(text, rgb, g=g, web=True)]
+
+    # the roster record: header AND body gone, so the launch is one note, not two
+    assert opshtml.op_items(pair("<system-reminder>roster</system-reminder>", "b1"),
+                            "sid") == []
+    # the real brief keeps both halves — the note and the click that opens it
+    items = opshtml.op_items(pair("Find every call site of pick().", "b2"), "sid")
+    assert len(items) == 2
+    assert 'Agent &quot;Explore&quot; launched' in items[0]["html"]
+    assert "Find every call site" in items[1]["html"]
+    # a header ALONE (its body cut off the end of this window) still shows: the drop
+    # may never be a guess about an op it cannot see
+    alone = opshtml.op_items(pair("Find every call site of pick().", "b3")[:1], "sid")
+    assert len(alone) == 1 and 'launched' in alone[0]["html"]
+    # …and the same for a ⇠ result, the other block whose point is its body
+    res = [SF.chip("Explore", *SF.MARK_RESULT, rgb, g="b4", web=True,
+                   note='Agent "Explore" finished'),
+           O.gut("<system-reminder>nothing to report</system-reminder>", rgb,
+                 g="b4", web=True)]
+    assert opshtml.op_items(res, "sid") == []
+
+
 def test_hiding_a_row_beats_its_own_layout_rule(dash):
     """The bug three JS fixes chased and none could reach: `.vhide`/`.fhide` are
     ONE-CLASS selectors, and so is every stream row's own rule — some of which set

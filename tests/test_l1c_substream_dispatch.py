@@ -109,3 +109,36 @@ def test_agent_message_and_result_are_uncapped(monkeypatch):
     # the skimmed kinds still have their ceilings (and the shared cap() still works)
     assert SR.cap(body, SR.CAP_BODY).endswith("more lines)")
     assert not hasattr(SR, "CAP_MSG"), "a re-added message cap"
+
+
+def test_a_launch_with_no_brief_paints_no_block(monkeypatch):
+    """A launch opens the agent's transcript with TWO user records, not one: the
+    brief, then a record that is NOTHING but the addressable-teammates roster
+    <system-reminder> (measured 2026-07-27, v2.1.220, on a 20-agent team). Both
+    parse as `prompt`, so each painted its own ⇢ prompt block — the web feed showed
+    two identical `Agent "X" launched` notes of which only ONE opened onto the brief
+    ("why one is expandable where I can see the initial prompt and the other is
+    not"), and the terminal pane showed the same pair with an empty gutter.
+
+    The reminders are stripped BEFORE the block is opened, so a record with nothing
+    left paints nothing at all — not a header over an empty body. Pinned here rather
+    than at the web layer because the block must not exist in EITHER surface."""
+    emitted = []
+    monkeypatch.setattr(SR.O, "emit", lambda log, *ops: emitted.extend(ops))
+    monkeypatch.setattr(SR.O, "new_group", lambda log: "g1")
+    r = make_renderer()
+
+    roster = ("<system-reminder>\nOther agents active in this session, addressable "
+              "via SendMessage({to: name, message}): main, rev-ui, rev-observe."
+              "\n</system-reminder>")
+    r.render_prompt(roster)
+    assert emitted == [], "a reminder-only record opened a block"
+
+    # …and the REAL brief still paints its pair, both halves stamped for the web
+    r.render_prompt("Review the clients subtree and report every bug.")
+    assert len(emitted) == 2
+    head, body = emitted
+    assert "⇢ prompt" in head["s"] and head["note"] == 'Agent "tester" launched'
+    assert body["s"].strip() == "Review the clients subtree and report every bug."
+    assert head["web"] == 1 and body["web"] == 1
+    assert head["g"] == body["g"] == "g1"

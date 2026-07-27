@@ -213,11 +213,24 @@ class Renderer:
         # The spawn prompt is the other subagent block the web dashboard's main
         # mirror surfaces (web=True) — see flush_msg above and core/ops.py's "web".
         self.flush_msg()
+        # A launch opens the agent's transcript with TWO user records, not one: the
+        # brief, then a record that is NOTHING but the addressable-teammates roster
+        # <system-reminder> (measured 2026-07-27, v2.1.220, on a 20-agent team). Both
+        # parse as `prompt`, so each painted its own ⇢ prompt block — two identical
+        # `Agent "X" launched` lines in the web feed, and only ONE of them opened onto
+        # the brief ("why one is expandable where I can see the initial prompt and the
+        # other is not"). The reminder-only one is machinery with nothing behind the
+        # click, so it paints NOTHING: strip first, and a block with no brief left is
+        # not a block. Not a web-side drop — the terminal pane showed the same empty
+        # pair. (Ops already ON DISK can't be re-stamped; the web drops their
+        # bodiless note in dashboard/opshtml/ops.py.)
+        brief = cap(TR.strip_reminders(text).strip(), CAP_PROMPT)
+        if not brief:
+            return
         g = O.new_group(self.log)
         O.emit(self.log, self.chip(*SF.MARK_PROMPT, g=g, lk=O.COPY_ALL, web=True,
                                    note=self.agent_note("launched")),
-               self.gutter(cap(TR.strip_reminders(text).strip(), CAP_PROMPT),
-                           g=g, web=True))
+               self.gutter(brief, g=g, web=True))
 
     def render_teammsg(self, sender, body):
         # An incoming agent-team message (mail from another teammate or the lead).

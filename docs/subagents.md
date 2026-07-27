@@ -16,7 +16,11 @@ for the counters these streams feed).
     **prompt** (`<type> ⇢ prompt` — with Claude Code's injected
     `<system-reminder>` blocks stripped, `transcript.strip_reminders`: the roster of
     addressable teammates and friends arrived ahead of the actual brief, and they are
-    machinery, not the task), each **message** (`<type> ✎ message`), each
+    machinery, not the task — and a launch opens the transcript with **two** user
+    records, the brief and then one that is *only* that roster, so a record with
+    nothing left after the strip paints **no block at all** rather than a header over
+    an empty gutter, measured 2026-07-27 on v2.1.220), each **message**
+    (`<type> ✎ message`), each
     **command** (`<type> ▶ foreground` / `<type> ▷ background` — agent name +
     kind keyword), **file ops** (`<type> Read(name)` / `<type> Update(name) +N -M`
     — led by the agent's name in its colour, so a Read/Update/Write is attributable

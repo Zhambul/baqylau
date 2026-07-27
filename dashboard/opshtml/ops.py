@@ -179,6 +179,19 @@ def _body_follows(ops, i):
     g = ops[i].get("g")
     return nxt.get("g") == g if g else not nxt.get("g")
 
+
+def _empty_body(ops, i, key):
+    """Does the block opened at ops[i] have NOTHING behind its click — its body op
+    present in this batch but rendering to nothing? Fails toward SHOWING: a body that
+    isn't in the batch (a window cut between a header and its body) is unknown, not
+    empty, so the header stays. Its one caller is the bodiless-note drop above."""
+    nxt = ops[i + 1] if i + 1 < len(ops) else None
+    if not isinstance(nxt, dict) or nxt.get("t") not in _BODY_OPS:
+        return False
+    if nxt.get("g") != ops[i].get("g"):
+        return False
+    return not op_html(nxt, key)
+
 # The bullet a web NOTE line opens with — Claude Code's own marker for the same
 # kind of one-line activity notice in its transcript. It stands in the summary
 # line's DOT column (see the `.anote` rules), so no trailing space: the gap is CSS.
@@ -244,6 +257,13 @@ def op_items(ops, key="", ids=None, carry=None):
             # the main session's own `▶ <type> · <desc>` launch/resume header —
             # dropped here because the substream's ⇢ prompt block says the same
             # thing AND holds the brief behind the click (see agent_header)
+            continue
+        if actclass.agent_brief(op) and _empty_body(ops, i, key):
+            # a ⇢ prompt / ⇠ result chip with NOTHING behind the click — the roster
+            # <system-reminder> record a launch opens with, whose body op this layer
+            # drops (see op_html's `web` branch). Live sessions no longer emit the
+            # block at all (substream_render.render_prompt); this is the same drop for
+            # ops ALREADY ON DISK, which no restart can re-stamp.
             continue
         h = op_html(op, key)
         if not h:

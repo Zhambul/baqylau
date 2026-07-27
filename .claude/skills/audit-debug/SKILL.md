@@ -153,6 +153,25 @@ New always-audited swallow sites (previously silent — their absence used to ma
   stamped; `claude-cmd-fmt.py` etc. should not — except `claude-monitor-fmt.py`,
   whose agent-launched monitors are stamped via the explicit `emit(src=)`).
 
+- **One launch shows TWO `Agent "<name>" launched` notes, and only one of them
+  expands onto the brief** (reported 2026-07-27; fixed same day): not a duplicate
+  hook or a double-spawned tailer — Claude Code opens a subagent's transcript with
+  **two `type=user` records**, the brief and then one that is *nothing but* the
+  addressable-teammates roster `<system-reminder>`. Both parse as `prompt`, so the
+  substream painted a `⇢ prompt` block for each, and the reminder-only one's body is
+  stripped away on the web, leaving a note with nothing behind the click. The tell is
+  in the ops rows, one query: `sql "SELECT id, json_extract(op,'$.g'),
+  json_extract(op,'$.src'), substr(json_extract(op,'$.s'),1,40) FROM ops WHERE
+  session_id='<sid>' AND json_extract(op,'$.s') LIKE '%⇢ prompt%' ORDER BY id"` —
+  **two prompt labels with DIFFERENT `g` and the SAME `src`** is this shape (read the
+  next row after each: one body is the brief, the other opens `<system-reminder>`).
+  Current builds emit neither op (`substream_render.render_prompt` returns when the
+  strip leaves nothing) and drop the stale pair read-side, so seeing it means the ops
+  predate the fix (a parked or long-running session) or the tailer is running old
+  code — check `streams.started_at` against the fix. A DOUBLED tailer looks different:
+  every block duplicates, not just the launch, and there are two `streams` rows for
+  the one `agent_id`.
+
 - **A message the terminal TOOK BACK is still in the web stream** (the user
   cancelled a prompt with Esc-Esc right after sending, or rewound, and the
   dashboard still shows it): this leaves NO audit rows — the evidence is the

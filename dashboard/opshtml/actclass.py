@@ -168,6 +168,21 @@ def legacy_agent_note(op):
         return None                     # unreadable: keep the chip
 
 
+def agent_brief(op):
+    """True for a subagent's ⇢ prompt / ⇠ result CHIP — live or pre-`note` — the two
+    blocks whose whole point is the BODY behind the click (the brief, the result).
+    Read off the same markers as the wording above, so it holds for both eras. Its
+    one reader is the bodiless-note drop in ops.py: such a chip with nothing behind
+    it is not a block."""
+    try:
+        if op.get("t") != "label":
+            return False
+        text = _plain(op)
+        return any(text.find(mark) > 0 for mark, _verb in _LEGACY_NOTE)
+    except Exception:
+        return False                    # unreadable: keep it (fail toward showing)
+
+
 def mail_pair(op):
     """A team-mail chip -> (from, to, kind), or None; kind is `sent` (the ✉ MESSAGE
     row, written at send time and carrying the text), `new` or `read` (the inbox
