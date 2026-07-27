@@ -84,8 +84,8 @@ from dashboard.notify import broker, channels, notifier, presence  # noqa: F401 
 from dashboard.notify.broker import BROKER, Broker  # noqa: F401
 from dashboard.notify.notifier import NOTIFIER, Notifier  # noqa: F401
 from dashboard.notify.presence import (  # noqa: F401  -- facade re-export
-    VIEW_TTL_S, composing, device_seen, mark_device, mark_viewing,
-    mru_push_targets, session_ended, web_viewing,
+    TERMINAL, VIEW_TTL_S, composing, device_active, device_seen, mark_device,
+    mark_terminal, mark_viewing, route, session_ended, web_viewing,
 )
 # NOTE: VIEW_TTL_S is the one number here a test must patch on the OWNER
 # (`DS.presence.VIEW_TTL_S`) — this alias is a read handle.

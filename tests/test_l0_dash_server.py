@@ -581,10 +581,15 @@ def test_notify_suppressed_when_global_toggle_off(monkeypatch):
     assert supp and supp[0][3].get("reason") == "global-off"
 
 
-def _escalation_notifier(monkeypatch, clock):
-    """A bare Notifier wired for device-first/escalation timing tests: a
-    controllable monotonic `clock`, one 'done' tab on window '7', _watching off,
-    _telegram/_webpush recorded by the caller (returned as (sent, pushed))."""
+def _escalation_notifier(monkeypatch, clock, target="mac"):
+    """A bare Notifier wired for routing/escalation timing tests: a controllable
+    monotonic `clock`, one 'done' tab on window '7', _watching off, presence
+    routed to a browser device (override the `route` patch for the terminal /
+    no-device cases), _telegram/_webpush recorded by the caller."""
+    monkeypatch.setattr(DS.presence, "route",
+                        lambda: (target, [{"endpoint": "https://p/x",
+                                           "device": target}],
+                                 {"target": target, "candidates": []}))
     monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0.0)
     monkeypatch.setattr(DS.config, "ESCALATE_S", 300.0)
     monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
@@ -609,7 +614,7 @@ def test_device_push_first_then_telegram_escalation(monkeypatch):
     n = _escalation_notifier(monkeypatch, clock)
     sent, pushed = [], []
     monkeypatch.setattr(n, "_telegram", lambda e, *a: sent.append(e))
-    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    monkeypatch.setattr(n, "_webpush", lambda e, t: (pushed.append(t), True)[1])
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()                                     # baseline
@@ -632,7 +637,7 @@ def test_escalation_cancelled_when_you_act(monkeypatch):
     n = _escalation_notifier(monkeypatch, clock)
     sent, pushed = [], []
     monkeypatch.setattr(n, "_telegram", lambda e, *a: sent.append(e))
-    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    monkeypatch.setattr(n, "_webpush", lambda e, t: (pushed.append(t), True)[1])
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()
@@ -646,19 +651,45 @@ def test_escalation_cancelled_when_you_act(monkeypatch):
 
 
 def test_no_device_falls_back_to_telegram_immediately(monkeypatch):
-    """With nothing to push to (_webpush → False), Telegram is the IMMEDIATE
-    fallback at stage 1 — no on-device channel to escalate from."""
+    """With nothing to push to (presence routes nowhere), Telegram fires at
+    once — there is no on-device channel to escalate from."""
     clock = [0.0]
     n = _escalation_notifier(monkeypatch, clock)
+    monkeypatch.setattr(DS.presence, "route",
+                        lambda: (None, [], {"target": None, "candidates": []}))
     sent = []
     monkeypatch.setattr(n, "_telegram", lambda e, reason=None: sent.append(reason))
-    monkeypatch.setattr(n, "_webpush", lambda e: False)
+    monkeypatch.setattr(n, "_webpush", lambda e, t: pytest.fail("no targets"))
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()
     states["7"] = "awaiting-response"
     n.scan()                                     # no device → Telegram now
     assert sent == ["no-device"] and "7" not in n.pending   # reason audited
+
+
+def test_terminal_presence_routes_straight_to_telegram(monkeypatch):
+    """You were last AT THE TERMINAL: the alert goes to Telegram IMMEDIATELY
+    (nothing else reaches a machine whose browser is shut) and does NOT arm an
+    escalation — a second identical message 5 minutes later says nothing new,
+    and Telegram already reaches every device you own."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
+    monkeypatch.setattr(DS.presence, "route",
+                        lambda: (DS.TERMINAL, [],
+                                 {"target": DS.TERMINAL, "candidates": []}))
+    sent = []
+    monkeypatch.setattr(n, "_telegram", lambda e, reason=None: sent.append(reason))
+    monkeypatch.setattr(n, "_webpush", lambda e, t: pytest.fail("terminal: no push"))
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()
+    states["7"] = "awaiting-response"
+    n.scan()                                     # same tick as the transition
+    assert sent == ["terminal"] and "7" not in n.pending
+    clock[0] = 1000                              # …and no 5-minute duplicate
+    n.scan()
+    assert sent == ["terminal"]
 
 
 def test_telegram_always_sends_both_at_stage1(monkeypatch):
@@ -669,7 +700,7 @@ def test_telegram_always_sends_both_at_stage1(monkeypatch):
     monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM_ALWAYS", True)
     sent, pushed = [], []
     monkeypatch.setattr(n, "_telegram", lambda e, reason=None: sent.append(reason))
-    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    monkeypatch.setattr(n, "_webpush", lambda e, t: (pushed.append(t), True)[1])
     states = {"7": "working"}
     monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
     n.scan()
@@ -678,10 +709,23 @@ def test_telegram_always_sends_both_at_stage1(monkeypatch):
     assert len(pushed) == 1 and sent == ["always"] and "7" not in n.pending
 
 
-def test_mru_push_targets_picks_most_recent_device(monkeypatch):
-    """The on-device push goes to the subscriptions of the device with the
-    newest presence beat — not every subscription (the whole point: one device,
-    the one you're working on)."""
+def test_telegram_reason_separates_no_device_from_push_off():
+    """The stage-1 Telegram reason names WHICH of four situations sent it —
+    keeping `push-off` (a device was routed to, the push channel couldn't
+    deliver) apart from `no-device` (nothing subscribed), because reading the
+    first as the second sends you hunting for a subscription that exists."""
+    reason = DS.notifier.telegram_reason
+    subs = [{"endpoint": "https://p/mac", "device": "mac"}]
+    assert reason(True, "mac", subs) == "always"
+    assert reason(False, DS.TERMINAL, []) == "terminal"
+    assert reason(False, "mac", subs) == "push-off"
+    assert reason(False, None, []) == "no-device"
+
+
+def test_route_picks_most_recent_device(monkeypatch):
+    """The alert goes to the subscriptions of the device with the newest
+    presence beat — not every subscription (the whole point: one device, the
+    one you're at)."""
     subs = [{"endpoint": "https://push/mac", "keys": {}, "device": "mac"},
             {"endpoint": "https://push/ipad", "keys": {}, "device": "ipad"}]
     monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
@@ -691,7 +735,8 @@ def test_mru_push_targets_picks_most_recent_device(monkeypatch):
     DS.mark_device("ipad")
     clock[0] = 200
     DS.mark_device("mac")                       # mac is now most-recent
-    targets, decision = DS.mru_push_targets()
+    target, targets, decision = DS.route()
+    assert target == "mac"
     assert [s["endpoint"] for s in targets] == ["https://push/mac"]
     # the decision dict feeds the notify-route audit: chosen device + every
     # candidate's presence age, so "wrong device buzzed" is answerable
@@ -700,44 +745,50 @@ def test_mru_push_targets_picks_most_recent_device(monkeypatch):
     assert ages["mac"] == 0.0 and ages["ipad"] == 100.0
     clock[0] = 300
     DS.mark_device("ipad")                      # ...and now the iPad
-    assert [s["endpoint"] for s in DS.mru_push_targets()[0]] == ["https://push/ipad"]
+    assert [s["endpoint"] for s in DS.route()[1]] == ["https://push/ipad"]
     DS.presence._DEVICE_SEEN.clear()
 
 
-def test_mru_push_targets_legacy_untagged_sends_all(monkeypatch):
+def test_route_prefers_the_terminal_only_when_strictly_newer(monkeypatch):
+    """The TERMINAL competes as an ordinary device — it wins when you were at
+    it more recently than any browser, and loses ties. The tie rule decides the
+    cold-start case (nothing has ever beaten): route to a quiet push, not to
+    Telegram."""
+    subs = [{"endpoint": "https://push/ipad", "keys": {}, "device": "ipad"}]
+    monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
+    clock = [100.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    DS.presence._DEVICE_SEEN.clear()
+    assert DS.route()[0] == "ipad"              # cold start: web wins the -inf tie
+    DS.mark_terminal()
+    assert DS.route()[0] == DS.TERMINAL         # you're at the terminal now
+    assert DS.route()[1] == []                  # …and a terminal takes no push
+    clock[0] = 200
+    DS.mark_device("ipad")                      # picked the iPad up since
+    assert DS.route()[0] == "ipad"
+    ages = {c["device"]: c["age_s"] for c in DS.route()[2]["candidates"]}
+    assert ages[DS.TERMINAL] == 100.0 and ages["ipad"] == 0.0
+    DS.presence._DEVICE_SEEN.clear()
+
+
+def test_route_legacy_untagged_sends_all(monkeypatch):
     """A subscription with no device tag (a client from before device routing)
     can't be routed, so it degrades to send-all (decision `legacy:True`) —
     nothing silently lost."""
     subs = [{"endpoint": "https://push/x", "keys": {}},
             {"endpoint": "https://push/y", "keys": {}}]
     monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
-    targets, decision = DS.mru_push_targets()
-    assert targets == subs and decision["legacy"] is True and decision["target"] is None
-
-
-def test_webpush_audits_route_decision(monkeypatch):
-    """_webpush emits a `notify-route` row naming the chosen device + every
-    candidate's presence age — so a 'wrong device buzzed' is answerable from the
-    DB (the whole point of the audit-coverage pass)."""
-    monkeypatch.setattr(DS.webpush, "enabled", lambda: True)
-    subs = [{"endpoint": "https://p/mac", "keys": {}, "device": "mac", "label": "macOS"},
-            {"endpoint": "https://p/ipad", "keys": {}, "device": "ipad", "label": "iPad"}]
-    monkeypatch.setattr(DS.prefs, "push_subscriptions", lambda: subs)
     DS.presence._DEVICE_SEEN.clear()
-    DS.mark_device("mac")                       # mac is the MRU device
-    audited = []
-    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
-    n = DS.Notifier()
-    # don't actually hit the network: stub the fan-out at its owner (the send
-    # itself now lives in notify/channels.py — the notifier only routes + tracks)
-    monkeypatch.setattr(DS.channels, "_webpush_fanout", lambda *a: None)
-    ok = n._webpush({"sid": "s7", "kind": "done", "title": "t", "project": "p"})
-    assert ok is True
-    routes = [a[3] for a in audited if a[2] == "notify-route"]
-    assert len(routes) == 1
-    assert routes[0]["target"] == "mac" and routes[0]["sid"] == "s7"
-    ages = {c["device"]: c["age_s"] for c in routes[0]["candidates"]}
-    assert set(ages) == {"mac", "ipad"} and ages["mac"] == 0.0
+    target, targets, decision = DS.route()
+    assert targets == subs and decision["legacy"] is True and target is None
+
+
+def test_a_browser_cannot_claim_the_terminals_identity(monkeypatch):
+    """`terminal` is a RESERVED device id: a client POSTing it as its own would
+    otherwise be able to route every alert to Telegram."""
+    DS.presence._DEVICE_SEEN.clear()
+    DS.mark_device(DS.TERMINAL)
+    assert DS.device_seen(DS.TERMINAL) == float("-inf")
     DS.presence._DEVICE_SEEN.clear()
 
 
@@ -767,7 +818,7 @@ def test_notify_lifecycle_audit_rows(monkeypatch):
     sent, pushed = [], []
     monkeypatch.setattr(n, "_telegram",
                         lambda e, reason=None: sent.append((e, reason)))
-    monkeypatch.setattr(n, "_webpush", lambda e: (pushed.append(e), True)[1])
+    monkeypatch.setattr(n, "_webpush", lambda e, t: (pushed.append(t), True)[1])
     audited = []
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append((a[2], a[3])))
     states = {"7": "working"}
@@ -778,6 +829,10 @@ def test_notify_lifecycle_audit_rows(monkeypatch):
     arms = [c for act, c in audited if act == "notify-arm"]
     assert any(c.get("phase") == "arm" for c in arms)
     assert any(c.get("phase") == "escalate" for c in arms)
+    # …and the ROUTE decision that chose the device, one row per alert
+    routes = [c for act, c in audited if act == "notify-route"]
+    assert len(routes) == 1 and routes[0]["target"] == "mac"
+    assert routes[0]["sid"] == "s7" and routes[0]["kind"] == "done"
     clock[0] = 301
     n.scan()                                     # escalation → telegram
     assert sent and sent[-1][1] == "escalation"
@@ -815,7 +870,10 @@ def _notifier_for_done(monkeypatch, screen, delay=999):
         "kind": kind, "state": state, "sid": row["sid"]}
     sent = []
     n._telegram = lambda entry, *a: sent.append(entry)
-    n._webpush = lambda entry: False   # no push subscribed → Telegram is the path
+    # nothing subscribed and no terminal presence → Telegram is the path
+    monkeypatch.setattr(DS.presence, "route",
+                        lambda: (None, [], {"target": None, "candidates": []}))
+    n._webpush = lambda entry, targets: False
     n.push = lambda ev, pl: None
     return n, cur, done, sent, audited
 
@@ -895,6 +953,162 @@ def test_notify_suppressed_when_web_viewing(monkeypatch):
                    and a[3].get("reason") == "web-viewing" for a in audited)
     finally:
         DS.presence._VIEWING.pop("sX", None)
+
+
+def test_a_look_HOLDS_an_asking_alert_instead_of_killing_it(monkeypatch):
+    """The zero delay's one real cost, paid here. A red `asking` tab you are
+    looking at when it fires is HELD, not dropped: seeing a question is not
+    answering it, so glancing at the toast and walking away must still leave you
+    a reminder. The alert goes out the moment you stop being there.
+
+    (A green `done` tab is the deliberate opposite — a glance cancels it, since
+    its final message was on screen; that rule lives in _cancel_armed.)"""
+    win, asking = "9", next(s for s, k in DS.config.NOTIFY_STATES.items()
+                            if k == "asking")
+    cur = {"states": {}}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(cur["states"]))
+    monkeypatch.setattr(DS.presence, "session_ended", lambda sid: False)
+    monkeypatch.setattr(DS.presence, "composing", lambda sid: False)
+    monkeypatch.setattr(DS.prefs, "notify_muted", lambda sid: False)
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 0)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.presence, "route",
+                        lambda: (None, [], {"target": None, "candidates": []}))
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    here = {"v": "web-viewing"}
+    n = DS.Notifier()
+    n.winmap = {win: {"sid": "sX"}}
+    n._payload = lambda kind, state, row: {"kind": kind, "state": state,
+                                           "sid": row["sid"]}
+    n.push = lambda ev, pl: None
+    sent = []
+    n._telegram = lambda entry, reason=None: sent.append(reason)
+    monkeypatch.setattr(n, "_watching", lambda w, s, tree=None: here["v"])
+    scrapes = []
+    monkeypatch.setattr(n, "_dialog_region", lambda w: scrapes.append(w))
+    n.scan()                                  # baseline
+    cur["states"] = {win: asking}
+    n.scan()                                  # you're on it → held, not sent
+    assert sent == [] and win in n.pending
+    for _ in range(3):
+        n.scan()                              # …and held for as long as you are
+    assert sent == [] and win in n.pending
+    # a hold can last forever, so it must not cost a screen read per second:
+    # once held, the scraped signals are skipped (they are redundant while you
+    # are demonstrably in front of the session)
+    assert len(scrapes) == 1                  # the arming tick only
+    holds = [a[3] for a in audited if a[2] == "notify-arm"
+             and a[3].get("phase") == "hold"]
+    assert len(holds) == 1                    # audited ONCE, not once per tick
+    assert holds[0]["reason"] == "web-viewing"
+    here["v"] = None                          # you walked away, still unanswered
+    n.scan()
+    assert sent == ["no-device"] and win not in n.pending
+
+
+def test_a_hold_that_ended_restores_the_terminal_scrapes(monkeypatch):
+    """The hold's scrape-skip must track the CURRENT state, not latch. An alert
+    held for one tick and then pushed sits through a 5-minute escalation window,
+    and during THAT window the terminal signals are the only thing that can see
+    you answering — a latched skip would nudge you on Telegram while you typed
+    the answer."""
+    clock = [0.0]
+    n = _escalation_notifier(monkeypatch, clock)
+    monkeypatch.setattr(n, "_webpush", lambda e, t: True)
+    here = {"v": "tab-focused"}
+    monkeypatch.setattr(n, "_watching", lambda w, s, tree=None: here["v"])
+    scrapes = []
+    monkeypatch.setattr(n, "_dialog_region", lambda w: scrapes.append(w))
+    monkeypatch.setattr(n, "_input_typed", lambda w: scrapes.append(w))
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                  # baseline
+    # an ASKING tab: a look holds it, where a look would CANCEL a done one
+    states["7"] = next(st for st, k in DS.config.NOTIFY_STATES.items()
+                       if k == "asking")
+    n.scan()                                  # arm; you're there → held
+    assert "7" in n.pending and n.pending["7"].get("holding") is True
+    n.scan()                                  # still there → still held
+    assert len(scrapes) == 1                  # the arming tick only
+    here["v"] = None                          # you left → stage-1 push goes out
+    n.scan()
+    assert n.pending["7"].get("holding") is False    # …and the hold is OVER
+    n.scan()                                  # escalation window: scrapes are back
+    assert len(scrapes) == 2
+
+
+def test_notify_suppressed_when_a_browser_is_in_your_hands(monkeypatch):
+    """A browser you are ACTIVELY ON (a fresh /api/presence device beat, from
+    ANY view) suppresses the off-device alert even when you are not inside that
+    session's page: a focused page shows the in-page toast for EVERY session, so
+    a push would be a second copy of a notification you just got.
+
+    Note this is the WEB half only — there is no terminal equivalent (see
+    `presence.device_active`), because kitty being frontmost says nothing about
+    a tab you are not on."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}
+    n, cur, done, sent, audited = _notifier_for_done(monkeypatch, screen, delay=0)
+    DS.mark_device("mac")                    # you're on a browser right now…
+    n.scan()                                 # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                 # …so the alert is dropped
+    assert sent == []
+    assert any(a[2] == "notify-suppress"
+               and a[3].get("reason") == "device-active" for a in audited)
+
+
+def test_notify_fires_on_the_transition_tick_by_default(monkeypatch):
+    """The alert is INSTANT: with the shipped default delay (0) it goes out on
+    the same scan that saw the tab turn green — no grace window to sit through.
+    The old 60 s wait guessed at your attention with a clock; presence answers
+    it directly, so the only thing the delay bought was latency."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}
+    # NOT delay=0 — read the SHIPPED default, so a regression to a waiting
+    # notifier fails here rather than in production
+    n, cur, done, sent, _ = _notifier_for_done(monkeypatch, screen,
+                                              delay=DS.config.NOTIFY_DELAY_S)
+    assert DS.config.NOTIFY_DELAY_S == 0
+    n.scan()                                 # baseline
+    cur["states"] = {"9": done}
+    n.scan()                                 # transition and send, one tick
+    assert [e["sid"] for e in sent] == ["sX"]
+
+
+def test_terminal_presence_is_polled_from_the_scans_own_ls(monkeypatch):
+    """The terminal can't beat for itself, so the watcher polls it — and on a
+    tick that already fetched an `ls` for the tab-focus checks, that poll is
+    free. Presence recorded AT the transition is what lets the terminal win the
+    routing pick against a browser you used ten minutes ago."""
+    screen = {"txt": _done_screen("\x1b[m❯\xa0")}
+    n, cur, done, _sent, _ = _notifier_for_done(monkeypatch, screen, delay=999)
+    n.fe.app_focused = lambda tree=None: True     # kitty is frontmost
+    n.fe.ls = lambda: [{"is_focused": True, "tabs": []}]
+    assert DS.device_seen(DS.TERMINAL) == float("-inf")
+    n.scan()                                  # baseline: nothing armed, no ls
+    assert DS.device_seen(DS.TERMINAL) == float("-inf")
+    cur["states"] = {"9": done}
+    n.scan()                                  # armed → the tick pays for an ls
+    assert DS.device_seen(DS.TERMINAL) != float("-inf")
+
+
+def test_terminal_presence_poll_needs_a_live_session(monkeypatch):
+    """…and it does NOT run its own `kitten @ ls` when there is no session to
+    alert about: with an empty winmap the poll's subprocess would buy nothing."""
+    n = DS.Notifier()
+    calls = []
+
+    class FE:
+        def app_focused(self, tree=None):
+            calls.append(tree)
+            return True
+
+    n.fe = FE()
+    n._poll_terminal()                        # winmap empty → no probe at all
+    assert calls == [] and DS.device_seen(DS.TERMINAL) == float("-inf")
+    n.winmap = {"9": {"sid": "sX"}}
+    n._poll_terminal()
+    assert calls == [None] and DS.device_seen(DS.TERMINAL) != float("-inf")
 
 
 def test_notify_muted_drop_is_audited(monkeypatch):

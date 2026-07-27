@@ -119,33 +119,38 @@ STATIC = {                         # whitelist — no path resolution on user in
 # is asking you; green — done, your turn.
 NOTIFY_STATES = {tabs.AWAITING_COMMAND: "asking", tabs.AWAITING_RESPONSE: "done"}
 
-# Deferred off-device (Telegram) alerts, layered on the same red/green
-# transitions the in-page toast fires on (docs/dashboard.md, *Telegram alerts*).
-# The alert is ARMED on the transition and only actually SENT if the tab is
-# STILL in that state after the grace window — i.e. you didn't react (answer,
-# resume the turn, or close the session) in time. Browser-independent: it fires
-# whether or not a page is open, since reaching you when away is the point.
-# CLAUDE_DASH_NOTIFY_DELAY_S → grace seconds before a Telegram alert fires
-# (default 60). A bad / negative value falls back to the default.
-NOTIFY_DELAY_S = EV.env_float("CLAUDE_DASH_NOTIFY_DELAY_S", 60)
+# Off-device alerts, layered on the same red/green transitions the in-page toast
+# fires on (docs/dashboard.md, *Presence routing* / *Telegram alerts*). The
+# alert is ARMED on the transition and sent on the SAME tick unless PRESENCE
+# says you're already there. Browser-independent: it fires whether or not a page
+# is open, since reaching you when away is the point.
+# CLAUDE_DASH_NOTIFY_DELAY_S → grace seconds before the alert fires, DEFAULT 0.
+# It used to be 60: wait a minute, and if the tab is still red assume you didn't
+# react. Presence answers that question directly (are you at this device, is
+# this session in front of you), so the clock's only remaining job is as an
+# optional debounce for anyone who wants their alerts to hold fire. A bad /
+# negative value falls back to the default.
+NOTIFY_DELAY_S = EV.env_float("CLAUDE_DASH_NOTIFY_DELAY_S", 0)
 # Master switch: "0" disables arming + sending entirely (the in-page toast is
 # unaffected). Default on.
 NOTIFY_TELEGRAM = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM") or "1") != "0"
 # The ON-DEVICE Web Push channel (docs/dashboard.md, *Web push*): the same
-# deferred, grace-windowed, mute-honoring alert as Telegram, delivered to every
-# subscribed browser (an installed iOS home-screen app, a desktop page) as a
-# real system notification. Layered on — INDEPENDENT of — Telegram: either
-# channel arms the pending alert, and each fires only if its own switch is on.
-# Effectively off anyway when the crypto backend is missing (webpush.enabled()).
+# presence-routed, mute-honoring alert as Telegram, delivered to a subscribed
+# browser (an installed iOS home-screen app, a desktop page) as a real system
+# notification. Layered on — INDEPENDENT of — Telegram: either channel arms the
+# pending alert, and each fires only if its own switch is on. Effectively off
+# anyway when the crypto backend is missing (webpush.enabled()).
 NOTIFY_WEBPUSH = (os.environ.get("CLAUDE_DASH_NOTIFY_WEBPUSH") or "1") != "0"
-# The on-device push goes to the ONE device you most recently used (see
-# mru_push_targets), not every subscription — so a session going done/asking
-# alerts only the device you're working on, never all of them at once. Telegram
-# then ESCALATES: it fires as a nudge only if, ESCALATE_S after that on-device
-# push, you STILL haven't acted on the session (a reaction / a look drops the
-# arm in the cancel loop first). So the order is device-first, Telegram-if-
-# ignored — not the old "either/or". Telegram is ALSO the immediate fallback
-# when there's no device to push to at all (nobody subscribed).
+# The alert goes to the ONE device your PRESENCE says you were last on (see
+# presence.route), not every subscription — so a session going done/asking
+# reaches the device you're at, never all of them at once. A browser gets the
+# push; the TERMINAL gets Telegram, since nothing else reaches a machine whose
+# browser is shut. Telegram then ESCALATES a push: it fires as a nudge only if,
+# ESCALATE_S after that on-device push, you STILL haven't acted on the session
+# (a reaction / a look drops the arm in the cancel loop first). There is no
+# escalation after a stage-1 Telegram — it already reaches every device you own.
+# Telegram is ALSO the fallback when there's nothing to push to (nobody
+# subscribed).
 # CLAUDE_DASH_ESCALATE_S → seconds after the on-device push before Telegram
 # nudges (default 300 = 5 min). Bad / negative → the default.
 ESCALATE_S = EV.env_float("CLAUDE_DASH_ESCALATE_S", 300)

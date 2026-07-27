@@ -1,12 +1,22 @@
 # dashboard/notify/notifier.py — the tab-diff watcher: WHEN an alert happens.
 #
 # One daemon thread diffs the global tab DB once a second, pushes the in-page
-# toast on every asking/done transition, drives the deferred device-first /
-# Telegram-if-ignored off-device alert (armed on the transition, sent only if
-# you didn't react within the grace window), and RETRACTS a delivered alert once
-# what it told you stops being true. Reads the notify knobs LIVE from config
-# (config.NOTIFY_*) and the "need alerting" signals from presence — so a test
-# patches config / presence, not this module.
+# toast on every asking/done transition, drives the off-device alert — routed to
+# the device you were LAST ON and fired AT ONCE unless you're plainly there
+# (config.NOTIFY_DELAY_S, default 0), then escalated to Telegram if you keep
+# ignoring it — and RETRACTS a delivered alert once what it told you stops being
+# true. Reads the notify knobs LIVE from config (config.NOTIFY_*) and the "need
+# alerting" signals from presence — so a test patches config / presence, not
+# this module.
+#
+# The grace window is what presence REPLACED. It used to be the whole test:
+# wait 60 s, and if the tab was still red you must not have reacted. That is a
+# guess about attention made by a clock, and it paid for itself twice over —
+# once in latency (an alert about a finished turn arriving a minute late), once
+# in wrongness (you had walked away 59 s ago; the delay changed nothing except
+# when you found out). Presence answers the same question directly — are you at
+# this device, is this session in front of you — so the delay's default is now
+# 0 and the knob survives only as a debounce for anyone who wants one.
 #
 # HOW an alert reaches you (and how it is taken back) is channels.py: this
 # module never touches a socket, a subprocess or a payload shape. It holds two
@@ -57,6 +67,22 @@ SILENT_REASONS = frozenset(("tab-moved", "session-ended", "composing"))
 RETRACT_REASONS = frozenset(("tab-moved", "session-ended", "composing"))
 
 
+def telegram_reason(pushed, target, targets):
+    """WHY Telegram fired at stage 1, for its `telegram-notify` row — so a
+    Telegram alert is never an unexplained duplicate, and a Telegram alert you
+    expected to be a push is never an unexplained ROUTE. Four distinct answers,
+    and the last two are the pair worth keeping apart: `push-off` means presence
+    DID pick a device and the push channel couldn't deliver (switched off, or no
+    crypto backend), `no-device` means there was nothing subscribed to pick."""
+    if pushed:
+        return "always"                    # _ALWAYS forced both channels
+    if target == presence.TERMINAL:
+        return "terminal"                  # you were last at the terminal
+    if targets:
+        return "push-off"                  # a device was routed to; push is off
+    return "no-device"                     # nothing subscribed anywhere
+
+
 class Notifier:
     """The tab-DB diff watcher. Once a second it diffs the global tab table and
     publishes ('notify', payload) on its Broker for every asking/done
@@ -65,12 +91,16 @@ class Notifier:
     Also keeps the win -> session map the payloads are named from (refreshed on the slow cadence —
     sessions come and go rarely).
 
-    It ALSO drives the deferred off-device alert: each asking/done transition
-    arms `self.pending[win]`; a later scan SENDS it iff the tab is still in that
-    state after NOTIFY_DELAY_S (you didn't react) and the session isn't muted —
-    otherwise the entry is dropped when the tab moves off that state, the
-    session ends (you closed it / moved on), or you're composing a reply to it
-    (an unsent web draft = you're already on it).
+    It ALSO drives the off-device alert: each asking/done transition arms
+    `self.pending[win]`, and the same tick SENDS it (NOTIFY_DELAY_S defaults to
+    0) unless you are plainly ALREADY THERE — the session's kitty tab in front
+    of you, a browser viewing it, or a browser in your hands — and unless the
+    session is muted. It goes to the device your PRESENCE says you were last on
+    (`presence.route`): a browser gets a Web Push, the terminal gets Telegram.
+    An entry is likewise dropped when the tab moves off that state, the session
+    ends (you closed it / moved on), or you're composing a reply to it (an
+    unsent web draft = you're already on it) — which, after a push, is what the
+    5-minute Telegram escalation waits through.
 
     And it RETRACTS: a sent alert moves to `self.sent` with the handle its
     channel returned, and once the session stops needing you (RETRACT_REASONS)
@@ -155,20 +185,56 @@ class Notifier:
         except Exception:
             return None
 
+    def _poll_terminal(self, tree=None):
+        """Record "you are AT THE TERMINAL right now" when the terminal app is
+        frontmost — the beat a terminal cannot send for itself, and the reason
+        the terminal can compete with your browsers for an alert at all
+        (`presence.route`). Gated on `winmap`: with no live session there is
+        nothing to alert about, so the poll's subprocess would buy nothing.
+
+        Called twice per lifecycle, both cheap: from `scan` with the `ls()` that
+        tick ALREADY paid for (free, and exactly when an alert is being decided
+        — the presence that matters most is the presence at the transition), and
+        from the SLOW cadence with its own `ls()`, which is what keeps a
+        HISTORY: "I was at the terminal two minutes ago" cannot be recovered
+        after the fact, and it is the whole answer when the tab goes red while
+        you're in another app on the same machine."""
+        if not (self.fe and self.winmap):
+            return
+        try:
+            if self.fe.app_focused(tree):
+                presence.mark_terminal()
+        except Exception:
+            pass                           # best-effort: no channel = no presence
+
     def _watching(self, win, sid, tree=None):
-        """You are LOOKING AT this session, so the deferred alert would only
-        nag. Two channels: the kitty TAB is frontmost on your screen
-        (`fe.tab_focused` — `is_focused`, so a web-spawned synthetic tab in a
-        BACKGROUNDED kitty does NOT count, verified empirically), or a BROWSER
-        is actively viewing the session (a fresh `web_viewing` heartbeat).
-        Returns the suppress reason (`tab-focused` / `web-viewing`) or None;
-        best-effort — a terminal read miss / no channel degrades to None.
+        """You are LOOKING AT this session (or holding the device it would land
+        on), so the alert would only nag. Three channels, and the asymmetry
+        between them is deliberate:
+        - the kitty TAB is frontmost on your screen (`fe.tab_focused` —
+          `is_focused`, so a web-spawned synthetic tab in a BACKGROUNDED kitty
+          does NOT count, verified empirically),
+        - a BROWSER is actively viewing the session (a fresh `web_viewing`
+          heartbeat),
+        - or ANY browser is in your hands right now (`presence.device_active`)
+          — because a focused page shows the in-page toast for EVERY session, so
+          an off-device push would be a second copy of a notification you just
+          got. There is no terminal equivalent of that third channel: kitty
+          being frontmost says nothing about a tab you are NOT on, so at the
+          terminal only the per-session `tab_focused` counts as having seen it.
+        Returns the suppress reason (`tab-focused` / `web-viewing` /
+        `device-active`) or None; best-effort — a terminal read miss / no
+        channel degrades to None.
 
         Called from two places with different meanings (see scan): for a `done`
-        arm it runs EVERY scan while armed, so a single glance any time during
-        the grace ('I saw the final message') cancels the alert even after you
+        arm it runs EVERY scan while armed, so a single glance any time before
+        the send ('I saw the final message') cancels the alert even after you
         move on; for an `asking` arm it runs only at SEND time ('are you looking
         RIGHT NOW'), because a glance that didn't ANSWER still needs the ping.
+        With the delay at 0 those two collapse into the same instant for the
+        FIRST send — the distinction still earns its keep across the escalation
+        window, where a glance cancels a `done` nudge and does not cancel an
+        unanswered `asking` one.
         `tree` is a pre-fetched `ls()` shared across a scan's entries so the tab
         check costs one `kitten @ ls` per scan, not one per armed session."""
         try:
@@ -178,6 +244,8 @@ class Notifier:
             pass
         if presence.web_viewing(sid):
             return "web-viewing"
+        if presence.device_active():
+            return "device-active"
         return None
 
     def _reaction(self, entry, cur, tree, screen=True):
@@ -256,6 +324,30 @@ class Notifier:
                          {"sid": entry.get("sid"), "kind": entry.get("kind"),
                           "reason": reason})
 
+    def _hold(self, entry, reason):
+        """Defer an armed alert because you are AT the session right now — the
+        third outcome beside `_drop` and a send, and the only one that leaves
+        the entry armed. Audited ONCE per arm (`notify-arm` `phase:hold`), not
+        once per tick: a hold repeats every second for as long as you sit there,
+        and the useful fact is that the alert waited AT ALL, plus what for. It
+        rides the ARM vocabulary rather than notify-suppress deliberately — a
+        suppress row says "this alert will never be sent", which is the one
+        thing a hold does not mean.
+
+        TWO flags, not one, because they answer different questions: `holding`
+        is the CURRENT state (pass 2 reads it to skip the screen scrapes) and
+        must go false again the moment you leave, while `held` is a latch that
+        never resets (the audit fired once). Folding them together let an alert
+        that was held for a second lose its terminal-answering cancels for the
+        whole escalation window afterwards."""
+        entry["holding"] = True
+        if entry.get("held"):
+            return
+        entry["held"] = True
+        A.state_file("", "", "notify-arm",
+                     {"sid": entry.get("sid"), "kind": entry.get("kind"),
+                      "phase": "hold", "reason": reason})
+
     def _payload(self, kind, state, row):
         # a worktree session's toast names the PROJECT it groups under, not the
         # worktree dir — the SAME group_dir resolution the list page uses (the
@@ -278,12 +370,14 @@ class Notifier:
         FOUR passes, in this order and no other (each depends on the previous
         one's edits to self.pending):
           1. _arm_transitions — the tab diff: toast every new asking/done
-             transition and arm its deferred off-device alert.
-          2. _cancel_armed — drop the arms you already reacted to, all BEFORE
-             any delay elapses.
-          3. _fire_due — send what survived the grace window (on-device push,
-             then the Telegram escalation), recording each delivery in
-             self.sent.
+             transition and arm its off-device alert.
+          2. _cancel_armed — drop the arms you already reacted to. With the
+             delay at its default 0 an arm is normally sent the same tick, so
+             what this pass really guards is the window AFTER a push, where the
+             entry sits armed for its Telegram escalation: reacting there is
+             what stops the nudge.
+          3. _fire_due — send what survived (routed on-device push, then the
+             Telegram escalation), recording each delivery in self.sent.
           4. _retract_resolved — take back the deliveries whose session no
              longer needs you, and expire the rest. Reads self.sent, which is
              disjoint from self.pending, so it is last only for readability:
@@ -310,6 +404,8 @@ class Notifier:
             tree = self.fe.ls() if (self.fe and self.pending) else None
         except Exception:
             tree = None
+        if tree is not None:
+            self._poll_terminal(tree)      # free: this tick already paid for ls
         self._cancel_armed(cur, tree)
         self._fire_due(now, tree)
         self._retract_resolved(cur, now)
@@ -365,30 +461,63 @@ class Notifier:
         """PASS 2 — cancel the arms you reacted to / are already handling, all
         BEFORE the delay elapses. Every reason `_reaction` can name cancels a
         PENDING alert (that predicate is exactly "you don't need to be told");
-        SILENT_REASONS decides which of them owes a notify-suppress row."""
+        SILENT_REASONS decides which of them owes a notify-suppress row.
+
+        An entry HOLDING (pass 3 last tick: you are in front of the session) skips
+        the screen scrapes, which is what keeps an unbounded hold from costing
+        an unbounded `kitten @ get-text` per second. They are redundant exactly
+        then, and the argument is worth writing down because it is the whole
+        justification: those two signals detect you acting AT THE TERMINAL while
+        nothing else can see it — but if you are typing at the terminal, that
+        tab is frontmost, which is one of the things holding the alert in the
+        first place; and when you finish, the tab leaves red/green and
+        `tab-moved` catches it. Their unique contribution is when the terminal
+        is NOT in front of you, and then the entry is not held."""
         for win in list(self.pending):
-            reason = self._reaction(self.pending[win], cur, tree)
+            entry = self.pending[win]
+            reason = self._reaction(entry, cur, tree,
+                                    screen=not entry.get("holding"))
             if reason:
                 self._drop(win, None if reason in SILENT_REASONS else reason)
 
     def _fire_due(self, now, tree):
-        """PASS 3 — fire the arms that persisted past the grace window (once
-        each) — unless, at THIS moment, you're looking at the session (the kitty
-        tab is frontmost, or a browser is actively viewing it): then you don't
-        need an off-device ping, so drop it with a notify-suppress row. In
-        practice that send-time check now matters for `asking` arms: a `done` arm
-        that was ever seen was already dropped in _cancel_armed (the 'seen it'
-        rule), so a done arm reaching here was never looked at.
+        """PASS 3 — fire the arms that are due (once each) — unless, at THIS
+        moment, you are plainly there (`_watching`): the kitty tab in front of
+        you, a browser viewing the session, or a browser in your hands. Then the
+        alert is HELD, not dropped: it stays armed and goes out the moment you
+        stop being there.
 
-        DEVICE-FIRST, TELEGRAM-IF-IGNORED. Two stages per armed entry:
-          1. after the grace window, the ON-DEVICE push goes to the one device
-             you most recently used (_webpush → mru_push_targets); the entry
-             STAYS armed, now with an escalate_at ESCALATE_S in the future.
+        Holding rather than dropping is what the zero delay COST. With a 60 s
+        grace, "you were looking at the instant we'd have pinged" was a fair
+        proxy for "you're handling it". At delay 0 that instant is the
+        transition itself, and dropping there means a question that turned red
+        while you happened to be at a browser is never mentioned again — you
+        glance at the toast, walk away, and the reminder you needed died with
+        the glance. Seeing a question is not answering it. So a look now defers
+        the alert instead of cancelling it, and closing the laptop is what
+        delivers it.
+
+        This is the `asking` rule; a `done` arm never reaches it, because
+        _cancel_armed already dropped a seen one per-scan (the "if I've SEEN the
+        final message, don't tell me" rule — the deliberate asymmetry between
+        the two kinds). Written kind-agnostically anyway: holding a `done` arm
+        would be harmless (pass 2 drops it on the next tick), where a stray drop
+        here would silently lose an alert.
+
+        PRESENCE-ROUTED, TELEGRAM-IF-IGNORED. Two stages per armed entry:
+          1. the alert goes to the device you were LAST ON (`presence.route`) —
+             a browser (Web Push to that device's subscriptions) or the TERMINAL
+             (Telegram: nothing else reaches a machine whose browser is shut).
+             After a push the entry STAYS armed with an escalate_at ESCALATE_S
+             in the future; after a Telegram it is done (see below).
           2. if it survives to escalate_at — you STILL did nothing with the
              session (any reaction / look already dropped it in _cancel_armed) —
              Telegram nudges you, in case you're away from that device.
-        Telegram is instead the IMMEDIATE fallback when there's no device to push
-        to (nobody subscribed); `_ALWAYS` fires both at stage 1."""
+        There is no stage 2 after a stage-1 Telegram, and that is the point
+        rather than an omission: escalation exists to reach a channel the first
+        send couldn't, and Telegram already reaches every device you own. A
+        second identical message five minutes later carries no new information.
+        `_ALWAYS` fires both at stage 1."""
         for win in list(self.pending):
             entry = self.pending[win]
             escalating = entry.get("notified") is not None
@@ -396,13 +525,12 @@ class Notifier:
             if now < due:
                 continue
             sid = entry.get("sid")
-            # looking at it RIGHT NOW = you're handling it; don't ping (the done
-            # 'seen it' cancel above already caught it per-scan — this is the
-            # asking arm's send-time check, applied at both stages).
+            # you are there RIGHT NOW: hold the alert, don't cancel it (above).
             watching = self._watching(win, sid, tree)
             if watching:
-                self._drop(win, watching)
+                self._hold(entry, watching)
                 continue
+            entry["holding"] = False           # …and you've stopped being there
             if prefs.notify_muted(sid):
                 # audited (`muted`) — see _drop: an unaudited drop here read as
                 # "you reacted", so a per-session mute silently swallowing the
@@ -417,8 +545,17 @@ class Notifier:
                 if config.NOTIFY_TELEGRAM:
                     self._telegram(entry, "escalation")
                 continue
-            # stage 1: on-device push to the most-recently-used device
-            pushed = self._webpush(entry) if config.NOTIFY_WEBPUSH else False
+            # stage 1: route to the device you were last on. The decision is
+            # audited UNCONDITIONALLY (unlike the old push-only routing, which
+            # skipped the row when nothing was subscribed): with the terminal in
+            # the running there is always a choice being made, and "why did this
+            # go to Telegram" deserves the same evidence as "why did the iPad
+            # buzz" — one row per alert, naming every candidate's presence age.
+            target, targets, decision = presence.route()
+            A.state_file("", "", "notify-route",
+                         dict(decision, sid=sid, kind=entry.get("kind")))
+            pushed = (self._webpush(entry, targets)
+                      if (targets and config.NOTIFY_WEBPUSH) else False)
             if pushed and not config.NOTIFY_TELEGRAM_ALWAYS:
                 # NOTE the entry stays PENDING here while a delivery of it is
                 # already tracked in self.sent — the one moment both collections
@@ -432,8 +569,8 @@ class Notifier:
                               "phase": "escalate", "in_s": config.ESCALATE_S})
                 continue
             self._drop(win)
-            if config.NOTIFY_TELEGRAM:                     # no device to push to, or _ALWAYS
-                self._telegram(entry, "always" if pushed else "no-device")
+            if config.NOTIFY_TELEGRAM:            # the terminal, no device, or _ALWAYS
+                self._telegram(entry, telegram_reason(pushed, target, targets))
 
     def _track(self, entry, handle):
         """Remember one DELIVERY so it can be taken back. `handle` is opaque
@@ -508,8 +645,9 @@ class Notifier:
                           "age_s": round(now - rec.get("sent_at", 0), 1)})
 
     def _telegram(self, entry, reason=None):
-        """Send the deferred alert to Telegram (channels.send_telegram) and
-        track whatever it returns. `reason` says WHY Telegram fired —
+        """Send the alert to Telegram (channels.send_telegram) and track
+        whatever it returns. `reason` says WHY Telegram fired — `terminal` (you
+        were last at the terminal, and Telegram is what reaches that machine),
         `escalation` (the 5-min nudge after an on-device push you ignored),
         `no-device` (nobody was push-subscribed), `always` (_ALWAYS forced
         both) — so a Telegram alert is never an unexplained duplicate."""
@@ -541,12 +679,13 @@ class Notifier:
         return sum(1 for win, row in self.winmap.items()
                    if row.get("live") and states.get(win) in NOTIFY_STATES)
 
-    def _webpush(self, entry):
-        """Send the on-device alert (channels.send_webpush) and track it.
-        Returns True iff it DISPATCHED to at least one subscription — the signal
-        `_fire_due` uses to hold Telegram back to the escalation nudge (device
-        first, Telegram only if you keep ignoring it)."""
-        handle = channels.send_webpush(entry, self._needs_you_count())
+    def _webpush(self, entry, targets):
+        """Send the on-device alert to `targets` (channels.send_webpush) and
+        track it. Returns True iff it DISPATCHED to at least one subscription —
+        the signal `_fire_due` uses to hold Telegram back to the escalation
+        nudge (the routed device first, Telegram only if you keep ignoring
+        it)."""
+        handle = channels.send_webpush(entry, targets, self._needs_you_count())
         self._track(entry, handle)
         return handle is not None
 
@@ -556,6 +695,7 @@ class Notifier:
             try:
                 if n % SLOW_EVERY == 0:
                     self.refresh_winmap()
+                    self._poll_terminal()  # …and its own ls, to keep a history
                 self.scan()
             except Exception:
                 A.error("", "dashboard notifier")

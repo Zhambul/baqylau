@@ -26,7 +26,6 @@ from urllib.parse import quote
 
 from core.noaudit import load_audit
 from dashboard import config, prefs, telegram, webpush
-from dashboard.notify import presence
 
 A = load_audit()
 
@@ -186,31 +185,25 @@ def _telegram_delete_body(h):
 
 # ----------------------------------------------------------------- Web Push
 
-def send_webpush(entry, badge=0):
-    """Send the on-device alert as a Web Push to the ONE device you most
-    recently used (`mru_push_targets`) — NOT every subscription, so a session
-    going done/asking buzzes the device you're working on, not your iPad and Mac
-    at once (docs/dashboard.md, *Web push* / *Device routing*). Dispatched on a
-    detached daemon thread: the crypto + network round-trips must never stall the
-    1 s watcher. Best-effort + audited; a subscription the push service reports
-    GONE (404/410) is pruned. No-op when the crypto backend is missing or nobody
-    has subscribed.
+def send_webpush(entry, subs, badge=0):
+    """Send the on-device alert as a Web Push to `subs` — the subscriptions of
+    the ONE device the caller routed to (`presence.route`), NOT every
+    subscription, so a session going done/asking buzzes the device you're
+    working on, not your iPad and Mac at once (docs/dashboard.md, *Web push* /
+    *Presence routing*). Dispatched on a detached daemon thread: the crypto +
+    network round-trips must never stall the 1 s watcher. Best-effort + audited;
+    a subscription the push service reports GONE (404/410) is pruned. No-op when
+    the crypto backend is missing or `subs` is empty.
+
+    The ROUTING is deliberately not decided here — a transport that picked its
+    own destination could not be reused by the retraction, which must reach the
+    devices the alert ACTUALLY went to rather than whichever is most-recently-
+    used by then. The caller passes the targets and audits `notify-route`.
 
     Returns a handle (the alert is out on these subscriptions, and a resolve
     push can close it) or None — which the caller reads as "no device to push
-    to", the signal that holds Telegram back to the escalation nudge. Audits the
-    ROUTING DECISION (`notify-route`) — the chosen device + every candidate's
-    presence age — so "the wrong device buzzed" is answerable from the DB."""
-    if not webpush.enabled():
-        return None
-    subs, decision = presence.mru_push_targets()
-    # The routing decision is audited whenever there was ANYTHING to weigh (at
-    # least one subscription) — even the no-target edge — so a missing push is
-    # never a mystery. No subs at all = nothing to route, no row.
-    if decision.get("n_subs"):
-        A.state_file("", "", "notify-route",
-                     dict(decision, sid=entry.get("sid"), kind=entry.get("kind")))
-    if not subs:
+    to", the signal that holds Telegram back to the escalation nudge."""
+    if not (webpush.enabled() and subs):
         return None
     sid = entry.get("sid") or ""
     title, body, url = alert_text(entry)

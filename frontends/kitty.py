@@ -165,17 +165,22 @@ def kitten_launch_tab(kitten, listen, cwd, argv):
     return r.stdout.decode("utf-8", "replace").strip() or True
 
 
-def kitten_app_focused(kitten, listen):
+def kitten_app_focused(kitten, listen, tree=None):
     """True when ANY kitty OS window is focused — i.e. kitty is the frontmost
     app on this desktop right now. The gate for launch_pane's --keep-focus:
     kitty's keep-focus "restore the previous window" path calls
     focus_os_window(raise=True) whenever no kitty OS window is focused, which
     on macOS ACTIVATES the kitty app over whatever the user is in (the
     dashboard web-launch steal — the pane opens at SessionStart were the
-    thieves). False on an ls failure (degrade toward not stealing)."""
+    thieves). ALSO the dashboard's "you are AT THE TERMINAL right now" presence
+    poll (docs/dashboard.md *Presence routing*) — the terminal cannot beat for
+    itself the way a browser does, so the notifier polls this instead.
+    `tree` reuses an ls() the caller already paid for. False on an ls failure
+    (degrade toward not stealing, and toward alerting)."""
     try:
         return any(osw.get("is_focused")
-                   for osw in kitten_ls(kitten, listen))
+                   for osw in (kitten_ls(kitten, listen) if tree is None
+                               else tree or []))
     except Exception:
         return False
 
@@ -358,6 +363,9 @@ class KittyFrontend(Frontend):
 
     def iter_windows(self, tree=None):
         return iter_windows(self.ls() if tree is None else tree)
+
+    def app_focused(self, tree=None):
+        return kitten_app_focused(self.kitten, self.listen, tree)
 
     # --- pane management --------------------------------------------------------
     def goto_splits_layout(self, win=None):

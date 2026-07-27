@@ -286,6 +286,19 @@ ANOMALY_SECTIONS = [
      "SELECT ts, content FROM state_files WHERE action='notify-retract' "
      "AND json_extract(content, '$.sid')=? "
      "AND COALESCE(json_extract(content, '$.ok'), 0)=0", 1),
+    # "I got NO alert at all." Presence is what decides that now, and its one
+    # false-positive shape is a browser that reports itself in use when you are
+    # not there: the /api/presence beat needs the page visible + FOCUSED, so an
+    # iPad left awake on a desk with the dashboard in front keeps beating, reads
+    # as `device-active`, and suppresses every session's alert machine-wide
+    # (docs/dashboard.md *Presence routing*). The tell is these rows with no
+    # `web-push`/`telegram-notify` rows beside them. Also fired by a session you
+    # genuinely watched, so read the count, not the existence: a handful is
+    # normal, a session's whole alert history being these is the bug.
+    ("off-device alerts suppressed by browser presence (device-active)",
+     "SELECT ts, content FROM state_files WHERE action='notify-suppress' "
+     "AND json_extract(content, '$.sid')=? "
+     "AND json_extract(content, '$.reason')='device-active'", 1),
     # A compaction that ARMED the ctx bar's animation and never cleared it:
     # PreCompact wrote the `compacting` latch and no PostCompact followed. Real
     # and expected occasionally — a compaction can die on an API error or be

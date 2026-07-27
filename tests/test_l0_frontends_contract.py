@@ -56,6 +56,7 @@ CALLS = {
     "find_window":        (("claude_session", "sid-1"), None),
     "window_for_session": (("sid-1",), None),
     "tab_focused":        (("7",), False),
+    "app_focused":        ((), False),
     # pane management
     "goto_splits_layout": (("7",), 1),
     "launch_pane":        ((["echo", "hi"], "vsplit"), 1),
@@ -172,6 +173,29 @@ def test_tab_focused_keys_on_is_focused_not_is_active(monkeypatch):
     assert fe.tab_focused(999) is False       # unknown window
     # the inert stub has no windows → always False
     assert Frontend().tab_focused(7) is False
+
+
+def test_app_focused_is_the_os_window_not_the_tab(monkeypatch):
+    """app_focused asks the COARSE question tab_focused doesn't: is the terminal
+    APP frontmost at all (any OS window focused) — "you're at the terminal",
+    whichever tab you're on. It is the dashboard's terminal PRESENCE poll, so it
+    must not key on the per-tab flag: a focused tab inside a backgrounded kitty
+    would then read as you being there. A pre-fetched `tree` is honoured (the
+    watcher already paid for one ls that tick)."""
+    from frontends import kitty as fk
+    bg = [{"is_focused": False, "tabs": [
+        {"is_active": True, "is_focused": True, "windows": [{"id": 7}]}]}]
+    fg = [{"is_focused": True, "tabs": [
+        {"is_active": True, "is_focused": True, "windows": [{"id": 7}]}]}]
+    monkeypatch.setattr(fk, "kitten_ls", lambda kitten, listen: bg)
+    fe = KittyFrontend(listen="unix:/tmp/x", kitten="/bin/true")
+    assert fe.app_focused() is False           # kitty is in the background…
+    assert fe.tab_focused(7) is True           # …though the tab itself is focused
+    assert fe.app_focused(fg) is True          # a passed tree is used as-is
+    assert fe.app_focused([]) is False         # a failed ls degrades to "not here"
+    monkeypatch.setattr(fk, "kitten_ls", lambda kitten, listen: fg)
+    assert fe.app_focused() is True
+    assert Frontend().app_focused() is False   # no channel → no presence
 
 
 def _geometry_fe(monkeypatch, tree):

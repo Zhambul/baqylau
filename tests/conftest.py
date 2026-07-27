@@ -112,6 +112,18 @@ def _fresh_audit_conn(tmp_path):
     from core import paths as P
     prev_prefs = P.DASH_PREFS_DB
     P.DASH_PREFS_DB = str(tmp_path / "dash-prefs.db")
+    # Clear the in-memory PRESENCE maps (dashboard/notify/presence.py). They are
+    # module-global by design — the dashboard is a singleton process, so one
+    # dict IS the whole truth — which makes them the one piece of dashboard
+    # state a test can leak into the next: a recorded device beat reads as
+    # "a browser is in your hands" and SUPPRESSES the alert a later notifier
+    # test asserts on. Order-dependent, so it would surface only under a
+    # randomised run. Only when already imported — no reason to drag the
+    # dashboard into an L3 hook test to clear state it never made.
+    pres = sys.modules.get("dashboard.notify.presence")
+    if pres is not None:
+        pres._VIEWING.clear()
+        pres._DEVICE_SEEN.clear()
     A._CONN, A._FAILED = None, False
     yield
     P.DASH_PREFS_DB = prev_prefs

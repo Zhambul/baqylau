@@ -104,6 +104,18 @@ class Frontend:
         w = self.find_window("claude_session", sid, tree)
         return str(w.get("id")) if w else None
 
+    def app_focused(self, tree=None):
+        """True when the terminal APP is frontmost on this desktop right now
+        (ANY of its windows holds OS focus) — "you are at the terminal",
+        whichever tab you're on. Distinct from `tab_focused`, which asks about
+        ONE session: this is the coarse PRESENCE signal the dashboard polls to
+        rank the terminal against your browsers when routing an alert
+        (docs/dashboard.md *Presence routing*), where tab_focused is the finer
+        "you are looking at THIS session" suppression. `tree` reuses a
+        pre-fetched ls(). False when there is no terminal channel — which
+        degrades toward alerting you, the safe direction."""
+        return False
+
     def tab_focused(self, win, tree=None):
         """True when the TAB containing window `win` is frontmost on the user's
         screen RIGHT NOW — i.e. it is the active tab AND its OS window holds
