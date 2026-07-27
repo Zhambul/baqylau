@@ -22,7 +22,7 @@ from dashboard.notify.broker import BROKER
 from dashboard.read.lists import (accounts_key, accounts_payload,
                                   sessions_payload, row_key, wire_row)
 from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
-                                 session_title, session_slug)
+                                 session_prompts, session_title, session_slug)
 from dashboard.read.mirror import (agent_scope, merged_backlog, merge_live,
                                    TAIL_BLOCKS)
 from dashboard.read.session import (BADGES, badge_count, agents_ctx,
@@ -130,6 +130,11 @@ _SLOW_CHANS = (
     # the pinned goal card — the active `/goal` scanned from the transcript
     # tail (read-side, no hook fires). Slow, for the same reason as tasks
     _Chan("goal", "goal", lambda c: session_goal(c.tpath), "goal"),
+    # the ⊜ compact button's gate — how many prompts you have typed. It only
+    # matters at the very start of a session (below the floor Claude Code
+    # refuses to compact at), and the cached probe is a getsize once the
+    # transcript is any size at all, so it rides the slow cadence.
+    _Chan("prompts", "prompts", lambda c: session_prompts(c.tpath), "prompts"),
     # the unsent composer draft — so a composer open on ANOTHER device tracks
     # this one's edits (the writer suppresses its own echo by `origin`; the
     # page skips the repaint while its own box has focus). Slow: a draft is

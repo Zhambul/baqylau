@@ -13,8 +13,8 @@ from core import tabs
 from dashboard import opshtml, prefs, suggestion
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
-                                 session_goal, session_kv, session_title,
-                                 session_slug)
+                                 session_goal, session_kv, session_prompts,
+                                 session_title, session_slug)
 from plugins.claude_code import accounting as ACC
 from plugins.claude_code import memory as MEM
 from plugins.claude_code import model as M
@@ -272,6 +272,12 @@ def session_payload(sid, agent=""):
     # still shows its final/achieved goal — read-side, no hook (docs/dashboard.md
     # *Web goal*)
     data["goal"] = session_goal(data.get("transcript_path") or "")
+    # how many prompts YOU typed (capped; None = nothing to conclude) — the ⊜
+    # compact button's gate, since Claude Code refuses /compact on a
+    # conversation that has barely started (docs/dashboard.md *Header action
+    # bar*). Not live-gated: the header shows every action for a parked session
+    # too, greyed with the reason.
+    data["prompts"] = session_prompts(data.get("transcript_path") or "")
     # deliberately NOT live-gated: the composer stays usable on a PARKED
     # session (the resume-&-send door), so its draft must restore there too
     data["composer_draft"] = composer_draft(sid)

@@ -83,6 +83,15 @@ def goal(transcript_path):
     return transcript.goal_probe(transcript_path)
 
 
+def prompts(transcript_path):
+    """The human-prompt-count provider (plugins.prompts fan-out) — how many
+    prompts the user typed into a Claude transcript, capped; None for files this
+    parser finds none in. Backs the dashboard's ⊜ compact gate. See
+    transcript.prompt_count."""
+    from plugins.claude_code import transcript
+    return transcript.prompt_count(transcript_path)
+
+
 def conversation(sid, pos=0, agent_id=""):
     """The conversation provider (plugins.conversation fan-out) for the
     dashboard's merged mirror stream — ONE identity's records: the session's own

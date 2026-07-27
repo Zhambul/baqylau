@@ -135,6 +135,14 @@ function route() {
   // hide the c1/c2 account strip once we're inside a particular session
   document.body.classList.toggle("in-session", parts[0] === "s");
   showBack(parts[0] === "s");     // the standalone-app ‹ back button (installed)
+  // the header's top-right corner belongs to the open session (its action bar,
+  // mounted by renderSessionChrome) — hand it back to the list's own buttons on
+  // every other route. Only OFF a session route: a drill-down (…/m/<task>)
+  // re-enters showSection without rebuilding the chrome, so clearing here
+  // unconditionally would leave the header empty for the rest of the visit.
+  // A switch to ANOTHER session re-mounts (mountHeaderActions clears first).
+  if (parts[0] !== "s" && typeof clearHeaderActions === "function")
+    clearHeaderActions();
   // A user-driven navigation while a launch watch is armed flips it QUIET:
   // the watch keeps running, but resolution becomes a clickable toast instead
   // of a navigation — yanking the browser away from wherever the user went is

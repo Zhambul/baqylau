@@ -474,7 +474,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `tasks-hide` (`{"hidden": bool}` → dismiss/restore the pinned tasks CARD, a prefs write, no terminal and no task touched — *Web tasks* below; 400 non-bool, **409 unless every task is completed**), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
+| `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors[?agent=<aid>]` | the Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*) |
 | `GET /api/session/<sid>/jobs[?agent=<aid>]` | the background Bash jobs (command + lifecycle state, merging audit streams + ops + the launch hook) for the jobs tab (*Jobs tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*); output via the `/copy/<group>/out` endpoint |
 | `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
@@ -1712,9 +1712,9 @@ actually needs.
 
 ## Web quick commands (`POST /api/session/<sid>/command`)
 
-The scoreboard's SECOND action row (its own line under
-stop/cancel/rewind/close — live-with-window sessions only, like the buttons
-above it): **⊜ compact**, **✦ model ▾**, **✧ effort ▾**. Each just types one
+The SECOND action row of the header action bar (beside the session gestures —
+*Header action bar* below, which also owns when each is reachable): **⊜
+compact**, **✦ model ▾**, **✧ effort ▾**. Each just types one
 of the TUI's OWN slash commands into the session's window — `/compact`,
 `/model <alias>`, `/effort <level>`. The TUI stays authoritative, same
 philosophy as the "/" menu: the web never re-implements compaction or model
@@ -1770,7 +1770,7 @@ post_message's: a RED tab (`awaiting-command` — a modal dialog is up) is a
 attempt is a `web-command` state_files row (`{win, cmd, arg, ok, tab}`),
 failures also an `A.error`.
 
-The client row (`chromeQuickCmds`, the second `actrow` of the session chrome):
+The client row (`chromeQuickCmds`, the second `actrow` of the header action bar):
 compact carries the close button's two-step arm via the shared `armConfirm`
 ("compact now?", 4 s) — a misclick would summarize the conversation out from
 under you; model and effort open
@@ -4311,6 +4311,97 @@ Like every control-plane write the POST sits behind `_post_guard` (so
 `state_files` row (empty session log/path — it is dashboard-global, not
 per-session, exactly like the `ns-prefs` write).
 
+## Header action bar (the page header's corner belongs to the open session)
+
+The page header's top-right holds the LIST's gestures — ▦ stats, ◉ alerts (the
+global master switch), ⛶ fullscreen, ＋session. Every one of them is about the
+**crowd** of sessions, and none is about the session you are reading. So inside
+a session view they stand down (`body.in-session`, the class the router already
+sets and the `#accounts` strip already hides on) and that corner is handed to the
+session's OWN actions instead: `#sessact`, filled by `mountHeaderActions`
+(app.11-chrome.js) with the same two `.actrow` groups that used to stack under
+the session title — ✎ rename · ⇆ migrate · ◉ alerts · ■ stop · ↶ rewind · ✕
+close, then ⊜ compact · ✦ model ▾ · ✧ effort ▾ (*Web quick commands*).
+
+One exception to the stand-down: **⛶ comes back while fullscreen is actually
+engaged** (`body.fs-on`, synced from the `fullscreenchange` handler), because it
+is then the EXIT — entering fullscreen on the list and opening a session would
+otherwise strand you with no visible way out. ◉ alerts goes because the session
+bar carries a per-session ◉ alerts of its own, and two identical-looking toggles
+side by side is a coin flip. The conn dot and the wake/notification buttons stay:
+those are status and permission affordances, not list gestures.
+
+**Mounting.** `renderSessionChrome` calls `mountHeaderActions` where it used to
+`head.append` the rows, so there is still exactly one builder per row and one
+owner of "this header belongs to this session". `clearHeaderActions` hands the
+corner back, called by the router for every non-session route — deliberately
+NOT on every route: a drill-down (`…/m/<task>`) re-enters `showSection` without
+rebuilding the chrome, and clearing unconditionally left the header empty for the
+rest of the visit. A switch to another session re-mounts (the mount clears
+first), so no button in the bar can ever act on the sid you just left.
+`applyAgentActionVis` (the agent-scope hide) queries `$sessact` for the same
+reason: one root, so where the buttons are and where they are looked for cannot
+drift.
+
+The header WRAPS (`#top`/`.topright` `flex-wrap`) rather than scrolling: nine
+buttons plus the brand do not fit a phone, and a horizontally-scrolled header
+puts ✕ close off-screen with nothing saying so. Height is the cheap direction.
+
+### Greyed, never gone
+
+The bar's rule: **an action that doesn't apply greys out and says why; it does
+not vanish.** Buttons that come and go move every other button under the cursor
+between one tab state and the next, and the corner is small enough that ✕ close
+lands where ■ stop was. So a parked session shows the same nine buttons a live
+one does — only the reachable subset changes. `gate(btn, ok, why)` is the single
+place that expresses it: `disabled` plus a title that NAMES the missing
+condition, with the working tooltip (`data-tip`) restored the moment it applies.
+
+| button | reachable when | why not |
+| --- | --- | --- |
+| ✎ rename · ⇆ migrate · ◉ alerts | always | they touch the transcript or a dashboard pref, not the terminal — live AND parked |
+| ■ stop | live window **and** a turn is running (`BUSY_TABS`) | an Esc when idle can clear queued input; on a red tab it *declines the dialog* |
+| ↶ rewind | live window **and** idle | exactly the complement of stop — it drives the TUI's checkpoint menu, which needs a settled session |
+| ✕ close | live window | nothing to close once it's parked |
+| ⊜ compact | live window, no dialog waiting, **and** enough conversation | see below |
+| ✦ model ▾ · ✧ effort ▾ | live window, no dialog waiting | pasted text would land IN an open dialog (the server 409s too) |
+| ↻ resume | parked, with a cwd | the one button that is genuinely absent otherwise: it is the parked counterpart of the live set, not a greyed version of anything |
+
+Both tab-dependent gates re-derive from the tab on every SSE `tab` event
+(`ses.stopMode`, `ses.quickMode`) — never blindly re-enabled. `rewindSession` /
+`interruptSession` / the endpoints still refuse the same cases; the gate only
+moves the answer to *before* the click. A disabled button also stops lighting up
+under the cursor (`.sstop:disabled:hover`), since a hover glow on something that
+won't click is the whole "why won't it work" confusion.
+
+**The compact floor.** Claude Code refuses `/compact` on a conversation that has
+barely started — "Not enough messages to compact" — and the button used to type
+it anyway, so the failure only showed up in the terminal. The session payload now
+carries `prompts`: how many prompts YOU typed, from
+`transcript.prompt_count` behind the `plugins.prompts` path-keyed fan-out
+(sibling of `context`/`goal`), the `session_prompts` (path, size) memo, and a
+slow SSE channel so the button un-greys on the message that crosses the floor.
+
+Three things about that count are deliberate:
+
+* It counts what `conversation()` paints as YOU bubbles — a `prompt` record that
+  is not `meta`. Claude Code injects user-shaped records constantly (tool
+  results, skill loads, teammate mail, the queued-command replay); counting bare
+  `type:"user"` records would call a one-message session a long one.
+* It is BOUNDED: a transcript past `PROMPT_SCAN_B` (256 KB) is not read at all,
+  and the scan stops at `PROMPT_CAP`. So the probe is a `getsize` for every real
+  session and a small read only for the young one whose answer decides anything.
+* It FAILS OPEN in every direction — an oversized file, an unreadable one, and a
+  file with no prompts in it (a codex rollout reaches the same path-keyed
+  fan-out) all mean "don't conclude anything", and the client gates only on a
+  real number. The count exists solely to ARGUE FOR disabling a button, so an
+  unknown must never disable one.
+
+The floor itself (`COMPACT_MIN_PROMPTS = 2`) is the lowest one that catches the
+reported case — you sent a single message and compact bounced. Claude Code's
+exact rule is its own and unpublished, so past that floor the TUI stays the
+authority: this is a courtesy gate, not a reimplementation of its check.
+
 ## The session chrome, in named phases
 
 `renderSessionChrome(tab)` builds the whole session view, and it does six
@@ -4321,8 +4412,8 @@ rule, applied to the page:
 | phase | builds |
 | --- | --- |
 | `chromeIdentity` | `l1` — title · state badge · parked chip · directory · sid · git chip · account chip |
-| `chromeActions` | `actrow` #1 — ✎ rename / ⇆ migrate / ◉ alerts (live AND parked), then ■ stop / ↶ rewind / ✕ close (live+windowed) or ↻ resume (parked) |
-| `chromeQuickCmds` | `actrow` #2 — ⊜ compact + the model/effort pickers (live-only; returns an EMPTY row the caller drops) |
+| `chromeActions` | `actrow` #1 — ✎ rename / ⇆ migrate / ◉ alerts / ■ stop / ↶ rewind / ✕ close, plus ↻ resume when parked. Mounted in the PAGE HEADER, not the head (*Header action bar*) |
+| `chromeQuickCmds` | `actrow` #2 — ⊜ compact + the model/effort pickers, same mount |
 | `chromeLiveRows` | the three rows that start empty and are filled by the patchers: `statsrow` · `ctxrow` · `runrow` |
 | `chromeTabs` | the tab strip + its badges (fetched list length, else the payload's cheap eager count) |
 | `chromeBody` | the open tab's body — the mirror composite, or a grid + the fetch that fills it |
@@ -6711,7 +6802,8 @@ focused re-renders through `updateAgents` (an `agents` SSE, which doesn't move
 `statsSig`). `setBadge` clears `data-st` on the way back, and a full
 `renderSessionChrome` rebuilds the header outright.
 
-The header **action buttons** are pruned to what applies to a subagent
+The **action buttons** (in the page header — *Header action bar*) are pruned to
+what applies to a subagent
 (`applyAgentActionVis`): the session-only actions — rename, migrate, cancel,
 rewind, close, resume, and the compact/model/effort quick commands (all marked
 `.actses`) — hide while focused, since none of them act on an individual
@@ -6805,8 +6897,10 @@ session strip, and the agents rail (sticky beside the stream, yielding to the
 strip via `body.attn-on .rail`). Nothing becomes unreachable when the
 header scrolls away — the control gestures are document-level (Esc =
 interrupt, etc.) and the session strip + toasts still surface state — so
-don't re-pin it as a "fix"; if the mouse path to ■ stop ever matters, the
-answer is a collapsing slim bar, not restoring the full sticky header.
+don't re-pin it as a "fix". The mouse path to ■ stop stopped being the
+question anyway once the action rows moved into the top bar (*Header action
+bar*), which IS pinned: the buttons are now always on screen and the session
+header is two rows shorter, which is the same win from the other end.
 
 ## Mobile / iPad
 

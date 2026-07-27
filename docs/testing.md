@@ -153,6 +153,18 @@ server round-trip is involved. Executing the function and asserting on the body
 is the only thing that catches it; the harness is checked against the OLD
 source as well, to confirm it fails there.
 
+And a fifth: `tests/jsdom/headeract.js` mounts the header action bar
+(`mountHeaderActions` in `app.11-chrome.js`, docs/dashboard.md *Header action
+bar*) and reports, per session state, which of its nine buttons can be clicked —
+behind `test_header_action_bar_gates_every_button`. It is the one harness that
+loads TWO sources: `app.10-control.js` goes in first so `BUSY_TABS` and
+`liveTab()` are the page's own rather than a re-encoded copy. It exists because
+the bar's contract is that a button which doesn't apply GREYS instead of
+vanishing, which makes "is it clickable right now" the feature itself — a matrix
+(live/parked × idle/running/dialog-waiting × how much conversation there is)
+computed by two closures and a handful of static gates. A grep can read those
+closures; only running them says what came out.
+
 The DOM shim these harnesses share lives in
 `tests/jsdom/domshim.js` (`El` + `domGlobals()`): a copy per harness would be
 exactly the duplication these harnesses were written to catch. Note that a

@@ -67,7 +67,15 @@ $notifytoggle.onclick = () => {
       const p = cur() ? exit.call(document) : req.call(root);
       if (p && p.catch) p.catch(() => {});   // e.g. permission denied — no-op
     };
-    const sync = () => { $fsbtn.title = cur() ? "exit fullscreen" : "fullscreen"; };
+    // `fs-on` is what keeps the ⛶ reachable inside a session view, where the
+    // list-page header buttons are hidden (style.css): while fullscreen is
+    // ENGAGED this button is the exit, and hiding an exit strands you.
+    const sync = () => {
+      const on = !!cur();
+      $fsbtn.title = on ? "exit fullscreen" : "fullscreen";
+      document.body.classList.toggle("fs-on", on);
+    };
+    sync();
     document.addEventListener("fullscreenchange", sync);
     document.addEventListener("webkitfullscreenchange", sync);
   }

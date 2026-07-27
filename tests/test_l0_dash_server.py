@@ -1955,6 +1955,61 @@ def test_limits_endpoint_serves_its_owners_numbers(dash, monkeypatch):
     assert e.value.code == 413
 
 
+def test_session_payload_carries_prompt_count(dash, tmp_path):
+    """The ⊜ compact gate's input: `prompts` — how many prompts the USER typed,
+    capped (docs/dashboard.md *Header action bar*). Claude Code refuses /compact
+    on a conversation that has barely started, so the button greys out instead of
+    typing a command the TUI will bounce. None = nothing to conclude."""
+    tr = tmp_path / "pc.jsonl"
+    tr.write_text("".join(json.dumps(o) + "\n" for o in [
+        {"type": "user", "message": {"content": "only message"}},
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "ok"}]}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "out"}]}},   # not something you said
+    ]), encoding="utf-8")
+    A.session_start({"session_id": "pc1", "cwd": "/w",
+                     "transcript_path": str(tr)})
+    assert _get_json(dash + "/api/session/pc1")["prompts"] == 1
+    tr.write_text(tr.read_text(encoding="utf-8")
+                  + json.dumps({"type": "user",
+                                "message": {"content": "second"}}) + "\n",
+                  encoding="utf-8")
+    assert _get_json(dash + "/api/session/pc1")["prompts"] == 2
+
+
+def test_header_corner_belongs_to_the_open_session(dash):
+    """The page header's top-right holds the LIST's gestures (▦ stats, ◉ global
+    alerts, ⛶, ＋session) — and, inside a session, that session's own action bar
+    instead (docs/dashboard.md *Header action bar*).
+
+    Static check over the served assets, because the swap is split across three
+    of them and each half is silent on its own: the mount point (index.html), the
+    mount (app.11-chrome.js — and NOT into the session's own head, which is what
+    it replaced), and the CSS that stands the list buttons down."""
+    code, index = _get(dash + "/")
+    assert code == 200
+    assert 'id="sessact"' in index
+    code, chrome = _get(dash + "/static/app.11-chrome.js")
+    assert code == 200
+    assert "function mountHeaderActions(" in chrome
+    assert "$sessact.append(row)" in chrome
+    assert "head.append(chromeActions" not in chrome, \
+        "the action rows are back in the session head — the header corner is the mount"
+    code, router = _get(dash + "/static/app.02-router.js")
+    assert code == 200
+    assert "clearHeaderActions()" in router      # …and handed back off-session
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    hidden = re.search(r"((?:body\.in-session #\w+,\s*)+body\.in-session #\w+)"
+                       r"\s*\{\s*display: none", css)
+    assert hidden, "the list-page header buttons are no longer hidden in-session"
+    for btn in ("statsbtn", "notifytoggle", "fsbtn", "newbtn"):
+        assert "#" + btn in hidden.group(1), btn
+    # the one exception: engaged fullscreen keeps its ⛶, which is then the EXIT
+    assert "body.in-session.fs-on #fsbtn" in css
+
+
 def test_page_reads_the_served_limits_not_its_own_copies(dash):
     """The page must CONSUME /api/limits, not re-encode the caps: one `LIMITS`
     declaration (app.00-core.js, the pre-fetch fallback + the fetch target), and

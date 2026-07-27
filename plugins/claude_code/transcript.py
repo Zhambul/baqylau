@@ -584,6 +584,59 @@ def context_probe(path, main=False):
     return None
 
 
+PROMPT_SCAN_B = 256 * 1024   # bytes of transcript prompt_count will read. A file
+#                              bigger than this holds far more conversation than
+#                              the question is about, so it is not read AT ALL —
+#                              which bounds every real session to a getsize, and
+#                              spends the read only on the young session whose
+#                              answer actually decides something.
+PROMPT_CAP = 8               # stop counting here: nothing asks "how many" past a
+#                              handful, and the early exit is what keeps a busy
+#                              young session's scan short.
+
+
+def prompt_count(path, cap=PROMPT_CAP):
+    """How many prompts the HUMAN typed into this transcript, capped at `cap`;
+    None when the file has nothing to say (see below).
+
+    Backs the dashboard's ⊜ compact gate (docs/dashboard.md *Header action
+    bar*). Claude Code refuses `/compact` on a conversation that has barely
+    started — "Not enough messages to compact" — and a button whose whole job is
+    to type a command the TUI will reject should say so before you press it.
+
+    Counts exactly the records conversation() paints as YOU bubbles: a `prompt`
+    record that is NOT `meta`. Claude Code injects user-shaped turns constantly
+    (tool results, skill loads, teammate mail, the queued-command replay) and
+    none of those is something you said, so counting bare `type:"user"` records
+    would call a one-message session a long one.
+
+    FAILS OPEN everywhere, because the count only ever ARGUES FOR DISABLING a
+    button and an unknown must never do that: a transcript past PROMPT_SCAN_B is
+    `cap` unread, an unreadable one is `cap`, and a file this parser finds no
+    prompts in at all is None — "nothing to conclude", which is also the honest
+    answer for a codex rollout the path-keyed fan-out hands us (the same
+    contract as context_probe, which returns None on a file it can't speak)."""
+    if not path:
+        return None
+    try:
+        if os.path.getsize(path) > PROMPT_SCAN_B:
+            return cap
+        with open(path, "rb") as f:
+            raw = f.read(PROMPT_SCAN_B)
+    except OSError:
+        return cap
+    n = 0
+    for ln in raw.split(b"\n"):
+        if b'"user"' not in ln:           # cheap prefilter before the parse
+            continue
+        rec = parse_line(ln.decode("utf-8", "replace"))
+        if rec and rec.get("kind") == "prompt" and not rec.get("meta"):
+            n += 1
+            if n >= cap:
+                break
+    return n or None
+
+
 # The `/goal <condition>` slash command's args, pulled from its transcript
 # command record (`<command-name>/goal</command-name> … <command-args>ARGS
 # </command-args>`). A bare `/goal clear` (or `off`) ends the goal; `/goal

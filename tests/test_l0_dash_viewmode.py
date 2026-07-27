@@ -485,6 +485,62 @@ def test_secondary_tab_sections_are_one_engine(tmp_path):
     assert d["badges"]["memory"] == {"count": "1", "meta": 1, "painted": None}
 
 
+def test_header_action_bar_gates_every_button(tmp_path):
+    """The header action bar's reachability matrix, EXECUTED:
+    tests/jsdom/headeract.js mounts the real bar (app.11-chrome.js, with the
+    real app.10-control.js supplying BUSY_TABS/liveTab) and reports, per session
+    state, which buttons can be clicked (docs/dashboard.md *Header action bar*).
+
+    The bar's contract is that a button which doesn't apply GREYS rather than
+    vanishing — so "is it clickable right now" IS the feature, and it is computed
+    by closures a grep can only read the source of. Each row below has been wrong
+    at least once: a ■ stop offered when nothing runs, a ↶ rewind the server
+    refuses, a ⊜ compact that types a command Claude Code bounces with "not
+    enough messages". Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "headeract.js"),
+         os.path.join(REPO, "dashboard", "static", "app.10-control.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    def off(state):
+        return {k for k, v in d[state].items() if v["disabled"]}
+
+    # the same nine buttons in EVERY live state — greyed, never gone
+    for state in ("idle", "running", "asking", "fresh", "unknown"):
+        assert list(d[state]) == ["✎ rename", "⇆ migrate", "◉ alerts", "■ stop",
+                                  "↶ rewind", "✕ close", "⊜ compact",
+                                  "✦ model ▾", "✧ effort ▾"], state
+    # idle: nothing to stop; rewind is exactly the complement of stop
+    assert off("idle") == {"■ stop"}
+    assert off("running") == {"↶ rewind"}
+    # red = a modal dialog is up: an Esc declines it and pasted text lands IN
+    # it, so both stop and every quick command stand down (close still works —
+    # it closes the tab, it doesn't type)
+    assert off("asking") == {"■ stop", "↶ rewind", "⊜ compact",
+                             "✦ model ▾", "✧ effort ▾"}
+    # one prompt in — Claude Code refuses to compact a conversation this short
+    assert off("fresh") == {"■ stop", "⊜ compact"}
+    assert "not enough conversation" in d["fresh"]["⊜ compact"]["title"]
+    # …but an UNKNOWN count never greys it: the gate only ever argues for
+    # disabling, so it must not act on a number it doesn't have
+    assert off("unknown") == {"■ stop"}
+    # parked: everything that needs a terminal to type into is greyed and SAYS
+    # so, ↻ resume joins as the way back, and the three that touch the
+    # transcript or a pref still work
+    assert off("parked") == {"■ stop", "↶ rewind", "✕ close", "⊜ compact",
+                             "✦ model ▾", "✧ effort ▾"}
+    assert "parked" in d["parked"]["✕ close"]["title"]
+    assert d["parked"]["↻ resume"]["disabled"] is False
+    # leaving the session hands the corner back to the list's own buttons
+    assert d["cleared"] == {"n": 0, "hidden": True}
+
+
 def test_view_mode_engine_collapses_runs_and_words_them(dash):
     """The COLLAPSE ITSELF, executed rather than grepped: tests/jsdom/viewmode.js
     runs the real app.05-session.js engine over a DOM shim and reports what the

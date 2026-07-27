@@ -20,6 +20,7 @@ const $favicon = document.getElementById("favicon");
 const $newbtn = document.getElementById("newbtn");
 const $notifytoggle = document.getElementById("notifytoggle");
 const $statsbtn = document.getElementById("statsbtn");
+const $sessact = document.getElementById("sessact");   // the header action bar
 const $modal = document.getElementById("modal");
 const $accounts = document.getElementById("accounts");
 

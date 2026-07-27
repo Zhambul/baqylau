@@ -94,7 +94,11 @@ code, pre, .mono { font-family: var(--mono); }
 /* ---- top bar ---------------------------------------------------------- */
 #top {
   position: sticky; top: 0; z-index: 50;
+  /* wraps: inside a session the right group holds the session's whole action
+     bar (#sessact), which on a narrow screen drops to its own line rather than
+     squeezing the brand or scrolling ✕ close out of sight */
   display: flex; align-items: center; justify-content: space-between;
+  flex-wrap: wrap; row-gap: 8px;
   padding: calc(10px + var(--sat)) max(var(--gx), env(safe-area-inset-right))
            10px max(var(--gx), env(safe-area-inset-left));
   background: linear-gradient(180deg,
@@ -111,7 +115,8 @@ code, pre, .mono { font-family: var(--mono); }
 /* the shanyrak mark in the header lockup — gold accent baked in, ink follows
    the brand's currentColor (see index.html) */
 .brandmark { width: 2em; height: 2em; flex: none; display: block; }
-.topright { display: flex; align-items: center; gap: 14px; }
+.topright { display: flex; align-items: center; gap: 14px;
+            flex-wrap: wrap; justify-content: flex-end; min-width: 0; }
 .dot {
   width: 8px; height: 8px; border-radius: 50%;
   background: var(--dim2); display: inline-block; transition: background .3s;
@@ -141,6 +146,38 @@ code, pre, .mono { font-family: var(--mono); }
    dashboard reads at a glance (docs/dashboard.md, *Global alerts toggle*). */
 #notifytoggle.off { color: var(--dim2); text-decoration: line-through; }
 #notifytoggle.off:hover { color: var(--dim); }
+/* LIST-PAGE-ONLY header buttons: ▦ stats, ◉ alerts (the GLOBAL master switch),
+   ⛶ fullscreen and "+ session" are gestures ABOUT the crowd of sessions, not
+   about the one you're reading — the same reasoning that already hides the
+   #accounts strip in a session view. In a session that corner belongs to the
+   session's OWN actions (#sessact below), which include a per-session ◉ alerts
+   toggle the global one would sit next to looking identical. The conn dot and
+   the wake/notif buttons stay: those are status/permission affordances, not
+   list gestures. The hidden buttons stay WIRED — a #/stats bookmark or ⌃⇧←/→
+   works from anywhere; they are simply not shown here. */
+body.in-session #statsbtn,
+body.in-session #notifytoggle,
+body.in-session #fsbtn,
+body.in-session #newbtn { display: none; }
+/* ONE exception: while fullscreen is actually ENGAGED the ⛶ comes back, because
+   it is then the EXIT affordance — entering fullscreen on the list and opening a
+   session would otherwise strand you with no visible way out (`body.fs-on`, kept
+   in sync by the fullscreenchange handler in app.12-shell.js). */
+body.in-session.fs-on #fsbtn { display: revert; }
+/* …and what takes their place: the open session's own action bar (✎ rename ⇆
+   migrate ◉ alerts ■ stop ↶ rewind ✕ close · ⊜ compact + the model/effort
+   pickers), mounted here by app.11-chrome.js. Two .actrow groups side by side
+   — the same two that used to stack under the session title — so the row gap
+   inside a group reads as one group and the gap between them separates the
+   session gestures from the quick commands.
+
+   The header wraps rather than scrolls under the count: nine buttons plus the
+   brand do not fit a phone, and a horizontally-scrolled header hides ✕ close
+   off-screen with no affordance saying so. Wrapping costs header height, which
+   is the cheap direction. */
+.topact { display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+          justify-content: flex-end; min-width: 0; }
+.topact .actrow { margin-top: 0; }
 
 /* ---- global session strip (persistent complement to toasts) ----------- */
 /* Slim hairline bar under the header, on every view; hidden when nothing is
@@ -335,7 +372,13 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .sstop:hover, .sresume:hover { color: var(--text); box-shadow: var(--card-hover); }
 .sstop.arm { color: #fff; background: var(--red, #b5484d); }
-.sstop:disabled { color: var(--dim2); cursor: default; }
+/* A disabled action still SHOWS (the header greys instead of hiding — see
+   app.11-chrome.js gate()), so it has to read as unavailable at a glance and
+   stay inert under the cursor: :hover matches a disabled button, and lighting
+   up under one is the whole "why won't it click" confusion. The title says
+   which condition is missing. */
+.sstop:disabled { color: var(--dim2); cursor: default; opacity: .6; }
+.sstop:disabled:hover { color: var(--dim2); box-shadow: var(--card); }
 /* quick-command picker (second actrow): the model/effort dropdowns anchor
    inside their button's wrap and reuse the new-session form's dropdown look
    (.nsdropmenu/.nsdropitem — the dashboard's one picker language); the wrap

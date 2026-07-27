@@ -982,6 +982,51 @@ def test_goal_probe_ignores_list_content_quoting_the_command(tmp_path):
     assert TR.goal_probe(str(p)) is None
 
 
+# ------------------------------------------------- prompt_count (the compact gate)
+
+def test_prompt_count_none_without_transcript(tmp_path):
+    # Fails OPEN: an unreadable file is "plenty" (the count only ever argues for
+    # disabling the ⊜ compact button, so an unknown must never disable it).
+    assert TR.prompt_count(str(tmp_path / "missing.jsonl")) == TR.PROMPT_CAP
+    assert TR.prompt_count("") is None
+
+
+def test_prompt_count_counts_only_what_you_typed(tmp_path):
+    # Claude Code injects user-shaped records constantly — tool results, skill
+    # loads, teammate mail — and none of them is a prompt YOU sent. Counting
+    # bare type:"user" records would call a one-message session a long one.
+    p = tmp_path / "t.jsonl"
+    p.write_text("".join(_l(o) + "\n" for o in [
+        {"type": "user", "message": {"content": "first"}},
+        {"type": "assistant", "message": {"id": "m1", "content": [
+            {"type": "text", "text": "hi"}]}},
+        {"type": "user", "isMeta": True, "message": {"content": "injected"}},
+        {"type": "user", "message": {"content": [
+            {"type": "tool_result", "content": "out"}]}},
+    ]), encoding="utf-8")
+    assert TR.prompt_count(str(p)) == 1
+
+
+def test_prompt_count_zero_prompts_is_none(tmp_path):
+    # "Nothing to conclude" — the same contract context_probe has for a file it
+    # can't speak (a codex rollout reaches this path-keyed fan-out too).
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l({"type": "assistant", "message": {"id": "m1", "content": [
+        {"type": "text", "text": "hi"}]}}) + "\n", encoding="utf-8")
+    assert TR.prompt_count(str(p)) is None
+
+
+def test_prompt_count_caps_and_skips_a_big_transcript(tmp_path, monkeypatch):
+    p = tmp_path / "t.jsonl"
+    p.write_text("".join(_l({"type": "user", "message": {"content": "m%d" % i}})
+                         + "\n" for i in range(30)), encoding="utf-8")
+    assert TR.prompt_count(str(p), cap=3) == 3
+    # past the scan budget the file is not read at all — a transcript that big
+    # obviously has more conversation than the question is about
+    monkeypatch.setattr(TR, "PROMPT_SCAN_B", 10)
+    assert TR.prompt_count(str(p), cap=3) == 3
+
+
 # ------------------------------------------------- the two presenters' registries
 
 def test_both_transcript_presenters_cover_every_record_kind():

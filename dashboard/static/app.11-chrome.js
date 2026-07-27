@@ -33,11 +33,11 @@ function renderSessionChrome(tab) {
   const head = el("div", "shead");
   head.dataset.tab = meta.tab || "";    // state tint; live via setBadge()
   head.append(chromeIdentity(ses, meta));
-  // the action buttons live on their OWN rows (actrow) — inside l1 they floated
-  // to wherever the title/chips left room, moving with title width. An empty row
-  // (a parked session has no quick commands) is left out entirely.
-  for (const row of [chromeActions(ses, meta), chromeQuickCmds(ses, meta)])
-    if (row.childElementCount) head.append(row);
+  // the action buttons are mounted in the PAGE HEADER (mountHeaderActions), not
+  // here — the top-right corner the list page fills with ▦ stats / ⛶ / +
+  // session is dead space inside a session, and those gestures aren't about the
+  // session you're reading.
+  mountHeaderActions(ses, meta);
   head.append(...chromeLiveRows(ses));
   $view.append(head);
   updateStatsRow();
@@ -100,12 +100,65 @@ function chromeIdentity(ses, meta) {
   return l1;
 }
 
+/* ---------- the header action bar ---------- */
+/* The session's own gestures live in the PAGE HEADER's top-right (docs/
+   dashboard.md *Header action bar*), where the list page keeps ▦ stats / ⛶ /
+   ＋session — those are gestures about the CROWD of sessions and are hidden in a
+   session view (style.css `body.in-session`), so the corner is free for the
+   ones that are about the session you are actually reading.
+
+   Two `.actrow`s side by side, the same two the session's own header used to
+   stack: #1 the session-level gestures, #2 the quick commands. Mounted here
+   rather than built inline so there is ONE owner of "the header belongs to this
+   session" — and one place to empty it when you leave (clearHeaderActions,
+   called by the router for every non-session route). */
+function mountHeaderActions(ses, meta) {
+  if (!$sessact) return;
+  clearHeaderActions();
+  for (const row of [chromeActions(ses, meta), chromeQuickCmds(ses, meta)])
+    if (row.childElementCount) $sessact.append(row);
+  $sessact.hidden = !$sessact.childElementCount;
+}
+
+function clearHeaderActions() {
+  if (!$sessact) return;
+  $sessact.textContent = "";
+  $sessact.hidden = true;
+}
+
+/* "This action doesn't apply right now, and here is why" — disabled plus a
+   title that NAMES the reason, the working tooltip (`data-tip`) coming back the
+   moment it applies again.
+
+   The rule the header follows: a button that doesn't apply GREYS, it does not
+   vanish. Buttons that come and go move every other button under the cursor
+   between one tab state and the next, and the corner is small enough that ✕
+   close would land where ■ stop was. So the set is the same for a live session,
+   a busy one and a parked one — only the reachable subset changes. */
+function gate(btn, ok, why) {
+  btn.disabled = !ok;
+  btn.title = ok ? (btn.dataset.tip || "") : why;
+}
+
+// Claude Code refuses `/compact` until a conversation has something to
+// summarize ("Not enough messages to compact"), so ⊜ compact greys out below
+// this many of YOUR prompts (meta.prompts, capped server-side; None/absent =
+// nothing to conclude → no gate). Deliberately the lowest floor that catches
+// the reported case — you sent one message and compact bounced: past it the TUI
+// stays the authority, since its exact rule is its own and unpublished.
+const COMPACT_MIN_PROMPTS = 2;
+
+// Why every terminal-typing action is out for a parked session: it has no
+// window to type into (the server rejects them too — this just says so first).
+const NO_WINDOW = "this session is parked — there is no terminal to type into";
+
 /* actrow #1: the session-level gestures. rename / migrate / alerts work live AND
    parked (they touch the transcript or a dashboard pref, not the terminal); stop
    / rewind / close need a window to type into, and resume is the parked-only
    counterpart. */
 function chromeActions(ses, meta) {
   const act = el("div", "actrow");
+  const windowed = !!(meta.live && meta.kitty_window_id);
   // rename: deliberately OUTSIDE the live gate — it works for live AND parked
   // sessions (the server appends the agent-name naming record to the
   // transcript; a live kitty tab also retitles in place — docs/dashboard.md
@@ -150,68 +203,77 @@ function chromeActions(ses, meta) {
       .catch(e => toast("ask", "mute toggle failed", (e && e.error) || ""));
   };
   act.append(notif);
-  if (meta.live && meta.kitty_window_id) {
-    // stop: THE one stop gesture — an Escape key press in the session's window.
-    // What it does is the terminal's call, not ours: interrupt a turn that has
-    // already done work and the work is kept; interrupt one early enough and
-    // Claude Code takes the message back, handing it to the input box (the
-    // response's `restored`, which applyTakeBack mirrors into the composer).
-    // There used to be a second ⊘ cancel button for that second outcome, on the
-    // theory that it needed a DOUBLE Escape — it doesn't (measured 2026-07-25),
-    // so the two buttons were one gesture with two labels.
-    // Immediate, no confirm: it matches pressing Esc in the terminal.
-    const stop = el("button", "sstop actstop", "■ stop");
-    stop.title = "stop the turn (Esc) — takes your message back if nothing ran yet";
-    stop.onclick = () => lockDuring(stop, interruptSession,
-                                    () => ses.stopMode(liveTab()));
-    // gated to the working states — a stop only applies while a turn is
-    // running, and an Esc when idle can clear queued input, so it greys out
-    // otherwise (the resting state re-derives from the tab, never a blind
-    // re-enable). NOT red awaiting-command, where an Esc declines the open
-    // dialog instead of interrupting (interruptSession bails there too).
-    ses.stopMode = (t) => { stop.disabled = !BUSY_TABS.includes(t); };
-    ses.stopMode(liveTab());
-    act.append(stop);
-    // rewind: idle-only picking mode — click a message below, choose what to
-    // restore, and the server drives the TUI's own checkpoint menu
-    const rew = el("button", "sstop actses", "↶ rewind");
-    rew.title = "rewind: pick a message to restore to (idle only)";
-    // stopPropagation is load-bearing: the ENABLING click must not bubble to
-    // the document click-away handler, which reads any non-bubble click in
-    // picking mode as "leave" — without it the mode self-cancelled in the
-    // same event (toast shown, buttons never revealed)
-    rew.onclick = (e) => { e.stopPropagation(); rewindSession(); };
-    act.append(rew);
-    // close: closes the session's kitty tab — a graceful stop (Claude Code
-    // exits on the HUP and SessionEnd runs the normal lifecycle).
-    // Two-step confirm: first click arms for 4s, second click fires.
-    const cls = el("button", "sstop actses", "✕ close");
-    cls.title = "close this session's terminal tab";
-    armConfirm(cls, "✕ close", "close session?", () => {
-      cls.disabled = true;
-      cls.textContent = "closing…";
-      const sid = S.cur;
-      // optimistic close: beacon the `close` lifecycle (web-hint op=close) and
-      // navigate back to the list on the POST ack — the list card shows greyed
-      // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
-      closeBegin(sid);
-      closeSession(sid, "header")
-        .then(() => {
-          toast("done", "session closed", "terminal tab closed");
-          // the session just ended — back to the list, unless the user
-          // already navigated elsewhere while the POST was in flight
-          if (S.cur === sid) location.hash = "#/";
-        })
-        .catch(e => {
-          closeSettle(sid, "dropped", { reason: "failed" });
-          cls.disabled = false;
-          cls.textContent = "✕ close";
-          clientFail(sid, "close", e);   // a lost/rejected /stop the audit can't see
-          toast("ask", "close failed", (e && e.error) || "");
-        });
-    });
-    act.append(cls);
-  }
+  // stop: THE one stop gesture — an Escape key press in the session's window.
+  // What it does is the terminal's call, not ours: interrupt a turn that has
+  // already done work and the work is kept; interrupt one early enough and
+  // Claude Code takes the message back, handing it to the input box (the
+  // response's `restored`, which applyTakeBack mirrors into the composer).
+  // There used to be a second ⊘ cancel button for that second outcome, on the
+  // theory that it needed a DOUBLE Escape — it doesn't (measured 2026-07-25),
+  // so the two buttons were one gesture with two labels.
+  // Immediate, no confirm: it matches pressing Esc in the terminal.
+  const stop = el("button", "sstop actstop", "■ stop");
+  stop.dataset.tip = "stop the turn (Esc) — takes your message back if nothing ran yet";
+  stop.onclick = () => lockDuring(stop, interruptSession,
+                                  () => ses.stopMode(liveTab()));
+  // rewind: idle-only picking mode — click a message below, choose what to
+  // restore, and the server drives the TUI's own checkpoint menu
+  const rew = el("button", "sstop actses", "↶ rewind");
+  rew.dataset.tip = "rewind: pick a message to restore to (idle only)";
+  // stopPropagation is load-bearing: the ENABLING click must not bubble to
+  // the document click-away handler, which reads any non-bubble click in
+  // picking mode as "leave" — without it the mode self-cancelled in the
+  // same event (toast shown, buttons never revealed)
+  rew.onclick = (e) => { e.stopPropagation(); rewindSession(); };
+  // Both are tab-state gated, and re-derived from the tab on every SSE `tab`
+  // event — never blindly re-enabled. ■ stop applies only while a turn is
+  // RUNNING (an Esc when idle can clear queued input instead), and NOT on a red
+  // awaiting-command, where an Esc declines the open dialog. ↶ rewind is the
+  // exact complement: it drives the TUI's checkpoint menu, which needs an idle
+  // session — rewindSession bails on a busy or red tab with a toast, and the
+  // button now says so before the click rather than after it.
+  ses.stopMode = (t) => {
+    gate(stop, windowed && BUSY_TABS.includes(t),
+         !windowed ? NO_WINDOW
+           : t === "awaiting-command" ? "a question is waiting — answer it in the card"
+           : "nothing is running to stop");
+    gate(rew, windowed && !BUSY_TABS.includes(t) && t !== "awaiting-command",
+         !windowed ? NO_WINDOW
+           : t === "awaiting-command" ? "a question is waiting — answer it first"
+           : "a turn is running — stop it first, then rewind");
+  };
+  ses.stopMode(liveTab());
+  act.append(stop, rew);
+  // close: closes the session's kitty tab — a graceful stop (Claude Code
+  // exits on the HUP and SessionEnd runs the normal lifecycle).
+  // Two-step confirm: first click arms for 4s, second click fires.
+  const cls = el("button", "sstop actses", "✕ close");
+  cls.dataset.tip = "close this session's terminal tab";
+  gate(cls, windowed, NO_WINDOW);   // nothing to close once it's parked
+  armConfirm(cls, "✕ close", "close session?", () => {
+    cls.disabled = true;
+    cls.textContent = "closing…";
+    const sid = S.cur;
+    // optimistic close: beacon the `close` lifecycle (web-hint op=close) and
+    // navigate back to the list on the POST ack — the list card shows greyed
+    // 'closing…' (S.closing) until reconcileCloses parks it from the poll.
+    closeBegin(sid);
+    closeSession(sid, "header")
+      .then(() => {
+        toast("done", "session closed", "terminal tab closed");
+        // the session just ended — back to the list, unless the user
+        // already navigated elsewhere while the POST was in flight
+        if (S.cur === sid) location.hash = "#/";
+      })
+      .catch(e => {
+        closeSettle(sid, "dropped", { reason: "failed" });
+        gate(cls, true);
+        cls.textContent = "✕ close";
+        clientFail(sid, "close", e);   // a lost/rejected /stop the audit can't see
+        toast("ask", "close failed", (e && e.error) || "");
+      });
+  });
+  act.append(cls);
   // resume (parked, with a cwd): reopen the new-session form preset to
   // `claude --resume <this sid>` in this session's directory
   if (!meta.live && meta.cwd) {
@@ -225,15 +287,15 @@ function chromeActions(ses, meta) {
 
 /* actrow #2: the quick commands — compact + the model/effort pickers, each
    typing the TUI's own slash command into the session (docs/dashboard.md, *Web
-   quick commands*). Live-only like stop: there is no window to type into
-   otherwise, so a parked session gets an EMPTY row the caller drops. */
+   quick commands*). Every one of them needs a window to type into, so on a
+   parked session they are all greyed rather than absent (see gate()). */
 function chromeQuickCmds(ses, meta) {
   const act2 = el("div", "actrow");
-  if (!(meta.live && meta.kitty_window_id)) return act2;
+  const windowed = !!(meta.live && meta.kitty_window_id);
   // compact: two-step confirm like close — a misclick summarizes the whole
   // conversation out from under you, so it arms first
   const cpt = el("button", "sstop actses", "⊜ compact");
-  cpt.title = "compact the conversation (/compact)";
+  cpt.dataset.tip = "compact the conversation (/compact)";
   armConfirm(cpt, "⊜ compact", "compact now?", () => sendQuickCmd("compact"));
   act2.append(cpt);
   // model: dropdown picker; the label shows the ctx probe's current model
@@ -242,7 +304,7 @@ function chromeQuickCmds(ses, meta) {
   const mdl = el("button", "sstop");
   ses.modelBtn = mdl;
   setModelBtn(mdl);
-  mdl.title = "switch the model (/model — also saves as your new-session default)";
+  mdl.dataset.tip = "switch the model (/model — also saves as your new-session default)";
   mdl.onclick = () => openQuickMenu(mwrap, "model", MODEL_CHOICES,
                                     curModelFamily());
   mwrap.append(mdl);
@@ -253,7 +315,7 @@ function chromeQuickCmds(ses, meta) {
   const eff = el("button", "sstop");
   ses.effortBtn = eff;
   setEffortBtn(eff);
-  eff.title = "set the reasoning effort (/effort — also saves as your new-session default)";
+  eff.dataset.tip = "set the reasoning effort (/effort — also saves as your new-session default)";
   eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES,
                                     (ses.meta && ses.meta.effort) || "");
   ewrap.append(eff);
@@ -261,9 +323,21 @@ function chromeQuickCmds(ses, meta) {
   // a red tab = a modal dialog is up — pasted text would land IN it (the
   // server 409s too; disabling just says so up front). Live via the same
   // SSE tab event as stopMode.
+  //
+  // ⊜ compact carries one gate of its own: Claude Code refuses to compact a
+  // conversation that has barely started, so a session with fewer than
+  // COMPACT_MIN_PROMPTS of your prompts greys it out instead of typing a
+  // command the TUI will bounce (`prompts`, patched live by its SSE event).
   ses.quickMode = (t) => {
-    const block = t === "awaiting-command";
-    for (const b of [cpt, mdl, eff]) b.disabled = block;
+    const dialog = t === "awaiting-command";
+    const ok = windowed && !dialog;
+    const why = !windowed ? NO_WINDOW
+                          : "a question is waiting — answer it in the card";
+    for (const b of [mdl, eff]) gate(b, ok, why);
+    const n = (ses.meta && ses.meta.prompts);
+    const thin = typeof n === "number" && n < COMPACT_MIN_PROMPTS;
+    gate(cpt, ok && !thin,
+         !ok ? why : "not enough conversation to compact yet");
   };
   ses.quickMode(liveTab());
   return act2;
@@ -461,13 +535,15 @@ function updateStatsRow() {
    ■ stop (`.actstop`) stays ONLY while the focused subagent is still running
    (interrupting the session is the one way to stop it). An action row left with
    nothing visible collapses so it leaves no gap. A full renderSessionChrome
-   rebuild (going back) restores everything, agentFocus already cleared. */
+   rebuild (going back) restores everything, agentFocus already cleared.
+   Scoped to the header bar (`$sessact`), which is where those buttons now
+   live — the one query root, so this can't drift from where they are mounted. */
 function applyAgentActionVis() {
   const ses = S.ses;
-  if (!ses) return;
+  if (!ses || !$sessact) return;
   const focused = !!ses.agentFocus;
-  $view.querySelectorAll(".actses").forEach(b => { b.style.display = focused ? "none" : ""; });
-  const stop = $view.querySelector(".actstop");
+  $sessact.querySelectorAll(".actses").forEach(b => { b.style.display = focused ? "none" : ""; });
+  const stop = $sessact.querySelector(".actstop");
   if (stop) {
     let show = true;
     if (focused) {
@@ -476,7 +552,7 @@ function applyAgentActionVis() {
     }
     stop.style.display = show ? "" : "none";
   }
-  $view.querySelectorAll(".shead .actrow").forEach(row => {
+  $sessact.querySelectorAll(".actrow").forEach(row => {
     const any = [...row.children].some(c => c.style.display !== "none");
     row.style.display = any ? "" : "none";
   });

@@ -240,6 +240,19 @@ def session_goal(tpath):
     return size_cached(_GOAL, tpath, lambda: plugins.goal(tpath))
 
 
+_PROMPTS = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, count): the
+#                   same (path, size) key as _CTX/_GOAL — the number of prompts
+#                   you typed can only change when the file grows.
+
+
+def session_prompts(tpath):
+    """plugins.prompts() (how many prompts the HUMAN typed, capped) behind the
+    (path, size) cache; None when there is nothing to conclude. The ⊜ compact
+    button's gate — Claude Code refuses /compact on a conversation that has
+    barely started (docs/dashboard.md *Header action bar*)."""
+    return size_cached(_PROMPTS, tpath, lambda: plugins.prompts(tpath))
+
+
 _CMDS = API.BoundedLRU(MEMO_CAP)   # cwd -> (monotonic expiry, frozenset(names)).
 #                   TTL'd like _DIRTY, not size-keyed like the transcript memos:
 #                   the input is a DIRECTORY WALK (every ancestor .claude's

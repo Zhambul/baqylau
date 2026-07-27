@@ -300,6 +300,16 @@ function connectSession(sid) {
     if (S.ses.meta) S.ses.meta.goal = d.goal || null;
     renderGoal();
   });
+  // how many prompts you have typed — the ⊜ compact gate's input (Claude Code
+  // refuses to compact a conversation that has barely started). Re-runs the
+  // quick-command gates so the button un-greys on the message that crosses the
+  // floor, without a reload.
+  es.addEventListener("prompts", (e) => {
+    const d = JSON.parse(e.data);
+    if (!S.ses || !S.ses.meta) return;
+    S.ses.meta.prompts = d.prompts;
+    if (S.ses.quickMode) S.ses.quickMode(liveTab());
+  });
   es.addEventListener("tab", (e) => {
     const d = JSON.parse(e.data);
     // while drilled into a subagent the badge/wash belong to that agent's

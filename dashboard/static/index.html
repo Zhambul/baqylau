@@ -49,6 +49,11 @@
        screen edge is the easiest target to hit. The conn dot is a status light,
        not a button, so it sits inboard of it. -->
   <div class="topright">
+    <!-- the open session's OWN action buttons (app.11-chrome.js
+         mountHeaderActions) — this corner belongs to the session while you are
+         reading one, and to the list's gestures otherwise. Empty + hidden on
+         every non-session route. -->
+    <div id="sessact" class="topact" hidden></div>
     <button id="statsbtn" class="ghost" title="stats">▦ stats</button>
     <button id="notifytoggle" class="ghost" title="global alerts">◉ alerts</button>
     <button id="notifbtn" class="ghost" hidden>enable notifications</button>

@@ -63,6 +63,7 @@ PROVIDERS = {
     "effort_default": 2,     # (cwd, slug)          — the resolved effort level
     "context": 1,            # (transcript_path)    — ctx saturation
     "goal": 1,               # (transcript_path)    — the active /goal
+    "prompts": 1,            # (transcript_path)    — human prompts, capped
     "conversation": 3,       # (sid, pos, agent_id) — ONE identity's records
     "ask_preamble": 2,       # (sid, tool_use_id)   — the ask card's preamble
 }
@@ -349,6 +350,17 @@ def goal(transcript_path):
     same exception contract as census()/activity(): the callers are read-side
     dashboards, not hooks."""
     return _first("goal", transcript_path)
+
+
+def prompts(transcript_path):
+    """Human-prompt-count fan-out (path-keyed like context/goal): the first
+    plugin that finds prompts in the file returns how many the USER typed,
+    capped at a handful; None when no plugin does — a file no parser speaks, or
+    one with nothing in it yet. Backs the dashboard's ⊜ compact gate, which is
+    why the None means "don't conclude anything" rather than zero: the count
+    only ever argues for disabling a button. Same exception contract as
+    census()/activity(): the callers are read-side dashboards, not hooks."""
+    return _first("prompts", transcript_path)
 
 
 def conversation(sid, pos=0, agent_id=""):
