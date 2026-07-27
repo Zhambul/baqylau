@@ -295,16 +295,20 @@ def _render_window(entries, start, key, cmds=()):
     in front of it (this rendered every op alone, so the inheritance never fired
     and a team-mail body stayed unclassifiable — hence visible in focus). A
     conversation entry flushes the run, since a message is not any op's block."""
-    out, pend = [], []
+    out, pend, pids = [], [], []
 
     def flush():
         if pend:
-            out.extend(opshtml.op_items(pend, key))
+            # the ops' row ids ride along: pre-`mid` team mail reconstructs a subject
+            # key from the arrival's id, which has to survive these batch boundaries
+            out.extend(opshtml.op_items(pend, key, pids))
             pend.clear()
+            pids.clear()
 
-    for _slot, kind, obj in entries[start:]:
+    for slot, kind, obj in entries[start:]:
         if kind == "op":
             pend.append(obj)
+            pids.append(slot)
             continue
         flush()
         out.extend(conv_items([obj], cmds))

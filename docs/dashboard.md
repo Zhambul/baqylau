@@ -5029,15 +5029,18 @@ Getting there needed the classifier to actually KNOW those rows, which it did no
   reverses into "header, then its bodies, in order", the way a real block's card reads.
   And its **subject** (`mid`): pre-`mid` history has no message id anywhere in the op,
   so the subject is reconstructed from the `<from> → <to>` pair off the chip
-  (`actclass.mail_pair`, the one parser of that chip shape) plus a per-pair COUNT of
-  arrivals seen — `● X → Y` opens message n and the `◉ read · X → Y` after it belongs
-  to that same n. So an arrival, its body and its read notice count as ONE message
-  instead of three, and a teammate that reports twice still counts twice (the pair
-  alone collapsed both into one; the reviewed session has exactly that shape). Mail is
-  chronological, so a read always trails its arrival; one whose arrival fell outside
-  the batch is keyed apart rather than merged into whichever arrival comes later. The
-  residual imprecision is a batch boundary — a conversation record between an arrival
-  and its read flushes the run, and the read then counts as its own message.
+  (`actclass.mail_pair`, the one parser of that chip shape) plus the ROW ID of the
+  arrival that opened it — `● X → Y` opens a message and the `◉ read · X → Y` after it
+  belongs to that same one. So an arrival, its body and its read notice count as ONE
+  message instead of three, and a teammate that reports twice still counts twice. Two
+  weaker keys were tried and both merged messages that were not the same: the pair
+  alone collapsed a teammate's two reports into one (the reviewed session has exactly
+  that shape), and a per-pair COUNTER collided across the batches of a single render —
+  `#1` from two batches is one key. The row id is stable across every batch and fetch,
+  which is why `op_items` takes the `ids` the history paths already carry for their
+  window cuts. Mail is chronological, so a read always trails its arrival; one whose
+  arrival fell outside the batch opens its own subject rather than merging into
+  whichever arrival comes later.
 - **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
   basis (`task_fmt.GLYPHS`).
 

@@ -174,7 +174,7 @@ _BODY_OPS = ("gut", "code")
 NOTE_GLYPH = "⏺"
 
 
-def op_items(ops, key=""):
+def op_items(ops, key="", ids=None):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
@@ -200,15 +200,25 @@ def op_items(ops, key=""):
     `add`/`rem` line counts. The page reads them for the kind filter and the view
     modes; it never re-derives them from the HTML it was handed. That inheritance
     is why the CALLERS batch consecutive ops into one call (read/mirror.py) — a
-    per-op call has no row in front of it to inherit from."""
+    per-op call has no row in front of it to inherit from.
+
+    `ids` are the ops' state-DB row ids, when the caller has them (the history and
+    backlog paths do — `_merge_order` carries them for its window cuts). They serve
+    the ONE thing that needs an identity no op carries: pre-`mid` team mail, whose
+    reconstructed subject key must be stable across batches and fetches (see below).
+    Without them the key falls back to a per-call position, which is unique within
+    the batch — enough for the live path, where every op has a real `mid`."""
     out = []
     prev_act = None
     prev_mid = None
     head = None                 # index of the group-less header a body op belongs under
-    mail_n, orphans = {}, 0     # per-pair arrival count, for pre-`mid` mail (below)
-    for op in ops:
+    mail_n = {}                 # pre-`mid` mail: pair -> the token of its open message
+    for i, op in enumerate(ops):
         if not isinstance(op, dict):
             continue
+        # a globally stable token when the caller has row ids, else a per-call one
+        oid = ids[i] if (ids and i < len(ids) and ids[i] is not None) \
+            else "n%d" % (len(out) + 1)
         t = op.get("t")
         if t in ("rule", "blank") or (op.get("src") and not op.get("web")):
             continue
@@ -236,25 +246,24 @@ def op_items(ops, key=""):
             it["mid"] = str(op["mid"])
         else:
             # PRE-`mid` HISTORY has no message id anywhere in the op, so the subject
-            # is reconstructed from the `<from> → <to>` PAIR off the chip plus a
-            # per-pair COUNT of the arrivals seen so far: `● X → Y` opens message n,
-            # and the `◉ read · X → Y` that follows belongs to that same n. The pair
-            # alone is not enough — a teammate that reports twice would have both
-            # messages collapse into one (the reviewed session has exactly that), so
-            # the count is what keeps two messages two. Mail is chronological, so a
+            # is reconstructed: the `<from> → <to>` PAIR off the chip, plus the token
+            # of the ARRIVAL that opened it — `● X → Y` opens a message, and the
+            # `◉ read · X → Y` after it belongs to that same one. The pair alone is
+            # not enough (a teammate that reports twice had both messages collapse
+            # into one — the reviewed session has exactly that shape), and a
+            # per-batch counter is not either: `#1` in two batches of one render
+            # collides, which is the same merge by another route. The arrival's ROW
+            # ID is stable across every batch and fetch. Mail is chronological, so a
             # read always trails its arrival; one whose arrival fell outside this
-            # batch is keyed apart (negative n) rather than merged into whichever
-            # arrival happens to come later.
+            # batch opens its own subject rather than merging into whichever arrival
+            # happens to come later.
             got = actclass.mail_pair(op)
             if got:
                 frm, to, read = got
                 pair = "%s → %s" % (frm, to)
-                if not read:
-                    mail_n[pair] = mail_n.get(pair, 0) + 1
-                elif pair not in mail_n:
-                    orphans -= 1
-                    mail_n[pair] = orphans
-                it["mid"] = "pair:%s#%d" % (pair, mail_n[pair])
+                if not read or pair not in mail_n:
+                    mail_n[pair] = oid
+                it["mid"] = "pair:%s#%s" % (pair, mail_n[pair])
         if op.get("note") or actclass.legacy_note(op):
             it["note"] = 1          # this header IS the whole line (see op_html)
         # The ACTIVITY CLASS the view modes collapse a run of items on

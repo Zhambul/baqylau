@@ -756,18 +756,24 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     assert "check the diff" in legacy[0]["html"]
     assert "Message lead → rev-ui</span>" in legacy[1]["html"]
     # all three rows are ONE message: with no msg_id in pre-`mid` history the subject
-    # is the `<from> → <to>` pair plus a per-pair arrival count, so the summary counts
-    # one
-    assert [i.get("mid") for i in legacy] == ["pair:lead → rev-ui#1"] * 3
-    # …and the COUNT is what keeps two messages the same way apart (a teammate that
-    # reports twice: the pair alone collapsed both into one)
-    twice = opshtml.op_items([old_new, old_body, old_read, old_new, old_read], "sid")
-    assert len({i["mid"] for i in twice}) == 2
-    # a read notice whose arrival is outside this batch is its own message, and can
+    # is the `<from> → <to>` pair plus the ARRIVAL's row id, so the summary counts one
+    ids = [11, 12, 13]
+    keyed = opshtml.op_items([old_new, old_body, old_read], "sid", ids)
+    assert [i.get("mid") for i in keyed] == ["pair:lead → rev-ui#11"] * 3
+    # …the arrival's own id, which is what keeps two messages the same way apart (the
+    # pair alone collapsed both into one) AND survives the batch boundaries of one
+    # render (a per-batch counter gave both a `#1` and merged them again)
+    twice = opshtml.op_items([old_new, old_body, old_read, old_new, old_read],
+                             "sid", [11, 12, 13, 14, 15])
+    assert {i["mid"] for i in twice} == {"pair:lead → rev-ui#11", "pair:lead → rev-ui#14"}
+    # a read notice whose arrival is outside this batch opens its own subject, and can
     # never be merged into an arrival that only comes later
-    orphan = opshtml.op_items([old_read, old_new, old_body], "sid")
-    assert orphan[0]["mid"] == "pair:lead → rev-ui#-1"
+    orphan = opshtml.op_items([old_read, old_new, old_body], "sid", [20, 21, 22])
+    assert orphan[0]["mid"] == "pair:lead → rev-ui#20"
     assert len({i["mid"] for i in orphan}) == 2
+    # without ids (the live path, where every op carries a real mid) the key falls
+    # back to a per-call position — still one subject for the trio
+    assert len({i["mid"] for i in legacy}) == 1
     # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
     # the classifier — mail wears the semantic green, a monitor its slot palette)
     from core import slots
