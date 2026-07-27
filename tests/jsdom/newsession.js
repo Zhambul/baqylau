@@ -51,7 +51,20 @@ const sandbox = {
   $newbtn: new El("button"), $statsbtn: new El("button"),
   $notifytoggle: new El("button"), $view: new El("div"),
   clog: () => {}, toast: () => {}, route: () => {},
-  postJSON: (url, body) => { posted.push({ url, body }); return Promise.resolve({}); },
+  // the launch now arms the jump watch + tears the form down SYNCHRONOUSLY, on
+  // the click (the waiting room must not wait for the POST — docs/dashboard.md
+  // *The pending view*), so go() reaches these two other-part names before it
+  // ever posts; they were unreachable while all of that lived in the .then
+  JUMP_TIMEOUT_MS: 120000, stopDictation: () => {},
+  // the snapshot taken DURING the request is the point: a launch must have
+  // already armed the jump watch and entered the waiting room by the time it
+  // posts, since that is the only window in which the user is staring at
+  // something (docs/dashboard.md *The pending view*)
+  postJSON: (url, body) => {
+    posted.push({ url, body, armed: !!sandbox.S.jump,
+                  hash: sandbox.location.hash });
+    return Promise.resolve({});
+  },
   autoGrow: () => {}, dictation: () => ({ btn: new El("button"), stop() {} }),
   attachTray: () => ({ strip: new El("div"), pending: () => false, paths: () => [] }),
   wireAttach: () => new El("button"),
@@ -110,6 +123,10 @@ step("launch", () => {
   submit.onclick();
 });
 out.posted = posted.map((p) => p.url);
-out.launch_cwd = (posted[0] && posted[0].body && posted[0].body.cwd) || "";
+const launch = posted.find((p) => p.url === "/api/sessions/new") || {};
+out.launch_cwd = (launch.body && launch.body.cwd) || "";
+// the optimistic hand-off, as it stood WHILE the launch request was open
+out.launch_armed = !!launch.armed;
+out.launch_hash = launch.hash || "";
 
 console.log(JSON.stringify(out));

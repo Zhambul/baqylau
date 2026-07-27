@@ -20,6 +20,25 @@ from dashboard.control.launch import launch_argv
 A = load_audit()
 
 
+class _Steps:
+    """A launch's per-step stopwatch — `mark(name)` closes the step that just
+    ran and `ms` is the accumulated `{step: milliseconds, …}` map (plus `all`,
+    the elapsed total) an audit row carries. Local to the launch handler on
+    purpose: this is diagnostic instrumentation for ONE slow endpoint, not a
+    shared timing vocabulary — the other control POSTs are single-call and get
+    their latency from the client's `<gesture>.ok` clientlog row."""
+
+    def __init__(self):
+        self._t0 = self._last = time.time()
+        self.ms = {}
+
+    def mark(self, name):
+        now = time.time()
+        self.ms[name] = round((now - self._last) * 1000)
+        self.ms["all"] = round((now - self._t0) * 1000)
+        self._last = now
+
+
 class _SessionMixin:
     """Launching, migrating and renaming whole sessions."""
 
@@ -34,7 +53,7 @@ class _SessionMixin:
         reports one, and a launch_wake watcher thread hurries the session's
         SSE appearance (see its block). Audited as a `web-launch` state_files
         row (no session db exists yet, so its log/path are empty; `win` = the
-        launched window)."""
+        launched window; `ms` = the per-step latency breakdown, see _Steps)."""
         body = self._post_guard()
         if body is None:
             return
@@ -93,10 +112,21 @@ class _SessionMixin:
         opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
                 "resume": resume or "", "cont": bool(cont),
                 "account": acct or "", "attachments": len(attachments)}
+        # Per-STEP timings, folded into the row as `ms` (below). The handler runs
+        # up to four subprocess round-trips before it answers — the osascript
+        # clipboard probe (~150 ms measured), `lsappinfo` front-app, a resume's
+        # `kitten @ ls`, and `kitten @ launch` — and the row used to record only
+        # that it happened. That left "launch took 5 s" (a real `new.ok`
+        # outlier) un-attributable from the DB: the client's clientlog bounds the
+        # ROUND-TRIP, nothing said which step burned it. Each step is stamped as
+        # it completes, so a partial row (a hung `kitten @ launch`, never
+        # returning) still names the step it died in.
+        step = _Steps()
         fe = launch.frontend()
+        step.mark("fe")
         if fe is None:
             A.error("", "dashboard new-session (no terminal)", {"cwd": cwd})
-            A.state_file("", "", "web-launch", dict(opts, ok=False))
+            A.state_file("", "", "web-launch", dict(opts, ok=False, ms=step.ms))
             return self._json({"error": "no terminal available"}, 503)
         # Guard: never resume-launch a session that ALREADY has a live tab. A
         # second `claude --resume <sid>` would run a duplicate process against
@@ -120,15 +150,19 @@ class _SessionMixin:
             # account is irrelevant to this check.
             r_tpath = (API.session_row(resume) or {}).get("transcript_path") or ""
             if r_tpath and not os.path.isfile(r_tpath):
+                step.mark("row")
                 A.state_file("", "", "web-launch",
-                             dict(opts, ok=False, why="transcript missing"))
+                             dict(opts, ok=False, why="transcript missing",
+                                  ms=step.ms))
                 return self._json(
                     {"error": "session transcript is gone — can't resume",
                      "sid": resume}, 410)
+            step.mark("row")
             live_win = fe.window_for_session(resume) or ""
+            step.mark("livewin")
             if live_win:
                 A.state_file("", "", "web-launch",
-                             dict(opts, ok=False, win=live_win))
+                             dict(opts, ok=False, win=live_win, ms=step.ms))
                 return self._json(
                     {"error": "session already live", "sid": resume,
                      "win": live_win}, 409)
@@ -139,18 +173,21 @@ class _SessionMixin:
         # has no OS app identity (the inert stub, off-mac).
         term = fe.app_id()
         before = launch.front_app() if term else ""
+        step.mark("front")
         # a launch carrying a first prompt makes Claude Code's TUI read the
         # clipboard at startup and attach any image to that auto-submitted
         # message (docs/dashboard.md *Clipboard-image guard*) — empty an image
         # clipboard first so the startup grab finds nothing. Only when there's a
         # prompt (a bare launch auto-submits nothing, so nothing to attach to).
         clip = launch.clear_clipboard_image() if prompt.strip() else False
+        step.mark("clip")
         # launch_tab: the new window's id on success when the terminal reports
         # one (kitty prints it), bare True when it doesn't, falsy on failure.
         got = fe.launch_tab(cwd, argv)
         win = got if isinstance(got, str) else ""
+        step.mark("tab")
         A.state_file("", "", "web-launch",
-                     dict(opts, ok=bool(got), win=win, clip=clip))
+                     dict(opts, ok=bool(got), win=win, clip=clip, ms=step.ms))
         if not got:
             A.error("", "dashboard new-session (launch failed)", {"cwd": cwd})
             return self._json({"error": "launch failed"}, 502)

@@ -910,6 +910,20 @@ def test_post_new_session_launches(dash, monkeypatch, tmp_path):
     assert fe.launched[-1][1][4:] == [evil]
 
 
+def test_post_new_session_audits_step_timings(dash, monkeypatch, tmp_path):
+    """The `web-launch` row carries the per-step latency breakdown (`ms`), so a
+    slow launch is attributable to a step from the DB alone — the client's
+    `new.ok` clientlog only bounds the whole round-trip."""
+    _inject_fe(monkeypatch, _FakeFE())
+    code, _ = _post(dash + "/api/sessions/new", {"cwd": str(tmp_path)})
+    assert code == 200
+    ms = (_last_state_file("", "web-launch") or {}).get("ms")
+    # the steps every launch runs (a resume adds row/livewin) + the total
+    assert set(ms) == {"fe", "front", "clip", "tab", "all"}
+    assert all(isinstance(v, int) and v >= 0 for v in ms.values())
+    assert ms["all"] >= ms["tab"]
+
+
 class _WatchAudit:
     """Wraps the server's audit handle: records one action's state_file rows
     in-memory (a watch thread's audit write cross-thread would land in the

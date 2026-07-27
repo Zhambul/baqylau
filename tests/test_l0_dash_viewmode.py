@@ -1893,3 +1893,11 @@ def test_new_session_form_phases_hand_off_everything(tmp_path):
     # …and the launch reached the endpoint with the directory the form opened on
     assert d["posted"] == ["/api/sessions/new"], d
     assert d["launch_cwd"] == "/tmp/proj", d
+    # The waiting room is OPTIMISTIC: by the time the request is in flight the
+    # jump watch is armed and the page is already at #/launching. Gating that on
+    # the response (where it first shipped) put the whole POST — measured p50
+    # ~0.4 s, tail past 5 s — between the click and any feedback, which is the
+    # dead air the pending view exists to remove (docs/dashboard.md *The pending
+    # view*). Asserted from the snapshot the postJSON stub takes mid-request.
+    assert d["launch_armed"] is True, d
+    assert d["launch_hash"] == "#/launching", d

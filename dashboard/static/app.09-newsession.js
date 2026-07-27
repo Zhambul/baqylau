@@ -25,7 +25,12 @@ function armJump(cwd, resumeSid, o) {
   // the client half of the launch story (the server logs web-launch/-wake): when
   // we START waiting for the launched tab to appear on the list — paired with the
   // hit/timeout below it bounds "launched from web but never showed up".
-  clog(resumeSid || "", "launch.arm", { win: o.win || "", resume: !!resumeSid });
+  // `pend` = armed OPTIMISTICALLY, at the click, with the POST still in flight
+  // (a form launch): the row then lands BEFORE this launch's `new.begin`, which
+  // is how the DB shows the waiting room covered the request instead of
+  // following it (the old ordering — dead air — is a `launch.arm` after `new.ok`).
+  clog(resumeSid || "", "launch.arm",
+       { win: o.win || "", resume: !!resumeSid, pend: !!o.pend });
 }
 
 function checkJump() {
@@ -271,6 +276,14 @@ function dropdown() {
 // written only on a successful launch; an explicit prefill (a dir group's "+",
 // a resume button) still wins over the remembered directory.
 const nsLast = () => S.nsPrefs || {};
+// The selections of a launch whose POST FAILED, consumed by the very next
+// openNewSession (which the failure path opens itself). Since the waiting room
+// now mounts on the click, a rejected launch has already torn the form down —
+// this is what makes the re-opened form the one you submitted (model/effort/
+// account; the directory and resume row ride openNewSession's own arguments and
+// the prompt its draft) rather than a blank last-used one. Never persisted: it
+// is one retry's worth of state, not a preference.
+let nsRetry = null;
 const nsRemember = (p) => {
   S.nsPrefs = p;                                   // cache first, form is sync
   postJSON("/api/ns-prefs", p).catch(() => {});    // best-effort backend write
@@ -855,7 +868,14 @@ function nsPickers(F) {
       const out = a.logged_out ? "  · ⚠ logged out" : "";
       return [a.slug, a.slug + " · " + a.label + usage + lim + out];
     }));
-    autoAcct();
+    // a RETRIED launch keeps the account it was submitted under (only nsRetry
+    // sets last.account — the remembered prefs never carry one, so the normal
+    // open still auto-picks); re-applied on every fill, since the async
+    // /api/accounts refill rebuilds the options, and dropped the moment the
+    // user picks by hand.
+    if (!acctPicked && last.account && acct.has(last.account))
+      acct.value = last.account;
+    else autoAcct();
   };
   if (S.accts) fillAccts(S.accts);
   fetch("/api/accounts").then(r => r.json())
@@ -1014,26 +1034,50 @@ function nsActions(F) {
     // keeps your text (the "the draft stayed in the message input" fix).
     const sentPrompt = prompt.value;
     prompt.value = ""; autoGrow(prompt);
+    // The pending view mounts on the CLICK, not on the response. The POST is
+    // slow in absolute terms — measured `new.ok` p50 ~0.4 s, tail past 5 s: the
+    // server runs an osascript clipboard probe (~150 ms), an `lsappinfo` front-app
+    // read, a `kitten @ ls` on a resume and finally the `kitten @ launch` itself,
+    // all before it answers. Gating the waiting room on that reply put a second of
+    // DEAD AIR between the click and any feedback — the exact stretch the pending
+    // view exists to cover, so it was missing precisely when it was needed
+    // (docs/dashboard.md *The pending view*). Nothing in the response is needed to
+    // MOUNT it: `win` only sharpens the jump watch (which falls back to the cwd
+    // heuristic) and arrives below, and the failure path rolls the form back.
+    // Arming before the POST also takes the known/live baseline from before the
+    // launch, which is what checkJump wants.
+    const show = { mode: body.resume ? "resume" : "new",
+                   model: model.value, effort: effort.value,
+                   account: acct.value, prompt: body.prompt || "" };
+    armJump(cwd, body.resume, { show, pend: true });
+    const mine = S.jump;               // this launch's watch — a later one wins
+    closeNewSession();
+    // Explicit route() when the hash already IS #/launching (a second launch
+    // from the header + while waiting): no hashchange fires, but the view must
+    // rebuild around the new watch.
+    if (location.hash === "#/launching") route();
+    else location.hash = "#/launching";
     postJSON("/api/sessions/new", body, { audit: "new", sid: "" })
       .then((d) => {
         nsRemember({ cwd, model: model.value, effort: effort.value });
-        armJump(cwd, body.resume, {
-          win: (d && d.win) || "",
-          show: { mode: body.resume ? "resume" : "new",
-                  model: model.value, effort: effort.value,
-                  account: acct.value, prompt: body.prompt || "" },
-        });
-        closeNewSession();
-        // the optimistic pending view — the jump swaps it for the session in
-        // place. Explicit route() when the hash already IS #/launching (a
-        // second launch from the header + while waiting): no hashchange fires,
-        // but the view must rebuild around the new watch.
-        if (location.hash === "#/launching") route();
-        else location.hash = "#/launching";
+        // the exact-match window id, folded into the watch already running (and
+        // re-checked at once: the session may have appeared while we waited)
+        if (S.jump === mine && d && d.win) { mine.win = d.win; checkJump(); }
       })
       .catch(e => {
-        submit.disabled = false;
-        prompt.value = sentPrompt; autoGrow(prompt);   // launch failed — keep it
+        // roll the optimistic view back: drop OUR watch (a launch that never
+        // happened must not resolve onto some other session's arrival), then
+        // re-open the form exactly as it was submitted — the prompt via its
+        // draft (closeNewSession flushed the emptied box), the pickers via
+        // nsRetry — so the failure costs a click, not the typing.
+        if (S.jump === mine) S.jump = null;
+        // leave the (now watchless) waiting room — but only if we're still IN
+        // it: a user who navigated away mid-flight is not to be yanked back.
+        if (location.hash === "#/launching") location.hash = "#/";
+        nsRetry = { cwd, model: model.value, effort: effort.value,
+                    account: acct.value };
+        saveNsDraft(cwd, sentPrompt, true);
+        openNewSession(cwd, body.resume);
         toast("ask", "launch failed", (e && e.error) || "");
       });
   };
@@ -1079,7 +1123,10 @@ function openNewSession(prefillCwd, resumeSid) {
   $modal.textContent = "";
   const panel = el("div", "nspanel");
   panel.append(el("div", "nstitle", "new session"));
-  const F = { prefillCwd, resumeSid, panel, last: nsLast() };
+  // a failed launch's own selections outrank the remembered last-used ones,
+  // once (nsRetry) — the reopened form is that launch, ready to re-submit
+  const F = { prefillCwd, resumeSid, panel, last: nsRetry || nsLast() };
+  nsRetry = null;
   nsDirField(F);
   nsConversation(F);
   nsPickers(F);

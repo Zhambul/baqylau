@@ -2627,7 +2627,32 @@ poll notices. Three mechanisms cover it:
 optimistic "starting session…" page (spinner, launch dir, account/model/effort
 chips, the typed first prompt echoed) instead of idling on the list — the
 original design left ~2–3 s of dead air and then yanked the page when the
-snapshot landed ("late jumping"). The arrival becomes a swap-in-place
+snapshot landed ("late jumping"). **Immediately means on the CLICK, with the
+`/api/sessions/new` POST still in flight** — not in its `.then`, which is where
+it shipped first and which quietly re-opened a smaller version of the same
+hole: that POST is slow in absolute terms (audit `new.ok` clientlog rows: p50
+~0.4 s, tail past 5 s — the handler runs an osascript clipboard probe ~150 ms,
+an `lsappinfo` front-app read, a resume's `kitten @ ls`, then `kitten @ launch`
+itself before it answers), so the form sat there frozen for the better part of
+a second and the waiting room appeared only once the wait was nearly over. It
+was missing during exactly the stretch it exists to cover. Nothing in the
+response is needed to MOUNT it: the reply's only payload is `win`, which merely
+sharpens the jump watch (`checkJump` falls back to the cwd heuristic), so it is
+folded into the already-running watch when it lands — with an immediate
+`checkJump()`, since the session can appear while the POST is still open — and
+arming BEFORE the POST also takes the known/live sid baseline from before the
+launch, which is what that watch wants anyway. A REJECTED launch rolls the
+optimistic view back: it drops its own watch (`S.jump === mine` — a later launch
+must win, and a launch that never happened must not resolve onto some other
+session's arrival), leaves the waiting room only if the user is still in it, and
+re-opens the form as submitted — the prompt from its draft (`closeNewSession`
+flushed the emptied box), the directory and resume row as `openNewSession`
+arguments, and model/effort/account through the one-shot `nsRetry` stash (the
+`last.account` seed exists for it alone; the remembered ns-prefs never carry an
+account, so a normal open still auto-picks). A failure costs a click, not the
+typing. Uploaded attachments are the one thing not restored to the tray — the
+staged files survive server-side, but the retry must re-attach them.
+The arrival becomes a swap-in-place
 (`jumpHit` uses `location.replace`, so the waiting room never enters history —
 back lands on the list). Past `PEND_HINT_MS` the hint escalates with an
 elapsed counter (counted from `armedAt`, so leaving/re-entering the room
@@ -2678,8 +2703,20 @@ minutes later.
 (`{win, chars, ok, tab}` — `tab` is the state at send time, so "my message
 vanished" is answerable as "it queued mid-turn"; keyed to the session's
 state-DB path) and `web-launch`
-(`{cwd, model, effort, resume, cont, account, ok, win}`, no session yet so
-log/path are empty) followed by its watcher's one `web-launch-wake`
+(`{cwd, model, effort, resume, cont, account, ok, win, ms}`, no session yet so
+log/path are empty). **`ms` is the per-step latency breakdown** (`_Steps` in
+`http/post/session.py`): `fe` (frontend resolve), `row`+`livewin` (a resume's
+transcript-row read and its `kitten @ ls` live-window scan), `front`
+(`app_id` + the `lsappinfo` frontmost read), `clip` (the osascript
+clipboard-image probe/clear), `tab` (`kitten @ launch`) and `all`, the elapsed
+total — each stamped as its step COMPLETES, so a row that stops at `clip` names
+the step a hung launch died in. It exists because the launch handler is the one
+control POST that makes up to four subprocess round-trips before answering, and
+the row used to say only that it happened: a 5 s `new.ok` was visible from the
+client's clientlog but un-attributable to a step from the DB. The other control
+POSTs are single-call and get their latency from the client's `<gesture>.ok`
+row, which is why this is local instrumentation, not a shared timer.
+It is followed by its watcher's one `web-launch-wake`
 (`{sid, win, cwd, ok, waited_s}` — found: `waited_s` IS the launch→appearance
 latency, the dashboard's own share of "launching felt slow" reconstructible
 next to the `web-launch` row; timeout: `ok` false, sid empty),
@@ -2843,7 +2880,12 @@ become audit rows.
     `backlog.fail` (the initial stream GET failed → "waiting for activity…").
   - **Launch story** (the client half of `web-launch`/`web-launch-wake`):
     `launch.arm` → `launch.hit` (appeared, with latency) / `launch.timeout`
-    (never showed up in time).
+    (never showed up in time). `launch.arm`'s `pend` flag says the watch (and
+    with it the waiting room) was armed OPTIMISTICALLY, at the click — that row
+    then lands BEFORE this launch's own `new.begin`, which is how the DB shows
+    the pending view COVERED the request rather than followed it. The old
+    dead-air ordering is its exact negative: a `launch.arm` after `new.ok`,
+    `new.ok`'s `ms` being the blank stretch the user stared at.
   - **Resume picker** (the read-only `/api/resumable` + `/backlog` gestures leave
     no server row, so the browser is the only witness — *Resume picker* above):
     `resume.mode` (`fresh` toggled), `resume.list` (`cwd` + search `q` + row count
