@@ -1492,13 +1492,19 @@ def _merge_monitor(m, st):
     the STATE (started/ended/end_reason/live), the transcript owns the
     command/description/events. `event_count` is the transcript's real event
     count (excludes the stream-ended status), falling back to the streamer's
-    line tally; the carried `events` are the most-recent MON_EVENT_CAP."""
+    line tally; the carried `events` are the most-recent MON_EVENT_CAP.
+
+    An AGENT's monitor is absent from the main transcript entirely (its launch
+    lives in the agent's own), so `m` is a bare state stub there and the
+    command/description fall back to the ones sessionapi.nested_owners recovered
+    from the launch hook — that blank command is why an agent-launched monitor
+    used to render as an unreadable row."""
     events = m.get("events") or []
     ev_count = sum(1 for e in events if "event" in e)
     trunc = len(events) > MON_EVENT_CAP
     return {"task": m["task"],
-            "command": m.get("command") or "",
-            "description": m.get("description") or "",
+            "command": m.get("command") or st.get("command") or "",
+            "description": m.get("description") or st.get("description") or "",
             "source": m.get("source") or "",
             "persistent": m.get("persistent"),
             "timeout_ms": m.get("timeout_ms"),

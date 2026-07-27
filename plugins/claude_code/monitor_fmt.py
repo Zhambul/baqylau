@@ -128,7 +128,7 @@ def main():
     # find_proc prefers a whole-command argv match over the single longest-token
     # `sig`, which alone can also match an unrelated long-lived process (see
     # claude-stream.py find_proc).
-    env = H.stream_env(group=grp)
+    env = H.stream_env(group=grp, agent=d.get("agent_id") or None)
     env["CLAUDE_MONITOR_CMD"] = ti.get("command") or ""
     if opsrc:
         env["CLAUDE_OPS_SRC"] = opsrc

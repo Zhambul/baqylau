@@ -278,7 +278,7 @@ def spawn_tailer(kind, taskid, cmd="", group=None):
     # contract with claude-stream.py's find_proc).
     sig = ST.monitor_sig(cmd) if kind == "monitor" else ""
     outer = ",".join(str(x) for x in SUB_RGB)
-    env = HK.stream_env(cmd=cmd, group=group)
+    env = HK.stream_env(cmd=cmd, group=group, agent=AGENT)
     # Detach mechanics + spawn/error audit live in core.spawn (the one owner),
     # reached via hookkit.spawn_streamer; audit_argv drops the sig/outer noise
     # the spawns row never recorded here. None = missing script / spawn failure
@@ -326,7 +326,7 @@ def spawn_fg_tailer(tid, rec, cmd=""):
     outer = ",".join(str(x) for x in SUB_RGB)
     env = HK.stream_env(src=rec["src"], done=rec["done"], cmd=cmd, group=tid,
                         own=bool(rec.get("own")),
-                        skip_existing=bool(rec.get("append")))
+                        skip_existing=bool(rec.get("append")), agent=AGENT)
     # Detach mechanics + spawn/error audit live in core.spawn (the one owner),
     # reached via hookkit.spawn_streamer; audit_argv drops the empty-sig/outer
     # noise the spawns row never recorded here. None = missing script / spawn

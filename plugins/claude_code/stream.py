@@ -60,7 +60,7 @@ TASKID = LOG = SIG = OUTER = ""
 SLOT, _MARKER = 0, None
 SLOT_RGB = (0, 0, 0)
 OUTER_RGB = None
-SRC = DONE = CMD = ""
+SRC = DONE = CMD = AGENT = ""
 OWN = SKIP_EXISTING = False
 POS0 = None
 GROUP = None
@@ -79,7 +79,7 @@ def _init(argv):
     plus the CLAUDE_STREAM_* env contract and everything derived from them
     (slot claim/colour, outer gutter colour, content-render detection)."""
     global KIND, TASKID, LOG, SIG, OUTER, SLOT, _MARKER, SLOT_RGB, OUTER_RGB
-    global SRC, OWN, DONE, SKIP_EXISTING, GROUP, CMD
+    global SRC, OWN, DONE, SKIP_EXISTING, GROUP, CMD, AGENT
     global RKIND, RVALUE, MD, RENDER_KIND, SNIFF
     KIND   = argv[1] if len(argv) > 1 else "bg"
     TASKID = argv[2] if len(argv) > 2 else ""
@@ -121,6 +121,11 @@ def _init(argv):
         POS0 = None
     GROUP = os.environ.get("CLAUDE_STREAM_GROUP") or None
     CMD = os.environ.get("CLAUDE_STREAM_CMD") or ""
+    # The OWNING agent of a nested job (hookkit.stream_env's `agent`), "" for the
+    # lead's own commands. Recorded on our audit `streams` row so the read model
+    # can partition a session's jobs/monitors by who launched them — before this,
+    # a subagent's bg/monitor tailer looked exactly like the lead's.
+    AGENT = os.environ.get("CLAUDE_STREAM_AGENT") or ""
 
     _CLEANED["done"], _CLEANED["path"] = False, None   # fresh run, fresh teardown
 
@@ -962,7 +967,7 @@ def main(run):
 
 def entry():
     _init(sys.argv)
-    with T.stream_lifecycle(LOG, KIND, task_id=TASKID, src_path=SRC,
+    with T.stream_lifecycle(LOG, KIND, agent_id=AGENT, task_id=TASKID, src_path=SRC,
                             ctx={"kind": KIND, "taskid": TASKID, "md": MD},
                             on_exit=cleanup) as run:
         main(run)

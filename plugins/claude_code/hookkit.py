@@ -138,13 +138,19 @@ def spawn_streamer(name, argv, log, env=None, purpose="", audit_argv=None):
 
 
 def stream_env(src=None, done=None, cmd=None, group=None, own=False,
-               skip_existing=False, pos0=None):
+               skip_existing=False, pos0=None, agent=None):
     """The ONE builder of claude-stream.py's env contract (CLAUDE_STREAM_*).
     Every tailer launch site — main-session fg (cmd_pre), bg (cmd_fmt), a
     subagent's fg (substream.spawn_fg_tailer) — goes through here, so a new key
     reaches all of them at once; assembling the env by hand per launch site is
     how the subagent fg path silently missed the content-render key and a
-    subagent's `cat foo.kt` streamed uncoloured. `cmd` is the ORIGINAL
+    subagent's `cat foo.kt` streamed uncoloured. `agent` is the OWNING agent id
+    when this tailer streams a NESTED job (a subagent's bg/fg command, an
+    agent-launched monitor) — it rides as CLAUDE_STREAM_AGENT and lands on the
+    tailer's audit `streams` row, which is what lets the read model tell a
+    lead's job from an agent's (docs/dashboard.md *Agent scope*). Empty/None for
+    the lead's own commands, which is the row's historical meaning. `cmd` is the
+    ORIGINAL
     (pre-tee-wrap) command: the tailer derives its own content-render mode
     (md/json/yaml/code) from it — launchers pass the command, never the
     decision. `skip_existing` tails the file from its size at spawn (a `>>`
@@ -156,7 +162,8 @@ def stream_env(src=None, done=None, cmd=None, group=None, own=False,
     startup (seconds under load), a permanently-lost line."""
     env = dict(os.environ)
     for k, v in (("CLAUDE_STREAM_SRC", src), ("CLAUDE_STREAM_DONE", done),
-                 ("CLAUDE_STREAM_CMD", cmd), ("CLAUDE_STREAM_GROUP", group)):
+                 ("CLAUDE_STREAM_CMD", cmd), ("CLAUDE_STREAM_GROUP", group),
+                 ("CLAUDE_STREAM_AGENT", agent)):
         if v:
             env[k] = v
     if own:

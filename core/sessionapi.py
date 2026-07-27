@@ -645,6 +645,91 @@ def codex_runs(sid):
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 
+# --- nested-job ownership -----------------------------------------------------------
+# How long a session's owner map is trusted before it is rebuilt. It only changes
+# when a NEW job/monitor launches, and every reader below is a per-tick badge or a
+# tab fetch, so a few seconds of staleness costs at most one late row while saving a
+# hook_events scan on every SSE tick.
+OWNERS_TTL_S = 5.0
+_OWNERS = BoundedLRU(512)            # sid -> (expires_at, map)
+
+
+def nested_owners(sid):
+    """Who launched each of a session's background jobs and monitors:
+    `{task_id: {"agent_id", "tool_use_id", "command", "description"}}`,
+    chain-aware. The ONE owner of that fact for the read model — jobs(),
+    monitor_streams() and the counts all resolve through here.
+
+    The authoritative source is the tailer's own audit `streams.agent_id`
+    (hookkit.stream_env's CLAUDE_STREAM_AGENT). This map is the SECOND source,
+    and it exists for two reasons the stream row cannot serve:
+
+      * HISTORY. Every stream row written before the stamp carries agent_id ''
+        whoever launched it, so a parked session could never be partitioned.
+      * The missing COMMAND. A subagent's bg job paints its `code` op under the
+        tool_use_id while its stream row is keyed by the backgroundTaskId, so
+        core.copy.group_commands misses and the job rendered with a blank
+        command; a subagent's MONITOR is absent from the main transcript
+        entirely, so plugins.monitors had no command for it either.
+
+    Both are recoverable from `hook_events`, whose PostToolUse payload carries
+    agent_id, the task id, the tool_use_id and the command TOGETHER. Extraction
+    runs in SQLite (json_extract) rather than Python so a busy session's large
+    payloads are never pulled across — only the six small columns."""
+    now = time.time()
+    hit = _OWNERS.get(sid)
+    if hit and hit[0] > now:
+        return hit[1]
+    chain = sid_chain(sid)
+    q = ("SELECT agent_id,"
+         " json_extract(payload,'$.tool_response.backgroundTaskId'),"
+         " json_extract(payload,'$.tool_response.taskId'),"
+         " json_extract(payload,'$.tool_use_id'),"
+         " json_extract(payload,'$.tool_input.command'),"
+         " json_extract(payload,'$.tool_input.description')"
+         " FROM hook_events WHERE hook='PostToolUse' AND tool_name IN ('Bash','Monitor')"
+         " AND session_id IN (%s) ORDER BY id" % _in_clause(len(chain)))
+    out = {}
+    for aid, btid, mtid, tuid, cmd, desc in _rows(audit_db(), q, tuple(chain)):
+        task = btid or mtid
+        if not task:
+            continue                      # a plain foreground call — no nested stream
+        out[task] = {"agent_id": aid or "", "tool_use_id": tuid or "",
+                     "command": cmd or "", "description": desc or ""}
+    _OWNERS[sid] = (now + OWNERS_TTL_S, out)
+    return out
+
+
+def _owner_of(task, stream_aid, owners):
+    """The owning agent id of one nested task ("" = the lead agent's own).
+    The stream row wins when it is stamped; the owner map answers for the
+    history that predates the stamp (see nested_owners)."""
+    if stream_aid:
+        return stream_aid
+    return (owners.get(task) or {}).get("agent_id", "")
+
+
+def _agent_match(owner, agent):
+    """Does a row owned by `owner` belong in a view scoped to `agent`?
+    `agent` None = no scoping (everything); "" = LEAD ONLY, the session-level
+    view (docs/dashboard.md *Agent scope*); an id = exactly that agent, so a
+    teammate's jobs never show under a subagent."""
+    return agent is None or owner == agent
+
+
+def _nested_count(sid, kind, agent):
+    """Distinct nested tasks of one `kind` owned by `agent` — the shared body of
+    job_count()/monitor_count() once a scope is asked for. `agent is None` (count
+    everything) is the caller's fast path: it needs no ownership at all and stays
+    on the pure-SQL _stream_count."""
+    def fold(out, task, row):
+        out[task] = row[1] or ""         # newest row wins, as everywhere else
+    rows = _streams_by(sid, (kind,), "task_id, agent_id", lambda r: r[0], fold)
+    owners = nested_owners(sid) if rows else {}
+    return sum(1 for task, aid in rows.items()
+               if _agent_match(_owner_of(task, aid, owners), agent))
+
+
 def monitor_streams(sid):
     """The audit `streams` lifecycle rows for a session's MONITORS (kind
     'monitor'), chain-aware, keyed by task_id: {task: {started_at, ended_at,
@@ -653,64 +738,103 @@ def monitor_streams(sid):
     NEWEST end/status. `live` is the newest row's `ended_at` being None (still
     tailing, or the streamer died uncleanly). This is the STATE half of the
     monitors read-model — the transcript (plugins.monitors) owns command/events;
-    streams own start/end/liveness (the same keystone agents() reads)."""
+    streams own start/end/liveness (the same keystone agents() reads).
+
+    `agent_id` is resolved through nested_owners, so a monitor an AGENT launched
+    is attributed even on a session whose stream rows predate the stamp; the
+    owner map's `command`/`description` ride along too, because the main
+    transcript plugins.monitors parses never saw that launch."""
     def fold(out, task, row):
         _, aid, pid, st, en, er, lines = row
         rec = out.setdefault(task, {"started_at": st, "agent_id": aid or ""})
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["lines"], rec["pid"] = lines, pid
         rec["live"] = en is None
-    return _streams_by(sid, ("monitor",),
-                       "task_id, agent_id, pid, started_at, ended_at,"
-                       " end_reason, lines_emitted",
-                       lambda r: r[0], fold)
+    out = _streams_by(sid, ("monitor",),
+                      "task_id, agent_id, pid, started_at, ended_at,"
+                      " end_reason, lines_emitted",
+                      lambda r: r[0], fold)
+    if out:
+        owners = nested_owners(sid)
+        for task, rec in out.items():
+            own = owners.get(task) or {}
+            rec["agent_id"] = _owner_of(task, rec.get("agent_id") or "", owners)
+            rec["command"] = own.get("command", "")
+            rec["description"] = own.get("description", "")
+    return out
 
 
-def monitor_count(sid):
+def monitor_count(sid, agent=""):
     """The distinct-monitor COUNT for a session (chain-aware) — the cheap twin of
-    plugins.monitors() for the monitors tab's badge, from the audit `streams`
-    keystone alone (no transcript parse), so the per-session overview/SSE can show
-    it without reading the whole transcript on every tick."""
-    return _stream_count(sid, "monitor")
+    plugins.monitors() for the monitors tab's badge, so the per-session overview/SSE
+    can show it without reading the whole transcript on every tick. `agent` scopes
+    it exactly as monitors are listed: "" (the default) counts the LEAD's monitors
+    only, an id counts that agent's, None counts every one."""
+    if agent is None:
+        return _stream_count(sid, "monitor")
+    return _nested_count(sid, "monitor", agent)
 
 
-def jobs(sid):
+def jobs(sid, agent=None):
     """Background Bash jobs of a session (run_in_background launches + Ctrl+B
     conversions), chain-aware, from the audit `streams` keystone (kind='bg',
     task_id=backgroundTaskId) merged with the mirror OPS: each job's COMMAND is
     the `code` op of its copy-group (core.copy.group_commands — the job's taskId
     IS its op group `g`). Row shape mirrors agents()/the monitors read model:
-    {task, command, started_at, ended_at, end_reason, live, lines}. The full
-    OUTPUT is deliberately NOT carried here (a build log can be huge) — the
-    drill-down reads it on demand from the same ops via the /copy/<task>/out
-    endpoint (core.copy.collect). `live` is the newest streams row's ended_at
-    being None. Sorted by first start. A converted (Ctrl+B) job's command op
-    lives in its foreground group, so `command` may be blank there — the card
-    falls back to the taskId."""
+    {task, command, group, agent_id, started_at, ended_at, end_reason, live,
+    lines}. The full OUTPUT is deliberately NOT carried here (a build log can be
+    huge) — the drill-down reads it on demand from the same ops via the
+    /copy/<group>/out endpoint (core.copy.collect). `live` is the newest streams
+    row's ended_at being None. Sorted by first start.
+
+    `agent` scopes the list: None = every job, "" = the LEAD's own only (what the
+    session-level Jobs tab shows), an id = exactly that agent's.
+
+    An AGENT's job needs both fallbacks below. Its command op is painted under the
+    tool_use_id (the substream's block group), not the backgroundTaskId this row is
+    keyed by, so group_commands misses and nested_owners supplies the command; and
+    `group` carries that tool_use_id so the drill-down's output fetch has a group
+    that actually exists. A converted (Ctrl+B) job's command op likewise lives in
+    its foreground group."""
     def fold(out, task, row):
-        _, pid, st, en, er, lines = row
-        rec = out.setdefault(task, {"task": task, "started_at": st, "command": ""})
+        _, aid, pid, st, en, er, lines = row
+        rec = out.setdefault(task, {"task": task, "started_at": st, "command": "",
+                                    "agent_id": aid or "", "group": task})
         rec["ended_at"], rec["end_reason"] = en, er or ""
         rec["lines"], rec["pid"] = lines, pid
         rec["live"] = en is None
     out = _streams_by(sid, ("bg",),
-                      "task_id, pid, started_at, ended_at, end_reason,"
+                      "task_id, agent_id, pid, started_at, ended_at, end_reason,"
                       " lines_emitted",
                       lambda r: r[0], fold)
+    owners = nested_owners(sid) if out else {}
+    for task, rec in out.items():
+        rec["agent_id"] = _owner_of(task, rec.get("agent_id") or "", owners)
+    out = {t: r for t, r in out.items() if _agent_match(r["agent_id"], agent)}
     sdb = state_db_for(sid)
     if sdb and out:
         from core import copy as CP
         cmds = CP.group_commands(sdb, set(out))
         for task, rec in out.items():
             rec["command"] = cmds.get(task, "")
+    for task, rec in out.items():
+        own = owners.get(task) or {}
+        if not rec["command"]:
+            rec["command"] = own.get("command", "")
+            if own.get("tool_use_id"):
+                rec["group"] = own["tool_use_id"]     # where the ops actually live
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 
-def job_count(sid):
+def job_count(sid, agent=""):
     """The distinct background-job COUNT for a session (chain-aware) — the cheap
     twin of jobs() for the jobs tab's badge (audit `streams` kind='bg', no ops
-    read), so the per-session overview/SSE can show it per-tick."""
-    return _stream_count(sid, "bg")
+    read), so the per-session overview/SSE can show it per-tick. `agent` scopes it
+    exactly as jobs() lists: "" (the default) counts the LEAD's jobs only, an id
+    counts that agent's, None counts every one."""
+    if agent is None:
+        return _stream_count(sid, "bg")
+    return _nested_count(sid, "bg", agent)
 
 
 def memory(sid):
