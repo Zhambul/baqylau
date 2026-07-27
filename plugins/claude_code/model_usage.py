@@ -17,16 +17,23 @@
 # dashboard calls it (via plugins.model_windows); core and hooks never do (core
 # stays tokenless; account_usage/the relimit picker must not depend on an API).
 #
-# Refresh ownership (avoids a two-writer fight over one refresh token):
-#   - the ACTIVELY-used login (plain `claude`, e.g. the personal account) is kept
-#     fresh by Claude Code itself — we only READ its keychain token, never refresh.
-#   - a SWITCHER-only account's OAuth login is never exercised by Claude Code (it
-#     runs on the setup-token), so its keychain access token expires in ~8h with
-#     nobody to refresh it; baqylau becomes its SOLE refresher, minting new tokens
-#     from the refresh token and persisting the rotation in its OWN keychain entry
-#     ("baqylau-model-usage: <service>"), never overwriting Claude Code's copy.
-# The per-cycle token pick is just "whichever copy (Claude Code's or ours) is
-# fresher", so the personal path never self-refreshes and the work path does.
+# Refresh ownership (one rotating credential, cooperative writers):
+#   Anthropic ROTATES the refresh token on every refresh and revokes the whole
+#   token family when a superseded refresh token is replayed (reuse detection).
+#   The original design ("never overwrite Claude Code's copy; persist rotations
+#   only in baqylau's own mirror entry") therefore STOLE the family whenever it
+#   refreshed a login Claude Code still uses: Claude Code kept the superseded
+#   refresh token, replayed it on its next refresh, and the server revoked the
+#   family — surfacing as "401 OAuth access token has been revoked" /login
+#   loops several times a day (diagnosed 2026-07-27).
+#   The fix is to cooperate the way a SECOND Claude Code process would: refresh
+#   only when the token is (near-)expired, then WRITE THE ROTATION BACK to
+#   Claude Code's own entry — its keychain watcher picks up the new tokens
+#   instead of replaying the stale ones (both sides use /usr/bin/security, so
+#   no ACL prompt). Legacy "baqylau-model-usage: <service>" mirror entries are
+#     still READ (fresher-copy wins) so a family that lives only there is
+#     adopted back into Claude Code's entry on its next refresh, but they are
+#     never written again.
 #
 # Fail-silent + audited: an undocumented endpoint or a keychain ACL change must
 # NEVER break the dashboard — every failure degrades to "no model windows".
@@ -57,7 +64,7 @@ BETA_HEADER = "oauth-2025-04-20"
 USER_AGENT = "claude-code/baqylau"
 
 CRED_PREFIX = "Claude Code-credentials"      # the full-scope OAuth login entries
-STORE_PREFIX = "baqylau-model-usage: "       # baqylau's own rotated-token entries
+STORE_PREFIX = "baqylau-model-usage: "       # LEGACY mirror entries — read-only
 DEFAULT_EXPIRES_S = 8 * 3600                 # OAuth access-token life when unstated
 
 TTL_S = 60             # cache the whole fan-out — the endpoint/keychain work runs
@@ -134,8 +141,8 @@ def _sec_read(service):
 
 
 def _sec_write(service, blob):
-    """Persist a token blob to a baqylau-owned keychain entry (-U = update in
-    place). Best-effort — a write failure just means we re-refresh next cycle."""
+    """Persist a token blob to a keychain entry (-U = update in place).
+    Best-effort — a write failure just means we re-refresh next cycle."""
     try:
         subprocess.run(
             ["/usr/bin/security", "add-generic-password", "-U",
@@ -206,9 +213,12 @@ def _refresh(refresh_token):
 
 def _access_token(service):
     """A usable access token for one login service, refreshing if needed. Picks
-    the fresher of Claude Code's copy and baqylau's own rotated copy; if that is
+    the fresher of Claude Code's copy and any legacy baqylau mirror; if that is
     (near-)expired and carries a refresh token, mints a new one and persists it
-    to baqylau's entry. None when no credential/refresh is available."""
+    to CLAUDE CODE'S entry (the module-header ownership contract — rotations
+    must land where Claude Code will read them, or its next refresh replays a
+    superseded token and the server revokes the whole family). None when no
+    credential/refresh is available."""
     cred = _fresher(_sec_read(service), _sec_read(STORE_PREFIX + service))
     if not cred:
         return None
@@ -225,7 +235,10 @@ def _access_token(service):
         return None
     if not new:
         return None
-    _sec_write(STORE_PREFIX + service, new)
+    # Merge over the prior blob: the refresh response carries only the token
+    # fields, but Claude Code's entry also holds subscriptionType/rateLimitTier
+    # (plan metadata its model picker gates on) — those must survive rotation.
+    _sec_write(service, {**cred, **{k: v for k, v in new.items() if v}})
     return new.get("accessToken")
 
 

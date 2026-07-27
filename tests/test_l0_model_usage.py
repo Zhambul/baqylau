@@ -149,18 +149,47 @@ def test_access_token_fresh_never_refreshes(monkeypatch):
 
 
 def test_access_token_expired_refreshes_and_persists(monkeypatch):
+    """Rotations land in CLAUDE CODE'S entry (never a private mirror — a mirror
+    leaves Claude Code holding a superseded refresh token, whose replay gets
+    the whole family revoked: the 2026-07-27 '401 revoked' /login loops), and
+    plan metadata Claude Code stores alongside the tokens survives the merge."""
     expired = {"accessToken": "AT-old", "refreshToken": "RT-1",
-               "expiresAt": int((time.time() - 10) * 1000)}
-    reads = {"svc": expired}                              # store copy absent
+               "expiresAt": int((time.time() - 10) * 1000),
+               "subscriptionType": "max", "rateLimitTier": "default_claude_max_5x"}
+    reads = {"svc": expired}                              # mirror copy absent
     monkeypatch.setattr(MU, "_sec_read", lambda svc: reads.get(svc))
     minted = {"accessToken": "AT-new", "refreshToken": "RT-2",
-              "expiresAt": int((time.time() + 7200) * 1000)}
+              "expiresAt": int((time.time() + 7200) * 1000), "scopes": None}
     monkeypatch.setattr(MU, "_refresh", lambda rt: minted if rt == "RT-1" else None)
     written = {}
     monkeypatch.setattr(MU, "_sec_write",
                         lambda svc, blob: written.update({svc: blob}))
     assert MU._access_token("svc") == "AT-new"
-    assert written == {MU.STORE_PREFIX + "svc": minted}  # rotation persisted, ours only
+    assert set(written) == {"svc"}                        # Claude Code's entry
+    assert written["svc"]["refreshToken"] == "RT-2"       # rotation persisted
+    assert written["svc"]["subscriptionType"] == "max"    # plan metadata kept
+    assert "scopes" not in written["svc"] or written["svc"]["scopes"] is None
+
+
+def test_access_token_adopts_fresher_legacy_mirror(monkeypatch):
+    """A family that lives only in a legacy mirror (its refresh token is ahead
+    of Claude Code's stale copy) is refreshed FROM the mirror and written back
+    to Claude Code's entry — converging on one source of truth."""
+    stale = {"accessToken": "AT-cc", "refreshToken": "RT-stale",
+             "expiresAt": int((time.time() - 9000) * 1000)}
+    mirror = {"accessToken": "AT-mir", "refreshToken": "RT-live",
+              "expiresAt": int((time.time() - 10) * 1000)}
+    reads = {"svc": stale, MU.STORE_PREFIX + "svc": mirror}
+    monkeypatch.setattr(MU, "_sec_read", lambda svc: reads.get(svc))
+    minted = {"accessToken": "AT-new", "refreshToken": "RT-next",
+              "expiresAt": int((time.time() + 7200) * 1000)}
+    monkeypatch.setattr(MU, "_refresh", lambda rt: minted if rt == "RT-live" else None)
+    written = {}
+    monkeypatch.setattr(MU, "_sec_write",
+                        lambda svc, blob: written.update({svc: blob}))
+    assert MU._access_token("svc") == "AT-new"
+    assert set(written) == {"svc"}                        # adopted into CC's entry
+    assert written["svc"]["refreshToken"] == "RT-next"
 
 
 def test_access_token_expired_no_refresh_token(monkeypatch):
