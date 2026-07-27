@@ -28,6 +28,10 @@ const sandbox = {
   performance: { now: () => 0 },
   ...domGlobals(),
   dur: sec => Math.max(0, sec | 0) + "s",
+  // app.00-core's text-presentation pin (U+FE0E on emoji-capable glyphs). Identity
+  // here: this harness measures ROUTING, and the pin itself is asserted from Python
+  // over the bundle + opshtml.text_presentation.
+  tp: s => s,
   BUSY_TABS: ["thinking", "working", "executing", "awaiting-bg"],
   liveTab: () => sandbox.__tab,
   postJSON: () => { sandbox.__posted++; return Promise.resolve({}); },

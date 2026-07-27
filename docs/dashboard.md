@@ -4520,7 +4520,7 @@ summary:
 ```
 ⏺  make test                                                    finished · 91.4s
 ⏺  git push                                                 failed (exit 1) · 2.1s
-⏺  pytest -q tests/                                                        ⏱ 1m04s
+⏺  pytest -q tests/                                                       · 1m04s
 ⏺  background  npm run dev                              background finished · 3m 2s
 ⏺  monitor · watch the suite · persistent  pytest -q --ff   monitor ended · 12m 4s
 ```
@@ -4568,8 +4568,9 @@ this is the only way the duration can sit *after* the command, and it also gets 
 hover-only ⧉ links out of the reading line (in the flow they reserved a ~90px hole
 between the dot and the command while invisible). A GROUP-LESS quiet label (the
 `▷ backgrounded (ctrl+b)` notice) is not split: it has no header to be a slot of, and
-wears the flag alone. The live ⏱ chip (*Live command elapsed*) joins the register too —
-no outline, no accent — and ticks in the same column the final duration lands in.
+wears the flag alone. The live elapsed chip (*Live command elapsed*) joins the register too —
+no outline, no accent, no glyph — and ticks in the same column the final duration lands
+in.
 
 ### What gets an inner scroll box, and what must not
 
@@ -5996,14 +5997,22 @@ a stale slot the way `slots.claim` does), grouped by kind. It rides
 (the same only-on-change, slow-tick cadence as `agents`/`costs`). A parked
 session's rows are all dead, so its ribbon is empty (hidden).
 
-## Live command elapsed (the ticking ⏱ chip)
+## Live command elapsed (the ticking `· 1m04s` chip)
 
 A foreground command's mirror block used to show its duration only in hindsight
 — the `■ finished · 3.2s` chip the block gets when it ends. While it ran there
 was no clock at all, so a long `make test` / build / deploy read exactly like a
-wedged one. The block now carries a **live elapsed chip** (`⏱ 1m04s`, outlined
-and gently pulsing) beside the `▶ foreground` chip, ticking once a second, and
-retired the moment the real finish chip lands.
+wedged one. The block now carries a **live elapsed chip** (`· 1m04s`, gently pulsing) in the
+quiet header's tail slot, ticking once a second, and retired the moment the real finish
+chip lands. It wears **no stopwatch glyph**: `⏱` (U+23F1) is emoji-capable, this was the
+one page path that assigned text without `tp()` applying the U+FE0E pin, and it shipped
+a colour emoji (*"No emoji"*, reported 2026-07-27, the moment the chip started painting
+at all). A pin is only a REQUEST — a font lacking the text glyph ignores it, which is
+why the ☀ wake button became an SVG — and the glyph was never needed here: the line
+already reads `· 91.4s` when the command ends, so the ticking form is the same words,
+and "still counting" is carried by the grey dot plus the pulse.
+`test_no_page_glyph_can_turn_colour` now pins the whole class: no emoji-capable
+codepoint may be written to the page without `tp()`.
 
 **Where the start comes from: the `fg-live` hand-off, not a new store.**
 `claude-cmd-pre.py` already writes a take-once hand-off record when it spawns
@@ -6085,10 +6094,10 @@ its `▶`/`■` siblings: those are the session's own painted labels replayed fr
 the ops stream, this one is the dashboard talking. Outlined, `--exec` blue,
 `tabular-nums` so the ticking seconds don't twitch the chip wider. **Inside a quiet
 command header it joins that register** (`.blk[data-quiet] .chip.blive`): no outline, no
-accent, just the dim pulsing figure — and it sits in the `.btail` slot, the same column
-the final `finished · 91.4s` lands in, so the number does not jump across the line when
-the command ends. A ⏱ armed before the header knew its register is re-homed to that slot
-by the op that sets the flag. Read-only
+accent, no glyph, just the dim pulsing figure — and it sits in the `.btail` slot, the
+same column the final `finished · 91.4s` lands in, so the number does not jump across
+the line when the command ends. A chip armed before the header knew its register is
+re-homed to that slot by the op that sets the flag. Read-only
 throughout, so it adds no audit rows (like the ctx bars and the goal card); the
 one producer change — `ts` in the record — is covered by the `state:fg-live`
 `state_files` row `cmd_pre` already writes with the record as its content.

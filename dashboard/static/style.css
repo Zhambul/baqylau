@@ -1271,7 +1271,7 @@ body.modal-open { overflow: hidden; }
               `monitor · <desc>`; `foreground` is muted — the command says it)
      .bsum    the command itself, the block's own first body line as always
      .btail   the closing words, `finished · 0.6s` / `failed (exit 1) · 2.1s`, and
-              the ticking ⏱ while it runs — after the command, where a duration
+              the ticking `· 1m04s` while it runs — after the command, where a duration
               reads as that command's
      .blinks  the ⧉ copy links, hover-only, at the far right and OUT of the line's
               flow (in it they reserved a ~90px hole while invisible)
@@ -1294,8 +1294,9 @@ body.modal-open { overflow: hidden; }
 .blk[data-quiet]:hover > .bhead .cqt { color: var(--text-soft); }
 .btail, .blinks { flex: none; }
 .blinks { margin-left: 4px; }
-/* the in-flight ⏱ (`.chip.blive`) joins the register too: no outline, no accent, just
-   the dim ticking figure where the final duration will land */
+/* the in-flight elapsed (`.chip.blive`) joins the register too: no outline, no accent and
+   no glyph — just the dim ticking figure where the final duration will land (the ⏱ it
+   used to lead with was an emoji-capable codepoint, docs/dashboard.md *No emoji*) */
 .blk[data-quiet] .chip.blive {
   border: none; color: var(--dim); padding: 0; font-weight: 400;
 }
@@ -1342,7 +1343,7 @@ body.modal-open { overflow: hidden; }
   color: var(--text-soft); font: 12px/1.4 var(--mono); flex: 1; min-width: 0;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* the in-flight foreground command's live elapsed chip (⏱ 1m04s, ticking) —
+/* the in-flight foreground command's live elapsed chip (`· 1m04s`, ticking) —
    deliberately NOT a filled `.chip` like its ▶/■ siblings: those are the
    session's own painted labels, this one is the dashboard talking. Outlined and
    gently pulsing so it reads as "still counting", and tabular figures so the

@@ -384,7 +384,15 @@ function tickFgElapsed() {
     (b.root.dataset.quiet ? b.tail : b.chips).append(c);
   }
   ses.fgChipAt = fg.g;
-  c.textContent = "⏱ " + dur(Date.now() / 1000 - fg.start_ts);
+  // NO GLYPH, and no emoji risk: this was `"⏱ " + dur(…)` written straight to
+  // textContent — bypassing tp(), so U+23F1 fell through to the colour-emoji font
+  // ("No emoji", docs/dashboard.md). A pin (U+FE0E) is only a REQUEST, which a font
+  // without the text glyph ignores — the ☀ wake button learned that and became an SVG.
+  // Here the glyph was never needed: the line already reads `· 91.4s` when the command
+  // ends, so the ticking form is the same words, and "still counting" is carried by the
+  // grey dot plus the pulse. Runs through tp() anyway, since this is the one page path
+  // that assigns text without el()/tnode() doing it (test_no_page_glyph_can_turn_colour).
+  c.textContent = tp("· " + dur(Date.now() / 1000 - fg.start_ts));
 }
 
 function setFgRun(fg) {

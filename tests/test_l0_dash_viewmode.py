@@ -598,7 +598,7 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # before it ever painted — permanently, since `fgEnded` refuses a resurrection.
     # Only the `■ finished` CLOSER may retire it. Both arrival orders are pinned.
     for got in (d["fgLiveArmedFirst"], d["fgLiveOpsFirst"]):
-        assert got["live"]["text"] == "⏱ 64s", got
+        assert got["live"]["text"] == "· 64s", got   # no stopwatch glyph — *No emoji*
         assert got["live"]["inTail"], "the ⏱ belongs where the duration will land"
         assert not got["afterFinish"], "the finish chip retires the ticker"
         assert got["tail"] == "cqt", "…and replaces it with the real duration"
@@ -913,6 +913,53 @@ def test_a_skill_is_one_note_line_shown_in_default_and_counted_in_focus(dash):
     assert '"skill"' not in modes["default"], "default keeps the line standing"
     assert '["skill", "using", "used", "skill", "skills"]' in ses
     assert re.search(r"skill: \"commands\"", ses)
+
+
+def test_no_page_glyph_can_turn_colour(dash):
+    """docs/dashboard.md *No emoji*: every string the PAGE turns into text must pass
+    through `tp()` — `el()` and `tnode()` do it for you, so the exposed path is a
+    hand-assigned `textContent`/`innerHTML`. One of those existed and shipped a colour
+    emoji: the live elapsed chip's `c.textContent = "⏱ " + dur(…)` (U+23F1 is
+    emoji-capable), which nobody saw until the chip started painting at all.
+
+    Checked as a PROPERTY of the served bundle, over the emoji-capable set's own owner
+    (`opshtml.ansi`) rather than a re-spelled list here: any direct write whose text
+    carries one of those codepoints must name `tp(`."""
+    import glob
+    import os
+    from conftest import REPO
+    from dashboard.opshtml import ansi
+
+    chars = [c for c in re.search(r"\[(.*?)\]", ansi._EMOJI_CAPABLE.pattern, re.S)
+             .group(1) if not c.isspace()]
+    assert "⏱" in chars and "⚠" in chars, "the set moved — this test reads it live"
+
+    writes = re.compile(r"\.(?:textContent|innerHTML)\s*=([^\n]*)"
+                        r"|insertAdjacentHTML\(([^\n]*)")
+    bare = []
+    files = sorted(glob.glob(os.path.join(REPO, "dashboard", "static", "app.*.js")))
+    assert files, "no app bundle parts found"
+    for path in files:
+        with open(path, encoding="utf-8") as f:
+            for n, line in enumerate(f, 1):
+                if line.lstrip().startswith("//"):
+                    continue                       # prose about a glyph is not a write
+                for m in writes.finditer(line):
+                    rhs = m.group(1) or m.group(2) or ""
+                    if any(c in rhs for c in chars) and "tp(" not in rhs:
+                        bare.append("%s:%d %s" % (os.path.basename(path), n,
+                                                  line.strip()[:90]))
+    assert not bare, "emoji-capable glyph written to the page without tp():\n" \
+        + "\n".join(bare)
+
+    # …and the site that shipped one carries NO emoji-capable glyph at all now: a pin is
+    # only a REQUEST (a font without the text glyph ignores it — the ☀ wake button became
+    # an SVG for that reason), and the live elapsed never needed a stopwatch. It reads
+    # `· 1m04s`, the same words its own finish chip lands with.
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    live = re.search(r"c\.textContent = ([^\n]*)", ses).group(1)
+    assert 'tp("· "' in live and not any(c in live for c in chars), live
 
 
 def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
