@@ -984,3 +984,44 @@ def test_declared_kinds_are_the_kinds_parse_line_actually_emits():
     for kind, line in samples.items():
         rec = TR.parse_line(line)
         assert rec is not None and rec["kind"] == kind, (kind, rec)
+
+
+# ------------------------------------------------------------- queue_drained
+
+def test_queue_drained_reads_the_queue_records_not_the_prose(tmp_path):
+    # The tell the dashboard's interrupt needs: Claude Code delivers a
+    # mid-turn-queued message the instant the running turn ends, so a `dequeue`
+    # (or the delivered `queued_command`) past the press-time offset means the
+    # boundary happened — stop re-pressing Escape (docs/dashboard.md,
+    # *Interrupt*). Only RECORDS count: a tool_result that merely quotes the
+    # words is not a boundary (the is_interrupt_line lesson).
+    p = tmp_path / "t.jsonl"
+    p.write_text(_l({"type": "user", "message": {"content": "go"}}) + "\n")
+    base = p.stat().st_size
+    assert TR.queue_drained(str(p), base) == ""          # no growth yet
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(_l({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": "t1",
+             "content": '{"type":"queue-operation","operation":"dequeue"}'}]}})
+                + "\n")
+    assert TR.queue_drained(str(p), base) == ""          # a QUOTE, not a drain
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(_l({"type": "queue-operation", "operation": "enqueue",
+                    "content": "later"}) + "\n")
+    assert TR.queue_drained(str(p), base) == ""          # queued, not delivered
+    with open(p, "a", encoding="utf-8") as f:
+        f.write(_l({"type": "queue-operation", "operation": "dequeue"}) + "\n")
+    assert TR.queue_drained(str(p), base) == "dequeue"
+    # ...and the delivered message itself is the same conclusion
+    p2 = tmp_path / "t2.jsonl"
+    p2.write_text(_l({"type": "attachment", "attachment": {
+        "type": "queued_command", "commandMode": "prompt", "prompt": "hi"}})
+        + "\n")
+    assert TR.queue_drained(str(p2), 0) == "queued_command"
+    # a torn final line is undecidable (re-read whole next pass), and a missing
+    # path / offset past EOF is just ""
+    p3 = tmp_path / "t3.jsonl"
+    p3.write_text(_l({"type": "queue-operation", "operation": "dequeue"}))
+    assert TR.queue_drained(str(p3), 0) == ""
+    assert TR.queue_drained("", 0) == ""
+    assert TR.queue_drained(str(p2), 10_000) == ""

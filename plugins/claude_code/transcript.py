@@ -1004,6 +1004,72 @@ def conversation(path, pos=0, suspects=()):
     return cx.out, new_pos
 
 
+QUEUE_TAIL_MAX = 1 << 20         # bytes of growth queue_drained will read (a
+#                                  single tool_result can be megabytes; the
+#                                  queue records we look for land within a
+#                                  breath of the press, so a bounded head of the
+#                                  growth is all a 2-second loop can need)
+
+
+def queue_drained(path, since):
+    """Did Claude Code DRAIN its message queue in `path` past byte `since`?
+    Returns the tell — "dequeue" / "queued_command" — or "".
+
+    The one durable signal that a turn BOUNDARY happened, and the fact the
+    dashboard's interrupt loop needs (docs/dashboard.md, *Interrupt*): Claude
+    Code holds a message typed mid-turn in its own queue and delivers it the
+    instant the running turn ends — an Escape included. So the delivery starts a
+    NEW turn within milliseconds of the Esc landing, the screen keeps animating,
+    and the interrupt's screen-DELTA liveness reads "still live" and presses
+    again — killing the very message it just delivered (measured 2026-07-27,
+    session 3266f418: four Escapes, the queued prompt handed back to the input
+    box, the user re-sending it by hand). The queue records say what the screen
+    cannot.
+
+    Two record shapes, both unambiguous — no prose is matched, so nothing that
+    merely QUOTES them counts (the is_interrupt_line lesson, docs/tab-colors.md):
+      * `{"type": "queue-operation", "operation": "dequeue"}` — the queue handing
+        its head over;
+      * a `queued_command` attachment — the delivered message itself.
+    A generic "a new user record appeared" tell was deliberately NOT used: a
+    running turn appends user-shaped records all the time (tool_results, teammate
+    mail, Stop-hook feedback), and reading one as a boundary would stop the
+    re-press loop over a turn that never died.
+
+    Note a queue drained by anything else (a task-notification delivered at a
+    natural turn end) is the same conclusion for the caller: the queue only
+    drains at a boundary, so the turn it wanted to stop is already over.
+
+    Best-effort and read-only: no path / an unreadable file / no growth is ""."""
+    if not path or since is None or since < 0:
+        return ""
+    try:
+        if os.path.getsize(path) <= since:
+            return ""
+        with open(path, "rb") as f:
+            f.seek(since)
+            chunk = f.read(QUEUE_TAIL_MAX)
+    except OSError:
+        return ""
+    # Only COMPLETE lines are decidable (a torn tail is re-read whole by the
+    # caller's next pass, which re-reads from the same `since` anyway).
+    for ln in chunk.split(b"\n")[:-1]:
+        if b"queue" not in ln:               # cheap prefilter before the parse
+            continue
+        try:
+            rec = json.loads(ln)
+        except Exception:
+            continue
+        if not isinstance(rec, dict):
+            continue
+        if rec.get("type") == "queue-operation" and rec.get("operation") == "dequeue":
+            return "dequeue"
+        att = rec.get("attachment")
+        if isinstance(att, dict) and att.get("type") == "queued_command":
+            return "queued_command"
+    return ""
+
+
 TAKEN_BACK_KEY = "takeback"      # state-DB kv: uuids Claude Code handed back
 TAKEN_BACK_MAX = 20              # keep the tail — an old flag is inert anyway
 

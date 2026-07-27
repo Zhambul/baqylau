@@ -236,6 +236,25 @@ ANOMALY_SECTIONS = [
      "SELECT ts, content FROM state_files WHERE session_id=? "
      "AND action='web-interrupt' "
      "AND json_extract(content, '$.stopped')=0", 1),
+    # "I stopped the turn and my QUEUED message vanished." Claude Code hands the
+    # turn to a queued prompt the instant the Esc lands, so the screen keeps
+    # animating; a screen-only verdict reads that as "still live" and presses
+    # again — interrupting the delivered message, which (having produced
+    # nothing) is discarded back into the TUI's input box where the web cannot
+    # see it. Since 2026-07-27 the transcript's queue records stop the loop, so
+    # the row says which: `drained` non-empty = the boundary was SEEN (one press
+    # per phase, healthy). This flags the harmful shape — RE-pressed while a
+    # message was queued and no drain was ever seen (docs/dashboard.md
+    # *Interrupt*).
+    ("stop re-pressed with a message QUEUED and no queue drain seen "
+     "(the delivered prompt may have been killed)",
+     "SELECT i.ts, i.content FROM state_files i WHERE i.session_id=? "
+     "AND i.action='web-interrupt' "
+     "AND json_extract(i.content, '$.attempts') > 1 "
+     "AND COALESCE(json_extract(i.content, '$.drained'), '') = '' "
+     "AND EXISTS (SELECT 1 FROM state_files q WHERE q.session_id=i.session_id "
+     "  AND q.action='web-send' AND json_extract(q.content, '$.queued')=1 "
+     "  AND q.ts < i.ts AND q.ts > i.ts - 1800)", 1),
     # A nested bg/monitor tailer whose OWNER can be resolved from neither
     # source: not from its own streams row (hookkit.stream_env's
     # CLAUDE_STREAM_AGENT, stamped by the three nested launch sites) and not

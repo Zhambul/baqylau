@@ -217,7 +217,10 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   record; a queued delivery appends the user-prompt record right after it —
   in that case the watcher audits ("queued prompt delivered"), advances past
   it and **keeps watching** (the delivered turn is mid-flight and deserves the
-  same recovery). Otherwise it re-checks the state: green/idle means the turn
+  same recovery). The dashboard's own stop gesture reasons from the same fact
+  on the way IN: its re-press loop stops the moment the transcript shows the
+  queue draining, or it would interrupt the message it just delivered
+  (docs/dashboard.md, *Interrupt*). Otherwise it re-checks the state: green/idle means the turn
   already resolved (do nothing); blue means a live command/agent whose own
   writer-liveness recovery is faster and authoritative (defer, or it would race
   `bg-recheck` and could paint "done" over a still-live bg job); magenta or red

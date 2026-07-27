@@ -2106,6 +2106,47 @@ in the transcript"*).
 
 **Robust verified re-press.** So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint presses Escape, then RE-PRESSES *while the turn is still LIVE*, up to `INTERRUPT_TRIES` times. Liveness is **not** a marker string — spinner glyphs animate, gerunds vary, and the thinking level changes how long each phase lasts, so no fixed literal (`esc to interrupt`, `tok/s`, …) is robust. Instead it is **whether the screen is still CHANGING**: two `Frontend.get_text` captures `INTERRUPT_RETRY_S` apart (well above the TUI's own ~150 ms double-Esc window, so re-presses never read as a double-Esc) — a running turn always ticks its spinner / elapsed-timer / stream within that window at *every* thinking level, a stopped one is static. It stops the instant the screen goes static (dead), so an already-idle box never gets a stray Esc. The `web-interrupt` row carries `attempts`, `stopped` (True = verified static/dead · False = still animating after every re-press, the Esc never landed · None = idle press / unreadable) and `probes` — the per-capture phase snapshots. When `stopped` is **False** the endpoint returns `502` and spawns **no** `escape-recheck` (flipping the tab green would mask a live turn, exactly how the failure hid), so the page toasts a real failure. Every capture is also folded into an **`interrupt-probe`** `state_files` row (`insert`/`toks`/`spin` flags + a tail per capture point) — the durable ground truth for diagnosing a recurrence across thinking levels.
 
+**A QUEUED message outranks the screen — the transcript stops the re-press
+loop** (2026-07-27). The stop gesture must mean in the browser exactly what Esc
+means in the terminal, and with a message queued that is *not* "the session goes
+idle": Claude Code delivers the queued prompt **the instant the turn ends**, so
+the interrupt hands the session straight over to your message and a NEW turn
+starts thinking (the same fact `interrupt-watch` already reasons about —
+docs/tab-colors.md). Which is precisely what screen-delta cannot see: the screen
+never goes static, the loop reads "still live", and it presses again — killing
+the message it just delivered. Because that fresh turn has produced nothing yet,
+Claude Code **discards its prompt and hands it back to the TUI's input box**
+(*Interrupt*, above), where the web cannot see it: the ⧗ pin never drains, the
+composer never prefills (`_restored_input` matches against the last *transcript*
+prompt, and a queued message never became one), and the message is simply gone
+from the web side. Measured end to end in session `3266f418` (2026-07-27):
+`enqueue` at 20:31:05 (a `queued: true` web send), **four** Escapes at 20:33:21,
+a `queue-operation`/`dequeue` with no delivered prompt behind it, and the user
+re-sending the same 94 chars by hand 26 s later — which then arrived **doubled**,
+the leftover first line of the box glued onto the resend (the `clear_draft`
+Ctrl+U/Ctrl+K kills one line, and the taken-back message had two).
+
+So the loop takes a second, authoritative stop condition, checked before every
+re-press: **`transcript.queue_drained(path, since)`** over the growth past the
+press-time baseline `_press_baseline` already takes. Two record shapes count,
+both unambiguous — `{"type": "queue-operation", "operation": "dequeue"}` and a
+`queued_command` attachment — and nothing else: a generic "a new user record
+appeared" tell was rejected because a running turn appends user-shaped records
+constantly (tool_results, teammate mail, Stop-hook feedback) and one of those
+would stop the loop over a turn that never died. Any drain is the same
+conclusion for the caller — **the queue only drains at a turn BOUNDARY**, so the
+turn the Esc was aimed at is over (even a `task-notification` delivered at a
+natural end says so). The tell rides the `web-interrupt` row as **`drained`**
+(`"dequeue"` / `"queued_command"` / `""`) so the audit says WHY the loop stopped
+— screen-static or boundary — and the response carries **`queued: true`**, on
+which the page skips its optimistic "your turn" flip (the composer stays in
+queue mode, since the session is busy again) and toasts *"your queued message is
+running now"*. The record shapes belong to `plugins/claude_code/transcript.py`,
+the single owner of the transcript grammar; the dashboard only asks the
+question. The `escape-recheck` still spawns: the delivered turn is mid-flight
+and deserves the same cancel recovery, and its own queued-prompt guard already
+keeps watching instead of flipping green (docs/tab-colors.md).
+
 When the (verified or unverifiable) Escape lands on a MAGENTA tab
 (`thinking`/`working`) the endpoint also spawns the **`escape-recheck`** tab
 dispatch (detached `claude-tab-status.py escape-recheck <log> <transcript>

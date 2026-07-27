@@ -1273,7 +1273,7 @@ def test_post_interrupt_sends_escape(dash, monkeypatch):
     code, body = _post(dash + "/api/session/intr1/interrupt", {})
     # `restored` is "" — nothing in this session's transcript to hand back
     assert code == 200 and json.loads(body) == {"ok": True, "tab": "",
-                                                "restored": ""}
+                                                "queued": False, "restored": ""}
     assert fe.keyed == [("66", ("escape",))]
     assert fe.closed == []                    # never touches the tab
 
@@ -1297,7 +1297,7 @@ def test_post_interrupt_magenta_spawns_escape_recheck(dash, monkeypatch,
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"77": "thinking"})
     code, body = _post(dash + "/api/session/intr3/interrupt", {})
     assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking",
-                                                "restored": ""}
+                                                "queued": False, "restored": ""}
     assert len(spawned) == 1
     path, argv, env, purpose = spawned[0]
     assert path.endswith("claude-tab-status.py")
@@ -1331,11 +1331,57 @@ def test_post_interrupt_verifies_and_re_presses(dash, monkeypatch):
     monkeypatch.setattr(DS.API, "tab_states", lambda: {"78": "thinking"})
     code, body = _post(dash + "/api/session/intrv/interrupt", {})
     assert code == 200 and json.loads(body) == {"ok": True, "tab": "thinking",
-                                                "restored": ""}
+                                                "queued": False, "restored": ""}
     assert fe.keyed == [("78", ("escape",)), ("78", ("escape",))]  # one re-press
     row = _last_state_file("intrv", "web-interrupt")
     assert row["attempts"] == 2 and row["stopped"] is True
     assert row["probes"][0]["at"] == "pre-esc"     # ground-truth capture present
+
+
+def test_post_interrupt_stops_pressing_when_the_queue_is_delivered(dash,
+                                                                   monkeypatch,
+                                                                   tmp_path):
+    # A message QUEUED mid-turn is delivered by Claude Code the instant the
+    # Escape lands, so a NEW turn starts and the screen keeps animating —
+    # screen-delta alone reads "still live" and re-presses, which interrupts the
+    # very message it just delivered and hands it back to the TUI's input box
+    # (measured 2026-07-27, session 3266f418: 4 Escapes, the queued prompt gone
+    # from the web, re-sent by hand). The queue records outrank the screen: one
+    # press, then the `queue-operation`/dequeue in the transcript says the turn
+    # boundary happened — stop, and tell the page the turn goes ON (`queued`),
+    # so it doesn't claim "your turn".
+    tp = tmp_path / "intrq.jsonl"
+    tp.write_text('{"type":"user"}\n')
+
+    class _DeliverFE(_FakeFE):
+        def send_key(self, win, *keys):
+            # the Esc lands: Claude Code drains its queue into a new turn
+            with open(tp, "a", encoding="utf-8") as f:
+                f.write('{"type":"queue-operation","operation":"dequeue"}\n')
+            return _FakeFE.send_key(self, win, *keys)
+
+    fe = _DeliverFE()
+    fe.screens = ["✻ Alpha…", "✻ Bravo…", "✻ Delta…", "✻ Echo…", "✻ Golf…"]
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.post_interrupt, "INTERRUPT_RETRY_S", 0)
+    spawned = []
+    monkeypatch.setattr(DS.SP, "spawn_detached",
+                        lambda path, argv, log, env=None, purpose="", **kw:
+                        spawned.append(argv) or None)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "80")
+    A.session_start({"session_id": "intrq", "cwd": "/w",
+                     "transcript_path": str(tp)})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"80": "thinking"})
+    code, body = _post(dash + "/api/session/intrq/interrupt", {})
+    assert code == 200
+    assert json.loads(body)["queued"] is True     # the page keeps queue mode
+    assert fe.keyed == [("80", ("escape",))]      # ONE press — no hammering
+    row = _last_state_file("intrq", "web-interrupt")
+    assert row["attempts"] == 1 and row["stopped"] is True
+    assert row["drained"] == "dequeue"            # WHY it stopped, in the audit
+    # the delivered turn is mid-flight and still deserves cancel recovery —
+    # the escape-recheck's own queued-prompt guard keeps watching it
+    assert len(spawned) == 1 and spawned[0][0] == "escape-recheck"
 
 
 def test_post_interrupt_not_confirmed_is_502_no_recheck(dash, monkeypatch):
@@ -1370,7 +1416,8 @@ def test_post_rewind_idle_types_the_command(dash, monkeypatch):
     monkeypatch.setenv("KITTY_WINDOW_ID", "88")
     A.session_start({"session_id": "rew1", "cwd": "/w", "transcript_path": ""})
     code, body = _post(dash + "/api/session/rew1/interrupt", {})
-    assert json.loads(body) == {"ok": True, "tab": "", "restored": ""}
+    assert json.loads(body) == {"ok": True, "tab": "", "queued": False,
+                                "restored": ""}
     assert fe.keyed == [("88", ("escape",))]          # single press = interrupt
     code, body = _post(dash + "/api/session/rew1/rewind", {})
     assert code == 200

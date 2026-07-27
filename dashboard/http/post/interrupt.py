@@ -161,7 +161,7 @@ class _InterruptMixin:
         # every re-press (the Esc never landed), None = idle press / unreadable.
         pre = self._screen(fe, win)
         ok = bool(fe.send_key(win, "escape"))
-        attempts, stopped = 1, None
+        attempts, stopped, drained = 1, None, ""
         probes = [self._phase(pre, "pre-esc")]
         if ok and tab in QUEUE_TABS:
             for _ in range(INTERRUPT_TRIES):
@@ -171,15 +171,27 @@ class _InterruptMixin:
                 probes.append(self._phase(b, "post-esc%d" % attempts))
                 if a is None or b is None:   # can't read the screen — stop
                     break
-                if a == b:                   # static -> the turn is dead
+                # A QUEUED MESSAGE outranks the screen. Claude Code delivers a
+                # mid-turn message the instant the turn ends, so the Esc that
+                # LANDED starts a new turn within milliseconds — the screen goes
+                # on animating and a screen-only verdict reads "still live" and
+                # presses again, interrupting the delivered message and handing
+                # it back to the input box, where the web can't see it (measured
+                # 2026-07-27, session 3266f418: 4 Escapes, the queued prompt
+                # taken back, the user re-sending it by hand — and the leftover
+                # in the box glued onto the resend). The queue records are the
+                # tell the screen doesn't have (transcript.queue_drained), and
+                # the queue only drains at a turn BOUNDARY: the turn is over.
+                drained = transcript.queue_drained(tpath, tsize)
+                if drained or a == b:        # boundary / static -> the turn is dead
                     stopped = True
                     break
                 stopped = False              # still animating -> still live
                 if fe.send_key(win, "escape"):
                     attempts += 1
         A.state_file(log, sdb, action,
-                     {"win": win, "ok": ok, "tab": tab,
-                      "attempts": attempts, "stopped": stopped, "probes": probes})
+                     {"win": win, "ok": ok, "tab": tab, "attempts": attempts,
+                      "stopped": stopped, "drained": drained, "probes": probes})
         if not ok:
             A.error(log, "dashboard %s (send failed)" % verb,
                     {"sid": sid, "win": win})
@@ -202,7 +214,12 @@ class _InterruptMixin:
             # within its grace. Detached + audited (A.spawn); its verdict
             # lands as tab_transitions rows under DISPATCH escape-recheck.
             self._spawn_escape_recheck(fe, win, log, tpath, tsize)
-        return self._json({"ok": True, "tab": tab,
+        # `queued`: the stop ALSO started the next turn. Claude Code delivered
+        # the message you had queued the moment the Esc landed (the terminal's
+        # own behavior — the stop doesn't idle the session, it re-points it at
+        # your message), so the page must not claim "your turn": the composer
+        # stays in queue mode and the delivered prompt drains its ⧗ pin.
+        return self._json({"ok": True, "tab": tab, "queued": bool(drained),
                            "restored": self._restored_input(fe, win, sid, log,
                                                             sdb, action)})
 

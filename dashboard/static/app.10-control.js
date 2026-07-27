@@ -37,6 +37,11 @@ function interruptSession() {
       if (r && r.restored) {
         applyTakeBack(r.restored);
         toast("done", "took it back", "message restored below — edit and resend");
+      } else if (r && r.queued) {
+        // the stop handed the turn over to the message you had queued — Claude
+        // Code delivers it the instant the Esc lands (the terminal's own
+        // behavior). The session is BUSY again, so no your-turn flip below.
+        toast("done", "interrupted", "your queued message is running now");
       } else if (BUSY_TABS.includes(r && r.tab)) {
         toast("done", "interrupted", "Esc sent to the session");
       } else {
@@ -50,7 +55,7 @@ function interruptSession() {
       // green, or the next prompt — reconciles, and if the turn somehow kept
       // going that next tab event flips it right back to "queue".
       const ses = S.ses;
-      if (ses && BUSY_TABS.includes(r && r.tab)) {
+      if (ses && !(r && r.queued) && BUSY_TABS.includes(r && r.tab)) {
         const yourTurn = "awaiting-response";   // green, not a QUEUE_TAB
         if (ses.composerMode) ses.composerMode(yourTurn);
         if (ses.stopMode) ses.stopMode(yourTurn);
