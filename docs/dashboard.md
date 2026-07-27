@@ -4820,10 +4820,19 @@ it (`…/a/<aid>/m/<task>`). The tab bar, the components and the stream engine a
 the session's own; what changes is a `?agent=<id>` on every read.
 
 **What re-scopes, and what deliberately doesn't.** The **mirror**, **monitors**
-and **jobs** follow the agent. **Memory** and **errors** do not — a memory note
-is the team's and an error belongs to a script, neither has an agent dimension —
-so in scope they keep showing the session's, with a quiet `session-wide` note on
-the tab bar rather than an ambiguous silence. The **agents** tab also stays
+and **jobs** follow the agent — *including their tab BADGES*, which is the same
+split declared once in the read model's `BADGES` table (`scoped`) and reached
+through the one `badge_count`, so the overview payload and the SSE badge channel
+cannot answer differently for the same tab. That was the whole of a real bug: the
+badge counters took `(sid, cwd)` and never the agent, so every scope showed the
+LEAD's numbers — an agent with 19 background jobs read `jobs 1`, one with 8
+monitors had no badge at all, and its background work looked like it simply
+wasn't there. The lists behind those tabs had been scoped from the start; only
+the number that tells you to click was not. **Memory** and **errors** do not
+follow the agent — a memory note is the team's and an error belongs to a script,
+neither has an agent dimension — so in scope they keep showing the session's,
+with a quiet `session-wide` note on the tab bar rather than an ambiguous
+silence. The **agents** tab also stays
 unscoped: a list of the session's agents is what you navigate *between* them
 with. The scoped mirror additionally drops the session's pinned cards (goal,
 tasks, plan, ask) and the **composer** — those are the lead's, and a composer
@@ -4922,8 +4931,13 @@ and history's prose blocks stayed in the stream beside their own transcript
 bubbles — doubled prompts, messages and results.
 
 **One SSE, not two.** Agent scope has no stream of its own — `?agent=` on
-`/events/session/<sid>` scopes the mirror channel only, so a scoped page still
-gets the tab colour, scoreboard, cards and dialogs on the same connection. Note
+`/events/session/<sid>` scopes the mirror channel and the two scoped badges
+(monitors, jobs — the connection's agent rides on `_Tick`, fixed for its
+lifetime, since a scope change is a new connection; without it a live tick
+pushed the lead's counts straight over the ones the initial payload got right,
+a badge that reads correctly for one second and then lies), so a scoped page
+still gets the tab colour, scoreboard, cards and dialogs on the same
+connection. Note
 the cursor still advances over out-of-scope ops (a tick carrying only the lead's
 work renders to nothing and sends no event), or the stream would re-read them
 forever.

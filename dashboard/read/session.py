@@ -120,24 +120,45 @@ def memory_count(sid, cwd):
 # badge meant editing both, in different vocabularies, with nothing to say so.
 # Here the pair is declared once and both sides derive from it.
 #
-# Values are (sid, cwd) callables, not bound API functions: the lookup has to
-# happen at CALL time so a patched sessionapi moves the served number too (the
+# Values are (sid, cwd, agent) callables, not bound API functions: the lookup has
+# to happen at CALL time so a patched sessionapi moves the served number too (the
 # module-qualified read rule), and `memory` needs a different owner than the
 # others — its badge is project-SCOPED, and that gate belongs to this read model
 # (which the overview payload and the SSE badge table must not each re-apply).
-_Badge = collections.namedtuple("_Badge", "event field count")
+#
+# `scoped` says whether the badge follows AGENT SCOPE, and it is the same split
+# the tab strip already declares out loud: monitors and jobs are one agent's work
+# and re-point with the view, while errors (a script's) and memory (the team's)
+# stay session-wide and are labelled "session-wide" on the page. Without it every
+# badge counted the LEAD's, in every scope — an agent with 19 background jobs
+# read `jobs 1` and one with 8 monitors had no badge at all, so its background
+# work looked like it wasn't there ("I still can't see the background job shells,
+# and their outputs. For the subagents.").
+_Badge = collections.namedtuple("_Badge", "event field count scoped")
 
 BADGES = (
     # ⚠ swallowed errors — the web sibling of the scorebar's errwatch chip;
     # a COUNT, no tracebacks
-    _Badge("errors", "error_count", lambda sid, cwd: API.error_count(sid)),
+    _Badge("errors", "error_count",
+           lambda sid, cwd, agent: API.error_count(sid), False),
     # distinct monitors — a new Monitor launch bumps it
-    _Badge("monitors", "monitor_count", lambda sid, cwd: API.monitor_count(sid)),
+    _Badge("monitors", "monitor_count",
+           lambda sid, cwd, agent: API.monitor_count(sid, agent), True),
     # distinct background jobs — a new bg launch bumps it
-    _Badge("jobs", "job_count", lambda sid, cwd: API.job_count(sid)),
+    _Badge("jobs", "job_count",
+           lambda sid, cwd, agent: API.job_count(sid, agent), True),
     # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
-    _Badge("memory", "memory_count", lambda sid, cwd: memory_count(sid, cwd)),
+    _Badge("memory", "memory_count",
+           lambda sid, cwd, agent: memory_count(sid, cwd), False),
 )
+
+
+def badge_count(badge, sid, cwd, agent=""):
+    """One badge's number for a view — THE one place a badge meets a scope, so
+    the overview payload and the SSE badge channel cannot answer differently for
+    the same tab. An unscoped badge is handed "" whatever the view is, which is
+    also what `agent_id`-empty means to the counters: the LEAD's own."""
+    return badge.count(sid, cwd, agent if badge.scoped else "")
 
 
 def session_payload(sid, agent=""):
@@ -145,12 +166,14 @@ def session_payload(sid, agent=""):
     (BADGES; the full rows stay behind /errors, /monitors, /jobs, /memory) and
     the display title.
 
-    `agent` additionally stamps `agent_usage` — that ONE agent's token rollup
-    and priced cost, for the scoreboard the page swaps in under agent scope
-    (docs/dashboard.md *Agent scope*). It is per-request rather than a field on
-    every agents row because it folds a whole transcript: paying that for all of
-    a 28-agent session's rows on every overview would be absurd, and only the
-    scoped one is ever shown."""
+    `agent` scopes the badges that HAVE an agent dimension (BADGES `scoped`:
+    monitors and jobs — the two tabs that re-point with the view) and stamps
+    `agent_usage` — that ONE agent's token rollup and priced cost, for the
+    scoreboard the page swaps in under agent scope (docs/dashboard.md *Agent
+    scope*). The usage is per-request rather than a field on every agents row
+    because it folds a whole transcript: paying that for all of a 28-agent
+    session's rows on every overview would be absurd, and only the scoped one is
+    ever shown."""
     data = API.session(sid)
     if agent:
         data["agent_usage"] = agent_usage(sid, agent)
@@ -160,7 +183,7 @@ def session_payload(sid, agent=""):
     # off-scope); the count still rides along (0 off-scope — nothing recorded).
     data["memory_scope"] = memory_scope(data.get("cwd") or "")
     for b in BADGES:
-        data[b.field] = b.count(sid, data.get("cwd") or "")
+        data[b.field] = badge_count(b, sid, data.get("cwd") or "", agent)
     data["title"] = session_title(data.get("transcript_path") or "")
     # Whether the session's transcript .jsonl is GONE (known path, absent on
     # disk) — the composer's resume-&-send door is dead for it (`claude

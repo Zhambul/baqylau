@@ -25,7 +25,8 @@ from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
                                  session_title, session_slug)
 from dashboard.read.mirror import (agent_scope, merged_backlog, merge_live,
                                    TAIL_BLOCKS)
-from dashboard.read.session import (BADGES, agents_ctx, agents_model_effort,
+from dashboard.read.session import (BADGES, badge_count, agents_ctx,
+                                    agents_model_effort,
                                     visible_agents, ask_draft,
                                     ask_pending, ask_wire, composer_draft, composer_queue,
                                     plan_pending, tasks_card,
@@ -78,9 +79,14 @@ def _badge_chan(badge):
     named factory, not an inline lambda: the producer must close over THIS
     row's callable, not over the comprehension's loop variable (ruff B023).
     The `prev` key is the badge's PAYLOAD field, so a connection's last-sent map
-    reads in the same vocabulary the initial payload used."""
+    reads in the same vocabulary the initial payload used.
+
+    Scoped through the read model's own `badge_count`, with this connection's
+    agent — a scoped page's ticks would otherwise push the LEAD's counts over
+    the ones its initial payload got right, which is a badge that reads correctly
+    for one second and then lies."""
     return _Chan(badge.field, badge.event,
-                 lambda c: badge.count(c.sid, c.cwd), "count")
+                 lambda c: badge_count(badge, c.sid, c.cwd, c.agent), "count")
 
 
 def _badge_chans():
@@ -174,13 +180,16 @@ class _Tick:
     """The per-tick facts the channel producers read — the single mutable
     context object a named-phase loop shares (styleguide, *Module shape*).
     `sdb`/`tab` are refreshed every tick; the slow prologue additionally
-    re-resolves the session row and stamps `win`/`cwd`/`tpath`/`eff`."""
+    re-resolves the session row and stamps `win`/`cwd`/`tpath`/`eff`. `agent`
+    is this CONNECTION's scope, fixed for its lifetime (a scope change is a new
+    connection) — the badge channels are the only readers."""
 
-    __slots__ = ("sid", "sdb", "win", "cwd", "tpath", "eff", "tab")
+    __slots__ = ("sid", "sdb", "win", "cwd", "tpath", "eff", "tab", "agent")
 
-    def __init__(self, sid, row):
+    def __init__(self, sid, row, agent=""):
         self.sid = sid
         self.sdb = self.tab = self.win = self.eff = ""
+        self.agent = agent or ""
         self.adopt(row)
 
     def adopt(self, row):
@@ -321,10 +330,13 @@ class _SseMixin:
         ts-interleave note).
 
         `agent` scopes the MIRROR channel to one agent (docs/dashboard.md *Agent
-        scope*) and nothing else: the tab colour, scoreboard, cards and dialogs a
-        scoped page shows are still the session's, so agent scope needs no second
-        connection. The conversation cursor is not advanced there — an agent's
-        stream is ops only, exactly as in the backlog.
+        scope*) and the two badges that HAVE an agent dimension (monitors, jobs
+        — the same tabs `?agent=` filters, so a live tick can't push the lead's
+        counts over a scoped page's). Nothing else: the tab colour, scoreboard,
+        cards and dialogs a scoped page shows are still the session's, so agent
+        scope needs no second connection. The conversation cursor IS advanced
+        there — an agent's stream reads its own transcript (see the mirror
+        phase), exactly as in the backlog.
 
         Everything else the stream pushes is a CHANNEL — see `_SLOW_CHANS` /
         `_FAST_CHANS` for the table and its cadences, and `_INLINE_KEYS` for the
@@ -337,7 +349,7 @@ class _SseMixin:
         last = after
         prev = _prev_map()
         row = API.session_row(sid) or {}
-        ctx = _Tick(sid, row)
+        ctx = _Tick(sid, row, agent)
         # The mirror-log KEY of this session — what the ⧉ copy / click-to-view
         # links in every rendered op are stamped with. A tick-loop LOCAL once,
         # which the badge stanza's `for key, ...` then clobbered from the second

@@ -990,12 +990,39 @@ def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
         ("errors", "error_count"), ("monitors", "monitor_count"),
         ("jobs", "job_count"), ("memory", "memory_count")]
     # the stream's row IS the scope owner — not its own API call beside it
-    assert table["memory"].count("s1", str(proj)) == 5
-    assert table["memory"].count("s1", off) == 0
+    assert rsession.badge_count(table["memory"], "s1", str(proj)) == 5
+    assert rsession.badge_count(table["memory"], "s1", off) == 0
     # every row resolves its count at CALL time, so a patched sessionapi moves
     # the pushed number (a class-body-bound callable would have frozen it)
     monkeypatch.setattr(rsession.API, "error_count", lambda sid: 3)
-    assert table["errors"].count("s1", off) == 3
+    assert rsession.badge_count(table["errors"], "s1", off) == 3
+
+
+def test_badges_that_have_an_agent_dimension_follow_the_scope(monkeypatch):
+    """Monitors and jobs are ONE AGENT's work and re-point with the view; errors
+    (a script's) and memory (the team's) are session-wide, which is what the tab
+    strip labels out loud. `badge_count` is where a badge meets a scope — one
+    place, so the overview payload and the SSE badge channel cannot answer
+    differently for the same tab.
+
+    Un-scoped, every badge counted the LEAD's in every view: an agent with 19
+    background jobs showed `jobs 1` and one with 8 monitors showed no badge at
+    all, so its background work looked like it wasn't there."""
+    from dashboard.read import session as rsession
+    seen = []
+    monkeypatch.setattr(rsession.API, "job_count",
+                        lambda sid, agent="": seen.append(("jobs", agent)) or 19)
+    monkeypatch.setattr(rsession.API, "monitor_count",
+                        lambda sid, agent="": seen.append(("mon", agent)) or 8)
+    monkeypatch.setattr(rsession.API, "error_count", lambda sid: 3)
+    table = {b.event: b for b in rsession.BADGES}
+    assert rsession.badge_count(table["jobs"], "s1", "/w", "agA") == 19
+    assert rsession.badge_count(table["monitors"], "s1", "/w", "agA") == 8
+    # …and the session-wide pair is handed "" whatever the view is
+    assert rsession.badge_count(table["errors"], "s1", "/w", "agA") == 3
+    assert seen == [("jobs", "agA"), ("mon", "agA")]
+    assert rsession.badge_count(table["jobs"], "s1", "/w") == 19
+    assert seen[-1] == ("jobs", "")          # no scope means the lead's own
 
 
 def test_session_stream_channels_are_a_derived_table():
