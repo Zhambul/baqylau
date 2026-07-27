@@ -692,6 +692,7 @@ const ACT_KIND = {
 
 function refineBlockKind(b, it) {
   if (it.agent) b.root.dataset.agent = it.agent;       // whose agent block (src id)
+  if (it.mid) b.root.dataset.mid = it.mid;             // which message (mail msg_id)
   if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
   if (it.g) b.root.dataset.g = it.g;                   // the run pass reads it
   if (/class="og"/.test(it.html)) {                    // outer gutter == nested subagent job
@@ -731,6 +732,7 @@ function stampItem(elem, it) {
   if (it.kind) elem.dataset.msg = it.kind;
   if (it.agent) elem.dataset.agent = it.agent;   // the run summary counts agents,
   //                                                not agent-ish rows
+  if (it.mid) elem.dataset.mid = it.mid;         // …and messages, not mail-ish rows
   if (it.meta) elem.dataset.injected = "1";   // a prompt Claude Code injected,
   //                                             not one the human typed
   elem.dataset.vk = String(++S.ses.viewSeq);
@@ -853,6 +855,15 @@ const VIEW_FRAGMENTS = [
 // them as distinct Update/Write one-liners when expanded.
 const VIEW_COUNTER = { write: "edit" };
 
+// Counters that count a SUBJECT rather than a row, and the served attribute that
+// names it. One subagent contributes a launch note, a finish note (and a resume,
+// and a second result if it reports twice); one message contributes an arrival,
+// its body and its read notice — counting rows said "ran 77 agents" for a session
+// with 21 of them, and "passed 4 messages" where two had been sent. `data-agent`
+// is the producer-source id and `data-mid` the mail msg_id, both stamped
+// server-side (opshtml.op_items) from the op itself.
+const VIEW_SUBJECT = { agent: "agent", mail: "mid" };
+
 // Don't show a run's elapsed until it has actually been running a moment —
 // Claude Code's own threshold for the same chip, and it keeps a fast run from
 // flashing "· 0s".
@@ -919,23 +930,21 @@ function buildRunSummary(key, members, running, anchor, bad, open) {
   row.append(el("span", "vdot" + (running ? "" : bad ? " bad" : " done")));
   const text = el("span", "vtext");
   const counts = { add: 0, rem: 0 };
-  // AGENTS are counted per AGENT, not per row: one subagent contributes a launch
-  // note and a finish note (and a resume, and a second result if it reports twice),
-  // so counting rows said "ran 77 agents" for a session with 21 of them. `data-agent`
-  // is the served src id (opshtml.op_items); a row without one is its own key, so an
-  // unattributable agent row still counts once.
-  const agents = new Set();
+  const seen = {};                             // subject counter -> the ids counted
   for (const m of members) {
     const c = viewCounter(m);
-    if (c === "agent") {
-      agents.add(m.dataset.agent || ("vk" + m.dataset.vk));
+    const idk = VIEW_SUBJECT[c];
+    if (idk) {
+      // a row without an id is its own subject, so an unattributable row still
+      // counts once (and can never merge with another one)
+      (seen[c] || (seen[c] = new Set())).add(m.dataset[idk] || ("vk" + m.dataset.vk));
     } else if (c) {
       counts[c] = (counts[c] | 0) + 1;
     }
     counts.add += +(m.dataset.add || 0);       // served per item (actclass.diffstat)
     counts.rem += +(m.dataset.rem || 0);
   }
-  if (agents.size) counts.agent = agents.size;
+  for (const c in seen) counts[c] = seen[c].size;
   text.append(...viewSummaryNodes(counts, running));
   row.append(text);
   const timer = el("span", "vtimer");

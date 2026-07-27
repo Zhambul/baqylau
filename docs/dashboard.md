@@ -5030,6 +5030,49 @@ of them. Every agent item now carries `agent` — the producer-source id parsed 
 run's counter is the size of that id set. A row with no id counts once rather than
 dropping out: unattributable, never uncounted.
 
+**And the mail counter counts MESSAGES**, on the same rule and through the same
+mechanism, because mail has the same shape: an arrival, its body and its read notice
+are three rows about one message, so `passed 4 messages` appeared for two that had
+been sent. The subject id is the msg_id, carried as the op's `mid` (core/ops.py — the
+producer stamps it on all three ops; the terminal ignores it) and stamped onto the row
+as `data-mid`. `VIEW_SUBJECT` is the table of counters that count subjects rather than
+rows — `{agent: data-agent, mail: data-mid}` — so the two cases are one code path.
+
+### Team mail reads as a note too, and holds the message
+
+A mail row is the same kind of thing as an agent note — one line saying something
+happened, with the substance behind a click — so it wears the same `⏺` note (`Message
+team-lead → rev-ui-util: <summary>`, `Message team-lead → rev-ui-util · read`) instead
+of the pane's coloured chip. A green `◉ read · team-lead → rev-ui-util` in the feed
+announces plumbing at the weight of the conversation; the pane keeps it, because a
+pane reader scans by colour. `:` introduces the message's own words, `·` appends a
+state, matching `finished · 21m 16s`. Worded by its owner (`msgs.note_new` /
+`note_read`) like every other note, and recovered read-side for chips already on disk
+(`actclass.legacy_mail_note`, colour-gated exactly like the classifier so a monitor's
+`◉` is never reworded).
+
+**The body is the MESSAGE, not its preview.** The row used to carry only SendMessage's
+`summary` — Claude Code's own 5-10 word label — and often not even that, so expanding
+`passed 4 messages` revealed a stack of chips with no messages behind them ("why when
+I click on Passed 4 messages can't I see the actual messages?"). The tracker already
+reads the inbox record; it now takes its `text` field (the message body — the record is
+`{type, from, text, timestamp, read, color, summary, msg_id}`, confirmed against the
+2.1.220 binary's mailbox schema) and paints THAT as the block's body, with the summary
+riding the note as the line's preview. Capped at `msgs.CAP_TEXT` (24 lines) because the
+terminal paints it inline, where a 200-line report is a wall; deliberately its own
+ceiling and not `substream_render`'s `CAP_TEAMMSG`/`CAP_SENDMSG`, which cap the same
+content inside an AGENT's stream. Only the SUMMARY is persisted in the tracker state —
+a read notice needs no body, so a full report is never copied into the state DB. The
+audit's `msg-transitions` row records the msg_id and the body's LENGTH (never the
+body), which is what makes "the mail line showed nothing" answerable after the fact: an
+arrival with `chars=0` had no text to paint.
+
+Known duplication: for mail a TEAMMATE sent, the terminal now shows the body twice —
+once in the teammate's own `✉ to <who>` substream block, once on the lead's mail line.
+Accepted, because the web mirror drops the substream copy (it is `src`-stamped) and mail
+the LEAD sent has no substream block at all, so the mail line is the only place either
+surface can show it.
+
 Because they are classes now, both collapsing modes fold them and need words for
 them:
 `tracked N tasks` and `passed N messages`. Neither is Claude Code vocabulary (it

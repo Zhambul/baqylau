@@ -85,6 +85,7 @@ function item(spec) {
   if (spec.rem) e.dataset.rem = String(spec.rem);
   if (spec.g) e.dataset.g = spec.g;
   if (spec.agent) e.dataset.agent = spec.agent;
+  if (spec.mid) e.dataset.mid = spec.mid;
   if (spec.act && spec.act !== "msg") e.dataset.open = "1";   // a block card,
   //                          born expanded like appendItems' live-tail blocks
   if (spec.userset) e.dataset.userset = "1";
@@ -125,6 +126,9 @@ const F = {
   aResult: { act: "agent", kind: "agents", agent: "a1" },
   bLaunch: { act: "agent", kind: "agents", agent: "a2" },
   bResult: { act: "agent", kind: "agents", agent: "a2" },
+  // one MESSAGE, two rows: it arrives (with its body) and it is read
+  mailIn: { act: "mail", kind: "commands", mid: "m1" },
+  mailRead: { act: "mail", kind: "commands", mid: "m1" },
   // a user-SHAPED turn Claude Code injected: a Stop hook's feedback, a loaded
   // skill's SKILL.md body, a resume nudge (transcript isMeta)
   hookmsg: { act: "msg", kind: "messages", msg: "prompt", injected: 1 },
@@ -181,6 +185,12 @@ out.agentCount = sums(scene("focus",
 // …and a row with no src id still counts once (unattributable, never uncounted)
 out.agentCountNoId = sums(scene("focus",
   [F.prompt, F.agent, F.agent, F.reply]))[0].text;
+// the same rule for MAIL, by msg_id: an arrival and its read notice are one
+// message ("passed 4 messages" for two that had been sent)
+out.mailCount = sums(scene("focus",
+  [F.prompt, F.mailIn, F.mailRead, F.reply]))[0].text;
+out.mailCountNoId = sums(scene("focus",
+  [F.prompt, F.mail, F.mail, F.reply]))[0].text;
 
 // EXPANDING a run reveals what its summary COUNTED — never what the mode hid.
 // The hidden items sit inside the run's span, and revealing the span wholesale

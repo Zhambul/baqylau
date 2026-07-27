@@ -99,9 +99,10 @@ def op_html(op, key=""):
         # A web-facing NOTE (core/ops.py) replaces the chip entirely: one quiet
         # `⏺ …` line in the register of a collapsed run's summary, no stream colour,
         # no model/ctx tags, no ⧉ links. The block's BODY is what the reader clicks
-        # for (a subagent's brief, or its result), and a coloured chip announcing
-        # `⇠ result  fable-5·high  ctx 22% · 225k/1M` competes with that.
-        note = op.get("note") or actclass.legacy_agent_note(op)
+        # for (a subagent's brief or result, a team message's text), and a coloured
+        # chip announcing `⇠ result  fable-5·high  ctx 22% · 225k/1M` — or a green
+        # `◉ read · team-lead → rev-ui-util` — competes with that.
+        note = op.get("note") or actclass.legacy_note(op)
         if note:
             # marker + text as separate spans, so the line can sit on the SAME grid
             # as a collapsed run's summary (`.vsum`: a 7px dot, an 8px gap, then the
@@ -225,7 +226,12 @@ def op_items(ops, key=""):
         src = op.get("src") or ""
         if ":" in src:
             it["agent"] = src.split(":", 1)[1]
-        if op.get("note") or actclass.legacy_agent_note(op):
+        # …and the same for a MESSAGE (core/ops.py's `mid`): an arrival, its body and
+        # its read notice are three rows about one message, and a run summary that
+        # counted rows said "passed 4 messages" where two had been sent.
+        if op.get("mid"):
+            it["mid"] = str(op["mid"])
+        if op.get("note") or actclass.legacy_note(op):
             it["note"] = 1          # this header IS the whole line (see op_html)
         # The ACTIVITY CLASS the view modes collapse a run of items on
         # (docs/dashboard.md, *View modes*) — classified here, once, instead of

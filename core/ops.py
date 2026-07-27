@@ -62,6 +62,14 @@
 # reformat in the presenter: the wording is stream vocabulary, and parsing a chip
 # back apart to reword it is the sniffing actclass exists to have ended.
 #
+# A label/gut op may carry "mid": the id of the SUBJECT it is about, when several
+# ops speak about one thing — today a team message's msg_id (plugins/claude_code/
+# msgs.py: an arrival, its body and its read notice all wear the same mid). The
+# web's collapsed-run summary counts DISTINCT subjects by it, so "passed 4
+# messages" means four messages and not four mail-ish rows — the same distinction
+# the agent counter draws by `src` ("running 77 agents" for a session with 21).
+# Ignored by the terminal renderer, like "note" and "web".
+#
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
 # one activity block together (the Bash tool_use_id, the backgroundTaskId for a
 # background job, or any synthesised per-block id). A g-tagged label is painted with
@@ -92,12 +100,14 @@ def rule():
     return {"t": "rule"}
 
 
-def label(s, c, outer=None, g=None, lk=None, web=False, note=None):
+def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if web:
         o["web"] = 1
     if note:
         o["note"] = str(note)      # the web mirror's wording for this header
+    if mid:
+        o["mid"] = str(mid)        # the SUBJECT this op is about (see the header)
     if outer is not None:
         o["outer"] = _rgb(outer)
     if g:
@@ -132,10 +142,12 @@ def code(s, ind="  ", g=None):
 
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
-        web=False, mem=False):
+        web=False, mem=False, mid=None):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if web:
         o["web"] = 1
+    if mid:
+        o["mid"] = str(mid)        # the SUBJECT this op is about (see label())
     if mem:
         # A memory-wiki file op (see line()'s `mem`) — web-only filter hint.
         o["mem"] = 1

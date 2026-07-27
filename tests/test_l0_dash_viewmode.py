@@ -493,6 +493,11 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # rather than dropping out — unattributable, never uncounted.
     assert d["agentCount"] == "Ran 2 agents"           # 2 agents, 4 rows
     assert d["agentCountNoId"] == "Ran 2 agents"       # 2 rows, no ids
+    # …and the same rule for MAIL, keyed on the msg_id (`data-mid`): an arrival, its
+    # body and its read notice are three rows about ONE message, which is how
+    # "passed 4 messages" appeared for two that had been sent.
+    assert d["mailCount"] == "Passed 1 message"        # 1 message, 2 rows
+    assert d["mailCountNoId"] == "Passed 2 messages"   # 2 rows, no ids
 
     # EXPANDING that summary reveals every member it counted, agents and mail
     # included, under one rail
@@ -670,15 +675,84 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     # same 7px marker column, same 8px gap, same font. They are the same kind of
     # line, and a note indented differently from `Ran 2 shell commands` reads as a
     # ragged pair (the reported "not visually aligned").
-    vsum, note = rules[".vsum"], rules[".blk > .bhead .anote"]
+    vsum, note = rules[".vsum"], rules[".anote"]
     head = rules[".stream > .blk[data-note] > .bhead"]
     for prop in ("gap: 8px", "font: 12px/1.5 var(--mono)", "align-items: baseline"):
         assert prop in vsum and prop in note, prop
     assert "padding: 5px 13px" in vsum and "padding: 5px 13px" in head
+    # …and a note with NO block behind it (a mail read notice) wears that same box
+    assert "padding: 5px 13px" in rules[".stream > .anote"]
     assert "width: 7px" in rules[".vsum .vdot"]
     assert "width: 7px" in rules[".anote .anmark"]     # the ⏺ stands in that column
     assert "box-shadow: none" in rules['.stream > .blk[data-note]']
     assert 'var(--card)' in rules['.stream > .blk[data-note][data-open="1"]']
+
+
+def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
+    """Team mail on the web reads like the agent notes beside it: `⏺ Message
+    team-lead → rev-ui-util: …`, not a green `◉ read · team-lead → rev-ui-util`
+    ("this thing should also not be coloured"). And the click has something behind
+    it — the MESSAGE, not the 5-10 word preview that was all the row ever carried
+    ("why when I click on Passed 4 messages can't I see the actual messages?").
+    The terminal keeps its coloured chip; only the web wording and the body move."""
+    from core import hostpane as HP
+    from dashboard.opshtml import actclass as AC
+    from plugins.claude_code import msgs as MSGS
+
+    log = str(tmp_path / "claude-mirror-mail.log")
+    HP.ensure_db(log)
+    body = "Complete. `core.money_cycle` now owns the cycle.\nAll twelve providers use it."
+    chip, gut = MSGS.event_ops(
+        [("new", "fix-smoke", "team-lead", "Money-cycle dedup complete",
+          body, "m-42")], log)
+    read, = MSGS.event_ops([("read", "fix-smoke", "team-lead", "", "", "m-42")], log)
+    # the PANE is untouched: same glyphs, same semantic colours, same classes
+    assert chip["s"] == "● fix-smoke → team-lead" and chip["c"] == list(O.YELLOW)
+    assert read["s"] == "◉ read · fix-smoke → team-lead" and read["c"] == list(O.GREEN)
+    assert [AC.classify(o)[0] for o in (chip, gut, read)] == ["mail", None, "mail"]
+    # …and all three name the same MESSAGE, which is what the counter dedupes on
+    assert chip["mid"] == gut["mid"] == read["mid"] == "m-42"
+
+    # the body is the message itself; the summary rides the note as its preview
+    assert gut["s"] == body
+    assert chip["note"] == "Message fix-smoke → team-lead: Money-cycle dedup complete"
+    assert read["note"] == "Message fix-smoke → team-lead · read"
+    # a long report is capped — the pane paints this INLINE, where a wall is a wall
+    long = MSGS.event_ops([("new", "a", "b", "s", "x\n" * 200, "m1")], log)[1]["s"]
+    assert long.count("\n") == MSGS.CAP_TEXT and "more lines)" in long
+
+    items = opshtml.op_items([chip, gut, read], "sid")
+    assert [it.get("act") for it in items] == ["mail", None, "mail"]
+    assert [it.get("mid") for it in items] == ["m-42", "m-42", "m-42"]
+    for it in (items[0], items[2]):
+        assert 'class="anote"' in it["html"] and it["note"] == 1
+        for gone in ('class="chip"', "●", "◉", "rgb(152,195,121)"):
+            assert gone not in it["html"], gone
+    assert "Message fix-smoke → team-lead: Money-cycle" in items[0]["html"]
+    # the arrival and its body are ONE block, so the note line opens onto the message
+    assert items[0]["g"] and items[0]["g"] == items[1]["g"]
+    assert "core.money_cycle" in items[1]["html"]
+    # a read notice has no body and so no block: it is a bare line, and the page
+    # refuses to offer a click that would reveal nothing
+    assert items[2]["g"] is None
+
+    # HISTORY (ops written before the wording existed, which no restart re-stamps)
+    # gets it recovered from the chip, through the same owner
+    old_new = _lbl("● lead → rev-ui", MSGS.MSG_NEW_RGB)
+    old_body = O.gut("check the diff", MSGS.MSG_NEW_RGB)
+    old_read = _lbl("◉ read · lead → rev-ui", MSGS.MSG_READ_RGB)
+    assert AC.legacy_note(old_new) == "Message lead → rev-ui"
+    assert AC.legacy_note(old_read) == "Message lead → rev-ui · read"
+    legacy = opshtml.op_items([old_new, old_body, old_read], "sid")
+    assert 'class="anote"' in legacy[0]["html"] and 'class="anote"' in legacy[2]["html"]
+    # …and the summary body a legacy arrival carried is still there to read
+    assert "check the diff" in legacy[1]["html"]
+    # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
+    # the classifier — mail wears the semantic green, a monitor its slot palette)
+    from core import slots
+    mon = _lbl("◉ monitor · npm", slots.color("monitor", 1))
+    assert AC.legacy_note(mon) is None
+    assert 'class="chip"' in opshtml.op_items([mon], "sid")[0]["html"]
 
 
 def test_an_agents_brief_carries_no_injected_system_reminders(dash):

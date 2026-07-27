@@ -45,9 +45,14 @@ see [otel.md](otel.md).
     delivered − read`). Since the team files carry **no liveness flag**, `stale` is also
     the only available (age-based) signal for a message sitting in the inbox of a
     crashed recipient. The same tracker also **emits into the mirror stream** on each
-    transition — a `● <from> → <to>` chip (+ summary) when a message is delivered, a
+    transition — a `● <from> → <to>` chip (+ the MESSAGE ITSELF, the inbox record's
+    `text` field, capped at `CAP_TEXT` 24 lines) when a message is delivered, a
     `◉ read · <from> → <to>` chip when it's consumed — so arrivals/reads interleave with
-    the command stream. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its summary share a copy-group, one block, returned
+    the command stream. The body was the one-line `summary` until the web mirror made the
+    gap plain: a mail row whose only content was a 5-10 word preview left "passed 4
+    messages" with no messages behind it (docs/dashboard.md *Team mail reads as a note
+    too*). The summary now rides the chip's web wording instead, and only IT is persisted
+    in the tracker state — a full report never enters the state DB. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its body share a copy-group, one block, and all of a message's ops carry its msg_id as `mid` so the web counts messages rather than mail-ish rows, returned
     through the plugin's `census`), and this renderer only emits them: the glyphs and
     colours are a claude_code vocabulary the web mirror reads back to classify these rows
     as mail (docs/dashboard.md *View modes*), while the scorebar serves every host tool

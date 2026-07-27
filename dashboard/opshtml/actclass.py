@@ -168,6 +168,40 @@ def legacy_agent_note(op):
         return None                     # unreadable: keep the chip
 
 
+def legacy_mail_note(op):
+    """The same fallback for a pre-`note` team-mail chip: `● <frm> → <to>` and
+    `◉ read · <frm> → <to>` reworded through their owner (msgs.note_new /
+    note_read), or None. The summary can't be recovered — a legacy arrival keeps
+    it in the separate body op, where the reader still finds it — so the note is
+    the bare `Message <frm> → <to>`. Colour-gated like the classifier: only the
+    two semantic mail colours qualify, so a monitor's ◉ is never reworded."""
+    try:
+        if op.get("t") != "label" or op.get("note"):
+            return None
+        if tuple(op.get("c") or ()) not in _MAIL_RGB:
+            return None
+        text = _plain(op)
+        if text.startswith(MSGS.READ_PREFIX):
+            pair, read = text[len(MSGS.READ_PREFIX):], True
+        elif text.startswith(MSGS.GLYPH_NEW + " "):
+            pair, read = text[2:], False
+        else:
+            return None
+        frm, sep, to = pair.partition(" → ")
+        if not sep:
+            return None
+        return (MSGS.note_read(frm, to) if read
+                else MSGS.note_new(frm, to))
+    except Exception:
+        return None                     # unreadable: keep the chip
+
+
+def legacy_note(op):
+    """The web wording for a chip written before its producer carried one — an
+    agent's, or team mail's. One door, so op_html/op_items ask the question once."""
+    return legacy_agent_note(op) or legacy_mail_note(op)
+
+
 def agent_header(op):
     """True for the MAIN session's own subagent launch/resume header (`▶ <type> ·
     <desc>` / `↻ …`, in a slot-palette colour). The web mirror drops it: the

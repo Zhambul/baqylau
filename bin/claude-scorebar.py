@@ -111,7 +111,7 @@ def joiner(prev_kind, kind):
 
 def emit_events(ops):
     """Surface inbox transitions in the MIRROR itself (not just the census): the
-    census fan-out hands back ready-made paint ops (a chip + summary gutter for a
+    census fan-out hands back ready-made paint ops (a chip + the message body for a
     delivery, a chip for a read) and this only emits them into the shared mirror
     log, so they interleave with the command stream. The ops' SHAPE — glyphs and
     colours — belongs to the plugin that produced the events, because the web

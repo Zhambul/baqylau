@@ -9,6 +9,7 @@ import time
 from core import ops as O
 from core import paths as P
 from core import state as S
+from core import streamfmt as SF
 
 from core.noaudit import load_audit
 
@@ -66,15 +67,44 @@ GLYPH_READ = "◉"                # …and consumed. NOTE: shared with a monitor
 #                                 monitor), exactly as it does for ▶.
 READ_PREFIX = GLYPH_READ + " read · "
 
+# The WEB WORDING of those two chips (core/ops.py's `note`): one quiet `⏺ …` line
+# in the register of a collapsed run's summary, instead of the pane's coloured
+# chip. Written HERE, by the producer, for the same reason the glyphs are — the
+# presenter must not parse a chip back apart to reword it. `:` introduces the
+# message's own words, `·` appends a state, matching the agent notes' `finished ·
+# 21m 16s`.
+def note_new(frm, to, summ=""):
+    """`Message <frm> → <to>[: <summary>]` — a delivered message. The summary is
+    Claude Code's own 5-10 word preview (SendMessage's `summary` field); the body
+    behind the click is the message itself."""
+    line = "Message %s → %s" % (frm, to)
+    return (line + ": " + summ) if summ else line
+
+
+def note_read(frm, to):
+    """`Message <frm> → <to> · read` — the same message, consumed. Carries no body
+    (there is nothing to reveal), and the web counts it as the SAME message as its
+    arrival, not a second one (see `mid`)."""
+    return "Message %s → %s · read" % (frm, to)
+
+
+# How much of a message body the mail line paints. Deliberately its own ceiling and
+# NOT substream_render's CAP_TEAMMSG/CAP_SENDMSG (which cap the same content inside
+# an AGENT's own stream): this line is the lead's ambient view of team mail, and on
+# the web the body sits behind a click, so it can afford to be generous. Capped at
+# all because the terminal paints it inline, where a 200-line report is a wall.
+CAP_TEXT = 24
+
 
 def event_ops(events, log=None):
-    """[(kind, from, to, summary)] transitions -> the mirror ops that show them.
-    Returns a list (possibly empty) for the caller to emit into the mirror log, so
-    the shape lives with the tracker that produces the events rather than with the
-    renderer that paints them.
+    """[(kind, from, to, summary[, text, msg_id])] transitions -> the mirror ops
+    that show them. Returns a list (possibly empty) for the caller to emit into the
+    mirror log, so the shape lives with the tracker that produces the events rather
+    than with the renderer that paints them. The 5th/6th fields are optional — a
+    4-tuple caller still works, it just gets the pre-`text` shape.
 
-    An arrival's chip and its summary body share a copy-GROUP (hence `log`, which
-    `new_group` needs): they are one block, and a delivered message with a summary
+    An arrival's chip and its BODY share a copy-GROUP (hence `log`, which
+    `new_group` needs): they are one block, and a delivered message with a body
     was the one two-op row in the mirror that wasn't. That cost the body its
     identity on the web — a group-less body op has no block to take its activity
     class from, so it landed as an unclassifiable top-level row, visible in every
@@ -82,16 +112,27 @@ def event_ops(events, log=None):
     in the middle of focus mode with its own header hidden (docs/dashboard.md,
     *View modes*). Without a log there is nothing to allocate a group from, so the
     ops go out ungrouped exactly as before (the read side still has a best-effort
-    fallback for pre-grouping history)."""
+    fallback for pre-grouping history).
+
+    The body is the MESSAGE ITSELF (the inbox record's `text`), not just its
+    one-line summary: the summary rides the chip's web note, and a mail row whose
+    only content was a 5-10 word preview left "Passed 4 messages" with no messages
+    behind it — the whole point of the row is what was said."""
     ops = []
-    for kind, frm, to, summ in events:
+    for ev in events:
+        kind, frm, to, summ = ev[:4]
+        text = (ev[4] if len(ev) > 4 else "") or ""
+        mid = (ev[5] if len(ev) > 5 else "") or ""
         if kind == "new":
-            g = O.new_group(log) if (log and summ) else None
-            ops.append(O.label(GLYPH_NEW + " " + frm + " → " + to, MSG_NEW_RGB, g=g))
-            if summ:
-                ops.append(O.gut(summ, MSG_NEW_RGB, g=g))
+            body = SF.cap(text.strip(), CAP_TEXT) or summ
+            g = O.new_group(log) if (log and body) else None
+            ops.append(O.label(GLYPH_NEW + " " + frm + " → " + to, MSG_NEW_RGB,
+                               g=g, mid=mid, note=note_new(frm, to, summ)))
+            if body:
+                ops.append(O.gut(body, MSG_NEW_RGB, g=g, mid=mid))
         else:                                        # read
-            ops.append(O.label(READ_PREFIX + frm + " → " + to, MSG_READ_RGB))
+            ops.append(O.label(READ_PREFIX + frm + " → " + to, MSG_READ_RGB,
+                               mid=mid, note=note_read(frm, to)))
     return ops
 
 
@@ -111,7 +152,7 @@ def _msg_epoch(ts):
 
 def _scan_inbox(d):
     """Snapshot of every message currently in this team's inboxes, keyed by
-    (recipient, msg_id): {key: read_bool}, {key: (from, recipient, summary)}
+    (recipient, msg_id): {key: read_bool}, {key: (from, recipient, summary, text)}
     (recipient = inbox filename stem), and {key: epoch_or_None}. Keyed per
     RECIPIENT COPY, not per msg_id: a broadcast puts the same msg_id in several
     inboxes, and collapsing those made the tracked read flag whichever copy
@@ -143,7 +184,13 @@ def _scan_inbox(d):
                 continue
             k = (recipient, mid)
             states[k] = bool(m.get("read"))
-            meta[k] = (m.get("from") or "?", recipient, m.get("summary") or "")
+            # `text` is the message itself — the field Claude Code writes the body
+            # into (the inbox record is {type, from, text, timestamp, read, color,
+            # summary, msg_id}). It is what the mail block shows behind the click;
+            # only the SUMMARY is persisted in the tracker state, so a full report
+            # is never copied into the state DB.
+            meta[k] = (m.get("from") or "?", recipient, m.get("summary") or "",
+                       m.get("text") or "")
             ts[k] = _msg_epoch(m.get("timestamp"))
     return states, meta, ts
 
@@ -155,8 +202,11 @@ def update_messages(log):
       parts  — [(kind, text)] census for the ✉ row: msgs / unread / read; always leads
                with a msgs count (0 included) so the row is never blank, even for a
                non-team session.
-      events — [(kind, from, recipient, summary)] transitions to surface in the mirror;
-               kind is 'new' (just delivered — still unread) or 'read' (consumed).
+      events — [(kind, from, recipient, summary, text, msg_id)] transitions to surface
+               in the mirror; kind is 'new' (just delivered — still unread) or 'read'
+               (consumed). `text` is the message body (empty for a read — there is
+               nothing new to show); `msg_id` names the MESSAGE, so the web counts an
+               arrival and its read as one message rather than two.
     Idempotent when nothing changed (a repaint with an unchanged inbox emits no events
     and rewrites nothing), so it is safe to call on every render — incl. resize repaints."""
     d = team_dir(log)
@@ -166,34 +216,42 @@ def update_messages(log):
     delivered, read = delivered0, read0
     cur, meta, ts = _scan_inbox(d)       # keyed by (recipient, msg_id) — see _scan_inbox
     events = []
+    # The msg_id is the key's second half (k = (recipient, msg_id)), so every event
+    # can name its message — including a DRAINED one, whose inbox record is already
+    # gone and whose only surviving trace is the tracked key.
     for k, is_read in cur.items():       # deliveries — copies present now we hadn't seen
         if k not in live:
             delivered += 1
-            frm, to, summ = meta[k]
-            events.append(("new", frm, to, summ))
+            frm, to, summ, text = meta[k]
+            events.append(("new", frm, to, summ, text, k[1]))
             if is_read:                  # arrived already read (fast consumer)
                 read += 1
-                events.append(("read", frm, to, summ))
+                events.append(("read", frm, to, summ, "", k[1]))
     for k, ent in list(live.items()):    # reads/drains among copies we were tracking
         was_read = bool(ent[0])
         if k not in cur:                 # drained -> consumed => read
             if not was_read:
                 read += 1
-                events.append(("read", ent[1], ent[2], ent[3]))
+                events.append(("read", ent[1], ent[2], ent[3], "", k[1]))
         elif cur[k] and not was_read:    # flipped read:true in place
             read += 1
-            frm, to, summ = meta[k]
-            events.append(("read", frm, to, summ))
+            frm, to, summ, _text = meta[k]
+            events.append(("read", frm, to, summ, "", k[1]))
+    # Tracked state keeps the SUMMARY only (the read event it feeds needs no body).
     new_live = {k: [cur[k], meta[k][0], meta[k][1], meta[k][2]] for k in cur}
     if delivered != delivered0 or read != read0 or new_live != live:
         S.msgs_write(log, delivered, read, new_live)
     # Audit message-tracker transitions (only when something actually changed —
     # this runs on every scorebar tick). One row per delivery/read event plus the
-    # resulting cumulative counters, so a wrong ✉ census is traceable.
+    # resulting cumulative counters, so a wrong ✉ census is traceable. The msg_id
+    # and the body's LENGTH are recorded (never the body — an audit row is not the
+    # place for a 4 KB report), which is what makes "the mail line showed nothing"
+    # answerable: an arrival with chars=0 had no text to paint.
     if events:
         A.state_file(log, S.db_path(log), "msg-transitions", {
-            "events": [{"kind": k, "from": f_, "to": t, "summary": s}
-                       for k, f_, t, s in events],
+            "events": [{"kind": k, "from": f_, "to": t, "summary": s,
+                        "msg_id": mid, "chars": len(text or "")}
+                       for k, f_, t, s, text, mid in events],
             "now": {"delivered": delivered, "read": read}})
     # `stale` is a CURRENT-STATE count (unlike the cumulative delivered/read): messages
     # sitting unread in an inbox right now for longer than STALE_S. It's a DISJOINT group

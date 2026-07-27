@@ -1186,7 +1186,8 @@ body.modal-open { overflow: hidden; }
 .vsum .dadd { color: var(--green); }
 .vsum .drem { color: var(--red); }
 
-/* A SUBAGENT NOTE — `⏺ Agent "Fix git/config commands + glab" finished · 21m 31s`
+/* AN ACTIVITY NOTE — `⏺ Agent "Fix git/config commands + glab" finished · 21m 31s`,
+   `⏺ Message team-lead → rev-ui-util · read`
    (core/ops.py's "note", worded by the producer). Deliberately the same register as
    a collapsed run's summary line above: quiet mono, dim, no stream colour and no
    model/ctx tags. The coloured chip it replaces on THIS surface
@@ -1194,7 +1195,9 @@ body.modal-open { overflow: hidden; }
    the same weight as the conversation, and those numbers already live on the
    agent's own card. The terminal pane keeps the chip — a pane reader scans by
    colour. Its BLOCK is still a block: clicking the line opens the body, which is
-   the agent's brief (launched) or its result (finished). */
+   the agent's brief (launched), its result (finished), or a team message's text.
+   Some notes have no block at all (a mail READ notice has nothing to reveal), so
+   the typography is on `.anote` itself and only the BOX is per-context below. */
 /* ALIGNED WITH `.vsum` ABOVE, deliberately and to the pixel: the two are the same
    kind of line — one activity notice — and read as a ragged pair otherwise. The
    summary's grid is `padding-left: 13px`, a 7px dot, an 8px gap, then the words; the
@@ -1203,13 +1206,16 @@ body.modal-open { overflow: hidden; }
    which is the attention pill's own dot) (a single "⏺ text" string lands at
    neither column, since the glyph's own advance width is not 7px + 8px). Same font,
    same padding, same margins, same hover — change one, change both. */
-.blk > .bhead .anote {
+.anote {
   display: flex; align-items: baseline; gap: 8px; min-width: 0;
   font: 12px/1.5 var(--mono); color: var(--dim);
 }
 .anote .anmark { flex: none; width: 7px; font-size: 9px; text-align: center; }
 .anote .atext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk:hover > .bhead .anote { color: var(--text-soft); }
+/* a BLOCKLESS note (the mail read notice) wears the note block's own box, so it
+   lands on the same grid as the arrival line above it. */
+.stream > .anote { padding: 5px 13px; margin: 3px 0; }
 /* …and the card itself recedes to a plain line: no panel fill, no hairline, and the
    header carries `.vsum`'s exact box, so a run of agent notes reads as a list of
    lines rather than a stack of cards. */
