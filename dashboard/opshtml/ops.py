@@ -65,6 +65,22 @@ def _code_block(text, ind="  "):
     return "<pre class=\"oc\">%s</pre>" % ansi_html(painted)
 
 
+def _cq_pieces(op, key, text, role):
+    """The two PIECES of a quiet command header (actclass.cmd_note) — its dim text span,
+    with the note DOT when this op opens the block, and its ⧉ copy links. Kept apart
+    because the page puts them in different SLOTS of the block header: the words beside
+    the command, the links at the far right (the links are hover-only, and in the flow
+    they reserved a ~90px hole between the dot and the command while invisible).
+    Either piece may be '' — a foreground opener's whole word is muted, and an op
+    without a copy group has no links."""
+    body = ("<span class=\"cqt\">%s</span>" % html.escape(text)) if text else ""
+    if role == actclass.CQ_OPEN:
+        body = "<span class=\"anmark\">%s</span>%s" % (NOTE_GLYPH, body)
+    g = op.get("g")
+    links = _copy_links(key, g, op.get("lk")) if (g and key) else ""
+    return body, links
+
+
 def _wrap_outer(body, outer):
     """Wrap `body` in the shared `og` outer div carrying the border colour, or
     return it unchanged when the op has no `outer` — the one shape both the
@@ -111,6 +127,14 @@ def op_html(op, key=""):
             return ("<div class=\"anote\"><span class=\"anmark\">%s</span>"
                     "<span class=\"atext\">%s</span></div>"
                     % (NOTE_GLYPH, html.escape(note)))
+        # …and a COMMAND-family chip goes quiet the same way (a foreground command, a
+        # background job, a monitor — actclass.cmd_note). One row here, because a lone
+        # op has no header to be a slot of; the STREAM path splits it (op_items).
+        cq = actclass.cmd_note(op)
+        if cq is not None:
+            body, links = _cq_pieces(op, key, cq[0], cq[1])
+            return _wrap_outer("<div class=\"ol\">%s%s</div>" % (body, links),
+                               op.get("outer"))
         chip = ("<span class=\"chip\" style=\"background:%s\">%s</span>"
                 % (_rgb(op.get("c")), ansi_html(op.get("s", ""))))
         g = op.get("g")
@@ -279,6 +303,26 @@ def op_items(ops, key="", ids=None, carry=None):
         if not h:
             continue
         it = {"g": op.get("g") or None, "t": t, "html": h}
+        # A QUIET COMMAND HEADER (actclass.cmd_note) is handed over as the header's
+        # PIECES rather than one row: the page owns the block header's layout and puts
+        # the words, the closing duration and the ⧉ links in three different slots of it
+        # (`quiet` names which — the CQ_* roles). `html` may come back EMPTY here (a
+        # foreground opener's word is muted) and the item still matters: it is what
+        # declares the block quiet and what carries its links.
+        # The SPLIT is for a GROUPED op only: a lone quiet label (the `▷ backgrounded
+        # (ctrl+b)` notice, which groups with nothing) has no block header to be a slot
+        # of, so it keeps op_html's own one-row shape and only wears the flag.
+        cq = actclass.cmd_note(op)
+        if cq is not None:
+            it["quiet"] = cq[1]
+            if it["g"]:
+                it["html"], links = _cq_pieces(op, key, cq[0], cq[1])
+                # the `og` wrapper survives (a NESTED job's chip — see _wrap_outer): the
+                # page reads that class to recognise a pre-`src` subagent's block, and
+                # dropping it would silently re-file those blocks as the session's own
+                it["html"] = _wrap_outer(it["html"], op.get("outer"))
+                if links:
+                    it["links"] = links
         # PRE-`mid` MAIL is two TOP-LEVEL rows on disk — a `● from → to` label and the
         # message body as a bare gutter, NEITHER carrying a copy group (the send-time
         # row that groups them did not exist yet). The page folds a block by its `g`,

@@ -258,7 +258,8 @@ def test_app_js_initializes_close_state(dash):
     assert row["live"] is True
     d = _get_json(dash + "/api/session/dash1/ops?after=0")
     assert d["last"] >= 3 and len(d["items"]) >= 3
-    assert any("chip" in it["html"] for it in d["items"])
+    # …the command block's own header, in the quiet register (opshtml.cmd_note)
+    assert any(it.get("quiet") == "open" for it in d["items"])
     # grouped items carry their copy-group id so the app can fold the block
     assert all(it["g"] == "g1" for it in d["items"])
     # the overview composes without error even for a minimal session

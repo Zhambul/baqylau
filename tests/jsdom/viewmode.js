@@ -125,6 +125,7 @@ const F = {
   reply: { act: "msg", kind: "messages", msg: "message" },
   warn: { act: "warn", kind: "commands" },
   memread: { act: "read", kind: "memory" },
+  mon: { act: "monitor", kind: "commands" },      // ◉ a monitor block
   task: { act: "task", kind: "commands" },        // ✚/✓ task-list rows
   mail: { act: "mail", kind: "commands" },        // ● team mail (header + body)
   // a subagent's own blocks, both carrying its src id: one AGENT, four rows
@@ -218,6 +219,12 @@ out.focusSettled = shown(scene("focus", midTurn, "awaiting-response"));
 // an older turn's reply is never provisional, even while a NEW turn runs
 out.focusOlderTurn = shown(scene("focus",
   [F.prompt, F.reply, F.prompt, F.fg], "executing"));
+
+// a MONITOR folds in DEFAULT (it did not before), a background job does not
+const mons = scene("default", [F.prompt, F.mon, F.mon, F.reply]);
+out.monitorDefault = { sums: sums(mons).map(s => s.text), shown: shown(mons) };
+const jobs = scene("default", [F.prompt, { act: "bg", kind: "commands" }, F.reply]);
+out.bgDefault = { sums: sums(jobs).map(s => s.text), shown: shown(jobs) };
 
 out.singular = sums(scene("default", [F.prompt, F.read, F.fg]))[0].text;
 out.plural = sums(scene("default",
@@ -398,6 +405,31 @@ function dotScene() {
   return rows.map(c => [c.dataset.agent || "-", c.dataset.out || "-"]);
 }
 
+// ---- and the QUIET COMMAND HEADER: the served pieces (opshtml.cmd_note) must land
+// in their slots — the words beside the command, the closing duration AFTER it, the
+// ⧉ links out of the line — and the line's dot must follow the outcome. Drives the
+// real createBlock/fillBlock, the only place that routing exists.
+function quietScene(closer) {
+  sandbox.S = { ses: { blocks: new Map(), fgRun: null, stream: new El("div", "stream") } };
+  const b = sandbox.createBlock();
+  const q = (quiet, html, links) => ({ g: "t1", t: "label", quiet, html, links,
+                                       bad: quiet === "close" && closer === "bad" ? 1 : 0 });
+  sandbox.fillBlock(b, q("open", '<span class="anmark">D</span>',
+                         '<span class="cl">L</span>'));
+  sandbox.fillBlock(b, { g: "t1", t: "code", html: "make test" });
+  const mid = { quiet: b.root.dataset.quiet, out: b.root.dataset.out };
+  if (closer)
+    sandbox.fillBlock(b, q("close", '<span class="cqt">finished</span>'));
+  return { running: mid,
+           quiet: b.root.dataset.quiet, out: b.root.dataset.out,
+           sum: b.sum.textContent,
+           chips: b.chips.textContent, links: b.links.childElementCount,
+           tail: b.tail.querySelector(".cqt") ? "cqt" : "-",
+           // the closer's words are NOT in the chips row (they'd land before the
+           // command, where a duration reads as nothing)
+           tailInChips: b.chips.textContent.includes("cqt") };
+}
+
 runFill("focus", "focus", 40)
   .then(() => runFill("verbose", "verbose", 40))
   .then(() => runFill("allCommands", "focus", 40, { mix: false }))
@@ -406,6 +438,9 @@ runFill("focus", "focus", 40)
   .then(() => switchScene("focus")).then(r => { out.switchFocus = r; })
   .then(() => switchScene("verbose")).then(r => { out.switchVerbose = r; })
   .then(() => { out.dots = dotScene(); })
+  .then(() => { out.quietRun = quietScene(null); })
+  .then(() => { out.quietOk = quietScene("ok"); })
+  .then(() => { out.quietBad = quietScene("bad"); })
   .then(() => {
     out.fills = fills;
     process.stdout.write(JSON.stringify(out, null, 1));

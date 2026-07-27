@@ -1165,8 +1165,15 @@ body.modal-open { overflow: hidden; }
    — no card background, dim mono text — so a collapsed stream reads as a thin
    index of what happened and the blocks that stay expanded (edits, messages)
    keep all the visual weight. docs/dashboard.md *View modes* */
+/* `align-items: center`, not baseline (which it was): every one of these lines leads
+   with a 7px DOT BOX, and a box has no text baseline to align to — it is synthesized
+   from its bottom edge, so a baseline row put the dot at a different height in each of
+   the three line kinds (and pushed a nested slot's words off the line in the quiet
+   command header). Centring a single-line row is equivalent for the text and puts every
+   dot in the same place. Shared, deliberately: .vsum / .anote / a quiet header are one
+   register — change one, change all three (asserted property by property). */
 .vsum {
-  display: flex; align-items: baseline; gap: 8px; cursor: pointer;
+  display: flex; align-items: center; gap: 8px; cursor: pointer;
   padding: 5px 13px; margin: 3px 0; border-radius: var(--r);
   font: 12px/1.5 var(--mono); color: var(--dim);
 }
@@ -1207,10 +1214,23 @@ body.modal-open { overflow: hidden; }
    neither column, since the glyph's own advance width is not 7px + 8px). Same font,
    same padding, same margins, same hover — change one, change both. */
 .anote {
-  display: flex; align-items: baseline; gap: 8px; min-width: 0;
+  display: flex; align-items: center; gap: 8px; min-width: 0;
   font: 12px/1.5 var(--mono); color: var(--dim);
 }
-.anote .anmark { flex: none; width: 7px; font-size: 9px; text-align: center; }
+/* unscoped, deliberately: a QUIET COMMAND header wears the same dot in the same 7px
+   column (see `[data-quiet]` below), and the whole point of that column is that every
+   one-line notice lands on it.
+   …and it is `.vdot`'s CIRCLE, byte for byte, not the ⏺ GLYPH rendered small: a
+   text glyph's ink is whatever the font makes of it (⏺ at 9px drew visibly smaller
+   than the 7px circle beside it — "why are agent dots smaller than other dots, all
+   dots should be the same size"), and no font-size can be relied on to match a CSS
+   box. So the span keeps the character (it is still what a copy of the line yields,
+   Claude Code's own marker) and paints as a box with `font-size: 0`. `currentColor`
+   is what keeps the OUTCOME rules below working unchanged — they set `color`. */
+.anmark {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: currentColor; color: var(--dim); font-size: 0;
+}
 /* …and the mark carries the OUTCOME, the same three states a run summary's `.vdot`
    shows: grey while the agent runs, green when it finished, red when it didn't
    (`data-out`, stamped on the row by tintAgentNotes from the agents payload — the op
@@ -1226,15 +1246,67 @@ body.modal-open { overflow: hidden; }
 /* …and the card itself recedes to a plain line: no panel fill, no hairline, and the
    header carries `.vsum`'s exact box, so a run of agent notes reads as a list of
    lines rather than a stack of cards. */
-.stream > .blk[data-note] {
+.stream > .blk[data-note], .stream > .blk[data-quiet] {
   box-shadow: none; background: none; margin: 3px 0; padding: 0;
 }
-.stream > .blk[data-note] > .bhead { padding: 5px 13px; }
-.stream > .blk[data-note] > .bhead:hover { background: var(--panel); }
+.stream > .blk[data-note] > .bhead, .stream > .blk[data-quiet] > .bhead {
+  padding: 5px 13px;
+}
+.stream > .blk[data-note] > .bhead:hover,
+.stream > .blk[data-quiet] > .bhead:hover { background: var(--panel); }
 /* opened by a click, it becomes a card again — the body it reveals is a whole brief
    or a whole result, which needs the panel to read as one thing. */
-.stream > .blk[data-note][data-open="1"] {
+.stream > .blk[data-note][data-open="1"], .stream > .blk[data-quiet][data-open="1"] {
   box-shadow: var(--card); background: var(--panel); margin: 6px 0; padding-bottom: 4px;
+}
+
+/* ---- A QUIET COMMAND HEADER --------------------------------------------------
+   A foreground command, a background job and a monitor read as ONE dim line in the
+   note register above — `⏺ make test · 0.6s` — instead of the terminal's colour-coded
+   pill inside a panel card ("style foreground/background/monitors to the same style
+   that we have established / I don't like those boxy blocks / also get rid of the
+   colors / I still want the dot and the time info"). The server hands the pieces to
+   the header's slots (opshtml.cmd_note, app.05-session.js createBlock/fillBlock):
+     .bchips  the dot + the kind word, when the register keeps one (`background`,
+              `monitor · <desc>`; `foreground` is muted — the command says it)
+     .bsum    the command itself, the block's own first body line as always
+     .btail   the closing words, `finished · 0.6s` / `failed (exit 1) · 2.1s`, and
+              the ticking ⏱ while it runs — after the command, where a duration
+              reads as that command's
+     .blinks  the ⧉ copy links, hover-only, at the far right and OUT of the line's
+              flow (in it they reserved a ~90px hole while invisible)
+   Typography is `.anote`'s, to the pixel and for the same reason: an agent note, a
+   collapsed run's summary and a command line are all one-line activity notices, and
+   the three read as a ragged set if any of them sits on its own grid. */
+/* `align-items: center` for the reason spelled out on `.vsum`, and here it is load-
+   bearing twice over: this header's words live in NESTED slots (`.bchips` > `.ol` >
+   the word), and a nested flex container's baseline comes from its first item — the
+   7px dot box — so on a baseline row the kind word (`background`, `monitor · …`) sat
+   ~3px below the command beside it. */
+.blk[data-quiet] > .bhead {
+  gap: 8px; font: 12px/1.5 var(--mono); align-items: center;
+}
+.blk[data-quiet] .bsum, .blk[data-quiet] .btail, .blk[data-quiet] .cqt {
+  color: var(--dim); font: 12px/1.5 var(--mono);
+}
+.blk[data-quiet] .bchips, .blk[data-quiet] .ol { gap: 8px; }
+.blk[data-quiet]:hover > .bhead .bsum,
+.blk[data-quiet]:hover > .bhead .cqt { color: var(--text-soft); }
+.btail, .blinks { flex: none; }
+.blinks { margin-left: 4px; }
+/* the in-flight ⏱ (`.chip.blive`) joins the register too: no outline, no accent, just
+   the dim ticking figure where the final duration will land */
+.blk[data-quiet] .chip.blive {
+  border: none; color: var(--dim); padding: 0; font-weight: 400;
+}
+/* a GROUP-LESS quiet row (the `▷ backgrounded (ctrl+b)` notice) is a plain line too —
+   it groups with nothing, so it never becomes a block. Scoped to the `.ol` row it
+   really is, NOT to any `[data-quiet]` child of the stream: a bare attribute selector
+   also matches the BLOCK above, and the colour here would then be inherited by
+   everything its opened body reveals. */
+.stream > .ol[data-quiet] {
+  box-shadow: none; background: none; margin: 3px 0; padding: 5px 13px;
+  color: var(--dim); gap: 8px;
 }
 
 /* ---- the mirror stream -------------------------------------------------- */

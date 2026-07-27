@@ -34,6 +34,18 @@ def _lbl(text, rgb, **kw):
     return O.label(text, rgb, **kw)
 
 
+def _css_rules(css):
+    """The stylesheet as {selector: body}, keyed by the whole selector LIST *and* by
+    each selector in it — a rule two registers share (`.stream > .blk[data-note],
+    .stream > .blk[data-quiet] { … }`, the agent note's box and the quiet command
+    header's, which must not drift apart) is then findable by either name."""
+    out = {}
+    for sels, body in re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css):
+        for key in [sels] + sels.split(","):
+            out.setdefault(key.strip(), body)
+    return out
+
+
 def test_actclass_classifies_main_session_blocks():
     """The block-opening chip names the activity. The GLYPH alone can't: a
     subagent launch header is also `▶ …`, so `▶` means a shell command only in
@@ -366,6 +378,10 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
     assert "VIEW_HIDE" not in ses, "a mode may collapse an act, never uncount it"
     # focus folds a SUPERSET of default: it is the stricter cut, always
     assert folds["default"] <= folds["focus"]
+    # a MONITOR folds in DEFAULT too, asked for in those words ("also monitors should
+    # be in the under summary in default mode") — while a BACKGROUND job still stands
+    # there: it is work you are waiting on, whose output you came to read.
+    assert "monitor" in folds["default"] and "bg" not in folds["default"]
 
 
 def test_page_view_modes_match_the_pref_vocabulary(dash):
@@ -558,6 +574,28 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # `agents` event. Scene: a1 finished (one of its two rows carrying a failing op, so
     # that row alone reddens), a2 still running, and a mail row that is nobody's agent.
     assert d["dots"] == [["-", "-"], ["a2", "run"], ["a1", "bad"], ["a1", "ok"]]
+
+    # A COMMAND's header is the same kind of line, assembled from the pieces the server
+    # splits out (opshtml.cmd_note): the dot + the kind word beside the command, the
+    # closing duration AFTER it, the ⧉ links in their own slot. Its dot needs no agents
+    # payload — the ops themselves say it: grey while the command runs, then green, or
+    # red when the closer reports a failure.
+    for got in (d["quietRun"], d["quietOk"], d["quietBad"]):
+        assert got["quiet"] == "1" and got["links"] == 1
+        assert got["sum"] == "make test"          # the command, from its own body op
+        assert "anmark" in got["chips"]           # the dot, in the chips slot
+        assert got["running"]["out"] == "run"     # …grey until the closer lands
+        assert not got["tailInChips"], "the duration must sit AFTER the command"
+    assert [d["quietRun"]["out"], d["quietOk"]["out"], d["quietBad"]["out"]] \
+        == ["run", "ok", "bad"]
+    assert [d["quietRun"]["tail"], d["quietOk"]["tail"]] == ["-", "cqt"]
+
+    # DEFAULT folds a monitor into the summary ("also monitors should be in the under
+    # summary in default mode") and leaves a background job standing
+    assert d["monitorDefault"] == {"sums": ["Watched 2 monitors"],
+                                   "shown": ["msg", "msg"]}
+    assert d["bgDefault"] == {"sums": [], "shown": ["msg", "bg", "msg"]}
+
     # the ⚠ audit warning never folds — and it splits the run it sits in
     assert d["warnBreaksRuns"] == {"sums": 2, "shown": ["warn", "msg"]}
 
@@ -612,8 +650,7 @@ def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
     report survived the server-side fix."""
     code, css = _get(dash + "/static/style.css")
     assert code == 200
-    rules = dict((sel.strip(), body) for sel, body in
-                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+    rules = _css_rules(css)
 
     # conversation text — the stream's message bubbles AND the drill-down's
     # entries, capped together by one rule — grows to its content
@@ -682,8 +719,9 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     assert "Agent &quot;Fix infra/vcs subprocess bugs&quot; finished" in legacy["html"]
     assert "ctx 22%" not in legacy["html"] and legacy["note"] == 1
 
-    # a label with NO note is untouched — the coloured chip is still the default
-    plain = opshtml.op_items([O.label("▶ foreground", O.SLATE, g="t1")], "sid")[0]
+    # a label in NEITHER quiet register — no note of its own, and not command family
+    # (a task row) — is untouched: the coloured chip is still the default
+    plain = opshtml.op_items([O.label("✚ task · ship it", O.GREEN, g="t1")], "sid")[0]
     assert 'class="chip"' in plain["html"] and "anote" not in plain["html"]
 
     # …and the page knows to let the note BE the line (no first-body-line summary
@@ -697,23 +735,120 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     # and the card recedes to a plain line until it is opened
     code, css = _get(dash + "/static/style.css")
     assert code == 200
-    rules = dict((sel.strip(), body) for sel, body in
-                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+    rules = _css_rules(css)
     # the note line sits on the SUMMARY line's grid, to the pixel: same padding,
     # same 7px marker column, same 8px gap, same font. They are the same kind of
     # line, and a note indented differently from `Ran 2 shell commands` reads as a
     # ragged pair (the reported "not visually aligned").
     vsum, note = rules[".vsum"], rules[".anote"]
     head = rules[".stream > .blk[data-note] > .bhead"]
-    for prop in ("gap: 8px", "font: 12px/1.5 var(--mono)", "align-items: baseline"):
+    for prop in ("gap: 8px", "font: 12px/1.5 var(--mono)", "align-items: center"):
         assert prop in vsum and prop in note, prop
     assert "padding: 5px 13px" in vsum and "padding: 5px 13px" in head
     # …and a note with NO block behind it (a mail read notice) wears that same box
     assert "padding: 5px 13px" in rules[".stream > .anote"]
-    assert "width: 7px" in rules[".vsum .vdot"]
-    assert "width: 7px" in rules[".anote .anmark"]     # the ⏺ stands in that column
+    # …and the DOT is the same dot: every one-line notice's marker is `.vdot`'s CIRCLE,
+    # not a glyph rendered small (a font's ⏺ drew visibly smaller than the circle beside
+    # it — "all dots should be the same size"), so the geometry is asserted equal
+    for prop in ("width: 7px", "height: 7px", "border-radius: 50%"):
+        assert prop in rules[".vsum .vdot"] and prop in rules[".anmark"], prop
+    # which means the marker's own character must NOT paint — the box does
+    assert "font-size: 0" in rules[".anmark"]
     assert "box-shadow: none" in rules['.stream > .blk[data-note]']
     assert 'var(--card)' in rules['.stream > .blk[data-note][data-open="1"]']
+
+
+def test_a_command_block_is_a_quiet_note_line_with_its_duration(dash):
+    """A foreground command, a background job and a monitor read as ONE dim line —
+    `⏺ make test · 0.6s` — instead of a coloured pill inside a panel card ("style
+    foreground/background/monitors to the same style that we have established / I
+    don't like those boxy blocks / also get rid of the colors / I still want the dot
+    and the time info").
+
+    So the producer's chip is re-cut into the note register: the glyph goes (it only
+    ever disambiguated by COLOUR — `◉` is a monitor or a mail read notice depending on
+    it — so it cannot survive un-coloured), `foreground` goes (the command says it),
+    and what survives is the words the producer already wrote plus the duration. The
+    pieces are served SEPARATELY because they land in different slots of the block
+    header, which is the only way the duration can sit after the command."""
+    from dashboard.opshtml import actclass as AC
+    from core import slots
+
+    mon_rgb = slots.color("monitor", 0)
+    fg_open = _lbl("▶ foreground", O.SLATE, g="t1")
+    fg_end = _lbl("■ finished · 0.6s", O.SLATE, g="t1")
+    bad_end = _lbl("■ failed (exit 1) · 2.1s", O.RED, g="t1")
+    bg_open = _lbl("▷ background", slots.color("bg", 0), g="t2")
+    mon_open = _lbl("◉ monitor · watch tests · persistent", mon_rgb, g="t3")
+    ws = _lbl("⇄ ws · wss://x/y", mon_rgb, g="t3")
+
+    # the WORDS, and each op's ROLE in its line (which the page needs to place it)
+    assert AC.cmd_note(fg_open) == ("", AC.CQ_OPEN)      # muted, NOT unrecognised
+    assert AC.cmd_note(fg_end) == ("finished · 0.6s", AC.CQ_CLOSE)
+    assert AC.cmd_note(bad_end) == ("failed (exit 1) · 2.1s", AC.CQ_CLOSE)
+    assert AC.cmd_note(bg_open) == ("background", AC.CQ_OPEN)
+    assert AC.cmd_note(mon_open) == ("monitor · watch tests · persistent", AC.CQ_OPEN)
+    # a monitor's SUBJECT line is a second header row, not a second opener: only the
+    # opener carries the line's dot, or a ws monitor would show two
+    assert AC.cmd_note(ws) == ("ws · wss://x/y", AC.CQ_SUB)
+
+    # colour-gated exactly like the classifier: a SUBAGENT's `■ … ended` footer is its
+    # block's, not a command's, and a mail read notice is not a monitor
+    sub_end = _lbl("■ explore ended · 3m", slots.color("sub", 0))
+    assert AC.cmd_note(sub_end) is None
+    assert AC.cmd_note(_lbl("◉ read · lead → rev", O.GREEN)) is None
+    # an op already in the note register keeps its own wording
+    assert AC.cmd_note(O.label("⇠ result", mon_rgb, note='Agent "x" finished')) is None
+
+    items = opshtml.op_items([fg_open, O.code("make test", g="t1"),
+                              O.gut("all green", O.SLATE, g="t1"), fg_end], "sid")
+    head, end = items[0], items[-1]
+    assert head["quiet"] == "open" and end["quiet"] == "close"
+    # the dot is SERVED (one owner for the glyph — opshtml.NOTE_GLYPH), the muted word
+    # leaves nothing else on the opener, and the closing duration is its own piece
+    assert head["html"] == '<span class="anmark">⏺</span>'
+    assert end["html"] == '<span class="cqt">finished · 0.6s</span>'
+    # …and the ⧉ links come apart from the words, for the slot at the far right
+    assert "⧉cmd" in head["links"] and "⧉cmd" not in head["html"]
+    for it in items:
+        assert "chip" not in it["html"] and "background:rgb" not in it["html"]
+    # the block still classifies as a shell command (the fold/filter is unchanged)
+    assert head["act"] == "bash"
+    assert opshtml.op_items([bg_open], "sid")[0]["act"] == "bg"
+    assert opshtml.op_items([mon_open], "sid")[0]["act"] == "monitor"
+
+    # THE PAGE: four header slots, the quiet routing, and the dot's outcome
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    assert "head.append(chips, sum, tail, links);" in ses
+    assert 'if (it.quiet === "close") {' in ses
+    assert 'b.root.dataset.out =' in ses
+    # the ticking ⏱ lands in the same slot as the final duration
+    assert "(b.root.dataset.quiet ? b.tail : b.chips).append(c);" in ses
+
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = _css_rules(css)
+    # the same box as an agent note's — ONE rule serving both, so they cannot drift
+    for sel in ('.stream > .blk[data-quiet]',
+                '.stream > .blk[data-quiet] > .bhead',
+                '.stream > .blk[data-quiet][data-open="1"]'):
+        assert sel in rules
+    assert "box-shadow: none" in rules['.stream > .blk[data-quiet]']
+    assert rules['.stream > .blk[data-quiet]'] \
+        == rules['.stream > .blk[data-note]'], "one box, two registers"
+    # …and the same grid as the note/summary line (gap, font, baseline)
+    quiet_head = rules[".blk[data-quiet] > .bhead"]
+    for prop in ("gap: 8px", "font: 12px/1.5 var(--mono)", "align-items: center"):
+        assert prop in quiet_head, prop
+    # the words are DIM, and nothing in the line is an accent colour
+    assert "var(--dim)" in rules[".blk[data-quiet] .bsum, .blk[data-quiet] .btail,"
+                                " .blk[data-quiet] .cqt"]
+    assert "border: none" in rules[".blk[data-quiet] .chip.blive"]
+    # the dot carries the outcome through the SAME rules an agent note's does — those
+    # are keyed on `data-out` alone, so nothing new was needed for a command block
+    assert '[data-out="ok"] .anmark { color: var(--green); }' in css
+    assert '[data-out="bad"] .anmark { color: var(--red); }' in css
 
 
 def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
@@ -832,12 +967,14 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
                               (13, "op", old_read)], 0, "")
     mail = [i for i in split if i.get("act") == "mail"]
     assert len(mail) == 2 and len({i["mid"] for i in mail}) == 1
-    # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
-    # the classifier — mail wears the semantic green, a monitor its slot palette)
+    # a MONITOR's ◉ is not mail — the colour decides, as in the classifier (mail wears
+    # the semantic green, a monitor its slot palette). It has a quiet line of its own
+    # (cmd_note), and the point is that it is NOT worded as a message.
     from core import slots
     mon = _lbl("◉ monitor · npm", slots.color("monitor", 1))
     assert AC.legacy_note(mon) is None
-    assert 'class="chip"' in opshtml.op_items([mon], "sid")[0]["html"]
+    assert AC.cmd_note(mon) == ("monitor · npm", AC.CQ_OPEN)
+    assert "Message" not in opshtml.op_items([mon], "sid")[0]["html"]
 
 
 def test_an_ungrouped_mail_message_is_still_ONE_expandable_block():
@@ -1168,8 +1305,7 @@ def test_system_bubble_is_styled_and_is_not_a_rewind_target(dash):
     code, css = _get(dash + "/static/style.css")
     assert code == 200
     assert re.search(r"--sys:\s*#", css), "the system hue needs one owner in :root"
-    rules = dict((sel.strip(), body) for sel, body in
-                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+    rules = _css_rules(css)
     assert "var(--sys)" in rules[".msg.prompt.sys"]
     assert "var(--sys)" in rules[".msg.prompt.sys .who"]
     # the picker's own outline skips a system bubble

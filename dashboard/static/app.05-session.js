@@ -315,10 +315,16 @@ function createBlock() {
   const head = el("div", "bhead");
   const chips = el("span", "bchips");
   const sum = el("span", "bsum");
+  // …and the two slots a QUIET command header uses (opshtml.cmd_note): its closing
+  // words after the command, where `· 0.6s` reads as that command's duration, and the
+  // ⧉ links at the far right, out of the line the eye reads.
+  const tail = el("span", "btail");
+  const links = el("span", "blinks");
   const body = el("div", "bbody");
-  head.append(chips, sum);
+  head.append(chips, sum, tail, links);
   root.append(head, body);
-  const b = { root, chips, sum, body, userSet: false, kindLocked: false };
+  const b = { root, chips, sum, tail, links, body, userSet: false,
+              kindLocked: false };
   head.onclick = (e) => {
     if (e.target.closest("a")) return;           // ⧉ links keep working
     // nothing to reveal, nothing to toggle: a TEAMMATE's launch note has no body
@@ -352,7 +358,7 @@ const FG_TICK_MS = 1000;
 
 function fgClearChip(g) {
   const b = g && S.ses.blocks.get(g);
-  const c = b && b.chips.querySelector(".blive");
+  const c = b && b.root.querySelector(".blive");   // chips row, or a quiet head's tail
   if (c) c.remove();
 }
 
@@ -370,8 +376,13 @@ function tickFgElapsed() {
   }
   const b = ses.blocks.get(fg.g);
   if (!b) return;              // the block's ops haven't landed yet — next tick
-  let c = b.chips.querySelector(".blive");
-  if (!c) { c = el("span", "chip blive"); b.chips.append(c); }
+  let c = b.root.querySelector(".blive");
+  // in a QUIET head it belongs where the finish chip's duration will land, so the
+  // ticking number and the final one appear in the same column of the line
+  if (!c) {
+    c = el("span", "chip blive");
+    (b.root.dataset.quiet ? b.tail : b.chips).append(c);
+  }
   ses.fgChipAt = fg.g;
   c.textContent = "⏱ " + dur(Date.now() / 1000 - fg.start_ts);
 }
@@ -411,6 +422,26 @@ function fillBlock(b, it) {
       fgClearChip(it.g);
       S.ses.fgEnded = it.g;
       S.ses.fgRun = null;
+    }
+    // A QUIET COMMAND header (a foreground command, a background job, a monitor —
+    // opshtml.cmd_note): the served pieces go to their slots, and the line's dot
+    // carries the outcome the way an agent note's does — grey while the command runs,
+    // green/red once its `■ …` closer lands. The card itself recedes to a plain line
+    // (see `[data-quiet]` in style.css); the body behind the click is unchanged.
+    if (it.quiet) {
+      if (!b.root.dataset.quiet) {
+        b.root.dataset.quiet = "1";
+        b.root.dataset.out = "run";
+      }
+      if (it.links && !b.links.childElementCount) b.links.innerHTML = it.links;
+      if (it.quiet === "close") {
+        b.tail.innerHTML = it.html;
+        b.root.dataset.out =
+          (it.bad || b.root.dataset.bad === "1") ? "bad" : "ok";
+      } else if (it.html) {
+        b.chips.insertAdjacentHTML("beforeend", it.html);
+      }
+      return;
     }
     // a NOTE header (a subagent's `⏺ Agent "…" launched / finished · 21m 31s`) IS the
     // whole line — no first-body-line summary beside it, because the body is what the
@@ -729,6 +760,9 @@ function ungroupedKind(it, elem) {
 function stampItem(elem, it) {
   elem.dataset.kind = ungroupedKind(it, elem);
   if (it.act) elem.dataset.act = it.act;
+  // a GROUP-LESS quiet command row (the `▷ backgrounded (ctrl+b)` notice) — the flag
+  // that gives it the same plain-line box as a quiet block's header
+  if (it.quiet) elem.dataset.quiet = "1";
   if (it.bad) elem.dataset.bad = "1";
   if (it.add) elem.dataset.add = String(it.add);   // a mutation's line counts, for
   if (it.rem) elem.dataset.rem = String(it.rem);   //   focus mode's edit summary
@@ -851,9 +885,15 @@ const VIEW_DEFAULT = "default";
 // Nothing is ever dropped from the COUNTERS by a mode (there is no second axis;
 // see docs/dashboard.md *View modes* for the one that was tried and rejected):
 // what a mode collapses, its summary still accounts for.
+// A MONITOR folds in default too, asked for in those words ("also monitors should be
+// in the under summary in default mode"): a monitor is a watcher you set up once and
+// then read only if it fires, so its card standing open in the feed is noise — the
+// summary's "watched 2 monitors" is the whole of what default needs to say. A
+// BACKGROUND job deliberately stays visible there: it is work still running, whose
+// output you came to read.
 const VIEW_FOLD = {
   verbose: [],
-  default: ["bash", "read", "task", "mail"],
+  default: ["bash", "read", "monitor", "task", "mail"],
   focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "team",
           "task", "mail"],
 };

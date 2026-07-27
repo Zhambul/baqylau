@@ -37,6 +37,7 @@ import re
 
 from core import ops as O
 from core import render as R
+from core import slots as SL
 from core import streamfmt as SF
 from plugins.claude_code import msgs as MSGS
 from plugins.claude_code import task_fmt as TASKS
@@ -72,8 +73,25 @@ _CMD_RGB = (tuple(O.SLATE), tuple(O.ORANGE), tuple(O.RED))
 _GLYPH_BASH = "▶"          # a foreground command … or a subagent launch (see above)
 _GLYPH_BG = "▷"
 _GLYPH_MONITOR = "◉"
+_GLYPH_WS = "⇄"            # a WebSocket monitor's SUBJECT line (monitor_fmt._cmd_op)
 _GLYPH_RESUMED = "↻"       # a RESUMED subagent's launch header
 _GLYPH_FINISH = "■"
+
+# The stream palettes a bg job's / monitor's chips wear (core/slots.py owns the
+# tables — imported, never re-spelled). Together with the semantic command
+# colours above these are the COMMAND FAMILY: the three block kinds the web
+# renders in the quiet note register (see cmd_note). The five palettes are
+# mutually disjoint and none collides with a semantic colour, which is what makes
+# a chip's colour a reliable answer to "whose block is this" — a subagent's
+# `■ <type> ended` footer wears SUB_PALETTE and is therefore NOT command family.
+_STREAM_RGB = frozenset(tuple(c) for c in (SL.BG_PALETTE + SL.MON_PALETTE))
+
+# The kind word a quiet command line DROPS. A foreground command is the default
+# kind and its line already shows the command itself, so `▶ foreground` would say
+# nothing the dot and the command don't ("⏺ make test · 0.6s"); `background` and
+# `monitor` are kept, because with the chip colour gone the word is the only thing
+# left that distinguishes a job you didn't wait for from one you did.
+_CMD_KIND_MUTE = "foreground"
 
 # Team mail + task rows: the glyphs are their PRODUCERS' vocabulary, imported
 # rather than spelled again (msgs.event_ops paints the mail chips, task_fmt the
@@ -194,6 +212,56 @@ def agent_brief(op):
         return any(text.find(mark) > 0 for mark, _verb in _LEGACY_NOTE)
     except Exception:
         return False                    # unreadable: keep it (fail toward showing)
+
+
+# The three ROLES a quiet command-header op plays in its block, which is all the page
+# needs to place it: the kind-declaring OPENER (`▶ foreground`, `◉ monitor · …` — the
+# line's dot rides with it), a further SUBJECT line beside it (a ws monitor's `⇄ ws ·
+# <url>`, which must not mint a second dot), and the CLOSER (`■ finished · 0.6s`), whose
+# words go after the command where a duration reads as one.
+CQ_OPEN, CQ_SUB, CQ_CLOSE = "open", "sub", "close"
+
+
+def cmd_note(op):
+    """A COMMAND-FAMILY chip -> (text, role) in the quiet note register, or None when
+    the op is not one. The roles are the CQ_* constants above.
+
+    An EMPTY text is a legal answer (the muted `foreground`) and NOT the same as None:
+    the op still declares its block quiet and still carries the block's ⧉ links, so the
+    caller must test for None, never for falsiness.
+
+    The web renders a foreground command, a background job and a monitor as one dim
+    line — `⏺ make test · 0.6s` — instead of the terminal's colour-coded pill card
+    ("I don't like those boxy blocks / also get rid of the colors / I still want the dot
+    and the time info"). The wording is the PRODUCER's, minus the parts the register
+    drops: the glyph (`▶ ▷ ◉ ■`, which only carried meaning through its colour — see
+    `_MAIL_RGB` on `◉` — and cannot survive un-coloured) and the muted kind word above.
+    What's left is what the producer already wrote: `background`, `monitor · <desc>`,
+    `finished · 0.6s`, `failed (exit 1) · 2.1s`, `interrupted · 12s`, `monitor ended ·
+    no output`. The dot's colour carries the outcome (the page stamps `data-out` from
+    the same ops), so nothing is lost with the pill.
+
+    Colour-gated exactly like the classifier, and for the same reason: a `■ <type>
+    ended` footer in the SUBAGENT palette is an agent's block, not a command's, and a
+    `◉` in a mail colour is a read notice. An op that carries its own `note` is already
+    in this register (an agent's, mail's) and is left alone."""
+    try:
+        if op.get("t") != "label" or op.get("note"):
+            return None
+        c = tuple(op.get("c") or ())
+        if c not in _CMD_RGB and c not in _STREAM_RGB:
+            return None
+        text = _plain(op)
+        head, rest = text[:1], text[1:].strip()
+        if head == _GLYPH_FINISH:
+            return rest, CQ_CLOSE
+        if head == _GLYPH_WS:
+            return rest, CQ_SUB
+        if head in (_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR):
+            return ("" if rest == _CMD_KIND_MUTE else rest), CQ_OPEN
+        return None
+    except Exception:
+        return None                     # unreadable: keep the chip
 
 
 def mail_pair(op):

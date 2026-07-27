@@ -4510,6 +4510,67 @@ Loose top-level rows (file-op one-liners, standalone chip lines) get the same
 card treatment, scoped to DIRECT `.stream` children so ops nested inside a block
 body keep their compact inline form.
 
+### The quiet register: a command is a LINE, not a card
+
+The card look survived for content — an opened body, a message bubble — but not for
+the *header* of a command. A foreground command, a background job and a monitor now
+read as ONE dim line, the same register as an agent note and a collapsed run's
+summary:
+
+```
+⏺  make test                                                    finished · 91.4s
+⏺  git push                                                 failed (exit 1) · 2.1s
+⏺  pytest -q tests/                                                        ⏱ 1m04s
+⏺  background  npm run dev                              background finished · 3m 2s
+⏺  monitor · watch the suite · persistent  pytest -q --ff   monitor ended · 12m 4s
+```
+
+Asked for in those words: *"let's style foreground/background/monitors to the same
+style that we have established / I don't like those boxy blocks / also get rid of the
+colors / I still want the dot and the time info"*. The card comes BACK the moment the
+line is opened (`[data-quiet][data-open="1"]`), for the same reason a note's does: the
+body it reveals is a whole command's output and needs the panel to read as one thing.
+The **terminal pane keeps its coloured pills** — a pane reader scans by colour.
+
+Two things go, and both had to:
+
+- **The colour.** It was the pill's whole visual weight, and on this surface it
+  competed with the conversation for the eye while saying only what the words already
+  said.
+- **The glyph.** `▶ ▷ ◉ ■` are only unambiguous *in* colour — `◉` is a monitor in a
+  slot palette and a mail read notice in the semantic green (`actclass._MAIL_RGB`), `▶`
+  is a command or a subagent launch. Un-coloured they are four indistinguishable
+  shapes, so the WORDS carry the kind now: `background`, `monitor · <desc>`. The one
+  word dropped is `foreground` — it is the default kind and the line shows the command
+  itself.
+
+What stays is what was asked for: the **dot**, tinted by outcome exactly like an agent
+note's (grey running · green finished · red failed/interrupted — `data-out`, stamped by
+`fillBlock` from the ops themselves, no agents payload needed here), and the **time**,
+the producer's own `finished · 0.6s` / `failed (exit 1) · 2.1s` / `monitor ended · no
+output`, verbatim.
+
+**Where it is computed.** `actclass.cmd_note(op)` → `(text, role)`, colour-gated
+exactly like the classifier (`_CMD_RGB` ∪ the bg/monitor slot palettes — a subagent's
+`■ <type> ended` footer wears SUB_PALETTE and is NOT command family). The role is
+which slot the words go in, and it exists because a lone op cannot know where in a
+header it lands:
+
+| role | op | slot | why |
+|------|----|------|-----|
+| `CQ_OPEN` | `▶ foreground`, `▷ background`, `◉ monitor · …` | `.bchips` | carries the line's DOT |
+| `CQ_SUB` | a ws monitor's `⇄ ws · <url>` | `.bchips` | a second header row, and must NOT mint a second dot |
+| `CQ_CLOSE` | `■ finished · 0.6s` | `.btail` | after the command, where a duration reads as that command's |
+
+`op_items` hands the pieces over SEPARATELY (`html` = the words, which may be empty;
+`links` = the ⧉ pair; `quiet` = the role) because the page owns the header's layout —
+this is the only way the duration can sit *after* the command, and it also gets the
+hover-only ⧉ links out of the reading line (in the flow they reserved a ~90px hole
+between the dot and the command while invisible). A GROUP-LESS quiet label (the
+`▷ backgrounded (ctrl+b)` notice) is not split: it has no header to be a slot of, and
+wears the flag alone. The live ⏱ chip (*Live command elapsed*) joins the register too —
+no outline, no accent — and ticks in the same column the final duration lands in.
+
 ### What gets an inner scroll box, and what must not
 
 Read content is never boxed; skimmed content is. A **message bubble** (`.msg .md`,
@@ -4869,6 +4930,14 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   re-cut every focus-mode stream into more summary lines, which is a different
   feature from greying one bubble.
 
+**A MONITOR folds in default too** (`VIEW_FOLD.default`), asked for in those words:
+*"also monitors should be in the under summary in default mode"*. A monitor is a
+watcher you set up once and then read only if it fires, so its card standing open in
+the feed is noise — `Watched 2 monitors` is the whole of what default needs to say
+about it, and the line is one click from its events. A **background job deliberately
+does NOT fold there**: it is work still running, whose output is why you opened the
+session. (Focus folds both, like everything else.)
+
 **`agent` is the one act the two modes disagree about.** Task rows (`task`) and
 team mail (`mail`) fold in both; **agent activity folds only in focus**. Claude
 Code's own default density prints agent work as its own lines — `6 background
@@ -4891,6 +4960,18 @@ feed they shouted an agent's bookkeeping at the weight of the conversation. Clic
 the line opens the block's body, which is the thing worth having — the agent's brief
 on the launch line, its result on the finish line. The block arrives CLOSED (unlike
 a live command block) for the same reason, and never re-closes one you opened.
+
+**Every one of these lines leads with the SAME DOT** — `.vdot`'s 7px CSS circle, in
+`.vsum`, in a note (`.anmark`) and in a quiet command header alike. The note's marker
+started out as the `⏺` GLYPH rendered at 9px, and a glyph's ink is whatever the font
+makes of it: it drew visibly smaller than the circle beside it (*"why are agent dots
+smaller than other dots, all dots should be the same size"*), and no font-size can be
+relied on to match a CSS box across fonts and platforms. So the span keeps the
+character — it is still Claude Code's marker, and still what a copy of the line yields
+— and paints as a box (`font-size: 0`, `background: currentColor`, which is what lets
+the `data-out` outcome rules keep colouring it by setting `color`). The rows are
+`align-items: center` rather than baseline for the same reason: a box has no text
+baseline, so a baseline row put the dot at a different height in each line kind.
 
 **It sits on the summary line's grid, to the pixel.** The two are the same kind of
 line — one activity notice — so the note's `⏺` stands in `.vsum`'s 7px DOT column and
