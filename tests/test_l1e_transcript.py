@@ -70,6 +70,50 @@ def test_teammate_message_unwraps_sender_and_body():
     assert rec == {"kind": "teammsg", "sender": "lead", "body": "do the thing"}
 
 
+_ENVELOPE = (
+    "Another Claude session sent a message:\n"
+    '<teammate-message teammate_id="rev-observe" color="purple">\n'
+    '{"type":"idle_notification","from":"rev-observe","idleReason":"available"}\n'
+    "</teammate-message>\n\n"
+    "This came from another Claude session — not typed by your user, but very "
+    "likely working on their behalf.")
+
+
+def test_teammate_mail_envelope_is_an_injected_prompt():
+    # Claude Code delivers a peer session's message as a user turn of its OWN
+    # making (framing sentence + the peer's block + its own instruction). It
+    # carries NO structural flag — no isMeta, userType "external", exactly the
+    # shape of a typed prompt (measured on the corpus) — so `meta` has to come
+    # from the anchored text shape. Without it the dashboard rendered another
+    # session's mail as a YOU bubble, in every view mode.
+    rec = TR.parse_line(_l({"type": "user", "userType": "external",
+                            "message": {"content": _ENVELOPE}}))
+    assert rec["kind"] == "prompt"
+    assert rec["meta"] is True
+
+
+def test_a_message_that_only_QUOTES_an_envelope_stays_yours():
+    # The false-positive that makes text-matching dangerous, and why the pattern
+    # is anchored: asking "why is this in my transcript?" over a pasted envelope
+    # is a real prompt, and must not be relabelled as system and hidden.
+    rec = TR.parse_line(_l({"type": "user", "message": {
+        "content": "why do I see this?\n\n" + _ENVELOPE}}))
+    assert rec["kind"] == "prompt"
+    assert rec["meta"] is False
+    # …and the mark is the WHOLE shape: the framing sentence alone is not it
+    plain = TR.parse_line(_l({"type": "user", "message": {
+        "content": "Another Claude session sent a message: it went fine"}}))
+    assert plain["meta"] is False
+
+
+def test_a_bare_teammate_block_is_still_teammate_mail_not_system():
+    # The envelope mark must not swallow the UNWRAPPED form: that one already has
+    # a sender to name, so it keeps its own ✉ record and bubble.
+    rec = TR.parse_line(_l({"type": "user", "message": {
+        "content": '<teammate-message teammate_id="lead">ping</teammate-message>'}}))
+    assert rec == {"kind": "teammsg", "sender": "lead", "body": "ping"}
+
+
 def test_results_collects_blocks_in_order_plus_texts():
     rec = TR.parse_line(_l({
         "type": "user", "toolUseResult": {"file": {"numLines": 3}},

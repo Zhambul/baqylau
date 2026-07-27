@@ -98,10 +98,12 @@ function liveTab() {
 function applyTakeBack(restored) {
   const ses = S.ses;
   if (!ses) return;
-  // the taken-back bubble is the newest .msg.prompt (items prepend, so it is
-  // the FIRST in the feed)
+  // the taken-back bubble is the newest prompt YOU sent (items prepend, so it is
+  // the FIRST in the feed) — `:not(.sys)` because an INJECTED turn can be newer
+  // than it (teammate mail, a Stop hook's feedback: they land as prompt-shaped
+  // bubbles too) and removing that one would delete the wrong thing
   const feed = ses.stream;
-  const bubble = feed && feed.querySelector(".msg.prompt");
+  const bubble = feed && feed.querySelector(".msg.prompt:not(.sys)");
   if (bubble) bubble.remove();
   prefillComposer(restored);
 }
@@ -348,13 +350,15 @@ function applyRewind(bubble, restored) {
 }
 
 // Feed delegation: ↶ on a prompt bubble (hover or pick mode) opens the mode
-// menu; in pick mode the whole bubble is a target.
+// menu; in pick mode the whole bubble is a target — a ⚙ SYSTEM bubble excluded,
+// since an injected turn is nothing to restore to (it carries neither the ↶ nor
+// the data-txt the menu POSTs).
 document.addEventListener("click", (e) => {
   const rw = e.target.closest && e.target.closest(".msg.prompt .rw");
   if (rw) { e.preventDefault(); return openRewindMenu(rw.closest(".msg.prompt")); }
   if (e.target.closest && e.target.closest(".rwmenu")) return;
   if (inRewindPick()) {
-    const bubble = e.target.closest && e.target.closest(".msg.prompt");
+    const bubble = e.target.closest && e.target.closest(".msg.prompt:not(.sys)");
     if (bubble) return openRewindMenu(bubble);
     rewindPickMode(false);            // clicked elsewhere — leave pick mode
   } else closeRewindMenu();           // click-away closes a hover-opened menu

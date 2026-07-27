@@ -100,16 +100,17 @@ def conv_items(recs, cmds=()):
         it = {"g": None, "t": "msg", "kind": r["kind"], "act": opshtml.ACT_MSG,
               "html": opshtml.msg_html(r["kind"], r.get("text", ""),
                                        r.get("sender", ""), r.get("qa"),
-                                       r.get("par") or "", cmds)}
+                                       r.get("par") or "", cmds,
+                                       r.get("meta"))}
         if r["kind"] == "prompt":
             it["text"] = r.get("text", "")
             it["par"] = r.get("par") or ""
             # An INJECTED user turn, not something the human typed (Claude
             # Code's isMeta: a Stop hook's feedback, a loaded skill's body, a
-            # resume nudge). Verbose still shows it — it is in the transcript —
-            # but the non-verbose modes hide it, because a bubble labelled YOU
-            # that you never wrote is a lie about the conversation
-            # (docs/dashboard.md, *View modes*).
+            # resume nudge, another session's teammate mail). Verbose still
+            # shows it — it is in the transcript — but as a ⚙ SYSTEM bubble
+            # (msg_html's `meta`), never as YOU; the non-verbose modes hide it
+            # outright (docs/dashboard.md, *View modes*).
             if r.get("meta"):
                 it["meta"] = 1
         out.append(it)

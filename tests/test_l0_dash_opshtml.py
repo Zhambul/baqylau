@@ -291,6 +291,25 @@ def test_msg_html_prompt_stamps_tree_position():
     assert 'data-par' not in opshtml.msg_html("message", "hi", "", None, "a1")
 
 
+def test_msg_html_injected_prompt_is_a_system_bubble():
+    """An INJECTED user turn (transcript._injected: a Stop hook's feedback, a
+    loaded skill's body, another session's teammate mail) must not wear the YOU
+    label — it says ⚙ system, in its own colour, with no rewind affordance. The
+    `sys` class rides ALONGSIDE `prompt`: the page's focus logic keys on the kind,
+    and an injected turn must not read as a turn boundary."""
+    h = opshtml.msg_html("prompt", "Stop hook feedback: check the wiki", meta=True)
+    assert 'class="msg prompt sys"' in h
+    assert "⚙ system" in h and ">you" not in h
+    # no rewind target: neither the ↶ button nor the data-txt the menu POSTs
+    assert 'class="rw"' not in h and "data-txt" not in h
+    # a real prompt is untouched
+    y = opshtml.msg_html("prompt", "hi")
+    assert 'class="msg prompt"' in y and "you" in y and 'class="rw"' in y
+    # `meta` is prompt-scoped — nothing else can be an injected user turn
+    assert "sys" not in opshtml.msg_html("message", "hi", meta=True)
+    assert "sys" not in opshtml.msg_html("teammsg", "hi", "lead", meta=True)
+
+
 def test_msg_html_question_bubble():
     # the AskUserQuestion the transcript records: a `claude ▸ asks you` bubble
     # (no rewind ↶ — not a re-runnable prompt), options rendered as a list

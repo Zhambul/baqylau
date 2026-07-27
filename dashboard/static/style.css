@@ -42,6 +42,7 @@
   --red: #e06c75;
   --green: #98c379;
   --gold: #e5c07b;                /* reasoning/prompt gold, per the brief */
+  --sys: #aab9d2;                 /* == core/ops.py SLATE — neutral, not a hue */
   --orange: #d19a66;
   --blue: #61afef;
   --amber: #d6995c;
@@ -1327,7 +1328,8 @@ body.modal-open { overflow: hidden; }
 }
 .msg.prompt:hover .rw, .rwpick .msg.prompt .rw { opacity: 1; }
 .msg.prompt .rw:hover { box-shadow: var(--card-hover); }
-.rwpick .msg.prompt { cursor: pointer;
+/* :not(.sys) — an injected ⚙ SYSTEM turn is not a rewind target (app.10-control) */
+.rwpick .msg.prompt:not(.sys) { cursor: pointer;
   outline: 1px dashed color-mix(in srgb, var(--gold) 55%, transparent); }
 .rwmenu {
   position: absolute; top: 26px; right: 6px; z-index: 30;
@@ -1382,6 +1384,13 @@ body.modal-open { overflow: hidden; }
    set it apart from prompts/messages. No rewind ↶ — it isn't a re-runnable prompt. */
 .msg.recap { border-left-color: #56b6c2; }
 .msg.recap .who { color: #56b6c2; }
+/* an INJECTED user turn (⚙ SYSTEM — a Stop hook's feedback, a loaded skill's
+   body, another session's teammate mail): the neutral slate of core/ops.py's
+   SLATE, held back from the vivid hues because none of this is conversation.
+   Only verbose renders these at all (docs/dashboard.md, *View modes*), and the
+   colour's job is to stop the eye reading a gold YOU bubble over machinery. */
+.msg.prompt.sys { border-left-color: color-mix(in srgb, var(--sys) 50%, transparent); }
+.msg.prompt.sys .who { color: color-mix(in srgb, var(--sys) 78%, transparent); }
 
 /* markdown-rendered conversation text (opshtml.md_html — escaped server-side).
    Shared by the interleaved .msg blocks and the timeline .ent .bd bodies. */

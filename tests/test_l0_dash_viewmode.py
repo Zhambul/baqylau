@@ -449,6 +449,29 @@ def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
     assert "max-height: 480px" in generic and "overflow: auto" in generic
 
 
+def test_system_bubble_is_styled_and_is_not_a_rewind_target(dash):
+    """The ⚙ SYSTEM flavour has to be DRAWN — a distinct, deliberately neutral
+    colour (core/ops.py's SLATE, one `--sys` var rather than a hex per rule), so
+    an injected turn does not read as your gold prompt. And every affordance that
+    treats a bubble as YOUR prompt must exclude it: the rewind picker's outline
+    and click target, and the take-back's "newest prompt" lookup — which would
+    otherwise delete a system bubble that happens to be newer."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    assert re.search(r"--sys:\s*#", css), "the system hue needs one owner in :root"
+    rules = dict((sel.strip(), body) for sel, body in
+                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+    assert "var(--sys)" in rules[".msg.prompt.sys"]
+    assert "var(--sys)" in rules[".msg.prompt.sys .who"]
+    # the picker's own outline skips a system bubble
+    assert ".rwpick .msg.prompt:not(.sys)" in rules
+
+    code, ctl = _get(dash + "/static/app.10-control.js")
+    assert code == 200
+    assert '.msg.prompt:not(.sys)"' in ctl
+    assert ctl.count(".msg.prompt:not(.sys)") == 2, "take-back AND pick-mode click"
+
+
 def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
     """Claude Code writes some turns in the USER's shape without the human
     typing them, and marks them `isMeta`: a Stop hook's blocking feedback, a
@@ -494,6 +517,45 @@ def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
     # …and it reaches the page on the wire item the view modes read
     items = DS.mirror.conv_items(recs)
     assert [it.get("meta") for it in items] == [None, 1, 1]
+    # …AND the bubble itself says so: verbose is the one mode that shows these,
+    # and there they read ⚙ SYSTEM in their own colour, never YOU
+    assert 'class="msg prompt sys"' in items[1]["html"]
+    assert "⚙ system" in items[1]["html"]
+    assert 'class="msg prompt"' in items[0]["html"]      # yours is untouched
+
+
+def test_another_sessions_teammate_mail_is_a_system_turn(dash, tmp_path):
+    """Teammate mail — `Another Claude session sent a message:` wrapping a peer's
+    <teammate-message> plus Claude Code's own "permission laundering" instruction
+    — is written by Claude Code, not typed by the human. It reached the feed as a
+    YOU bubble in EVERY mode (the report): it carries no isMeta, no interrupt id,
+    nothing structural at all, so the envelope's anchored SHAPE is the mark
+    (transcript._TEAM_ENVELOPE). End to end: parse → conversation → wire item →
+    bubble."""
+    from plugins.claude_code import transcript as TR
+
+    env = ("Another Claude session sent a message:\n"
+           '<teammate-message teammate_id="rev-observe" color="purple">\n'
+           '{"type":"idle_notification","from":"rev-observe"}\n</teammate-message>\n\n'
+           "This came from another Claude session — not typed by your user…")
+    mine = json.dumps({"type": "user", "uuid": "u1",
+                       "timestamp": "2026-07-27T02:00:00.000Z",
+                       "message": {"role": "user", "content": "review the diff"}})
+    mail = json.dumps({"type": "user", "uuid": "u2", "parentUuid": "u1",
+                       "userType": "external",          # …as the real records are
+                       "timestamp": "2026-07-27T02:14:05.000Z",
+                       "message": {"role": "user", "content": env}})
+    tf = tmp_path / "t.jsonl"
+    tf.write_text(mine + "\n" + mail + "\n", encoding="utf-8")
+    recs, _pos = TR.conversation(str(tf))
+    assert [(r["kind"], r.get("meta")) for r in recs] == [
+        ("prompt", None), ("prompt", True)]
+
+    items = DS.mirror.conv_items(recs)
+    assert [it.get("meta") for it in items] == [None, 1]   # default/focus hide it
+    assert "⚙ system" in items[1]["html"]                  # verbose relabels it
+    # and it is no longer a rewind target / a ↑-history entry (both read data-txt)
+    assert "data-txt" not in items[1]["html"]
 
 
 def test_load_older_keeps_its_promise_in_a_collapsing_mode(dash):

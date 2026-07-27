@@ -31,13 +31,15 @@
 #       a plain `user` string OR a `queued_command` attachment (the delivered
 #       form of a message queued mid-turn; commandMode=="prompt" only).
 #       `meta` means the record is shaped like a user turn but the HUMAN DID NOT
-#       TYPE IT — Claude Code injected it (see _injected for the three structural
-#       marks it reads). Seen carrying `Stop hook feedback: …` (a Stop hook's
+#       TYPE IT — Claude Code injected it (see _injected for the marks it reads).
+#       Seen carrying `Stop hook feedback: …` (a Stop hook's
 #       blocking output), a loaded skill's whole SKILL.md body, `Continue from
 #       where you left off.` (a resume nudge), the `<local-command-caveat>`
-#       envelope, `[Request interrupted by user…]` (the cancel annotation), and
+#       envelope, `[Request interrupted by user…]` (the cancel annotation),
 #       the post-/compact summary (`This session is being continued from a
-#       previous conversation…`). The `<`-wrapped ones are dropped by
+#       previous conversation…`), and TEAMMATE MAIL (`Another Claude session sent
+#       a message:` wrapping a peer's <teammate-message> — the one shape with no
+#       structural flag to read). The `<`-wrapped ones are dropped by
 #       conversation() anyway; the bare-prose ones are indistinguishable from a
 #       real prompt WITHOUT this flag, which is why it is now carried rather
 #       than dropped: the dashboard's focus mode promises "your prompt", and a
@@ -174,10 +176,34 @@ def _strip_recap_hint(text):
     return _RECAP_HINT.sub("", text).strip()
 
 
-def _injected(o):
+# The TEAMMATE-MAIL ENVELOPE — Claude Code delivering another session's message
+# as a user turn of ITS OWN making: a framing sentence, the peer's
+# <teammate-message> block(s), then Claude Code's own trailing "This came from
+# another Claude session … that's permission laundering" instruction. Nothing in
+# it was typed by the human, so it is `meta` like any other injection.
+#
+# This is the ONE mark _injected reads out of TEXT, because the record carries no
+# structural flag whatsoever (measured on the corpus: type "user", `isMeta`
+# absent, `userType` "external", `isSidechain` false — byte-for-byte the shape of
+# a typed prompt). So the pattern is ANCHORED at the start of the content: a
+# message that merely QUOTES an envelope — a paste asking "why is this in my
+# transcript?", this repo's own docs about it — has something in front of it and
+# stays a prompt. That is the same false-positive class _injected refuses to court
+# for the interrupt marker; an anchor is what makes text safe to read here.
+#
+# The bare `<teammate-message>…` form (no envelope) is NOT this: classify_user_text
+# already turns it into a `teammsg` record with its own ✉ sender bubble. A wording
+# change in the framing sentence degrades to today's behaviour (a YOU bubble), not
+# to a crash.
+_TEAM_ENVELOPE = re.compile(
+    r'^\s*Another Claude session sent a message:\s*<teammate-message\b')
+
+
+def _injected(o, text=""):
     """Whether this user-shaped record was written by CLAUDE CODE rather than
     typed by the human — the `meta` flag on the prompt/results records below.
-    Three structural marks, no text matching:
+    Three structural marks plus one anchored text shape (`text`, the record's
+    content when it is a plain string — see _TEAM_ENVELOPE):
 
       isMeta               a Stop hook's blocking feedback, a loaded skill's
                            whole SKILL.md body, the `Continue from where you
@@ -195,13 +221,16 @@ def _injected(o):
                            record and is likewise NOT isMeta, so it too needed
                            its own mark.
 
-    Deliberately NOT matched on the annotation's TEXT, which would re-run the
-    false-positive class tabstatus.is_interrupt_line documents at length: any
+    The ANNOTATION is deliberately not matched on its text, which would re-run
+    the false-positive class tabstatus.is_interrupt_line documents at length: any
     growth that merely QUOTES the marker — a Read of a doc that mentions it, a
     grep hit, a conversation about it — is textually identical to the real
-    thing. The id-bearing/boolean fields cannot be quoted."""
+    thing, and the marker can appear anywhere in a record. The id-bearing/boolean
+    fields cannot be quoted. The teammate envelope has no such field to read and
+    is instead pinned to the START of the content (see _TEAM_ENVELOPE)."""
     return bool(o.get("isMeta") or o.get("interruptedMessageId")
-                or o.get("isCompactSummary"))
+                or o.get("isCompactSummary")
+                or (text and _TEAM_ENVELOPE.match(text)))
 
 
 # Every `kind` parse_line can return — the record vocabulary of this module,
@@ -243,7 +272,10 @@ def parse_line(s):
                 return {"kind": "teammsg", "sender": a, "body": b}
             # isMeta = Claude Code injected this user turn (see the header) —
             # carried so consumers can tell it from something the human typed.
-            return {"kind": "prompt", "text": content, "meta": _injected(o)}
+            # The content goes in too: the teammate-mail envelope is injected
+            # with no structural flag to show it (see _TEAM_ENVELOPE).
+            return {"kind": "prompt", "text": content,
+                    "meta": _injected(o, content)}
         if isinstance(content, list):
             blocks, texts = [], []
             for blk in content:
@@ -262,7 +294,10 @@ def parse_line(s):
                 # bubble holding the entire skill.
                 return {"kind": "results", "blocks": blocks,
                         "tur": o.get("toolUseResult"), "texts": texts,
-                        "meta": _injected(o)}
+                        # the leading text block, for the one text-read mark
+                        # (_TEAM_ENVELOPE): an envelope arriving in list form
+                        # would be that block, and the mark is anchored anyway
+                        "meta": _injected(o, texts[0] if texts else "")}
         return None
     if t == "assistant":
         blocks = []

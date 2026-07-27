@@ -80,7 +80,7 @@ def _tint_lead(body, tok):
         body[:i + 1], esc, body[i + 1 + len(esc):])
 
 
-def msg_html(kind, text, sender="", qa=None, par="", cmds=()):
+def msg_html(kind, text, sender="", qa=None, par="", cmds=(), meta=False):
     """A main-thread CONVERSATION block for the merged web stream — not an op
     (the terminal mirror deliberately omits main-agent messages: the main
     pane already shows them; the web has no main pane, so the dashboard
@@ -99,13 +99,25 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=()):
     prompt a later one re-parented over and drop the dead bubble live
     (docs/dashboard.md, *Discarded prompts*). `cmds` (prompt only) is the
     session's real slash-command names — the leading `/name` of a prompt that
-    IS one renders tinted (_lead_cmd/_tint_lead); empty = no tint."""
+    IS one renders tinted (_lead_cmd/_tint_lead); empty = no tint. `meta` (prompt
+    only) says Claude Code INJECTED this user turn rather than the human typing
+    it (transcript._injected): it renders as a SYSTEM bubble — its own label,
+    its own colour, and no rewind affordance, since there is no prompt of yours
+    to go back to. Only verbose shows these at all; the point of the label is
+    that a bubble saying YOU over a hook's feedback, a loaded skill, or another
+    session's mail is a lie about who said it (docs/dashboard.md, *View modes*)."""
+    system = bool(meta) and kind == "prompt"
     who = {"prompt": "you", "message": "claude",
            "question": "claude ▸ asks you", "answer": "you ▸ answered",
            "recap": "↩ recap"} \
         .get(kind) or ("✉ " + (sender or "team"))
+    if system:
+        who = "⚙ system"
     extra = ""
-    if kind == "prompt":
+    # a system bubble deliberately gets NEITHER data-txt nor the ↶ button: an
+    # injected turn is not a prompt to restore to, and the queued-chip match that
+    # reads data-txt only ever looks for something the composer sent
+    if kind == "prompt" and not system:
         # the web rewind picker needs the prompt's RAW text (the rendered
         # markdown is lossy): data-txt is what the page POSTs to /rewind-to
         # and prefills the composer with after a restore; the ↶ button is
@@ -130,9 +142,13 @@ def msg_html(kind, text, sender="", qa=None, par="", cmds=()):
         tok = _lead_cmd(text or "", cmds)
         if tok:
             body = _tint_lead(body, tok)
+    # `sys` rides ALONGSIDE the kind class (still `prompt`): the page's focus
+    # logic keys on the kind — an injected turn must not read as a turn boundary —
+    # so the flavour is a second class, not a different kind.
+    cls = html.escape(kind, quote=True) + (" sys" if system else "")
     return ("<div class=\"msg %s\"%s><span class=\"who\">%s</span>"
             "<div class=\"md\">%s</div></div>"
-            % (html.escape(kind, quote=True), extra, who, body))
+            % (cls, extra, who, body))
 
 
 # --- rich tool rendering (tool_html / tool_output_html) -----------------------

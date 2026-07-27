@@ -4805,8 +4805,8 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   feature from greying one bubble.
 
 Both non-verbose modes additionally drop **injected prompts** — turns written in
-the USER's shape that the human never typed (`transcript._injected`, three
-structural marks). The first is `isMeta`:
+the USER's shape that the human never typed (`transcript._injected`: three
+structural marks and one anchored text shape). The first is `isMeta`:
 a **Stop hook's blocking feedback**, a **loaded skill's whole SKILL.md body**
 (injected as a text block right after the `Skill` tool_result — the noisiest of
 them), and the resume nudge `Continue from where you left off.`. They used to
@@ -4846,8 +4846,40 @@ never reached this stream — only the drill-down timeline renders it, as its ow
 deliberate: the collapse is about what you read, and the boundary's one fact
 (context was compacted) is already on the ctx-saturation bar.
 
-Verbose deliberately keeps them: it shows the transcript as it is, and they ARE
-in it. An injected prompt also does **not close the turn** for focus mode's
+The fourth mark is the only one read out of TEXT: the **teammate-mail envelope**.
+Claude Code delivers another session's message as a user turn of its own making —
+the framing sentence `Another Claude session sent a message:`, the peer's
+`<teammate-message teammate_id=… color=…>` block(s), then its own trailing "this
+came from another Claude session … that's permission laundering" instruction. None
+of it was typed by the human, and in a teammate-heavy session it arrives every few
+minutes, so it read as a stream of `YOU` bubbles full of `idle_notification` JSON
+in every mode (the report). Unlike the other three there is **nothing structural
+to read**: measured on the corpus the record is `type: "user"`, `isMeta` absent,
+`userType: "external"`, `isSidechain: false` — byte-for-byte the shape of a typed
+prompt. So the mark is the envelope's shape, **anchored at the start of the
+content** (`transcript._TEAM_ENVELOPE`), which is what makes reading text safe
+here: a message that merely QUOTES an envelope — a paste asking "why is this in my
+transcript?", this file — has something in front of it and stays yours. A wording
+change in the framing sentence degrades to the old behaviour, not to a crash. The
+BARE `<teammate-message>…` form (no envelope) is untouched: `classify_user_text`
+already turns that into a `teammsg` record with its own ✉ sender bubble, because
+there the sender is known.
+
+**Verbose relabels them: ⚙ SYSTEM, not YOU.** Verbose deliberately keeps injected
+turns — it shows the transcript as it is, and they ARE in it — but a bubble
+labelled `YOU` over a hook's feedback, a loaded skill or another session's mail is
+a lie about who said it, whatever the mode. `msg_html`'s `meta` therefore renders
+them as a system bubble: the `⚙ system` label, a second class `sys` beside the
+kind (the kind stays `prompt` — the page's focus logic keys on it), and the
+deliberately neutral slate of `core/ops.py`'s SLATE (`--sys`) instead of prompt
+gold, because none of this is conversation. It also drops the affordances that
+only make sense for something you wrote: no `data-txt` and no `↶`, so a system
+turn is not a rewind target and not a `↑`-history entry in the composer — and the
+two selectors that reach for "your newest prompt" (the interrupt take-back, the
+rewind picker's click target) exclude `.sys`, since an injected turn can easily be
+newer than the prompt they mean.
+
+An injected prompt also does **not close the turn** for focus mode's
 final-reply rule — the reply after a hook firing still belongs to the prompt you
 typed, and treating it as a boundary surfaced a second "final" reply per firing.
 
