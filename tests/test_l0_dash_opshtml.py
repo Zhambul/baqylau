@@ -387,6 +387,20 @@ def test_tool_html_write_highlights_known_lexer():
     assert "<pre class=\"oc\">" in h and "<span" in h    # python lexer ran
 
 
+def test_tool_html_lexer_for_matches_the_langs_families():
+    """The presenter's endswith-keyed lookup over the shared coderender.LANGS
+    resolves each family member to its OWN lexer (.jsx/.tsx/.cjs are not the
+    base extension, .kts is not .ts) — the suffix-uniqueness the table's keys
+    guarantee, checked from the consumer that depends on it."""
+    from dashboard.opshtml.tools import _lexer_for
+    for path, exp in [("/w/domshim.js", "javascript"), ("/w/cfg.cjs", "javascript"),
+                      ("/w/App.jsx", "jsx"), ("/w/main.ts", "typescript"),
+                      ("/w/Panel.tsx", "tsx"), ("/w/build.gradle.kts", "kotlin"),
+                      ("/w/index.html", "html"), ("/w/style.css", "css"),
+                      ("/w/notes.txt", None)]:
+        assert _lexer_for(path) == exp, path
+
+
 def test_tool_html_read_one_liner():
     h = opshtml.tool_html("Read", {"file_path": "/w/a.py", "offset": 10,
                                    "limit": 20})

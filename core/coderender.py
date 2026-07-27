@@ -13,11 +13,24 @@
 from core import render as R
 
 # File extension -> pygments lexer name. Extend here to support more languages.
+#
+# Two consumers match an extension by SUFFIX rather than by splitext (tools.
+# _lexer_match, opshtml.tools._lexer_for: first entry whose ext the word ends
+# with wins), so no key may be a suffix of another or insertion order would
+# decide. The dot in each key is what keeps the families apart — ".cjs" does not
+# end with ".js", ".tsx" does not end with ".ts", ".kts" does not end with ".ts"
+# — so every member of a family needs its own row.
 LANGS = {
     ".py": "python", ".pyi": "python",
     ".kt": "kotlin", ".kts": "kotlin",
     ".java": "java",
     ".sh": "bash", ".bash": "bash", ".zsh": "bash",
+    ".js": "javascript", ".mjs": "javascript", ".cjs": "javascript",
+    ".jsx": "jsx",
+    ".ts": "typescript", ".mts": "typescript", ".cts": "typescript",
+    ".tsx": "tsx",
+    ".html": "html", ".htm": "html",
+    ".css": "css", ".scss": "scss", ".less": "less",
 }
 
 

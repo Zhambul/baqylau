@@ -73,7 +73,8 @@ hyperlink (`claude-copy:///<key>/<tool_use_id>/view`, baked into the op's text
 by the producer; the renderer needs no geometry). Clicking it expands the op's
 full content directly under the line; clicking again collapses it. What
 expands: a **Read** shows the text it returned, syntax-highlighted
-(`coderender.LANGS` — python/kotlin/java/bash + friends) with a dim
+(`coderender.LANGS` — python/kotlin/java/bash, js/mjs/cjs/jsx, ts/mts/cts/tsx,
+html/htm, css/scss/less) with a dim
 line-number gutter from its real start line — **except a `.md`/`.markdown`
 file, which is instead pretty-rendered as markdown** (headings→amber banners,
 bold/emphasis, lists, blockquotes, GFM tables, fenced code in its own CODE_BG

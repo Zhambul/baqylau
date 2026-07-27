@@ -82,8 +82,9 @@ def _read_text(path, ti, tr):
 
 
 def _lexer(path):
-    """The pygments lexer for a path's extension (python/kotlin/java/bash and
-    friends — the shared coderender.LANGS table), or None."""
+    """The pygments lexer for a path's extension (python/kotlin/java/bash,
+    js/ts/jsx/tsx, html/css and friends — the shared coderender.LANGS table),
+    or None."""
     from core.coderender import LANGS
     return LANGS.get(os.path.splitext(path)[1].lower())
 

@@ -184,7 +184,9 @@ byte-identical by the `tests/golden/render-*.ansi` goldens. No new dependency:
 stdlib `json` + the same optional pygments for colour.
 
 **Source files are syntax-highlighted too.** `cat`/`head`/`tail` of a `.py`,
-`.java`, `.kt`/`.kts`, or `.sh`/`.bash`/`.zsh` (`tools.code_source`, gated by
+`.java`, `.kt`/`.kts`, `.sh`/`.bash`/`.zsh`, a JS/TS-family file
+(`.js`/`.mjs`/`.cjs`/`.jsx`, `.ts`/`.mts`/`.cts`/`.tsx`), or web markup
+(`.html`/`.htm`, `.css`/`.scss`/`.less`) (`tools.code_source`, gated by
 `CLAUDE_MIRROR_CODE`) is coloured in place via the matching pygments lexer,
 reusing `render.pick` (keywords magenta, function names blue, strings green,
 numbers orange, comments grey) — no reformat, no panel. `sed`/`grep`/`egrep`/`fgrep`
@@ -193,7 +195,12 @@ because these put a SCRIPT/PATTERN arg *before* the file, the lexer is read from
 **trailing** arg only, so a pattern like `grep 'foo.py' x.txt` can't masquerade as
 python and a recursive `grep -r pat src/` (a directory, no extension) correctly opts
 out. One generic renderer, `core/coderender.CodeStreamer(lexer)`; adding a language
-is one line in `coderender.LANGS` (extension → lexer name). `code_source` returns the
+is one line in `coderender.LANGS` (extension → lexer name) — one line *per
+extension*: two consumers match by `endswith` (`tools._lexer_match`,
+`opshtml.tools._lexer_for`), so no key may be a suffix of another. The leading dot
+is what keeps the families apart (`.cjs` does not end with `.js`, `.tsx` not with
+`.ts`, `.kts` not with `.ts`), which is why every member gets its own row rather
+than riding on the family's base extension. `code_source` returns the
 lexer name (not just a bool) so the tailer knows which lexer to load. Detection runs
 on the command's **effective read** (`tools._effective`): a trailing **truncation
 pipe** (`grep … x.py | head -40`, `| tail`) is stripped — it only shortens the same

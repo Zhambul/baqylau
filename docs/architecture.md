@@ -97,7 +97,9 @@ supersedes `render.markdown()` and falls back to it when `wenmode` is absent),
 `.json` stream whole and pretty-prints + colours it at completion — stdlib `json`;
 `YamlStreamer` colours a `.yml` in place without reformatting — both optional
 pygments, no background panel), `coderender.py` (a generic `CodeStreamer(lexer)`
-that colours a source file — `.py`/`.java`/`.kt`/`.sh` — via the pygments lexer
+that colours a source file — `.py`/`.java`/`.kt`/`.sh`, the JS/TS family
+(`.js`/`.mjs`/`.cjs`/`.jsx`/`.ts`/`.mts`/`.cts`/`.tsx`), and the web-markup pair
+`.html`/`.htm` + `.css`/`.scss`/`.less` — via the pygments lexer
 named by its extension in `LANGS`; reuses `render.pick`), `audit.py` (the audit
 trail's WRITE path — the tables, the migrations, the `A.*` row writers, the
 spool degradation; imported by every hook process on every event, which is why

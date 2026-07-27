@@ -307,21 +307,50 @@ from core import coderender as CODE  # noqa: E402
 
 
 def test_code_highlighted_per_language():
+    # (source, the STRUCTURAL colour that language must show) — a comment is
+    # always required on top. Markup has no keywords (html's tags land on `def`,
+    # scss's $vars on `var`), so the structural colour is per-language rather
+    # than a uniform "kw".
     cases = {
-        "python": "import os\ndef greet(n):\n    return f'hi {n}'  # c\n",
-        "java": 'public class Foo { int n = 3; // c\n String s = "x"; }\n',
-        "kotlin": 'fun greet(n: String): String {\n  val x = 42  // c\n  return "hi"\n}\n',
-        "bash": '#!/bin/bash\nset -e\nfor i in 1 2 3; do echo "$i"; done  # loop\n',
+        "python": ("import os\ndef greet(n):\n    return f'hi {n}'  # c\n", "kw"),
+        "java": ('public class Foo { int n = 3; // c\n String s = "x"; }\n', "kw"),
+        "kotlin": ('fun greet(n: String): String {\n  val x = 42  // c\n  return "hi"\n}\n',
+                   "kw"),
+        "bash": ('#!/bin/bash\nset -e\nfor i in 1 2 3; do echo "$i"; done  # loop\n',
+                 "kw"),
+        "javascript": ("import os from 'os';\nfunction greet(n) {\n"
+                       "  const x = 42; // c\n  return `hi ${n}`;\n}\n", "kw"),
+        "jsx": ('const A = () => (\n  <div className="x">{/* c */}hi</div>\n);\n',
+                "kw"),
+        "typescript": ("interface P { n: number }\nfunction f(p: P): string {\n"
+                       "  // c\n  return 'x';\n}\n", "kw"),
+        "tsx": ("const A = (p: {n: number}) => <b>{p.n}</b>; // c\n", "kw"),
+        "html": ('<!doctype html>\n<!-- c -->\n<div class="x">hi</div>\n', "def"),
+        "css": ("/* c */\n.x { color: #fff; margin: 0 auto; }\n", "kw"),
+        "scss": ("$c: #fff;\n// c\n.x { color: $c; }\n", "var"),
+        "less": ("@c: #fff;\n/* c */\n.x { color: @c; }\n", "kw"),
     }
-    for lexer, src in cases.items():
+    for lexer, (src, structural) in cases.items():
         s = CODE.CodeStreamer(lexer)
         s.feed(src)
         text, bg = s.close()[0]
         assert bg is None, lexer + " must have no background panel"
-        assert R.COL["kw"] in text, lexer + " keyword coloured"
+        assert R.COL[structural] in text, lexer + " " + structural + " coloured"
         assert R.COL["cmt"] in text, lexer + " comment coloured"
         # source preserved verbatim (no reformat).
         assert R.strip_ansi(text).rstrip("\n") == src.rstrip("\n")
+
+
+def test_code_langs_keys_are_suffix_unique():
+    """No LANGS key may be a suffix of another: two consumers match an extension
+    with `endswith` over the table (tools._lexer_match, opshtml.tools._lexer_for),
+    so a key that is a suffix of another would make dict ORDER decide the lexer.
+    The leading dot is what keeps the families apart (.cjs/.js, .tsx/.ts,
+    .kts/.ts) — this pins that every family member has its own row."""
+    keys = list(CODE.LANGS)
+    for k in keys:
+        for other in keys:
+            assert other == k or not k.endswith(other), (k, other)
 
 
 def test_code_fallback_without_pygments(monkeypatch):
@@ -349,17 +378,56 @@ def test_code_source_detection():
                    ("grep -n def base.py |\nhead", "python"),
                    ("grep foo \\\n  Main.java", "java"),
                    # multi-statement: the LAST statement's file picks the lexer
-                   ("grep -n def a.py\nprintf hi\nsed -n 1,5p b.java", "java")]:
+                   ("grep -n def a.py\nprintf hi\nsed -n 1,5p b.java", "java"),
+                   # the JS/TS family — each extension its own lexer, and the
+                   # family members must NOT collapse onto the base extension
+                   ("sed -n 60,110p tests/jsdom/domshim.js", "javascript"),
+                   ("cat bundle.mjs", "javascript"), ("cat cfg.cjs", "javascript"),
+                   ("grep -n useState App.jsx", "jsx"),
+                   ("cat main.ts", "typescript"), ("head -20 node.mts", "typescript"),
+                   ("cat Panel.tsx", "tsx"),
+                   # .kts stays kotlin (it does not end with the .ts key)
+                   ("cat build.gradle.kts", "kotlin"),
+                   # web markup
+                   ("head -20 index.html", "html"), ("< page.htm", "html"),
+                   ("tail -5 app.css", "css"), ("cat theme.scss", "scss"),
+                   ("sed -n 1,40p vars.less", "less")]:
         assert code_source(c) == exp, c
     for c in ["cat foo.txt", "bat foo.py", "python foo.py",
               "cat foo.py > o", "rm a.py",
               # the PATTERN/SCRIPT arg must not masquerade as the file
               "grep 'foo.py' x.txt", "sed 's/a/b.py/' notes.txt",
+              "grep 'foo.js' x.txt", "node app.js",
               # recursive grep (dir last, no extension) opts out
               "grep -r pattern src/",
               # a TRANSFORM pipe (not head/tail) still disqualifies — output derived
               "cat foo.py | grep x", "cat foo.py | awk '{print}'"]:
         assert code_source(c) is None, c
+
+
+def test_read_command_names_file_and_reader():
+    """The Read-one-liner seam both Bash hooks consult returns the whole triple —
+    (lexer, file, reader tag). A sed of a .js used to fall through to a streamed
+    fg block because the extension had no lexer; the file/reader halves always
+    matched (sed is a tailarg reader), so only the LANGS row was missing."""
+    from plugins.claude_code.tools import read_command
+    assert read_command("sed -n 60,110p tests/jsdom/domshim.js") == (
+        "javascript", "tests/jsdom/domshim.js", "sed")
+    assert read_command("grep -n color app/theme.scss") == (
+        "scss", "app/theme.scss", "grep")
+    assert read_command("cat notes.txt") == (None, None, None)
+
+
+def test_file_op_lexer_covers_the_web_extensions():
+    """The file-op click-to-view expand keys its lexer off the same table
+    (file_fmt._lexer, splitext-keyed), so a Read/Write of a .js/.ts/.css
+    highlights in the mirror too — not just a command that streams one."""
+    from plugins.claude_code.file_fmt import _lexer
+    for path, exp in [("/a/b/domshim.js", "javascript"), ("/a/Panel.tsx", "tsx"),
+                      ("/a/main.ts", "typescript"), ("/a/index.html", "html"),
+                      ("/a/style.css", "css"), ("/a/build.gradle.kts", "kotlin"),
+                      ("/a/notes.txt", None)]:
+        assert _lexer(path) == exp, path
 
 
 # ---- golden byte-identity ------------------------------------------------------
