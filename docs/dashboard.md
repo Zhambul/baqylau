@@ -3432,9 +3432,11 @@ quality, nothing to keyterm).
 **Audio: AudioWorklet → linear16 PCM, not MediaRecorder.** MediaRecorder
 was rejected because **iPad Safari emits mp4/AAC, which Deepgram streaming
 refuses** — and the iPad (docs/remote.md) is a first-class client. Instead a
-~15-line worklet converts Float32→Int16 at the AudioContext's **native**
-rate (declared in `sample_rate=` — no resampling code), batched to
-4096-sample chunks (~85ms @48k) so the socket sees a sane message rate.
+worklet converts Float32→Int16 and **resamples to Deepgram's own 16 kHz model
+rate** (`DICT_RATE`, declared in `sample_rate=` — see *Dictation lag* below for
+why it is no longer the native rate), batched to `DICT_CHUNK`-sample chunks
+(1024 = 64ms @16k) so the socket sees a sane message rate — bare 128-sample
+render quanta would be ~375 tiny ws messages/s, and Deepgram wants 20–250ms.
 Continuous PCM means silence is still data, so Deepgram's no-audio timeout
 never fires and there is no KeepAlive plumbing. Secure-context note: mic
 APIs work on `http://127.0.0.1` (localhost is a secure context) and on the
@@ -3459,6 +3461,77 @@ tracks (the tab's mic indicator must go off). Deliberately NO auto-stop on
 silence — an open mic costs $0.0077/min and auto-stop mid-thought is the
 annoying failure mode.
 
+### Dictation lag
+
+The reported symptom (2026-07-27): *"I say a lot of words and it takes some
+time for them to appear in the input"* — from an **iPad over the tunnel**.
+
+**The uplink was ours to fix.** The worklet used to declare and send the
+AudioContext's **native** rate untouched — the design note said "no resampling
+code", which was true and was the bug. 48000 Hz × 2 bytes mono is **768 kbps of
+sustained upload**, and because continuous PCM is deliberate (silence is data,
+which is what keeps Deepgram's no-audio timeout from firing) it is 768 kbps for
+as long as the mic is open, pauses included. An iPad on a phone-grade uplink
+cannot hold that, so `ws.send()` queued faster than the socket drained and
+**the delay grew with every sentence** — nothing anywhere read
+`ws.bufferedAmount`, so the backlog was invisible and unbounded. That growth is
+the tell: a slow *API* is a roughly constant delay; a saturated *uplink*
+compounds. Deepgram's models are 16 kHz, so every sample above that was pure
+upstream cost buying zero accuracy. `DICT_RATE` = 16000 is **3× less** wire.
+
+**Why the resampling is ours and not the browser's.** `new
+AudioContext({sampleRate: 16000})` needs no DSP at all and was rejected: the
+first-class client is iPad Safari (docs/remote.md), and a non-native-rate
+context feeding `createMediaStreamSource` is exactly where Safari's own
+resampler has a history of misbehaving. **A silent mic is a far worse bug than
+a laggy one**, so the conversion happens in the worklet and behaves identically
+on every browser. It is a 4th-order Butterworth low-pass (two cascaded biquads
+at the Butterworth Q pair, cutoff 0.425 × the output rate) into a **fractional**
+linear-interpolating read head — fractional because 44100 devices are real and
+44100/16000 is 2.756, so a decimate-by-N would be wrong there and only there.
+The filter is not optional: without it everything above 8 kHz **folds back into
+the speech band**, landing sibilant energy on top of vowels, which is worse for
+ASR than the HF being dropped. Hardware already at or below 16k (8k/16k
+devices) is a byte-exact **passthrough** — filtering a 1:1 stream only degrades
+it. The rate is decided **once**, on the main thread, before the mint: it is
+baked into the listen URL's `sample_rate=` *and* handed to the worklet as a
+`processorOption`, because a re-derived rate could disagree and mislabel the
+stream. `tests/jsdom/dictpcm.js` executes the real worklet over synthetic
+tones (exact sample counts at 48k and 44.1k, unity passband gain, a 12 kHz tone
+attenuated to ~0.05, byte-exact passthrough) — every one of those failures
+produces plausible-looking PCM that no grep would catch.
+
+**And the delay is now attributed, not guessed.** "Dictation is slow" was
+unanswerable from the audit DB by construction: the server mints a token and
+**never sees the stream** (that is the whole architecture), so nothing on this
+machine knew whether the words were stuck in our socket or still inside
+Deepgram. The browser now samples both onto the frontend audit channel
+(*Frontend audit (clientlog)*), every `DICT_LAG_MS`, in seconds-of-audio so
+they add up to the delay you actually see:
+
+- **`queue_s`** — `ws.bufferedAmount / (rate × 2)`: audio sitting in **our**
+  send buffer, i.e. uplink we can't keep up with. This is the one that grows,
+  and the one we can fix.
+- **`svc_s`** — audio the network has taken that Deepgram hasn't accounted for
+  yet, measured against **Deepgram's own audio clock** (its `Results` carry the
+  segment's `start` + `duration`). This one is theirs, and should be roughly
+  constant.
+
+Events: `dictate.start` `{rate, native}` (the native rate is what proves the
+resampler is engaged on that device), `dictate.lag`
+`{queue_s, svc_s, sent_s, buffered}`, a one-shot `dictate.backlog` +
+**toast** when `queue_s` passes `DICT_BACKLOG_WARN_S` — worth knowing *while*
+you speak, not after you send — and `dictate.stop`
+`{rate, spoke_s, max_queue_s, max_svc_s}`, the maxima rather than whatever the
+last sample happened to catch, so one session is comparable to the next.
+Collapsing the two into a single "lag" number would put the next report right
+back at guessing. Read them with:
+
+```sh
+python3 bin/claude-audit.py sql "SELECT ts, content FROM state_files
+  WHERE action='web-client' AND content LIKE '%dictate.%' ORDER BY ts DESC LIMIT 40"
+```
+
 **Audit.** Every mint attempt is a `web-dictate` `state_files` row (no sid —
 the new-session form dictates too), `{ok, rate, cwd, keyterms}` on success
 (`cwd` + the term count answer "why didn't my project word bias" — an empty
@@ -3466,7 +3539,10 @@ the new-session form dictates too), `{ok, rate, cwd, keyterms}` on success
 `{ok: false, why: bad-rate|no-key|grant}` on failure, grant failures also an
 `A.error("dashboard dictate (grant failed)")`. "Mic button missing or dead"
 triages as: `/api/dictate` says available? → `web-dictate` rows → dictate
-errors (the audit-debug skill's bug shape).
+errors (the audit-debug skill's bug shape). "Dictation is SLOW" is a different
+question with different evidence — the `dictate.lag` clientlog rows above, not
+the mint rows; a `web-dictate` `rate` back at 48000 would mean the resampler
+never engaged on that device.
 
 ## Stats / Insights (`GET /api/stats`)
 

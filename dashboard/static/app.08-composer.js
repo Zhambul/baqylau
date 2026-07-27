@@ -3,11 +3,14 @@
 // cohesive files (classic scripts share one global scope; load order is set in
 // index.html). See app.13-init.js for the boot/init sequence.
 
-function dictation(ta, getCwd) {
+function dictation(ta, getCwd, sid) {
   // Per-textarea controller — returns {btn, stop}; callers place the button.
   // getCwd (optional, zero-arg): the directory that keys the PROJECT
   // vocabulary layer — read at mic-press time, so the new-session form's
   // typed dir is honored as-typed and a keyterms edit lands next press.
+  // sid (optional): only for attributing the lag telemetry below — the
+  // new-session form dictates with no session to name, exactly like the
+  // server-side `web-dictate` audit row.
   const btn = el("button", "micbtn");
   btn.type = "button";
   btn.title = "dictate";
@@ -31,7 +34,14 @@ function dictation(ta, getCwd) {
     // must be released or the tab's mic indicator sticks on. (First-ever use
     // can sit >30s in the permission prompt and outlive the JWT — the ws
     // then fails its handshake and toasts; the retry has a warm permission.)
-    const tokBody = { sample_rate: Math.round(ctx.sampleRate) };
+    // What we will actually PUT ON THE WIRE — not what the hardware runs at.
+    // The worklet resamples to DICT_RATE (see DICT_WORKLET: native-rate PCM
+    // saturated an iPad's uplink and the lag then grew with every sentence);
+    // hardware already at or below it passes through untouched. This is the
+    // rate baked into the listen URL, so it must be decided BEFORE the mint
+    // and handed to the worklet unchanged — one decision, two consumers.
+    const outRate = Math.min(DICT_RATE, Math.round(ctx.sampleRate));
+    const tokBody = { sample_rate: outRate };
     const cwd = getCwd && getCwd();
     if (cwd) tokBody.cwd = cwd;    // keys the project keyterms layer
     const [ms, mt] = await Promise.allSettled([
@@ -63,6 +73,23 @@ function dictation(ta, getCwd) {
       prefix: ta.value.slice(0, at), suffix: ta.value.slice(at),
       committed: "", interim: "", skipFinal: false, painting: false,
       stopping: false, closed: false, lastPainted: null,
+      // lag accounting (docs/dashboard.md *Dictation lag*): `sent` counts the
+      // audio HANDED TO the socket, `proc` the audio Deepgram has told us it
+      // transcribed (its Results carry the segment's own audio clock). The
+      // difference splits cleanly in two, which is the whole point — see lag().
+      sent: 0, proc: 0, maxQueue: 0, maxSvc: 0, warned: false, timer: null,
+    };
+    const bps = outRate * 2;   // linear16 mono: bytes of wire per second of audio
+    // WHERE the delay lives, measured rather than guessed:
+    //   queue   — audio sitting in OUR WebSocket send buffer, i.e. uplink we
+    //             cannot keep up with. This is the one WE can fix.
+    //   service — audio the network has taken but Deepgram hasn't accounted
+    //             for yet. This one is theirs.
+    // Both are in seconds-of-audio, so they add up to the delay you SEE.
+    const lag = () => {
+      const queue = ws && ws.readyState === 1 ? ws.bufferedAmount / bps : 0;
+      const sent = st.sent / outRate;
+      return { queue, sent, svc: Math.max(0, sent - queue - st.proc) };
     };
     const paint = () => {
       // Once we're STOPPING, never RESURRECT text into a box that something
@@ -97,6 +124,13 @@ function dictation(ta, getCwd) {
     const finish = () => {         // the ws is done, clean or not
       if (st.closed) return;
       st.closed = true;
+      if (st.timer) { clearInterval(st.timer); st.timer = null; }
+      // the summary is what makes a session comparable to the next one — the
+      // WORST backlog we ever reached, not whatever the last sample caught
+      clog(sid || "", "dictate.stop", {
+        rate: outRate, spoke_s: +(st.sent / outRate).toFixed(1),
+        max_queue_s: +st.maxQueue.toFixed(2), max_svc_s: +st.maxSvc.toFixed(2),
+      });
       stream.getTracks().forEach(t => t.stop());   // tab mic indicator OFF
       if (ctx.state !== "closed") ctx.close();
       // commit a dangling interim — but never resurrect text into a box
@@ -123,6 +157,10 @@ function dictation(ta, getCwd) {
       let d;
       try { d = JSON.parse(ev.data); } catch (e) { return; }
       if (d.type !== "Results") return;
+      // Deepgram stamps every Results with the segment's position in the audio
+      // it has consumed — the only clock that says how far it has actually got
+      if (typeof d.start === "number" && typeof d.duration === "number")
+        st.proc = d.start + d.duration;
       const alt = d.channel && d.channel.alternatives
         && d.channel.alternatives[0];
       const text = (alt && alt.transcript) || "";
@@ -148,14 +186,38 @@ function dictation(ta, getCwd) {
             new Blob([DICT_WORKLET], { type: "text/javascript" }));
         await ctx.audioWorklet.addModule(dictWorkletURL);
         const src = ctx.createMediaStreamSource(stream);
-        const sink = new AudioWorkletNode(ctx, "dictate-pcm");
+        const sink = new AudioWorkletNode(ctx, "dictate-pcm",
+                                          { processorOptions: { outRate } });
         sink.port.onmessage = (e) => {
-          if (ws.readyState === 1 && !st.stopping) ws.send(e.data);
+          if (ws.readyState === 1 && !st.stopping) {
+            ws.send(e.data);
+            st.sent += e.data.byteLength / 2;   // linear16: 2 bytes a sample
+          }
         };
         src.connect(sink);
         sink.connect(ctx.destination);   // pull the graph; outputs are silence
         btn.classList.remove("wait");
         btn.classList.add("rec");
+        clog(sid || "", "dictate.start",
+             { rate: outRate, native: Math.round(ctx.sampleRate) });
+        st.timer = setInterval(() => {
+          const l = lag();
+          if (l.queue > st.maxQueue) st.maxQueue = l.queue;
+          if (l.svc > st.maxSvc) st.maxSvc = l.svc;
+          clog(sid || "", "dictate.lag", {
+            queue_s: +l.queue.toFixed(2), svc_s: +l.svc.toFixed(2),
+            sent_s: +l.sent.toFixed(1), buffered: ws.bufferedAmount,
+          });
+          // Say it out loud, once. A backlog this deep means the text you are
+          // watching is seconds behind your mouth and will only fall further —
+          // that is worth knowing WHILE you speak, not after you send.
+          if (!st.warned && l.queue > DICT_BACKLOG_WARN_S) {
+            st.warned = true;
+            clog(sid || "", "dictate.backlog", { queue_s: +l.queue.toFixed(2) });
+            toast("ask", "dictation lagging",
+                  "slow upload — the text is behind your voice");
+          }
+        }, DICT_LAG_MS);
       } catch (e) {
         try { ws.close(); } catch (e2) { /* already closed */ }
         finish();
@@ -751,7 +813,7 @@ function buildComposer() {
     ses.hintBtn = hintBtn;
   }
   syncSuggestion(ta);   // show a live ghost suggestion (if any) into the empty box
-  const dic = dictation(ta, () => meta.cwd || "");
+  const dic = dictation(ta, () => meta.cwd || "", sid);
   dic.btn.disabled = !usable;    // an honest dead mic beats one that ignores you
   // attachments: staged under this session's id (live) or its own id for a
   // parked resume (the bytes are read once the revived session boots)

@@ -476,26 +476,120 @@ function dictAvailable() {
   return dictProbe;
 }
 
-// Float32 → Int16 in the audio thread, batched to 4096-sample (~85ms @48k)
-// chunks — bare 128-sample process() quanta would be ~375 tiny ws messages/s.
+// The audio thread's whole job: mic Float32 at the AudioContext's NATIVE rate
+// → 16 kHz linear16 PCM, batched into ~64ms chunks (bare 128-sample process()
+// quanta would be ~375 tiny ws messages/s).
+//
+// Why resample at all (2026-07-27): we used to declare the native rate and ship
+// it untouched — 48000 × 2 bytes = 768 kbps of sustained uplink, silence
+// included (continuous PCM is deliberate: it keeps Deepgram's no-audio timeout
+// from ever firing). An iPad over the tunnel could not hold that up, so the ws
+// send queue grew without bound and the transcript fell FURTHER behind the
+// longer you spoke — the tell of a saturated uplink, not a slow API (a slow API
+// is a CONSTANT delay). Deepgram's models are 16 kHz; every sample above that
+// was pure upstream cost for zero accuracy. 16k is 256 kbps, 3× less.
+//
+// Why here and not `new AudioContext({sampleRate: 16000})`, which needs no DSP
+// at all: the first-class client is iPad Safari (docs/remote.md), and a
+// non-native-rate context feeding createMediaStreamSource is exactly where
+// Safari's own resampler has a history of misbehaving. A SILENT mic is a far
+// worse bug than a laggy one, so the conversion is ours and behaves identically
+// on every browser.
+//
+// Decimation without an anti-alias filter would FOLD everything above 8 kHz
+// back into the speech band (sibilant energy landing on top of vowels — worse
+// for ASR than the HF being dropped), hence the 4th-order Butterworth low-pass
+// ahead of the resampler. The read head is FRACTIONAL (linear interpolation),
+// not a decimate-by-N, because 44100 devices are real and 44100/16000 is 2.756.
+const DICT_RATE = 16000;      // Deepgram's model rate — above it is upstream cost
+const DICT_CHUNK = 1024;      // 64ms @16k, inside Deepgram's 20–250ms window
 const DICT_WORKLET = `
+const CHUNK = ${DICT_CHUNK};
+const LP_HZ = 0.425;             // cutoff as a fraction of the OUTPUT rate
+const LP_Q = [0.5412, 1.3065];   // the 4th-order Butterworth section Qs
+
+class Biquad {                   // one RBJ low-pass section
+  constructor(rate, hz, q) {
+    const w = 2 * Math.PI * hz / rate, c = Math.cos(w);
+    const al = Math.sin(w) / (2 * q), a0 = 1 + al;
+    this.b0 = (1 - c) / 2 / a0; this.b1 = (1 - c) / a0; this.b2 = this.b0;
+    this.a1 = -2 * c / a0; this.a2 = (1 - al) / a0;
+    this.x1 = this.x2 = this.y1 = this.y2 = 0;
+  }
+  step(x) {
+    const y = this.b0 * x + this.b1 * this.x1 + this.b2 * this.x2
+              - this.a1 * this.y1 - this.a2 * this.y2;
+    this.x2 = this.x1; this.x1 = x; this.y2 = this.y1; this.y1 = y;
+    return y;
+  }
+}
+
 class DictatePCM extends AudioWorkletProcessor {
-  constructor() { super(); this.buf = new Int16Array(4096); this.n = 0; }
+  constructor(opt) {
+    super();
+    // outRate is the main thread's decision because the TOKEN is minted (and
+    // the listen URL's sample_rate= baked) before this processor exists — it
+    // must not be re-derived here or the two could disagree.
+    const out = (opt && opt.processorOptions && opt.processorOptions.outRate)
+                || sampleRate;
+    this.step = sampleRate / out;   // input samples consumed per output sample
+    // a device already at or below the target (8k/16k hardware) is a
+    // PASSTHROUGH — filtering and interpolating a 1:1 stream only degrades it
+    this.lp = this.step > 1.0001
+      ? LP_Q.map(q => new Biquad(sampleRate, LP_HZ * out, q)) : [];
+    this.pos = 0;    // fractional read head, relative to this block's start
+    this.prev = 0;   // last filtered sample of the PREVIOUS block (index -1)
+    this.f = null;   // filtered scratch, sized to the render quantum
+    this.buf = new Int16Array(CHUNK);
+    this.n = 0;
+  }
+  emit(v) {
+    const s = v < -1 ? -1 : v > 1 ? 1 : v;
+    this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
+    if (this.n === this.buf.length) {
+      this.port.postMessage(this.buf.slice(0).buffer);
+      this.n = 0;
+    }
+  }
   process(inputs) {
     const ch = inputs[0] && inputs[0][0];
-    if (ch) for (let i = 0; i < ch.length; i++) {
-      const s = Math.max(-1, Math.min(1, ch[i]));
-      this.buf[this.n++] = s < 0 ? s * 0x8000 : s * 0x7fff;
-      if (this.n === this.buf.length) {
-        this.port.postMessage(this.buf.slice(0).buffer);
-        this.n = 0;
-      }
+    if (!ch) return true;
+    if (!this.lp.length) {
+      for (let i = 0; i < ch.length; i++) this.emit(ch[i]);
+      return true;
     }
+    if (!this.f || this.f.length < ch.length)
+      this.f = new Float32Array(ch.length);
+    const f = this.f;
+    for (let i = 0; i < ch.length; i++) {
+      let v = ch[i];
+      for (let k = 0; k < this.lp.length; k++) v = this.lp[k].step(v);
+      f[i] = v;
+    }
+    // interpolate between f[i] and f[i+1]; i === -1 reaches back across the
+    // block boundary to the previous block's last sample, so the phase is
+    // continuous and no output sample is lost at a quantum edge
+    while (this.pos < ch.length - 1) {
+      const i = Math.floor(this.pos), t = this.pos - i;
+      const a = i < 0 ? this.prev : f[i];
+      this.emit(a + (f[i + 1] - a) * t);
+      this.pos += this.step;
+    }
+    this.prev = f[ch.length - 1];
+    this.pos -= ch.length;
     return true;
   }
 }
 registerProcessor("dictate-pcm", DictatePCM);`;
 let dictWorkletURL = null;
+
+// Dictation lag telemetry (docs/dashboard.md *Dictation lag*). "It's slow" was
+// unanswerable from the DB: the server mints a token and never sees the stream,
+// so nothing on this machine knew whether the words were stuck in OUR socket or
+// still inside Deepgram. These sample the two separately onto the clientlog
+// channel, which is the only place the distinction can be observed at all.
+const DICT_LAG_MS = 5000;         // one lag sample per 5s of dictation
+const DICT_BACKLOG_WARN_S = 3;    // queued audio that earns the one-shot toast
 
 function micIcon() {
   const NS = "http://www.w3.org/2000/svg";

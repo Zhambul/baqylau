@@ -33,9 +33,16 @@ GRANT_TIMEOUT_S = 5.0    # the grant is one small HTTPS POST; fail fast so a
 #                          Deepgram outage can't hold a server thread long
 MODEL = "nova-3"         # keyterm prompting requires nova-3
 LANGUAGE = "en"
-# The browser sends its AudioContext's NATIVE rate (no client-side resampling
-# — Float32→Int16 is the only transform); anything outside hardware reality
-# is a bogus request, not a config to honor.
+# The browser sends the rate it will actually PUT ON THE WIRE, which since
+# 2026-07-27 is Deepgram's own 16 kHz model rate, not the AudioContext's native
+# one: the worklet resamples (hardware already at or below 16k passes through),
+# because native-rate PCM is 768 kbps of sustained uplink and an iPad over the
+# tunnel could not hold that up — the send queue backed up and the transcript
+# fell further behind with every sentence (docs/dashboard.md *Dictation lag*).
+# The range stays a sanity bound, not a config: the client is trusted to
+# declare what it sends, but anything outside hardware reality is a bogus
+# request. The rate is audited on every mint, so a regression to native-rate
+# audio is visible in the `web-dictate` rows.
 SAMPLE_RATE_MIN, SAMPLE_RATE_MAX = 8000, 384000
 KEYTERMS_MAX = 100       # keep the URL sane; Deepgram tolerates ~100s of terms
 
@@ -121,9 +128,10 @@ def ws_url(sample_rate, terms=()):
     """The full live-listen URL the browser connects to, every parameter
     server-decided: nova-3 + interim results (the whole point — text lands in
     the textarea as you speak), smart_format for punctuation, raw linear16
-    PCM at the client's native rate (AudioWorklet output — MediaRecorder is
-    rejected in docs/dashboard.md: iPad Safari emits mp4/AAC, which Deepgram
-    streaming refuses), one keyterm= per vocabulary term — the caller passes
+    PCM at the rate the client says it will SEND (AudioWorklet output,
+    resampled to the model rate — MediaRecorder is rejected in
+    docs/dashboard.md: iPad Safari emits mp4/AAC, which Deepgram streaming
+    refuses), one keyterm= per vocabulary term — the caller passes
     the keyterms() result so the merged list is read once and the audit
     count matches what actually rode the URL."""
     base = os.environ.get("CLAUDE_DICTATE_LISTEN_URL") or DEEPGRAM_LISTEN_URL

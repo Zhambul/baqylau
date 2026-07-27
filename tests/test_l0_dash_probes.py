@@ -6,6 +6,8 @@
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
 import threading
 import urllib.error
@@ -263,6 +265,70 @@ def test_post_dictate_token_grant_failure_is_502(dash, tmp_path, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/dictate/token", {"sample_rate": 48000})
     assert e.value.code == 502
+
+
+def test_dictation_worklet_resamples_to_the_model_rate():
+    """The dictation worklet, EXECUTED rather than grepped: tests/jsdom/
+    dictpcm.js runs the real DICT_WORKLET source (a template string inside
+    app.07-dialogs.js, which `node --check` never even parses) over synthetic
+    tones at the rates real hardware runs at.
+
+    The worklet exists to stop sending NATIVE-rate PCM: 48000x2 bytes is
+    768 kbps of sustained uplink including silence, which an iPad over the
+    tunnel could not hold up — so the ws send queue grew without bound and the
+    transcript fell further behind the longer you spoke (docs/dashboard.md
+    *Dictation lag*). Every way the fix can be wrong is invisible to a grep:
+    a bypassed anti-alias filter still emits plausible PCM (it just folds
+    sibilants above 8 kHz onto the vowels), and a phase accumulator that resets
+    per render quantum still emits roughly the right sample COUNT.
+
+    So: the rate conversion is exact at 48k AND at the fractional 44.1k (where
+    a decimate-by-N would be wrong and only there), 1 kHz survives at unity
+    gain, 12 kHz — which unfiltered would alias to a full-amplitude 4 kHz tone
+    in the middle of the speech band — is attenuated an order of magnitude, and
+    hardware already at 16k is a byte-exact passthrough. Skipped without `node`
+    (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "dictpcm.js"),
+         os.path.join(REPO, "dashboard", "static", "app.07-dialogs.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+    assert d["rate"] == 16000, d          # Deepgram's model rate
+    for k in ("c48", "c44"):
+        c = d[k]
+        # no samples invented or dropped across quantum boundaries, and every
+        # message is one full chunk (the socket must not see 375 tiny writes/s)
+        assert c["emitted"] == c["expected"], (k, c)
+        assert c["widths"] == [d["chunk"]], (k, c)
+        assert 0.95 <= c["gain"] <= 1.02, (k, c)      # passband is flat
+    assert d["alias"] < 0.2, d            # ~0.05 measured; 1.0 = no filter
+    assert d["thru"]["maxerr"] < 0.001, d      # 16k hardware: untouched
+
+
+def test_dictation_lag_is_split_into_queue_and_service():
+    """The lag telemetry has to attribute the delay, not just measure it —
+    "dictation is slow" was unanswerable from the DB because the server mints a
+    token and never sees the stream (docs/dashboard.md *Dictation lag*). The
+    two numbers are the whole feature: `queue_s` is audio stuck in OUR
+    WebSocket send buffer (a saturated uplink — ours to fix, and the thing that
+    GROWS the longer you speak), `svc_s` is audio the network took that
+    Deepgram hasn't accounted for yet (theirs, and roughly constant). Collapse
+    them into one "lag" number and the next report is a guess again."""
+    src = open(os.path.join(REPO, "dashboard", "static",
+                            "app.08-composer.js"), encoding="utf-8").read()
+    assert "queue_s" in src and "svc_s" in src
+    # queue is measured off the socket, service off Deepgram's own audio clock
+    assert "bufferedAmount / bps" in src
+    assert "st.proc = d.start + d.duration" in src
+    # the rate on the wire is decided ONCE and reaches both the mint and the
+    # worklet — a re-derived rate would silently mislabel the stream
+    assert "const outRate = Math.min(DICT_RATE" in src
+    assert "processorOptions: { outRate }" in src
+    assert "sample_rate: outRate" in src
 
 
 def test_canon_cwd_collapses_symlinked_repo(tmp_path):
