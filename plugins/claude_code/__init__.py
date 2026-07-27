@@ -18,7 +18,7 @@ def census(log):
     class) — the pane renderer that emits them stays tool-agnostic."""
     from plugins.claude_code import msgs
     parts, events = msgs.update_messages(log)
-    return parts, msgs.event_ops(events)
+    return parts, msgs.event_ops(events, log)
 
 
 def activity(sid, agent_id=None):

@@ -67,17 +67,29 @@ GLYPH_READ = "◉"                # …and consumed. NOTE: shared with a monitor
 READ_PREFIX = GLYPH_READ + " read · "
 
 
-def event_ops(events):
+def event_ops(events, log=None):
     """[(kind, from, to, summary)] transitions -> the mirror ops that show them.
     Returns a list (possibly empty) for the caller to emit into the mirror log, so
     the shape lives with the tracker that produces the events rather than with the
-    renderer that paints them."""
+    renderer that paints them.
+
+    An arrival's chip and its summary body share a copy-GROUP (hence `log`, which
+    `new_group` needs): they are one block, and a delivered message with a summary
+    was the one two-op row in the mirror that wasn't. That cost the body its
+    identity on the web — a group-less body op has no block to take its activity
+    class from, so it landed as an unclassifiable top-level row, visible in every
+    view mode however strict; a teammate's report-delivery summary therefore sat
+    in the middle of focus mode with its own header hidden (docs/dashboard.md,
+    *View modes*). Without a log there is nothing to allocate a group from, so the
+    ops go out ungrouped exactly as before (the read side still has a best-effort
+    fallback for pre-grouping history)."""
     ops = []
     for kind, frm, to, summ in events:
         if kind == "new":
-            ops.append(O.label(GLYPH_NEW + " " + frm + " → " + to, MSG_NEW_RGB))
+            g = O.new_group(log) if (log and summ) else None
+            ops.append(O.label(GLYPH_NEW + " " + frm + " → " + to, MSG_NEW_RGB, g=g))
             if summ:
-                ops.append(O.gut(summ, MSG_NEW_RGB))
+                ops.append(O.gut(summ, MSG_NEW_RGB, g=g))
         else:                                        # read
             ops.append(O.label(READ_PREFIX + frm + " → " + to, MSG_READ_RGB))
     return ops

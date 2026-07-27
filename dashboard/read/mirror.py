@@ -131,20 +131,28 @@ def merge_live(ops, recs, key="", cmds=()):
     the next op only when its ts is STRICTLY less (op with ts == rec.ts sorts
     first — the rec lands AFTER it, matching _merge_order.place's `ots <= ts`).
     A ts-less op/rec (pre-migration edge; live always stamps both) falls to the
-    tail in arrival order. op_items is stateless per-op — the same per-op render
-    the backlog window uses — so interleaving single ops with conv items is
-    identical to a batch render."""
+    tail in arrival order. Runs of consecutive ops go to op_items in ONE call, for
+    the same reason _render_window batches them: a group-less body op inherits its
+    class from the row in front of it, and a per-op call has none."""
     items, i, j = [], 0, 0
+    run = []                       # consecutive ops awaiting one batched render
+
+    def flush():
+        if run:
+            items.extend(opshtml.op_items(run, key))
+            run.clear()
+
     while i < len(ops) and j < len(recs):
         ot, rt = ops[i].get("_ts"), recs[j].get("ts")
         if rt is not None and (ot is None or rt < ot):
+            flush()
             items.extend(conv_items([recs[j]], cmds))
             j += 1
         else:
-            items.extend(opshtml.op_items([ops[i]], key))
+            run.append(ops[i])
             i += 1
-    for op in ops[i:]:
-        items.extend(opshtml.op_items([op], key))
+    run.extend(ops[i:])
+    flush()
     if j < len(recs):
         items.extend(conv_items(recs[j:], cmds))
     return items
@@ -280,11 +288,27 @@ def _snap(entries, start):
 def _render_window(entries, start, key, cmds=()):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
     op_items, msg entries through conv_items. Only the windowed slice is
-    rendered — the whole point of the block cut."""
-    out = []
+    rendered — the whole point of the block cut.
+
+    Consecutive op entries go to op_items in ONE call: a group-less body op takes
+    its activity class from the row in front of it, and a per-op call has no row
+    in front of it (this rendered every op alone, so the inheritance never fired
+    and a team-mail body stayed unclassifiable — hence visible in focus). A
+    conversation entry flushes the run, since a message is not any op's block."""
+    out, pend = [], []
+
+    def flush():
+        if pend:
+            out.extend(opshtml.op_items(pend, key))
+            pend.clear()
+
     for _slot, kind, obj in entries[start:]:
-        out.extend(opshtml.op_items([obj], key) if kind == "op"
-                   else conv_items([obj], cmds))
+        if kind == "op":
+            pend.append(obj)
+            continue
+        flush()
+        out.extend(conv_items([obj], cmds))
+    flush()
     return out
 
 

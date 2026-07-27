@@ -164,8 +164,11 @@ def op_items(ops, key=""):
     body op inherits the row it follows, which is the only block it has), `bad`
     (1 when the op reports a failed outcome) and, for a mutation one-liner, its
     `add`/`rem` line counts. The page reads them for the kind filter and the view
-    modes; it never re-derives them from the HTML it was handed."""
+    modes; it never re-derives them from the HTML it was handed. That inheritance
+    is why the CALLERS batch consecutive ops into one call (read/mirror.py) — a
+    per-op call has no row in front of it to inherit from."""
     out = []
+    prev_act = None
     for op in ops:
         if not isinstance(op, dict):
             continue
@@ -190,19 +193,17 @@ def op_items(ops, key=""):
                 it["add"] = add
             if rem:
                 it["rem"] = rem
-        elif not act and not it["g"] and t in _BODY_OPS and out:
+        elif not act and not it["g"] and t in _BODY_OPS and prev_act:
             # A GROUP-LESS body op inherits the class of the row it follows.
             # "A body op inherits its block's class" is the classifier's rule, but
             # a body op with no `g` has no block to inherit from and lands as a
             # top-level row of its own — unclassifiable, therefore never
             # collapsible, therefore visible in EVERY view mode. Team mail is
             # exactly that shape (a `● from → to` label followed by the message
-            # body as a bare gutter), which is how a teammate's message text sat
-            # in the middle of focus mode. The preceding item IS its block here,
-            # so it is read as one.
-            prev = out[-1]
-            if prev.get("act"):
-                it["act"] = prev["act"]
+            # body as a bare gutter), which is how a teammate's report-delivery
+            # summary sat in the middle of focus mode.
+            it["act"] = act = prev_act
+        prev_act = act or prev_act
         out.append(it)
     return out
 

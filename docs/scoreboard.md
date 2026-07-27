@@ -47,7 +47,7 @@ see [otel.md](otel.md).
     crashed recipient. The same tracker also **emits into the mirror stream** on each
     transition — a `● <from> → <to>` chip (+ summary) when a message is delivered, a
     `◉ read · <from> → <to>` chip when it's consumed — so arrivals/reads interleave with
-    the command stream. The tracker BUILDS those ops itself (`msgs.event_ops`, returned
+    the command stream. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its summary share a copy-group, one block, returned
     through the plugin's `census`), and this renderer only emits them: the glyphs and
     colours are a claude_code vocabulary the web mirror reads back to classify these rows
     as mail (docs/dashboard.md *View modes*), while the scorebar serves every host tool

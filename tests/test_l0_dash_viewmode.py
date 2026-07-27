@@ -142,6 +142,10 @@ def test_a_groupless_body_op_inherits_the_row_it_follows():
     items = opshtml.op_items(MSGS.event_ops(
         [("new", "lead", "rev-ui", "please send your final report")]))
     assert [it.get("act") for it in items] == ["mail", "mail"]
+    # …and a chain of body ops keeps inheriting, not just the first
+    chain = opshtml.op_items(MSGS.event_ops([("new", "lead", "rev-ui", "a")])
+                             + [O.gut("b", MSGS.MSG_NEW_RGB)])
+    assert [it.get("act") for it in chain] == ["mail", "mail", "mail"]
     # a GROUPED body still inherits from its own block, not from a neighbour…
     grouped = opshtml.op_items([_lbl("▶ foreground", O.SLATE, g="t1"),
                                 O.gut("out", O.SLATE, g="t1")])
@@ -149,6 +153,50 @@ def test_a_groupless_body_op_inherits_the_row_it_follows():
     # …and a body op with nothing before it stays unclassified (fail toward
     # showing, never inherit out of thin air)
     assert opshtml.op_items([O.gut("orphan", O.SLATE)])[0].get("act") is None
+
+
+def test_a_mail_arrival_is_ONE_block_and_survives_a_per_op_render(dash, tmp_path):
+    """Two halves of the same bug, and the reason the first fix didn't hold.
+
+    The inheritance above only works WITHIN one op_items call — and the two render
+    paths called it ONE OP AT A TIME, so it never fired in production while the
+    unit test (a batch) passed. A teammate's report-delivery summary therefore
+    still sat in the middle of focus mode with its own header hidden. So: the
+    render paths batch consecutive ops, AND — the real fix — an arrival's chip and
+    body now share a copy-group at the source, which needs no adjacency at all.
+    Only pre-grouping HISTORY leans on the inheritance."""
+    from core import hostpane as HP
+    from dashboard.read import mirror as M
+    from plugins.claude_code import msgs as MSGS
+
+    log = str(tmp_path / "claude-mirror-mail.log")
+    HP.ensure_db(log)                      # a state DB to allocate the group from
+    ops = MSGS.event_ops([("new", "rev-observe", "team-lead", "[to main] 4 BUGs")], log)
+    assert len({o.get("g") for o in ops}) == 1 and ops[0].get("g"), \
+        "the chip and its summary body are one block"
+    # a read notice has no body, so no group is spent on it
+    assert MSGS.event_ops([("read", "a", "b", "")], log)[0].get("g") is None
+
+    # GROUPED, the body needs no class of its own: it is inside the block, whose
+    # class comes from the chip — so it hides with it, whatever the render path
+    # does or how the window happens to be cut
+    live = M.merge_live(ops, [])
+    assert [it.get("act") for it in live] == ["mail", None]
+    assert live[0]["g"] == live[1]["g"] == ops[0]["g"]
+
+    # LEGACY history (ops written before the grouping) has only the inheritance to
+    # lean on, and that is what the per-op calls defeated: both paths must batch
+    old = MSGS.event_ops([("new", "rev-observe", "team-lead", "[to main] 4 BUGs")])
+    assert not any(o.get("g") for o in old)
+    assert [it.get("act") for it in M.merge_live(old, [])] == ["mail", "mail"]
+    window = M._render_window([(1, "op", old[0]), (2, "op", old[1])], 0, "")
+    assert [it.get("act") for it in window] == ["mail", "mail"]
+    # a conversation record BETWEEN them still flushes the run — a message is no
+    # op's block, and inheriting `msg` would make a mail body conversation text
+    split = M._render_window([(1, "op", old[0]),
+                              (1, "msg", {"kind": "message", "text": "hi"}),
+                              (2, "op", old[1])], 0, "")
+    assert [it.get("act") for it in split] == ["mail", "msg", None]
 
 
 def test_actclass_warning_light_is_its_own_class():

@@ -4898,13 +4898,28 @@ Getting there needed the classifier to actually KNOW those rows, which it did no
   as ops rather than raw events, and the tool-agnostic scorebar just emits what it
   is handed — it no longer knows what team mail looks like.
 - **A mail BODY could not inherit anything.** "A body op inherits its block's
-  class" is the classifier's rule, but mail is a `●` label followed by the message
+  class" is the classifier's rule, but mail was a `●` label followed by the message
   text as a `gut` op with **no `g`** — no block to inherit from, so it landed as a
   top-level row, unclassifiable, therefore never collapsible, therefore on screen
-  in every mode however strict. That is exactly how a teammate's message text sat
-  in the middle of focus mode. `op_items` now resolves a group-less body op
-  against the item it FOLLOWS, which is the only block it has. Read-side, so it
-  fixes parked history too — a producer-side regroup would only fix new sessions.
+  in every mode however strict. That is exactly how a teammate's report-delivery
+  summary sat in the middle of focus mode *with its own header hidden*, which reads
+  as "the subagent results are still there".
+
+  Fixed in two places, because the first one alone did not hold. `op_items`
+  resolves a group-less body op against the item it FOLLOWS (the only block it
+  has) — but that only works **within one call**, and both render paths called it
+  ONE OP AT A TIME (`_render_window` per entry, `merge_live` per op in the
+  two-pointer merge). So the inheritance never fired in production while its unit
+  test — a batch — passed. Both paths now batch consecutive ops into one call
+  (a conversation record flushes the run: a message is no op's block, and
+  inheriting `msg` would make a mail body conversation text).
+
+  The real fix is at the SOURCE: an arrival's chip and its summary body now share
+  a copy-group (`msgs.event_ops` takes the log for `new_group`), so the body is
+  *inside* the block like every other block's body and needs no adjacency at all —
+  no batch boundary, no window cut, no interleaved message can strand it. The
+  inheritance stays for PARKED history written before that, where the ops are
+  already on disk ungrouped and only the read side can still help them.
 - **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
   basis (`task_fmt.GLYPHS`).
 
