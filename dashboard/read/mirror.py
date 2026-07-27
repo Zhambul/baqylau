@@ -162,7 +162,7 @@ TAIL_BLOCKS = 80       # initial backlog: how many stream BLOCKS to paint at onc
 HISTORY_BLOCKS = 40    # /history default page size (blocks), when ?blocks absent
 
 
-def _merge_order(sid, key):
+def _merge_order(sid, key, agent=None):
     """The full oldest->newest interleave of a session's ops and its main-thread
     conversation, WITHOUT rendering — a list of (slot_id, kind, obj) triples
     (kind 'op' -> obj is the op dict; 'msg' -> obj is a conversation record) so
@@ -189,7 +189,10 @@ def _merge_order(sid, key):
     `mpos` is the whole-transcript end so the live SSE tail resumes correctly."""
     sdb = API.state_db_for(sid)
     last, ops = API.ops_at(sdb, 0) if sdb else (0, [])
-    got = plugins.conversation(sid, 0)
+    # In AGENT scope the main thread's conversation is not part of the stream —
+    # the agent's own messages are already ops (the substream paints them), so
+    # merging the lead's prompts/replies in would show a second conversation.
+    got = None if agent else plugins.conversation(sid, 0)
     recs, mpos = got if got else ([], 0)
     # anchor -> last op index (the fallback placement); timestamped ops as
     # (ts, index) for the primary time-merge.
@@ -244,20 +247,20 @@ def _merge_order(sid, key):
     return entries, last, mpos
 
 
-def _cut_blocks(entries, blocks):
+def _cut_blocks(entries, blocks, scope=None):
     """Index into `entries` (oldest->newest) of the START of the newest-`blocks`
     stream blocks — 0 when they all fit. A block is a distinct non-null group
     `g` or a standalone item; `rule`/`blank` ops are spacing (dropped by
-    op_items) and count as nothing, as do producer-source-stamped ops (`src` —
-    dropped by op_items too: the web mirror is main-agent-only), so a window of
-    N blocks means N VISIBLE blocks even when agent streams dominate the tail.
-    Approximate by design (the window size is a
-    soft limit) — cursor correctness rides slot ids, not this count."""
+    op_items) and count as nothing, as do ops out of `scope` (dropped by
+    op_items too — the SAME `opshtml.in_scope` predicate, so the window and its
+    contents can't disagree), so a window of N blocks means N VISIBLE blocks even
+    when agent streams dominate the tail. Approximate by design (the window size
+    is a soft limit) — cursor correctness rides slot ids, not this count."""
     seen, count = set(), 0
     for i in range(len(entries) - 1, -1, -1):
         _slot, kind, obj = entries[i]
         if kind == "op":
-            if obj.get("t") in ("rule", "blank") or obj.get("src"):
+            if obj.get("t") in ("rule", "blank") or not opshtml.in_scope(obj, scope):
                 continue
             g = obj.get("g") or None
         else:
@@ -285,7 +288,27 @@ def _snap(entries, start):
     return start
 
 
-def _render_window(entries, start, key, cmds=()):
+def agent_scope(sid, agent):
+    """The set of producer-source (`src`) stamps that belong to ONE agent of a
+    session — what the mirror read path scopes on (opshtml.in_scope). None for a
+    falsy `agent`, i.e. the ordinary main-agent-only session view.
+
+    A subagent and a teammate are both named by their hook agent_id, so both
+    stamp spellings are accepted for it. A CODEX run is the exception the set
+    exists for: it is stamped `codex:<label>` (plugins/codex/watch.spawn) while
+    its synthesized agent id is the rollout basename (sessionapi.codex_aid), so
+    its label has to be looked up off the run's row — matching the id against
+    the stamp would silently show an empty mirror."""
+    if not agent:
+        return None
+    scope = {"sub:" + agent, "team:" + agent}
+    for run in API.codex_runs(sid):
+        if run.get("agent_id") == agent and run.get("desc"):
+            scope.add("codex:" + run["desc"])
+    return scope
+
+
+def _render_window(entries, start, key, cmds=(), scope=None):
     """Render entries[start:] to stream items ({g, t, html}); op entries through
     op_items, msg entries through conv_items. Only the windowed slice is
     rendered — the whole point of the block cut.
@@ -305,7 +328,7 @@ def _render_window(entries, start, key, cmds=()):
             # and its read notice may well land in the NEXT batch (a conversation
             # record between them flushes the run) — where it would otherwise read as
             # a message of its own
-            out.extend(opshtml.op_items(pend, key, pids, carry))
+            out.extend(opshtml.op_items(pend, key, pids, carry, scope))
             pend.clear()
             pids.clear()
 
@@ -320,55 +343,62 @@ def _render_window(entries, start, key, cmds=()):
     return out
 
 
-def merged_backlog(sid, key, blocks=TAIL_BLOCKS):
+def merged_backlog(sid, key, blocks=TAIL_BLOCKS, agent=None):
     """The session view's INITIAL stream: the NEWEST `blocks` stream blocks of
     the op+conversation interleave, rendered to stream items ({g, t, html} — see
     _merge_order for the interleave rule). Returns
     (last_op_id, transcript_pos, oldest_op_id, [item, …]): `oldest` is the
     smallest op id painted — 0 when the whole history fits (nothing older to
     lazy-load), else the next cursor the client hands /history to load the
-    previous blocks downward."""
-    entries, last, mpos = _merge_order(sid, key)
-    start = _snap(entries, _cut_blocks(entries, blocks))
+    previous blocks downward.
+
+    `agent` renders that AGENT's mirror instead of the lead's (agent_scope /
+    opshtml.in_scope). The main thread's conversation is left out there — an
+    agent's own messages already arrive as substream ops, so re-merging the
+    lead's prompts and replies would put another conversation in its stream."""
+    entries, last, mpos = _merge_order(sid, key, agent)
+    scope = agent_scope(sid, agent)
+    start = _snap(entries, _cut_blocks(entries, blocks, scope))
     oldest = entries[start][0] if start > 0 else 0
     return last, mpos, oldest, _render_window(entries, start, key,
-                                              session_cmds(sid))
+                                              session_cmds(sid), scope)
 
 
-def history(sid, key, before, blocks):
+def history(sid, key, before, blocks, agent=None):
     """The `blocks` stream blocks immediately OLDER than op id `before` — the
     lazy-backlog page. Reuses _merge_order's merge core (one implementation), so
     the initial backlog + successive history pages concatenate to the unlimited
     merge with no gap and no overlap. Returns (oldest_op_id, [item, …]): the
     next cursor (0 when the head is reached — history exhausted). `before` names
     a slot boundary (a returned `oldest`), so the older universe is every whole
-    slot below it."""
+    slot below it. `agent` scopes it exactly as merged_backlog does."""
     if before <= 0:
         return 0, []
-    entries, _last, _mpos = _merge_order(sid, key)
+    entries, _last, _mpos = _merge_order(sid, key, agent)
+    scope = agent_scope(sid, agent)
     bound = len(entries)
     for i, (slot, _kind, _obj) in enumerate(entries):
         if slot >= before:                     # slots are id-ordered ascending
             bound = i
             break
     universe = entries[:bound]
-    start = _snap(universe, _cut_blocks(universe, blocks))
+    start = _snap(universe, _cut_blocks(universe, blocks, scope))
     oldest = universe[start][0] if start > 0 else 0
-    return oldest, _render_window(universe, start, key, session_cmds(sid))
+    return oldest, _render_window(universe, start, key, session_cmds(sid), scope)
 
 
-def ops_payload(sid, after):
+def ops_payload(sid, after, agent=None):
     """(last_id, [item, …]) — rendered server-side so the page never touches
     raw op bytes (items: {g, t, html}, see opshtml.op_items). Reads via
     ops_at on the RESOLVED path (live or parked), which can never create the
-    live DB."""
+    live DB. `agent` scopes it to that agent's ops (agent_scope)."""
     sdb = API.state_db_for(sid)
     if not sdb:
         return after, []
     last, ops = API.ops_at(sdb, after)
     row = API.session_row(sid)
     key = P.sid_from_log(row["log"]) if row else sid
-    return last, opshtml.op_items(ops, key)
+    return last, opshtml.op_items(ops, key, scope=agent_scope(sid, agent))
 
 
 def view_payload(sid, gid):

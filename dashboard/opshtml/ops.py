@@ -231,24 +231,47 @@ def _empty_body(ops, i, key):
 NOTE_GLYPH = "⏺"
 
 
-def op_items(ops, key="", ids=None, carry=None):
+def in_scope(op, scope=None):
+    """THE producer-source rule: does this op belong in a mirror scoped to
+    `scope`? One owner, because the render path and the block-window cut
+    (read/mirror.py `_cut_blocks`) must agree exactly or a window's blocks and
+    its contents disagree.
+
+    `scope` None is the SESSION view: keep the main agent's own (unstamped) ops
+    and drop every `src`-stamped one — agent and secondary-codex detail belongs
+    to that agent, not the lead's stream — except the two `web`-stamped
+    endpoints described in op_items. A `scope` SET (of exact `src` strings, e.g.
+    {"sub:a1b2", "team:a1b2"}, built by read/mirror.agent_scope) inverts it: keep
+    only those, which is how the same pipeline renders ONE agent's mirror. It is
+    a resolved set rather than a bare id because the stamps are not uniform —
+    a codex run is stamped `codex:<label>` while its agent id is the rollout
+    basename."""
+    src = op.get("src") or ""
+    if scope is None:
+        return not src or bool(op.get("web"))
+    return src in scope
+
+
+def op_items(ops, key="", ids=None, carry=None, scope=None):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
     of a wall. `rule`/`blank` ops are dropped here — they are terminal-width
-    spacing, and the web's block cards separate themselves. Ops carrying a
-    producer-source stamp (`src` — sub:/team:/codex:, core/ops.py owns the
-    vocabulary) are dropped too: the WEB mirror is main-agent-only — agent and
-    secondary-codex detail lives in the per-agent drill-down, while the
-    terminal mirror keeps painting everything. What survives of an agent here
-    is the main session's own record of it (the subagent_fmt launch header +
-    finish chip, emitted by the hook process, unstamped) PLUS the two endpoints
-    of the subagent's own contribution — its ⇢ prompt and ⇠ result blocks, which
-    the substream stamps `web` to override the drop (core/ops.py's "web" field);
-    everything in between stays drill-down only. Pre-stamp history (parked DBs)
-    has no `src`, so old sessions render as before — an unstamped agent block
-    still reads as one, because the ACTIVITY CLASS below is derived from the op
-    itself and so classifies live and parked ops identically.
+    spacing, and the web's block cards separate themselves. Which ops survive at
+    all is `in_scope` above — by default the WEB mirror is main-agent-only, and
+    with a `scope` it is exactly one agent's (docs/dashboard.md *Agent scope*).
+
+    What survives of an agent in the SESSION view is the main session's own
+    record of it (the subagent_fmt launch header + finish chip, emitted by the
+    hook process, unstamped) PLUS the two endpoints of the subagent's own
+    contribution — its ⇢ prompt and ⇠ result blocks, which the substream stamps
+    `web` to override the drop (core/ops.py's "web" field);
+    everything in between belongs to that agent's own scope. Pre-stamp history
+    (parked DBs) has no `src`, so old sessions render as before in the session
+    view — an unstamped agent block still reads as one, because the ACTIVITY
+    CLASS below is derived from the op itself and so classifies live and parked
+    ops identically. The same gap makes an OLD session's agent scope empty:
+    nothing there is stamped, so nothing can be attributed to an agent.
 
     Each item also carries that class: `act` (a token from actclass.ACTS, absent
     when the op names no kind — a body op inherits its block's, and a GROUP-LESS
@@ -285,7 +308,7 @@ def op_items(ops, key="", ids=None, carry=None):
         oid = ids[i] if (ids and i < len(ids) and ids[i] is not None) \
             else "n%d" % (len(out) + 1)
         t = op.get("t")
-        if t in ("rule", "blank") or (op.get("src") and not op.get("web")):
+        if t in ("rule", "blank") or not in_scope(op, scope):
             continue
         if actclass.agent_header(op):
             # the main session's own `▶ <type> · <desc>` launch/resume header —
