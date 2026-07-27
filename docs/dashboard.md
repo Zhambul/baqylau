@@ -4849,8 +4849,9 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   its own `VIEW_DEFAULT` and the grep test pins both halves against
   `prefs.VIEW_DEFAULT`.
 - **focus** — your prompts and each turn's FINAL reply at full weight, its
-  mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and a one-line
-  summary of the edits. Everything else folds — or, for the team plumbing, goes.
+  mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and ONE summary
+  line accounting for everything else the turn did. Every intermediate step folds
+  into it; nothing is dropped from its counters.
 
   Mid-turn prose is greyed rather than dropped, which it was at first. Hiding it
   read as content VANISHING: only the NEWEST message in a turn is its "final"
@@ -4867,22 +4868,24 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   re-cut every focus-mode stream into more summary lines, which is a different
   feature from greying one bubble.
 
-**Two axes, not one: `VIEW_FOLD` and `VIEW_HIDE`.** Folding says "this happened,
-here is a line for it"; hiding says "this is not your conversation at all" — no
-row, no summary fragment, and (the part folding cannot do) *not a counter either*.
-Focus is the only mode that hides, and what it hides is the **team plumbing**: a
-subagent's launch/prompt/result blocks (`agent`), task-list rows (`task`) and
-agent-team mail (`mail`). Default folds all three into its summary line instead;
-verbose still shows every one.
+**The team plumbing FOLDS — it is never uncounted.** A subagent's
+launch/prompt/result blocks (`agent`), task-list rows (`task`) and agent-team mail
+(`mail`) collapse in both non-verbose modes, and their counts stay in the summary
+line: focus reads `Edited 1 file +12 -3, ran 2 agents, ran 1 shell command,
+tracked 1 task, passed 2 messages`. The rows are gone; the accounting is not.
 
-On a LEAD session that plumbing is most of the stream, and merely folding it left
-focus reading `Ran 22 agents, watched 7 monitors` over and over — a summary of
-work you did not do, in a mode whose whole promise is your prompt, what changed,
-and the answer. Hiding is checked BEFORE folding for that reason: a dropped class
-must not reach the counters, or the line would still announce the very activity
-the mode exists to omit. Nothing is lost — an agent's full detail was never in
-this stream anyway (it lives in the per-agent drill-down), and both other modes
-still show the blocks.
+**Rejected: a second axis that dropped them from the counters.** Focus briefly had
+a `VIEW_HIDE` table — no row, no fragment, no counter — on the reasoning that a
+lead session's summary reading `Ran 22 agents` is "work you did not do". That was
+wrong on the summary's own terms, and the user said so plainly: *everything should
+be in the focus summary; that's the whole point of the summary.* A one-line
+account that silently omits the largest part of a turn is a lie about the turn,
+not a précis of it — and the sparser the mode, the more that one line has to
+carry. The rows it was meant to suppress were being kept on screen by the CSS
+cascade bug below, not by the counting, so the whole axis was solving a problem it
+had misdiagnosed. It is deleted rather than left empty (a grep test asserts
+`VIEW_HIDE` stays gone): the only thing any mode still DROPS is an injected prompt,
+which is not conversation at all and is keyed on `data-injected`, never on an act.
 
 **Hiding must outrank layout (`display: none !important`).** The class was right
 and the row still showed: `.vhide`/`.fhide` are ONE-CLASS selectors and so is every
@@ -4958,7 +4961,8 @@ Getting there needed the classifier to actually KNOW those rows, which it did no
 - **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
   basis (`task_fmt.GLYPHS`).
 
-Because they are classes now, `default` folds them and needs words for them:
+Because they are classes now, both collapsing modes fold them and need words for
+them:
 `tracked N tasks` and `passed N messages`. Neither is Claude Code vocabulary (it
 has no agent-team surface to word), so they follow the table's shape — an active
 participle and a plain past tense — and are marked as ours in `VIEW_FRAGMENTS`.

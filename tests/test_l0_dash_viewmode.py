@@ -322,7 +322,7 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
         assert set(got) == {"verbose", "default", "focus"}, name
         return got
 
-    folds, hides = table("VIEW_FOLD"), table("VIEW_HIDE")
+    folds = table("VIEW_FOLD")
     fragments = re.findall(r'\n  \["([a-z-]+)", "', ses)
     aliases = dict(re.findall(r'VIEW_COUNTER = \{ ([a-z]+): "([a-z-]+)" \}', ses))
     assert fragments and folds["default"] and not folds["verbose"]
@@ -336,17 +336,16 @@ def test_act_vocabulary_matches_the_page_phrase_table(dash):
     for key in fragments:
         assert key in ACTS or key in ("mem-read", "mem-write"), key
 
-    # HIDING is the second axis: a dropped act needs no fragment (nothing counts
-    # it), but it must be a real act, only focus may hide, and hiding and folding
-    # the same act in one mode is a contradiction — the disposition can only be
-    # one of them, and which one won would be decided by statement order.
-    assert not hides["verbose"] and not hides["default"]
-    for act in hides["focus"]:
-        assert act in ACTS, "focus hides unknown act %r" % act
-        assert act not in folds["focus"], "focus both folds and hides %r" % act
-    # focus is the stricter cut, always: every act default folds, focus either
-    # folds or hides
-    assert folds["default"] <= (folds["focus"] | hides["focus"])
+    # No act is ever dropped from the COUNTERS by a mode: whatever a mode collapses,
+    # its summary still accounts for. Focus hid the team plumbing outright for a
+    # while (no row, no fragment) and that was wrong on the summary's own terms —
+    # a summary that omits work is a lie rather than a précis, and the rows it was
+    # meant to suppress were being kept on screen by a CSS cascade bug anyway
+    # (test_hiding_a_row_beats_its_own_layout_rule). Only INJECTED prompts are
+    # dropped, and they are keyed on `data-injected`, never on an act.
+    assert "VIEW_HIDE" not in ses, "a mode may collapse an act, never uncount it"
+    # focus folds a SUPERSET of default: it is the stricter cut, always
+    assert folds["default"] <= folds["focus"]
 
 
 def test_page_view_modes_match_the_pref_vocabulary(dash):
@@ -468,30 +467,28 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
         ["Edited 1 file +12 -3, read 3 files, ran 4 shell commands"]
     assert d["focus"]["shown"] == ["msg", "msg"]
 
-    # TEAM PLUMBING — a lead session's agents, task rows and mail. Default folds
-    # them into its summary (they happened, and it says so in one line)…
+    # TEAM PLUMBING — a lead session's agents, task rows and mail. Both collapsing
+    # modes fold it: the rows go, the COUNT stays. Default…
     assert d["teamDefault"]["sums"] == [
         "Ran 1 agent",
         "Ran 1 agent, ran 1 shell command, tracked 1 task, passed 2 messages"]
-    # …while focus drops them ENTIRELY: not a row, and — the part folding cannot
-    # do — not a counter either, so the summary names only what the turn did to
-    # the repo. This is the difference between "Ran 22 agents, watched 7 monitors"
-    # and a mode that shows your prompt, the change, and the answer.
-    assert d["teamFocus"]["sums"] == ["Edited 1 file +12 -3, ran 1 shell command"]
+    # …and focus the same, merged into its single line. Focus briefly DROPPED these
+    # from the counters too (no row, no fragment) and that was wrong on the
+    # summary's own terms: the summary accounts for what the turn did, so a mode
+    # that silently omits work makes it a lie rather than a précis. What kept those
+    # rows on screen was the CSS cascade bug, not the counting.
+    assert d["teamFocus"]["sums"] == [
+        "Edited 1 file +12 -3, ran 2 agents, ran 1 shell command,"
+        " tracked 1 task, passed 2 messages"]
     assert d["teamFocus"]["shown"] == ["msg", "msg"]
-    # a session that is ONLY plumbing collapses to the conversation alone — no
-    # summary line survives, because a hidden act is counted into nothing
-    assert d["teamOnly"] == {"sums": 0, "shown": ["msg", "msg"]}
-    # EXPANDING a summary reveals what it COUNTED, never what the mode HID. The
-    # hidden rows sit inside the run's span, and revealing the span wholesale
-    # brought every agent/mail/task row back — on the first click a reader made,
-    # and `viewOpen` then remembered it, which is why focus "still showed the
-    # subagents" long after they were dropped.
-    assert d["teamExpanded"]["shown"] == ["msg", "edit", "bash", "msg"]
-    # …and the group rail spans only those visible members, so it cannot end on a
-    # display:none node (which reads as an unterminated group)
-    assert d["teamExpanded"]["rail"] == 2
-    assert d["teamExpanded"]["railLast"] == ["bash"]
+    # a session that is ONLY plumbing still gets its line — the work happened
+    assert d["teamOnly"] == {"sums": 1, "shown": ["msg", "msg"]}
+    # EXPANDING that summary reveals every member it counted, agents and mail
+    # included, under one rail
+    assert d["teamExpanded"]["shown"] == \
+        ["msg", "agent", "edit", "bash", "task", "mail", "mail", "agent", "msg"]
+    assert d["teamExpanded"]["rail"] == 7
+    assert d["teamExpanded"]["railLast"] == ["agent"]
 
     # …and while the turn is STILL RUNNING that newest message is PROVISIONAL —
     # greyed, because the result is still coming — going to full weight when the

@@ -786,27 +786,17 @@ const VIEW_DEFAULT = "default";
 // Which activity classes each mode folds into a summary. Everything not listed
 // stays its own visible block, which is also what an unclassified item gets —
 // a classification gap fails toward SHOWING content, never toward hiding it.
+//
+// The TEAM PLUMBING (`agent`/`task`/`mail`) folds in both collapsing modes, and
+// deliberately does NOT get dropped from the counters. Focus briefly hid it
+// outright — no row, no fragment — which was wrong on the summary's own terms: the
+// summary exists to account for everything the turn did, so a mode that silently
+// omits work makes it a lie rather than a précis. What actually kept those rows on
+// screen was a CSS cascade bug (see style.css `.vhide`), not the counting.
 const VIEW_FOLD = {
   verbose: [],
   default: ["bash", "read", "agent", "task", "mail"],
-  focus: ["bash", "read", "bg", "monitor", "edit", "write"],
-};
-
-// …and what a mode drops ENTIRELY — no row, no summary fragment, not even a
-// counter. Folding says "this happened, here is a line for it"; hiding says
-// "this is not your conversation at all".
-//
-// Focus is the only mode that hides, and it hides the TEAM PLUMBING: a subagent's
-// launch/prompt/result blocks, task-list rows, and agent-team mail. On a lead
-// session those are most of the stream, and collapsing them still left focus
-// reading "Ran 22 agents, watched 7 monitors" over and over — a summary of work
-// you did not do in a mode whose promise is your prompt, what changed, and the
-// answer. The agents' own detail is not lost: it is a click away in the per-agent
-// drill-down, and both other modes still show it.
-const VIEW_HIDE = {
-  verbose: [],
-  default: [],
-  focus: ["agent", "task", "mail"],
+  focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "task", "mail"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -824,9 +814,9 @@ const VIEW_FRAGMENTS = [
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],
-  // team plumbing — folded in default, hidden outright in focus (VIEW_HIDE).
-  // Not Claude Code vocabulary (it has no agent-team surface to word), so these
-  // two follow the same shape: an active participle and a plain past tense.
+  // team plumbing — folded (and COUNTED) in both collapsing modes. Not Claude
+  // Code vocabulary (it has no agent-team surface to word), so these two follow
+  // the same shape: an active participle and a plain past tense.
   ["task", "tracking", "tracked", "task", "tasks"],
   ["mail", "passing", "passed", "message", "messages"],
   ["mem-read", "recalling", "recalled", "memory", "memories"],
@@ -982,7 +972,6 @@ function applyViewMode() {
   }
 
   const fold = VIEW_FOLD[mode] || [];
-  const drop = VIEW_HIDE[mode] || [];
   // DOM order is newest -> oldest, so "the first reply seen since the last
   // prompt" IS that turn's final one — which is the only assistant prose focus
   // mode keeps. A prompt closes the turn: items below it are the older one's.
@@ -1023,11 +1012,7 @@ function applyViewMode() {
       }
       return "show";
     }
-    const act = elem.dataset.act || "";
-    // hidden BEFORE folded: a dropped class must not reach the counters, or the
-    // summary would still announce the very activity the mode exists to omit
-    if (drop.includes(act)) return "hide";
-    return fold.includes(act) ? "fold" : "show";
+    return fold.includes(elem.dataset.act || "") ? "fold" : "show";
   });
 
   // PLAN first, mutate second: the runs are computed into a list, and the DOM is
@@ -1037,13 +1022,14 @@ function applyViewMode() {
   // back, and drops an in-progress text selection. Same reasoning, and the same
   // shape, as `statsSig` for the header.
   const plan = [];
-  // Every item the mode DROPS — an injected prompt, and in focus the team
-  // plumbing. Tracked as one list rather than only the ones falling outside a run,
+  // Every item the mode DROPS — today only an INJECTED prompt (a hook's feedback,
+  // a loaded skill, teammate mail's envelope): not conversation, and counted into
+  // nothing. Tracked as one list rather than only the ones falling outside a run,
   // because a hidden item is hidden WHEREVER it lands: trailing a run, inside a
   // collapsed run's span, or inside an EXPANDED one. That last case is why this
-  // exists: expanding a summary revealed its whole span, so one click on any
-  // summary line brought back every agent launch, result and mail row focus had
-  // just dropped — and `viewOpen` remembers the expansion, so it stayed back.
+  // exists: expanding a summary revealed its whole span, so one click on a summary
+  // line brought back every row the mode had dropped — and `viewOpen` remembers
+  // the expansion, so it stayed back.
   const hidden = items.filter((_e, k) => disp[k] === "hide");
   const isHide = new Set(hidden);
   const dims = items.filter((_e, k) => disp[k] === "dim");
