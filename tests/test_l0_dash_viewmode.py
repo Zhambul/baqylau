@@ -747,9 +747,17 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     assert AC.legacy_note(old_new) == "Message lead → rev-ui"
     assert AC.legacy_note(old_read) == "lead → rev-ui · read"
     legacy = opshtml.op_items([old_new, old_body, old_read], "sid")
-    assert 'class="anote"' in legacy[0]["html"] and 'class="anote"' in legacy[2]["html"]
-    # …and the summary body a legacy arrival carried is still there to read
-    assert "check the diff" in legacy[1]["html"]
+    # …and the body is placed UNDER its own header. The feed is newest-on-top, so the
+    # page reverses this list — which put a group-less body ABOVE the arrival it
+    # belongs to, wedged under the `· read` notice of the message before it. The body
+    # therefore comes FIRST here and reverses into "arrival, then its body".
+    assert [("body" if "ogut" in i["html"] else "note") for i in legacy] == \
+        ["body", "note", "note"]
+    assert "check the diff" in legacy[0]["html"]
+    assert "Message lead → rev-ui</span>" in legacy[1]["html"]
+    # all three rows are ONE message: with no msg_id in pre-`mid` history, the
+    # `<from> → <to>` pair is the subject key, so the summary counts one
+    assert [i.get("mid") for i in legacy] == ["pair:lead → rev-ui"] * 3
     # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
     # the classifier — mail wears the semantic green, a monitor its slot palette)
     from core import slots

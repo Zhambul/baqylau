@@ -203,6 +203,8 @@ def op_items(ops, key=""):
     per-op call has no row in front of it to inherit from."""
     out = []
     prev_act = None
+    prev_mid = None
+    head = None                 # index of the group-less header a body op belongs under
     for op in ops:
         if not isinstance(op, dict):
             continue
@@ -231,6 +233,17 @@ def op_items(ops, key=""):
         # counted rows said "passed 4 messages" where two had been sent.
         if op.get("mid"):
             it["mid"] = str(op["mid"])
+        else:
+            # PRE-`mid` HISTORY has no message id anywhere in the op, so the best
+            # available subject key is the `<from> → <to>` PAIR off the chip: an
+            # arrival and its read notice then count as one message, which is right
+            # for every session that ever ran (a lead sends one message to a
+            # teammate and gets one back). Two messages the same way inside one
+            # collapsed run would undercount as one — the safer error here, since
+            # the alternative is the inflation the whole rule exists to remove.
+            got = actclass.mail_pair(op)
+            if got:
+                it["mid"] = "pair:%s → %s" % got[:2]
         if op.get("note") or actclass.legacy_note(op):
             it["note"] = 1          # this header IS the whole line (see op_html)
         # The ACTIVITY CLASS the view modes collapse a run of items on
@@ -257,7 +270,26 @@ def op_items(ops, key=""):
             # body as a bare gutter), which is how a teammate's report-delivery
             # summary sat in the middle of focus mode.
             it["act"] = act = prev_act
+            # …and it inherits the SUBJECT too, so a legacy mail body is not counted
+            # as a message of its own.
+            if prev_mid and "mid" not in it:
+                it["mid"] = prev_mid
+            if head is not None:
+                # …and it is placed UNDER its own header. The feed is newest-on-top,
+                # so the page shows this list reversed — which put a group-less body
+                # ABOVE the row it belongs to, wedged between that row and the next
+                # one: a mail body appeared to belong to the `· read` notice above
+                # its arrival ("I don't see the change" — the body was there, just
+                # attributed to the wrong line). Inserting it at the header's index
+                # reverses into "header, then its bodies, in order", which is how a
+                # real block's card reads. Nothing else moves: a body op is only
+                # ever adjacent to its own header.
+                out.insert(head, it)
+                prev_act = act
+                continue
+        head = len(out)             # the row a following group-less body sits under
         prev_act = act or prev_act
+        prev_mid = it.get("mid") or prev_mid
         out.append(it)
     return out
 

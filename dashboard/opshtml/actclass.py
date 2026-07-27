@@ -168,15 +168,13 @@ def legacy_agent_note(op):
         return None                     # unreadable: keep the chip
 
 
-def legacy_mail_note(op):
-    """The same fallback for a pre-`note` team-mail chip: `● <frm> → <to>` and
-    `◉ read · <frm> → <to>` reworded through their owner (msgs.note_new /
-    note_read), or None. The summary can't be recovered — a legacy arrival keeps
-    it in the separate body op, where the reader still finds it — so the note is
-    the bare `Message <frm> → <to>`. Colour-gated like the classifier: only the
-    two semantic mail colours qualify, so a monitor's ◉ is never reworded."""
+def mail_pair(op):
+    """A team-mail chip -> (from, to, is_read), or None. Colour-gated like the
+    classifier: only the two semantic mail colours qualify, so a monitor's `◉` is
+    never read as mail. The one parser of that chip's shape — its two readers are
+    the wording fallback below and the legacy SUBJECT key in op_items."""
     try:
-        if op.get("t") != "label" or op.get("note"):
+        if op.get("t") != "label":
             return None
         if tuple(op.get("c") or ()) not in _MAIL_RGB:
             return None
@@ -188,12 +186,24 @@ def legacy_mail_note(op):
         else:
             return None
         frm, sep, to = pair.partition(" → ")
-        if not sep:
-            return None
-        return (MSGS.note_read(frm, to) if read
-                else MSGS.note_new(frm, to))
+        return (frm, to, read) if sep else None
     except Exception:
-        return None                     # unreadable: keep the chip
+        return None                     # unreadable: not mail as far as we can tell
+
+
+def legacy_mail_note(op):
+    """The same fallback for a pre-`note` team-mail chip: `● <frm> → <to>` and
+    `◉ read · <frm> → <to>` reworded through their owner (msgs.note_new /
+    note_read), or None. The summary can't be recovered — a legacy arrival keeps
+    it in the separate body op, where the reader still finds it — so the note is
+    the bare `Message <frm> → <to>`."""
+    if op.get("note"):
+        return None
+    got = mail_pair(op)
+    if not got:
+        return None
+    frm, to, read = got
+    return MSGS.note_read(frm, to) if read else MSGS.note_new(frm, to)
 
 
 def legacy_note(op):

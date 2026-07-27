@@ -5019,6 +5019,20 @@ Getting there needed the classifier to actually KNOW those rows, which it did no
   no batch boundary, no window cut, no interleaved message can strand it. The
   inheritance stays for PARKED history written before that, where the ops are
   already on disk ungrouped and only the read side can still help them.
+
+  Two more things a group-less body op inherits, both for that history's sake. Its
+  **placement**: the feed is newest-on-top, so the page reverses the item list — which
+  put the body ABOVE the row it belongs to, wedged between that arrival and the `·
+  read` notice of the message before it. The body was on screen the whole time,
+  attributed to the wrong line (*"I don't see the change"* — pasted with the body
+  sitting under a read notice). `op_items` now inserts it at its header's index, which
+  reverses into "header, then its bodies, in order", the way a real block's card reads.
+  And its **subject** (`mid`): pre-`mid` history has no message id anywhere in the op,
+  so the `<from> → <to>` pair off the chip is the key (`actclass.mail_pair`, the one
+  parser of that chip shape) — an arrival, its body and its read notice then count as
+  ONE message instead of three. Two messages the same way inside one collapsed run
+  undercount as one; that is the safer error, the alternative being the inflation the
+  rule exists to remove.
 - **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
   basis (`task_fmt.GLYPHS`).
 
