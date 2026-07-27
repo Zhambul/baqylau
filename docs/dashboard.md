@@ -6596,12 +6596,13 @@ anomaly **"off-device alert left behind (notify-retract not ok)"** is the
 query — note it matches the sid *inside the JSON*, since notify rows are global
 (`session_id=''`).
 
-### Installed-app polish (badge · icon · wake lock · back)
+### Installed-app polish (badge · icon · wake lock)
 
 Extras that only matter once the dashboard is a home-screen app (all
-feature-detected — a plain browser tab silently gets none; `IS_STANDALONE` in
-app.js, `matchMedia("(display-mode: standalone)")` ∪ `navigator.standalone`,
-gates the chrome-assuming ones):
+feature-detected — a plain browser tab silently gets none). Nothing here tests
+for standalone mode any more: the one control that did was the ‹ back button
+(below), and with it gone the old `IS_STANDALONE` probe
+(`matchMedia("(display-mode: standalone)")` ∪ `navigator.standalone`) went too:
 
 - **App-icon badge = sessions needing you.** The Badging API
   (`navigator.setAppBadge`) puts a count on the home-screen icon = live sessions
@@ -6640,10 +6641,15 @@ gates the chrome-assuming ones):
   while you watch a run; it glows gold while held. The lock auto-releases when
   the tab hides, so it's re-acquired on the next `visibilitychange` to visible
   while the toggle is on. Pure client state — no persistence, no audit.
-- **In-app back** — a standalone app has no browser back button, so the ‹
-  header button (`initBackBtn`, standalone-only, shown by `showBack` inside a
-  session view) drives `history.back()` over the hash-router's own history
-  entries (falling back to `#/`).
+- **No in-app back button** — there used to be a ‹ left of the logo
+  (standalone-only, shown inside a session view) driving `history.back()`, on
+  the reasoning that a home-screen app has no browser chrome. It is GONE: the
+  header BRAND is itself a link to `#/`, sitting right where the ‹ was, so the
+  two controls did the same one thing — leave the session view for the list —
+  a few pixels apart. The brand is the way out; the platform's own back gesture
+  still works over the hash router's history entries wherever the OS offers
+  one. (Don't re-add it: a second control for one navigation is what was
+  removed, not an oversight.)
 
 **The session strip is the persistent complement to the toasts.** Toasts are
 transient (a 7s slide-in on the transition); the strip is the standing view of

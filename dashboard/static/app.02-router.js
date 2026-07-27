@@ -134,7 +134,6 @@ function route() {
   const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   // hide the c1/c2 account strip once we're inside a particular session
   document.body.classList.toggle("in-session", parts[0] === "s");
-  showBack(parts[0] === "s");     // the standalone-app ‹ back button (installed)
   // the header's top-right corner belongs to the open session (its action bar,
   // mounted by renderSessionChrome) — hand it back to the list's own buttons on
   // every other route. Only OFF a session route: a drill-down (…/m/<task>)

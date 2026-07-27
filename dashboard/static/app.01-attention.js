@@ -106,13 +106,10 @@ async function sweepStale() {
   updateBadge();
 }
 
-/* ---------- installed-app polish (badge · wake lock · back) ------------------
+/* ---------- installed-app polish (badge · wake lock) -------------------------
    Extras that only make sense for the home-screen app (docs/dashboard.md
    *Installed-app polish*). All feature-detected — a plain browser tab silently
-   gets none. IS_STANDALONE gates the ones that assume no browser chrome. */
-const IS_STANDALONE =
-  (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches)
-  || navigator.standalone === true;   // navigator.standalone is the iOS tell
+   gets none, and nothing here needs a standalone-mode test. */
 
 // The app-icon badge = how many LIVE sessions need you (red asking + green
 // done) — the glanceable count without opening the app. Rides the same
@@ -161,19 +158,11 @@ function initWakeBtn() {
   });
 }
 
-// In-app back: a standalone app has no browser back button. The router is a
-// hash SPA and every navigation pushes a history entry, so history.back()
-// works; showBack() reveals the ‹ only in standalone mode inside a session
-// view (updateHeadChrome calls it on every route change).
-function initBackBtn() {
-  const b = document.getElementById("backbtn");
-  if (!b || !IS_STANDALONE) return;
-  b.onclick = () => { if (history.length > 1) history.back(); else location.hash = "#/"; };
-}
-function showBack(inSession) {
-  const b = document.getElementById("backbtn");
-  if (b && IS_STANDALONE) b.hidden = !inSession;
-}
+// There is deliberately NO in-app back button. A standalone app has no browser
+// chrome, but the header BRAND is already a link to `#/` — a ‹ next to it did
+// the same one thing (leave the session view for the list) in a second place,
+// so it went. The router is a hash SPA, so the platform back gesture (and
+// history.back()) still works wherever the OS offers one.
 
 /* ---------- persistent session strip ---------- */
 // The standing complement to the transient toasts: a slim bar under the header,

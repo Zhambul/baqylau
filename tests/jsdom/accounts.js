@@ -44,7 +44,7 @@ const sandbox = {
   ...domGlobals(),
   $accounts,
   $notifybtn: new El("button"), $wakebtn: new El("button"),
-  $backbtn: new El("button"), $attn: new El("div"),
+  $attn: new El("div"),
   S: { sessions: [], accts: null, cur: null },
   clog: () => {}, toast: () => {}, route: () => {},
   postJSON: () => Promise.resolve({}),

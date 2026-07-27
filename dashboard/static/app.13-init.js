@@ -77,7 +77,6 @@ if (/[?&#]vpdiag/.test(location.search + location.hash)) {
 initNotifBtn();
 initPush();   // register the push service worker + (re)subscribe if already granted
 initWakeBtn();   // ☀ keep-screen-awake toggle (installed-app polish)
-initBackBtn();   // ‹ in-app back (standalone only)
 // the new-session form's last-used prefs live on the backend now (cross-device)
 // — prime the cache so the first form open reads them synchronously
 fetch("/api/ns-prefs").then(r => r.json())
