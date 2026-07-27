@@ -60,7 +60,7 @@ from core import sessionapi as API  # noqa: F401  -- DS.API
 from core import spawn as SP  # noqa: F401  -- DS.SP
 from core.noaudit import load_audit
 from dashboard import askdialog, confirmdialog, plandialog, prefs, \
-    rewindmenu, webpush  # noqa: F401  -- DS.<dialog>/prefs/webpush test handles
+    rewindmenu, telegram, webpush  # noqa: F401  -- DS.<dialog>/prefs/transport test handles
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
 
@@ -78,7 +78,9 @@ from dashboard import config  # noqa: F401  -- DS.config: the knob surface + pat
 # The presence signals, the /events BROKER and the tab-diff Notifier live in
 # dashboard/notify/; server.py re-exports the presence helpers its POST handlers
 # call, the bus the SSE + launch-wake paths push to, and the watcher singleton.
-from dashboard.notify import broker, notifier, presence  # noqa: F401  -- module handles for tests
+# `channels` is the notifier's delivery/retraction surface — a module handle so a
+# test patches sends and retractions at their one owner.
+from dashboard.notify import broker, channels, notifier, presence  # noqa: F401  -- module handles for tests
 from dashboard.notify.broker import BROKER, Broker  # noqa: F401
 from dashboard.notify.notifier import NOTIFIER, Notifier  # noqa: F401
 from dashboard.notify.presence import (  # noqa: F401  -- facade re-export

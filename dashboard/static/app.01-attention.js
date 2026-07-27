@@ -71,6 +71,39 @@ async function initPush() {
   // subscription silently (endpoints rotate, and the server may have restarted
   // with a fresh subscription store) — no button, no gesture needed.
   if ("Notification" in window && Notification.permission === "granted") ensureSubscribed();
+  // re-arm the stale-banner sweep every time the app goes away, so the next
+  // foreground visit runs exactly one (renderAttention fires it — see sweepStale).
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "visible") sweepArmed = true;
+  });
+}
+
+/* ---------- stale-banner sweep --------------------------------------------
+   The client half of retraction (docs/dashboard.md, *Alert retraction*). The
+   server takes an alert back by pushing a resolve to the service worker, but
+   that push can be refused, dropped, or switched off (CLAUDE_DASH_RESOLVE_PUSH),
+   and the handles it needs live only in the running server's memory — a restart
+   forgets them. So the page also clears up after itself: on coming to the
+   foreground it closes every banner whose session no longer needs you.
+
+   Once per foreground visit, and only from renderAttention — i.e. only with a
+   REAL sessions snapshot in hand. Sweeping off a boot-empty S.sessions would
+   read "nothing needs you" and close banners that are still true. */
+let sweepArmed = true;
+
+async function sweepStale() {
+  if (!swReg || !swReg.getNotifications) return;
+  const needs = new Set(needsYouRows().map(r => r.sid));
+  let ns;
+  try { ns = await swReg.getNotifications(); } catch (_) { return; }
+  // A banner with no sid can't be attributed to a session — that's either a
+  // legacy alert or the placeholder WebKit substitutes for a push that showed
+  // nothing. Both are ours and both are stale, so both go.
+  for (const n of ns) {
+    const sid = (n.data && n.data.sid) || "";
+    if (!needs.has(sid)) n.close();
+  }
+  updateBadge();
 }
 
 /* ---------- installed-app polish (badge · wake lock · back) ------------------
@@ -86,10 +119,12 @@ const IS_STANDALONE =
 // sessions snapshot the attention strip does (updateBadge is called from
 // renderAttention), and the push service worker sets it while the app is
 // closed. Cleared to nothing at 0 so the icon has no stray dot.
-function needsYouCount(sessions) {
+function needsYouRows(sessions) {
   return (sessions || S.sessions || []).filter(
-    r => r.live && (r.tab === "awaiting-command" || r.tab === "awaiting-response")
-  ).length;
+    r => r.live && (r.tab === "awaiting-command" || r.tab === "awaiting-response"));
+}
+function needsYouCount(sessions) {
+  return needsYouRows(sessions).length;
 }
 function updateBadge(sessions) {
   if (!("setAppBadge" in navigator)) return;
@@ -226,6 +261,11 @@ function renderAttention() {
   document.title = asking ? "(" + asking + ") " + BASE_TITLE : BASE_TITLE;
   if ($favicon) $favicon.href = asking ? FAVICON_ASK : FAVICON;
   updateBadge();   // app-icon badge = red+green needs-you count (installed app)
+  // one stale-banner sweep per foreground visit, now that a real snapshot is in
+  if (sweepArmed && document.visibilityState === "visible") {
+    sweepArmed = false;
+    sweepStale();
+  }
 }
 
 /* ---------- account usage strip (top of every page) ---------- */

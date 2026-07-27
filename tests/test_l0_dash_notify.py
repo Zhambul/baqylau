@@ -5,8 +5,11 @@
 # server fixture (`dash`) in tests/conftest.py.
 import json
 import sys
+import threading
 import urllib.error
+import urllib.parse
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from conftest import REPO, wait_until
@@ -617,3 +620,368 @@ def test_post_message_empty_text_is_400(dash, monkeypatch):
     with pytest.raises(urllib.error.HTTPError) as e:
         _post(dash + "/api/session/msg3/message", {"text": "   "})
     assert e.value.code == 400
+
+
+# ----------------------------------------------------- alert retraction
+# docs/dashboard.md, *Alert retraction*. A DELIVERED alert is taken back once
+# the session stops needing you: the Telegram message is deleted, and a resolve
+# push closes the on-device banner.
+
+
+def _armed_and_sent(monkeypatch, tmp_path, kind="asking", handle=None):
+    """Drive one alert all the way to DELIVERED and hand back (notifier, states,
+    clock). Telegram is the channel (NOTIFY_WEBPUSH off → the no-device
+    immediate fallback), stubbed at channels so nothing touches a wire."""
+    monkeypatch.setattr(P, "DASH_PREFS_DB", str(tmp_path / "prefs.db"))
+    monkeypatch.setattr(DS.config, "NOTIFY_DELAY_S", 30.0)
+    monkeypatch.setattr(DS.config, "NOTIFY_TELEGRAM", True)
+    monkeypatch.setattr(DS.config, "NOTIFY_WEBPUSH", False)
+    monkeypatch.setattr(DS.notifier, "session_title", lambda p: "t")
+    clock = [0.0]
+    monkeypatch.setattr(DS.time, "monotonic", lambda: clock[0])
+    monkeypatch.setattr(DS.channels, "send_telegram",
+                        lambda entry, reason=None: handle)
+    n = DS.Notifier()
+    n.winmap = {"7": {"sid": "s7", "cwd": "/w/p", "transcript_path": "/w/t.jsonl"}}
+    states = {"7": "working"}
+    monkeypatch.setattr(DS.API, "tab_states", lambda: dict(states))
+    n.scan()                                   # baseline
+    states["7"] = ("awaiting-command" if kind == "asking" else "awaiting-response")
+    n.scan()                                   # -> armed
+    clock[0] = 40.0
+    n.scan()                                   # past the grace -> DELIVERED
+    return n, states, clock
+
+
+def test_retract_deletes_the_message_when_you_answer(monkeypatch, tmp_path):
+    """The whole feature, end to end at the watcher: an alert that was SENT is
+    retracted the moment the tab leaves the state it alerted about — with a
+    `notify-retract` row naming the channel, the reason and the outcome."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "asking"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, handle=h)
+    assert [r["handle"] for r in n.sent] == [h]     # delivered + tracked
+    calls = []
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda handle, reason, badge=0:
+                        (calls.append((handle, reason, badge)), DS.channels.OK)[1])
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    clock[0] = 50.0
+    states["7"] = "working"                        # you answered
+    n.scan()
+    assert calls and calls[0][0] is h and calls[0][1] == "tab-moved"
+    assert n.sent == []                            # retracted exactly once
+    rows = [a[3] for a in audited if a[2] == "notify-retract"]
+    assert len(rows) == 1
+    assert rows[0]["channel"] == "telegram" and rows[0]["reason"] == "tab-moved"
+    assert rows[0]["outcome"] == "ok" and rows[0]["ok"] is True
+    n.scan()
+    assert len(calls) == 1                         # and never twice
+
+
+@pytest.mark.parametrize("reason,signal", [
+    ("session-ended", ("session_ended", lambda sid: True)),
+    ("composing", ("composer_draft", lambda sid: {"text": "half a reply"})),
+])
+def test_retract_on_session_end_and_on_composing(monkeypatch, tmp_path,
+                                                 reason, signal):
+    """The other two RETRACT_REASONS: you closed the session, or you're typing a
+    reply in the web composer. Both mean the alert's premise is gone."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "done"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, kind="done",
+                                       handle=h)
+    got = []
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda handle, r, badge=0: (got.append(r), DS.channels.OK)[1])
+    monkeypatch.setattr(DS.presence, *signal)
+    clock[0] = 50.0
+    n.scan()
+    assert got == [reason] and n.sent == []
+
+
+def test_a_glance_never_retracts_a_delivered_alert(monkeypatch, tmp_path):
+    """THE design rule (notifier.RETRACT_REASONS). Looking at a session cancels
+    an alert not yet sent — "you don't need to be told". It must NOT delete one
+    already delivered: glance at a red tab, walk away, and the deletion would
+    have destroyed your only reminder while the tab is still sitting there
+    asking. So a watching signal leaves the delivered alert alone."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "done"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, kind="done",
+                                       handle=h)
+    assert len(n.sent) == 1
+    calls = []
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda *a, **k: (calls.append(a), DS.channels.OK)[1])
+    # you are looking right at it — both channels of _watching, plus the two
+    # screen-scraped "I'm on it" signals, all say so
+    monkeypatch.setattr(n, "_watching", lambda win, sid, tree=None: "tab-focused")
+    monkeypatch.setattr(n, "_input_typed", lambda win: "a half-typed reply")
+    clock[0] = 50.0
+    n.scan()
+    assert calls == [] and len(n.sent) == 1       # still out there, still tracked
+    # ...and the moment the tab actually moves, it goes
+    states["7"] = "working"
+    n.scan()
+    assert len(calls) == 1 and n.sent == []
+
+
+def test_retract_retries_while_the_send_is_still_in_flight(monkeypatch, tmp_path):
+    """The Telegram send runs on its own thread, so a retraction can genuinely
+    beat the message id home. PENDING keeps the record for the next tick rather
+    than dropping it — otherwise a fast answer would strand the message."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "asking"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, handle=h)
+    outcomes = [DS.channels.PENDING, DS.channels.PENDING, DS.channels.OK]
+    seen = []
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda *a, **k: (seen.append(1), outcomes.pop(0))[1])
+    states["7"] = "working"
+    for t in (50.0, 51.0):
+        clock[0] = t
+        n.scan()
+        assert len(n.sent) == 1                   # still pending -> still tracked
+    clock[0] = 52.0
+    n.scan()
+    assert len(seen) == 3 and n.sent == []
+
+
+def test_untracked_delivery_when_nothing_retractable_came_back(monkeypatch, tmp_path):
+    """A channel that returns no handle delivered nothing retractable — the
+    legacy `notify` script send, whose message id goes to DEVNULL. Nothing is
+    tracked, and the retraction pass has nothing to do."""
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, handle=None)
+    assert n.sent == []
+    calls = []
+    monkeypatch.setattr(DS.channels, "retract", lambda *a, **k: calls.append(a))
+    clock[0] = 50.0
+    states["7"] = "working"
+    n.scan()
+    assert calls == []
+
+
+def test_delivered_alert_expires_past_the_ttl(monkeypatch, tmp_path):
+    """Past RETRACT_S the delivery stops being tracked — Telegram's own 48h
+    delete window is the ceiling. It is audited as `expired`, because an alert
+    left behind is exactly the thing worth being able to find in the DB."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "asking"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, handle=h)
+    monkeypatch.setattr(DS.config, "RETRACT_S", 100.0)
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    clock[0] = 60.0
+    n.scan()
+    assert len(n.sent) == 1                       # inside the window
+    clock[0] = 200.0
+    n.scan()
+    assert n.sent == []
+    rows = [a[3] for a in audited if a[2] == "notify-retract"]
+    assert len(rows) == 1
+    assert rows[0]["outcome"] == "expired" and rows[0]["reason"] == "ttl"
+    assert rows[0]["ok"] is False
+
+
+def test_resolve_push_goes_to_the_alerted_subscriptions(monkeypatch):
+    """The on-device retraction: a `type:"resolve"` payload, carrying the SAME
+    tag sw.js showed the banner under, to the subscriptions the alert actually
+    went to — not to whatever device is most-recently-used by now, which may not
+    be the one holding the banner."""
+    sent = []
+    monkeypatch.setattr(DS.channels, "_webpush_fanout",
+                        lambda subs, payload, action: sent.append((subs, payload, action)))
+    subs = [{"endpoint": "https://p/ipad", "keys": {}, "device": "ipad"}]
+    h = {"ch": "webpush", "sid": "s7", "kind": "asking", "subs": subs,
+         "tag": DS.channels.push_tag("s7")}
+    out = DS.channels.retract(h, "tab-moved", badge=2)
+    assert out == DS.channels.OK
+    assert len(sent) == 1
+    got_subs, payload, action = sent[0]
+    assert got_subs is subs and action == "resolve"
+    assert payload["type"] == "resolve" and payload["tag"] == "claude-s7"
+    assert payload["sid"] == "s7" and payload["badge"] == 2
+
+
+def test_resolve_push_kill_switch(monkeypatch):
+    """CLAUDE_DASH_RESOLVE_PUSH=0 — the off switch for the one push that
+    deliberately raises no notification (iOS userVisibleOnly, see
+    channels._retract_webpush). Nothing goes on the wire."""
+    monkeypatch.setattr(DS.config, "RESOLVE_PUSH", False)
+    sent = []
+    monkeypatch.setattr(DS.channels, "_webpush_fanout",
+                        lambda *a: sent.append(a))
+    h = {"ch": "webpush", "sid": "s7", "kind": "asking",
+         "subs": [{"endpoint": "https://p/x", "keys": {}}], "tag": "claude-s7"}
+    assert DS.channels.retract(h, "tab-moved") == DS.channels.NOTHING
+    assert sent == []
+
+
+def test_push_tag_agrees_with_the_service_worker(dash):
+    """The tag is a CONTRACT between channels.push_tag and sw.js: the resolve
+    push closes by tag, so a drift here leaves the banner up forever. Checked
+    against the served worker, the same way the other cross-file literals are."""
+    code, body = _get(dash + "/sw.js")
+    assert code == 200
+    assert '"claude-" + (sid || "")' in body, "sw.js must build channels.push_tag"
+    assert 'd.type === "resolve"' in body and "getNotifications" in body
+    assert DS.channels.push_tag("abc") == "claude-abc"
+
+
+def test_telegram_transport_sends_and_deletes(monkeypatch, tmp_path):
+    """dashboard/telegram.py against a fake Bot API (CLAUDE_DASH_TELEGRAM_API —
+    the env-knob convention dictate.py's grant URL set). The point of the module
+    is that `send` KEEPS the message_id the fire-and-forget script threw away,
+    and that `delete` can then reach the message with it."""
+    seen = []
+
+    class Bot(BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            args = urllib.parse.parse_qs(self.rfile.read(n).decode())
+            seen.append((self.path, {k: v[0] for k, v in args.items()}))
+            out = ({"ok": True, "result": {"message_id": 4242,
+                                           "chat": {"id": 209}}}
+                   if self.path.endswith("/sendMessage")
+                   else {"ok": True, "result": True})
+            body = json.dumps(out).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Bot)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        creds = tmp_path / "tg"
+        creds.mkdir()
+        (creds / "bot-token").write_text("tok-123\n")
+        (creds / "chat-id").write_text("209\n")
+        monkeypatch.setenv("CLAUDE_DASH_TELEGRAM_DIR", str(creds))
+        monkeypatch.setenv("CLAUDE_DASH_TELEGRAM_API",
+                           "http://127.0.0.1:%d" % srv.server_address[1])
+        assert DS.telegram.enabled() is True
+
+        res = DS.telegram.send("🔴 proj needs you")
+        assert res.ok and res.message_id == 4242 and res.chat == 209
+        path, args = seen[0]
+        assert path == "/bottok-123/sendMessage"
+        assert args["chat_id"] == "209" and "needs you" in args["text"]
+
+        gone = DS.telegram.delete(res.chat, res.message_id)
+        assert gone.ok
+        path, args = seen[1]
+        assert path == "/bottok-123/deleteMessage"
+        assert args == {"chat_id": "209", "message_id": "4242"}
+    finally:
+        srv.shutdown()
+
+
+def test_telegram_transport_off_without_credentials(monkeypatch, tmp_path):
+    """Unconfigured = invisible, never broken: enabled() is False (the notifier
+    then uses the legacy script, which is why an alert still arrives), and a
+    stray call still returns a Result rather than raising into the watcher."""
+    monkeypatch.setenv("CLAUDE_DASH_TELEGRAM_DIR", str(tmp_path / "nope"))
+    assert DS.telegram.enabled() is False
+    assert DS.telegram.send("hi").ok is False
+    assert DS.telegram.delete(None, None).ok is False
+
+
+def test_telegram_delete_of_a_vanished_message_is_not_a_failure(monkeypatch, tmp_path):
+    """A 400 'message to delete not found' means someone cleared the chat first
+    — the message is out, which is what we wanted. It must read as `gone`, not
+    as a failed retraction (which would light up the audit for nothing)."""
+    class Bot(BaseHTTPRequestHandler):
+        def do_POST(self):
+            body = json.dumps({"ok": False,
+                               "description": "Bad Request: message to delete not found"}).encode()
+            self.send_response(400)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, *a):
+            pass
+
+    srv = ThreadingHTTPServer(("127.0.0.1", 0), Bot)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setenv("CLAUDE_DASH_TELEGRAM_TOKEN", "t")
+        monkeypatch.setenv("CLAUDE_DASH_TELEGRAM_CHAT", "9")
+        monkeypatch.setenv("CLAUDE_DASH_TELEGRAM_API",
+                           "http://127.0.0.1:%d" % srv.server_address[1])
+        res = DS.telegram.delete(9, 1)
+        assert res.ok is False and res.gone is True
+        # and the channel reports that as a settled retraction, not a failure.
+        # The delete runs OFF the watcher thread (a 10s-timeout round-trip can't
+        # sit in the 1s scan), so it settles over two ticks: PENDING, then the
+        # outcome the thread left.
+        h = {"ch": "telegram", "sid": "s7", "kind": "done",
+             "chat": 9, "msg_id": 1, "done": True}
+        assert DS.channels.retract(h, "tab-moved") == DS.channels.PENDING
+        wait_until(lambda: DS.channels.retract(h, "tab-moved") == DS.channels.GONE,
+                   desc="the delete thread settles the handle as gone")
+    finally:
+        srv.shutdown()
+
+
+def test_telegram_handle_is_pending_until_the_send_lands(monkeypatch):
+    """The handle's PENDING state: created synchronously by send_telegram, filled
+    by the sender thread. Until `done` the retraction must say PENDING (retry),
+    and a send that failed outright leaves NOTHING to retract."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "done",
+         "chat": None, "msg_id": None, "done": False}
+    assert DS.channels.retract(h, "tab-moved") == DS.channels.PENDING
+    h["done"] = True                                # thread finished, send failed
+    assert DS.channels.retract(h, "tab-moved") == DS.channels.NOTHING
+
+
+def test_neither_channel_blocks_the_watcher_thread(monkeypatch, tmp_path):
+    """The 1 s scan loop must never sit on a network round-trip — the rule the
+    send already followed and the retraction had to be held to. Both wire calls
+    are stubbed to hang; a scan that delivers AND a scan that retracts must each
+    return promptly, with the retraction reporting PENDING rather than waiting."""
+    import time as _real_time
+    hanging = threading.Event()
+    monkeypatch.setattr(DS.telegram, "enabled", lambda: True)
+    # the stubs return a real Result once released, so the freed threads finish
+    # cleanly rather than raising into pytest's unhandled-thread warning
+    def stalled(*a):
+        hanging.wait(30)
+        return DS.telegram.Result(error="stub")
+    monkeypatch.setattr(DS.telegram, "send", stalled)
+    monkeypatch.setattr(DS.telegram, "delete", stalled)
+    h = {"ch": "telegram", "sid": "s7", "kind": "done",
+         "chat": 9, "msg_id": 1, "done": True}
+    try:
+        t0 = _real_time.monotonic()
+        assert DS.channels.send_telegram({"sid": "s7", "kind": "done"}) is not None
+        assert DS.channels.retract(h, "tab-moved") == DS.channels.PENDING
+        assert DS.channels.retract(h, "tab-moved") == DS.channels.PENDING
+        assert _real_time.monotonic() - t0 < 2.0, "a wire call reached the watcher"
+    finally:
+        hanging.set()
+
+
+def test_a_wedged_retraction_still_ages_out(monkeypatch, tmp_path):
+    """The TTL is a bound on the record's LIFETIME, not just on the un-resolved
+    case: a channel stuck answering PENDING (a wedged sender thread) must still
+    age out, or the bound would hold only while another thread behaves."""
+    h = {"ch": "telegram", "sid": "s7", "kind": "asking"}
+    n, states, clock = _armed_and_sent(monkeypatch, tmp_path, handle=h)
+    monkeypatch.setattr(DS.config, "RETRACT_S", 100.0)
+    monkeypatch.setattr(DS.channels, "retract",
+                        lambda *a, **k: DS.channels.PENDING)   # never settles
+    audited = []
+    monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
+    states["7"] = "working"                    # resolved, but the wire is wedged
+    clock[0] = 60.0
+    n.scan()
+    assert len(n.sent) == 1                    # still retrying inside the window
+    clock[0] = 200.0
+    n.scan()
+    assert n.sent == []
+    rows = [a[3] for a in audited if a[2] == "notify-retract"]
+    assert rows and rows[-1]["outcome"] == "expired" and rows[-1]["reason"] == "ttl"

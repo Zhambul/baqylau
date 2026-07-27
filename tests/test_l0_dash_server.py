@@ -694,7 +694,9 @@ def test_webpush_audits_route_decision(monkeypatch):
     audited = []
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
     n = DS.Notifier()
-    n._webpush_send = lambda *a: None            # don't actually hit the network
+    # don't actually hit the network: stub the fan-out at its owner (the send
+    # itself now lives in notify/channels.py — the notifier only routes + tracks)
+    monkeypatch.setattr(DS.channels, "_webpush_fanout", lambda *a: None)
     ok = n._webpush({"sid": "s7", "kind": "done", "title": "t", "project": "p"})
     assert ok is True
     routes = [a[3] for a in audited if a[2] == "notify-route"]
@@ -713,9 +715,9 @@ def test_webpush_send_row_carries_device(monkeypatch):
     monkeypatch.setattr(DS.webpush, "send", lambda sub, payload: R())
     audited = []
     monkeypatch.setattr(DS.A, "state_file", lambda *a, **k: audited.append(a))
-    n = DS.Notifier()
-    n._webpush_send([{"endpoint": "https://p/mac", "keys": {}, "device": "mac"}],
-                    {"sid": "s7", "kind": "done", "badge": 1})
+    DS.channels._webpush_fanout(
+        [{"endpoint": "https://p/mac", "keys": {}, "device": "mac"}],
+        {"sid": "s7", "kind": "done", "badge": 1}, "send")
     sends = [a[3] for a in audited if a[2] == "web-push" and a[3].get("action") == "send"]
     assert len(sends) == 1 and sends[0]["device"] == "mac"
     assert sends[0]["ok"] is True and sends[0]["endpoint"] == "https://p/mac"

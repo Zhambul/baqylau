@@ -1,47 +1,84 @@
-# dashboard/notify/notifier.py — the tab-diff watcher.
+# dashboard/notify/notifier.py — the tab-diff watcher: WHEN an alert happens.
 #
 # One daemon thread diffs the global tab DB once a second, pushes the in-page
-# toast/OS-notification on every asking/done transition, and drives the deferred
-# device-first / Telegram-if-ignored off-device alert (armed on the transition,
-# sent only if you didn't react within the grace window). Reads the notify knobs
-# LIVE from config (config.NOTIFY_*) and the "need alerting" signals from
-# presence — so a test patches config / presence, not this module.
+# toast on every asking/done transition, drives the deferred device-first /
+# Telegram-if-ignored off-device alert (armed on the transition, sent only if
+# you didn't react within the grace window), and RETRACTS a delivered alert once
+# what it told you stops being true. Reads the notify knobs LIVE from config
+# (config.NOTIFY_*) and the "need alerting" signals from presence — so a test
+# patches config / presence, not this module.
+#
+# HOW an alert reaches you (and how it is taken back) is channels.py: this
+# module never touches a socket, a subprocess or a payload shape. It holds two
+# collections and the rules that move entries between them —
+#   self.pending  armed, not yet delivered   -> cancelled, or sent
+#   self.sent     delivered, still retractable -> retracted, or expired
 #
 # The /events FAN-OUT it publishes on is broker.py, not this class: sse_global
 # and launch_wake want a bus, not a watcher.
 import os
-import subprocess
-import sys
-import threading
 import time
-from urllib.parse import quote
 
 from core import sessionapi as API
 from core.noaudit import load_audit
-from dashboard import askdialog, config, prefs, suggestion, webpush
+from dashboard import askdialog, config, prefs, suggestion
 from dashboard.config import (GLOBAL_TICK_S, NOTIFY_STATES,
                               SESSIONS_LIMIT, SLOW_EVERY)
 from dashboard.control import launch
-from dashboard.notify import presence
+from dashboard.notify import channels, presence
 from dashboard.notify.broker import BROKER, Broker
 from dashboard.read.meta import canon_cwd, session_title, group_dir
 
 A = load_audit()
 
+# ---------------------------------------------------------------- reactions
+#
+# `_reaction` names every way you can make a red/green alert moot. What differs
+# is who ACTS on each name, and these two tables are that difference — the one
+# place the distinction is written down rather than implied by control flow.
+#
+# SILENT: cancelling a pending alert for this reason files no notify-suppress
+# row, because something else already records it (a `tab_transitions` row, the
+# session's `ended_at`, the `composer-draft` kv). Every other reason owes a row
+# — see `_drop`.
+SILENT_REASONS = frozenset(("tab-moved", "session-ended", "composing"))
+# RETRACT: the reasons that also take back an alert ALREADY DELIVERED. Narrower
+# than the cancel set on purpose. A pending alert is cancelled by anything that
+# means "you don't need to be told" — including a mere glance (tab-focused /
+# web-viewing). A delivered alert may only be retracted by something that means
+# "what you were told is no longer true". Glancing at a red tab and walking away
+# is the counter-example that decides it: treating a look as a resolution would
+# delete your only reminder while the tab is still sitting there asking. The
+# screen-scraped signals (dialog-activity / terminal-input) are excluded for a
+# duller reason — they cost a `kitten @ get-text` per record per tick, and a
+# delivered alert is tracked for hours, not for the 60 s grace window; answering
+# at the terminal moves the tab off red seconds later anyway, so `tab-moved`
+# catches it for free.
+RETRACT_REASONS = frozenset(("tab-moved", "session-ended", "composing"))
+
 
 class Notifier:
     """The tab-DB diff watcher. Once a second it diffs the global tab table and
     publishes ('notify', payload) on its Broker for every asking/done
-    transition (the in-page toast + OS notification). Also keeps the win ->
-    session map the payloads are named from (refreshed on the slow cadence —
+    transition (the in-page toast — shown only by the FOCUSED page; the
+    on-device system notification is Web Push, at the deferred fire point).
+    Also keeps the win -> session map the payloads are named from (refreshed on the slow cadence —
     sessions come and go rarely).
 
-    It ALSO drives the deferred off-device Telegram alert: each asking/done
-    transition arms `self.pending[win]`; a later scan SENDS it iff the tab is
-    still in that state after NOTIFY_DELAY_S (you didn't react) and the session
-    isn't muted — otherwise the entry is dropped when the tab moves off that
-    state, the session ends (you closed it / moved on), or you're composing a
-    reply to it (an unsent web draft = you're already on it)."""
+    It ALSO drives the deferred off-device alert: each asking/done transition
+    arms `self.pending[win]`; a later scan SENDS it iff the tab is still in that
+    state after NOTIFY_DELAY_S (you didn't react) and the session isn't muted —
+    otherwise the entry is dropped when the tab moves off that state, the
+    session ends (you closed it / moved on), or you're composing a reply to it
+    (an unsent web draft = you're already on it).
+
+    And it RETRACTS: a sent alert moves to `self.sent` with the handle its
+    channel returned, and once the session stops needing you (RETRACT_REASONS)
+    the Telegram message is deleted and a resolve push closes the on-device
+    banner. Retraction is best-effort and IN-MEMORY: a dashboard restart forgets
+    the handles, so an alert delivered before it stays in the chat — the same
+    bargain `pending` already makes, and the reason the page's own foreground
+    sweep exists as a second line of defence."""
 
     def __init__(self, broker=None):
         # The bus this watcher publishes on. NOTIFIER takes the process-wide
@@ -52,6 +89,12 @@ class Notifier:
         #                                {} (a real empty screen — all tabs gone)
         self.winmap = {}
         self.pending = {}              # win -> dict(payload, armed_at, state)
+        # Delivered alerts still worth taking back: a LIST, not a win-keyed map
+        # like `pending`. One window can hold two at once — stage 1's push and
+        # stage 2's Telegram escalation are separate deliveries of the same
+        # alert, each with its own handle — and a keyed map would silently drop
+        # one of them. Kept in send order, so the cap trims the oldest.
+        self.sent = []                 # [dict(payload, sent_at, handle)]
         self.fe = None                 # cached Frontend for the dialog-region
         #                                read (refreshed on the slow cadence)
 
@@ -137,6 +180,63 @@ class Notifier:
             return "web-viewing"
         return None
 
+    def _reaction(self, entry, cur, tree, screen=True):
+        """Has this alert stopped being worth delivering — and if so, WHY? The
+        single owner of that question; `_cancel_armed` and `_retract_resolved`
+        differ only in which answers they act on (SILENT_REASONS /
+        RETRACT_REASONS above). Returns a reason name or None.
+
+        Checked cheapest-first, and the order is also a precedence: the tab
+        moving off its alerted state is the strongest signal there is, so it
+        wins over anything a screen read might say.
+
+        `screen=False` skips the two scraped signals (each a `kitten @ get-text`
+        subprocess). The retraction pass runs with it off — it tracks entries for
+        hours, where the cancel pass only ever tracks them across the 60 s grace
+        window."""
+        win, sid = entry.get("win"), entry.get("sid")
+        if cur.get(win) != entry["state"]:
+            # answered -> busy, or the win vanished (tab gone). `ended` below is
+            # the robust companion this check can miss: a stale tab row can
+            # linger, and a REUSED window id can even re-match the armed state
+            # under a different session.
+            return "tab-moved"
+        if presence.session_ended(sid):
+            return "session-ended"        # you closed / quit it — moved on, and
+            #                               the deep link would open a dead one
+        if presence.composing(sid):
+            return "composing"            # unsent web draft = "I'm on it"
+        if not screen:
+            return None
+        if entry.get("kind") == "asking":
+            # You answering AT THE TERMINAL — typing a free-text answer or
+            # toggling a selection — moves neither the tab off red nor the
+            # transcript (the dialog is still open, unsubmitted), so nothing
+            # above fires. Its ONLY trace is the dialog region changing.
+            # Baseline it on first sighting (the untouched dialog), then report
+            # the moment it differs: you're on it, don't nag.
+            reg = self._dialog_region(win)
+            if reg:                          # "" = no ask dialog / read miss
+                if entry.get("ask_region") is None:
+                    entry["ask_region"] = reg
+                elif reg != entry["ask_region"]:
+                    return "dialog-activity"
+        elif entry.get("kind") == "done":
+            # A green `done` tab is your turn; you replying AT THE TERMINAL —
+            # typing into the `❯` box — likewise shows up nowhere until you
+            # submit. Its trace is REAL (non-faint) content in the input box (a
+            # settled tab pre-fills only a FAINT ghost suggestion, which
+            # `suggestion.typed` ignores).
+            if self._input_typed(win):
+                return "terminal-input"
+            # "If I've SEEN the final message, no notification." A done tab's
+            # final message is on screen the moment it goes green, so ANY glance
+            # during the grace means you saw it — checked every scan, so a
+            # glance that has since ended still counts. Weakest signal in the
+            # table, and the reason RETRACT_REASONS excludes it.
+            return self._watching(win, sid, tree)
+        return None
+
     def _drop(self, win, reason=None):
         """Disarm `self.pending[win]` — the ONE way an armed deferred alert ends
         without being sent. `reason` names it in a `notify-suppress` row; None is
@@ -174,17 +274,23 @@ class Notifier:
         }
 
     def scan(self):
-        """One 1 s tick: diff the tab DB, then walk the armed entries twice.
-        THREE passes, in this order and no other (each depends on the previous
+        """One 1 s tick: diff the tab DB, then walk the tracked entries.
+        FOUR passes, in this order and no other (each depends on the previous
         one's edits to self.pending):
           1. _arm_transitions — the tab diff: toast every new asking/done
              transition and arm its deferred off-device alert.
           2. _cancel_armed — drop the arms you already reacted to, all BEFORE
              any delay elapses.
           3. _fire_due — send what survived the grace window (on-device push,
-             then the Telegram escalation).
+             then the Telegram escalation), recording each delivery in
+             self.sent.
+          4. _retract_resolved — take back the deliveries whose session no
+             longer needs you, and expire the rest. Reads self.sent, which is
+             disjoint from self.pending, so it is last only for readability:
+             an alert delivered by pass 3 this very tick cannot be resolved
+             before the next one.
         `tree` (one `kitten @ ls`) is resolved once between 1 and 2 and shared by
-        both later passes' tab-focus checks — else it costs one subprocess per
+        the later passes' tab-focus checks — else it costs one subprocess per
         armed session per second."""
         cur = API.tab_states()
         prev, self.prev = self.prev, cur
@@ -206,12 +312,13 @@ class Notifier:
             tree = None
         self._cancel_armed(cur, tree)
         self._fire_due(now, tree)
+        self._retract_resolved(cur, now)
 
     def _arm_transitions(self, cur, prev, now):
         """PASS 1 — the tab diff. For every window that just ENTERED an
-        asking/done state: push the immediate in-page toast + OS notification,
-        and arm `self.pending[win]` for the deferred off-device alert. The global
-        alerts switch gates BOTH here (the one suppression site)."""
+        asking/done state: push the immediate in-page toast, and arm
+        `self.pending[win]` for the deferred off-device alert. The global alerts
+        switch gates BOTH here (the one suppression site)."""
         for win, state in cur.items():
             kind = NOTIFY_STATES.get(state)
             if not kind or prev.get(win) == state:
@@ -229,7 +336,7 @@ class Notifier:
                              {"sid": payload.get("sid"), "kind": kind,
                               "reason": "global-off"})
                 continue
-            self.push("notify", payload)   # immediate in-page toast + OS notif
+            self.push("notify", payload)   # immediate in-page toast (focused page)
             if config.NOTIFY_TELEGRAM or config.NOTIFY_WEBPUSH:   # arm the deferred off-device
                 # `notified`/`escalate_at` are seeded HERE, at the arm, even
                 # though only the stage-1 push sets them for real: _fire_due
@@ -238,8 +345,12 @@ class Notifier:
                 # invariant held in another method (escalating <=> notified is
                 # not None <=> escalate_at was written). An armed entry now has
                 # its whole shape from the start.
-                self.pending[win] = dict(payload, armed_at=now, state=state,
-                                         notified=None, escalate_at=0.0)
+                # `win` rides IN the entry as well as keying the map: an entry
+                # outlives that key (a delivered one moves to the unkeyed
+                # `self.sent` list), and `_reaction` needs it either way.
+                self.pending[win] = dict(payload, win=win, armed_at=now,
+                                         state=state, notified=None,
+                                         escalate_at=0.0)
                 # ANCHOR the deferred lifecycle: every armed alert ends in
                 # exactly one of suppress / route+send (+escalate) / telegram,
                 # all keyed back to this `notify-arm` row (a silent disappearance
@@ -252,55 +363,13 @@ class Notifier:
 
     def _cancel_armed(self, cur, tree):
         """PASS 2 — cancel the arms you reacted to / are already handling, all
-        BEFORE the delay elapses: the tab left its armed state (answered → busy,
-        or the win vanished = tab gone), the session ENDED (you closed / quit it
-        — moved on, and the alert's deep link would open a dead session), OR
-        you're actively COMPOSING a reply to it (a non-empty unsent web draft is
-        "I'm on it" — don't nag). ended_at is the robust signal the win-vanish
-        check can miss: a stale tab row can linger, and a reused window id can
-        even re-match the armed state under a DIFFERENT session. Then the two
-        per-kind TERMINAL-activity signals (see the branches)."""
+        BEFORE the delay elapses. Every reason `_reaction` can name cancels a
+        PENDING alert (that predicate is exactly "you don't need to be told");
+        SILENT_REASONS decides which of them owes a notify-suppress row."""
         for win in list(self.pending):
-            entry = self.pending[win]
-            sid = entry.get("sid")
-            if (cur.get(win) != entry["state"]
-                    or presence.session_ended(sid) or presence.composing(sid)):
-                self._drop(win)                # you reacted — no row (see _drop)
-                continue
-            # You answering AT THE TERMINAL — typing a free-text answer or
-            # toggling a selection — doesn't move the tab off red and doesn't
-            # grow the transcript (the dialog is still open, unsubmitted), so
-            # none of the checks above fire. Its ONLY trace is the dialog region
-            # changing. Baseline it on first sighting (the untouched dialog),
-            # then drop the arm the moment it differs: you're on it, don't nag.
-            if entry.get("kind") == "asking":
-                reg = self._dialog_region(win)
-                if reg:                          # "" = no ask dialog / read miss
-                    if entry.get("ask_region") is None:
-                        entry["ask_region"] = reg
-                    elif reg != entry["ask_region"]:
-                        self._drop(win, "dialog-activity")
-            # A green `done` tab is your turn; you replying AT THE TERMINAL —
-            # typing a message into the `❯` input box — likewise moves neither
-            # the tab off green nor the transcript until you submit, so the
-            # checks above miss it. Its trace is REAL (non-faint) content in the
-            # input box (a settled tab pre-fills only a FAINT ghost suggestion,
-            # which `suggestion.typed` ignores). Drop the arm the moment any is
-            # there: you're continuing the conversation in the kitty tab.
-            elif entry.get("kind") == "done":
-                if self._input_typed(win):
-                    self._drop(win, "terminal-input")
-                else:
-                    # "If I've SEEN the final message, no notification." A done
-                    # tab's final message is on screen the moment it goes green,
-                    # so ANY glance during the grace — the kitty tab frontmost
-                    # or a browser viewing the session — means you saw it. Check
-                    # every scan (not just at send time), so a glance that has
-                    # since ended still cancels: you don't need to be told about
-                    # a result you already read.
-                    seen = self._watching(win, sid, tree)
-                    if seen:
-                        self._drop(win, seen)
+            reason = self._reaction(self.pending[win], cur, tree)
+            if reason:
+                self._drop(win, None if reason in SILENT_REASONS else reason)
 
     def _fire_due(self, now, tree):
         """PASS 3 — fire the arms that persisted past the grace window (once
@@ -351,6 +420,11 @@ class Notifier:
             # stage 1: on-device push to the most-recently-used device
             pushed = self._webpush(entry) if config.NOTIFY_WEBPUSH else False
             if pushed and not config.NOTIFY_TELEGRAM_ALWAYS:
+                # NOTE the entry stays PENDING here while a delivery of it is
+                # already tracked in self.sent — the one moment both collections
+                # hold the same alert. That is correct and independent: a
+                # reaction now cancels the escalation (pass 2) AND retracts the
+                # push already on your phone (pass 4).
                 entry["notified"] = now            # arm the escalation, keep pending
                 entry["escalate_at"] = now + config.ESCALATE_S
                 A.state_file("", "", "notify-arm",
@@ -361,48 +435,85 @@ class Notifier:
             if config.NOTIFY_TELEGRAM:                     # no device to push to, or _ALWAYS
                 self._telegram(entry, "always" if pushed else "no-device")
 
-    def _alert_text(self, entry):
-        """The alert pieces both notify channels (Telegram + Web Push) build
-        the same way from one `entry`: the 🔴/🟢 headline (project +
-        needs-you/is-done), the detail line (the session title, or a
-        kind-specific fallback), and the ?s=<sid> deep link. Returns the three
-        RAW strings only — each channel composes them differently (Telegram
-        joins them into one message; Web Push splits them across the payload's
-        title/body), so the joining/escaping stays at the call site.
+    def _track(self, entry, handle):
+        """Remember one DELIVERY so it can be taken back. `handle` is opaque
+        (channels.py owns its shape); None means the channel delivered nothing
+        retractable — a legacy script send, or no subscription — and there is
+        simply nothing to track.
 
-        ?s=<sid>, NOT the app's #/s/<sid> hash route: Telegram's auto-linker
-        drops the URL fragment, so a #-link opens the dashboard ROOT on the
-        phone, not the session. The sid rides a query param (linkified whole);
-        the page translates ?s=<sid> back into the hash route on load."""
-        asking = entry.get("kind") == "asking"
-        proj = entry.get("project") or entry.get("sid") or "session"
-        head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
-        detail = entry.get("title") or (
-            "Claude is asking a question" if asking else "finished — your turn")
-        url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
-        return head, detail, url
+        The record is a COPY of the entry: pass 3 is about to drop the original
+        from `pending`, and for the stage-1 push it keeps mutating it besides."""
+        if handle is None:
+            return
+        self.sent.append(dict(entry, sent_at=time.monotonic(), handle=handle))
+        while len(self.sent) > config.SENT_CAP:
+            self._forget(self.sent[0], "capped")
+
+    def _forget(self, rec, reason):
+        """Stop tracking a delivery WITHOUT retracting it, and say so: the alert
+        is still out there, we've just stopped waiting for a resolution. Both
+        callers are bounds, not outcomes (the TTL and the cap), so this is the
+        one row that means 'a notification was left behind' — and therefore the
+        one worth alerting on in the audit."""
+        try:
+            self.sent.remove(rec)
+        except ValueError:                 # already forgotten — nothing to do
+            return
+        A.state_file("", "", "notify-retract",
+                     {"sid": rec.get("sid"), "kind": rec.get("kind"),
+                      "channel": (rec.get("handle") or {}).get("ch"),
+                      "reason": reason, "outcome": "expired", "ok": False,
+                      "age_s": round(time.monotonic() - rec.get("sent_at", 0), 1)})
+
+    def _retract_resolved(self, cur, now):
+        """PASS 4 — take back the delivered alerts whose premise is gone
+        (docs/dashboard.md, *Alert retraction*). Only RETRACT_REASONS count:
+        the narrower question, not the "you don't need to be told" one pass 2
+        asks — see the table at the top of this module.
+
+        Runs with `screen=False`: no `kitten @ get-text` per record per tick,
+        because these are tracked for hours. A channel that answers PENDING —
+        the send thread hasn't got its message id home yet, or the delete is
+        still in flight — is simply asked again next tick.
+
+        The TTL is checked on EVERY path, settled or not. It would read more
+        naturally as the else-branch of "did it resolve", but then a record that
+        answered PENDING forever (a wedged sender thread) would never age out —
+        a bound that holds only while another thread behaves is not a bound.
+        Telegram's own 48 h delete window is the ceiling config.RETRACT_S sits
+        under."""
+        for rec in list(self.sent):
+            reason = self._reaction(rec, cur, None, screen=False)
+            outcome = None
+            if reason in RETRACT_REASONS:
+                outcome = channels.retract(rec["handle"], reason,
+                                           self._needs_you_count())
+                if outcome == channels.PENDING:
+                    outcome = None         # not settled — let the TTL judge it
+            if outcome is None:
+                if now - rec.get("sent_at", 0) >= config.RETRACT_S:
+                    self._forget(rec, "ttl")
+                continue
+            try:
+                self.sent.remove(rec)
+            except ValueError:             # pragma: no cover - concurrent forget
+                continue
+            if outcome == channels.NOTHING:
+                continue                   # nothing was ever delivered, no row
+            A.state_file("", "", "notify-retract",
+                         {"sid": rec.get("sid"), "kind": rec.get("kind"),
+                          "channel": rec["handle"].get("ch"), "reason": reason,
+                          "outcome": outcome,
+                          "ok": outcome in (channels.OK, channels.GONE),
+                          "age_s": round(now - rec.get("sent_at", 0), 1)})
 
     def _telegram(self, entry, reason=None):
-        """Send the deferred alert via the reused `notify` skill (Telegram),
-        detached so a slow round-trip never stalls the 1 s watcher. Best-effort
-        + audited; never raises into the loop. `reason` (in the audit row) says
-        WHY Telegram fired: `escalation` (the 5-min nudge after an on-device push
-        you ignored), `no-device` (nobody was push-subscribed — the immediate
-        fallback), or `always` (`_ALWAYS` forced both) — so a Telegram alert is
-        never an unexplained duplicate."""
-        head, title, url = self._alert_text(entry)
-        msg = "%s — %s\n%s" % (head, title, url)
-        try:
-            subprocess.Popen(
-                [sys.executable or "python3", config.NOTIFY_CMD, msg],
-                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL, start_new_session=True)
-            A.state_file("", "", "telegram-notify",
-                         {"sid": entry.get("sid"), "kind": entry.get("kind"),
-                          "reason": reason})
-        except Exception:
-            A.error("", "dashboard telegram notify",
-                    {"sid": entry.get("sid")})
+        """Send the deferred alert to Telegram (channels.send_telegram) and
+        track whatever it returns. `reason` says WHY Telegram fired —
+        `escalation` (the 5-min nudge after an on-device push you ignored),
+        `no-device` (nobody was push-subscribed), `always` (_ALWAYS forced
+        both) — so a Telegram alert is never an unexplained duplicate."""
+        self._track(entry, channels.send_telegram(entry, reason))
 
     def _needs_you_count(self):
         """How many tabs are in a needs-you state (red asking + green done) right
@@ -416,61 +527,13 @@ class Notifier:
             return 0
 
     def _webpush(self, entry):
-        """Send the on-device alert as a Web Push to the ONE device you most
-        recently used (`mru_push_targets`) — NOT every subscription, so a
-        session going done/asking buzzes the device you're working on, not your
-        iPad and Mac at once (docs/dashboard.md, *Web push* / *Device routing*).
-        Dispatched on a detached daemon thread: the crypto + network round-trips
-        must never stall the 1 s watcher. Best-effort + audited; a subscription
-        the push service reports GONE (404/410) is pruned. No-op when the crypto
-        backend is missing or nobody has subscribed.
-
+        """Send the on-device alert (channels.send_webpush) and track it.
         Returns True iff it DISPATCHED to at least one subscription — the signal
-        the caller uses to hold Telegram back to the escalation nudge (device
-        first, Telegram only if you keep ignoring it). Audits the ROUTING
-        DECISION (`notify-route`) — the chosen device + every candidate's
-        presence age — so "the wrong device buzzed" is answerable from the DB."""
-        if not webpush.enabled():
-            return False
-        subs, decision = presence.mru_push_targets()
-        # The routing decision is audited whenever there was ANYTHING to weigh
-        # (at least one subscription) — even the no-target edge — so a missing
-        # push is never a mystery. No subs at all = nothing to route, no row.
-        if decision.get("n_subs"):
-            A.state_file("", "", "notify-route",
-                         dict(decision, sid=entry.get("sid"), kind=entry.get("kind")))
-        if not subs:
-            return False
-        title, body, url = self._alert_text(entry)
-        payload = {"title": title, "body": body,
-                   "sid": entry.get("sid") or "", "kind": entry.get("kind"),
-                   "url": url, "badge": self._needs_you_count()}
-        threading.Thread(target=self._webpush_send, args=(subs, payload),
-                         daemon=True).start()
-        return True
-
-    def _webpush_send(self, subs, payload):
-        """The detached fan-out body: deliver `payload` to each subscription,
-        audit the outcome (with the target `device` — the on-device analog of
-        the route decision), and prune the dead ones. Runs off the watcher
-        thread; never raises."""
-        for sub in subs:
-            try:
-                res = webpush.send(sub, payload)
-            except Exception:
-                A.error("", "dashboard webpush send",
-                        {"sid": payload.get("sid")})
-                continue
-            ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
-            dev = sub.get("device") if isinstance(sub, dict) else None
-            if res.gone:
-                prefs.remove_push_subscription(ep)
-            A.state_file("", "", "web-push",
-                         {"sid": payload.get("sid"), "kind": payload.get("kind"),
-                          "action": "send", "status": res.status,
-                          "ok": res.ok, "gone": res.gone,
-                          "badge": payload.get("badge"),
-                          "device": dev, "endpoint": ep[:80]})
+        `_fire_due` uses to hold Telegram back to the escalation nudge (device
+        first, Telegram only if you keep ignoring it)."""
+        handle = channels.send_webpush(entry, self._needs_you_count())
+        self._track(entry, handle)
+        return handle is not None
 
     def run(self):
         n = 0

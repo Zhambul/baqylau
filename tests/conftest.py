@@ -94,6 +94,15 @@ def _fresh_audit_conn(tmp_path):
     # and on a dev macOS box that would read the real keychain / hit the network.
     # Tests that exercise it monkeypatch the I/O seams and re-enable explicitly.
     os.environ["CLAUDE_MODEL_USAGE"] = "0"
+    # Point the Telegram credential pair (dashboard/telegram.py) at an empty
+    # per-test dir. The dev machine keeps a real bot token in ~/.config/telegram,
+    # and telegram.enabled() reading it would flip the notifier off the legacy
+    # script path onto the live Bot API — i.e. the suite would send the developer
+    # actual notifications, and could DELETE real messages when a retraction test
+    # ran. An absent dir reads as unconfigured (the feature's own degrade), and a
+    # test that wants the API path points this at its own stub.
+    prev_tg = os.environ.get("CLAUDE_DASH_TELEGRAM_DIR")
+    os.environ["CLAUDE_DASH_TELEGRAM_DIR"] = str(tmp_path / "telegram-none")
     # Relocate the durable global prefs DB (dashboard/prefs.py reads
     # P.DASH_PREFS_DB fresh each call) so NO in-process test touches real
     # ~/.claude — the `dash` server fixture already does this per-test, but the
@@ -124,6 +133,10 @@ def _fresh_audit_conn(tmp_path):
         os.environ.pop("CLAUDE_MODEL_USAGE", None)
     else:
         os.environ["CLAUDE_MODEL_USAGE"] = prev_mu
+    if prev_tg is None:
+        os.environ.pop("CLAUDE_DASH_TELEGRAM_DIR", None)
+    else:
+        os.environ["CLAUDE_DASH_TELEGRAM_DIR"] = prev_tg
 
 
 # ------------------------------------------------------------------ test env

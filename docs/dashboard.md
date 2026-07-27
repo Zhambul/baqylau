@@ -5724,8 +5724,14 @@ queries for one snapshot) once a second, and maps windows to sessions via the
 audit `sessions` rows' `kitty_window_id` (newest session wins the window — a
 kitty window outlives sessions). A transition INTO `awaiting-command` (red —
 Claude is asking you) or `awaiting-response` (green — done, your turn) pushes
-a `notify` event to every `/events` client; the app shows an in-page toast
-always and an OS `Notification` when the page is hidden. The win→session map
+a `notify` event to every `/events` client; the app shows an in-page toast on
+the FOCUSED device only (the handler self-gates on
+`visibilityState`/`hasFocus`). There is deliberately no `new Notification()`
+here any more — the old immediate `osNotify` on a hidden tab buzzed every
+backgrounded device at once, the exact duplicate *Device routing* fixes, and
+iOS never supported that constructor in an installed app anyway; the on-device
+system notification is Web Push, at the deferred fire point (*Web push*). The
+win→session map
 depends on `audit.session_start`'s upsert REFRESHING `kitty_window_id` (and
 clearing `ended_at`): a resume fires SessionStart again under the same sid
 from a NEW kitty window, and before the upsert refreshed the id the map kept
@@ -6022,12 +6028,14 @@ The pieces:
   `mru_push_targets` can route by device. `POST /api/push/unsubscribe` (and a
   server-side prune on a `gone` send) drops
   it.
-- **The send** — `Notifier._webpush` builds the `{title, body, sid, kind, url}`
-  payload and fans it out to every stored subscription on a **detached daemon
-  thread** (`_webpush_send`) so the crypto + network round-trips never stall the
-  1 s watcher; each outcome is a `web-push` `state_files` row (`action: send`
-  with `status`/`ok`/`gone`), a `gone` subscription is pruned. Subscribe /
-  unsubscribe are their own `web-push` rows (`action: subscribe`/`unsubscribe`).
+- **The send** — `channels.send_webpush` builds the `{title, body, sid, kind,
+  url, badge}` payload and fans it out to the routed subscriptions on a
+  **detached daemon thread** (`_webpush_fanout`) so the crypto + network
+  round-trips never stall the 1 s watcher; each outcome is a `web-push`
+  `state_files` row (`action: send` with `status`/`ok`/`gone`), a `gone`
+  subscription is pruned. Subscribe / unsubscribe are their own `web-push` rows
+  (`action: subscribe`/`unsubscribe`), and a retraction reuses the same fan-out
+  with `action: resolve` (*Alert retraction*).
 
 **Env knob**: `CLAUDE_DASH_NOTIFY_WEBPUSH` (`0` disables arming + sending on the
 push channel; default on — but still a no-op without the crypto backend),
@@ -6039,6 +6047,119 @@ instead of push-supersedes-Telegram — see the dedup note above).
 16.4+ exposes `Notification`/`PushManager` only in a standalone web app), reached
 over the PUBLIC origin, and the permission prompt must come from a user gesture
 (the button) — a plain Safari tab shows no button and never subscribes.
+
+### Alert retraction (clearing an alert you've dealt with)
+
+An alert is a claim about the present — *this session needs you*. Once you deal
+with the session the claim is false, but the Telegram message and the iPad
+banner stay exactly where they were: a chat full of things that no longer need
+you, and a lock-screen badge that lies. So the watcher does not stop at the
+send. Every DELIVERY moves into `Notifier.sent` with the **handle** its channel
+returned, and once the session stops needing you the alert is **taken back** —
+the Telegram message is `deleteMessage`d, and a resolve push closes the banner.
+
+**"Reacted" and "resolved" are different questions, and conflating them is the
+bug this design exists to avoid.** Both are answered by one predicate
+(`Notifier._reaction`, which names every way an alert can stop mattering), but
+two declared tables decide who acts on each name:
+
+- `SILENT_REASONS` — which cancels owe no `notify-suppress` row (unchanged).
+- `RETRACT_REASONS` — which reasons also retract an alert **already
+  delivered**: `tab-moved`, `session-ended`, `composing`.
+
+Cancelling a PENDING alert is the broad question, *"do you still need to be
+told?"*, and a mere glance answers it (`tab-focused` / `web-viewing` — you saw
+the final message, so don't ping). Retracting a DELIVERED one is the narrow
+question, *"is what you were told still true?"*, and a glance must NOT answer
+it: look at a red asking-tab on your phone, get distracted, walk away — the tab
+is still red, nothing has been answered, and deleting the alert there would
+destroy your only reminder. So glances are deliberately excluded. The two
+screen-scraped signals (`dialog-activity` / `terminal-input`) are excluded for a
+duller reason: pass 4 runs with `screen=False` because a delivered alert is
+tracked for HOURS, and a `kitten @ get-text` per record per second is a
+subprocess bill the 60 s cancel window never had to pay. Answering at the
+terminal moves the tab off red within seconds anyway, so `tab-moved` catches it
+for free.
+
+**Where it lives.** Retraction is why `dashboard/notify/channels.py` exists.
+Before it, a send was a leaf call and the watcher could own both the WHEN and
+the HOW; a retraction is a *second* wire operation that has to reach the exact
+thing the first one produced, so "what was delivered, and what does it take
+back" became a fact needing an owner. `notifier.py` now decides only when
+(`self.pending` → `self.sent` → gone) and never touches a socket, a subprocess
+or a payload shape; `channels.py` owns both directions of both channels behind
+`send_telegram` / `send_webpush` / `retract`, the last dispatching through a
+`_RETRACT` registry rather than an if/elif on channel.
+
+**Telegram needed a real transport** (`dashboard/telegram.py`, the sibling of
+`webpush.py`). The reused `notify` skill is spawned detached with DEVNULL
+stdio and never waited on, so the `sendMessage` reply — carrying the
+`message_id` that `deleteMessage` needs — was discarded before anything could
+read it. The dashboard now calls the Bot API itself: credentials in
+`~/.config/telegram/{bot-token,chat-id}` (the Deepgram-key precedent from
+`dictate.py`; `CLAUDE_DASH_TELEGRAM_DIR` relocates the pair, which is also how
+the suite stays hermetic — an autouse fixture points it at an empty dir so a
+test can never send, or DELETE, a real message). **Unconfigured it degrades to
+the legacy script**: the alert still reaches you, it just returns no handle and
+so is never retractable. That is the deliberate trade — losing the alert would
+be far worse than losing the retraction, and the `telegram-notify` row's
+`retractable` flag records which kind it was.
+
+**Nothing touches the wire on the watcher thread**, in either direction — the
+rule the send already followed and the retraction had to be held to
+(`telegram.delete` is a synchronous HTTPS call with a 10 s timeout; the scan
+loop ticks at 1 s). So the send creates its handle synchronously and *fills* it
+from its thread, and the delete likewise settles over two ticks: the first spawns
+it and answers `PENDING`, a later one reads what the thread left. `PENDING` is
+therefore load-bearing twice over — it also covers a retraction that genuinely
+beats the message id home (you answered within the second). Either way the record
+stays and is asked again next tick rather than being dropped with the message
+stranded, and the `notify-retract` row still reports what happened on the wire
+instead of an optimistic guess made before the call returned.
+
+**On-device: the resolve push, and its honest risk.** `channels._retract_webpush`
+pushes `{type:"resolve", sid, tag, badge}` to the subscriptions the alert
+actually went to (NOT whatever device is most-recently-used by then — the banner
+is on the former), and `sw.js` closes everything under the tag and **shows
+nothing**. That is a knowing bend of the `userVisibleOnly` contract an iOS
+subscription is made under: WebKit may answer a push that raises no notification
+with a generic "updated in the background" placeholder, and can revoke the
+subscription if it becomes a habit. Three things keep it survivable:
+
+- **A 1:1 budget.** Exactly one resolve per delivered alert — the notifier
+  forgets the record either way — so silent pushes are bounded against visible
+  ones rather than being a background chatter channel. WebKit's budget model
+  tolerates that; a chatty app is what it punishes.
+- **A kill switch.** `CLAUDE_DASH_RESOLVE_PUSH=0` disables just this push. The
+  Telegram delete is unaffected.
+- **A client-side fallback.** `app.01-attention.js` `sweepStale()` closes every
+  banner whose session no longer needs you, once per foreground visit, driven
+  from `renderAttention` so it only ever runs with a REAL sessions snapshot in
+  hand (sweeping off a boot-empty `S.sessions` would read "nothing needs you"
+  and close banners that are still true). So a resolve that is refused, dropped,
+  or switched off degrades to "cleared a bit later", never to a wrong badge.
+  It also covers the case the server structurally cannot: the handles live in
+  the running process's memory, so a dashboard **restart** strands every
+  delivery it was tracking — the same bargain `pending` already makes.
+
+**Bounds.** `CLAUDE_DASH_RETRACT_S` (default 24 h) is how long a delivery stays
+retractable; it sits under `telegram.DELETE_WINDOW_S` (48 h, the Bot API's own
+ceiling on deleting your own message) with margin. `config.SENT_CAP` (200) is
+the backstop for the pathological case. Past either, the delivery is forgotten
+*unretracted* and audited as such — an alert left behind is exactly the thing
+worth being able to find later.
+
+**Audit.** One action, `notify-retract`, with a single writer (the notifier —
+`channels.retract` deliberately does not file it, so the lifecycle has one row
+shape, and the expiries never reach a channel at all). Fields: `sid`, `kind`,
+`channel`, `reason` (the RETRACT_REASONS name, or `ttl`/`capped` for an
+expiry), `outcome` (`ok` · `gone` — already out of the chat, which is the same
+thing · `failed` · `expired`), `ok`, `age_s`. The channels still audit their own
+WIRE detail, which the notifier could not describe: the resolve push's
+per-device delivery is a `web-push` row with `action: resolve`. The canned
+anomaly **"off-device alert left behind (notify-retract not ok)"** is the
+query — note it matches the sid *inside the JSON*, since notify rows are global
+(`session_id=''`).
 
 ### Installed-app polish (badge · icon · wake lock · back)
 

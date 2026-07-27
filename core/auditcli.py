@@ -255,6 +255,22 @@ ANOMALY_SECTIONS = [
      "AND EXISTS (SELECT 1 FROM state_files q WHERE q.session_id=i.session_id "
      "  AND q.action='web-send' AND json_extract(q.content, '$.queued')=1 "
      "  AND q.ts < i.ts AND q.ts > i.ts - 1800)", 1),
+    # An off-device alert that was DELIVERED and then never taken back — the
+    # Telegram message or the iPad banner is still sitting there after you dealt
+    # with the session (docs/dashboard.md *Alert retraction*). `outcome` says
+    # which kind of leftover: `failed` (the wire refused the delete / the resolve
+    # push) or `expired` (nothing resolved it inside CLAUDE_DASH_RETRACT_S, or
+    # the SENT_CAP backstop dropped it — note a dashboard RESTART also strands
+    # every delivery it was tracking, and leaves no row at all). Absence of any
+    # notify-retract row for an alert you did answer is its own signal: the
+    # handle was never tracked, i.e. the send wasn't retractable — check the
+    # paired `telegram-notify` row's `retractable` flag.
+    # NB the notify rows are GLOBAL (session_id=''), so the sid is matched inside
+    # the JSON rather than on the column.
+    ("off-device alert left behind (notify-retract not ok)",
+     "SELECT ts, content FROM state_files WHERE action='notify-retract' "
+     "AND json_extract(content, '$.sid')=? "
+     "AND COALESCE(json_extract(content, '$.ok'), 0)=0", 1),
     # A nested bg/monitor tailer whose OWNER can be resolved from neither
     # source: not from its own streams row (hookkit.stream_env's
     # CLAUDE_STREAM_AGENT, stamped by the three nested launch sites) and not

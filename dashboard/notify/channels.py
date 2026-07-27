@@ -1,0 +1,301 @@
+# dashboard/notify/channels.py — HOW an off-device alert is delivered, and
+# un-delivered (docs/dashboard.md, *Telegram alerts* / *Web push* / *Alert
+# retraction*).
+#
+# The split this module exists for: notifier.py decides WHEN an alert should
+# happen (the tab diff, the grace window, the arm/cancel/escalate state
+# machine); channels.py knows WHAT that means on the wire. Before retraction
+# existed the two were one file, and it read fine — a send was a leaf call. A
+# retraction is not a leaf: it is a SECOND wire operation that has to reach the
+# exact thing the first one produced, so "what was delivered, and what does it
+# take back" became a fact needing an owner. That fact is the HANDLE below.
+#
+# Every send returns a handle or None. None means nothing retractable was
+# delivered — either the channel was off/unconfigured, or nobody was subscribed.
+# A handle is an opaque dict to the caller: it carries `ch`, and the notifier's
+# only business with it is storing it and later passing it back to `retract()`.
+#
+# Both directions are BEST-EFFORT and audited here rather than at the call site,
+# because the audit row's shape is per-channel (a Telegram message id vs a push
+# endpoint + device) and the watcher shouldn't have to know either. Nothing in
+# this module raises into the 1 s watcher loop.
+import subprocess
+import sys
+import threading
+from urllib.parse import quote
+
+from core.noaudit import load_audit
+from dashboard import config, prefs, telegram, webpush
+from dashboard.notify import presence
+
+A = load_audit()
+
+# `retract()` outcome vocabulary. Everything except PENDING is settled — the
+# caller forgets the record. PENDING means the SEND is still in flight (the
+# Telegram round-trip runs on its own thread, so a retraction can genuinely
+# arrive first): keep the record and ask again on the next tick.
+PENDING = "pending"     # send not landed yet — retry next tick
+OK = "ok"               # retracted
+GONE = "gone"           # already gone from the chat — the same thing, cheaper
+FAILED = "failed"       # the wire said no; the alert is still out there
+NOTHING = "nothing"     # the send never landed anything — nothing to take back
+
+
+def alert_text(entry):
+    """The alert pieces both channels build the same way from one `entry`: the
+    🔴/🟢 headline (project + needs-you/is-done), the detail line (the session
+    title, or a kind-specific fallback), and the ?s=<sid> deep link. Returns the
+    three RAW strings only — each channel composes them differently (Telegram
+    joins them into one message; Web Push splits them across the payload's
+    title/body), so the joining/escaping stays at the call site.
+
+    ?s=<sid>, NOT the app's #/s/<sid> hash route: Telegram's auto-linker drops
+    the URL fragment, so a #-link opens the dashboard ROOT on the phone, not the
+    session. The sid rides a query param (linkified whole); the page translates
+    ?s=<sid> back into the hash route on load."""
+    asking = entry.get("kind") == "asking"
+    proj = entry.get("project") or entry.get("sid") or "session"
+    head = ("🔴 %s needs you" if asking else "🟢 %s is done") % proj
+    detail = entry.get("title") or (
+        "Claude is asking a question" if asking else "finished — your turn")
+    url = "%s/?s=%s" % (config.NOTIFY_URL_BASE, quote(entry.get("sid") or ""))
+    return head, detail, url
+
+
+def push_tag(sid):
+    """The notification tag a pushed alert is shown under — the ONE encoding of
+    it, shared by the sender, the retraction and the service worker (sw.js
+    builds the same string). It is what makes a repeat alert REPLACE its
+    predecessor instead of stacking, and what the resolve push closes."""
+    return "claude-%s" % (sid or "")
+
+
+# ----------------------------------------------------------------- Telegram
+
+def send_telegram(entry, reason=None):
+    """Send the deferred alert to Telegram. `reason` (in the audit row) says WHY
+    it fired: `escalation` (the nudge after an on-device push you ignored),
+    `no-device` (nobody was push-subscribed — the immediate fallback), or
+    `always` (_ALWAYS forced both) — so a Telegram alert is never an unexplained
+    duplicate.
+
+    TWO transports, and which one runs decides whether the alert can later be
+    taken back. When `telegram.enabled()` (credentials configured) the Bot API
+    is called in-process on a daemon thread and the reply's `message_id` lands
+    in the handle — retractable. Otherwise it degrades to the LEGACY detached
+    `notify` script: the alert still reaches you, but its id is written to
+    DEVNULL, so there is nothing to delete and the handle is None.
+
+    Returns a handle (retractable) or None. Note the asymmetry with the return
+    value's usual meaning: None here does NOT mean 'nothing was sent'."""
+    head, title, url = alert_text(entry)
+    msg = "%s — %s\n%s" % (head, title, url)
+    if not telegram.enabled():
+        _send_telegram_legacy(entry, msg, reason)
+        return None                        # sent, but with no id to retract by
+    # The handle is created NOW and filled by the sender thread, because the
+    # watcher must not block on a round-trip and a retraction can beat the send
+    # home. `msg_id` None + `done` False is exactly the PENDING state retract()
+    # reads. Single assignments of small immutables, read by the one watcher
+    # thread — the same "atomic enough" bargain presence.py's maps make.
+    h = {"ch": "telegram", "sid": entry.get("sid"), "kind": entry.get("kind"),
+         "chat": None, "msg_id": None, "done": False}
+    threading.Thread(target=_telegram_send_body, args=(h, msg, reason),
+                     daemon=True).start()
+    return h
+
+
+def _telegram_send_body(h, msg, reason):
+    """The off-watcher send body: call the Bot API, record the id in the handle,
+    audit. `done` is set LAST and unconditionally — it is what releases retract()
+    from PENDING, so an exception path that skipped it would pin the record until
+    its TTL."""
+    try:
+        res = telegram.send(msg)
+    except Exception:
+        A.error("", "dashboard telegram notify", {"sid": h.get("sid")})
+        h["done"] = True
+        return
+    if res.ok:
+        h["chat"], h["msg_id"] = res.chat, res.message_id
+    A.state_file("", "", "telegram-notify",
+                 {"sid": h.get("sid"), "kind": h.get("kind"), "reason": reason,
+                  "ok": res.ok, "status": res.status, "error": res.error,
+                  # the retraction contract, recorded at the send: an alert with
+                  # retractable=False can never be taken back, and this row is
+                  # the only place that says so.
+                  "retractable": bool(res.ok and res.message_id),
+                  "message_id": res.message_id})
+    h["done"] = True
+
+
+def _send_telegram_legacy(entry, msg, reason):
+    """The pre-retraction transport: spawn the `notify` skill detached (DEVNULL
+    stdio, never waited on) so a slow round-trip can't stall the watcher. Kept
+    as the unconfigured-credentials degrade — an alert that reaches you but
+    can't be retracted beats no alert at all. Yields no handle at all: the
+    script writes the message id to DEVNULL, so there is none to be had."""
+    try:
+        subprocess.Popen(
+            [sys.executable or "python3", config.NOTIFY_CMD, msg],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        A.state_file("", "", "telegram-notify",
+                     {"sid": entry.get("sid"), "kind": entry.get("kind"),
+                      "reason": reason, "ok": True, "retractable": False,
+                      "transport": "script"})
+    except Exception:
+        A.error("", "dashboard telegram notify", {"sid": entry.get("sid")})
+
+
+def _retract_telegram(h, reason, badge=0):
+    """Delete the message — OFF the watcher thread, for the same reason the send
+    is: `telegram.delete` is a synchronous HTTPS round-trip with a 10 s timeout,
+    and the 1 s scan loop cannot wear that. So the outcome is not known
+    synchronously either, and this settles over two ticks: the first spawns the
+    delete and answers PENDING, a later one reads what the thread left. The
+    caller already retries PENDING (it must, for the in-flight send), so this
+    needs no new machinery — and the `notify-retract` row it eventually writes
+    still reports what actually happened on the wire, rather than an optimistic
+    guess made before the call returned."""
+    if not h.get("done"):
+        return PENDING                     # the SEND hasn't landed yet
+    if h.get("outcome"):
+        return h["outcome"]                # the delete thread finished
+    if not (h.get("chat") and h.get("msg_id")):
+        return NOTHING                     # the send failed — nothing is out there
+    if not h.get("deleting"):              # spawn once, however often we're asked
+        h["deleting"] = True
+        threading.Thread(target=_telegram_delete_body, args=(h,),
+                         daemon=True).start()
+    return PENDING
+
+
+def _telegram_delete_body(h):
+    """The off-watcher delete body: `outcome` is set on every path (it is what
+    releases the retraction from PENDING), and a `gone` message counts as done —
+    someone clearing the chat first is the outcome we wanted, not a failure."""
+    try:
+        res = telegram.delete(h["chat"], h["msg_id"])
+    except Exception:
+        A.error("", "dashboard telegram retract", {"sid": h.get("sid")})
+        h["outcome"] = FAILED
+        return
+    h["outcome"] = OK if res.ok else (GONE if res.gone else FAILED)
+
+
+# ----------------------------------------------------------------- Web Push
+
+def send_webpush(entry, badge=0):
+    """Send the on-device alert as a Web Push to the ONE device you most
+    recently used (`mru_push_targets`) — NOT every subscription, so a session
+    going done/asking buzzes the device you're working on, not your iPad and Mac
+    at once (docs/dashboard.md, *Web push* / *Device routing*). Dispatched on a
+    detached daemon thread: the crypto + network round-trips must never stall the
+    1 s watcher. Best-effort + audited; a subscription the push service reports
+    GONE (404/410) is pruned. No-op when the crypto backend is missing or nobody
+    has subscribed.
+
+    Returns a handle (the alert is out on these subscriptions, and a resolve
+    push can close it) or None — which the caller reads as "no device to push
+    to", the signal that holds Telegram back to the escalation nudge. Audits the
+    ROUTING DECISION (`notify-route`) — the chosen device + every candidate's
+    presence age — so "the wrong device buzzed" is answerable from the DB."""
+    if not webpush.enabled():
+        return None
+    subs, decision = presence.mru_push_targets()
+    # The routing decision is audited whenever there was ANYTHING to weigh (at
+    # least one subscription) — even the no-target edge — so a missing push is
+    # never a mystery. No subs at all = nothing to route, no row.
+    if decision.get("n_subs"):
+        A.state_file("", "", "notify-route",
+                     dict(decision, sid=entry.get("sid"), kind=entry.get("kind")))
+    if not subs:
+        return None
+    sid = entry.get("sid") or ""
+    title, body, url = alert_text(entry)
+    payload = {"title": title, "body": body, "sid": sid,
+               "kind": entry.get("kind"), "url": url, "badge": badge}
+    threading.Thread(target=_webpush_fanout, args=(subs, payload, "send"),
+                     daemon=True).start()
+    # The subscriptions are the handle: a resolve push has to reach the devices
+    # the alert actually went to, NOT whichever device is most-recently-used by
+    # then — the banner is on the former.
+    return {"ch": "webpush", "sid": sid, "kind": entry.get("kind"),
+            "subs": subs, "tag": push_tag(sid)}
+
+
+def _webpush_fanout(subs, payload, action):
+    """The detached fan-out body, shared by the alert and its retraction:
+    deliver `payload` to each subscription, audit the outcome (with the target
+    `device` — the on-device analog of the route decision), and prune the dead
+    ones. Runs off the watcher thread; never raises."""
+    for sub in subs:
+        try:
+            res = webpush.send(sub, payload)
+        except Exception:
+            A.error("", "dashboard webpush %s" % action,
+                    {"sid": payload.get("sid")})
+            continue
+        ep = sub.get("endpoint", "") if isinstance(sub, dict) else ""
+        dev = sub.get("device") if isinstance(sub, dict) else None
+        if res.gone:
+            prefs.remove_push_subscription(ep)
+        A.state_file("", "", "web-push",
+                     {"sid": payload.get("sid"), "kind": payload.get("kind"),
+                      "action": action, "status": res.status,
+                      "ok": res.ok, "gone": res.gone,
+                      "badge": payload.get("badge"),
+                      "device": dev, "endpoint": ep[:80]})
+
+
+def _retract_webpush(h, reason, badge=0):
+    """Close the delivered banner by pushing a RESOLVE message to the same
+    subscriptions; sw.js closes everything under the tag and shows nothing.
+
+    That "shows nothing" is the load-bearing risk of this whole path: an iOS
+    subscription is `userVisibleOnly`, and WebKit may answer a push that raises
+    no notification with a generic placeholder banner — or, if it keeps
+    happening, revoke the subscription. What keeps that survivable is the
+    BUDGET: exactly one resolve per delivered alert (the notifier forgets the
+    record either way), so the silent:visible ratio is bounded at 1:1 rather
+    than being a background chatter channel. CLAUDE_DASH_RESOLVE_PUSH=0 turns it
+    off, and the page's own foreground sweep (app.01-attention.js) still clears
+    stale banners on open — so a refused or dropped resolve degrades to "cleared
+    a bit later", never to a wrong badge."""
+    if not config.RESOLVE_PUSH:
+        return NOTHING
+    subs = h.get("subs") or []
+    if not subs:
+        return NOTHING
+    payload = {"type": "resolve", "sid": h.get("sid") or "",
+               "kind": h.get("kind"), "tag": h.get("tag"), "badge": badge}
+    threading.Thread(target=_webpush_fanout, args=(subs, payload, "resolve"),
+                     daemon=True).start()
+    return OK                              # dispatched; the thread audits the wire
+
+
+# --------------------------------------------------------------- dispatch
+
+# Registry, not an if/elif ladder (docs/styleguide.md): a new channel adds a
+# send function and one row here, and nothing in notifier.py changes.
+_RETRACT = {"telegram": _retract_telegram, "webpush": _retract_webpush}
+
+
+def retract(handle, reason, badge=0):
+    """Take back one delivered alert. Returns an outcome from the vocabulary
+    above; PENDING is the only one the caller must retry.
+
+    Deliberately does NOT write the `notify-retract` row: the notifier owns that
+    action so the lifecycle has ONE writer and one row shape (it also files the
+    expiries, which never reach a channel at all). What each channel audits is
+    its own WIRE detail — the resolve push's per-device delivery — which the
+    notifier could not describe."""
+    fn = _RETRACT.get((handle or {}).get("ch"))
+    if fn is None:
+        return NOTHING
+    try:
+        return fn(handle, reason, badge)
+    except Exception:
+        A.error("", "dashboard notify retract", {"sid": (handle or {}).get("sid")})
+        return FAILED

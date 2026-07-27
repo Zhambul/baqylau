@@ -158,6 +158,34 @@ NOTIFY_TELEGRAM_ALWAYS = (os.environ.get("CLAUDE_DASH_NOTIFY_TELEGRAM_ALWAYS") o
 NOTIFY_CMD = os.path.expanduser(
     os.environ.get("CLAUDE_DASH_NOTIFY_CMD")
     or "~/.claude/skills/notify/scripts/notify.py")
+# RETRACTION (docs/dashboard.md, *Alert retraction*). Once an alert has been
+# DELIVERED, the watcher keeps watching the session; when the thing it told you
+# about stops being true — the tab left red/green, the session ended, you're
+# composing a reply — the alert is taken back: the Telegram message is deleted,
+# and a resolve push closes the on-device banner. Note this is a NARROWER
+# question than the one that cancels a PENDING alert: a mere glance suppresses
+# an alert not yet sent ("you don't need to be told"), but must NOT delete one
+# already delivered — looking at a red tab and walking away would then destroy
+# your only reminder while the tab is still red. notifier.RETRACT_REASONS is
+# where that distinction is declared.
+# CLAUDE_DASH_RETRACT_S → how long a delivered alert stays retractable (default
+# 24 h). Must stay under telegram.DELETE_WINDOW_S (48 h), the Bot API's own
+# ceiling on deleting your own message; past it the alert is simply history and
+# an expiry row is audited. Bad / negative → the default.
+RETRACT_S = EV.env_float("CLAUDE_DASH_RETRACT_S", 24 * 3600)
+# The on-device half of retraction: push a `type:"resolve"` message that makes
+# the service worker close the banner. "0" disables it — the Telegram delete
+# still happens, and the page's foreground sweep still clears stale banners when
+# you next open the app. The kill switch exists because this push deliberately
+# raises NO notification, which iOS's userVisibleOnly contract only tolerates on
+# a budget (see channels._retract_webpush): if WebKit ever starts answering it
+# with placeholder banners, this is the off switch.
+RESOLVE_PUSH = (os.environ.get("CLAUDE_DASH_RESOLVE_PUSH") or "1") != "0"
+# Hard bound on delivered-but-not-yet-retracted alerts held in memory. RETRACT_S
+# is the real bound; this is the backstop for the pathological case (a wedged
+# terminal channel, hundreds of sessions) so the watcher's per-tick work and the
+# process's memory can't grow without limit. Oldest are dropped first.
+SENT_CAP = 200
 # The base URL the alert's deep link points at — the PUBLIC (proxied) origin,
 # not the bind: a Telegram alert lands on your phone, where http://127.0.0.1 is
 # useless. Defaults to the cloudflared/tailscale front (docs/remote.md);
