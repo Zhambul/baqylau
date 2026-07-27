@@ -475,6 +475,26 @@ function fgScene(order) {
            tail: b.tail.querySelector(".cqt") ? "cqt" : "-" };
 }
 
+// ---- and a CLICK-TO-VIEW panel (an Update's diff, a Read's content), the one
+// top-level stream child that is not an item: it carries no `data-kind`, so no pass
+// sees it. It is a SATELLITE of the row it was opened from, tied to it by DOM
+// ADJACENCY alone — which is the invariant the stylesheet's `.vhide + .view-block`
+// rule leans on. So: the host is hidden by the mode, the panel is NOT (nothing marks
+// it), and it is STILL the host's next sibling after a full re-pass has removed and
+// re-inserted the summary lines around it.
+function satelliteScene(mode) {
+  const ses = scene(mode, [F.prompt, F.upd, F.fg, F.reply]);
+  const row = ses.stream.children.find(c => c.dataset.act === "edit");
+  const panel = new El("div", "view-block");
+  ses.stream.insertBefore(panel, row.nextElementSibling);   // insertAdjacentHTML afterend
+  ses.viewSig = "";                       // force a real pass with the panel in place
+  sandbox.applyViewMode();
+  return { hostHidden: row.classList.contains("vhide"),
+           adjacent: row.nextElementSibling === panel,
+           panelIsItem: !!panel.dataset.kind,
+           panelMarked: panel._cls().filter(c => c !== "view-block") };
+}
+
 runFill("focus", "focus", 40)
   .then(() => runFill("verbose", "verbose", 40))
   .then(() => runFill("allCommands", "focus", 40, { mix: false }))
@@ -488,6 +508,8 @@ runFill("focus", "focus", 40)
   .then(() => { out.quietBad = quietScene("bad"); })
   .then(() => { out.fgLiveArmedFirst = fgScene("fgrun-first"); })
   .then(() => { out.fgLiveOpsFirst = fgScene("ops-first"); })
+  .then(() => { out.satelliteFocus = satelliteScene("focus"); })
+  .then(() => { out.satelliteDefault = satelliteScene("default"); })
   .then(() => {
     out.fills = fills;
     process.stdout.write(JSON.stringify(out, null, 1));

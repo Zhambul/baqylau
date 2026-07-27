@@ -34,6 +34,22 @@ def _lbl(text, rgb, **kw):
     return O.label(text, rgb, **kw)
 
 
+def _viewmode_verdict(_dash=None):
+    """Run the jsdom harness over the REAL view-mode engine and return its verdict
+    object. Skips without `node` — the one JS-executing test path in the suite
+    (docs/testing.md). Shared by every test that needs the engine EXECUTED rather
+    than grepped."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    harness = os.path.join(REPO, "tests", "jsdom", "viewmode.js")
+    app = os.path.join(REPO, "dashboard", "static", "app.05-session.js")
+    r = subprocess.run([node, harness, app], capture_output=True, text=True,
+                       timeout=60)
+    assert r.returncode == 0, r.stderr
+    return json.loads(r.stdout)
+
+
 def _css_rules(css):
     """The stylesheet as {selector: body}, keyed by the whole selector LIST *and* by
     each selector in it — a rule two registers share (`.stream > .blk[data-note],
@@ -477,15 +493,7 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     and "which dot" live only in the page — and a grep test can't tell a correct
     run cut from an off-by-one. Skipped without `node` (the one JS-executing test
     in the suite, never a build requirement — docs/testing.md)."""
-    node = shutil.which("node")
-    if not node:
-        pytest.skip("no node on PATH")
-    harness = os.path.join(REPO, "tests", "jsdom", "viewmode.js")
-    app = os.path.join(REPO, "dashboard", "static", "app.05-session.js")
-    r = subprocess.run([node, harness, app], capture_output=True, text=True,
-                       timeout=60)
-    assert r.returncode == 0, r.stderr
-    d = json.loads(r.stdout)
+    d = _viewmode_verdict(dash)
 
     # verbose hides nothing and summarizes nothing — today's dashboard, unchanged
     assert d["verbose"] == {"sums": 0, "shown": 11}
@@ -1638,6 +1646,48 @@ def test_expanded_run_rail_is_styled_as_one_group(dash):
     # the padding give-back ties with `.blk[data-note] > .bhead` on specificity, so it
     # only wins by coming later — same trap as the cards above
     assert css.index('.stream > .blk[data-note] > .bhead') < css.index(give.group(1))
+
+
+def test_a_click_to_view_panel_is_hidden_with_the_row_it_belongs_to(dash):
+    """Expand an Update's diff in default, switch to focus: the ROW folds into the
+    summary and the DIFF used to stay standing — an orphan panel belonging to nothing
+    ("this update does not disappear, it still stays expanded, and it kinda messes with
+    the whole view").
+
+    Root cause, and it is structural: a click-to-view panel is the ONE top-level stream
+    child that is not an item. `toggleView` inserts the served HTML as a plain sibling
+    (`insertAdjacentHTML("afterend")`) with no `data-kind`, and `streamItems()` — the
+    door every pass goes through — filters on exactly that. So no pass knows the panel
+    exists: not the view mode, not the kind filter (same hole), not the run rail, not
+    the visible count. Nothing was hiding it because nothing could see it.
+
+    The fix is a cascade rule rather than a fourth pass taught about a second kind of
+    child, which is sound because the panel's tie to its host is DOM ADJACENCY and that
+    is an invariant: every other writer inserts at the top, at the bottom, or
+    immediately before a span's first item. Both halves are pinned here — the rule, and
+    the adjacency it leans on (over the real engine, through a full re-pass)."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = _css_rules(css)
+    # whatever hides the host hides the panel — BOTH axes, since the filter had the
+    # same hole, and `!important` because `.vhide`/`.fhide` are themselves important
+    hide = rules[".vhide + .view-block"]
+    assert "display: none !important" in hide
+    assert ".fhide + .view-block" in css
+    # …and inside an expanded run it joins the group, or the rail breaks around it
+    assert "var(--runrail)" in rules[".vrun + .view-block"]
+    # hidden, NOT removed: switching back must bring your expansion with it
+    assert "remove" not in hide
+
+    d = _viewmode_verdict(dash)
+    # focus folds an edit: the host goes, the panel is untouched by the pass (nothing
+    # marks it — the stylesheet is what acts), and it is STILL the host's next sibling
+    # after a full re-pass tore down and re-inserted the summary lines around it
+    assert d["satelliteFocus"] == {"hostHidden": True, "adjacent": True,
+                                   "panelIsItem": False, "panelMarked": []}
+    # …and in default, where the edit stands on its own, nothing hides either
+    assert d["satelliteDefault"] == {"hostHidden": False, "adjacent": True,
+                                     "panelIsItem": False, "panelMarked": []}
 
 
 def test_interrupt_annotation_is_flagged_by_its_id_not_its_text(dash):

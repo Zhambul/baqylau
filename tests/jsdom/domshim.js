@@ -88,6 +88,17 @@ class El {
     if (m) this.append(new El(m[1], m[2] || ""));
   }
   get innerHTML() { return ""; }
+  // sibling walks — the click-to-view panel is tied to its host row by ADJACENCY
+  // alone (toggleView inserts it "afterend"), so a test of that invariant needs them
+  get nextElementSibling() {
+    const a = this.parentNode ? this.parentNode.children : [];
+    return a[a.indexOf(this) + 1] || null;
+  }
+  get previousElementSibling() {
+    const a = this.parentNode ? this.parentNode.children : [];
+    const i = a.indexOf(this);
+    return i > 0 ? a[i - 1] : null;
+  }
   get firstElementChild() { return this.children[0] || null; }
   get lastElementChild() { return this.children[this.children.length - 1] || null; }
   get childElementCount() { return this.children.length; }

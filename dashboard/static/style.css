@@ -1492,6 +1492,28 @@ body.modal-open { overflow: hidden; }
 .ogut.panel { border-radius: 0 var(--r) var(--r) 0; padding: 6px 10px; }
 .og { border-left: 2px solid var(--dim2); padding-left: 8px; margin: 1px 0; }
 .opl { margin: 1px 0; }
+/* A CLICK-TO-VIEW panel (a Read's content, an Update's diff — `toggleView`) is the
+   one top-level stream child that is NOT an item: it carries no `data-kind`, so
+   `streamItems()` skips it and NO pass knows it exists — not the view mode, not the
+   kind filter, not the run rail, not the visible count. It is a SATELLITE of the row
+   it was opened from, and the only thing tying it to that row is DOM adjacency
+   (`insertAdjacentHTML("afterend")`).
+   So the tie is made visual here, in the cascade, rather than by teaching every pass
+   about a second kind of child: whatever hides the host hides the panel. Without it,
+   expanding an Update's diff in default and switching to focus hid the ROW and left
+   the DIFF standing — an orphan panel belonging to nothing ("this update does not
+   disappear, it still stays expanded, and it kinda messes with the whole view"), and
+   the kind filter had the same hole. Hidden, not removed: switch back and your
+   expansion is still there.
+   The adjacency this leans on is an invariant, not luck — every other writer to the
+   stream inserts at the TOP (`appendItems`), at the BOTTOM (`appendOlder`) or
+   immediately BEFORE a span's first item (the `.vsum` summaries), so nothing can land
+   between a host and its panel. `toggleView`'s own close depends on the same fact. */
+.vhide + .view-block, .fhide + .view-block { display: none !important; }
+/* …and inside an expanded run it joins the group, or the rail breaks around it */
+.vrun + .view-block {
+  margin-left: 0; border-left: 2px solid var(--runrail); border-radius: 0;
+}
 .view-block {
   box-shadow: var(--card); border-radius: var(--r);
   background: var(--panel); padding: 8px 12px; margin: 4px 0 6px 14px;

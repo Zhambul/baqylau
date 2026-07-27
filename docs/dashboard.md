@@ -5503,6 +5503,29 @@ test never reaches: the two earlier fixes for the same report were each verified
 replaying real sessions through the real engine, and both looked right, because the
 replay never clicked.
 
+**A CLICK-TO-VIEW PANEL is a SATELLITE, and no pass can see it.** `toggleView` inserts
+the served HTML as a plain sibling of the row it was opened from
+(`insertAdjacentHTML("afterend")`), and that panel carries no `data-kind` — which is
+exactly what `streamItems()` filters on. So the panel is invisible to *every* pass: the
+view mode, the kind filter, the run rail and the visible count all walk right past it.
+Expanding an Update's diff in default and switching to focus therefore folded the ROW
+into the summary and left the DIFF standing — an orphan panel belonging to nothing
+(*"this update does not disappear, it still stays expanded, and it kinda messes with the
+whole view"*), and the kind filter had the identical hole.
+
+The tie is made in the CASCADE rather than by teaching a fourth pass about a second kind
+of child: `.vhide + .view-block, .fhide + .view-block { display: none !important }` —
+whatever hides the host hides the panel, on both axes — plus `.vrun + .view-block` so an
+open panel inside an expanded run carries the rail instead of breaking it. Hidden, not
+removed: switch back and your expansion is still there. This is sound because the
+panel's tie to its host is DOM ADJACENCY and that is an INVARIANT, not luck — every
+other writer to the stream inserts at the top (`appendItems`), at the bottom
+(`appendOlder`) or immediately before a span's first item (the `.vsum` summaries), so
+nothing can land between a host and its panel; `toggleView`'s own close depends on the
+same fact. The invariant is pinned by the JS harness (`satelliteFocus`), which runs a
+full re-pass — summaries torn down and re-inserted — and checks the panel is still the
+host's next sibling.
+
 Getting there needed the classifier to actually KNOW those rows, which it did not:
 
 - **Team mail had no class at all.** Its arrival chip is `● <from> → <to>` in
