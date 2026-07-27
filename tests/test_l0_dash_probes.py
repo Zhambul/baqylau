@@ -673,6 +673,90 @@ def test_accounts_strip_rows_stack_column_for_column():
     assert d["cases"]["model_window_on_one"]["aname"] == "24ch"
 
 
+def test_ctx_bar_compaction_and_drain():
+    """The ctx bar, EXECUTED rather than grepped: tests/jsdom/ctxbar.js renders
+    the real `ctxBar` over the DOM shim across SEQUENCES of repaints and reports
+    what each one produced (docs/dashboard.md, *Compaction on the ctx bar*).
+
+    Two behaviours live here that no server-side test can see, both properties
+    of successive renders rather than of one call:
+
+      * the DRAIN. ctxBar builds a fresh node every repaint, and a fresh node
+        has nothing to transition FROM — which is why `.ubar`'s identical
+        `transition: width` rule has never actually animated anything. So the
+        bar is painted at its REMEMBERED width and moved on the next frame, and
+        the harness's rAF queue is what lets the pair be observed. The memory is
+        keyed per bar, so session A's collapse cannot animate out of session B's
+        last width.
+      * the COMPACTING state — the ghost segment at the current occupancy, the
+        class the CSS animates from, and a detail that stops quoting a token
+        count that is seconds from being wrong. Critically, a compacting render
+        must NOT consume the key's memory, or the drain that follows would start
+        from the rehearsal instead of from the pre-compaction width.
+
+    Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "ctxbar.js"),
+         os.path.join(REPO, "dashboard", "static", "app.04-list.js")],
+        capture_output=True, text=True, timeout=60)
+    d = json.loads(r.stdout)
+    assert d["ok"], d["errors"]
+    assert r.returncode == 0, r.stderr
+    c = d["cases"]
+
+    # the existing call sites pass no opts and must render exactly as before:
+    # no ghost, no animation, the token detail intact
+    assert c["plain"]["ghost"] is None
+    assert c["plain"]["widths"] == ["42%", "42%"]
+    assert c["plain"]["detail"] == "84000 / 200000"
+    assert "compacting" not in c["plain"]["cls"]
+    # first sight of a key seeds without animating (a page load must not slide
+    # every bar up from zero)
+    assert c["first_sight"]["widths"] == ["42%", "42%"]
+    # ...and the next render of that key drains, across two frames
+    assert c["drain"]["widths"] == ["87%", "4%"]
+    # the memory is PER BAR — interleaved sessions each animate from their own
+    assert c["keys_dont_bleed"]["a"]["widths"] == ["90%", "20%"]
+    assert c["keys_dont_bleed"]["b"]["widths"] == ["10%", "80%"]
+
+    comp = c["compacting"]
+    assert "compacting" in comp["cls"].split()
+    assert comp["ghost"] == "87%"          # the ghost holds the real occupancy
+    assert comp["label"] == "⟳ ctx"
+    assert comp["detail"] == "compacting…"  # not a count about to be wrong
+    assert comp["pct"] == "87%"            # the number itself is still honest
+    # a compacting render leaves the key's memory alone, so the real drop that
+    # follows still animates out of the PRE-compaction width
+    assert c["compaction_then_drain"]["widths"] == ["87%", "4%"]
+
+    # the colour ladder is untouched, and still emitted alongside `compacting`
+    assert c["ladder"] == {"hot": "cbar hot", "warn": "cbar warn",
+                           "cool": "cbar", "hot_compacting": "cbar hot compacting"}
+    # the width clamp survived the rewrite (the text stays verbatim)
+    assert c["clamped"]["over"]["widths"] == ["100%", "100%"]
+    assert c["clamped"]["under"]["widths"] == ["0%", "0%"]
+
+
+def test_ctx_bar_keys_the_session_off_the_real_sid(dash):
+    """The session ctx bar's drain key must come from `S.cur`, NOT from a field
+    on the session object — `S.ses` carries no `sid` (the current id lives in
+    `S.cur`), so `ses.sid` would key every session as "s:undefined" and the
+    per-bar memory would collapse into one shared slot: opening a session at 10%
+    right after one at 80% would drain the new bar out of the old one's width,
+    animating a collapse that never happened. Caught in review, pinned here
+    because the bug is INVISIBLE — an undefined key still produces a working
+    bar, just one that occasionally lies (docs/dashboard.md, *Compaction on the
+    ctx bar*)."""
+    code, chrome = _get(dash + "/static/app.11-chrome.js")
+    assert code == 200
+    m = re.search(r'key:\s*\(aid \? "a:" \+ aid : "s:" \+ ([\w.]+)\)', chrome)
+    assert m, "paintCtxRow's ctxBar key"
+    assert m.group(1) == "S.cur", m.group(1)
+
+
 def test_reset_column_fits_the_widest_reset_text(dash):
     """The fixed reset column in style.css must be as wide as the widest text
     `resetAgo()` can produce, or a window whose reset happens to be LONGER

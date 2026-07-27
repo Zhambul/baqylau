@@ -110,7 +110,7 @@ from dashboard.read.meta import (  # noqa: F401  -- facade re-export
 )
 from dashboard.read.session import (  # noqa: F401  -- facade re-export
     session_payload, ask_pending, chip_delivered, composer_draft,
-    composer_queue, last_prompt, plan_pending,
+    composer_queue, last_prompt, plan_pending, session_compacting,
 )
 from dashboard.read.mirror import (  # noqa: F401  -- facade re-export
     agent_scope, history, merge_live, merged_backlog, view_payload, conv_items,

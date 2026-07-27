@@ -1412,6 +1412,53 @@ def test_error_badge_payload_and_sse(dash):
     assert data and json.loads(data)["count"] == 2
 
 
+def test_compacting_payload_and_sse(dash):
+    """session_payload carries the compaction latch (the `compacting` kv
+    compact_fmt.py arms on PreCompact) and the per-session SSE announces it as
+    a `compacting` event on the FAST cadence — the ctx bar's animation
+    (docs/dashboard.md, *Compaction on the ctx bar*)."""
+    A.session_start({"session_id": "cmp1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cmp1")
+    assert _get_json(dash + "/api/session/cmp1")["compacting"] is None
+    S.kv_set(log, "compacting", {"ts": time.time(), "trigger": "manual"})
+    ov = _get_json(dash + "/api/session/cmp1")
+    assert ov["compacting"]["trigger"] == "manual"
+    assert ov["compacting"]["since"] > 0
+    data = _sse_event(dash + "/events/session/cmp1?after=0&mpos=0", "compacting")
+    assert data and json.loads(data)["compacting"]["trigger"] == "manual"
+    # PostCompact deletes the row — the animation ends
+    S.kv_del(log, "compacting")
+    assert _get_json(dash + "/api/session/cmp1")["compacting"] is None
+
+
+def test_compacting_latch_ages_out(dash):
+    """A compaction that dies on an API error or is interrupted fires NO
+    PostCompact (CLAUDE.md's no-hook-on-cancel invariant — the audit holds one
+    such orphan), and the hook that armed the latch has exited and cannot
+    retract it. So the READ side expires it: an animation must fail OFF rather
+    than run for the rest of the session."""
+    A.session_start({"session_id": "cmp2", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cmp2")
+    stale = time.time() - DS.config.COMPACT_MAX_S - 30
+    S.kv_set(log, "compacting", {"ts": stale, "trigger": "auto"})
+    assert _get_json(dash + "/api/session/cmp2")["compacting"] is None
+    # ...and a latch within the window still reads as compacting
+    S.kv_set(log, "compacting",
+             {"ts": time.time() - DS.config.COMPACT_MAX_S + 60, "trigger": "auto"})
+    assert _get_json(dash + "/api/session/cmp2")["compacting"]["trigger"] == "auto"
+
+
+def test_compacting_latch_survives_a_malformed_row(dash):
+    """The latch is written by a hook and read by the server; a row with no
+    usable timestamp reads as not-compacting rather than raising into the
+    payload every other card rides on."""
+    A.session_start({"session_id": "cmp3", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cmp3")
+    for bad in ({}, {"ts": "soon"}, {"ts": 0}, {"ts": None}, []):
+        S.kv_set(log, "compacting", bad)
+        assert _get_json(dash + "/api/session/cmp3")["compacting"] is None
+
+
 def test_tasks_card_payload_and_sse(dash):
     """session_payload carries the pinned tasks card's list (the `tasks` kv
     task_fmt.py snapshots from the on-disk task dir — docs/dashboard.md, *Web

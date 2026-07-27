@@ -41,6 +41,59 @@ def test_precompact_paints_busy(run_hook, test_env, session):
     assert not oracle.errors(test_env, s.sid)
 
 
+# the web dashboard's animated ctx bar (docs/dashboard.md, *Compaction on the
+# ctx bar*): the two compaction hooks are the ONLY window on an operation that
+# runs ~2 minutes emitting nothing else, so PreCompact latches and PostCompact
+# clears.
+
+def _compacting(s):
+    rows = s.query_state("SELECT val FROM kv WHERE key='compacting'")
+    return json.loads(rows[0][0]) if rows else None
+
+
+def test_precompact_arms_the_compacting_latch(run_hook, test_env, session):
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.base(s, "PreCompact", trigger="manual"))
+    rec = _compacting(s)
+    assert rec["trigger"] == "manual" and rec["ts"] > 0
+    assert any(a == "compacting" and '"write"' in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_postcompact_clears_the_latch(run_hook, test_env, session):
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.base(s, "PreCompact", trigger="auto"))
+    run_hook(HOOK, P.base(s, "PostCompact", trigger="auto",
+                          compact_summary="<analysis>…</analysis>"))
+    assert _compacting(s) is None
+    assert any(a == "compacting" and "PostCompact" in c
+               for _p, a, c in oracle.state_files(test_env, s.sid))
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_postcompact_without_an_arm_is_a_no_op(run_hook, test_env, session):
+    # a session that was already compacting when this handler was deployed, or
+    # a duplicate event — neither may write a latch that nothing will clear
+    s = session.make()
+    _seed_state_db(run_hook, s)
+    run_hook(HOOK, P.base(s, "PostCompact", trigger="manual"))
+    assert _compacting(s) is None
+    assert not oracle.errors(test_env, s.sid)
+
+
+def test_compact_latch_skips_an_unhosted_session(run_hook, test_env, session):
+    # no state DB (headless claude -p / a daemon-origin session) — the handler
+    # must not CREATE one: the file's existence is the session-alive signal
+    # watchers poll (the ghost-DB bug class).
+    s = session.make()
+    run_hook(HOOK, P.base(s, "PreCompact", trigger="auto"))
+    assert not os.path.exists(s.state_db)
+    assert not oracle.errors(test_env, s.sid)
+
+
 # ------------------------------------------------------- routing == old wiring
 
 def test_posttool_bash_routes_to_cmd_fmt(run_hook, test_env, session):
@@ -146,7 +199,11 @@ def test_plan_sequences_pinned():
     assert _names("SubagentStop") == ["claude-subagent-fmt.py"]
     for ev in ("TaskCreated", "TaskCompleted"):
         assert _names(ev) == ["claude-task-fmt.py"]
-    assert _names("PreCompact") == [tab]
+    # PreCompact: the tab dispatch paints busy, then the compaction latch the
+    # web ctx bar animates from. PostCompact is the ONLY end signal (nothing
+    # else fires until the next turn, which can be minutes away).
+    assert _names("PreCompact") == [tab, "claude-compact-fmt.py"]
+    assert _names("PostCompact") == ["claude-compact-fmt.py"]
     # Unknown/other events: empty plan (subscriber-only, recorded by route()).
     for ev in ("PermissionRequest", "Setup", ""):
         assert _names(ev) == []

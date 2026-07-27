@@ -429,9 +429,56 @@ body.in-session.fs-on #fsbtn { display: revert; }
   flex: 1; height: 7px; border-radius: 4px; overflow: hidden; min-width: 40px;
   background: color-mix(in srgb, var(--bg) 80%, black);
 }
-.cbar .cfill { display: block; height: 100%; background: var(--accent, #6b9bd1); }
+.cbar .cfill { display: block; height: 100%; background: var(--accent, #6b9bd1);
+  /* The eased DRAIN. A compaction drops the occupancy off a cliff (523k → 9k in
+     one measured session) and the number should be seen falling, not found
+     already fallen. Only fires because ctxBar paints a rebuilt bar at its
+     REMEMBERED width first and moves it on the next frame — a fresh node has
+     nothing to transition from (which is why .ubar's identical rule has never
+     animated anything). */
+  transition: width .9s cubic-bezier(.22, .61, .36, 1); }
 .cbar.warn .cfill { background: var(--amber, #d1a35a); }
 .cbar.hot .cfill { background: var(--red, #b5484d); }
+
+/* COMPACTION IN PROGRESS (docs/dashboard.md, *Compaction on the ctx bar*) —
+   the bar rehearses the collapse it is about to perform. `.cghost` holds the
+   current occupancy at low opacity while `.cfill` loops down to a fraction of
+   it and springs back, so the pair reads as "this much is here, and it is
+   being squeezed". Both sit in the same clipped track, the ghost UNDER the
+   fill (source order), so the accent segment reads as the live part of the
+   same bar rather than a second bar.
+
+   The fill's own width is left at the real percentage and the SQUEEZE is a
+   transform — `scaleX` composites off the main thread and, unlike animating
+   `width`, cannot fight the drain transition above (the two would otherwise
+   both own the same property, and whichever the browser resolved last would
+   win at the moment compaction ends — exactly the frame that matters). */
+.cbar.compacting .cghost {
+  position: absolute; left: 0; top: 0; height: 100%; opacity: .22;
+}
+/* the ghost is positioned, the fill is too, and the fill comes LATER in source
+   order — so it paints over the ghost with no z-index anywhere */
+.cbar.compacting .ctrack { position: relative; }
+.cbar.compacting .cfill {
+  position: relative; transform-origin: left center;
+  transition: none;                  /* the loop owns the fill until it ends */
+  animation: ctxsqueeze 2s cubic-bezier(.5, 0, .5, 1) infinite;
+}
+/* The colour ladder is deliberately overridden while compacting: a bar at 92%
+   is `hot` red, and red is this UI's "you are in trouble" register — but a
+   compaction is the fix ARRIVING, not the problem worsening. Violet is the
+   busy/working register the tab already uses for the same two minutes. */
+.cbar.compacting .cfill,
+.cbar.compacting .cghost { background: var(--busy, #c678dd); }
+.cbar.compacting .clabel { color: var(--busy, #c678dd); }
+/* reuses the pending-dialog spinner's keyframe — one rotation vocabulary */
+.cbar .cspin { display: inline-block; animation: pendspin 2s linear infinite; }
+.cbar.compacting .cdetail { color: var(--busy, #c678dd); opacity: .8; }
+@keyframes ctxsqueeze {
+  0%   { transform: scaleX(1); }
+  55%  { transform: scaleX(.28); }
+  100% { transform: scaleX(1); }
+}
 .cbar .cpct { color: var(--text); font: 600 11px/1 var(--mono); flex: none; }
 .cbar .cdetail { color: var(--dim2); font: 10px/1 var(--mono); flex: none; white-space: nowrap; }
 .cbar.big { margin-top: 8px; max-width: 520px; }

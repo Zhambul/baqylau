@@ -99,6 +99,11 @@ _ASK = _fmt("claude-ask-fmt.py", "ask_fmt",
             matcher="AskUserQuestion|ExitPlanMode")
 _ASK_TURN = _fmt("claude-ask-fmt.py", "ask_fmt")
 
+# The compaction-in-progress latch (the web ctx bar's animation): armed on
+# PreCompact, cleared on PostCompact. ONE step on both events — the handler
+# reads hook_event_name itself, like ask_fmt's stash/clear split.
+_COMPACT = _fmt("claude-compact-fmt.py", "compact_fmt")
+
 _ROUTES = {
     "SessionStart": [_tab("idle"), _split("open")],
     "UserPromptSubmit": [_tab("thinking"), _ASK_TURN],
@@ -154,7 +159,14 @@ _ROUTES = {
     # busy magenta so the tab doesn't sit stale (grey/green) through it. Use
     # WORKING, not THINKING: no interrupt-watch to start (this isn't a turn
     # boundary), just the colour. The next turn's hooks repaint from there.
-    "PreCompact": [_tab("working")],
+    # The formatter is the WEB's half of the same fact: magenta says "busy",
+    # which compaction shares with every think, so the dashboard's ctx bar
+    # needs the latch to know it is specifically COMPACTING (compact_fmt.py).
+    "PreCompact": [_tab("working"), _COMPACT],
+    # PostCompact was previously unrouted (audit-subscriber only). It is the
+    # only signal that compaction ENDED — nothing else fires, and the next
+    # turn's hooks can be minutes away.
+    "PostCompact": [_COMPACT],
 }
 _ROUTES["PostToolUseFailure"] = _ROUTES["PostToolUse"]
 # StopFailure = Stop's steps + the rate-limit migration (docs/relimit.md):

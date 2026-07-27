@@ -6,11 +6,12 @@
 # read/meta.py, the live window from control/launch.py.
 import collections
 import os
+import time
 
 import plugins
 from core import sessionapi as API
 from core import tabs
-from dashboard import opshtml, prefs, suggestion
+from dashboard import config, opshtml, prefs, suggestion
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
                                  session_goal, session_kv, session_prompts,
@@ -225,6 +226,10 @@ def session_payload(sid, agent=""):
     _tp = data.get("transcript_path") or ""
     data["transcript_missing"] = bool(_tp) and not os.path.isfile(_tp)
     data["ctx"] = session_ctx(data.get("transcript_path") or "", main=True)
+    # is the conversation being compacted right now — the ctx bar's animation
+    # (docs/dashboard.md, *Compaction on the ctx bar*). Seeds a page opened
+    # mid-compaction; the `compacting` SSE event carries the transitions.
+    data["compacting"] = session_compacting(sid)
     data["cwd"] = canon_cwd(data.get("cwd") or "")   # collapse the /kitty symlink
     data["git"] = git_info(data["cwd"])
     # the effort quick-button's label (docs/dashboard.md, *Web quick
@@ -351,6 +356,36 @@ def ask_draft(sid, ask=None):
     if (draft.get("tool_use_id") or "") != (ask.get("tool_use_id") or ""):
         return None
     return draft
+
+
+def session_compacting(sid, sdb=None):
+    """Whether this session is compacting RIGHT NOW — {"since", "trigger"} or
+    None. The `compacting` kv latch (compact_fmt.py: armed on PreCompact,
+    cleared on PostCompact) behind the ctx bar's animation (docs/dashboard.md,
+    *Compaction on the ctx bar*). Read-only (kv_at — never creates the state
+    DB). `sdb` is the SSE tick's already-resolved path (see session_kv): this
+    rides the FAST cadence, so it must not re-walk the adopt chain per tick.
+
+    AGED OUT past config.COMPACT_MAX_S: a compaction that died on an API error
+    or was interrupted fires no PostCompact, and the hook that armed the latch
+    has long exited, so this read — re-evaluated every tick — is the only place
+    that can end it. A stale latch must read as "not compacting", never as a
+    bar that animates for the rest of the session.
+
+    Deliberately NOT live-gated in the sense the dialogs are: a session that
+    parked mid-compaction has no animation to show anyway (the latch dies with
+    the arm's age), and gating on `live` would need a second lookup here for a
+    question the expiry already answers."""
+    rec = session_kv(sid, "compacting", sdb)
+    if not isinstance(rec, dict):
+        return None
+    try:
+        since = float(rec.get("ts") or 0)
+    except (TypeError, ValueError):
+        return None
+    if since <= 0 or time.time() - since > config.COMPACT_MAX_S:
+        return None
+    return {"since": since, "trigger": rec.get("trigger") or ""}
 
 
 def composer_draft(sid):

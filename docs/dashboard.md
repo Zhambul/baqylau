@@ -445,7 +445,7 @@ reflow for free and keeps the no-build rule.
 |---|---|
 | `/` `/static/<name>` | the app (whitelist — no path resolution on user input) |
 | `/api/sessions` | discovery list + per-row stats + tab state + `ctx` (context saturation, below) + `git` (branch/worktree/root/dirty, below) |
-| `/api/session/<sid>[?agent=<aid>]` | overview: `session()` + error count + `ctx` + `git` + `view_mode` (the mirror density, *View modes* below); agent rows carry their own `ctx`. With `?agent=` it also carries `agent_usage` — that agent's token rollup + priced cost for the scoped scoreboard (*Agent scope*) |
+| `/api/session/<sid>[?agent=<aid>]` | overview: `session()` + error count + `ctx` + `compacting` (`{since, trigger}` while the conversation is being compacted, else null — the ctx bar's animation, *Compaction on the ctx bar*; seeds a page opened mid-compaction, since the SSE channel only speaks on the two transitions) + `git` + `view_mode` (the mirror density, *View modes* below); agent rows carry their own `ctx`. With `?agent=` it also carries `agent_usage` — that agent's token rollup + priced cost for the scoped scoreboard (*Agent scope*) |
 | `/api/session/<sid>/ops?after=N[&agent=<aid>]` | `{last, html: […]}` server-rendered ops; `agent` scopes them to that agent (*Agent scope*) |
 | `/api/session/<sid>/history?before=<opid>&blocks=N[&agent=<aid>]` | the previous `N` stream blocks OLDER than op id `before` (lazy backlog): `{oldest, items}`, `oldest` the next cursor (0 = exhausted); `agent` scopes them |
 | `/api/session/<sid>/backlog[?agent=<aid>]` | the initial newest-`TAIL_BLOCKS` slice (`merged_backlog`): `{last, mpos, oldest, items}` — the gzip-able GET twin of the SSE fresh-connect backlog; the page fetches this first, then connects the session SSE with the cursors (*Lazy backlog* below) |
@@ -474,7 +474,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `tasks-hide` (`{"hidden": bool}` → dismiss/restore the pinned tasks CARD, a prefs write, no terminal and no task touched — *Web tasks* below; 400 non-bool, **409 unless every task is completed**), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
-| `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
+| `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`compacting`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors[?agent=<aid>]` | the Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*) |
 | `GET /api/session/<sid>/jobs[?agent=<aid>]` | the background Bash jobs (command + lifecycle state, merging audit streams + ops + the launch hook) for the jobs tab (*Jobs tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*); output via the `/copy/<group>/out` endpoint |
 | `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched (`{path, name, verb, agent, count, ts}`, from the `memory` kv) for the memory tab (*Memory tab*) |
@@ -4160,6 +4160,87 @@ a SessionEnd fallback), OTEL datapoints are per-session sums with no per-request
 grouping (occupancy is a *last-request* fact, not a total), and the status-line
 stdin carries rate limits, not context. The transcript tail is live, survives
 parking (transcripts persist), and covers agents uniformly.
+
+### Compaction on the ctx bar
+
+While the conversation is being compacted, the session header's ctx bar
+**rehearses the collapse it is about to perform**: a dim ghost holds the
+current occupancy while the accent segment loops down to a fraction of it and
+springs back, the label grows a spinning `⟳`, and the detail says
+`compacting…` instead of a token count that is seconds from being wrong. When
+it finishes, the ghost drops away and the real fill **eases down** to the new
+value.
+
+**Why it exists.** Compaction runs 104–139s (seven measured runs in the audit
+trail) and emits *nothing* while it does — no tool call, no reply, no
+transcript growth. The tab goes magenta, but magenta is `working`, which
+compaction shares with every ordinary think, so for two minutes the dashboard
+was indistinguishable from a slow turn while the one number about to change
+dramatically sat frozen. The bar is the right surface because it is the thing
+being acted on.
+
+**The signal is the two hooks, not a probe.** `PreCompact` and `PostCompact`
+bracket the operation exactly, and `PostCompact` was previously unrouted
+(audit-subscriber only). `plugins/claude_code/compact_fmt.py` is a pure latch:
+write the `compacting` kv on the first, delete it on the second. There is no
+read-side detection here (unlike ctx/goal) because there is nothing to read —
+that is the whole problem the hooks solve.
+
+**The latch expires on the READ side** (`session_compacting`,
+`config.COMPACT_MAX_S`, default 15 min). A compaction that dies on an API error
+or is interrupted fires no `PostCompact` — the audit holds such an orphan — and
+the hook process that armed the latch is long gone and can retract nothing. So
+the expiry lives where it is re-evaluated every tick. An animation must fail
+OFF; a bar that rehearses a collapse for the rest of the session is worse than
+one that never animated. `anomalies` flags an uncleared arm.
+
+**FAST SSE channel**, beside `tab`/`fgrun`: what the event is for is the START
+and the END, and on the slow cadence the bar would keep rehearsing for seconds
+after the real fill had already dropped. The value carries `since`, so it is
+stable across ticks and the channel is silent between the two transitions.
+
+**The drain needed a probe fix to land on.** A compaction writes no assistant
+record, so `context_probe` — which reads the last assistant usage — kept
+reporting the PRE-compaction figure until the next real turn: measured 22
+records of lag in one sampled session, over which the bar claimed 522,826
+tokens for a context actually holding 8,969. Without this the bar would have
+animated and then "drained" to the same number it started at. The
+`compact_boundary` record carries `postTokens`, and a boundary NEWER than the
+last assistant record now overrides `used`. The two are the same measure —
+that record's `preTokens` (523,056) and its own `context_used` (522,826) agree
+to 0.04% — so the swap cannot change scale. `window`/`model` still come from
+the assistant record: a boundary names no model, and compaction doesn't change
+the one in use. The marker is matched as a RECORD (through `parse_line`), never
+as raw bytes — a transcript quotes its own vocabulary constantly, and
+byte-matching a marker is what once flipped a tab green mid-turn.
+
+**Why the animation is a `transform`, not a width.** The squeeze loop and the
+drain would otherwise both own `width`, and whichever the browser resolved last
+would win at the exact frame compaction ends. `scaleX` also composites off the
+main thread.
+
+**Why the drain needs JS at all.** `ctxBar` builds a fresh node on every
+repaint, and a fresh node has nothing to transition *from* — which is why
+`.ubar`'s identical `transition: width` rule has never actually animated
+anything. So the bar remembers the width it last painted (keyed per bar:
+`s:<sid>` / `a:<aid>`), paints the rebuilt node at THAT width, and moves it on
+the next frame. A compacting render deliberately does not consume that memory,
+or the drain would start from the rehearsal instead of the pre-compaction
+width. First sight of a key seeds without animating, so a page load doesn't
+slide every bar up from zero. `tests/jsdom/ctxbar.js` executes the real
+renderer across these sequences.
+
+**Scoped to the session header, and to the session.** The list cards and agent
+cards pass no `key`/`comp` and render exactly as before. A drilled-in agent's
+bar never shows the rehearsal: compaction folds the MAIN thread's conversation,
+and an agent has none of its own to compact. The violet is `--busy` — the same
+colour the tab is already painting for those two minutes — and it deliberately
+overrides the `hot` red: a bar at 92% is red because you are in trouble, but a
+compaction is the fix ARRIVING, not the problem worsening.
+
+**Compaction adds no mirror block.** The terminal mirror still shows nothing
+for a main-session compaction (a subagent's gets `⟳ compacted` from
+`substream_render`); this feature is web-only.
 
 ## Agent model·effort (the card's op-tag echo)
 

@@ -547,6 +547,21 @@ CTX_TAIL_B = 262144     # tail-window bytes context_probe scans backwards for th
 #                         deeper than this simply shows no ctx
 
 
+def _boundary_meta(raw):
+    """`compactMetadata` of a `compact_boundary` record, or None when `raw` is
+    not one. Matched as a RECORD (through parse_line, the single owner of the
+    shape), never as raw bytes: a transcript quotes its own vocabulary
+    constantly — a Read of the file documenting it, a grep hit inside a
+    tool_result — and byte-matching a marker is exactly what once flipped a
+    tab green mid-turn (CLAUDE.md, the interrupt-watch invariant)."""
+    try:
+        rec = parse_line(raw.decode("utf-8", "replace")
+                         if isinstance(raw, bytes) else raw)
+    except Exception:
+        return None
+    return rec.get("meta") if rec and rec.get("kind") == "compact" else None
+
+
 def context_probe(path, main=False):
     """Context saturation from a transcript's tail — the LAST assistant
     record's usage IS the occupied window of the most recent turn (fresh +
@@ -557,12 +572,37 @@ def context_probe(path, main=False):
     speak). main=True skips isSidechain records: an inline sidechain turn in a
     MAIN transcript belongs to its agent, and its (smaller) usage would paint a
     phantom shrink over the main thread's fill — the same main/agent split as
-    accounting.bump_transcript vs fold_usage."""
+    accounting.bump_transcript vs fold_usage.
+
+    A `compact_boundary` NEWER than that assistant record overrides `used`
+    with its `postTokens`. A compaction writes no assistant record of its own,
+    so between the boundary and the next real turn the last assistant usage is
+    the PRE-compaction figure — measured 22 records (and however long you take
+    to type the next prompt) in one sampled session, over which the bar
+    reported 522,826 tokens for a context actually holding 8,969. The boundary
+    carries the post figure, and cross-checks: its `preTokens` (523,056) and
+    that same record's context_used (522,826) agree to 0.04%, so the two are
+    the same measure and swapping one for the other cannot change scale. The
+    `window`/`model` still come from the assistant record — a boundary names
+    no model, and compaction doesn't change the one in use."""
     from plugins.claude_code import model as M   # deferred: keep parse_line import-light
     lines = TL.tail_lines(path, CTX_TAIL_B)
     if lines is None:
         return None
+    post = None          # the newest boundary's postTokens, when it sits AFTER
+    seen_boundary = False    # the assistant record we settle on
     for raw in reversed(lines):
+        if not seen_boundary and b'"compact_boundary"' in raw:
+            meta = _boundary_meta(raw)
+            if meta is not None:
+                # Only the NEWEST boundary can speak for the current context,
+                # so the flag latches even when that one carries no postTokens
+                # (older Claude Code builds wrote none) — an EARLIER boundary
+                # describes a context two compactions ago.
+                seen_boundary = True
+                tok = meta.get("postTokens")
+                post = tok if isinstance(tok, int) and tok > 0 else None
+                continue
         if b'"usage"' not in raw or b'"assistant"' not in raw:
             continue
         try:
@@ -578,6 +618,7 @@ def context_probe(path, main=False):
         if used <= 0:
             continue
         window = M.context_window(msg.get("model"))
+        used = post or used
         return {"used": used, "window": window,
                 "pct": min(100, used * 100 // window),
                 "model": msg.get("model") or ""}

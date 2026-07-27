@@ -45,7 +45,7 @@ single-dispatcher refactor ([wiring.md](wiring.md)) the dispatcher writes it in-
 of `route()` — `A.hook_event(d, handler="subscriber")` — for **all 30 hook events**,
 so it still covers the ones nothing else listens to:
 `PermissionRequest`/`PermissionDenied`, `PostToolBatch`, `MessageDisplay`,
-`TeammateIdle`, `Pre`/`PostCompact`, `ConfigChange`, `CwdChanged`, `FileChanged`,
+`TeammateIdle`, `ConfigChange`, `CwdChanged`, `FileChanged`,
 `WorktreeCreate`/`Remove`, `Elicitation`/`ElicitationResult`, `Setup`,
 `UserPromptExpansion`, `InstructionsLoaded`. So nothing that happens in a session is
 invisible to the audit, and a mirror-handler row can be cross-checked against the

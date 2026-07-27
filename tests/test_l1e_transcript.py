@@ -755,6 +755,62 @@ def test_context_probe_none_without_usage(tmp_path):
     assert TR.context_probe(str(tmp_path / "absent.jsonl")) is None
 
 
+def _boundary(post=None, pre=523056):
+    meta = {"trigger": "manual", "preTokens": pre, "durationMs": 127639}
+    if post is not None:
+        meta["postTokens"] = post
+    return {"type": "system", "subtype": "compact_boundary",
+            "content": "Conversation compacted", "compactMetadata": meta}
+
+
+def test_context_probe_reads_post_compaction_occupancy(tmp_path):
+    # A compaction writes NO assistant record, so between the boundary and the
+    # next real turn the last assistant usage is the PRE-compaction figure —
+    # 22 records' worth of lag in the sampled session. The boundary's postTokens
+    # is what the context actually holds.
+    row = {"type": "assistant", "message": {"model": "claude-haiku-4-5",
+           "usage": {"input_tokens": 180000, "output_tokens": 9}}}
+    before = _wt(tmp_path, "cb1.jsonl", row)
+    assert TR.context_probe(before)["used"] == 180000
+    after = _wt(tmp_path, "cb2.jsonl", row, _boundary(post=8969),
+                {"type": "user", "isCompactSummary": True,
+                 "message": {"content": "This session is being continued…"}})
+    got = TR.context_probe(after)
+    assert got["used"] == 8969
+    # the model/window still come from the assistant record — a boundary names
+    # no model, and compaction doesn't change the one in use
+    assert (got["window"], got["model"]) == (200000, "claude-haiku-4-5")
+    assert got["pct"] == 4
+
+
+def test_context_probe_ignores_a_quoted_compact_boundary(tmp_path):
+    # The marker must match as a RECORD, never as raw bytes: a transcript
+    # quotes its own vocabulary constantly (a Read of the file documenting it,
+    # a grep hit in a tool_result) and byte-matching one has already flipped a
+    # tab green mid-turn once (CLAUDE.md, the interrupt-watch invariant).
+    p = _wt(tmp_path, "cb3.jsonl",
+            {"type": "assistant", "message": {"model": "claude-haiku-4-5",
+             "usage": {"input_tokens": 180000, "output_tokens": 9}}},
+            {"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "t",
+                 "content": 'grep hit: "subtype": "compact_boundary" '
+                            'with "postTokens": 1'}]}})
+    assert TR.context_probe(p)["used"] == 180000
+
+
+def test_context_probe_only_the_newest_boundary_speaks(tmp_path):
+    # An EARLIER boundary describes a context two compactions ago. The newest
+    # one latches even when it carries no postTokens (older Claude Code builds
+    # wrote none) — falling back to the assistant record, never to a stale
+    # boundary's figure.
+    p = _wt(tmp_path, "cb4.jsonl",
+            _boundary(post=1000),
+            {"type": "assistant", "message": {"model": "claude-haiku-4-5",
+             "usage": {"input_tokens": 180000, "output_tokens": 9}}},
+            _boundary(post=None))
+    assert TR.context_probe(p)["used"] == 180000
+
+
 def test_context_probe_bounded_tail(tmp_path):
     # The no-full-read rule: a usage record buried deeper than CTX_TAIL_B is
     # deliberately out of reach; one within the window is found past torn-line

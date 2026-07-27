@@ -29,7 +29,7 @@ from dashboard.read.session import (BADGES, badge_count, agents_ctx,
                                     agents_model_effort,
                                     visible_agents, ask_draft,
                                     ask_pending, ask_wire, composer_draft, composer_queue,
-                                    plan_pending, tasks_card,
+                                    plan_pending, session_compacting, tasks_card,
                                     input_box, SUGGEST_TABS)
 
 A = load_audit()
@@ -162,6 +162,15 @@ _SLOW_CHANS = (
 _FAST_CHANS = (
     _Chan("tab", "tab", lambda c: c.tab, "tab"),
     _Chan("fgrun", "fgrun", lambda c: API.fg_running(c.sid), "fg"),
+    # the ctx bar's compaction animation. FAST for the same reason as `fgrun`:
+    # what the event is for is the START and the END, and on the slow cadence
+    # the bar would keep rehearsing a collapse for seconds after the real fill
+    # had already dropped to its post-compaction value. One kv SELECT per tick,
+    # pushed only on change. NOTE the value carries `since` (the arm's
+    # timestamp), so it is stable across ticks while a compaction runs and this
+    # channel stays silent between the two transitions.
+    _Chan("compacting", "compacting",
+          lambda c: session_compacting(c.sid, c.sdb), "compacting"),
 )
 
 # Channels that stay INLINE in the loop and so own their own `prev` slot: the

@@ -21,7 +21,7 @@ _TITLES = API.BoundedLRU(MEMO_CAP)   # transcript_path -> (size, title): a title
 #                   transcript heads per tick
 
 
-def session_kv(sid, key):
+def session_kv(sid, key, sdb=None):
     """One READ-ONLY kv row off a session's state DB (live or parked), or None —
     the ONE owner of the `state_db_for` + `kv_at` pair the modal-dialog /
     draft / queue / tasks / account readers all need. None when the session has
@@ -30,8 +30,19 @@ def session_kv(sid, key):
 
     `state_db_for` resolves the live /tmp DB or its durable park and returns
     falsy when neither exists, and `kv_at` is mode=ro — so this can never CREATE
-    the state DB whose mere existence is a liveness signal elsewhere."""
-    sdb = API.state_db_for(sid)
+    the state DB whose mere existence is a liveness signal elsewhere.
+
+    `sdb` short-circuits that resolution for a caller who ALREADY has the path.
+    It is not an optimisation in general — it exists for the SSE tick, which
+    resolves `ctx.sdb` once at the top of every pass and whose FAST channels
+    then run at 0.6s: `state_db_for` walks the adopt `sid_chain`, which is an
+    audit-DB query, so a fast channel that re-resolved would double the loop's
+    per-tick DB work for a path already in hand. Pass it only when it came from
+    `state_db_for` (an empty string means "no state DB", same as a failed
+    resolve) — never a hand-built path, which is how the CREATE this function
+    exists to prevent would get back in."""
+    if sdb is None:
+        sdb = API.state_db_for(sid)
     return API.kv_at(sdb, key) if sdb else None
 
 

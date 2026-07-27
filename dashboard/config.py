@@ -193,6 +193,19 @@ SENT_CAP = 200
 NOTIFY_URL_BASE = (os.environ.get("CLAUDE_DASH_PUBLIC_URL")
                    or "https://baqylau.zhambyl.top").rstrip("/")
 
+# How long the `compacting` latch (plugins/claude_code/compact_fmt.py, armed on
+# PreCompact) is believed before the read side ages it out — the ctx bar's
+# compaction animation (docs/dashboard.md, *Compaction on the ctx bar*).
+# PostCompact normally clears it within ~2 minutes (104-139s across the seven
+# runs in the audit trail), but a compaction that dies on an API error or is
+# interrupted fires NO closing hook (CLAUDE.md's no-hook-on-cancel invariant;
+# the audit holds one such orphan), and the hook process that armed the latch
+# is long gone and can't retract it. So the EXPIRY lives here, on the read
+# side, where it is re-evaluated every tick: an animation must fail OFF.
+# Generous against the measured spread — this is a stuck-forever backstop, not
+# a deadline. CLAUDE_DASH_COMPACT_MAX_S overrides; bad / negative → the default.
+COMPACT_MAX_S = EV.env_float("CLAUDE_DASH_COMPACT_MAX_S", 15 * 60)
+
 # Tab states during which a composer send lands in Claude Code's own message
 # QUEUE (a turn is in progress — the TUI queues typed input and delivers it
 # when the turn ends) rather than starting a turn immediately. The /message

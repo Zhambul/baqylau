@@ -286,6 +286,24 @@ ANOMALY_SECTIONS = [
      "SELECT ts, content FROM state_files WHERE action='notify-retract' "
      "AND json_extract(content, '$.sid')=? "
      "AND COALESCE(json_extract(content, '$.ok'), 0)=0", 1),
+    # A compaction that ARMED the ctx bar's animation and never cleared it:
+    # PreCompact wrote the `compacting` latch and no PostCompact followed. Real
+    # and expected occasionally — a compaction can die on an API error or be
+    # interrupted, and neither fires a closing hook (the no-hook-on-cancel
+    # invariant) — which is exactly why the dashboard AGES the latch out
+    # (config.COMPACT_MAX_S) instead of trusting the clear. So a row here is not
+    # itself a broken bar; it is the evidence for "the bar animated for a while
+    # and then stopped on its own", and a session with SEVERAL is the tell that
+    # compactions are failing. A run's duration is the gap between the pair
+    # (measured 104-139s); one still open long past that never finished.
+    ("compaction armed the ctx bar and never cleared (no PostCompact)",
+     "SELECT pre.ts, json_extract(pre.content,'$.trigger') AS trigger "
+     "FROM state_files pre WHERE pre.session_id=? AND pre.action='compacting' "
+     "AND json_extract(pre.content,'$.action')='write' "
+     "AND NOT EXISTS (SELECT 1 FROM state_files post "
+     "  WHERE post.session_id=pre.session_id AND post.action='compacting' "
+     "  AND json_extract(post.content,'$.action')='remove' "
+     "  AND post.ts > pre.ts)", 1),
     # A nested bg/monitor tailer whose OWNER can be resolved from neither
     # source: not from its own streams row (hookkit.stream_env's
     # CLAUDE_STREAM_AGENT, stamped by the three nested launch sites) and not

@@ -31,7 +31,8 @@ function showSession(sid, tab, agent) {
     S.cur = sid;
     S.ses = { agent: agent,
               lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
-              agents: [], costs: null, ctx: null, running: {}, meta: null, es: null,
+              agents: [], costs: null, ctx: null, compacting: null,
+              running: {}, meta: null, es: null,
               fgRun: null, fgTimer: null, fgEnded: null, fgChipAt: null,  // live fg elapsed
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
@@ -96,6 +97,9 @@ function loadSessionData(sid) {
         S.ses.agents = d.agents || [];
         S.ses.costs = d.costs || null;
         S.ses.ctx = d.ctx || null;
+        // a page opened MID-compaction picks the animation up from the payload
+        // (the SSE channel only speaks on the two transitions)
+        S.ses.compacting = d.compacting || null;
         S.ses.running = d.running || {};
         // the durable per-session view mode (dashboard/prefs.py) — seeded before
         // the chrome is built, so the filter bar renders with the right segment
@@ -186,6 +190,14 @@ function connectSession(sid) {
   es.addEventListener("agents", (e) => { if (!S.ses) return; S.ses.agents = JSON.parse(e.data); updateAgents(); });
   es.addEventListener("costs", (e) => { if (!S.ses) return; S.ses.costs = JSON.parse(e.data); updateStatsRow(); });
   es.addEventListener("ctx", (e) => { if (!S.ses) return; S.ses.ctx = JSON.parse(e.data).ctx; updateStatsRow(); });
+  // compaction start/end — the ctx bar's collapse rehearsal (docs/dashboard.md,
+  // *Compaction on the ctx bar*). FAST channel, so the animation starts within a
+  // tick of PreCompact and the eased drain follows PostCompact just as promptly.
+  es.addEventListener("compacting", (e) => {
+    if (!S.ses) return;
+    S.ses.compacting = JSON.parse(e.data).compacting || null;
+    updateStatsRow();
+  });
   es.addEventListener("git", (e) => {
     const g = JSON.parse(e.data).git || null;
     if (!S.ses) return;

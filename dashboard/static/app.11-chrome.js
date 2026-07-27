@@ -489,7 +489,13 @@ function statsSig(ses) {
   return "S|" + [st.commands, st.failed, st.start, st.paused, st.files,
     st.added, st.removed, st.tk_in, st.tk_out, st.tk_read, st.tk_create, cost,
     st.msg_delivered, st.msg_read, (ses.meta && ses.meta.error_count) || 0,
-    ses.meta && ses.meta.model].join(",")
+    ses.meta && ses.meta.model,
+    // compaction is a ctx-ROW state, not a stats number, but it lives on the
+    // same signature: without it the row never rebuilds when compaction
+    // starts (nothing else about the session changes for those ~2 minutes —
+    // that is the whole point) and the animation would never appear. `since`
+    // is constant while one compaction runs, so this adds no extra rebuilds.
+    (ses.compacting && ses.compacting.since) || 0].join(",")
     + "|" + JSON.stringify(ses.ctx || {});
 }
 
@@ -603,19 +609,33 @@ function renderAgentScoreboard(sr, focus) {
     add("⏱", rec.ended_at ? dur(rec.ended_at - rec.started_at) : ago(rec.started_at));
   sigmaChip(add, d.usage || {});     // the agent shape IS in/out/cache/create
   if (d.cost) add("≈", usd(d.cost), "cost");
-  paintCtxRow(rec.ctx);              // the agent's own saturation, same row
+  paintCtxRow(rec.ctx, focus.aid);   // the agent's own saturation, same row
 }
 
 /* The ctx-saturation row under the scoreboard — its own row, shown only while
    there is an occupancy figure to show (docs/dashboard.md, *Context
    saturation*). One owner for both scoreboards: the session's ctx comes from the
    `ctx` SSE event, a drilled-in agent's from its own record, and the row is
-   REPLACED (not appended) on every repaint. */
-function paintCtxRow(cx) {
+   REPLACED (not appended) on every repaint.
+
+   `aid` names a drilled-in agent. It decides BOTH extras: the compaction
+   animation is the SESSION's (compaction folds the main thread's conversation —
+   an agent has none of its own to compact, and painting the lead's rehearsal
+   over an agent's bar would attribute it to the wrong context), and the
+   drain's identity key keeps each agent's bar animating from its own last
+   width rather than from whichever bar this row showed before. */
+function paintCtxRow(cx, aid) {
   const ses = S.ses;
   if (!ses || !ses.ctxRow) return;
   ses.ctxRow.textContent = "";
-  if (cx && cx.used) ses.ctxRow.append(ctxBar(cx, true));
+  if (cx && cx.used)
+    ses.ctxRow.append(ctxBar(cx, true, {
+      comp: aid ? null : ses.compacting,
+      // S.cur, NOT a field on `ses` — the session object carries no sid, so
+      // `ses.sid` would key every session as "s:undefined" and switching
+      // sessions would drain the new bar out of the old one's width
+      key: (aid ? "a:" + aid : "s:" + S.cur),
+    }));
   ses.ctxRow.style.display = cx && cx.used ? "" : "none";
 }
 

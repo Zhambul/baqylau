@@ -341,19 +341,66 @@ function gitChip(g) {
   return s;
 }
 
+// Last width each ctx bar was PAINTED at, keyed by the bar's identity (`key`).
+// The drain animation's memory: ctxBar builds a FRESH node every repaint, and a
+// fresh node has no previous width to transition FROM — it just appears at its
+// final size, which is why .ubar's `transition: width` has never actually
+// animated anything. So the width the bar last showed is remembered here, the
+// new node is painted at THAT width, and a rAF moves it to the real one — which
+// is a real style change on a live node, so the CSS transition runs. First
+// sight of a key seeds without animating (a page load should not slide every
+// bar up from zero). Bounded: a key is one session or one agent, and the map is
+// swept when it outgrows CTXW_CAP.
+const ctxWidths = new Map();
+const CTXW_CAP = 400;
+
+function ctxWidthFor(key, pct) {
+  if (!key) return pct;                       // unkeyed caller: no animation
+  const prev = ctxWidths.get(key);
+  if (ctxWidths.size > CTXW_CAP) ctxWidths.clear();
+  ctxWidths.set(key, pct);
+  return prev === undefined ? pct : prev;
+}
+
 // context-saturation bar — the account-limit bar's (acctPill's ubar) bigger
 // sibling, one full row wherever it appears: session cards, the session
 // header (big=true), agent cards. Accent fill, amber ≥70%, red ≥90%.
-function ctxBar(cx, big) {
+//
+// `opts.comp` = the session's `compacting` record ({since, trigger}) → the bar
+// REHEARSES the collapse it is about to perform: a dim ghost holds the current
+// fill while the accent segment loops down and springs back (docs/dashboard.md,
+// *Compaction on the ctx bar*). `opts.key` identifies the bar across repaints
+// so the post-compaction drop eases instead of jumping (see ctxWidths).
+function ctxBar(cx, big, opts) {
+  opts = opts || {};
+  const comp = opts.comp;
   const bar = el("div", "cbar" + (cx.pct >= 90 ? " hot" : cx.pct >= 70 ? " warn" : "")
-                        + (big ? " big" : ""));
-  bar.append(el("span", "clabel", "ctx"));
+                        + (big ? " big" : "") + (comp ? " compacting" : ""));
+  const label = el("span", "clabel");
+  // the ⟳ is its OWN span so it can spin without taking the word with it
+  if (comp) { label.append(el("span", "cspin", "⟳"), document.createTextNode(" ")); }
+  label.append(document.createTextNode("ctx"));
+  bar.append(label);
   const track = el("span", "ctrack");
   const fill = el("span", "cfill");
-  fill.style.width = Math.max(0, Math.min(100, cx.pct)) + "%";
+  const pct = Math.max(0, Math.min(100, cx.pct));
+  // While compacting, the ghost sits at the CURRENT occupancy and the accent
+  // fill animates underneath it — so the pair reads as "this much is here, and
+  // it is being squeezed". The ghost is inside the track (same clip, same
+  // radius) and carries no text, so it needs no width bookkeeping of its own.
+  if (comp) {
+    const ghost = el("span", "cghost");
+    ghost.style.width = pct + "%";
+    track.append(ghost);
+  }
+  const from = comp ? pct : ctxWidthFor(opts.key, pct);
+  fill.style.width = from + "%";
+  if (from !== pct)
+    requestAnimationFrame(() => { fill.style.width = pct + "%"; });
   track.append(fill);
   bar.append(track, el("span", "cpct", cx.pct + "%"));
-  bar.append(el("span", "cdetail", kfmt(cx.used) + " / " + kfmt(cx.window)));
+  bar.append(el("span", "cdetail", comp
+    ? "compacting…" : kfmt(cx.used) + " / " + kfmt(cx.window)));
   return bar;
 }
 
