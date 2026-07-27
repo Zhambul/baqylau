@@ -205,6 +205,7 @@ def op_items(ops, key=""):
     prev_act = None
     prev_mid = None
     head = None                 # index of the group-less header a body op belongs under
+    mail_n, orphans = {}, 0     # per-pair arrival count, for pre-`mid` mail (below)
     for op in ops:
         if not isinstance(op, dict):
             continue
@@ -234,16 +235,26 @@ def op_items(ops, key=""):
         if op.get("mid"):
             it["mid"] = str(op["mid"])
         else:
-            # PRE-`mid` HISTORY has no message id anywhere in the op, so the best
-            # available subject key is the `<from> → <to>` PAIR off the chip: an
-            # arrival and its read notice then count as one message, which is right
-            # for every session that ever ran (a lead sends one message to a
-            # teammate and gets one back). Two messages the same way inside one
-            # collapsed run would undercount as one — the safer error here, since
-            # the alternative is the inflation the whole rule exists to remove.
+            # PRE-`mid` HISTORY has no message id anywhere in the op, so the subject
+            # is reconstructed from the `<from> → <to>` PAIR off the chip plus a
+            # per-pair COUNT of the arrivals seen so far: `● X → Y` opens message n,
+            # and the `◉ read · X → Y` that follows belongs to that same n. The pair
+            # alone is not enough — a teammate that reports twice would have both
+            # messages collapse into one (the reviewed session has exactly that), so
+            # the count is what keeps two messages two. Mail is chronological, so a
+            # read always trails its arrival; one whose arrival fell outside this
+            # batch is keyed apart (negative n) rather than merged into whichever
+            # arrival happens to come later.
             got = actclass.mail_pair(op)
             if got:
-                it["mid"] = "pair:%s → %s" % got[:2]
+                frm, to, read = got
+                pair = "%s → %s" % (frm, to)
+                if not read:
+                    mail_n[pair] = mail_n.get(pair, 0) + 1
+                elif pair not in mail_n:
+                    orphans -= 1
+                    mail_n[pair] = orphans
+                it["mid"] = "pair:%s#%d" % (pair, mail_n[pair])
         if op.get("note") or actclass.legacy_note(op):
             it["note"] = 1          # this header IS the whole line (see op_html)
         # The ACTIVITY CLASS the view modes collapse a run of items on

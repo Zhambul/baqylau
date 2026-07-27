@@ -755,9 +755,19 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
         ["body", "note", "note"]
     assert "check the diff" in legacy[0]["html"]
     assert "Message lead → rev-ui</span>" in legacy[1]["html"]
-    # all three rows are ONE message: with no msg_id in pre-`mid` history, the
-    # `<from> → <to>` pair is the subject key, so the summary counts one
-    assert [i.get("mid") for i in legacy] == ["pair:lead → rev-ui"] * 3
+    # all three rows are ONE message: with no msg_id in pre-`mid` history the subject
+    # is the `<from> → <to>` pair plus a per-pair arrival count, so the summary counts
+    # one
+    assert [i.get("mid") for i in legacy] == ["pair:lead → rev-ui#1"] * 3
+    # …and the COUNT is what keeps two messages the same way apart (a teammate that
+    # reports twice: the pair alone collapsed both into one)
+    twice = opshtml.op_items([old_new, old_body, old_read, old_new, old_read], "sid")
+    assert len({i["mid"] for i in twice}) == 2
+    # a read notice whose arrival is outside this batch is its own message, and can
+    # never be merged into an arrival that only comes later
+    orphan = opshtml.op_items([old_read, old_new, old_body], "sid")
+    assert orphan[0]["mid"] == "pair:lead → rev-ui#-1"
+    assert len({i["mid"] for i in orphan}) == 2
     # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
     # the classifier — mail wears the semantic green, a monitor its slot palette)
     from core import slots
