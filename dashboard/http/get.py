@@ -19,7 +19,8 @@ from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_
 from dashboard.read.mirror import (history, merged_backlog, note_payload,
                                    ops_payload, view_payload, HISTORY_BLOCKS,
                                    TAIL_BLOCKS)
-from dashboard.read.session import session_payload
+from dashboard.read.session import (jobs_payload, monitors_payload,
+                                    session_payload)
 from dashboard.http.base import _qint, _qstr, valid_sid
 
 A = load_audit()
@@ -277,15 +278,13 @@ class _GetMixin:
 
     def get_monitors(self, sid, url):
         """Monitors of the session — the LEAD's own by default, one agent's with
-        `?agent=`. Every row is attributed (sessionapi.nested_owners), so the
-        filter is a scope check, not a guess."""
-        agent = _qstr(url, "agent")
-        rows = plugins.monitors(sid) or []
-        return self._json({"monitors": [m for m in rows
-                                        if (m.get("agent_id") or "") == agent]})
+        `?agent=` (read.session.monitors_payload, which also stamps the rendered
+        command each row shows)."""
+        return self._json({"monitors": monitors_payload(sid, _qstr(url, "agent"))})
 
     def get_jobs(self, sid, url):
-        return self._json({"jobs": API.jobs(sid, _qstr(url, "agent"))})
+        """…and its background jobs, the same shape through the same door."""
+        return self._json({"jobs": jobs_payload(sid, _qstr(url, "agent"))})
 
     def get_memory(self, sid, url):
         return self._json({"memory": API.memory(sid)})

@@ -230,6 +230,9 @@ def test_agent_scope_survives_what_the_page_repaints(dash):
     assert chrome.count('ses.body.textContent = ""') == 1
     assert "S.ses.agentFocus && S.ses.projEl" in session
     assert "j.group || j.task" in chrome
+    # …and the two secondary-tab drill-downs render their identity panel through
+    # ONE builder, so "a monitor and a job look the same" is structural
+    assert chrome.count("detailInfo(") == 3          # the builder + its two callers
 
 
 def test_no_dead_page_functions(dash):
@@ -2591,6 +2594,45 @@ def test_jobs_and_monitors_are_lead_only_until_scoped(dash, tmp_path):
     assert sub[0]["command"] == "echo sub" and sub[0]["group"] == "toolu_9"
     # the badge count follows the same lead-only rule
     assert _get_json(dash + "/api/session/scope2")["job_count"] == 1
+
+
+def test_jobs_and_monitors_serve_one_rendered_command_block(dash, tmp_path):
+    """A monitor and a background job are the same kind of thing — a long-running
+    command with a lifecycle — so both tabs serve their command the SAME way: as
+    the highlighted, pretty-printed block the mirror paints it as
+    (opshtml.cmd_html). Neither used to: the raw one-liner went out as text and
+    each tab hand-rendered it into a bare <pre>, so one command looked like two
+    different things depending on which tab you met it in.
+
+    The `command` field rides along unchanged for the cards' titles and the
+    crumb, which read it as text."""
+    A.session_start({"session_id": "cmdfmt", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("cmdfmt")
+    cmd = "cd /w && git log --oneline -3 && echo done"
+    O.emit(log, O.code(cmd, g="btask-c"))
+    A.stream_end(A.stream_start(log, "bg", task_id="btask-c"), "writer-gone")
+    # an AGENT's job takes its command from the launch HOOK instead, where it is
+    # still the dense one-liner nothing has reflowed
+    A.stream_end(A.stream_start(log, "bg", agent_id="agC", task_id="btask-s"),
+                 "writer-gone")
+    A.hook_event({"session_id": "cmdfmt", "hook_event_name": "PostToolUse",
+                  "tool_name": "Bash", "agent_id": "agC",
+                  "tool_use_id": "toolu_c", "tool_input": {"command": cmd},
+                  "tool_response": {"backgroundTaskId": "btask-s"}},
+                 handler="claude-cmd-fmt.py")
+    for url in ("/api/session/cmdfmt/jobs", "/api/session/cmdfmt/jobs?agent=agC"):
+        job = _get_json(dash + url)["jobs"][0]
+        html = job["cmd_html"]
+        assert 'class="oc"' in html                   # the mirror's own block
+        assert "<span style=\"color:" in html         # …highlighted
+        # …and REFLOWED, whichever source the command came from: the one-liner
+        # breaks after each top-level `&&`. That is core/codefmt.format_code —
+        # the same pass core.ops.code() runs for a mirror block, reached here
+        # rather than reimplemented (which is why an ops-sourced command arrives
+        # already broken and this is idempotent for it).
+        assert html.count("\n") >= 2
+    raw = _get_json(dash + "/api/session/cmdfmt/jobs?agent=agC")["jobs"][0]
+    assert raw["command"] == cmd                      # the text field, unchanged
 
 
 def test_hidden_agent_husk_rows_are_filtered(dash):

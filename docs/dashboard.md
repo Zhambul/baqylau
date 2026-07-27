@@ -5099,6 +5099,35 @@ MONITOR ones (a `<event>` tag, or a `Monitor …` summary) — otherwise a bg
 completion would show as a phantom monitor here and mislabel the activity
 timeline. Background jobs get their own tab instead (below).
 
+### One command block, both tabs
+
+A monitor and a background job are the same kind of thing — a long-running
+command with a lifecycle — and their drill-downs now say so structurally. The
+**identity panel** (kind pill + status → description → command → meta grid) is
+one builder, `detailInfo`, with only the pill and the meta rows passed in; each
+detail function adds just its own payload section below (a monitor's event rows,
+a job's output box). They were two hand-written panels that had drifted into
+showing the same facts in different shapes.
+
+The **command** in both is `cmd_html`, served pre-rendered: the identical
+highlighted `<pre class="oc">` block the mirror paints, produced by
+`opshtml.cmd_html` → `codefmt.format_code` + `_code_block`. Two things follow.
+Syntax highlighting needs a lexer, which the page has no way to run — so it has
+to be server-side, and doing it anywhere but the mirror's own owner would be a
+second implementation of "how a command looks". And the **pretty-print** comes
+free with it: `format_code` breaks a dense one-liner after top-level `&&` / `||`
+/ `|`, turns `;` into a line break and reformats embedded python in its own
+language. That pass already ran for every mirror block (`core.ops.code()` does it
+at op creation — width-independent work belongs to the producer); these two tabs
+simply weren't reaching it, so a 200-character one-liner sat as one unbroken grey
+line in the drill-down while the same command three tabs over was coloured across
+six readable lines. It is idempotent, which matters because a job's command is
+sometimes read back out of an already-formatted `code` op and sometimes raw from
+the launch hook.
+
+The raw `command` string still rides along beside it: the cards' titles and the
+breadcrumb use it as single-line text.
+
 ## Jobs tab
 
 A session-view tab **`jobs`** (between `monitors` and `errors`) lists the

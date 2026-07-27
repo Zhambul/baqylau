@@ -905,29 +905,58 @@ function sectionCrumbs(kind, sid, item) {
   return nav;
 }
 
-function renderMonitorDetail(container, m) {
-  const [sttxt, stcls] = monitorStatus(m);
+/* The IDENTITY panel of a monitor / background-job drill-down: kind pill +
+   status, the description, the COMMAND, then the per-kind meta grid.
+
+   ONE builder, because the two tabs are one machine (SECTIONS) showing one kind
+   of thing — a long-running command with a lifecycle — and the two hand-written
+   panels had drifted into presenting the same facts differently ("they kinda
+   look totally different … make the job the same"). `pill`/`rows` are all that
+   genuinely differs. The COMMAND is the same block in both, and it is now the
+   same block the MIRROR paints: highlighted and pretty-printed server-side
+   (`cmd_html` — see opshtml.cmd_html for why the reflow happens there and not
+   at op creation). `command` still rides along as text for the card titles and
+   the crumb, which must stay single-line. */
+function detailInfo(item, pill, status, rows) {
+  const [sttxt, stcls] = status;
   const info = el("div", "mdetail");
   const h = el("div", "mdhead");
-  h.append(el("span", "k k-monitor", "◉ monitor"), el("span", stcls, sttxt));
+  h.append(el("span", "k " + pill[0], pill[1]), el("span", stcls, sttxt));
   info.append(h);
-  if (m.description) info.append(el("div", "mdesc", m.description));
-  if (m.command) {
-    info.append(el("div", "lbl", m.source === "ws" ? "websocket" : "command"));
-    info.append(pre(m.command));
+  if (item.description) info.append(el("div", "mdesc", item.description));
+  info.append(el("div", "lbl", item.source === "ws" ? "websocket" : "command"));
+  if (item.cmd_html && item.source !== "ws") {
+    // server-rendered (escaped at its leaf, like every other served block)
+    const box = el("div", "jcmd");
+    box.innerHTML = item.cmd_html;
+    info.append(box);
+  } else if (item.command) {
+    info.append(pre(item.command));          // a ws URL / a pre-field row
+  } else {
+    // the field is shown even when EMPTY: "no command recorded" is a fact about
+    // the job (a Ctrl+B conversion paints its command in the foreground group),
+    // and a section that silently disappears reads as a different layout
+    info.append(el("div", "empty", "(command not recorded)"));
   }
   const grid = el("div", "mmeta");
   const add = metaAdder(grid);
-  add("task", m.task);
-  add("lifetime", m.persistent ? "persistent"
-    : (m.timeout_ms ? "≤" + dur(m.timeout_ms / 1000) : "—"));
-  add("events", m.event_count);
-  if (m.started_at) add("started", new Date(m.started_at * 1000).toLocaleString());
-  if (m.ended_at) add("ended", new Date(m.ended_at * 1000).toLocaleString());
-  if (m.started_at && m.ended_at) add("duration", dur(m.ended_at - m.started_at));
-  else if (m.started_at && m.live) add("running for", ago(m.started_at));
-  add("end reason", m.end_reason);
+  rows(add);
   info.append(grid);
+  return info;
+}
+
+function renderMonitorDetail(container, m) {
+  const info = detailInfo(m, ["k-monitor", "◉ monitor"], monitorStatus(m), (add) => {
+    add("task", m.task);
+    add("lifetime", m.persistent ? "persistent"
+      : (m.timeout_ms ? "≤" + dur(m.timeout_ms / 1000) : "—"));
+    add("events", m.event_count);
+    if (m.started_at) add("started", new Date(m.started_at * 1000).toLocaleString());
+    if (m.ended_at) add("ended", new Date(m.ended_at * 1000).toLocaleString());
+    if (m.started_at && m.ended_at) add("duration", dur(m.ended_at - m.started_at));
+    else if (m.started_at && m.live) add("running for", ago(m.started_at));
+    add("end reason", m.end_reason);
+  });
   container.append(info);
 
   const evwrap = el("div", "mevents");
@@ -1124,25 +1153,17 @@ function noteCrumbs(trail) {
 }
 
 function renderJobDetail(container, j) {
-  const [sttxt, stcls] = jobStatus(j);
-  const info = el("div", "mdetail");
-  const h = el("div", "mdhead");
-  h.append(el("span", "k k-job", "◷ background"), el("span", stcls, sttxt));
-  info.append(h);
-  if (j.command) {
-    info.append(el("div", "lbl", "command"));
-    info.append(pre(j.command));
-  }
-  const grid = el("div", "mmeta");
-  const add = metaAdder(grid);
-  add("task", j.task);
-  add("lines", j.lines);
-  if (j.started_at) add("started", new Date(j.started_at * 1000).toLocaleString());
-  if (j.ended_at) add("ended", new Date(j.ended_at * 1000).toLocaleString());
-  if (j.started_at && j.ended_at) add("duration", dur(j.ended_at - j.started_at));
-  else if (j.started_at && j.live) add("running for", ago(j.started_at));
-  add("end reason", j.end_reason);
-  info.append(grid);
+  // …the SAME identity panel a monitor gets (detailInfo): same pill row, same
+  // command block, same meta grid — only the rows and the payload below differ.
+  const info = detailInfo(j, ["k-job", "◷ background"], jobStatus(j), (add) => {
+    add("task", j.task);
+    add("lines", j.lines);
+    if (j.started_at) add("started", new Date(j.started_at * 1000).toLocaleString());
+    if (j.ended_at) add("ended", new Date(j.ended_at * 1000).toLocaleString());
+    if (j.started_at && j.ended_at) add("duration", dur(j.ended_at - j.started_at));
+    else if (j.started_at && j.live) add("running for", ago(j.started_at));
+    add("end reason", j.end_reason);
+  });
   container.append(info);
 
   // Output lives in the ops, not the transcript — fetch it from the copy

@@ -153,6 +153,38 @@ BADGES = (
 )
 
 
+def _with_cmd_html(rows):
+    """Stamp each secondary-tab row with `cmd_html` — its command as the SAME
+    highlighted, pretty-printed block the mirror paints (opshtml.cmd_html).
+
+    Both list kinds go through here because they are one kind of thing: a
+    long-running command with a lifecycle. They were two hand-written detail
+    panels showing the same facts in different shapes, and neither highlighted
+    anything — the raw one-liner as a single grey run, three tabs away from the
+    mirror showing that exact command coloured and broken across lines. `command`
+    is left ALONE beside it: the cards' titles and the crumb use it as text, and
+    a reflowed copy would put a line break in a card title."""
+    for r in rows:
+        if isinstance(r, dict) and r.get("command"):
+            r["cmd_html"] = opshtml.cmd_html(r["command"])
+    return rows
+
+
+def jobs_payload(sid, agent=""):
+    """The background-jobs tab's rows — the LEAD's own, or one agent's."""
+    return _with_cmd_html(API.jobs(sid, agent))
+
+
+def monitors_payload(sid, agent=""):
+    """The monitors tab's rows, filtered to a scope. Every row is ATTRIBUTED
+    (sessionapi.nested_owners), so the filter is a scope check, not a guess —
+    and the filtering lives here rather than in the handler, beside the jobs
+    twin it has to stay consistent with."""
+    rows = [m for m in (plugins.monitors(sid) or [])
+            if (m.get("agent_id") or "") == agent]
+    return _with_cmd_html(rows)
+
+
 def badge_count(badge, sid, cwd, agent=""):
     """One badge's number for a view — THE one place a badge meets a scope, so
     the overview payload and the SSE badge channel cannot answer differently for

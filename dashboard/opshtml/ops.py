@@ -65,6 +65,31 @@ def _code_block(text, ind="  "):
     return "<pre class=\"oc\">%s</pre>" % ansi_html(painted)
 
 
+def cmd_html(command):
+    """A RAW command string -> the same highlighted `<pre class="oc">` block the
+    mirror paints it as. '' for an empty command.
+
+    The difference from `_code_block` is the PRETTY-PRINT: a `code` op was
+    already reflowed by `core.ops.code()` at op-creation time (width-independent
+    work belongs to the producer), so `_code_block` must not redo it. The
+    monitors and jobs tabs read their command from a different place — the ops
+    scan / the launch hook payload — where it is still the dense one-liner the
+    agent typed, so they run `codefmt.format_code` here and get the identical
+    result: breaks after top-level `&&`/`||`/`|`, `;` as a line break, embedded
+    python reformatted in its own language.
+
+    Which is the answer to "can this be generalised": it already is, and these
+    two tabs simply weren't reaching it — a 200-character one-liner rendered as
+    one unbroken grey line in the drill-down while the mirror three tabs over
+    showed the same command highlighted across six readable lines."""
+    if not (command or "").strip():
+        return ""
+    try:
+        return _code_block(CF.format_code(command))
+    except Exception:
+        return _code_block(command)     # unformatted still beats unhighlighted
+
+
 def _cq_pieces(op, key, text, role):
     """The two PIECES of a quiet command header (actclass.cmd_note) — its dim text span,
     with the note DOT when this op opens the block, and its ⧉ copy links. Kept apart

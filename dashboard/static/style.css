@@ -1758,6 +1758,16 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
 .mdetail .mdesc { color: var(--text); font-size: 13px; margin-bottom: 10px; }
 .mdetail .lbl { color: var(--dim); font-size: 10px; text-transform: uppercase;
   letter-spacing: .08em; margin: 8px 0 3px; }
+/* the COMMAND block, shared by the monitor and background-job drill-downs
+   (`detailInfo`): the mirror's own highlighted `.oc` on the inset the rest of
+   the page uses for command output, so one command reads the same wherever you
+   meet it. Wrapping is the page's (the server renders unwrapped, `CODE_W`), and
+   a reflowed one-liner keeps its own newlines. */
+.mdetail .jcmd { background: color-mix(in srgb, var(--bg) 88%, black);
+  border-radius: var(--r); padding: 7px 4px; margin: 0; overflow-x: auto; }
+.mdetail .jcmd .oc { margin: 0; white-space: pre-wrap; word-break: break-word;
+  font: 12px/1.55 var(--mono); }
+.mdetail .empty { padding: 4px 0; }
 .mmeta { display: grid; grid-template-columns: max-content 1fr; gap: 3px 14px;
   margin-top: 10px; font: 11.5px/1.5 var(--mono); }
 .mmeta .mk { color: var(--dim); text-transform: uppercase; letter-spacing: .06em;
@@ -1773,9 +1783,13 @@ body.attn-on .rail { top: calc(101px + var(--sat)); max-height: calc(100vh - 114
 .mev.mev-status { border-left-color: color-mix(in srgb, var(--done) 60%, transparent);
   background: color-mix(in srgb, var(--done) 8%, transparent); }
 .mev.mev-status .mtxt { color: var(--text-soft); }
-/* background-job drill-down: the output box (from the ops, via /copy) */
-.joutput { max-height: 60vh; overflow: auto; }
-.joutput pre { margin: 0; }
+/* background-job drill-down: the output box (from the ops, via /copy) — the same
+   inset panel the command block above it sits on, so the two sections of a job's
+   detail read as the pair the monitor's command + events do */
+.joutput { max-height: 60vh; overflow: auto;
+  background: color-mix(in srgb, var(--bg) 88%, black);
+  border-radius: var(--r); padding: 7px 10px; }
+.joutput pre { margin: 0; white-space: pre-wrap; word-break: break-word; }
 .tl { display: flex; flex-direction: column; gap: 7px; }
 .tlhead {
   display: flex; gap: 16px; flex-wrap: wrap; align-items: baseline;
