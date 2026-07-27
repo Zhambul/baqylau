@@ -288,6 +288,19 @@ def accounts_payload():
     return out
 
 
+def accounts_key(payload):
+    """The accounts strip's change-detection key: the payload minus each row's
+    `sched_score`. That score is remaining%/hours-to-reset — it moves
+    continuously with the clock, so a full-payload diff would push an
+    `accounts` SSE event on EVERY tick of an idle dashboard (row_key's
+    paused-blind diff, applied to the strip). A pushed payload still carries
+    the exact score; only the DIFF is score-blind — and every other field is
+    step-valued (integer percentages, reset epochs, booleans), moving only
+    when a snapshot, stamp, or window boundary actually moves."""
+    return json.dumps([{k: v for k, v in a.items() if k != "sched_score"}
+                       for a in payload], default=str, sort_keys=True)
+
+
 # The stats aggregate's TTL memo (read/cache.ttl_cached, keyed by the single
 # key "" — the payload takes no arguments). A whole-corpus scan has no cheap
 # fingerprint, so bounded staleness is the only freshness rule available; the

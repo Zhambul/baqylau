@@ -44,10 +44,12 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 
 from core import sessionapi as API
@@ -69,10 +71,15 @@ DEFAULT_EXPIRES_S = 8 * 3600                 # OAuth access-token life when unst
 
 TTL_S = 60             # cache the whole fan-out — the endpoint/keychain work runs
                        # at most once a minute however often the page polls
+FETCH_WORKERS = 5      # per-service /usage GETs in flight at once — independent
+                       # ~0.5s HTTPS round-trips; five sequential ones measured
+                       # ~2.7s, the bulk of the fan-out's wall time
 RESET_TOL_S = 600      # window-reset epochs count as "the same account" within this
 SKEW_S = 120           # treat a token expiring within this as already expired
 
 _CACHE = {"ts": 0.0, "val": {}}
+_REFRESH_LOCK = threading.Lock()   # guards _REFRESHING (single-flight, below)
+_REFRESHING = False                # a background recompute is in flight
 _AUDITED = set()   # funcs already error-audited this process (flood guard, below)
 
 
@@ -292,10 +299,12 @@ def model_windows(usage_json):
     return out
 
 
-def _slug_for(usage_json, cache=None):
+def _slug_for(usage_json, per=None):
     """Map the endpoint account to a switcher slug by matching its 7-DAY reset
     epoch against each slug's freshest captured usage (core.sessionapi.
-    account_usage — the tokenless status-line snapshots). The 7d epoch is
+    account_usage — the tokenless status-line snapshots; `per` is that mapping,
+    pre-resolved by the fan-out so the pool threads never touch the shared
+    db_cached memo, or None to resolve here). The 7d epoch is
     stable for the whole week, so a unique match attaches even when no session
     has run recently; the 5h epoch is only a TIE-BREAKER when two accounts
     share a 7d boundary (a single-signal match mis-mapped once, 2026-07-19).
@@ -308,8 +317,10 @@ def _slug_for(usage_json, cache=None):
     e7 = _iso_epoch(((usage_json.get("seven_day") or {}).get("resets_at")))
     if e7 is None:
         return None
+    if per is None:
+        per = API.account_usage() or {}
     cands = []
-    for slug, ent in (API.account_usage(cache=cache) or {}).items():
+    for slug, ent in per.items():
         cu = ent.get("usage") or {}
         c7 = cu.get("seven_day_reset")
         if isinstance(c7, (int, float)) and abs(c7 - e7) < RESET_TOL_S:
@@ -326,32 +337,106 @@ def _slug_for(usage_json, cache=None):
     return None
 
 
+def _service_windows(service, per):
+    """One login service's (slug, model-window kv), or None — token → /usage
+    GET → shape → slug-map. Runs on the fan-out pool; failures degrade to None
+    per the module's fail-silent contract (expected transients silently,
+    anything else audited once per process)."""
+    try:
+        token = _access_token(service)
+        if not token:
+            return None
+        usage = _get(USAGE_URL, token)
+        mw = model_windows(usage)
+        if not mw:
+            return None
+        slug = _slug_for(usage, per)
+        if slug is None:
+            return None
+        return slug, mw
+    except Exception as e:
+        if not _expected_net_error(e):   # offline / dead endpoint is expected
+            _audit_once("model_usage.windows_by_slug",
+                        {"service": service, "err": str(e)})
+        return None
+
+
+def _recompute(cache):
+    """The full fan-out, PARALLEL across login services — each is an
+    independent ~0.5s HTTPS round-trip and five sequential ones measured ~2.7s
+    (the bulk of the "accounts strip takes seconds to appear" reload stall,
+    2026-07-27). account_usage is resolved ONCE up front: it is the same
+    answer for every service, and the shared db_cached memo dict must not be
+    hit from the pool threads. ex.map preserves service order, so slug
+    collisions merge exactly as the sequential loop did."""
+    per = API.account_usage(cache=cache) or {}
+    services = _login_services()
+    out = {}
+    if not services:
+        return out
+    with ThreadPoolExecutor(max_workers=min(FETCH_WORKERS, len(services))) as ex:
+        for got in ex.map(lambda svc: _service_windows(svc, per), services):
+            if got:
+                slug, mw = got
+                out.setdefault(slug, {}).update(mw)
+    return out
+
+
+def _store(val):
+    """Publish a recompute result: the TTL clock starts when the value LANDS
+    (a total failure stores {} like the old design did, so staleness stays
+    bounded — one TTL plus one refresh, never 'forever')."""
+    _CACHE.update(ts=time.time(), val=val)
+
+
+def _refresh_async(cache):
+    """Kick the single-flight background recompute — at most one in flight
+    however many request/SSE threads see the TTL expire on the same beat. An
+    in-process daemon thread, not a detached process (no stream rows): its
+    per-service failures are swallowed-and-audited inside _service_windows,
+    and the belt below catches anything above them."""
+    global _REFRESHING
+    with _REFRESH_LOCK:
+        if _REFRESHING:
+            return
+        _REFRESHING = True
+
+    def work():
+        global _REFRESHING
+        try:
+            _store(_recompute(cache))
+        except Exception as e:           # nothing below should raise; belt
+            _audit_once("model_usage._refresh_async", {"err": str(e)})
+        finally:
+            with _REFRESH_LOCK:
+                _REFRESHING = False
+
+    threading.Thread(target=work, name="model-usage-refresh",
+                     daemon=True).start()
+
+
 def windows_by_slug(cache=None):
-    """{slug: {model-window kv}} across every readable OAuth login, TTL-cached.
-    Fail-silent + audited per service — one dead credential (or the whole
-    endpoint) never blocks the rest or the dashboard. {} when disabled."""
+    """{slug: {model-window kv}} across every readable OAuth login, TTL-cached
+    STALE-WHILE-REVALIDATE: within TTL_S the cached value; past it the
+    PREVIOUS value immediately while one background thread recomputes
+    (_refresh_async). Serving the old snapshot is correct by construction —
+    the value is a ≤TTL_S-stale snapshot by design, this only moves the
+    refresh off the caller's thread (the synchronous expiry used to stall
+    every dashboard reload for the whole fan-out, because the page's poll
+    interval equals TTL_S so a reload almost always landed on an expired
+    cache). Only the FIRST call of a process (no previous value) computes
+    synchronously — ~1s with the parallel fan-out. Fail-silent + audited per
+    service — one dead credential (or the whole endpoint) never blocks the
+    rest or the dashboard. {} when disabled."""
     if not enabled():
         return {}
-    now = time.time()
-    if now - _CACHE["ts"] < TTL_S:
+    if time.time() - _CACHE["ts"] < TTL_S:
         return _CACHE["val"]
-    out = {}
-    for service in _login_services():
+    if not _CACHE["ts"]:                 # first ever — nothing to serve stale
         try:
-            token = _access_token(service)
-            if not token:
-                continue
-            usage = _get(USAGE_URL, token)
-            mw = model_windows(usage)
-            if not mw:
-                continue
-            slug = _slug_for(usage, cache)
-            if slug is None:
-                continue
-            out.setdefault(slug, {}).update(mw)
-        except Exception as e:
-            if not _expected_net_error(e):   # offline / dead endpoint is expected
-                _audit_once("model_usage.windows_by_slug",
-                            {"service": service, "err": str(e)})
-    _CACHE.update(ts=now, val=out)
-    return out
+            _store(_recompute(cache))
+        except Exception as e:           # same belt as the async path
+            _audit_once("model_usage.windows_by_slug", {"err": str(e)})
+        return _CACHE["val"]
+    _refresh_async(cache)
+    return _CACHE["val"]

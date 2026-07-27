@@ -5,12 +5,13 @@
 # monkeypatching only its return (the mapping arithmetic is what's under test).
 # No network, no keychain — every external call is stubbed.
 import sys
+import threading
 import time
 import urllib.error
 
 import pytest
 
-from conftest import REPO
+from conftest import REPO, wait_until
 
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
@@ -24,8 +25,10 @@ def _fresh(monkeypatch):
     cache before each test so cached values never leak across cases."""
     monkeypatch.setattr(MU, "enabled", lambda: True)
     MU._CACHE.update(ts=0.0, val={})
+    MU._REFRESHING = False
     yield
     MU._CACHE.update(ts=0.0, val={})
+    MU._REFRESHING = False
 
 
 def _usage(five_reset, seven_reset, fable=91, fable_reset="2026-07-21T16:59:59+00:00"):
@@ -305,6 +308,69 @@ def test_windows_by_slug_unexpected_error_audited(monkeypatch):
                         lambda url, tok: (_ for _ in ()).throw(KeyError("shape")))
     assert MU.windows_by_slug() == {}
     assert audited == ["model_usage.windows_by_slug"]
+
+
+def test_windows_by_slug_stale_serves_previous_and_refreshes_behind(monkeypatch):
+    """Past the TTL a caller gets the PREVIOUS value back IMMEDIATELY while ONE
+    background thread recomputes (stale-while-revalidate). The synchronous
+    expiry used to stall every dashboard reload for the whole OAuth fan-out
+    (~3-4s measured, 2026-07-27) — the page's poll interval equals TTL_S, so a
+    reload almost always landed on an expired cache. Repeated stale calls stay
+    single-flight, and the fresh value is served once it lands."""
+    monkeypatch.setattr(MU, "_login_services", lambda: ["svc"])
+    monkeypatch.setattr(MU, "_access_token", lambda svc: "T")
+    monkeypatch.setattr(MU.API, "account_usage", lambda limit=50, cache=None: {
+        "c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}}})
+    pct = {"v": 10}
+    gate = threading.Event()
+    calls = {"n": 0}
+    def get(url, tok):
+        calls["n"] += 1
+        if calls["n"] > 1:
+            assert gate.wait(5)          # the refresh runs OFF the caller's thread
+        return _usage(2000, 9000, fable=pct["v"])
+    monkeypatch.setattr(MU, "_get", get)
+    assert MU.windows_by_slug()["c1"]["seven_day_fable"] == 10   # first ever: sync
+    pct["v"] = 99
+    MU._CACHE["ts"] = time.time() - MU.TTL_S - 1                 # expire the TTL
+    # The stale path returns the OLD value WITHOUT waiting on the gated _get —
+    # the very fact these return while the gate is closed proves the refresh
+    # runs elsewhere; and however often the expired path is hit, only ONE
+    # refresh is in flight (single-flight — calls stays at 2 below).
+    for _ in range(4):
+        assert MU.windows_by_slug()["c1"]["seven_day_fable"] == 10
+    gate.set()
+    wait_until(lambda: MU._CACHE["val"].get("c1", {}).get("seven_day_fable") == 99,
+               desc="background refresh lands")
+    assert MU.windows_by_slug()["c1"]["seven_day_fable"] == 99
+    assert calls["n"] == 2               # the sync first call + ONE refresh
+
+
+def test_windows_by_slug_fans_out_in_parallel(monkeypatch):
+    """The per-service /usage GETs run CONCURRENTLY — a Barrier both workers
+    must reach; a sequential fan-out would never release it (five sequential
+    ~0.5s round-trips were the bulk of the reload stall). account_usage is
+    resolved ONCE for the whole fan-out, not once per service — the shared
+    db_cached memo dict must stay off the pool threads."""
+    barrier = threading.Barrier(2, timeout=5)
+    per_calls = {"n": 0}
+    def usage_map(limit=50, cache=None):
+        per_calls["n"] += 1
+        return {"c1": {"usage": {"five_hour_reset": 2000, "seven_day_reset": 9000}},
+                "c2": {"usage": {"five_hour_reset": 1000, "seven_day_reset": 8000}}}
+    monkeypatch.setattr(MU.API, "account_usage", usage_map)
+    monkeypatch.setattr(MU, "_login_services", lambda: ["p", "w"])
+    monkeypatch.setattr(MU, "_access_token", lambda svc: "T-" + svc)
+    responses = {"T-p": _usage(2000, 9000, fable=91),
+                 "T-w": _usage(1000, 8000, fable=100)}
+    def get(url, tok):
+        barrier.wait()                   # deadlocks unless both are in flight
+        return responses[tok]
+    monkeypatch.setattr(MU, "_get", get)
+    out = MU.windows_by_slug()
+    assert out["c1"]["seven_day_fable"] == 91
+    assert out["c2"]["seven_day_fable"] == 100
+    assert per_calls["n"] == 1           # one resolve, shared by both workers
 
 
 def test_windows_by_slug_cached(monkeypatch):

@@ -456,7 +456,7 @@ reflow for free and keeps the no-build rule.
 | `/api/session/<sid>/activity` | main-thread timeline (`plugins.activity(sid)`) |
 | `/api/session/<sid>/agent/<aid>` | one agent's timeline (carries a `pos` byte cursor for the live SSE) |
 | `/api/session/<sid>/errors` | swallowed-exception rows |
-| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `sched_score` (weekly-quota perishability) and `sched_ok` (5h safety gate) for the new-session default-account picker, plus the `five_hour_eff` figure `sched_ok` itself gates on (*Default account*), plus `limit_hit` (active rate-limit stamp else null) and `logged_out`/`logged_out_msg` (the account's login was revoked — *Logged-out accounts*); backs the new-session picker and the top usage strip |
+| `/api/accounts` | `[{slug, label, alias, usage}, …]` — the launchable subscription accounts (`plugins.accounts`) plus each one's freshest captured usage: every status-line rate-limit window (the 5h/7d pair, aggregated across sessions, served EFFECTIVE — a rolled-over window reads 0 with no reset) PLUS per-model weekly windows fetched from the OAuth `/usage` endpoint and merged in (`plugins.model_windows`, *Per-model usage bars*); each row also carries `sched_score` (weekly-quota perishability) and `sched_ok` (5h safety gate) for the new-session default-account picker, plus the `five_hour_eff` figure `sched_ok` itself gates on (*Default account*), plus `limit_hit` (active rate-limit stamp else null) and `logged_out`/`logged_out_msg` (the account's login was revoked — *Logged-out accounts*); backs the new-session picker and the top usage strip; never blocks on the OAuth fetch — past its TTL the model-window cache serves the previous value while one background thread refreshes (*Per-model usage bars*), and changes reach open pages as the global stream's `accounts` event |
 | `/api/stats` | the **Stats / Insights** page (`stats_payload` over `sessionapi.activity_stats`): `{total_sessions, daily:[[day,n]], punch:[[dow,hour,n]], windows:{7d,30d,all}, projects:[…]}` — cross-session aggregates for the contribution heatmap, day×hour punch card, per-window Pulse summary, and per-project cards; server-computed + memo-cached (`STATS_TTL_S`), read-only (no audit rows) (*Stats / Insights* below) |
 | `/api/commands?cwd=<dir>` | the "/" menus: `[{name, desc, src}, …]` — CLI built-ins + the directory's discovered `.claude` commands/skills (`plugins.slash_commands`); cwd-keyed, not sid-keyed — the new-session form completes for a directory with no session yet (non-directory → built-ins + user-level) |
 | `/api/resumable?cwd=<dir>&limit=25&q=<text>` | the new-session **resume picker**'s rows (`resumable_payload`): the directory's sessions (canon-cwd-scoped, newest-first, `limit` clamped to `RESUMABLE_MAX`), each `{sid, title, last_active, live, model, effort, account{slug,label}}` — enough to reuse a session's model/effort on resume (*Resume picker* below); `q` filters by title+sid across the directory's WHOLE history (discovery scans up to `RESUMABLE_SCAN`, not just the newest — the client can't); blank/unknown cwd → `[]` |
@@ -479,7 +479,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
-| `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below) + `notify` toasts |
+| `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M` | per-session SSE: `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors` | the session's Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) |
 | `GET /api/session/<sid>/jobs` | the session's background Bash jobs (command + lifecycle state, merging audit streams + ops) for the jobs tab (*Jobs tab*); output via the `/copy/<task>/out` endpoint |
@@ -3668,23 +3668,49 @@ Design details (docs/relimit.md borrows the same account vocabulary):
   one status-line capture per account per week now suffices. No match ⇒ the
   bar just doesn't attach (audited once per process,
   `model_usage._slug_for`).
-- **Refresh ownership** (avoids two writers fighting over one rotating refresh
-  token). The actively-used login (plain `claude` — e.g. the personal account)
-  is kept fresh by Claude Code itself, so baqylau only READS its keychain token.
-  A **switcher-only** account's OAuth login is never exercised by Claude Code
-  (it runs on the setup-token), so its access token expires in ~8h with nobody
-  to refresh it — baqylau becomes its SOLE refresher (`grant_type=refresh_token`
-  at `platform.claude.com/v1/oauth/token`), persisting the rotation in its OWN
-  keychain entry (`baqylau-model-usage: <service>`), never overwriting Claude
-  Code's copy. The per-cycle pick is just "whichever copy is fresher", so the
-  personal path never self-refreshes and the work path does. **Coverage is
-  therefore limited to accounts with a scoped keychain login** — a
-  switcher-only account gets a bar only after one interactive
-  `claude auth login` (its refresh token then lets baqylau keep it alive).
+- **Refresh ownership** (one rotating credential, cooperative writers).
+  Anthropic ROTATES the refresh token on every refresh and revokes the whole
+  token family when a superseded refresh token is replayed (reuse detection).
+  The original design — "never overwrite Claude Code's copy; persist rotations
+  only in baqylau's own `baqylau-model-usage: <service>` mirror entry" —
+  therefore STOLE the family whenever it refreshed a login Claude Code still
+  uses: Claude Code kept the superseded refresh token, replayed it on its next
+  refresh, and the server revoked the family, surfacing as
+  "401 OAuth access token has been revoked" /login loops several times a day
+  (diagnosed 2026-07-27). The fix cooperates the way a SECOND Claude Code
+  process would: refresh only when the token is (near-)expired
+  (`grant_type=refresh_token` at `platform.claude.com/v1/oauth/token`), then
+  WRITE THE ROTATION BACK to Claude Code's own entry, merged over the prior
+  blob so plan metadata (`subscriptionType`/`rateLimitTier`) survives — its
+  keychain watcher picks up the new tokens instead of replaying stale ones
+  (both sides use `/usr/bin/security`, so no ACL prompt). Legacy mirror
+  entries are still READ (fresher-copy wins) so a family living only there is
+  adopted back into Claude Code's entry on its next refresh, but they are
+  never written again. **Coverage is limited to accounts with a scoped
+  keychain login** — a switcher-only account gets a bar only after one
+  interactive `claude auth login`.
 - **Tokenless-departure discipline.** This is the sole API call in a
   tokenless-by-design tool, so it is gated (`CLAUDE_MODEL_USAGE=0` disables),
   macOS-only, TTL-cached (60s — the keychain/network work runs at most once a
-  minute however often the page polls), and **fail-silent + audited-once**: a
+  minute however often the page polls) **stale-while-revalidate**, and
+  **fail-silent + audited-once**. Stale-while-revalidate + a parallel fan-out,
+  because the synchronous TTL expiry was a reported reload stall (2026-07-27,
+  "the accounts strip takes a few seconds to appear"): the page's poll
+  interval equals the TTL, so nearly every reload landed on an expired cache
+  and its `/api/accounts` blocked on the whole fan-out — measured ~3–4s, the
+  bulk of it five keychain login services fetched SEQUENTIALLY at ~0.5s of
+  HTTPS each. Now a call past the TTL returns the PREVIOUS value immediately
+  while ONE background thread (single-flight, in-process daemon — not a
+  detached process, so no stream rows) recomputes; the per-service GETs run
+  on a small pool (`FETCH_WORKERS`, `account_usage` resolved once up front so
+  the shared `db_cached` memo stays off the pool threads); only the first
+  call of a process computes synchronously (~1s parallel). Serving stale is
+  correct by construction — the value is a ≤TTL-stale snapshot by design, and
+  a completed refresh (even a failed one, which stores `{}` like the old
+  design) restarts the TTL clock, so staleness stays bounded at one TTL plus
+  one refresh. The fresh value reaches open pages via the global stream's
+  `accounts` event (*The list renders once, then patches*), whose per-tick
+  read also keeps this cache perpetually warm while any page is open. A
   failure degrades to "no model windows", and its `errors` row is written at
   most once per process (a 60s poll against a down endpoint would otherwise
   trickle a row a minute, which errwatch surfaces as a `⚠` in every session's
@@ -4122,6 +4148,20 @@ Both halves are fixed independently:
   boundary depend on wall time, not data — with idle pushes suppressed
   nothing would ever recompute them, so a boot-registered timer forces one
   full render per `LIST_REFRESH_MS` (60s).
+- **The accounts strip rides the same loop (`accounts` event).** Each global
+  tick also computes `accounts_payload()` and pushes the full payload when it
+  changed — under a **sched_score-blind** key (`lists.accounts_key`, the
+  `row_key` precedent applied to the strip: the score is
+  remaining%/hours-to-reset, which moves with the clock every tick, while
+  every other field is step-valued — integer percentages, reset epochs,
+  booleans). Connect only takes the baseline and pushes nothing: the page's
+  boot fetch paints the first strip, and a connect push would also change the
+  stream's event order under every existing consumer. The client
+  (`app.02-router.js`) re-renders the strip and refreshes `S.accts` so an
+  open new-session picker's cache tracks too; the old 60s `refreshAccounts`
+  poll survives as the SSE-down fallback. Side effect the reload latency
+  depends on: this per-tick read keeps `plugins.model_windows`' TTL cache
+  perpetually warm while any page is open (*Per-model usage bars*).
 
 **Why not per-row delta events:** the snapshot is already small (≤50 rows),
 the SSE only fires during genuine activity now, and a delta protocol would

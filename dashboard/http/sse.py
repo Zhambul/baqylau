@@ -17,8 +17,8 @@ from dashboard import prefs
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.control import launch
 from dashboard.notify.broker import BROKER
-from dashboard.read.lists import (sessions_payload,
-                                  row_key, wire_row)
+from dashboard.read.lists import (accounts_key, accounts_payload,
+                                  sessions_payload, row_key, wire_row)
 from dashboard.read.meta import (cmd_names, git_info, session_ctx, session_goal,
                                  session_title, session_slug)
 from dashboard.read.mirror import (merged_backlog, merge_live, enrich_entries)
@@ -245,7 +245,18 @@ class _SseMixin:
         viewer — deltas are a few KB/min; the sid set + order pin the list
         layout, so a delta can always merge in place by sid), plus every
         `notify` toast the watcher pushes. Row diffs are paused-blind
-        (row_key) and rows are wire-stripped (wire_row)."""
+        (row_key) and rows are wire-stripped (wire_row).
+
+        The accounts strip rides the same loop: an `accounts` event (the full
+        /api/accounts payload) whenever it CHANGES — sched_score-blind
+        (accounts_key), or the continuously-clocked score would push every
+        tick. Connect only takes the baseline, no push: the page boot-fetches
+        /api/accounts itself, and pushing here would also break every test
+        that reads this stream's event order. Side effect the strip depends
+        on: this per-tick read is what keeps plugins.model_windows' TTL cache
+        perpetually warm while any page is open, so a reload's fetch is
+        always served stale-while-revalidate instead of stalling on the OAuth
+        fan-out (docs/dashboard.md *Per-model usage bars*)."""
         self._sse_start()
         q = BROKER.register()
         try:
@@ -256,6 +267,7 @@ class _SseMixin:
             if not self._sse("sessions", wire):
                 return
             keys = {r["sid"]: row_key(r) for r in wire}
+            akey = accounts_key(accounts_payload())
             while True:
                 drained = False
                 try:
@@ -279,6 +291,12 @@ class _SseMixin:
                     if not self._sse("sessions-delta", {"rows": changed}):
                         return
                     keys = cur
+                accts = accounts_payload()
+                ak = accounts_key(accts)
+                if ak != akey:
+                    akey = ak
+                    if not self._sse("accounts", accts):
+                        return
                 beat, alive = self._keepalive(beat, drained)
                 if not alive:
                     return

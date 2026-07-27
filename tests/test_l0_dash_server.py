@@ -1093,7 +1093,7 @@ def test_notify_asking_still_fires_after_earlier_glance(monkeypatch):
     assert sent and sent[0]["sid"] == "sX"
 
 
-def _pump_global(r, got):
+def _pump_global(r, got, events=("sessions", "sessions-delta")):
     """Collect (event, data) frames from a global-SSE response into `got`."""
     def pump():
         pending = None
@@ -1102,8 +1102,7 @@ def _pump_global(r, got):
                 line = raw.decode("utf-8", "replace").rstrip("\n")
                 if line.startswith("event: "):
                     pending = line[len("event: "):]
-                elif line.startswith("data: ") \
-                        and pending in ("sessions", "sessions-delta"):
+                elif line.startswith("data: ") and pending in events:
                     got.append((pending, line[len("data: "):]))
         except Exception:
             pass                               # stream torn down by r.close()
@@ -1186,6 +1185,43 @@ def test_global_sse_delta_and_resync(dash, monkeypatch):
         ev, data = got[-1]
         assert ev == "sessions"                        # full snapshot, not delta
         assert any(x["sid"] == "dashd3" for x in json.loads(data))
+    finally:
+        r.close()
+
+
+def test_accounts_strip_sse_push_is_score_blind(dash, monkeypatch):
+    """The accounts strip rides the global stream: an `accounts` event carrying
+    the full /api/accounts payload whenever it CHANGES. The diff is
+    sched_score-blind (lists.accounts_key) — the score is remaining%/hours-to-
+    reset and moves with the clock on every tick, so a full-payload diff would
+    push perpetually on an idle dashboard. Connect pushes nothing (the page
+    boot-fetches /api/accounts); a real usage change pushes a payload that
+    still carries the exact score."""
+    from core import sessionapi as API_MOD
+    monkeypatch.setattr(DS.config, "GLOBAL_TICK_S", 0.05)
+    now = time.time()
+    usage = {"ts": now, "five_hour": 12, "five_hour_reset": now + 3600,
+             "seven_day": 40, "seven_day_reset": now + 86400}
+    monkeypatch.setattr(plugins, "accounts",
+                        lambda: [{"slug": "c1", "label": "acct", "alias": "c1"}])
+    monkeypatch.setattr(API_MOD, "account_usage", lambda limit=50, cache=None: {
+        "c1": {"usage": dict(usage), "limit_hit": None, "logged_out": None}})
+    got = []
+    r = _req(dash + "/events")
+    _pump_global(r, got, events=("sessions", "accounts"))
+    try:
+        wait_until(lambda: len(got) == 1, desc="initial sessions snapshot")
+        assert got[0][0] == "sessions"
+        time.sleep(0.5)                        # many ticks — sched_score moved
+        assert len(got) == 1                   # …but the strip stayed silent
+        usage["five_hour"] = 55                # a real snapshot change
+        wait_until(lambda: any(ev == "accounts" for ev, _ in got),
+                   desc="accounts push after a usage change")
+        ev, data = got[-1]
+        assert ev == "accounts"
+        row = next(a for a in json.loads(data) if a["slug"] == "c1")
+        assert row["usage"]["five_hour"] == 55
+        assert isinstance(row["sched_score"], (int, float))  # payload keeps it
     finally:
         r.close()
 

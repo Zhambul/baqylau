@@ -231,10 +231,12 @@ function renderAttention() {
 /* ---------- account usage strip (top of every page) ---------- */
 // A slim strip under the header showing each subscription account's latest
 // 5-hour / 7-day rate-limit usage (GET /api/accounts — aggregated per account
-// from the status-line capture, docs/dashboard.md). Polled on a slow timer
-// (usage moves slowly, and it's ambient); hidden entirely when no account has
-// any usage captured yet. The default account is labeled "default"; others by
-// their switcher label (c2 · claude-01).
+// from the status-line capture, docs/dashboard.md). Painted by the boot
+// fetch, then kept live by the `accounts` SSE push (app.02-router.js); the
+// slow poll below survives as the SSE-down fallback (usage moves slowly, and
+// it's ambient). Hidden entirely when no account has any usage captured yet.
+// The default account is labeled "default"; others by their switcher label
+// (c2 · claude-01).
 
 const ACCOUNTS_POLL_MS = 60000;
 

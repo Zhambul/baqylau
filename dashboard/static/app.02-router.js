@@ -44,6 +44,17 @@ function connectGlobal() {
     // full-snapshot path alone
     checkJump();
   });
+  // the accounts strip, pushed on change (the server diff is sched_score-blind
+  // — dashboard/read/lists.accounts_key). Connect sends nothing: the boot
+  // refreshAccounts() paints the first strip, this keeps it live. S.accts is
+  // updated too so an open new-session form's account picker sees the same
+  // freshness (app.09 still re-fetches on open; this just keeps its cache
+  // from going stale between opens).
+  es.addEventListener("accounts", (e) => {
+    const list = JSON.parse(e.data);
+    S.accts = list;
+    renderAccounts(list);
+  });
   // the launch-wake fast path: the server's launch_wake watcher spotted the
   // session a web launch produced and named its sid — the page that armed the
   // matching jump navigates NOW, without waiting for the row to ride a
