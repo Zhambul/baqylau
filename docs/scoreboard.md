@@ -52,7 +52,14 @@ see [otel.md](otel.md).
     gap plain: a mail row whose only content was a 5-10 word preview left "passed 4
     messages" with no messages behind it (docs/dashboard.md *Team mail reads as a note
     too*). The summary now rides the chip's web wording instead, and only IT is persisted
-    in the tracker state — a full report never enters the state DB. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its body share a copy-group, one block, and all of a message's ops carry its msg_id as `mid` so the web counts messages rather than mail-ish rows, returned
+    in the tracker state — a full report never enters the state DB. **A teammate
+    LIFECYCLE FRAME** (Claude Code routes idle notifications, task assignments and
+    terminations through the same inboxes, as a record whose `text` is JSON) is worded
+    from its type instead — `● rev-ui-util → team-lead · idle` — and its JSON is never
+    painted; the frame's own sentence, if it has one, becomes the body. These are the
+    MAJORITY of a team session's mail (12 of 14 arrivals in one reviewed session), and
+    they are counted in the ✉ census like any other delivery, because that row counts
+    what the mailbox carried. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its body share a copy-group, one block, and all of a message's ops carry its msg_id as `mid` so the web counts messages rather than mail-ish rows, returned
     through the plugin's `census`), and this renderer only emits them: the glyphs and
     colours are a claude_code vocabulary the web mirror reads back to classify these rows
     as mail (docs/dashboard.md *View modes*), while the scorebar serves every host tool

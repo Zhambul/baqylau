@@ -82,10 +82,76 @@ def note_new(frm, to, summ=""):
 
 
 def note_read(frm, to):
-    """`Message <frm> → <to> · read` — the same message, consumed. Carries no body
-    (there is nothing to reveal), and the web counts it as the SAME message as its
-    arrival, not a second one (see `mid`)."""
-    return "Message %s → %s · read" % (frm, to)
+    """`<frm> → <to> · read` — a delivered message, consumed. Carries no body (there
+    is nothing to reveal), and the web counts it as the SAME message as its arrival,
+    not a second one (see `mid`). It says `Message` nowhere on purpose: the tracked
+    state does not remember whether the arrival was prose or a lifecycle frame, and
+    `Message rev-ui-util → team-lead · read` under a `… · idle` line would claim
+    something the line above it just denied. The arrow pair is what names it as
+    mail; `Message` is reserved for the rows that actually carry words."""
+    return "%s → %s · read" % (frm, to)
+
+
+# --- LIFECYCLE FRAMES -------------------------------------------------------
+# Most of a team session's mail is not prose: Claude Code delivers teammate
+# lifecycle events through the SAME inboxes, as a mailbox record whose `text` is a
+# JSON frame — `{"type":"idle_notification","from":"rev-ui-util","idleReason":
+# "available"}`. Twelve of the fourteen arrivals in one reviewed lead session were
+# these. They carry no `summary`, so the row used to paint no body at all and read
+# as `Message rev-ui-util → team-lead` with nothing behind the click ("why can't I
+# read the message itself?" — there was no message). Painting the JSON instead
+# would be worse: a reader wants the event, not the wire format.
+#
+# So a frame is WORDED and the JSON is dropped. The type vocabulary is Claude
+# Code's own (2.1.220 rejects exactly this list from a plain-text SendMessage:
+# "message text must not be a teammate lifecycle/task frame"); an unknown type
+# still gets a line — its own `type`, which is at least the truth.
+FRAME_PHRASE = {
+    "idle_notification":   "idle",
+    "task_assignment":     "task assigned",
+    "task_completed":      "task completed",
+    "teammate_terminated": "terminated",
+    "shutdown_rejected":   "shutdown refused",
+    "permission_request":  "permission asked",
+}
+# The frame fields that hold a SENTENCE (per type: an idle frame's wrap-up, a task
+# assignment's brief, a termination's reason) — the first one present becomes the
+# block's body, so a frame that does say something is still readable. Everything
+# else in the frame is machine bookkeeping and is dropped.
+FRAME_TEXT = ("summary", "description", "message", "taskSubject", "reason",
+              "failureReason")
+
+
+def frame(text):
+    """The lifecycle frame a mailbox record's `text` carries, or None when it is a
+    plain message. A frame is a JSON object with a string `type`; anything else —
+    prose, a bare list, malformed JSON — is not one, and prose that happens to
+    parse as such an object does not occur (Claude Code refuses to SEND a frame as
+    plain text, which is where this vocabulary is written down)."""
+    t = (text or "").strip()
+    if not t.startswith("{"):
+        return None                     # the common case, before paying for a parse
+    try:
+        o = json.loads(t)
+    except Exception:
+        return None
+    return o if isinstance(o, dict) and isinstance(o.get("type"), str) else None
+
+
+def frame_words(fr):
+    """A frame -> (phrase, body): `idle`/`idle (interrupted)`/`task assigned`… and
+    the one sentence it carries, if any. One builder for both surfaces, so the
+    pane's chip and the web's note cannot describe the same frame differently."""
+    kind = fr.get("type") or ""
+    phrase = FRAME_PHRASE.get(kind, kind)
+    reason = fr.get("idleReason") or fr.get("completedStatus")
+    if reason and reason not in ("available", "resolved"):
+        phrase += " (%s)" % reason      # …only when it is not the ordinary outcome
+    for f in FRAME_TEXT:
+        v = fr.get(f)
+        if isinstance(v, str) and v.strip():
+            return phrase, v.strip()
+    return phrase, ""
 
 
 # How much of a message body the mail line paints. Deliberately its own ceiling and
@@ -117,21 +183,32 @@ def event_ops(events, log=None):
     The body is the MESSAGE ITSELF (the inbox record's `text`), not just its
     one-line summary: the summary rides the chip's web note, and a mail row whose
     only content was a 5-10 word preview left "Passed 4 messages" with no messages
-    behind it — the whole point of the row is what was said."""
+    behind it — the whole point of the row is what was said. A LIFECYCLE FRAME
+    (see `frame`) is worded instead — `rev-ui-util → team-lead · idle` — and its
+    JSON never becomes a body."""
     ops = []
     for ev in events:
         kind, frm, to, summ = ev[:4]
         text = (ev[4] if len(ev) > 4 else "") or ""
         mid = (ev[5] if len(ev) > 5 else "") or ""
+        pair = frm + " → " + to
         if kind == "new":
-            body = SF.cap(text.strip(), CAP_TEXT) or summ
+            fr = frame(text)
+            if fr:
+                phrase, said = frame_words(fr)
+                head, note, body = (pair + " · " + phrase,
+                                    pair + " · " + phrase, said)
+            else:
+                head, note = pair, note_new(frm, to, summ)
+                body = text.strip() or summ
+            body = SF.cap(body, CAP_TEXT)
             g = O.new_group(log) if (log and body) else None
-            ops.append(O.label(GLYPH_NEW + " " + frm + " → " + to, MSG_NEW_RGB,
-                               g=g, mid=mid, note=note_new(frm, to, summ)))
+            ops.append(O.label(GLYPH_NEW + " " + head, MSG_NEW_RGB,
+                               g=g, mid=mid, note=note))
             if body:
                 ops.append(O.gut(body, MSG_NEW_RGB, g=g, mid=mid))
         else:                                        # read
-            ops.append(O.label(READ_PREFIX + frm + " → " + to, MSG_READ_RGB,
+            ops.append(O.label(READ_PREFIX + pair, MSG_READ_RGB,
                                mid=mid, note=note_read(frm, to)))
     return ops
 

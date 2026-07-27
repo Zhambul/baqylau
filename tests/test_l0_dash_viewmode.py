@@ -716,7 +716,10 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     # the body is the message itself; the summary rides the note as its preview
     assert gut["s"] == body
     assert chip["note"] == "Message fix-smoke → team-lead: Money-cycle dedup complete"
-    assert read["note"] == "Message fix-smoke → team-lead · read"
+    # …and the read notice says `Message` NOWHERE: the tracked state cannot tell
+    # whether the arrival was prose or a lifecycle frame, so claiming a message
+    # under a `· idle` line would contradict the line above it
+    assert read["note"] == "fix-smoke → team-lead · read"
     # a long report is capped — the pane paints this INLINE, where a wall is a wall
     long = MSGS.event_ops([("new", "a", "b", "s", "x\n" * 200, "m1")], log)[1]["s"]
     assert long.count("\n") == MSGS.CAP_TEXT and "more lines)" in long
@@ -742,7 +745,7 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     old_body = O.gut("check the diff", MSGS.MSG_NEW_RGB)
     old_read = _lbl("◉ read · lead → rev-ui", MSGS.MSG_READ_RGB)
     assert AC.legacy_note(old_new) == "Message lead → rev-ui"
-    assert AC.legacy_note(old_read) == "Message lead → rev-ui · read"
+    assert AC.legacy_note(old_read) == "lead → rev-ui · read"
     legacy = opshtml.op_items([old_new, old_body, old_read], "sid")
     assert 'class="anote"' in legacy[0]["html"] and 'class="anote"' in legacy[2]["html"]
     # …and the summary body a legacy arrival carried is still there to read
@@ -753,6 +756,55 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     mon = _lbl("◉ monitor · npm", slots.color("monitor", 1))
     assert AC.legacy_note(mon) is None
     assert 'class="chip"' in opshtml.op_items([mon], "sid")[0]["html"]
+
+
+def test_most_team_mail_is_a_lifecycle_frame_and_says_so(tmp_path):
+    """The thing that made "why can't I read the message itself?" so confusing:
+    MOST of a team session's mail is not prose at all. Claude Code delivers teammate
+    lifecycle events through the same inboxes as a JSON frame in the record's `text`
+    — 12 of the 14 arrivals in the reviewed lead session were idle notifications,
+    which carry no summary, so the row painted no body and read as `Message
+    rev-ui-util → team-lead` with nothing behind the click. There was no message.
+    Painting the JSON would be worse, so a frame is WORDED — and one that does carry
+    a sentence (an assignment's brief, a failure's reason) still shows it."""
+    from core import hostpane as HP
+    from plugins.claude_code import msgs as MSGS
+
+    log = str(tmp_path / "claude-mirror-frames.log")
+    HP.ensure_db(log)
+
+    def row(text, summ=""):
+        ops = MSGS.event_ops([("new", "rev-ui", "team-lead", summ, text, "m1")], log)
+        return ops[0], (ops[1]["s"] if len(ops) > 1 else None)
+
+    idle = json.dumps({"type": "idle_notification", "from": "rev-ui",
+                       "timestamp": "2026-07-27T05:57:45.886Z",
+                       "idleReason": "available"})
+    chip, body = row(idle)
+    assert chip["note"] == "rev-ui → team-lead · idle" and body is None
+    assert chip["s"] == "● rev-ui → team-lead · idle"     # the pane says it too
+    assert "idle_notification" not in json.dumps(chip)   # …and never the wire format
+    # a frame that carries a SENTENCE keeps it as the body, so the click still pays
+    chip, body = row(json.dumps({"type": "task_assignment", "taskId": "7",
+                                 "subject": "fix ui", "assignedBy": "team-lead",
+                                 "description": "Fix the picker EOF loop."}))
+    assert chip["note"] == "rev-ui → team-lead · task assigned"
+    assert body == "Fix the picker EOF loop."
+    # an UNUSUAL outcome is named (an ordinary one is not — every line would carry it)
+    chip, body = row(json.dumps({"type": "idle_notification", "from": "rev-ui",
+                                 "idleReason": "failed",
+                                 "failureReason": "worktree gone"}))
+    assert chip["note"] == "rev-ui → team-lead · idle (failed)"
+    assert body == "worktree gone"
+    # an unknown frame type still gets a line — its own type, which is at least true
+    chip, _ = row(json.dumps({"type": "weird_new_thing", "x": 1}))
+    assert chip["note"] == "rev-ui → team-lead · weird_new_thing"
+    # …and PROSE is never mistaken for a frame, whatever it starts with
+    for prose in ("{ not json after all", '{"no": "type field"}', "plain words"):
+        assert MSGS.frame(prose) is None
+        chip, body = row(prose, "the preview")
+        assert chip["note"] == "Message rev-ui → team-lead: the preview"
+        assert body == prose
 
 
 def test_an_agents_brief_carries_no_injected_system_reminders(dash):

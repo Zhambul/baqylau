@@ -5067,6 +5067,30 @@ audit's `msg-transitions` row records the msg_id and the body's LENGTH (never th
 body), which is what makes "the mail line showed nothing" answerable after the fact: an
 arrival with `chars=0` had no text to paint.
 
+**Most team mail is not prose, and now says what it is.** Claude Code delivers
+teammate LIFECYCLE events through the same inboxes as an ordinary mailbox record whose
+`text` is a JSON frame — `{"type":"idle_notification","from":"rev-ui-util",
+"idleReason":"available"}`. In the reviewed lead session **12 of 14 arrivals were
+these**, and they carry no `summary`, which is what made the report so puzzling: the
+row painted no body at all and read as `Message rev-ui-util → team-lead` with nothing
+behind the click (*"but why can't I read the message itself?"* — there was no
+message). Painting the JSON is worse than painting nothing; a reader wants the event,
+not the wire format. So a frame is WORDED instead — `rev-ui-util → team-lead · idle`,
+`· task assigned`, `· terminated`, `· idle (failed)` — from `msgs.FRAME_PHRASE`, whose
+type vocabulary is Claude Code's own (2.1.220 refuses exactly that list from a
+plain-text SendMessage: *"message text must not be a teammate lifecycle/task frame"*).
+An unknown type still gets a line naming its own `type`, which is at least true. A
+frame that DOES carry a sentence — an assignment's `description`, a failure's
+`failureReason`, an idle wrap-up `summary` (`msgs.FRAME_TEXT`) — keeps it as the body,
+so the click still pays. One builder (`frame_words`) words both surfaces, so the pane's
+chip and the web's note can never describe the same frame differently.
+
+For the same reason a read notice says `Message` nowhere (`rev-ui-util → team-lead ·
+read`): the tracked state does not remember whether the arrival was prose or a frame,
+and `Message … · read` under a `· idle` line would claim what the line above it just
+denied. The arrow pair is what marks a row as mail; `Message` is reserved for the rows
+that actually carry words.
+
 Known duplication: for mail a TEAMMATE sent, the terminal now shows the body twice —
 once in the teammate's own `✉ to <who>` substream block, once on the lead's mail line.
 Accepted, because the web mirror drops the substream copy (it is `src`-stamped) and mail

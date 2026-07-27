@@ -1612,6 +1612,13 @@ New always-audited swallow sites (previously silent — their absence used to ma
   `msg_id`, which is what the web counts distinct messages by (the op's `mid`) — if a
   run's summary counts an arrival and its read as two, the `mid` stamp is missing from
   the ops (pre-2026-07-27 history has none, and legacy rows are counted per row).
+  **Check the `summary` first: an EMPTY one usually means the "message" was a teammate
+  LIFECYCLE FRAME** (an idle notification and friends — JSON in the record's `text`,
+  no summary; 12 of 14 arrivals in one reviewed lead session). Those are worded from
+  their type now (`… · idle`) and deliberately have no body; before that they painted
+  nothing at all, which is the "I can't read the message" report. A pre-2026-07-27
+  frame row on disk is indistinguishable from a prose arrival — nothing in the op says
+  which it was — so history keeps the `Message <frm> → <to>` wording.
 - **Mirror resizes to the wrong width / preset lands far off** — the geometry
   walk (`frontends/kitty.py` `split_geometry`, reached via
   `plugins/claude_code/split.py mirror_geometry`) resolves the mirror's
