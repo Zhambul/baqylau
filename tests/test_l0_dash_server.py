@@ -2484,6 +2484,25 @@ def test_agent_scope_reads_pre_field_history_like_the_present(dash, tmp_path):
     assert "rev-ui" not in html
 
 
+def test_agent_scope_strips_a_generic_tool_header(dash, tmp_path):
+    """A generic tool block opens with `·` — which is ALSO the separator inside a
+    ctx tag, so it is only safe as a header marker because the earliest match
+    wins. It has to be one: without it a pre-field `<who> · ToolSearch  opus-5·
+    high  ctx 13%` header matched nothing and kept both name and tags."""
+    rgb = SL.SUB_PALETTE[0]
+    A.session_start({"session_id": "scope4", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("scope4")
+    op = SF.chip("rev-ui", "·", "ToolSearch", rgb,
+                 tags=("opus-5·high", "ctx 13% · 132k/1M"), g="gt")
+    op = dict(op, s=SF.compose(op))
+    op.pop("who"), op.pop("tags")
+    O.emit(log, op, src="sub:agT")
+    items = _get_json(dash + "/api/session/scope4/backlog?agent=agT")["items"]
+    html = " ".join(i["html"] for i in items)
+    assert "ToolSearch" in html
+    assert "rev-ui" not in html and "opus-5" not in html and "132k" not in html
+
+
 def test_jobs_and_monitors_are_lead_only_until_scoped(dash, tmp_path):
     """A session's Jobs/Monitors tabs show the LEAD's own work; an agent's is
     behind that agent's scope, with the command the audit recovered."""

@@ -77,6 +77,7 @@ _GLYPH_MONITOR = "◉"
 _GLYPH_WS = "⇄"            # a WebSocket monitor's SUBJECT line (monitor_fmt._cmd_op)
 _GLYPH_RESUMED = "↻"       # a RESUMED subagent's launch header
 _GLYPH_FINISH = "■"
+_GLYPH_TOOL = "·"          # an agent's GENERIC tool block (substream_render.render_tool)
 
 # The stream palettes a bg job's / monitor's chips wear (core/slots.py owns the
 # tables — imported, never re-spelled). Together with the semantic command
@@ -238,7 +239,8 @@ CQ_OPEN, CQ_SUB, CQ_CLOSE = "open", "sub", "close"
 # `"<glyph> <kind>[  tag]…"`, so one of these leading the text is what says this
 # IS a header and its tags may be cut.
 _HEAD_MARKS = frozenset((_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS,
-                         _GLYPH_RESUMED, _GLYPH_FINISH, SF.SKILL_MARK,
+                         _GLYPH_RESUMED, _GLYPH_FINISH, _GLYPH_TOOL,
+                         SF.SKILL_MARK,
                          SF.MARK_PROMPT[0], SF.MARK_RESULT[0],
                          SF.MARK_MESSAGE[0], SF.MARK_MAIL))
 
@@ -255,13 +257,17 @@ def lead_head(text):
     team-lead` — which is what lets the same quiet-note register word them.
 
     The name is only ever in the text for ops written BEFORE `who` became a field
-    (core/streamfmt.compose_who); live chips open at the marker and the `find`
-    below returns 0 for them, so one rule covers both eras. It is cut by finding
-    the block MARKER rather than by matching a name, because the marker set is
-    closed and owned right here while the name is not knowable from the op — the
-    same technique legacy_agent_note already reads these chips with. (A body op's
+    (core/streamfmt.compose); live chips open at the marker and the `find` below
+    returns 0 for them, so one rule covers both eras. It is cut by finding the
+    block MARKER rather than by matching a name, because the marker set is closed
+    and owned right here while the name is not knowable from the op — the same
+    technique legacy_agent_note already reads these chips with. (A body op's
     prefix has no marker to key on and is undone by colour instead, in
     streamfmt.strip_who — its docstring says why the two halves live apart.)
+
+    The EARLIEST marker wins, which is what makes `·` — a generic tool block's
+    glyph, and also the separator inside a ctx tag (`ctx 13% · 132k/1M`) — safe to
+    include: the header's own `·` always precedes any tag's.
 
     Tags are split on the DOUBLE space `chip()` joins them with, so a kind
     containing single spaces (`from team-lead`) survives whole. Text with no known
