@@ -6,9 +6,11 @@
 // invisible to every server-side test (docs/dashboard.md, *Compaction on the
 // ctx bar*):
 //
-//   * the COMPACTING state — a ghost segment at the current occupancy plus the
-//     `compacting` class the CSS animates from, and a label/detail that stop
-//     reporting a token count nobody can act on for those ~2 minutes;
+//   * the COMPACTING state — the `compacting` class the CSS breathes from, and
+//     a label/detail that stop reporting a token count nobody can act on for
+//     those ~2 minutes. Critically the bar is painted at its REAL width and
+//     left there: the calm reading is that geometry never moves while
+//     compacting, and only a rendered width can show that;
 //   * the eased DRAIN — the bar is a FRESH node on every repaint, which has no
 //     previous width to transition from, so ctxBar paints it at its REMEMBERED
 //     width and moves it on the next frame. That memory is the whole mechanism
@@ -72,7 +74,6 @@ function flush() { const q = frames.splice(0); for (const fn of q) fn(); }
 function read(bar) {
   const track = bar.children.find(c => c.className === "ctrack");
   const fill = track.children.find(c => c.className === "cfill");
-  const ghost = track.children.find(c => c.className === "cghost");
   const painted = fill.style.width;
   flush();
   return {
@@ -80,7 +81,9 @@ function read(bar) {
     label: bar.children[0].textContent,
     pct: bar.children.find(c => c.className === "cpct").textContent,
     detail: bar.children.find(c => c.className === "cdetail").textContent,
-    ghost: ghost ? ghost.style.width : null,
+    // the track's whole content — the calm bar is ONE node in there, so an
+    // extra overlay segment creeping back in is visible here as a class name
+    kids: track.children.map(c => c.className),
     widths: [painted, fill.style.width],
   };
 }
@@ -120,10 +123,11 @@ step("keys_dont_bleed", () => {
   return { a: bar(CX(20), true, { key: "s:a" }), b: bar(CX(80), true, { key: "s:b" }) };
 });
 
-// (5) COMPACTING: the ghost holds the current occupancy, the class the CSS
-// animates from is present, the ⟳ spins in its own span (so the word doesn't
-// rotate with it), and the detail says what is happening instead of a token
-// count that is about to be wrong.
+// (5) COMPACTING: the class the CSS breathes from is present, the bar is
+// painted at its REAL width and stays there (both frames equal — nothing
+// moves), the ⟳ spins in its own span (so the word doesn't rotate with it),
+// and the detail says what is happening instead of a token count that is about
+// to be wrong.
 step("compacting", () => bar(CX(87, 174000), true,
                              { key: "s:c", comp: { since: 1, trigger: "manual" } }));
 

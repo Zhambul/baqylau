@@ -4164,12 +4164,25 @@ parking (transcripts persist), and covers agents uniformly.
 ### Compaction on the ctx bar
 
 While the conversation is being compacted, the session header's ctx bar
-**rehearses the collapse it is about to perform**: a dim ghost holds the
-current occupancy while the accent segment loops down to a fraction of it and
-springs back, the label grows a spinning `⟳`, and the detail says
-`compacting…` instead of a token count that is seconds from being wrong. When
-it finishes, the ghost drops away and the real fill **eases down** to the new
-value.
+**breathes**: its geometry is frozen at the current occupancy and only the
+fill's brightness moves — one slow 3s fade to ~70% and back — under a violet
+tint, a slowly spinning `⟳`, and a detail that reads `compacting…` instead of
+a token count that is seconds from being wrong. When it finishes, the fill
+**eases down** to the new value over 1.2s.
+
+**Why light and not size.** Everything that says WHAT is happening here is
+static: the tint, the `⟳`, the word. So the animation carries exactly one bit —
+"still going" — and light is the quietest channel that can carry it. The first
+cut of this feature animated the WIDTH instead (a collapse rehearsal: the fill
+squeezing to 28% and springing back against a ghost segment holding the true
+occupancy) and was rejected as jumpy. Size is the loudest channel a 9px bar
+has, and a repeating 72% swing in it reads as a twitch rather than a signal —
+nothing about a compaction is urgent, it just takes two minutes. Dropping the
+size animation also deleted the ghost (nothing moves, so there is nothing to
+hold a true value behind) and the `transition: none` guard (opacity and width
+are different properties, so the frame where compaction ends has no contested
+declaration — the transform the old version needed *did* collide with the
+drain, which is why it had to be `scaleX` rather than `width`).
 
 **Why it exists.** Compaction runs 104–139s (seven measured runs in the audit
 trail) and emits *nothing* while it does — no tool call, no reply, no
@@ -4214,11 +4227,6 @@ the one in use. The marker is matched as a RECORD (through `parse_line`), never
 as raw bytes — a transcript quotes its own vocabulary constantly, and
 byte-matching a marker is what once flipped a tab green mid-turn.
 
-**Why the animation is a `transform`, not a width.** The squeeze loop and the
-drain would otherwise both own `width`, and whichever the browser resolved last
-would win at the exact frame compaction ends. `scaleX` also composites off the
-main thread.
-
 **Why the drain needs JS at all.** `ctxBar` builds a fresh node on every
 repaint, and a fresh node has nothing to transition *from* — which is why
 `.ubar`'s identical `transition: width` rule has never actually animated
@@ -4228,7 +4236,11 @@ the next frame. A compacting render deliberately does not consume that memory,
 or the drain would start from the rehearsal instead of the pre-compaction
 width. First sight of a key seeds without animating, so a page load doesn't
 slide every bar up from zero. `tests/jsdom/ctxbar.js` executes the real
-renderer across these sequences.
+renderer across these sequences — including that a compacting bar renders at
+its real width in BOTH frames, which is the calm property stated as a test. The
+CSS half is pinned separately (`test_compacting_bar_animates_light_not_geometry`):
+the JS renders a still bar either way, so a `transform`/`width` keyframe would
+restore the rejected look with nothing else failing.
 
 **Scoped to the session header, and to the session.** The list cards and agent
 cards pass no `key`/`comp` and render exactly as before. A drilled-in agent's

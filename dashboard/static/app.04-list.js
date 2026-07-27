@@ -367,10 +367,13 @@ function ctxWidthFor(key, pct) {
 // header (big=true), agent cards. Accent fill, amber ≥70%, red ≥90%.
 //
 // `opts.comp` = the session's `compacting` record ({since, trigger}) → the bar
-// REHEARSES the collapse it is about to perform: a dim ghost holds the current
-// fill while the accent segment loops down and springs back (docs/dashboard.md,
-// *Compaction on the ctx bar*). `opts.key` identifies the bar across repaints
-// so the post-compaction drop eases instead of jumping (see ctxWidths).
+// BREATHES: the geometry is frozen at the current occupancy and only the fill's
+// brightness moves, a slow 3s fade (docs/dashboard.md, *Compaction on the ctx
+// bar*). Everything that says WHAT is happening is static — the violet tint,
+// the ⟳, the "compacting…" detail — so the motion has to carry nothing but
+// "still going", and the quietest thing that can say that is light.
+// `opts.key` identifies the bar across repaints so the post-compaction drop
+// eases instead of jumping (see ctxWidths).
 function ctxBar(cx, big, opts) {
   opts = opts || {};
   const comp = opts.comp;
@@ -384,15 +387,14 @@ function ctxBar(cx, big, opts) {
   const track = el("span", "ctrack");
   const fill = el("span", "cfill");
   const pct = Math.max(0, Math.min(100, cx.pct));
-  // While compacting, the ghost sits at the CURRENT occupancy and the accent
-  // fill animates underneath it — so the pair reads as "this much is here, and
-  // it is being squeezed". The ghost is inside the track (same clip, same
-  // radius) and carries no text, so it needs no width bookkeeping of its own.
-  if (comp) {
-    const ghost = el("span", "cghost");
-    ghost.style.width = pct + "%";
-    track.append(ghost);
-  }
+  // A compacting bar is painted at its REAL width and left there — the breath
+  // is a CSS opacity animation on this one node, so there is nothing extra to
+  // build. (An earlier cut animated the width instead and needed a second
+  // "ghost" segment to hold the true occupancy while the fill moved; nothing
+  // moves now, so there is nothing to hold.) The width is still fed through the
+  // comp branch rather than ctxWidthFor so a compacting repaint does not
+  // consume the key's memory — the drain that follows must start from the
+  // PRE-compaction width.
   const from = comp ? pct : ctxWidthFor(opts.key, pct);
   fill.style.width = from + "%";
   if (from !== pct)

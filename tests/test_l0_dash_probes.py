@@ -688,11 +688,13 @@ def test_ctx_bar_compaction_and_drain():
         the harness's rAF queue is what lets the pair be observed. The memory is
         keyed per bar, so session A's collapse cannot animate out of session B's
         last width.
-      * the COMPACTING state — the ghost segment at the current occupancy, the
-        class the CSS animates from, and a detail that stops quoting a token
-        count that is seconds from being wrong. Critically, a compacting render
-        must NOT consume the key's memory, or the drain that follows would start
-        from the rehearsal instead of from the pre-compaction width.
+      * the COMPACTING state — the class the CSS breathes from, and a detail
+        that stops quoting a token count that is seconds from being wrong. The
+        bar's GEOMETRY must not move at all while compacting (that is the whole
+        difference from the rejected first cut, which squeezed the width and
+        read as jumpy), and a compacting render must NOT consume the key's
+        memory, or the drain that follows would start from wherever the
+        animation left the bar instead of from the pre-compaction width.
 
     Skipped without `node` (docs/testing.md)."""
     node = shutil.which("node")
@@ -708,8 +710,8 @@ def test_ctx_bar_compaction_and_drain():
     c = d["cases"]
 
     # the existing call sites pass no opts and must render exactly as before:
-    # no ghost, no animation, the token detail intact
-    assert c["plain"]["ghost"] is None
+    # one fill, no animation, the token detail intact
+    assert c["plain"]["kids"] == ["cfill"]
     assert c["plain"]["widths"] == ["42%", "42%"]
     assert c["plain"]["detail"] == "84000 / 200000"
     assert "compacting" not in c["plain"]["cls"]
@@ -724,7 +726,11 @@ def test_ctx_bar_compaction_and_drain():
 
     comp = c["compacting"]
     assert "compacting" in comp["cls"].split()
-    assert comp["ghost"] == "87%"          # the ghost holds the real occupancy
+    # THE calm property: while compacting the geometry does not move. The bar is
+    # painted at its real occupancy and left there — the breath is opacity-only,
+    # on this one node, so the track gains no overlay segment either.
+    assert comp["widths"] == ["87%", "87%"]
+    assert comp["kids"] == ["cfill"]
     assert comp["label"] == "⟳ ctx"
     assert comp["detail"] == "compacting…"  # not a count about to be wrong
     assert comp["pct"] == "87%"            # the number itself is still honest
@@ -738,6 +744,30 @@ def test_ctx_bar_compaction_and_drain():
     # the width clamp survived the rewrite (the text stays verbatim)
     assert c["clamped"]["over"]["widths"] == ["100%", "100%"]
     assert c["clamped"]["under"]["widths"] == ["0%", "0%"]
+
+
+def test_compacting_bar_animates_light_not_geometry(dash):
+    """The compacting bar's animation must move BRIGHTNESS ONLY (docs/dashboard.md,
+    *Compaction on the ctx bar*). The first cut of this feature animated the
+    width — the fill squeezing down and springing back — and was rejected as
+    jumpy: size is the loudest channel a 9px bar has, and a repeating swing in
+    it reads as a twitch, when all the animation has to say is "still going"
+    (the violet, the ⟳ and the "compacting…" text already say WHAT). Pinned in
+    CSS because that is where it would come back: the JS renders a still bar
+    either way, so a `transform`/`width` keyframe would restore the rejected
+    look with nothing else failing."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    m = re.search(r"@keyframes ctxbreathe \{([^}]*\}[^}]*)\}", css)
+    assert m, "the compacting breath keyframes"
+    body = m.group(1)
+    for loud in ("transform", "scale", "width", "translate", "margin", "left"):
+        assert loud not in body, (loud, body)
+    assert "opacity" in body
+    # ...and the rule that drives it names only that keyframe (no second
+    # animation smuggled onto the same node)
+    r = re.search(r"\.cbar\.compacting \.cfill \{ animation: ([^;]+); \}", css)
+    assert r and r.group(1).startswith("ctxbreathe "), r and r.group(1)
 
 
 def test_ctx_bar_keys_the_session_off_the_real_sid(dash):

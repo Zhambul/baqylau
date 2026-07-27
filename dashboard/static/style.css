@@ -436,49 +436,40 @@ body.in-session.fs-on #fsbtn { display: revert; }
      REMEMBERED width first and moves it on the next frame — a fresh node has
      nothing to transition from (which is why .ubar's identical rule has never
      animated anything). */
-  transition: width .9s cubic-bezier(.22, .61, .36, 1); }
+  transition: width 1.2s cubic-bezier(.22, .61, .36, 1); }
 .cbar.warn .cfill { background: var(--amber, #d1a35a); }
 .cbar.hot .cfill { background: var(--red, #b5484d); }
 
 /* COMPACTION IN PROGRESS (docs/dashboard.md, *Compaction on the ctx bar*) —
-   the bar rehearses the collapse it is about to perform. `.cghost` holds the
-   current occupancy at low opacity while `.cfill` loops down to a fraction of
-   it and springs back, so the pair reads as "this much is here, and it is
-   being squeezed". Both sit in the same clipped track, the ghost UNDER the
-   fill (source order), so the accent segment reads as the live part of the
-   same bar rather than a second bar.
+   the bar BREATHES: its geometry is frozen at the current occupancy and only
+   the fill's brightness moves, one slow 3s fade to ~70% and back.
 
-   The fill's own width is left at the real percentage and the SQUEEZE is a
-   transform — `scaleX` composites off the main thread and, unlike animating
-   `width`, cannot fight the drain transition above (the two would otherwise
-   both own the same property, and whichever the browser resolved last would
-   win at the moment compaction ends — exactly the frame that matters). */
-.cbar.compacting .cghost {
-  position: absolute; left: 0; top: 0; height: 100%; opacity: .22;
-}
-/* the ghost is positioned, the fill is too, and the fill comes LATER in source
-   order — so it paints over the ghost with no z-index anywhere */
-.cbar.compacting .ctrack { position: relative; }
-.cbar.compacting .cfill {
-  position: relative; transform-origin: left center;
-  transition: none;                  /* the loop owns the fill until it ends */
-  animation: ctxsqueeze 2s cubic-bezier(.5, 0, .5, 1) infinite;
-}
+   Everything that says WHAT is happening here is STATIC — the violet tint, the
+   ⟳, the "compacting…" detail. So the animation carries exactly one bit,
+   "still going", and light is the quietest thing that can carry it. An earlier
+   cut animated the WIDTH (a collapse rehearsal: the fill squeezing down and
+   springing back against a ghost of the true occupancy) and read as jumpy —
+   size is the loudest channel a bar has, and the bar is 9px tall, so a
+   repeating 72% swing in it is a twitch rather than a signal. Nothing about
+   the compaction is urgent; it just takes two minutes.
+
+   Opacity also composites off the main thread, and — unlike the transform that
+   version needed — cannot collide with the drain transition above: the two
+   animate DIFFERENT properties, so the frame where compaction ends has no
+   contested declaration and needs no `transition: none` guard. */
+.cbar.compacting .cfill { animation: ctxbreathe 3s ease-in-out infinite; }
+@keyframes ctxbreathe { 50% { opacity: .7; } }
 /* The colour ladder is deliberately overridden while compacting: a bar at 92%
    is `hot` red, and red is this UI's "you are in trouble" register — but a
    compaction is the fix ARRIVING, not the problem worsening. Violet is the
    busy/working register the tab already uses for the same two minutes. */
-.cbar.compacting .cfill,
-.cbar.compacting .cghost { background: var(--busy, #c678dd); }
+.cbar.compacting .cfill { background: var(--busy, #c678dd); }
 .cbar.compacting .clabel { color: var(--busy, #c678dd); }
-/* reuses the pending-dialog spinner's keyframe — one rotation vocabulary */
-.cbar .cspin { display: inline-block; animation: pendspin 2s linear infinite; }
+/* reuses the pending-dialog spinner's keyframe — one rotation vocabulary — at
+   the breath's own period, so the two read as one unhurried rhythm rather than
+   two animations that happen to share a bar */
+.cbar .cspin { display: inline-block; animation: pendspin 3s linear infinite; }
 .cbar.compacting .cdetail { color: var(--busy, #c678dd); opacity: .8; }
-@keyframes ctxsqueeze {
-  0%   { transform: scaleX(1); }
-  55%  { transform: scaleX(.28); }
-  100% { transform: scaleX(1); }
-}
 .cbar .cpct { color: var(--text); font: 600 11px/1 var(--mono); flex: none; }
 .cbar .cdetail { color: var(--dim2); font: 10px/1 var(--mono); flex: none; white-space: nowrap; }
 .cbar.big { margin-top: 8px; max-width: 520px; }
