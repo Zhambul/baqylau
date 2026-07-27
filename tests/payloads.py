@@ -141,6 +141,27 @@ def post_task_update(s, task_id="1", status="in_progress", tid="toolu_tu1",
     return d
 
 
+def post_sendmessage(s, to="team-lead", summary="Money-cycle dedup complete",
+                     message="Complete. core.money_cycle now owns the cycle.",
+                     agent_id=None, agent_type=None, msg_id="msg-0001",
+                     success=True, event="PostToolUse"):
+    """PostToolUse(SendMessage) — shape per the live capture 2026-07-27 (2.1.220):
+    tool_input {to, summary, message} and tool_response {success, msg_id, routing}.
+    A TEAMMATE's send carries agent_id/agent_type; the lead's carries neither, and
+    mail_fmt handles BOTH (the one formatter that does not skip agent events)."""
+    d = base(s, event, tool_name="SendMessage", tool_use_id="toolu_sm1",
+             tool_input={"to": to, "summary": summary, "message": message},
+             tool_response={"success": success,
+                            "message": "Message sent to %s's inbox" % to,
+                            "msg_id": msg_id,
+                            "routing": {"sender": agent_type or "main",
+                                        "target": "@" + to, "summary": summary}})
+    if agent_id:
+        d["agent_id"] = agent_id
+        d["agent_type"] = agent_type or "teammate"
+    return d
+
+
 def notification(s, message="Claude needs your permission to use Bash"):
     return base(s, "Notification", message=message)
 

@@ -169,10 +169,12 @@ def legacy_agent_note(op):
 
 
 def mail_pair(op):
-    """A team-mail chip -> (from, to, is_read), or None. Colour-gated like the
-    classifier: only the two semantic mail colours qualify, so a monitor's `◉` is
-    never read as mail. The one parser of that chip's shape — its two readers are
-    the wording fallback below and the legacy SUBJECT key in op_items."""
+    """A team-mail chip -> (from, to, kind), or None; kind is `sent` (the ✉ MESSAGE
+    row, written at send time and carrying the text), `new` or `read` (the inbox
+    poller's plumbing rows). Colour-gated like the classifier: only the semantic mail
+    colours qualify, so a monitor's `◉` is never read as mail. The one parser of that
+    chip's shape — its readers are the wording fallback below, the legacy SUBJECT key
+    in op_items, and the plumbing flag beside it."""
     try:
         if op.get("t") != "label":
             return None
@@ -180,36 +182,64 @@ def mail_pair(op):
             return None
         text = _plain(op)
         if text.startswith(MSGS.READ_PREFIX):
-            pair, read = text[len(MSGS.READ_PREFIX):], True
+            pair, kind = text[len(MSGS.READ_PREFIX):], "read"
         elif text.startswith(MSGS.GLYPH_NEW + " "):
-            pair, read = text[2:], False
+            pair, kind = text[2:], "new"
+        elif text.startswith(MSGS.GLYPH_SENT + " "):
+            pair, kind = text[2:], "sent"
         else:
             return None
-        frm, sep, to = pair.partition(" → ")
-        return (frm, to, read) if sep else None
+        # a poller row may carry its state after the pair (`● a → b · delivered`);
+        # the pair itself is what identifies the message
+        frm, sep, rest = pair.partition(" → ")
+        to = rest.split(" · ")[0].strip()
+        return (frm, to, kind) if sep else None
     except Exception:
         return None                     # unreadable: not mail as far as we can tell
 
 
 def legacy_mail_note(op):
-    """The same fallback for a pre-`note` team-mail chip: `● <frm> → <to>` and
-    `◉ read · <frm> → <to>` reworded through their owner (msgs.note_new /
-    note_read), or None. The summary can't be recovered — a legacy arrival keeps
-    it in the separate body op, where the reader still finds it — so the note is
-    the bare `Message <frm> → <to>`."""
+    """The same fallback for a pre-`note` team-mail chip, reworded through its owner
+    (`msgs.note_message` / `note_mail`), or None. History has only the poller's rows
+    — the send-time MESSAGE row did not exist then — and an arrival there is the ONLY
+    trace of a real message, so a pre-`note` `● <frm> → <to>` keeps the `Message`
+    wording rather than being demoted to plumbing. Its summary rides the separate
+    body op, where the reader still finds it."""
     if op.get("note"):
         return None
     got = mail_pair(op)
     if not got:
         return None
-    frm, to, read = got
-    return MSGS.note_read(frm, to) if read else MSGS.note_new(frm, to)
+    frm, to, kind = got
+    return (MSGS.note_mail(frm, to, "read") if kind == "read"
+            else MSGS.note_message(frm, to))
 
 
 def legacy_note(op):
     """The web wording for a chip written before its producer carried one — an
     agent's, or team mail's. One door, so op_html/op_items ask the question once."""
     return legacy_agent_note(op) or legacy_mail_note(op)
+
+
+def mail_plumbing(op, body_follows=False):
+    """True when this mail row is the mail SYSTEM reporting on a message rather than
+    the message itself: the inbox poller's `delivered`/`read`/lifecycle lines. The web
+    shows those in VERBOSE only — asked for in exactly those words: *"I don't want to
+    see the lifecycle messages, mail arrivals in the default or focus mode, only the
+    real messages on sent time … but in verbose mode I want to see all of them with a
+    label"*.
+
+    `body_follows` is the escape hatch for HISTORY: before the send-time row existed,
+    an arrival WITH a message body was the only trace of a real message, and demoting
+    those would leave an old session showing no mail at all outside verbose. A read
+    notice is plumbing whatever follows it."""
+    got = mail_pair(op)
+    if not got:
+        return False
+    kind = got[2]
+    if kind == "sent":
+        return False                    # the message itself
+    return kind == "read" or not body_follows
 
 
 def agent_header(op):
@@ -265,6 +295,11 @@ def _classify(op):
     mail = tuple(op.get("c") or ()) in _MAIL_RGB
     if head == MSGS.GLYPH_NEW:
         return ACT_MAIL, bad           # ● from → to (nothing else opens with ●)
+    if head == MSGS.GLYPH_SENT and mail:
+        # ✉ from → to — the MESSAGE row (mail_fmt.py). Colour-gated like the rest: a
+        # substream's own `<who> ✉ from <sender>` chip wears a slot palette and is
+        # that agent's block, not the session's mail.
+        return ACT_MAIL, bad
     if head == _GLYPH_MONITOR:
         # ◉ is shared: a mail READ notice wears mail's semantic colour, a monitor
         # block's chip wears its slot palette (see _MAIL_RGB).

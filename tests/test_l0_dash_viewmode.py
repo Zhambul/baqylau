@@ -114,10 +114,16 @@ def test_actclass_team_mail_and_task_rows_have_their_own_classes():
     from plugins.claude_code import msgs as MSGS
     from plugins.claude_code import task_fmt as TASKS
 
+    mail_sent = MSGS.sent_ops("lead", "rev-ui", "check the diff", "the diff is at…",
+                              "m1", None)
     mail_new = MSGS.event_ops([("new", "lead", "rev-ui", "check the diff")])
     mail_read = MSGS.event_ops([("read", "lead", "rev-ui", "")])
-    assert [AC.classify(o)[0] for o in mail_new] == ["mail", None]   # chip + body
+    assert [AC.classify(o)[0] for o in mail_sent] == ["mail", None]  # chip + body
+    assert AC.classify(mail_new[0]) == ("mail", False)
     assert AC.classify(mail_read[0]) == ("mail", False)
+    # a substream's OWN ✉ chip wears a slot palette and is that agent's block, not
+    # the session's mail — the same colour gate the ◉ ambiguity uses
+    assert AC.classify(_lbl("✉ rev-ui → lead", slots.color("sub", 1)))[0] != "mail"
     # …and the ◉ ambiguity, both ways: mail wears the semantic colour, a monitor
     # block's chip wears its slot's palette
     assert AC.classify(_lbl("◉ monitor · npm", slots.color("monitor", 1))) \
@@ -139,11 +145,13 @@ def test_a_groupless_body_op_inherits_the_row_it_follows():
     from dashboard import opshtml
     from plugins.claude_code import msgs as MSGS
 
-    items = opshtml.op_items(MSGS.event_ops(
-        [("new", "lead", "rev-ui", "please send your final report")]))
+    # …a mail row and its message with no group between them (history's shape, and
+    # any un-logged producer's)
+    items = opshtml.op_items(MSGS.sent_ops("lead", "rev-ui", "the report",
+                                           "please send your final report", "m1"))
     assert [it.get("act") for it in items] == ["mail", "mail"]
     # …and a chain of body ops keeps inheriting, not just the first
-    chain = opshtml.op_items(MSGS.event_ops([("new", "lead", "rev-ui", "a")])
+    chain = opshtml.op_items(MSGS.sent_ops("lead", "rev-ui", "s", "a", "m1")
                              + [O.gut("b", MSGS.MSG_NEW_RGB)])
     assert [it.get("act") for it in chain] == ["mail", "mail", "mail"]
     # a GROUPED body still inherits from its own block, not from a neighbour…
@@ -155,15 +163,15 @@ def test_a_groupless_body_op_inherits_the_row_it_follows():
     assert opshtml.op_items([O.gut("orphan", O.SLATE)])[0].get("act") is None
 
 
-def test_a_mail_arrival_is_ONE_block_and_survives_a_per_op_render(dash, tmp_path):
+def test_a_mail_message_is_ONE_block_and_survives_a_per_op_render(dash, tmp_path):
     """Two halves of the same bug, and the reason the first fix didn't hold.
 
     The inheritance above only works WITHIN one op_items call — and the two render
     paths called it ONE OP AT A TIME, so it never fired in production while the
     unit test (a batch) passed. A teammate's report-delivery summary therefore
     still sat in the middle of focus mode with its own header hidden. So: the
-    render paths batch consecutive ops, AND — the real fix — an arrival's chip and
-    body now share a copy-group at the source, which needs no adjacency at all.
+    render paths batch consecutive ops, AND — the real fix — a message's chip and
+    body share a copy-group at the source, which needs no adjacency at all.
     Only pre-grouping HISTORY leans on the inheritance."""
     from core import hostpane as HP
     from dashboard.read import mirror as M
@@ -171,11 +179,14 @@ def test_a_mail_arrival_is_ONE_block_and_survives_a_per_op_render(dash, tmp_path
 
     log = str(tmp_path / "claude-mirror-mail.log")
     HP.ensure_db(log)                      # a state DB to allocate the group from
-    ops = MSGS.event_ops([("new", "rev-observe", "team-lead", "[to main] 4 BUGs")], log)
+    ops = MSGS.sent_ops("rev-observe", "team-lead", "4 BUGs",
+                        "[to main] 4 BUGs, one high", "m1", log)
     assert len({o.get("g") for o in ops}) == 1 and ops[0].get("g"), \
-        "the chip and its summary body are one block"
-    # a read notice has no body, so no group is spent on it
-    assert MSGS.event_ops([("read", "a", "b", "")], log)[0].get("g") is None
+        "the chip and its message are one block"
+    # the poller's rows are one line each — no body, so no group is spent on them
+    poll = MSGS.event_ops([("new", "a", "b", "s", "hi", "m1"),
+                           ("read", "a", "b", "", "", "m1")], log)
+    assert len(poll) == 2 and not any(o.get("g") for o in poll)
 
     # GROUPED, the body needs no class of its own: it is inside the block, whose
     # class comes from the chip — so it hides with it, whatever the render path
@@ -186,7 +197,7 @@ def test_a_mail_arrival_is_ONE_block_and_survives_a_per_op_render(dash, tmp_path
 
     # LEGACY history (ops written before the grouping) has only the inheritance to
     # lean on, and that is what the per-op calls defeated: both paths must batch
-    old = MSGS.event_ops([("new", "rev-observe", "team-lead", "[to main] 4 BUGs")])
+    old = MSGS.sent_ops("rev-observe", "team-lead", "4 BUGs", "[to main] 4 BUGs", "m1")
     assert not any(o.get("g") for o in old)
     assert [it.get("act") for it in M.merge_live(old, [])] == ["mail", "mail"]
     window = M._render_window([(1, "op", old[0]), (2, "op", old[1])], 0, "")
@@ -702,42 +713,50 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     log = str(tmp_path / "claude-mirror-mail.log")
     HP.ensure_db(log)
     body = "Complete. `core.money_cycle` now owns the cycle.\nAll twelve providers use it."
-    chip, gut = MSGS.event_ops(
-        [("new", "fix-smoke", "team-lead", "Money-cycle dedup complete",
-          body, "m-42")], log)
+    chip, gut = MSGS.sent_ops("fix-smoke", "team-lead", "Money-cycle dedup complete",
+                              body, "m-42", log)
+    arrive, = MSGS.event_ops([("new", "fix-smoke", "team-lead",
+                              "Money-cycle dedup complete", body, "m-42")], log)
     read, = MSGS.event_ops([("read", "fix-smoke", "team-lead", "", "", "m-42")], log)
-    # the PANE is untouched: same glyphs, same semantic colours, same classes
-    assert chip["s"] == "● fix-smoke → team-lead" and chip["c"] == list(O.YELLOW)
+    # the PANE keeps its glyphs, its semantic colours and its classes
+    assert chip["s"] == "✉ fix-smoke → team-lead" and chip["c"] == list(O.YELLOW)
+    assert arrive["s"] == "● fix-smoke → team-lead · delivered"
     assert read["s"] == "◉ read · fix-smoke → team-lead" and read["c"] == list(O.GREEN)
-    assert [AC.classify(o)[0] for o in (chip, gut, read)] == ["mail", None, "mail"]
-    # …and all three name the same MESSAGE, which is what the counter dedupes on
-    assert chip["mid"] == gut["mid"] == read["mid"] == "m-42"
+    assert [AC.classify(o)[0] for o in (chip, gut, arrive, read)] == \
+        ["mail", None, "mail", "mail"]
+    # …and all four name the same MESSAGE, which is what the counter dedupes on
+    assert chip["mid"] == gut["mid"] == arrive["mid"] == read["mid"] == "m-42"
 
-    # the body is the message itself; the summary rides the note as its preview
+    # the SENT row carries the message; the summary rides its note as the preview
     assert gut["s"] == body
     assert chip["note"] == "Message fix-smoke → team-lead: Money-cycle dedup complete"
-    # …and the read notice says `Message` NOWHERE: the tracked state cannot tell
-    # whether the arrival was prose or a lifecycle frame, so claiming a message
-    # under a `· idle` line would contradict the line above it
-    assert read["note"] == "fix-smoke → team-lead · read"
+    # …and the poller's rows are labelled MAIL, not Message: they report on a message
+    # they do not carry, and a row that says `Message` with nothing behind it is the
+    # whole complaint ("still can't see the message")
+    assert arrive["note"] == "Mail fix-smoke → team-lead · delivered"
+    assert read["note"] == "Mail fix-smoke → team-lead · read"
+    assert len(MSGS.event_ops([("new", "a", "b", "s", body, "m1")], log)) == 1
     # a long report is capped — the pane paints this INLINE, where a wall is a wall
-    long = MSGS.event_ops([("new", "a", "b", "s", "x\n" * 200, "m1")], log)[1]["s"]
+    long = MSGS.sent_ops("a", "b", "s", "x\n" * 200, "m1", log)[1]["s"]
     assert long.count("\n") == MSGS.CAP_TEXT and "more lines)" in long
 
-    items = opshtml.op_items([chip, gut, read], "sid")
-    assert [it.get("act") for it in items] == ["mail", None, "mail"]
-    assert [it.get("mid") for it in items] == ["m-42", "m-42", "m-42"]
-    for it in (items[0], items[2]):
+    items = opshtml.op_items([chip, gut, arrive, read], "sid")
+    assert [it.get("act") for it in items] == ["mail", None, "mail", "mail"]
+    assert [it.get("mid") for it in items] == ["m-42"] * 4
+    for it in (items[0], items[2], items[3]):
         assert 'class="anote"' in it["html"] and it["note"] == 1
-        for gone in ('class="chip"', "●", "◉", "rgb(152,195,121)"):
+        for gone in ('class="chip"', "✉", "●", "◉", "rgb(152,195,121)"):
             assert gone not in it["html"], gone
     assert "Message fix-smoke → team-lead: Money-cycle" in items[0]["html"]
-    # the arrival and its body are ONE block, so the note line opens onto the message
+    # the sent row and its body are ONE block, so the note line opens onto the message
     assert items[0]["g"] and items[0]["g"] == items[1]["g"]
     assert "core.money_cycle" in items[1]["html"]
-    # a read notice has no body and so no block: it is a bare line, and the page
-    # refuses to offer a click that would reveal nothing
-    assert items[2]["g"] is None
+    # THE MODE RULE: only the message is a message. The poller's two rows are marked
+    # plumbing (default and focus drop them, verbose shows them labelled), the sent
+    # row and its body are not.
+    assert [it.get("plumb") for it in items] == [None, None, 1, 1]
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200 and 'if (elem.dataset.plumb) return "hide";' in ses
 
     # HISTORY (ops written before the wording existed, which no restart re-stamps)
     # gets it recovered from the chip, through the same owner
@@ -745,7 +764,13 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     old_body = O.gut("check the diff", MSGS.MSG_NEW_RGB)
     old_read = _lbl("◉ read · lead → rev-ui", MSGS.MSG_READ_RGB)
     assert AC.legacy_note(old_new) == "Message lead → rev-ui"
-    assert AC.legacy_note(old_read) == "lead → rev-ui · read"
+    assert AC.legacy_note(old_read) == "Mail lead → rev-ui · read"
+    # …and an old arrival that DOES carry a message is not demoted to plumbing: it is
+    # the only trace that message left, and hiding it would leave a pre-2026-07-27
+    # session showing no mail at all outside verbose
+    assert [i.get("plumb") for i in
+            opshtml.op_items([old_new, old_body, old_read], "sid")] == [None, None, 1]
+    assert opshtml.op_items([old_new, old_read], "sid")[0].get("plumb") == 1
     legacy = opshtml.op_items([old_new, old_body, old_read], "sid")
     # …and the body is placed UNDER its own header. The feed is newest-on-top, so the
     # page reverses this list — which put a group-less body ABOVE the arrival it
@@ -796,11 +821,12 @@ def test_most_team_mail_is_a_lifecycle_frame_and_says_so(tmp_path):
     """The thing that made "why can't I read the message itself?" so confusing:
     MOST of a team session's mail is not prose at all. Claude Code delivers teammate
     lifecycle events through the same inboxes as a JSON frame in the record's `text`
-    — 12 of the 14 arrivals in the reviewed lead session were idle notifications,
-    which carry no summary, so the row painted no body and read as `Message
-    rev-ui-util → team-lead` with nothing behind the click. There was no message.
-    Painting the JSON would be worse, so a frame is WORDED — and one that does carry
-    a sentence (an assignment's brief, a failure's reason) still shows it."""
+    — 10 of the 12 arrivals recorded in the reviewed lead session were idle
+    notifications, which carry no summary, so the row painted no body and read as
+    `Message rev-ui-util → team-lead` with nothing behind the click. There was no
+    message. Painting the JSON would be worse, so a frame is named by its TYPE: these
+    rows exist only here (nothing calls SendMessage for them), and naming them is what
+    lets the collapsing modes drop them as the plumbing they are."""
     from core import hostpane as HP
     from plugins.claude_code import msgs as MSGS
 
@@ -809,36 +835,34 @@ def test_most_team_mail_is_a_lifecycle_frame_and_says_so(tmp_path):
 
     def row(text, summ=""):
         ops = MSGS.event_ops([("new", "rev-ui", "team-lead", summ, text, "m1")], log)
-        return ops[0], (ops[1]["s"] if len(ops) > 1 else None)
+        assert len(ops) == 1, "a poller row is one line, never a body"
+        return ops[0]
 
     idle = json.dumps({"type": "idle_notification", "from": "rev-ui",
                        "timestamp": "2026-07-27T05:57:45.886Z",
                        "idleReason": "available"})
-    chip, body = row(idle)
-    assert chip["note"] == "rev-ui → team-lead · idle" and body is None
+    chip = row(idle)
+    assert chip["note"] == "Mail rev-ui → team-lead · idle"
     assert chip["s"] == "● rev-ui → team-lead · idle"     # the pane says it too
     assert "idle_notification" not in json.dumps(chip)   # …and never the wire format
-    # a frame that carries a SENTENCE keeps it as the body, so the click still pays
-    chip, body = row(json.dumps({"type": "task_assignment", "taskId": "7",
-                                 "subject": "fix ui", "assignedBy": "team-lead",
-                                 "description": "Fix the picker EOF loop."}))
-    assert chip["note"] == "rev-ui → team-lead · task assigned"
-    assert body == "Fix the picker EOF loop."
+    assert MSGS.frame(idle)["idleReason"] == "available"
     # an UNUSUAL outcome is named (an ordinary one is not — every line would carry it)
-    chip, body = row(json.dumps({"type": "idle_notification", "from": "rev-ui",
-                                 "idleReason": "failed",
-                                 "failureReason": "worktree gone"}))
-    assert chip["note"] == "rev-ui → team-lead · idle (failed)"
-    assert body == "worktree gone"
+    assert row(json.dumps({"type": "idle_notification", "from": "rev-ui",
+                           "idleReason": "failed",
+                           "failureReason": "worktree gone"}))["note"] \
+        == "Mail rev-ui → team-lead · idle (failed)"
+    for kind, phrase in MSGS.FRAME_PHRASE.items():
+        assert row(json.dumps({"type": kind}))["note"] \
+            == "Mail rev-ui → team-lead · " + phrase
     # an unknown frame type still gets a line — its own type, which is at least true
-    chip, _ = row(json.dumps({"type": "weird_new_thing", "x": 1}))
-    assert chip["note"] == "rev-ui → team-lead · weird_new_thing"
-    # …and PROSE is never mistaken for a frame, whatever it starts with
+    assert row(json.dumps({"type": "weird_new_thing", "x": 1}))["note"] \
+        == "Mail rev-ui → team-lead · weird_new_thing"
+    # …and PROSE is never mistaken for a frame, whatever it starts with: its row is
+    # the plain `delivered` transition, and the MESSAGE is the send-time row's job
     for prose in ("{ not json after all", '{"no": "type field"}', "plain words"):
         assert MSGS.frame(prose) is None
-        chip, body = row(prose, "the preview")
-        assert chip["note"] == "Message rev-ui → team-lead: the preview"
-        assert body == prose
+        assert row(prose, "the preview")["note"] \
+            == "Mail rev-ui → team-lead · delivered"
 
 
 def test_an_agents_brief_carries_no_injected_system_reminders(dash):

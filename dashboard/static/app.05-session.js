@@ -693,6 +693,7 @@ const ACT_KIND = {
 function refineBlockKind(b, it) {
   if (it.agent) b.root.dataset.agent = it.agent;       // whose agent block (src id)
   if (it.mid) b.root.dataset.mid = it.mid;             // which message (mail msg_id)
+  if (it.plumb) b.root.dataset.plumb = "1";            // …and whether it IS one
   if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
   if (it.g) b.root.dataset.g = it.g;                   // the run pass reads it
   if (/class="og"/.test(it.html)) {                    // outer gutter == nested subagent job
@@ -733,6 +734,7 @@ function stampItem(elem, it) {
   if (it.agent) elem.dataset.agent = it.agent;   // the run summary counts agents,
   //                                                not agent-ish rows
   if (it.mid) elem.dataset.mid = it.mid;         // …and messages, not mail-ish rows
+  if (it.plumb) elem.dataset.plumb = "1";        // the mail system, not the message
   if (it.meta) elem.dataset.injected = "1";   // a prompt Claude Code injected,
   //                                             not one the human typed
   elem.dataset.vk = String(++S.ses.viewSeq);
@@ -1057,6 +1059,14 @@ function applyViewMode() {
       }
       return "show";
     }
+    // MAIL PLUMBING — the inbox poller reporting on a message (delivered / read / a
+    // teammate lifecycle frame) rather than the message itself, which now has its own
+    // send-time row (opshtml.op_items stamps `data-plumb` — actclass.mail_plumbing).
+    // Dropped here for the same reason an injected prompt is: it is not the thing it
+    // looks like, and counting it said "passed 4 messages" over rows that held no
+    // message. Verbose returns before any of this and shows every one of them, each
+    // labelled `Mail … · delivered/read/idle`.
+    if (elem.dataset.plumb) return "hide";
     return fold.includes(elem.dataset.act || "") ? "fold" : "show";
   });
 

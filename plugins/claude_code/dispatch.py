@@ -116,6 +116,11 @@ _ROUTES = {
         _fmt("claude-file-fmt.py", "file_fmt",
              matcher="Read|Edit|Write|MultiEdit|NotebookEdit"),
         _fmt("claude-monitor-fmt.py", "monitor_fmt", matcher="Monitor"),
+        # team mail's MESSAGE row (mail_fmt.py). The one formatter that deliberately
+        # does NOT skip an agent_id event: a teammate's SendMessage is where most
+        # team mail comes from, and the send is the only moment the text exists (the
+        # inbox poller sees a fraction of it — docs/dashboard.md, *Team mail*).
+        _fmt("claude-mail-fmt.py", "mail_fmt", matcher="SendMessage"),
         _ASK,
         # the task-list kv snapshot (web tasks card): a TaskUpdate status flip
         # (pending→in_progress, →completed, →deleted) fires NO dedicated hook —

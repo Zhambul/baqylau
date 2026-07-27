@@ -129,6 +129,8 @@ def test_plan_sequences_pinned():
         # the tool's own PostToolUse(+Failure) is its only refresh signal
         assert _names(ev, "TaskCreate") == [tab, "claude-task-fmt.py"]
         assert _names(ev, "TaskUpdate") == [tab, "claude-task-fmt.py"]
+        # team mail's MESSAGE row: the send is the only moment its text exists
+        assert _names(ev, "SendMessage") == [tab, "claude-mail-fmt.py"]
         assert _names(ev, "WebFetch") == [tab]
         assert _names(ev, "Readx") == [tab]  # fullmatch, not prefix
     assert _names("Notification") == [tab]
@@ -174,8 +176,8 @@ sys.argv = ["lazy-import-test"]
 import plugins.claude_code.dispatch as D
 HEAVY = {"plugins.claude_code." + m for m in
          ("cmd_pre", "cmd_fmt", "file_fmt", "monitor_fmt", "stop_fmt",
-          "task_fmt", "split", "subagent_fmt", "accounting", "msgs", "tools",
-          "model")}
+          "task_fmt", "mail_fmt", "split", "subagent_fmt", "accounting", "msgs",
+          "tools", "model")}
 loaded = HEAVY & set(sys.modules)
 assert not loaded, "at import time: %s" % loaded
 D.adopt.on_event = lambda d: None            # pin the probe to routing only

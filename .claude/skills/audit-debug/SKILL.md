@@ -1614,11 +1614,22 @@ New always-audited swallow sites (previously silent — their absence used to ma
   the ops (pre-2026-07-27 history has none, and legacy rows are counted per row).
   **Check the `summary` first: an EMPTY one usually means the "message" was a teammate
   LIFECYCLE FRAME** (an idle notification and friends — JSON in the record's `text`,
-  no summary; 12 of 14 arrivals in one reviewed lead session). Those are worded from
-  their type now (`… · idle`) and deliberately have no body; before that they painted
+  no summary; 10 of the 12 arrivals in one reviewed lead session). Those are worded from
+  their type now (`Mail … · idle`) and deliberately have no body; before that they painted
   nothing at all, which is the "I can't read the message" report. A pre-2026-07-27
   frame row on disk is indistinguishable from a prose arrival — nothing in the op says
   which it was — so history keeps the `Message <frm> → <to>` wording.
+- **A message is missing from the web mirror entirely / the mail row has no text** —
+  since 2026-07-27 the MESSAGE row comes from the `SendMessage` hook, not the poller:
+  `hook_events` where `handler='claude-mail-fmt.py'`, one row per send, its `decision`
+  carrying `<from> → <to> (N chars, msg_id …)`. No row for a message you can see in the
+  transcript means the hook never ran (check the dispatcher's `subscriber` row for the
+  same `tool_use_id`: if that exists and mail-fmt's does not, the step crashed — look in
+  `errors` under `script='claude-mail-fmt.py'`); an `ignored: send failed` decision means
+  Claude Code refused the send, and `ignored: no state DB` means the session was
+  unhosted or already parked. The poller's `msg-transitions` rows are the SECOND source
+  and now deliberately carry no text — a mail row with no message behind it is expected
+  there and is not the bug (docs/dashboard.md *Team mail*).
 - **Mirror resizes to the wrong width / preset lands far off** — the geometry
   walk (`frontends/kitty.py` `split_geometry`, reached via
   `plugins/claude_code/split.py mirror_geometry`) resolves the mirror's

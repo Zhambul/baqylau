@@ -168,6 +168,17 @@ def ops_html(ops, key=""):
 # identity (a label/line op is what names a class).
 _BODY_OPS = ("gut", "code")
 
+
+def _body_follows(ops, i):
+    """Does the op after ops[i] carry its BODY — either inside its block (same `g`) or
+    as the bare next row (the group-less shape team-mail history has)? Used to tell a
+    mail row that holds a message from one that only reports on it."""
+    nxt = ops[i + 1] if i + 1 < len(ops) else None
+    if not isinstance(nxt, dict) or nxt.get("t") not in _BODY_OPS:
+        return False
+    g = ops[i].get("g")
+    return nxt.get("g") == g if g else not nxt.get("g")
+
 # The bullet a web NOTE line opens with — Claude Code's own marker for the same
 # kind of one-line activity notice in its transcript. It stands in the summary
 # line's DOT column (see the `.anote` rules), so no trailing space: the gap is CSS.
@@ -266,11 +277,18 @@ def op_items(ops, key="", ids=None, carry=None):
             # happens to come later.
             got = actclass.mail_pair(op)
             if got:
-                frm, to, read = got
+                frm, to, kind = got
                 pair = "%s → %s" % (frm, to)
-                if not read or pair not in mail_n:
+                if kind != "read" or pair not in mail_n:
                     mail_n[pair] = oid
                 it["mid"] = "pair:%s#%s" % (pair, mail_n[pair])
+        # …and WHICH KIND of mail row this is: the mail system reporting on a message
+        # (delivered / read / a lifecycle frame) rather than the message itself. Those
+        # are verbose-only on the web — see actclass.mail_plumbing. The body lookahead
+        # is what spares HISTORY, where an arrival WITH a body is the only trace a real
+        # message left (the send-time row did not exist yet).
+        if actclass.mail_plumbing(op, _body_follows(ops, i)):
+            it["plumb"] = 1
         if op.get("note") or actclass.legacy_note(op):
             it["note"] = 1          # this header IS the whole line (see op_html)
         # The ACTIVITY CLASS the view modes collapse a run of items on

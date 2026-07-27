@@ -45,21 +45,22 @@ see [otel.md](otel.md).
     delivered − read`). Since the team files carry **no liveness flag**, `stale` is also
     the only available (age-based) signal for a message sitting in the inbox of a
     crashed recipient. The same tracker also **emits into the mirror stream** on each
-    transition — a `● <from> → <to>` chip (+ the MESSAGE ITSELF, the inbox record's
-    `text` field, capped at `CAP_TEXT` 24 lines) when a message is delivered, a
-    `◉ read · <from> → <to>` chip when it's consumed — so arrivals/reads interleave with
-    the command stream. The body was the one-line `summary` until the web mirror made the
-    gap plain: a mail row whose only content was a 5-10 word preview left "passed 4
-    messages" with no messages behind it (docs/dashboard.md *Team mail reads as a note
-    too*). The summary now rides the chip's web wording instead, and only IT is persisted
-    in the tracker state — a full report never enters the state DB. **A teammate
-    LIFECYCLE FRAME** (Claude Code routes idle notifications, task assignments and
-    terminations through the same inboxes, as a record whose `text` is JSON) is worded
-    from its type instead — `● rev-ui-util → team-lead · idle` — and its JSON is never
-    painted; the frame's own sentence, if it has one, becomes the body. These are the
-    MAJORITY of a team session's mail (12 of 14 arrivals in one reviewed session), and
-    they are counted in the ✉ census like any other delivery, because that row counts
-    what the mailbox carried. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its body share a copy-group, one block, and all of a message's ops carry its msg_id as `mid` so the web counts messages rather than mail-ish rows, returned
+    transition — a `● <from> → <to> · delivered` chip when a message lands, a
+    `◉ read · <from> → <to>` chip when it's consumed — so those interleave with the
+    command stream. They are **one line each, no body**: reporting on a message, not
+    carrying it. The MESSAGE itself is a separate row written at SEND time by the
+    `SendMessage` hook (`mail_fmt.py` — `✉ <from> → <to>` + the text), because this
+    poller structurally cannot be that row: it sees only mail still unread at a tick
+    (measured: 33 messages sent, 12 arrivals seen, 10 of those lifecycle frames) and the
+    inbox record is gone once the recipient drains it (docs/dashboard.md *Team mail*).
+    Every row of one message carries its `msg_id`, so the web counts one message however
+    many rows speak about it. **A teammate LIFECYCLE FRAME** (Claude Code routes idle
+    notifications, task assignments and terminations through the same inboxes, as a
+    record whose `text` is JSON) has no SendMessage anywhere, so this poller is its ONLY
+    surface: it is worded from its type — `● rev-ui-util → team-lead · idle` — and its
+    JSON is never painted. Frames are the MAJORITY of a team session's mail, and they
+    are counted in the ✉ census like any other delivery, because that row counts what
+    the mailbox carried. The tracker BUILDS those ops itself (`msgs.event_ops` — the arrival's chip and its body share a copy-group, one block, and all of a message's ops carry its msg_id as `mid` so the web counts messages rather than mail-ish rows, returned
     through the plugin's `census`), and this renderer only emits them: the glyphs and
     colours are a claude_code vocabulary the web mirror reads back to classify these rows
     as mail (docs/dashboard.md *View modes*), while the scorebar serves every host tool

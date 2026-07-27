@@ -5063,63 +5063,79 @@ producer stamps it on all three ops; the terminal ignores it) and stamped onto t
 as `data-mid`. `VIEW_SUBJECT` is the table of counters that count subjects rather than
 rows — `{agent: data-agent, mail: data-mid}` — so the two cases are one code path.
 
-### Team mail reads as a note too, and holds the message
+### Team mail: the message comes from the SEND, the poller only reports on it
 
-A mail row is the same kind of thing as an agent note — one line saying something
-happened, with the substance behind a click — so it wears the same `⏺` note (`Message
-team-lead → rev-ui-util: <summary>`, `Message team-lead → rev-ui-util · read`) instead
-of the pane's coloured chip. A green `◉ read · team-lead → rev-ui-util` in the feed
-announces plumbing at the weight of the conversation; the pane keeps it, because a
-pane reader scans by colour. `:` introduces the message's own words, `·` appends a
-state, matching `finished · 21m 16s`. Worded by its owner (`msgs.note_new` /
-`note_read`) like every other note, and recovered read-side for chips already on disk
+Mail on the web is TWO kinds of row, and confusing them is what made this feature take
+five attempts to get right:
+
+- **The message.** `⏺ Message fix-smoke-dedup → team-lead: Money-cycle dedup complete`
+  — written at SEND time by the `SendMessage` hook (`plugins/claude_code/mail_fmt.py`),
+  its body the message text, so the click opens what was said. Shown in every mode.
+- **The plumbing.** `⏺ Mail fix-smoke-dedup → team-lead · delivered` / `· read` /
+  `· idle` — the inbox poller (`msgs.event_ops`) reporting on a message. One line, no
+  body, and **verbose only**: asked for in exactly those words — *"I don't want to see
+  the lifecycle messages, mail arrivals in the default or focus mode, only the real
+  messages on sent time … but in verbose mode I want to see all of them with a label"*.
+  `data-plumb` (from `actclass.mail_plumbing`) is what the mode pass keys on, dropped
+  like an injected prompt: not the thing it looks like, and counted into nothing.
+
+**Why the poller cannot be the message.** `msgs.py` tracks mail by scanning the team
+inboxes once a second, so it only ever sees a message still sitting unread at a tick.
+Measured on one reviewed lead session: **33 messages sent, 12 arrivals recorded, 10 of
+those 12 lifecycle frames** — so 2 of 33 real messages left a row at all, and the rest
+were consumed between ticks and vanished. Nor does the poller have the text at the right
+moment: it reads the inbox record, which is gone once the recipient drains it. Four
+rounds of fixes to those rows (wording, placement, counting) each landed and each left
+the same complaint standing — *"why do you keep fixing but it is not fixed?"* — because
+the row the reader was clicking never had a message in it. The SendMessage hook fires on
+every send, at send time, with `tool_input.message` in hand. That is the fix; the rest
+was polish on the wrong surface.
+
+The hook is the ONE formatter that deliberately ignores the main-session-only invariant
+(the same exception `cmd_pre.py` takes for a subagent's teed command): a teammate's send
+carries an `agent_id`, and teammate mail is most of team mail. The op is emitted
+unstamped, so it lands in the main mirror where the lead reads it, and `msg_id` ties it
+to the poller's rows for the same message — which is how three rows count as one
+message. A REFUSED send paints nothing (the audit row is its trace), and the structured
+`{message: {type: …}}` form is a protocol frame, not prose, so it is left to the poller.
+
+Capped at `msgs.CAP_TEXT` (60 lines, `CAP_BODY`'s ceiling for a command's output — a
+review report is the same order of thing) because the terminal paints it inline;
+deliberately its own ceiling and not `substream_render`'s `CAP_TEAMMSG`/`CAP_SENDMSG`,
+which cap the same content inside an AGENT's stream.
+
+**A lifecycle frame is named by its type.** Claude Code delivers teammate lifecycle
+events through the same inboxes as an ordinary mailbox record whose `text` is a JSON
+frame — `{"type":"idle_notification","from":"rev-ui-util","idleReason":"available"}`.
+These have no SendMessage anywhere, so the poller's row is their only surface, and it
+words them from `msgs.FRAME_PHRASE` (`· idle`, `· task assigned`, `· terminated`,
+`· idle (failed)`) whose type vocabulary is Claude Code's own (2.1.220 refuses exactly
+that list from a plain-text SendMessage: *"message text must not be a teammate
+lifecycle/task frame"*). An unknown type still gets a line naming its `type`, which is at
+least true. Painting the JSON would be worse than painting nothing: a reader wants the
+event, not the wire format.
+
+**The wording is a LABEL, and that is deliberate.** `Message` marks the row that carries
+words; `Mail` marks the mail system talking about one. A line can then never promise
+content it does not have — which is precisely what `⏺ Message team-lead → rev-ui-util`
+over an empty click did. Both are worded by their owner (`msgs.note_message` /
+`note_mail`) like every other note, and recovered read-side for chips already on disk
 (`actclass.legacy_mail_note`, colour-gated exactly like the classifier so a monitor's
 `◉` is never reworded).
 
-**The body is the MESSAGE, not its preview.** The row used to carry only SendMessage's
-`summary` — Claude Code's own 5-10 word label — and often not even that, so expanding
-`passed 4 messages` revealed a stack of chips with no messages behind them ("why when
-I click on Passed 4 messages can't I see the actual messages?"). The tracker already
-reads the inbox record; it now takes its `text` field (the message body — the record is
-`{type, from, text, timestamp, read, color, summary, msg_id}`, confirmed against the
-2.1.220 binary's mailbox schema) and paints THAT as the block's body, with the summary
-riding the note as the line's preview. Capped at `msgs.CAP_TEXT` (24 lines) because the
-terminal paints it inline, where a 200-line report is a wall; deliberately its own
-ceiling and not `substream_render`'s `CAP_TEAMMSG`/`CAP_SENDMSG`, which cap the same
-content inside an AGENT's stream. Only the SUMMARY is persisted in the tracker state —
-a read notice needs no body, so a full report is never copied into the state DB. The
-audit's `msg-transitions` row records the msg_id and the body's LENGTH (never the
-body), which is what makes "the mail line showed nothing" answerable after the fact: an
-arrival with `chars=0` had no text to paint.
+**History keeps its `Message` rows.** Before the send-time row existed, an arrival WITH a
+body was the only trace a real message left, so `mail_plumbing` spares those (the body
+lookahead in `op_items`) — demoting them would leave every pre-2026-07-27 session showing
+no mail at all outside verbose. Those bodies are the SUMMARY, not the message; the text
+of a historical message is not in the mirror at all and can only come from the audit's
+own `SendMessage` payloads (a join measured exact on the reviewed session: 2 of 2 rows
+matched by sender + summary, one yielding a 6,364-character report) or from the sending
+teammate's drill-down.
 
-**Most team mail is not prose, and now says what it is.** Claude Code delivers
-teammate LIFECYCLE events through the same inboxes as an ordinary mailbox record whose
-`text` is a JSON frame — `{"type":"idle_notification","from":"rev-ui-util",
-"idleReason":"available"}`. In the reviewed lead session **12 of 14 arrivals were
-these**, and they carry no `summary`, which is what made the report so puzzling: the
-row painted no body at all and read as `Message rev-ui-util → team-lead` with nothing
-behind the click (*"but why can't I read the message itself?"* — there was no
-message). Painting the JSON is worse than painting nothing; a reader wants the event,
-not the wire format. So a frame is WORDED instead — `rev-ui-util → team-lead · idle`,
-`· task assigned`, `· terminated`, `· idle (failed)` — from `msgs.FRAME_PHRASE`, whose
-type vocabulary is Claude Code's own (2.1.220 refuses exactly that list from a
-plain-text SendMessage: *"message text must not be a teammate lifecycle/task frame"*).
-An unknown type still gets a line naming its own `type`, which is at least true. A
-frame that DOES carry a sentence — an assignment's `description`, a failure's
-`failureReason`, an idle wrap-up `summary` (`msgs.FRAME_TEXT`) — keeps it as the body,
-so the click still pays. One builder (`frame_words`) words both surfaces, so the pane's
-chip and the web's note can never describe the same frame differently.
-
-For the same reason a read notice says `Message` nowhere (`rev-ui-util → team-lead ·
-read`): the tracked state does not remember whether the arrival was prose or a frame,
-and `Message … · read` under a `· idle` line would claim what the line above it just
-denied. The arrow pair is what marks a row as mail; `Message` is reserved for the rows
-that actually carry words.
-
-Known duplication: for mail a TEAMMATE sent, the terminal now shows the body twice —
-once in the teammate's own `✉ to <who>` substream block, once on the lead's mail line.
+Known duplication: for mail a TEAMMATE sent, the terminal shows the body twice — once in
+the teammate's own `✉ to <who>` substream block, once on the session's message row.
 Accepted, because the web mirror drops the substream copy (it is `src`-stamped) and mail
-the LEAD sent has no substream block at all, so the mail line is the only place either
+the LEAD sent has no substream block at all, so the message row is the only place either
 surface can show it.
 
 Because they are classes now, both collapsing modes fold them and need words for
@@ -5127,6 +5143,9 @@ them:
 `tracked N tasks` and `passed N messages`. Neither is Claude Code vocabulary (it
 has no agent-team surface to word), so they follow the table's shape — an active
 participle and a plain past tense — and are marked as ours in `VIEW_FRAGMENTS`.
+`passed N messages` now counts only the rows that HOLD a message (the plumbing is
+dropped before the counters see it), so the summary can no longer promise mail that
+turns out not to be there.
 
 Both non-verbose modes additionally drop **injected prompts** — turns written in
 the USER's shape that the human never typed (`transcript._injected`: three

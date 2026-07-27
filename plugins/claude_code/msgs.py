@@ -60,36 +60,43 @@ STALE_S = 60                    # an unread message sitting longer than this is 
 # as one system: a delivered/unread message is yellow, a read one green.
 MSG_NEW_RGB  = O.YELLOW
 MSG_READ_RGB = O.GREEN
-GLYPH_NEW  = "●"                # a message delivered (still unread)
+GLYPH_SENT = "✉"                # a message SENT — the real thing, with its text
+GLYPH_NEW  = "●"                # …the poller seeing it land in an inbox
 GLYPH_READ = "◉"                # …and consumed. NOTE: shared with a monitor
 #                                 block's chip, so the classifier disambiguates
 #                                 by colour (semantic == mail, slot palette ==
 #                                 monitor), exactly as it does for ▶.
 READ_PREFIX = GLYPH_READ + " read · "
 
-# The WEB WORDING of those two chips (core/ops.py's `note`): one quiet `⏺ …` line
-# in the register of a collapsed run's summary, instead of the pane's coloured
-# chip. Written HERE, by the producer, for the same reason the glyphs are — the
-# presenter must not parse a chip back apart to reword it. `:` introduces the
-# message's own words, `·` appends a state, matching the agent notes' `finished ·
-# 21m 16s`.
-def note_new(frm, to, summ=""):
-    """`Message <frm> → <to>[: <summary>]` — a delivered message. The summary is
-    Claude Code's own 5-10 word preview (SendMessage's `summary` field); the body
-    behind the click is the message itself."""
+# TWO KINDS OF MAIL ROW, and the split is the whole point (docs/dashboard.md,
+# *Team mail*). The MESSAGE row is written at SEND time by the SendMessage hook
+# (mail_fmt.py) and carries the text; the DELIVERY/READ rows come from this
+# module's inbox poller and carry nothing but the transition. The poller cannot
+# be the message: it only sees mail still sitting unread at a tick, which in one
+# reviewed session was 12 of the 33 messages sent (10 of those 12 lifecycle
+# frames) — a message consumed between ticks left no row at all. So the poller's
+# rows are labelled `Mail …` PLUMBING (verbose only on the web) and the hook's
+# row is the message.
+#
+# The WEB WORDING of every one of them (core/ops.py's `note`): one quiet `⏺ …`
+# line in the register of a collapsed run's summary, instead of the pane's
+# coloured chip. Written HERE, by the producer, for the same reason the glyphs
+# are — the presenter must not parse a chip back apart to reword it. `:`
+# introduces the message's own words, `·` appends a state, matching the agent
+# notes' `finished · 21m 16s`.
+def note_message(frm, to, summ=""):
+    """`Message <frm> → <to>[: <summary>]` — a real message, whose body is its text.
+    The summary is Claude Code's own 5-10 word preview (SendMessage's `summary`)."""
     line = "Message %s → %s" % (frm, to)
     return (line + ": " + summ) if summ else line
 
 
-def note_read(frm, to):
-    """`<frm> → <to> · read` — a delivered message, consumed. Carries no body (there
-    is nothing to reveal), and the web counts it as the SAME message as its arrival,
-    not a second one (see `mid`). It says `Message` nowhere on purpose: the tracked
-    state does not remember whether the arrival was prose or a lifecycle frame, and
-    `Message rev-ui-util → team-lead · read` under a `… · idle` line would claim
-    something the line above it just denied. The arrow pair is what names it as
-    mail; `Message` is reserved for the rows that actually carry words."""
-    return "%s → %s · read" % (frm, to)
+def note_mail(frm, to, state):
+    """`Mail <frm> → <to> · delivered|read|idle|…` — a poller row. The leading `Mail`
+    is the LABEL the reader asked for: it says this line is the mail system talking
+    about a message, not the message. `Message` is reserved for the row that carries
+    words, so a line can never promise content it does not have."""
+    return "Mail %s → %s · %s" % (frm, to, state)
 
 
 # --- LIFECYCLE FRAMES -------------------------------------------------------
@@ -154,12 +161,33 @@ def frame_words(fr):
     return phrase, ""
 
 
-# How much of a message body the mail line paints. Deliberately its own ceiling and
-# NOT substream_render's CAP_TEAMMSG/CAP_SENDMSG (which cap the same content inside
-# an AGENT's own stream): this line is the lead's ambient view of team mail, and on
-# the web the body sits behind a click, so it can afford to be generous. Capped at
-# all because the terminal paints it inline, where a 200-line report is a wall.
-CAP_TEXT = 24
+# How much of a MESSAGE the mail line paints. Deliberately its own ceiling and NOT
+# substream_render's CAP_TEAMMSG/CAP_SENDMSG (which cap the same content inside an
+# AGENT's own stream): this row is the session's record of what was said, and on the
+# web its body sits behind a click. Capped at all because the terminal paints it
+# inline, where an unbounded report is a wall; 60 lines is `CAP_BODY`'s ceiling for a
+# command's output, and a teammate's review report is the same order of thing.
+CAP_TEXT = 60
+
+
+def sent_ops(frm, to, summ, text, mid, log=None):
+    """A message SENT -> the mirror ops for it: one `✉ <frm> → <to>` header plus the
+    message as its body, sharing a copy-group so the web has one block whose click
+    opens the text. Built HERE, with the rest of the mail vocabulary, and emitted by
+    the SendMessage hook (mail_fmt.py) — the only source that sees every message, at
+    the moment it is sent, with its full text.
+
+    `mid` is the msg_id from the tool response: the poller's delivery/read rows for
+    the same message carry it too, so the web counts one message however many rows
+    speak about it."""
+    body = SF.cap((text or "").strip(), CAP_TEXT)
+    g = O.new_group(log) if (log and body) else None
+    ops = [O.label("%s %s → %s" % (GLYPH_SENT, frm, to), MSG_NEW_RGB,
+                   g=g, mid=mid, lk=O.COPY_ALL if g else None,
+                   note=note_message(frm, to, summ))]
+    if body:
+        ops.append(O.gut(body, MSG_NEW_RGB, g=g, mid=mid))
+    return ops
 
 
 def event_ops(events, log=None):
@@ -167,25 +195,18 @@ def event_ops(events, log=None):
     that show them. Returns a list (possibly empty) for the caller to emit into the
     mirror log, so the shape lives with the tracker that produces the events rather
     than with the renderer that paints them. The 5th/6th fields are optional — a
-    4-tuple caller still works, it just gets the pre-`text` shape.
+    4-tuple caller still works.
 
-    An arrival's chip and its BODY share a copy-GROUP (hence `log`, which
-    `new_group` needs): they are one block, and a delivered message with a body
-    was the one two-op row in the mirror that wasn't. That cost the body its
-    identity on the web — a group-less body op has no block to take its activity
-    class from, so it landed as an unclassifiable top-level row, visible in every
-    view mode however strict; a teammate's report-delivery summary therefore sat
-    in the middle of focus mode with its own header hidden (docs/dashboard.md,
-    *View modes*). Without a log there is nothing to allocate a group from, so the
-    ops go out ungrouped exactly as before (the read side still has a best-effort
-    fallback for pre-grouping history).
+    These are the POLLER's rows and they are PLUMBING: one line per transition, no
+    body, labelled `Mail … · delivered` / `· read` / `· idle` (a lifecycle frame's
+    own phrase — see `frame`). They deliberately no longer carry the message text:
+    the send-time row does (`sent_ops`), and the poller's view of the same message
+    would be a second copy of it — worse, a copy that only exists when the mail
+    happened to still be unread at a tick. The `text` argument survives to word a
+    lifecycle frame, which has no SendMessage row anywhere and so exists ONLY here.
 
-    The body is the MESSAGE ITSELF (the inbox record's `text`), not just its
-    one-line summary: the summary rides the chip's web note, and a mail row whose
-    only content was a 5-10 word preview left "Passed 4 messages" with no messages
-    behind it — the whole point of the row is what was said. A LIFECYCLE FRAME
-    (see `frame`) is worded instead — `rev-ui-util → team-lead · idle` — and its
-    JSON never becomes a body."""
+    Every row carries the msg_id as `mid`, so all of a message's rows count as one
+    message on the web (docs/dashboard.md, *View modes*)."""
     ops = []
     for ev in events:
         kind, frm, to, summ = ev[:4]
@@ -194,22 +215,13 @@ def event_ops(events, log=None):
         pair = frm + " → " + to
         if kind == "new":
             fr = frame(text)
-            if fr:
-                phrase, said = frame_words(fr)
-                head, note, body = (pair + " · " + phrase,
-                                    pair + " · " + phrase, said)
-            else:
-                head, note = pair, note_new(frm, to, summ)
-                body = text.strip() or summ
-            body = SF.cap(body, CAP_TEXT)
-            g = O.new_group(log) if (log and body) else None
-            ops.append(O.label(GLYPH_NEW + " " + head, MSG_NEW_RGB,
-                               g=g, mid=mid, note=note))
-            if body:
-                ops.append(O.gut(body, MSG_NEW_RGB, g=g, mid=mid))
+            state = frame_words(fr)[0] if fr else "delivered"
+            ops.append(O.label("%s %s · %s" % (GLYPH_NEW, pair, state),
+                               MSG_NEW_RGB, mid=mid,
+                               note=note_mail(frm, to, state)))
         else:                                        # read
             ops.append(O.label(READ_PREFIX + pair, MSG_READ_RGB,
-                               mid=mid, note=note_read(frm, to)))
+                               mid=mid, note=note_mail(frm, to, "read")))
     return ops
 
 

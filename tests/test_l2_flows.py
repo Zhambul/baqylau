@@ -798,6 +798,36 @@ def test_f8_task_rows(run_hook, test_env, session, seed):
     oracle.assert_clean(test_env, s.sid)
 
 
+def test_f8b_team_mail_message_row(run_hook, test_env, session, seed):
+    """A message SENT gets its own mirror block, with the text in it. The inbox
+    poller cannot do this job: it sees only mail still unread at a tick (2 of 33
+    messages in one reviewed session), and it never has the text before the
+    recipient drains it — so the send-time hook is the message's only source
+    (docs/dashboard.md, *Team mail*)."""
+    s = session.make()
+    seed.py("from core import state as ST; ST.kv_set(%r, 'seeded', 1)" % s.log)
+    # a TEAMMATE's send: the one formatter that deliberately handles agent events
+    run_hook("claude-mail-fmt.py",
+             P.post_sendmessage(s, agent_id="afix-smoke-1", agent_type="fix-smoke",
+                                message="Twelve providers converted.\nWire proven."))
+    text = s.ops_text()
+    assert "✉ fix-smoke → team-lead" in text
+    assert "Twelve providers converted." in text and "Wire proven." in text
+    # the LEAD's own send (no agent_id) lands too, named for the team
+    run_hook("claude-mail-fmt.py",
+             P.post_sendmessage(s, to="fix-smoke", summary="go ahead",
+                                message="Proceed with the dedup.", msg_id="msg-2"))
+    assert "✉ main → fix-smoke" in s.ops_text()
+    oracle.assert_clean(test_env, s.sid)
+    # a REFUSED send paints nothing: the mirror would show mail that never went.
+    # The failed tool is the point here, so the oracle is told to expect one.
+    run_hook("claude-mail-fmt.py",
+             P.post_sendmessage(s, message="never delivered", success=False,
+                                msg_id="msg-3", event="PostToolUseFailure"))
+    assert "never delivered" not in s.ops_text()
+    oracle.assert_clean(test_env, s.sid, allow=("failed tools",))
+
+
 # --------------------------------------------------------------------- F9
 
 def test_f9a_cancelled_fg_command_self_heals(run_hook, test_env, session):
