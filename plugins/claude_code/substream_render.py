@@ -162,7 +162,7 @@ class Renderer:
         # advanced to the next turn), so emit that, not the live value.
         if self.pending_msg is None:
             return
-        glyph, kind = SF.MARK_RESULT if is_result else ("✎", "message")
+        glyph, kind = SF.MARK_RESULT if is_result else SF.MARK_MESSAGE
         # …and, for the result, the web mirror's own one-liner (core/ops.py "note"):
         # `⏺` + this, in the register of a collapsed run's summary. No model/ctx tag —
         # that belongs on the agent's card, not in the feed. The DURATION is appended
@@ -239,7 +239,8 @@ class Renderer:
         # An incoming agent-team message (mail from another teammate or the lead).
         self.flush_msg()
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip("✉", "from " + (sender or "?"), g=g, lk=O.COPY_ALL),
+        O.emit(self.log, self.chip(SF.MARK_MAIL, "from " + (sender or "?"),
+                                   g=g, lk=O.COPY_ALL),
                self.gutter(cap(body.strip(), CAP_TEAMMSG), g=g))
 
     def render_message(self, text):
@@ -276,15 +277,14 @@ class Renderer:
         # but the explicit name is what the eye reads. The one-liner itself is the shared
         # core builder (streamfmt.file_line — same anatomy as the main session's file ops
         # and codex patches).
-        who = R.fg(*self.rgb) + self.label + " " + RST
         # Same location-aware display as the main session's file ops
         # (streamfmt.file_display: ✎ scratchpad / dim out-of-project dir); the
         # tailer inherits the hook's cwd = the session directory, so the
         # default process-cwd baseline is the right one.
         disp, _loc = SF.file_display(path)
-        line = who + SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
-                                  failed=failed, extent=ext,
-                                  added=added, removed=removed, rng=rng)
+        line = SF.file_line(label, disp, CT.FILE_RGB.get(label, O.SLATE),
+                            failed=failed, extent=ext,
+                            added=added, removed=removed, rng=rng)
         if failed:
             line += "  " + R.DIM + "✗" + RST
         # A subagent memory-wiki op (~/wiki/01), and ONLY when this session is in
@@ -316,7 +316,8 @@ class Renderer:
                 self.log, tid, name_tool, label, name, path, inp,
                 result if isinstance(result, dict) else {}, line,
                 who="substream render", extra={"agent": self.agent})
-        O.emit(self.log, O.gut(line, self.rgb, view=vid, mem=is_mem))
+        O.emit(self.log, O.gut(line, self.rgb, view=vid, mem=is_mem,
+                               who=self.label))
         if is_mem:
             MEM.record(self.log, path, label, agent=self.agent)
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
@@ -376,7 +377,7 @@ class Renderer:
         # agent's un-bumped token tail; reconcile_spend recovers it, but don't crash).
         text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip("✉", "to " + to, ctx, g=g, lk=O.COPY_ALL),
+        O.emit(self.log, self.chip(SF.MARK_MAIL, "to " + to, ctx, g=g, lk=O.COPY_ALL),
                self.gutter(cap(text.strip(), CAP_SENDMSG), g=g))
         self.pend[tid] = ("sendmsg", "")
 

@@ -63,7 +63,7 @@ PROVIDERS = {
     "effort_default": 2,     # (cwd, slug)          — the resolved effort level
     "context": 1,            # (transcript_path)    — ctx saturation
     "goal": 1,               # (transcript_path)    — the active /goal
-    "conversation": 2,       # (sid, pos)           — the main-thread records
+    "conversation": 3,       # (sid, pos, agent_id) — ONE identity's records
     "ask_preamble": 2,       # (sid, tool_use_id)   — the ask card's preamble
 }
 
@@ -351,13 +351,15 @@ def goal(transcript_path):
     return _first("goal", transcript_path)
 
 
-def conversation(sid, pos=0):
-    """Main-thread conversation records from byte `pos` for the dashboard's
-    merged mirror stream: (records, new_pos) from the first plugin that
-    recognizes the sid, None otherwise. Records carry the tool_use `anchor`
-    the dashboard interleaves on (docs/dashboard.md). Same exception contract
-    as census()/activity()."""
-    return _first("conversation", sid, pos)
+def conversation(sid, pos=0, agent_id=""):
+    """Conversation records from byte `pos` for the dashboard's merged mirror
+    stream: (records, new_pos) from the first plugin that recognizes the sid,
+    None otherwise. `agent_id` picks WHOSE — the session's own main thread by
+    default, a subagent/teammate's when named — so agent scope merges prose into
+    an agent's mirror through this same call (docs/dashboard.md *Agent scope*).
+    Records carry the tool_use `anchor` the dashboard interleaves on. Same
+    exception contract as census()."""
+    return _first("conversation", sid, pos, agent_id)
 
 
 def ask_preamble(sid, tool_use_id):

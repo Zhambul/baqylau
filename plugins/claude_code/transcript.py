@@ -1121,17 +1121,25 @@ def mark_taken_back(sid, uid):
         return False
 
 
-def conversation_for(sid, pos=0):
-    """The conversation provider behind plugins.conversation(): the session's
-    MAIN transcript from byte `pos`. None when this plugin has no transcript
-    for the sid (the fan-out then asks the next plugin) — same resolution and
-    deferred-import shape as activity()."""
-    from core import sessionapi as API
-    row = API.session_row(sid)
-    path = (row or {}).get("transcript_path") or ""
-    if not path or not os.path.isfile(path):
+def conversation_for(sid, pos=0, agent_id=""):
+    """The conversation provider behind plugins.conversation(): ONE identity's
+    transcript from byte `pos` — the session's own main thread by default, or a
+    SUBAGENT/TEAMMATE's when `agent_id` names one. None when this plugin has no
+    transcript for the pair (the fan-out then asks the next plugin).
+
+    The same reader for both because it IS the same grammar: an agent's
+    transcript is a Claude transcript, so the dashboard's agent scope merges an
+    agent's prose into its mirror exactly as the session view merges the lead's
+    (docs/dashboard.md *Agent scope*), with no second path. Identity resolution
+    is `agent_path`'s (audit streams keystone, then the subagents/ layout).
+
+    The take-back stash is the LEAD's alone: it records prompts the terminal
+    handed back after an interrupt, which only ever happens to the human's input
+    (docs/dashboard.md *Interrupt*)."""
+    path = agent_path(sid, agent_id)
+    if not path:
         return None
-    return conversation(path, pos, taken_back(sid))
+    return conversation(path, pos, taken_back(sid) if not agent_id else ())
 
 
 def ask_preamble(path, tool_use_id):

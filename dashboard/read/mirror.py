@@ -154,10 +154,12 @@ def _merge_order(sid, key, agent=None):
     `mpos` is the whole-transcript end so the live SSE tail resumes correctly."""
     sdb = API.state_db_for(sid)
     last, ops = API.ops_at(sdb, 0) if sdb else (0, [])
-    # In AGENT scope the main thread's conversation is not part of the stream —
-    # the agent's own messages are already ops (the substream paints them), so
-    # merging the lead's prompts/replies in would show a second conversation.
-    got = None if agent else plugins.conversation(sid, 0)
+    # The conversation of WHOSE stream this is: the lead's main thread, or the
+    # agent's own transcript in agent scope. One call, keyed by identity — an
+    # agent's prose becomes bubbles exactly as the lead's does, which is what
+    # lets every downstream stage (view modes, focus, the rewind picker) work in
+    # scope without knowing scope exists.
+    got = plugins.conversation(sid, 0, agent or "")
     recs, mpos = got if got else ([], 0)
     # anchor -> last op index (the fallback placement); timestamped ops as
     # (ts, index) for the primary time-merge.
@@ -254,23 +256,35 @@ def _snap(entries, start):
 
 
 def agent_scope(sid, agent):
-    """The set of producer-source (`src`) stamps that belong to ONE agent of a
-    session — what the mirror read path scopes on (opshtml.in_scope). None for a
-    falsy `agent`, i.e. the ordinary main-agent-only session view.
+    """WHOSE stream to render: `{"srcs", "who"}` for one agent of a session, or
+    None for the ordinary main-agent-only session view (a falsy `agent`).
 
-    A subagent and a teammate are both named by their hook agent_id, so both
-    stamp spellings are accepted for it. A CODEX run is the exception the set
-    exists for: it is stamped `codex:<label>` (plugins/codex/watch.spawn) while
-    its synthesized agent id is the rollout basename (sessionapi.codex_aid), so
-    its label has to be looked up off the run's row — matching the id against
-    the stamp would silently show an empty mirror."""
+    `srcs` is the set of producer-source (`src`) stamps that belong to it, which
+    is what the ops are filtered on (opshtml.in_scope). A subagent and a teammate
+    are both named by their hook agent_id, so both spellings are accepted. A
+    CODEX run is the exception the SET exists for: it is stamped `codex:<label>`
+    (plugins/codex/watch.spawn) while its synthesized agent id is the rollout
+    basename (sessionapi.codex_aid), so its label is looked up off the run's row
+    — matching the id against the stamp would silently show an empty mirror.
+
+    `who` is the agent's display name, and it is here because the substream
+    prefixes it onto every block it paints — chip headers AND file-op one-liners
+    alike — to keep agents apart in the shared terminal pane. A scope is one
+    agent, so opshtml.as_lead strips it back off. Empty when the name is
+    unknowable (a session whose state DB has been swept), and then nothing is
+    stripped: a wrong strip would eat a real first word, and a redundant name is
+    the lesser fault."""
     if not agent:
         return None
-    scope = {"sub:" + agent, "team:" + agent}
-    for run in API.codex_runs(sid):
-        if run.get("agent_id") == agent and run.get("desc"):
-            scope.add("codex:" + run["desc"])
-    return scope
+    srcs = {"sub:" + agent, "team:" + agent}
+    who = ""
+    for rec in API.agents(sid):
+        if rec.get("agent_id") == agent:
+            who = rec.get("desc") or ""
+            if rec.get("kind") == "codex" and who:
+                srcs.add("codex:" + who)
+            break
+    return {"srcs": srcs, "who": who}
 
 
 def _render_window(entries, start, key, cmds=(), scope=None):

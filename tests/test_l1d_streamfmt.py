@@ -6,6 +6,8 @@
 # a "cleanup" here shows up as a golden diff, not a silent restyle.
 import os
 
+from conftest import REPO
+
 from core import ops as O
 from core import render as R
 from core import state as S
@@ -28,24 +30,55 @@ def test_cap_truncates_with_more_marker():
 
 # --- chip --------------------------------------------------------------------
 
-def test_chip_codex_shape():
-    # The codex header: no tags — exactly the old O.label(f"codex {g} {k}", rgb).
+def test_chip_carries_who_as_a_field_not_in_the_text():
+    """`who` is the op's OWN field, never concatenated into the paint text.
+
+    The terminal composes it back at paint time (bin/claude-mirror.py `_who`), so
+    the pane is unchanged; the web's agent scope — the one surface that must not
+    show a name it already says once — simply doesn't render the field. It used
+    to be baked into `s`, which left that surface parsing an ANSI-coloured name
+    back off a string and getting it wrong on every op shape it hadn't
+    anticipated."""
     got = SF.chip("codex", "▶", "cmd", RGB, g="g1", lk=[["cmd", "⧉cmd"]])
-    assert got == O.label("codex ▶ cmd", RGB, g="g1", lk=[["cmd", "⧉cmd"]])
-    assert got["s"] == "codex ▶ cmd"
+    assert got == O.label("▶ cmd", RGB, g="g1", lk=[["cmd", "⧉cmd"]], who="codex")
+    assert got["s"] == "▶ cmd" and got["who"] == "codex"
+
+
+def test_the_terminal_composes_who_back_onto_the_line():
+    """The pane is unchanged by `who` moving to a field: the renderer puts it
+    back, for a chip AND for a file-op gut line (the two shapes that carried it).
+
+    This is the pin on "same behaviour in the mirror, separated in core" — if a
+    producer ever bakes a name into `s` again, or the renderer stops composing,
+    one of these two reads differently."""
+    import importlib.util
+    import sys
+    spec = importlib.util.spec_from_file_location("_mir", os.path.join(REPO, "bin/claude-mirror.py"))
+    mir = importlib.util.module_from_spec(spec)
+    sys.modules["_mir"] = mir
+    spec.loader.exec_module(mir)
+
+    chip = SF.chip("explore", "▶", "foreground", RGB, tags=("opus",))
+    assert R.strip_ansi(mir._render(chip, 100)).strip() \
+        == "explore ▶ foreground  opus"
+    line = O.gut("Update(iam.py)", RGB, who="explore")
+    assert "explore Update(iam.py)" in R.strip_ansi(mir._render(line, 100))
+    # …and an op with no `who` (the main session's own) is untouched
+    assert R.strip_ansi(mir._render(O.gut("plain", RGB), 100)).strip() \
+        .endswith("plain")
 
 
 def test_chip_substream_tags():
     # The substream header: model tag + ctx ride as trailing double-spaced chips,
-    # empties skipped — the old inline f-string concatenation, byte for byte.
+    # empties skipped — the same concatenation, minus the who now on its own field.
     assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("opus", "ctx 42%"))["s"] == "explore ✎ message  opus  ctx 42%"
+                   tags=("opus", "ctx 42%"))["s"] == "✎ message  opus  ctx 42%"
     assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("", "ctx 42%"))["s"] == "explore ✎ message  ctx 42%"
+                   tags=("", "ctx 42%"))["s"] == "✎ message  ctx 42%"
     assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("opus", ""))["s"] == "explore ✎ message  opus"
+                   tags=("opus", ""))["s"] == "✎ message  opus"
     assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("", ""))["s"] == "explore ✎ message"
+                   tags=("", ""))["s"] == "✎ message"
 
 
 # --- gutter / dim_gut ----------------------------------------------------------

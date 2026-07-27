@@ -240,16 +240,16 @@ def in_scope(op, scope=None):
     `scope` None is the SESSION view: keep the main agent's own (unstamped) ops
     and drop every `src`-stamped one — agent and secondary-codex detail belongs
     to that agent, not the lead's stream — except the two `web`-stamped
-    endpoints described in op_items. A `scope` SET (of exact `src` strings, e.g.
-    {"sub:a1b2", "team:a1b2"}, built by read/mirror.agent_scope) inverts it: keep
-    only those, which is how the same pipeline renders ONE agent's mirror. It is
-    a resolved set rather than a bare id because the stamps are not uniform —
-    a codex run is stamped `codex:<label>` while its agent id is the rollout
-    basename."""
+    endpoints described in op_items. A scope RECORD (read/mirror.agent_scope:
+    `srcs` — the exact `src` strings, e.g. {"sub:a1b2", "team:a1b2"} — plus the
+    agent's display name) inverts it: keep only those, which is how the same
+    pipeline renders ONE agent's mirror. `srcs` is a resolved set rather than a
+    bare id because the stamps are not uniform — a codex run is stamped
+    `codex:<label>` while its agent id is the rollout basename."""
     src = op.get("src") or ""
     if scope is None:
         return not src or bool(op.get("web"))
-    return src in scope
+    return src in scope["srcs"]
 
 
 def op_items(ops, key="", ids=None, carry=None, scope=None):
@@ -310,6 +310,27 @@ def op_items(ops, key="", ids=None, carry=None, scope=None):
         t = op.get("t")
         if t in ("rule", "blank") or not in_scope(op, scope):
             continue
+        if scope is not None:
+            # AGENT SCOPE, and the ONLY place it differs from the session view.
+            # Two steps, both about making an agent's ops the same SHAPE the
+            # lead's are, so that everything below here is identity-agnostic by
+            # construction — no second rendering path, nothing downstream that
+            # has to know a scope exists:
+            #   1. drop the agent's PROSE blocks (header + body, by copy group) —
+            #      its conversation now comes from its own transcript through the
+            #      same merge the lead's does (actclass.prose_block);
+            #   2. normalise what's left into the lead's vocabulary — the
+            #      `<who>` prefix, the model/ctx tags, the agent palette and the
+            #      outer gutter all say "which agent", which the scope says once
+            #      (actclass.as_lead).
+            g = op.get("g") or None
+            if actclass.prose_block(op):
+                if g:
+                    cs.setdefault("drop", set()).add(g)
+                continue
+            if g and g in cs.get("drop", ()):
+                continue                # this block's body, following its header
+            op = actclass.as_lead(op)
         if actclass.agent_header(op):
             # the main session's own `▶ <type> · <desc>` launch/resume header —
             # dropped here because the substream's ⇢ prompt block says the same

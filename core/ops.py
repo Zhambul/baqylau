@@ -100,8 +100,22 @@ def rule():
     return {"t": "rule"}
 
 
-def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None):
+# WHO produced this block, as a SEPARATE field rather than baked into `s`.
+# Every op of a per-agent stream carries the agent's name, because the TERMINAL
+# pane is shared: without it a subagent's Read and the lead's are the same line.
+# It used to be concatenated into the paint text at the producer, which meant the
+# one surface that does NOT need it — the web dashboard's agent scope, where the
+# whole view is that one agent — had to parse it back off a string (ANSI and
+# all), and got it wrong on every op shape it hadn't anticipated. As a field the
+# terminal composes it at paint time (bin/claude-mirror.py `_who`) and the web
+# simply ignores it. Absent for the main session's own ops, which have no "who".
+
+
+def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
+          who=None):
     o = {"t": "label", "s": s, "c": _rgb(c)}
+    if who:
+        o["who"] = str(who)
     if web:
         o["web"] = 1
     if note:
@@ -142,8 +156,10 @@ def code(s, ind="  ", g=None):
 
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
-        web=False, mem=False, mid=None):
+        web=False, mem=False, mid=None, who=None):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
+    if who:
+        o["who"] = str(who)            # see label()'s `who`
     if web:
         o["web"] = 1
     if mid:

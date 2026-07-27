@@ -356,7 +356,7 @@ class _SseMixin:
             # events prepended a turn's preceding text ABOVE its command in the
             # newest-top feed (the "messages come after commands" inversion; the
             # backlog path already ts-merges, so only the live tick was wrong).
-            got = None if agent else plugins.conversation(sid, mpos)
+            got = plugins.conversation(sid, mpos, agent or "")
             recs = []
             if got:
                 recs, mpos = got            # advance the transcript cursor always

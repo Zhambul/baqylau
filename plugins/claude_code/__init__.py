@@ -83,11 +83,13 @@ def goal(transcript_path):
     return transcript.goal_probe(transcript_path)
 
 
-def conversation(sid, pos=0):
-    """The main-thread conversation provider (plugins.conversation fan-out)
-    for the dashboard's merged mirror stream. See transcript.conversation."""
+def conversation(sid, pos=0, agent_id=""):
+    """The conversation provider (plugins.conversation fan-out) for the
+    dashboard's merged mirror stream — ONE identity's records: the session's own
+    main thread, or a subagent/teammate's when `agent_id` names one. See
+    transcript.conversation_for."""
     from plugins.claude_code import transcript
-    return transcript.conversation_for(sid, pos)
+    return transcript.conversation_for(sid, pos, agent_id)
 
 
 def ask_preamble(sid, tool_use_id):

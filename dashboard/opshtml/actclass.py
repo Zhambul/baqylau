@@ -178,8 +178,11 @@ def diffstat(op):
 # op's `note` (core/ops.py); this is the fallback for ops ALREADY ON DISK, which
 # cannot be re-stamped — a parked or long-running session would otherwise keep
 # showing the terminal's colour-coded chip forever.
-_LEGACY_NOTE = ((" %s %s" % SF.MARK_PROMPT, "launched"),
-                (" %s %s" % SF.MARK_RESULT, "finished"))
+# No leading space: `who` is a FIELD now (core/ops.py) so a live chip's text
+# OPENS with the marker; pre-field history still has the name before it, and
+# `find` locating it at 0 vs >0 is exactly what tells the two eras apart.
+_LEGACY_NOTE = (("%s %s" % SF.MARK_PROMPT, "launched"),
+                ("%s %s" % SF.MARK_RESULT, "finished"))
 
 
 def legacy_agent_note(op):
@@ -196,8 +199,11 @@ def legacy_agent_note(op):
         text = _plain(op)
         for mark, verb in _LEGACY_NOTE:
             at = text.find(mark)
-            if at > 0:
-                return SF.agent_note(text[:at].strip(), verb, team=_is_team(op))
+            if at >= 0:
+                # `<who>` is a FIELD now (core/ops.py), so a live chip opens AT
+                # the marker and only pre-field history has text before it
+                return SF.agent_note((text[:at].strip() or op.get("who") or ""),
+                                     verb, team=_is_team(op))
         return None
     except Exception:
         return None                     # unreadable: keep the chip
@@ -213,7 +219,7 @@ def agent_brief(op):
         if op.get("t") != "label":
             return False
         text = _plain(op)
-        return any(text.find(mark) > 0 for mark, _verb in _LEGACY_NOTE)
+        return any(text.find(mark) >= 0 for mark, _verb in _LEGACY_NOTE)
     except Exception:
         return False                    # unreadable: keep it (fail toward showing)
 
@@ -224,6 +230,126 @@ def agent_brief(op):
 # <url>`, which must not mint a second dot), and the CLOSER (`■ finished · 0.6s`), whose
 # words go after the command where a duration reads as one.
 CQ_OPEN, CQ_SUB, CQ_CLOSE = "open", "sub", "close"
+
+
+# Every marker a block header can OPEN with — the command glyphs above plus the
+# subagent's own four (their owner is core/streamfmt, which both the producer and
+# this presenter read). `core.streamfmt.chip` builds a header as
+# `"<glyph> <kind>[  tag]…"`, so one of these leading the text is what says this
+# IS a header and its tags may be cut.
+_HEAD_MARKS = frozenset((_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS,
+                         _GLYPH_RESUMED, _GLYPH_FINISH, SF.SKILL_MARK,
+                         SF.MARK_PROMPT[0], SF.MARK_RESULT[0],
+                         SF.MARK_MESSAGE[0], SF.MARK_MAIL))
+
+
+def strip_tags(text):
+    """A block header's text with its trailing model/ctx TAGS removed — what a
+    header reads as in AGENT SCOPE (docs/dashboard.md *Agent scope*).
+
+    `opus-4.8·high  ctx 0% · 9k/1M` on every block is the per-agent identity cue
+    the shared terminal pane needs; a scope is one agent and its scoreboard shows
+    both figures once, so in scope they are noise on every line. What's left is
+    exactly what the LEAD's own blocks say — `▶ foreground`, `✎ message`,
+    `✉ from team-lead` — which is what lets the same quiet-note register word
+    them.
+
+    Tags are split on the DOUBLE space `chip()` joins them with, so a kind
+    containing single spaces (`from team-lead`) survives whole. Text that opens
+    with no known marker is returned unchanged — a header this doesn't recognise
+    keeps what it says rather than being cut on a guess."""
+    if text[:1] not in _HEAD_MARKS:
+        return text
+    return text.split("  ", 1)[0].strip()
+
+
+# The agent palettes a substream's OWN chips wear (core/slots.py owns the tables).
+# A nested bg job / monitor of an agent is NOT here — that block is painted by the
+# same claude-stream.py the lead's is, in the same slot palette, so it already
+# reads as command family.
+_AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
+
+# The markers on an agent's own PROSE blocks — the brief it was handed, its
+# assistant text, its final result. core/streamfmt owns all three.
+_PROSE_MARKS = (SF.MARK_PROMPT[0], SF.MARK_RESULT[0], SF.MARK_MESSAGE[0])
+
+
+def prose_block(op):
+    """True for the header of an agent's own PROSE block (`⇢ prompt`,
+    `✎ message`, `⇠ result`) — the blocks AGENT SCOPE drops because it reads that
+    agent's conversation from its transcript instead (docs/dashboard.md *Agent
+    scope*).
+
+    The lead's stream works exactly this way already: its prose is not in the ops
+    at all, only in its transcript, and the merge puts it back as bubbles. The
+    substream paints an agent's prose into the ops too — it has to, because the
+    terminal pane has no other channel for it — so in scope those ops are the one
+    thing that WOULD be duplicated, and dropping them is what makes an agent's
+    stream the same shape as the lead's. Its body op goes with it (same copy
+    group), which is the caller's job.
+
+    Colour-gated to the agent palettes so a lead-stream op can never match: `✎`
+    and `⇢` are not the lead's vocabulary, but the gate costs nothing and keeps
+    the "whose op is this" question answered the one way this module answers it."""
+    try:
+        if op.get("t") != "label":
+            return False
+        if tuple(op.get("c") or ()) not in _AGENT_RGB:
+            return False
+        return _plain(op)[:1] in _PROSE_MARKS
+    except Exception:
+        return False                    # unreadable: keep it (fail toward showing)
+
+
+def as_lead(op):
+    """One AGENT-produced op rewritten in the LEAD's own vocabulary — THE single
+    place agent scope differs from the session view (docs/dashboard.md *Agent
+    scope*).
+
+    The two producers shape a block header differently, because the TERMINAL needs
+    them to: every agent shares one pane there, so the substream prefixes each
+    header with `<who>`, paints it in that agent's palette, and appends the
+    model/ctx tags. On the web a scope is exactly ONE identity, so all three are
+    redundant — and, worse, they made every downstream stage fail to recognise the
+    block: `cmd_note` is colour-gated, the activity classifier reads the leading
+    glyph, and the view modes count what those two answer. An agent's `▶
+    foreground` therefore fell through to the legacy coloured pill while the lead's
+    became a quiet `⏺` line, and its `■ finished` closer — already SLATE — went
+    quiet beside it, which is the mismatch that reads as "legacy styles".
+
+    Rather than teach each of those stages about agents (a second code path
+    through the whole renderer, and a second case to chase for every future bug),
+    the op is normalised HERE, once, right after the scope filter: strip the
+    `<who>` + tags, recolour a command header to the semantic colour the lead's
+    equivalent wears, and drop the `outer` bar (the double gutter exists to say
+    WHICH agent, which is the one thing the scope already says). Everything below
+    this point — classification, the quiet register, folding, summaries, filters —
+    then runs on one vocabulary and needs no notion of scope at all.
+
+    The agent's NAME is not part of this: producers carry it as the op's own
+    `who` field (core/ops.py), which the terminal composes at paint time and the
+    web simply never renders — so there is nothing to strip and no string to
+    parse. Only the tags, the palette and the outer bar are left to normalise.
+
+    Anything unrecognised passes through untouched."""
+    out = op
+    if out.get("t") != "label":
+        return out
+    text = _plain(out)
+    stripped = strip_tags(text)
+    c = tuple(out.get("c") or ())
+    # a command-family header in an AGENT palette: the lead paints that block in a
+    # semantic colour, and the colour is what cmd_note/classify gate on
+    recolour = c in _AGENT_RGB and stripped[:1] in (
+        _GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS, _GLYPH_FINISH)
+    if stripped == text and not recolour and out.get("outer") is None:
+        return out                      # already in the lead's shape
+    out = dict(out)
+    out["s"] = stripped
+    if recolour:
+        out["c"] = list(O.SLATE)
+    out.pop("outer", None)
+    return out
 
 
 def cmd_note(op):

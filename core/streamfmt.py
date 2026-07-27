@@ -34,6 +34,15 @@ def cap(text, n):
 # needs the marker; live ops carry the note and never consult it.
 MARK_PROMPT = ("⇢", "prompt")
 MARK_RESULT = ("⇠", "result")
+# The other two markers a subagent's own block headers wear: its assistant text
+# (`<who> ✎ message`) and a piece of team mail (`<who> ✉ from|to <peer>`). Named
+# here for the same reason as the pair above — the web presenter has to find them
+# to know where a header's `<who>` prefix ENDS, which is what AGENT SCOPE strips
+# (the name is redundant when the whole view is that agent; docs/dashboard.md
+# *Agent scope*). Only the glyph is shared: the kind word differs per mail
+# direction, so it stays at the call site.
+MARK_MESSAGE = ("✎", "message")
+MARK_MAIL = "✉"
 
 # …and how those headers are WORDED for the web (the op's `note`). Claude Code has
 # two registers for the two kinds of agent and so do we, verbatim: a Task-spawned
@@ -78,18 +87,20 @@ def skill_note(name, failed=False):
 
 
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
-    """The block-header label op: '<who> <glyph> <kind>[  tag]…' in the stream's
-    colour. `tags` are optional trailing chips (model/effort tag, ctx %) — empty
-    ones are skipped, each joins with a double space. g/lk are the ⧉ copy-group
-    wiring (core/copy.py), passed straight through to O.label. web=True keeps this
-    stamped op in the web dashboard's main mirror (a subagent prompt/result
-    header — see core/ops.py's "web" field), and `note` is that surface's own
-    wording for it (the quiet one-liner, tags dropped)."""
-    s = f"{who} {glyph} {kind}"
+    """The block-header label op: '<glyph> <kind>[  tag]…' in the stream's
+    colour, with `who` carried as the op's own field rather than concatenated
+    into the text (core/ops.py's "who" — the terminal composes it at paint time,
+    the web ignores it). `tags` are optional trailing chips (model/effort tag,
+    ctx %) — empty ones are skipped, each joins with a double space. g/lk are the
+    ⧉ copy-group wiring (core/copy.py), passed straight through to O.label.
+    web=True keeps this stamped op in the web dashboard's main mirror (a subagent
+    prompt/result header — see core/ops.py's "web" field), and `note` is that
+    surface's own wording for it (the quiet one-liner, tags dropped)."""
+    s = f"{glyph} {kind}"
     for t in tags:
         if t:
             s += f"  {t}"
-    return O.label(s, rgb, g=g, lk=lk, web=web, note=note)
+    return O.label(s, rgb, g=g, lk=lk, web=web, note=note, who=who)
 
 
 def gutter(text, rgb, g=None, web=False):
