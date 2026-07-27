@@ -16,14 +16,22 @@ const SES_RECONNECT_MS = 1500;
 // this delay is what catches a click AWAY from the menu.)
 const MENU_BLUR_MS = 150;
 
-function showSession(sid, tab) {
+/* The session view, optionally SCOPED to one agent (docs/dashboard.md *Agent
+   scope*). `agent` re-points the mirror, monitors and jobs at that agent — the
+   same tabs, the same components, a different `?agent=` on every read — while
+   memory and errors stay session-wide (they have no agent dimension). Entering
+   or leaving scope on the SAME session rebuilds the stream, because the feed's
+   cursors and painted blocks belong to whichever scope produced them. */
+function showSession(sid, tab, agent) {
+  agent = agent || "";
   // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror
   if (!["mirror", "agents", "monitors", "jobs", "memory", "errors"].includes(tab)) tab = "mirror";
   if (S.cur !== sid) {
     leaveSession();
     S.cur = sid;
-    S.ses = { lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
-              agents: [], costs: null, ctx: null, running: {}, meta: null, es: null, agentEs: null,
+    S.ses = { agent: agent,
+              lastId: 0, mpos: 0, oldest: 0, stream: el("div", "stream"), stats: {},
+              agents: [], costs: null, ctx: null, running: {}, meta: null, es: null,
               fgRun: null, fgTimer: null, fgEnded: null, fgChipAt: null,  // live fg elapsed
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
@@ -39,15 +47,46 @@ function showSession(sid, tab) {
               // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
               view: VIEW_DEFAULT, viewOpen: new Set(), viewSeq: 0,
               viewTimer: null, viewFill: 0 };
-    S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
-    // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
-    // snapshots never repair it (updateHeadFromList no-ops while meta is null),
-    // so a transient failure left the whole view stuck unusable (composer
-    // disabled, no title) until a reload. Retry while still on this session and
-    // still unpopulated; the guards make a late retry after a leave a harmless
-    // no-op.
-    let resolveTries = 0;
-    const loadMeta = () => fetch("/api/session/" + encodeURIComponent(sid))
+    loadSessionData(sid);
+  } else if ((S.ses.agent || "") !== agent) {
+    // SCOPE CHANGE on the same session (into an agent, between agents, or back
+    // out). The feed's cursors and painted blocks belong to the scope that
+    // produced them, so the stream is torn down and refetched rather than
+    // filtered client-side — the server decides what is in scope, once.
+    S.ses.agent = agent;
+    resetStream();
+    loadSessionData(sid);
+  }
+  S.ses.tab = tab;
+  renderSessionChrome(tab);
+}
+
+/* Drop everything the stream holds so a fresh scope can repaint from zero:
+   the SSE (its cursors are scope-relative), the rendered blocks, the lazy
+   cursors, and the view-mode bookkeeping that names items by sequence. */
+function resetStream() {
+  const ses = S.ses;
+  if (ses.es) { try { ses.es.close(); } catch (e) { /* already closed */ } }
+  ses.es = null;
+  ses.lastId = 0; ses.mpos = 0; ses.oldest = 0;
+  ses.blocks = new Map();
+  ses.moreEl = null;
+  ses.loadingOlder = false;
+  ses.viewOpen = new Set(); ses.viewSeq = 0; ses.viewFill = 0;
+  ses.stream.textContent = "";
+}
+
+function loadSessionData(sid) {
+  S.ses.stream.append(el("div", "waiting", "waiting for activity…"));
+  // meta (live/kitty_window_id/title/…) comes ONLY from this fetch — global
+  // snapshots never repair it (updateHeadFromList no-ops while meta is null),
+  // so a transient failure left the whole view stuck unusable (composer
+  // disabled, no title) until a reload. Retry while still on this session and
+  // still unpopulated; the guards make a late retry after a leave a harmless
+  // no-op. In agent scope it also carries `agent_usage` — that agent's token
+  // rollup + priced cost, which the scoreboard swap shows.
+  let resolveTries = 0;
+  const loadMeta = () => fetch("/api/session/" + encodeURIComponent(sid) + agentQ())
       .then(r => r.json())
       .then(d => {
         if (S.cur !== sid || !S.ses) return;
@@ -62,7 +101,7 @@ function showSession(sid, tab) {
         // lit and the backlog collapses on first paint rather than flashing
         // verbose first
         if (VIEW_MODES.includes(d.view_mode)) S.ses.view = d.view_mode;
-        renderSessionChrome(tab);
+        renderSessionChrome(S.ses.tab || "mirror");
         applyViewMode();
         // a page opened MID-command ticks from the real start (the SSE `fgrun`
         // only fires on CHANGE, so without this seed a reload would show no
@@ -95,29 +134,25 @@ function showSession(sid, tab) {
         clog(sid, "meta.fail", {});   // the session-view meta GET rejected
         if (S.cur === sid && S.ses && !S.ses.meta) setTimeout(loadMeta, META_RETRY_MS);
       });
-    loadMeta();
-    // Initial stream content over a plain GET, NOT the SSE fresh-connect
-    // backlog: _send gzips this HTML 8-9x, while SSE frames are never
-    // compressed — on a remote/tunnel connection that difference IS the
-    // "waiting for activity…" wait. The SSE then connects with the returned
-    // cursors and only streams increments (the same no-gap resume contract a
-    // reconnect uses); on any fetch failure it connects with zero cursors
-    // and the server-side SSE backlog covers us like before.
-    fetch("/api/session/" + encodeURIComponent(sid) + "/backlog")
-      .then(r => r.json())
-      .then(d => {
-        if (S.cur !== sid || !S.ses) return;
-        S.ses.lastId = Math.max(S.ses.lastId, d.last | 0);
-        S.ses.mpos = Math.max(S.ses.mpos, d.mpos | 0);
-        if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
-        if (d.items && d.items.length) appendItems(d.items);
-      })
-      .catch(() => { clog(sid, "backlog.fail", {}); })   // stream may read empty
-      .finally(() => { if (S.cur === sid) connectSession(sid); });
-  }
-  closeAgentStream();                       // leaving any agent drill-down view
-  S.ses.tab = tab;
-  renderSessionChrome(tab);
+  loadMeta();
+  // Initial stream content over a plain GET, NOT the SSE fresh-connect
+  // backlog: _send gzips this HTML 8-9x, while SSE frames are never
+  // compressed — on a remote/tunnel connection that difference IS the
+  // "waiting for activity…" wait. The SSE then connects with the returned
+  // cursors and only streams increments (the same no-gap resume contract a
+  // reconnect uses); on any fetch failure it connects with zero cursors
+  // and the server-side SSE backlog covers us like before.
+  fetch("/api/session/" + encodeURIComponent(sid) + "/backlog" + agentQ())
+    .then(r => r.json())
+    .then(d => {
+      if (S.cur !== sid || !S.ses) return;
+      S.ses.lastId = Math.max(S.ses.lastId, d.last | 0);
+      S.ses.mpos = Math.max(S.ses.mpos, d.mpos | 0);
+      if (d.oldest != null) { S.ses.oldest = d.oldest | 0; updateMoreBtn(); }
+      if (d.items && d.items.length) appendItems(d.items);
+    })
+    .catch(() => { clog(sid, "backlog.fail", {}); })   // stream may read empty
+    .finally(() => { if (S.cur === sid) connectSession(sid); });
 }
 
 function connectSession(sid) {
@@ -129,7 +164,8 @@ function connectSession(sid) {
   // streaming, and its overlapping ops double-append into the feed.
   if (S.ses.es) { try { S.ses.es.close(); } catch (e) { /* already closed */ } }
   const es = new EventSource("/events/session/" + encodeURIComponent(sid)
-                             + "?after=" + S.ses.lastId + "&mpos=" + S.ses.mpos);
+                             + "?after=" + S.ses.lastId + "&mpos=" + S.ses.mpos
+                             + agentQ("&"));
   S.ses.es = es;
   // ops AND main-thread conversation arrive on this ONE event, already
   // interleaved oldest->newest by ts server-side (merge_live) — sending them as
@@ -706,7 +742,7 @@ function loadOlder(want) {
 
   const step = () => fetch("/api/session/" + encodeURIComponent(sid)
                            + "/history?before=" + (ses.oldest | 0)
-                           + "&blocks=" + blocks)
+                           + "&blocks=" + blocks + agentQ("&"))
     .then(r => r.json())
     .then(d => {
       if (S.cur !== sid || !S.ses) return;         // navigated away mid-fetch

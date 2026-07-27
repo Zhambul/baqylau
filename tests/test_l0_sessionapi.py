@@ -380,10 +380,10 @@ def test_presentation_channel_is_the_same_functions():
 
 # ------------------------------------------------------- plugins.activity glue
 
-def test_activity_falls_back_to_layout_derivation(monkeypatch, tmp_path):
+def test_agent_usage_falls_back_to_layout_derivation(monkeypatch, tmp_path):
     """No streams row (audit was off when the streamer ran): the provider
     derives the agent transcript from the sessions row's transcript_path via
-    transcript.agent_paths."""
+    transcript.agent_paths — the resolution agent scope's scoreboard rides on."""
     monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
     tp = tmp_path / "sess.jsonl"
     tp.write_text("", encoding="utf-8")
@@ -392,20 +392,17 @@ def test_activity_falls_back_to_layout_derivation(monkeypatch, tmp_path):
     sub = tmp_path / "sess" / "subagents"
     os.makedirs(sub)
     (sub / "agent-agX.jsonl").write_text(
-        json.dumps({"type": "user", "message": {"content": "sub prompt"}}) + "\n",
+        json.dumps({"type": "assistant",
+                    "message": {"id": "m1", "model": "claude-opus-4-8",
+                                "usage": {"input_tokens": 10, "output_tokens": 3},
+                                "content": []}}) + "\n",
         encoding="utf-8")
     import plugins
-    tl = plugins.activity("act1", "agX")
-    assert tl and tl["entries"] == [{"t": "prompt", "text": "sub prompt"}]
-    # main-thread view reads the parent transcript itself (empty -> no entries);
-    # `pos` is the additive live-resume byte cursor (0 for an empty transcript)
-    tl_main = plugins.activity("act1")
-    assert tl_main == {"entries": [], "model": None, "bad_lines": 0, "tools": 0,
-                       "pos": 0,
-                       "usage": {"in": 0, "out": 0, "cache": 0, "create": 0,
-                                 "create_1h": 0}}
+    got = plugins.agent_usage("act1", "agX")
+    assert got and got["model"] == "claude-opus-4-8"
+    assert got["usage"]["in"] == 10 and got["usage"]["out"] == 3
     # unknown pair -> no provider claims it
-    assert plugins.activity("act1", "missing-agent") is None
+    assert plugins.agent_usage("act1", "missing-agent") is None
 
 
 # ------------------------------------------- account usage read model (relimit)

@@ -186,7 +186,7 @@ function connInfo() {
     online: navigator.onLine !== false,
     vis: document.visibilityState || "",
     view: S.cur ? "session" : (S.pendingUI ? "launching" : "list"),
-    es: 1 + (S.cur ? 1 : 0) + (S.ses && S.ses.agentEs ? 1 : 0),
+    es: 1 + (S.cur ? 1 : 0),
     conn: $conn && $conn.dataset.on === "1" ? 1 : 0,
   };
 }

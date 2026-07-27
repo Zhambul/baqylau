@@ -21,20 +21,13 @@ def census(log):
     return parts, msgs.event_ops(events, log)
 
 
-def activity(sid, agent_id=None):
-    """The drill-down activity provider (plugins.activity fan-out) — the
-    full-fidelity timeline of a session's main thread or one subagent/teammate,
-    parsed from its transcript. See transcript.py."""
+def agent_usage(sid, agent_id):
+    """The per-agent usage provider (plugins.agent_usage fan-out) — one
+    subagent/teammate's token rollup + model, folded from its transcript, which
+    is what the web's agent scoreboard prices its Σ and ≈cost from. See
+    transcript.session_agent_usage."""
     from plugins.claude_code import transcript
-    return transcript.activity(sid, agent_id)
-
-
-def activity_since(sid, agent_id, pos):
-    """The LIVE drill-down provider (plugins.activity_since fan-out) —
-    incremental timeline entries + cross-increment tool resolutions from byte
-    cursor `pos`. See transcript.activity_since."""
-    from plugins.claude_code import transcript
-    return transcript.activity_since(sid, agent_id, pos)
+    return transcript.session_agent_usage(sid, agent_id)
 
 
 def monitors(sid):

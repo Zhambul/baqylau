@@ -389,10 +389,9 @@ def test_conversation_keeps_parallel_tool_branches(tmp_path):
         == [("prompt", "run both"), ("message", "both done")]
 
 
-def test_conversation_and_timeline_surface_recap(tmp_path):
-    # A recap (away_summary) shows in BOTH read models: the mirror conversation
-    # (a `recap` bubble) and the drill-down timeline (a `recap` entry), the hint
-    # stripped in each.
+def test_conversation_surfaces_recap(tmp_path):
+    # A recap (away_summary) shows in the mirror conversation as a `recap`
+    # bubble, its "(disable recaps…)" hint stripped.
     p = tmp_path / "r.jsonl"
     p.write_text("".join(_l(o) + "\n" for o in [
         {"type": "user", "message": {"content": "do the thing"},
@@ -404,10 +403,6 @@ def test_conversation_and_timeline_surface_recap(tmp_path):
     recs, _ = TR.conversation(str(p), 0)
     assert [r["kind"] for r in recs] == ["prompt", "recap"]
     assert recs[1]["text"] == "Did the thing; nothing pending."
-    tl = TR.timeline(str(p))
-    kinds = [e["t"] for e in tl["entries"]]
-    assert kinds == ["prompt", "recap"]
-    assert tl["entries"][1]["text"] == "Did the thing; nothing pending."
 
 
 def test_format_questions_flattens_text_and_options():
@@ -616,72 +611,6 @@ def _write(tmp_path, lines):
     return str(p)
 
 
-def test_timeline_pairs_results_and_dedups_usage(tmp_path):
-    path = _write(tmp_path, [
-        {"type": "user", "message": {"content": "do the thing"}},
-        {"type": "assistant", "message": {
-            "id": "m1", "model": "claude-opus-4-8",
-            "usage": {"input_tokens": 10, "output_tokens": 3},
-            "content": [{"type": "tool_use", "id": "t1", "name": "Bash",
-                         "input": {"command": "ls"}}]}},
-        # second JSONL line of the SAME message (per-content-block write):
-        # usage must fold as a delta, not double-count (the 2.2× bug class).
-        {"type": "assistant", "message": {
-            "id": "m1", "model": "claude-opus-4-8",
-            "usage": {"input_tokens": 10, "output_tokens": 7},
-            "content": [{"type": "text", "text": "listing done"}]}},
-        {"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": "t1",
-             "content": "a.txt\nb.txt", "is_error": False}]}},
-        {"type": "assistant", "message": {
-            "id": "m2", "usage": {"input_tokens": 4, "output_tokens": 2},
-            "content": [{"type": "text", "text": "all good"}]}},
-    ])
-    tl = TR.timeline(path)
-    kinds = [e["t"] for e in tl["entries"]]
-    assert kinds == ["prompt", "tool", "message", "message"]
-    tool = tl["entries"][1]
-    assert tool["tool"] == "Bash" and tool["input"] == {"command": "ls"}
-    assert tool["output"] == "a.txt\nb.txt" and tool["failed"] is False
-    assert tl["entries"][-1]["final"] is True          # the returned result
-    assert "final" not in tl["entries"][2]
-    assert tl["usage"] == {"in": 14, "out": 9, "cache": 0,
-                           "create": 0, "create_1h": 0}
-    assert tl["tools"] == 1 and tl["model"] == "claude-opus-4-8"
-    assert tl["bad_lines"] == 0
-
-
-def test_timeline_orphan_result_and_failed_flag(tmp_path):
-    path = _write(tmp_path, [
-        {"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": "never-seen",
-             "content": "boom", "is_error": True}]}},
-    ])
-    tl = TR.timeline(path)
-    assert tl["entries"] == [{"t": "orphan-result", "output": "boom",
-                              "failed": True}]
-
-
-def test_timeline_renders_parent_style_user_text_blocks(tmp_path):
-    # A PARENT transcript's user turns arrive as text blocks inside list
-    # content — invisible to the mirror renderer (deliberately), but the
-    # timeline is the full-fidelity view and must surface them.
-    path = _write(tmp_path, [
-        {"type": "user", "message": {"content": [
-            {"type": "text", "text": "please fix the bug"}]}},
-    ])
-    tl = TR.timeline(path)
-    assert tl["entries"] == [{"t": "prompt", "text": "please fix the bug"}]
-
-
-def test_timeline_counts_bad_lines(tmp_path):
-    p = tmp_path / "t.jsonl"
-    p.write_text('{"type": "user", "message": {"content": "hi"}}\n{oops\n',
-                 encoding="utf-8")
-    tl = TR.timeline(str(p))
-    assert tl["bad_lines"] == 1 and tl["entries"][0]["t"] == "prompt"
-
-
 def test_monitors_correlates_launch_result_and_events(tmp_path):
     # monitors() ties a Monitor tool_use to its taskId (via the "Monitor started
     # (task X)" result) and gathers its events — the monitors-tab read model.
@@ -725,117 +654,12 @@ def test_monitors_ws_source_and_launchless_events(tmp_path):
     assert mons["orphan"]["command"] == "" and mons["orphan"]["events"][0]["event"] == "lone"
 
 
-def test_timeline_surfaces_monitor_launch_and_events(tmp_path):
-    # The Monitor launch is a `tool` entry (name "Monitor"); its EVENTS follow as
-    # `monitor` entries — the full drill-down story of a monitor. The mirror shows
-    # events via ops, so they must NOT also appear in conversation() (dupe).
-    path = _write(tmp_path, [
-        {"type": "assistant", "message": {"content": [
-            {"type": "tool_use", "id": "t1", "name": "Monitor",
-             "input": {"command": "tail -f log", "description": "watch"}}]}},
-        {"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": "t1",
-             "content": "Monitor started"}]}},
-        {"type": "queue-operation", "content": _mon_note(event="line A")},
-        {"type": "queue-operation", "content": _mon_note(event="line B")},
-        {"type": "queue-operation", "content": _mon_note(
-            summary='Monitor "watch" stream ended', status="completed")},
-    ])
-    tl = TR.timeline(path)
-    kinds = [e["t"] for e in tl["entries"]]
-    assert kinds == ["tool", "monitor", "monitor", "monitor"]
-    assert tl["entries"][0]["tool"] == "Monitor"
-    assert [e.get("event") for e in tl["entries"][1:]] == ["line A", "line B", None]
-    assert tl["entries"][3]["status"] == "completed"
-    # conversation() (the dashboard mirror provider) must drop monitor events —
-    # they already ride the ops stream, so surfacing here would double them.
-    recs, _ = TR.conversation(path, 0)
-    assert not any(r["kind"] == "monitor" for r in recs)
-
-
 # ------------------------------------------------------------ timeline_since
 
 def _append(path, lines):
     with open(path, "a", encoding="utf-8") as fh:
         for o in lines:
             fh.write(_l(o) + "\n")
-
-
-def test_timeline_since_pairs_within_and_resolves_across_increments(tmp_path):
-    path = _write(tmp_path, [
-        {"type": "user", "message": {"content": "go"}},
-        {"type": "assistant", "message": {
-            "id": "m1", "content": [
-                {"type": "tool_use", "id": "t1", "name": "Bash",
-                 "input": {"command": "ls"}},
-                {"type": "tool_use", "id": "t2", "name": "Read",
-                 "input": {"file_path": "/x"}}]}},
-        # t2 resolves in the SAME window -> paired in place, no resolution
-        {"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": "t2", "content": "file body"}]}},
-    ])
-    ents, res, pos1 = TR.timeline_since(path, 0)
-    assert [e["t"] for e in ents] == ["prompt", "tool", "tool"]
-    assert ents[1]["id"] == "t1" and "output" not in ents[1]   # unresolved
-    assert ents[2]["id"] == "t2" and ents[2]["output"] == "file body"
-    assert res == [] and pos1 > 0
-
-    # second increment: t1's result (its tool_use was in the PRIOR window ->
-    # a cross-increment resolution, not an in-place patch) + a final message.
-    _append(path, [
-        {"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": "t1",
-             "content": "a\nb", "is_error": False}]}},
-        {"type": "assistant", "message": {
-            "id": "m2", "content": [{"type": "text", "text": "done"}]}},
-    ])
-    ents2, res2, pos2 = TR.timeline_since(path, pos1)
-    assert [e["t"] for e in ents2] == ["message"]      # no orphan-result entry
-    assert res2 == [("t1", "a\nb", False)] and pos2 > pos1
-    assert "final" not in ents2[-1]                    # increments never mark final
-
-
-def test_timeline_since_reads_no_torn_record(tmp_path):
-    # a trailing partial line (a mid-write tail) is not consumed; the cursor
-    # stops before it, and completing the line makes it readable next call.
-    p = tmp_path / "t.jsonl"
-    p.write_text(_l({"type": "user", "message": {"content": "hi"}}) + "\n"
-                 + '{"type": "assist', encoding="utf-8")
-    ents, res, pos = TR.timeline_since(str(p), 0)
-    assert [e["t"] for e in ents] == ["prompt"] and res == []
-    with open(p, "a", encoding="utf-8") as fh:
-        fh.write('ant", "message": {"content": '
-                 '[{"type": "text", "text": "ok"}]}}\n')
-    ents2, _res, _pos = TR.timeline_since(str(p), pos)
-    assert [e["t"] for e in ents2] == ["message"]
-
-
-def test_timeline_since_concatenation_matches_whole_file(tmp_path):
-    # entries across increments + applied resolutions reproduce what a
-    # whole-file timeline() reports for the finished transcript.
-    lines = [
-        {"type": "user", "message": {"content": "go"}},
-        {"type": "assistant", "message": {
-            "id": "m1", "content": [
-                {"type": "tool_use", "id": "t1", "name": "Bash",
-                 "input": {"command": "ls"}}]}},
-        {"type": "user", "message": {"content": [
-            {"type": "tool_result", "tool_use_id": "t1", "content": "out"}]}},
-        {"type": "assistant", "message": {
-            "id": "m2", "content": [{"type": "text", "text": "done"}]}},
-    ]
-    path = _write(tmp_path, lines[:2])
-    ents, res, pos = TR.timeline_since(path, 0)
-    _append(path, lines[2:])
-    ents2, res2, _pos = TR.timeline_since(path, pos)
-    merged = ents + ents2
-    for tid, out, failed in res + res2:                # the consumer's fill-in
-        for e in merged:
-            if e.get("id") == tid:
-                e["output"], e["failed"] = out, failed
-    whole = TR.timeline(path)["entries"]
-    whole[-1].pop("final", None)                        # increments don't mark it
-    assert merged == whole
 
 
 # ------------------------------------------------------------- context_probe
@@ -1114,23 +938,21 @@ def test_goal_probe_ignores_list_content_quoting_the_command(tmp_path):
 # ------------------------------------------------- the two presenters' registries
 
 def test_both_transcript_presenters_cover_every_record_kind():
-    """`parse_line`'s record vocabulary is DECLARED (`KINDS`), and each of the
-    two presenters that dispatch on it accounts for every kind — the timeline
-    fold (`_FOLD`) totally, the conversation stream (`_CONV`) by handling or
-    EXPLICITLY skipping.
+    """`parse_line`'s record vocabulary is DECLARED (`KINDS`), and the presenter
+    that dispatches on it accounts for every kind — the conversation stream
+    (`_CONV`) by handling or EXPLICITLY skipping.
 
-    Both were parallel elif ladders, 60 and 90 lines, over the same vocabulary:
-    `conversation()` for the dashboard's message stream and `_fold_record()` for
-    the drill-down timeline. Adding a record kind meant editing two chains in two
-    places with nothing saying so, and a forgotten one is silent — the record
-    simply never appears, which is indistinguishable from a transcript that
-    didn't contain it. As registries checked against one declared vocabulary,
-    a new kind fails here until both sides have said what they do with it, and
-    a DROP has to be written down rather than implied by absence."""
+    It was a 90-line elif ladder over that vocabulary, and for a while there
+    were TWO of them (the drill-down timeline's `_FOLD` was the other, until
+    agent scope replaced that whole read model with the scoped mirror). Adding a
+    record kind meant editing the chain with nothing saying so, and a forgotten
+    one is silent — the record simply never appears, which is indistinguishable
+    from a transcript that didn't contain it. As a registry checked against one
+    declared vocabulary, a new kind fails here until the table has said what it
+    does with it, and a DROP has to be written down rather than implied by
+    absence."""
     kinds = set(TR.KINDS)
     assert kinds, "the record vocabulary must not be empty"
-    # the timeline is full-fidelity: it has something to say about every kind
-    assert set(TR._FOLD) == kinds
     # the message stream handles or deliberately drops each, and never both
     assert set(TR._CONV) | TR._CONV_SKIP == kinds
     assert not (set(TR._CONV) & TR._CONV_SKIP)

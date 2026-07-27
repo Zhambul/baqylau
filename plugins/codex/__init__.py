@@ -30,11 +30,7 @@ def on_session_start(log, cwd, sid):
         pass
 
 
-def activity(sid, agent_id=None):
-    """The codex drill-down activity provider (plugins.activity fan-out) —
-    the full-fidelity timeline of one codex run, parsed from its native
-    rollout (agent_id = the sessionapi.codex_aid identity the agents() list
-    shows; agent_id=None matches a STANDALONE codex session's own rollout).
-    See rollout.py."""
-    from plugins.codex import rollout
-    return rollout.activity(sid, agent_id)
+# NB codex exposes no `agent_usage` provider: a run's tokens are folded from its
+# rollout at its footer and booked straight into the scoreboard (its own
+# CODEX_PRICES — plugins/codex/stream.py), so there is no transcript for the web
+# to re-price. The fan-out finding nothing here is the correct outcome, not a gap.

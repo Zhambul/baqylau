@@ -7,17 +7,18 @@
 # normalisation — for BOTH a subagent's transcript (subagents/agent-<id>.jsonl)
 # and the parent session's own transcript (the same record grammar); the one
 # sanctioned WRITE is set_session_title()'s `agent-name` naming-record append
-# (the dashboard's web rename). Two presenters consume its records:
-#
-#   substream_render.Renderer.handle_line  — the mirror's CAPPED, styled paint
-#   timeline() below                       — the UNCAPPED drill-down entries
-#                                             behind plugins.activity(), read
-#                                             through core/sessionapi.py
+# (the dashboard's web rename). The presenter that consumes its records is
+# substream_render.Renderer.handle_line — the mirror's styled paint. An agent's
+# web view is that same mirror, scoped (docs/dashboard.md *Agent scope*), so
+# there is no second rendering of these records anymore: the uncapped drill-down
+# timeline that used to live here — parsed per agent, styled nothing like the
+# mirror, and drifting from it — is gone, and only agent_usage() still reads a
+# whole agent transcript, for the two numbers the scoreboard prices.
 #
 # Re-encoding a transcript record shape anywhere else is a bug (styleguide
 # single-owner table). parse_line() is pure (no I/O, no state); the only
-# I/O here is timeline()/activity()'s own file read and set_session_title()'s
-# one-line append.
+# I/O here is agent_usage()/conversation()'s own file read and
+# set_session_title()'s one-line append.
 #
 # parse_line(s) returns one record per JSONL line (None = nothing renderable):
 #   {"kind": "bad", "raw": s}                       unparseable JSON
@@ -1129,231 +1130,41 @@ def ask_preamble_for(sid, tool_use_id):
     return ask_preamble(path, tool_use_id)
 
 
-# --- the drill-down timeline (full fidelity — deliberately UNCAPPED) ---------------
+# --- one agent's token rollup ----------------------------------------------------
 
-class _Fold:
-    """The accumulators the timeline handlers share — the drill-down's twin of
-    _Conv. `entries` gains the record's entries in transcript order; `pend` maps
-    a tool_use id → its (mutable) tool entry so a later tool_result patches
-    `output`/`failed` in place; `acc` (keys "usage_last"/"model"/"tot"[5]/"bad")
-    carries the usage-fold cursor + rollup + bad-line count; `ACC` is the
-    deferred accounting module and `on_unresolved` the per-caller hook below."""
+def agent_usage(path):
+    """ONE agent's token rollup + the last model it ran, as
+    {"model": str|None, "usage": {in, out, cache, create, create_1h}} — what the
+    web's per-agent scoreboard prices its Σ and ≈cost from (docs/dashboard.md
+    *Agent scope*). {} for a transcript that isn't there.
 
-    __slots__ = ("entries", "pend", "acc", "on_unresolved", "ACC")
-
-    def __init__(self, on_unresolved, ACC):
-        self.entries, self.pend = [], {}
-        self.acc = {"usage_last": None, "model": None,
-                    "tot": [0, 0, 0, 0, 0], "bad": 0}
-        self.on_unresolved, self.ACC = on_unresolved, ACC
-
-    def add(self, t, **fields):
-        self.entries.append(dict({"t": t}, **fields))
-
-
-def _fold_bad(rec, st):
-    st.acc["bad"] += 1
-
-
-def _fold_compact(rec, st):
-    st.add("compact", meta=rec["meta"])
-
-
-def _fold_recap(rec, st):
-    st.add("recap", text=rec["text"])
-
-
-def _fold_prompt(rec, st):
-    st.add("prompt", text=rec["text"].strip())
-
-
-def _fold_teammsg(rec, st):
-    st.add("teammsg", sender=rec["sender"], body=rec["body"])
-
-
-def _fold_monitor(rec, st):
-    st.add("monitor", task=rec["task"], summary=rec["summary"],
-           event=rec.get("event"), status=rec.get("status"))
-
-
-def _fold_results(rec, st):
-    for blk in rec["blocks"]:
-        out = result_text(blk.get("content"))
-        failed = bool(blk.get("is_error"))
-        e = st.pend.pop(blk.get("tool_use_id"), None)
-        if e is None:
-            # INLINE, so the hook's entry keeps its position within this record
-            st.on_unresolved(st.entries, blk.get("tool_use_id"), out, failed)
-        else:
-            e["output"] = out
-            e["failed"] = failed
-    for text in rec["texts"]:
-        tkind, sender, body = classify_user_text(text)
-        if tkind == "teammsg":
-            st.add("teammsg", sender=sender, body=body)
-        else:
-            st.add("prompt", text=text.strip())
-
-
-def _fold_assistant(rec, st):
-    if rec["usage"] is not None:
-        st.acc["model"] = rec["model"] or st.acc["model"]
-        d, st.acc["usage_last"] = st.ACC.usage_fold(
-            rec["id"], st.ACC.usage_fields(rec["usage"]), st.acc["usage_last"])
-        for i in range(5):
-            st.acc["tot"][i] += d[i]
-    for bkind, blk in rec["blocks"]:
-        if bkind == "text":
-            if blk.strip():
-                st.add("message", text=blk.strip())
-            continue
-        e = {"t": "tool", "tool": blk.get("name") or "",
-             "input": blk.get("input") or {}, "id": blk.get("id")}
-        st.entries.append(e)
-        if blk.get("id"):
-            st.pend[blk["id"]] = e
-
-
-# The timeline's dispatch over parse_line's record KINDS — the drill-down twin
-# of _CONV above, and unlike it, TOTAL: every kind maps to a handler, because a
-# full-fidelity timeline has something to say about all of them (see _CONV_SKIP
-# for the message stream's three deliberate drops). The record-shape → entry
-# mapping lives here and nowhere else (styleguide single-owner rule); timeline()
-# and timeline_since() share it, diverging only in `on_unresolved`.
-_FOLD = {
-    "bad":           _fold_bad,
-    "compact":       _fold_compact,
-    "recap":         _fold_recap,
-    "prompt":        _fold_prompt,
-    "teammsg":       _fold_teammsg,
-    "monitor_event": _fold_monitor,
-    "results":       _fold_results,
-    "assistant":     _fold_assistant,
-}
-
-
-def _fold_record(rec, st):
-    """Fold ONE parse_line record into the timeline accumulators `st` (a _Fold),
-    via the _FOLD registry. Shared by timeline() and timeline_since().
-
-    st.on_unresolved(entries, tool_use_id, output, failed) fires for a
-    tool_result whose tool_use isn't in `pend`. The two callers diverge only
-    there: whole-file timeline() appends an orphan-result entry (the tool_use
-    genuinely never appeared); timeline_since() records a cross-increment
-    resolution (the tool_use was in an EARLIER increment, already serialized and
-    sent)."""
-    handler = _FOLD.get(rec["kind"])
-    if handler is not None:
-        handler(rec, st)
-
-
-def _read(path, pos, on_unresolved):
-    """Fold the COMPLETE JSONL lines from byte `pos` through _fold_record,
-    returning (entries, acc, new_pos). Uses the torn-record-safe _complete_lines
-    cursor (a trailing partial line is not consumed), so a byte-window read
-    never parses half a record — the same discipline conversation() uses. An
-    unreadable path yields ([], fresh-acc, pos) (callers guard existence)."""
-    from plugins.claude_code import accounting as ACC   # deferred: keep parse_line import-light
-    lines, new_pos = _complete_lines(path, pos)
-    st = _Fold(on_unresolved, ACC)
+    Deduped per message.id through accounting.usage_fold, the ONE fold both
+    accountants use — a transcript line is one content BLOCK, so summing usage
+    per line double-counts a multi-block message. Deliberately narrow: it reads
+    only assistant usage, where the drill-down timeline this replaced had to
+    build every entry in the file to arrive at the same two numbers."""
+    from plugins.claude_code import accounting as ACC   # deferred, like _read was
+    lines, _pos = _complete_lines(path, 0)
+    tot, last, model = [0, 0, 0, 0, 0], None, None
     for s in lines:
         s = s.strip()
         if not s:
             continue
         rec = parse_line(s)
-        if rec is None:
+        if rec is None or rec["kind"] != "assistant" or rec["usage"] is None:
             continue
-        _fold_record(rec, st)
-    return st.entries, st.acc, new_pos
-
-
-def _append_orphan(entries, tool_use_id, output, failed):
-    """The whole-file (timeline()/activity()) on_unresolved: a tool_result with
-    no preceding tool_use is a genuine orphan (checkpointed/foreign tail)."""
-    entries.append({"t": "orphan-result", "output": output, "failed": failed})
-
-
-def _rollup(entries, acc):
-    """Shape the read's (entries, acc) into the timeline dict — the returned
-    dict shape both timeline() and activity() hand out. The last entry is
-    marked `final` when it is a message (the returned result, mirroring the
-    substream's flush semantics)."""
-    if entries and entries[-1]["t"] == "message":
-        entries[-1]["final"] = True
-    tot = acc["tot"]
-    return {"entries": entries, "model": acc["model"], "bad_lines": acc["bad"],
-            "tools": sum(1 for e in entries if e["t"] == "tool"),
+        model = rec["model"] or model
+        d, last = ACC.usage_fold(rec["id"], ACC.usage_fields(rec["usage"]), last)
+        for i in range(5):
+            tot[i] += d[i]
+    return {"model": model,
             "usage": {"in": tot[0], "out": tot[1], "cache": tot[2],
                       "create": tot[3], "create_1h": tot[4]}}
 
 
-def timeline(path):
-    """Parse a whole transcript into plain activity entries + a usage rollup.
-
-    This is the read-model view (docs/sessionapi.md): text is uncapped and
-    unstyled — the fidelity limit is the transcript itself (large tool outputs
-    are truncated by Claude Code at the source; a tool_result rarely carries
-    Read content). Entries, in transcript order:
-      {"t": "prompt", "text"}                   a user prompt
-      {"t": "teammsg", "sender", "body"}        incoming teammate mail
-      {"t": "message", "text"[, "final": True]} assistant text ("final" marks the
-                                                last entry when it is a message —
-                                                the returned result, mirroring
-                                                the substream's flush semantics)
-      {"t": "compact", "meta"}                  a compaction boundary
-      {"t": "recap", "text"}                    an away-summary recap
-      {"t": "monitor", "task", "summary", "event", "status"}
-                                                a Monitor tool event (or its
-                                                stream-ended `status`) — see
-                                                parse_line's monitor_event record
-      {"t": "tool", "tool", "input", "id"[, "output", "failed"]}
-                                                a tool call; output/failed fill
-                                                in from its tool_result
-      {"t": "orphan-result", "output", "failed"} a result whose tool_use wasn't
-                                                seen (checkpointed/foreign tail)
-    Usage is deduped per message.id exactly like both accountants
-    (accounting.usage_fold — one fold implementation, three consumers). The
-    per-record building is shared with timeline_since() via _fold_record."""
-    entries, acc, _pos = _read(path, 0, _append_orphan)
-    return _rollup(entries, acc)
-
-
-def timeline_since(path, pos):
-    """Incremental timeline from byte cursor `pos` — the LIVE-growth companion
-    to timeline() behind plugins.activity_since() (docs/dashboard.md). Returns
-    (entries, resolutions, new_pos):
-
-      entries      the new increment's entries (same shapes as timeline(), sans
-                   the whole-file `final` marking — a live turn isn't over), in
-                   transcript order, each carrying its CURRENT state.
-      resolutions  [(tool_use_id, output, failed), …] for every tool_result in
-                   this window whose tool_use is NOT in the window: a tool_use
-                   whose result lands in a LATER call can't be patched in place
-                   (its entry was already serialized and sent), so the consumer
-                   fills in the earlier entry by tool_use id — or ignores it (a
-                   genuine orphan whose tool_use it never saw either; increments
-                   deliberately do NOT emit orphan-result entries, since a
-                   window can't tell a cross-increment result from a true
-                   orphan). A tool_use and its result in the SAME window still
-                   pair in place, exactly as in timeline().
-      new_pos      the resume cursor (stops before a trailing partial line).
-
-    Usage is deliberately OMITTED: usage_fold dedups by message.id with a
-    running cursor that can't survive a per-call byte window (a message split
-    across the boundary would mis-delta), and the drill-down header's rollup is
-    a whole-file figure from the initial /agent fetch, not a live counter."""
-    resolutions = []
-
-    def _resolve(entries, tool_use_id, output, failed):
-        resolutions.append((tool_use_id, output, failed))
-
-    entries, _acc, new_pos = _read(path, pos, _resolve)
-    return entries, resolutions, new_pos
-
-
-def _timeline_path(sid, agent_id):
+def agent_path(sid, agent_id):
     """Resolve the transcript path for (sid, agent_id) — None when this plugin
-    has none. Shared by activity()/activity_since(). Goes through
+    has none; `agent_id` empty means the session's own. Goes through
     core/sessionapi.py (the audit streams row is the keystone mapping; the
     subagents/ layout derivation is the fallback for streams-less agents).
     Deferred import: parse_line stays usable without the API (and the API
@@ -1375,32 +1186,13 @@ def _timeline_path(sid, agent_id):
     return path
 
 
-def activity(sid, agent_id=None):
-    """The claude_code activity provider behind plugins.activity(): the
-    timeline for a session's MAIN thread (agent_id=None, the parent transcript)
-    or one of its subagents/teammates. None when this plugin has no transcript
-    for the pair — the fan-out then asks the next plugin. Carries an additive
-    `pos` (the byte cursor after the last complete line read) so a consumer can
-    hand it to activity_since() for a race-free live resume."""
-    path = _timeline_path(sid, agent_id)
-    if not path:
-        return None
-    entries, acc, new_pos = _read(path, 0, _append_orphan)
-    tl = _rollup(entries, acc)
-    tl["pos"] = new_pos
-    return tl
-
-
-def activity_since(sid, agent_id, pos):
-    """The claude_code LIVE drill-down provider behind plugins.activity_since():
-    timeline_since over the same transcript activity() resolves, from byte
-    cursor `pos`. None when this plugin has no transcript for the pair (the
-    fan-out then asks the next plugin — codex declines, no incremental
-    provider)."""
-    path = _timeline_path(sid, agent_id)
-    if not path:
-        return None
-    return timeline_since(path, pos)
+def session_agent_usage(sid, agent_id):
+    """The claude_code provider behind plugins.agent_usage(): one agent's token
+    rollup + model (agent_usage above), resolved by (sid, agent_id). None when
+    this plugin has no transcript for the pair, so the fan-out can ask the next
+    one (a codex run keeps its own cost fold and declines here)."""
+    path = agent_path(sid, agent_id)
+    return agent_usage(path) if path else None
 
 
 # --- the monitors read-model (the dashboard's monitors tab) ------------------------

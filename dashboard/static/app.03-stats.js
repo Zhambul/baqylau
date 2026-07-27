@@ -251,7 +251,6 @@ function leaveSession() {
   stopDictation();               // a mic must never outlive its composer
   if (S.ses) {
     if (S.ses.es) S.ses.es.close();
-    closeAgentStream();
     clearSectionPoll("monitors");
     clearSectionPoll("jobs");
     if (S.ses.timer) clearTimeout(S.ses.timer);

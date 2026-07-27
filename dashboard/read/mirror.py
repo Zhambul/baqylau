@@ -38,46 +38,6 @@ def heal_stash(sid, log, sdb, key, step):
         A.error(log, "dashboard stash heal (%s)" % key, {"sid": sid})
 
 
-def _enrich_entry(ent):
-    """Additively enrich ONE timeline entry for the page: message / prompt /
-    teammsg entries gain an `html` field — md_html of their text/body, so the
-    drill-down renders conversation text as readable markdown instead of a
-    plain <pre>; tool entries gain `input_html` (a scannable render of a
-    well-known tool's input — Bash command, Edit diff, Write body, Read
-    one-liner, definition list) and, where it differs from a plain <pre>,
-    `output_html`. Raw fields are left untouched (the API shape stays additive;
-    app.js falls back to pre(text)/JSON when a field is absent — an older
-    provider, or a tool with no rich render). The ONE post-processor both the
-    REST timelines (mdify) and the live SSE increments run."""
-    t = ent.get("t")
-    if t in ("message", "prompt", "recap"):
-        ent["html"] = opshtml.md_html(ent.get("text", ""))
-    elif t == "teammsg":
-        ent["html"] = opshtml.md_html(ent.get("body", ""))
-    elif t == "tool":
-        ih = opshtml.tool_html(ent.get("tool", ""), ent.get("input"))
-        if ih is not None:
-            ent["input_html"] = ih
-        oh = opshtml.tool_output_html(ent.get("output"), ent.get("failed"),
-                                      ent.get("tool", ""))
-        if oh is not None:
-            ent["output_html"] = oh
-    return ent
-
-
-def enrich_entries(entries):
-    for ent in entries:
-        _enrich_entry(ent)
-    return entries
-
-
-def mdify(tl):
-    """Enrich a whole timeline dict (plugins.activity result) in place — the
-    REST /activity and /agent post-processor. See _enrich_entry."""
-    enrich_entries((tl or {}).get("entries", []))
-    return tl
-
-
 def conv_items(recs, cmds=()):
     """Conversation records -> stream items. Additively carry `kind`
     (prompt|message|teammsg|question|answer|recap) and, for prompts, the raw `text`:

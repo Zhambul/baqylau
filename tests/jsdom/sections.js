@@ -33,9 +33,14 @@ const sandbox = {
   firstLine: s => String(s || "").split("\n")[0],
   metaAdder: (grid) => (k, v) => { if (v != null) grid.append(new El("div", "m", k)); },
   chipAdder: () => () => {},
+  // `agentQ` is the agent-scope query suffix (app.00-core.js) — a cross-part
+  // global like clog/pre, stubbed with its real 3-line body so the URLs this
+  // harness records are the ones the browser would send
+  agentQ: (sep) => { const a = (sandbox.S && sandbox.S.ses && sandbox.S.ses.agent) || "";
+                     return a ? (sep || "?") + "agent=" + encodeURIComponent(a) : ""; },
   sigmaChip: () => new El("span", "chip"),
   paintCtxRow: () => {},
-  closeAgentStream: () => {}, updateRunning: () => {},
+  updateRunning: () => {},
   showSession: () => {}, renderErrorsInto: () => {},
   renderNoteView: () => {}, openNoteRef: () => {},
   buildGoalCard: () => new El("div"), buildTasksCard: () => new El("div"),
@@ -43,7 +48,7 @@ const sandbox = {
   buildComposer: () => new El("div"), buildFilterBar: () => new El("div"),
   buildQueuePin: () => new El("div"), updateAgents: () => {},
   updateMoreBtn: () => {}, applyFilter: () => {}, closeMonitorStream: () => {},
-  renderTimelineInto: () => {}, IS_IPAD: false,
+  IS_IPAD: false,
   $view: new El("div"),
   S: { cur: "sid1", ses: null },
   __fetched: [],

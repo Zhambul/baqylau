@@ -16,7 +16,10 @@
 function renderSessionChrome(tab) {
   const ses = S.ses;
   if (!ses) return;
-  ses.agentFocus = null;      // a full session/tab render is never agent-focused
+  // In AGENT SCOPE the header keeps showing that agent (its own scoreboard,
+  // name and status); outside it there is nothing focused. Derived from the
+  // scope rather than cleared, so a tab switch inside scope stays in scope.
+  ses.agentFocus = ses.agent ? { aid: ses.agent, data: null } : null;
   ses.monitorFocus = null;    // …nor monitor-focused (a drill-down sets it again)
   ses.jobFocus = null;        // …nor background-job-focused
   clearSectionPoll("monitors");   // leaving a secondary tab stops its live poll
@@ -44,7 +47,12 @@ function renderSessionChrome(tab) {
   const body = el("div");
   ses.body = body;
   $view.append(body);
+  // the way back up out of agent scope, above whatever the tab renders
+  if (ses.agent)
+    body.append(agentCrumbs(S.cur, ses.agent,
+                            (ses.agents || []).find(a => a.agent_id === ses.agent)));
   chromeBody(ses, tab, body);
+  applyAgentActionVis();      // session-only header actions don't apply in scope
 }
 
 /* l1: who this session IS — title, state badge, directory, sid, checkout,
@@ -283,9 +291,15 @@ function chromeLiveRows(ses) {
    parked on `ses`. */
 function chromeTabs(ses, meta, tab) {
   const tabs = el("div", "tabs");
+  const scoped = ses.agent || "";
   const mk = (key, label, count) => {
     const a = el("a", key === tab ? "on" : "");
-    a.href = "#/s/" + encodeURIComponent(S.cur) + (key === "mirror" ? "" : "/" + key);
+    // in agent scope every tab stays in scope (docs/dashboard.md *Agent
+    // scope*) — the `agents` tab is the one that must not, since a list of the
+    // SESSION's agents is what you navigate between them with
+    a.href = (scoped && key !== "agents")
+      ? agentHref(S.cur, scoped, key)
+      : "#/s/" + encodeURIComponent(S.cur) + (key === "mirror" ? "" : "/" + key);
     a.append(tnode(label));
     if (count) a.append(el("span", "count", String(count)));
     tabs.append(a);
@@ -307,6 +321,11 @@ function chromeTabs(ses, meta, tab) {
     ses.memTab = mk("memory", "memory",
                     ses.memory ? ses.memory.length : (meta.memory_count || 0));
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
+  // memory + errors have no agent dimension (a note is the team's, an error is
+  // a script's), so in agent scope they still show the SESSION's — said out
+  // loud rather than left ambiguous.
+  if (scoped && (tab === "memory" || tab === "errors"))
+    tabs.append(el("span", "tabnote", "session-wide"));
   return tabs;
 }
 
@@ -315,19 +334,26 @@ function chromeTabs(ses, meta, tab) {
    the fetch that fills it. */
 function chromeBody(ses, tab, body) {
   if (tab === "mirror") {
-    body.append(buildGoalCard());           // the active /goal, pinned at the very top
-    body.append(buildTasksCard());          // the session's task list, pinned first
-    body.append(buildPlanCard());           // pending plan approval …
-    body.append(buildAskCard());            // … and question, above the composer
-    body.append(buildComposer());
-    // type right away on open — no click needed. After append (focus() on a
-    // detached node is a no-op), and only when the box can send (a disabled
-    // parked/headless composer takes no input anyway). The document-level
-    // gestures (Esc, ⌃-keys, ⌃⇧←/→) are focus-independent, so this only
-    // redirects plain typing. Not on an iPad: an unasked-for focus pops the
-    // on-screen keyboard over the stream on every session open (and focus is
-    // what triggers Safari's page auto-zoom — see style.css touch section).
-    if (!ses.composer.disabled && !IS_IPAD) ses.composer.focus();
+    // The pinned cards and the composer are the SESSION's — its goal, its task
+    // list, its pending dialogs, its input box. In agent scope they would all
+    // be lies about what you're looking at (worst of all the composer, which
+    // types to the lead, not the agent you drilled into), so the scoped mirror
+    // is the stream and its filter bar alone.
+    if (!ses.agent) {
+      body.append(buildGoalCard());         // the active /goal, pinned at the very top
+      body.append(buildTasksCard());        // the session's task list, pinned first
+      body.append(buildPlanCard());         // pending plan approval …
+      body.append(buildAskCard());          // … and question, above the composer
+      body.append(buildComposer());
+      // type right away on open — no click needed. After append (focus() on a
+      // detached node is a no-op), and only when the box can send (a disabled
+      // parked/headless composer takes no input anyway). The document-level
+      // gestures (Esc, ⌃-keys, ⌃⇧←/→) are focus-independent, so this only
+      // redirects plain typing. Not on an iPad: an unasked-for focus pops the
+      // on-screen keyboard over the stream on every session open (and focus is
+      // what triggers Safari's page auto-zoom — see style.css touch section).
+      if (!ses.composer.disabled && !IS_IPAD) ses.composer.focus();
+    }
     body.append(buildFilterBar());
     const split = el("div", "split");
     // the transcript column: queued messages pinned ABOVE the newest-first
@@ -377,11 +403,11 @@ function chromeBody(ses, tab, body) {
 function statsSig(ses) {
   const f = ses.agentFocus;
   if (f) {
-    const d = f.data || {};
+    const d = agentUsage(ses);
     const rec = (ses.agents || []).find(a => a.agent_id === f.aid) || {};
     return "A|" + [f.aid, rec.kind, rec.desc, rec.ended_at, rec.started_at,
       rec.tools, rec.model, rec.effort, rec.end_reason, rec.done,
-      d.tools, d.cost, d.model].join(",")
+      d.cost, d.model].join(",")
       + "|" + JSON.stringify(d.usage || {}) + "|" + JSON.stringify(rec.ctx || {});
   }
   const st = ses.stats || {};
@@ -463,14 +489,22 @@ function applyAgentActionVis() {
    THAT agent's own numbers (docs/dashboard.md, *Subagent scoreboard swap*). It
    resolves the freshest agent row from ses.agents each render (so an `agents`
    SSE that finishes the agent updates the status here too) and reads tokens/cost
-   from focus.data, the agent drill-down fetch (`/agent/<aid>` → usage + the
-   server-priced `cost`). The prominent header NAME becomes the subagent's; the
-   stats row leads with a "← session" link that restores the session view, and
+   from the session payload's `agent_usage` (served whenever a `?agent=` scope is
+   in play, so this needs no fetch of its own). The prominent header NAME becomes
+   the agent's; the stats row leads with a "← session" link that leaves scope, and
    the ctx row repaints from the agent's own ctx bar. */
+/* The scoped agent's own token rollup + priced cost — served on the session
+   payload when a `?agent=` is in play (read/session.agent_usage), so the
+   scoreboard needs no fetch of its own. {} before meta lands, or for an agent
+   with no transcript to fold (a codex run prices itself). */
+function agentUsage(ses) {
+  return ((ses && ses.meta) || {}).agent_usage || {};
+}
+
 function renderAgentScoreboard(sr, focus) {
   const ses = S.ses;
   const rec = (ses.agents || []).find(a => a.agent_id === focus.aid) || {};
-  const d = focus.data || {};
+  const d = agentUsage(ses);
   const [sttxt, stcls] = agentStatus(rec);
   // the header badge/dot + .shead wash follow THIS agent's status, not the
   // session tab (the session pill said "busy" over a finished subagent).
@@ -487,7 +521,7 @@ function renderAgentScoreboard(sr, focus) {
   add("", sttxt, stcls);
   const model = rec.model || (d.model ? String(d.model) : "");
   if (model) add("", model + (rec.effort ? "·" + rec.effort : ""), "amodel");
-  const ev = d.tools != null ? d.tools : rec.tools;
+  const ev = rec.tools;
   if (ev != null) add("", ev + " events");
   if (rec.started_at)
     add("⏱", rec.ended_at ? dur(rec.ended_at - rec.started_at) : ago(rec.started_at));
@@ -606,7 +640,7 @@ function agentCard(a) {
   const [sttxt, stcls] = agentStatus(a);
   const card = el("a", "acard" + (isHusk(a) ? " husk" : ""));
   card.dataset.st = stcls;              // state tint keyed off agent status
-  card.href = "#/s/" + encodeURIComponent(S.cur) + "/a/" + encodeURIComponent(a.agent_id);
+  card.href = agentHref(S.cur, a.agent_id, "mirror");   // into AGENT SCOPE
   const name = a.desc || a.agent_id;      // the Task description IS the name
   card.append(el("div", "aid", (a.kind === "teammate" ? "◈ " : "◇ ") + name));
   if (a.desc) card.append(el("div", "desc", a.agent_id));
@@ -681,7 +715,7 @@ function monitorCard(m) {
   const [sttxt, stcls] = monitorStatus(m);
   const card = el("a", "acard");
   card.dataset.st = stcls;
-  card.href = "#/s/" + encodeURIComponent(S.cur) + "/m/" + encodeURIComponent(m.task);
+  card.href = sectionHref(S.cur, "m", m.task);
   const name = m.description || m.command || m.task;
   card.append(el("div", "aid", "◉ " + name));
   // subtitle: the command when the name is the description, else the task id
@@ -718,6 +752,7 @@ const SECTIONS = {
     api: "monitors", list: "monitors", grid: "monitorsGrid",
     focus: "monitorFocus", poll: "monPoll", tabEl: "monTab",
     countField: "monitor_count", route: "m", glyph: "◉", label: "monitors",
+    scoped: true,          // follows agent scope (the lead's own by default)
     empty: "no monitors in this session", missing: "monitor not found",
     name: (m) => m.description || m.command || m.task,
     card: (m) => monitorCard(m), detail: (wrap, m) => renderMonitorDetail(wrap, m),
@@ -726,6 +761,7 @@ const SECTIONS = {
     api: "jobs", list: "jobs", grid: "jobsGrid",
     focus: "jobFocus", poll: "jobPoll", tabEl: "jobTab",
     countField: "job_count", route: "j", glyph: "◷", label: "jobs",
+    scoped: true,          // …as do background jobs
     empty: "no background jobs in this session", missing: "job not found",
     name: (j) => firstLine(j.command) || j.task,
     card: (j) => jobCard(j), detail: (wrap, j) => renderJobDetail(wrap, j),
@@ -755,7 +791,10 @@ function noteOpen() {
 function loadSection(kind) {
   const sec = SECTIONS[kind], ses = S.ses, sid = S.cur;
   if (!ses || !sid) return;
-  fetch("/api/session/" + encodeURIComponent(sid) + "/" + sec.api)
+  // monitors + jobs follow AGENT SCOPE (sec.scoped); memory is session-wide,
+  // so it never carries the filter — docs/dashboard.md *Agent scope*.
+  fetch("/api/session/" + encodeURIComponent(sid) + "/" + sec.api
+        + (sec.scoped ? agentQ() : ""))
     .then(r => r.json())
     .then(d => {
       if (S.cur !== sid || !S.ses) return;
@@ -818,12 +857,14 @@ function updateSectionCount(kind, n) {
 }
 
 /* Open one item's drill-down (router #/s/<sid>/<route>/<task>). */
-function showSection(kind, sid, task) {
+function showSection(kind, sid, task, agent) {
   const sec = SECTIONS[kind];
-  if (S.cur !== sid) showSession(sid, kind);
+  // a scoped detail (…/a/<aid>/m/<task>) enters that agent's scope first, so
+  // the list this task is looked up in is the agent's, not the lead's
+  if (S.cur !== sid || (agent || "") !== ((S.ses && S.ses.agent) || ""))
+    showSession(sid, kind, agent);
   const ses = S.ses;
   if (!ses) return;
-  closeAgentStream();
   clearSectionPoll(kind);
   ses.tab = kind.slice(0, -1) + ":" + task;      // "monitor:<task>" / "job:<task>"
   ses[sec.focus] = task;
@@ -856,7 +897,9 @@ function sectionCrumbs(kind, sid, item) {
   const sec = SECTIONS[kind];
   const nav = el("div", "crumbs");
   const back = el("a", "crumb");
-  back.href = "#/s/" + encodeURIComponent(sid) + "/" + kind;
+  back.href = (S.ses && S.ses.agent)
+    ? agentHref(sid, S.ses.agent, kind)          // back to the SCOPED list
+    : "#/s/" + encodeURIComponent(sid) + "/" + kind;
   back.title = "back to the " + sec.label + " list";
   back.append(el("span", "cg", sec.glyph), tnode(" " + sec.label));
   const cur = el("span", "crumb cur");
@@ -935,7 +978,7 @@ function jobCard(j) {
   const [sttxt, stcls] = jobStatus(j);
   const card = el("a", "acard");
   card.dataset.st = stcls;
-  card.href = "#/s/" + encodeURIComponent(S.cur) + "/j/" + encodeURIComponent(j.task);
+  card.href = sectionHref(S.cur, "j", j.task);
   const name = firstLine(j.command) || j.task;
   card.append(el("div", "aid", "◷ " + name));
   card.append(el("div", "desc", j.task));
@@ -1124,52 +1167,33 @@ function renderJobDetail(container, j) {
     .catch(() => { if (box.isConnected) { box.textContent = ""; box.append(el("div", "empty", "output unavailable")); } });
 }
 
-/* ---------- timeline (activity / agent drill-down) ---------- */
+/* ---------- agent scope ---------- */
 
-function showAgent(sid, aid) {
-  if (S.cur !== sid) showSession(sid, "agents");
-  closeAgentStream();                       // switching agents / re-entering
-  S.ses.tab = "agent:" + aid;
-  const ses = S.ses;
-  // no tab-bar entry is "agent:<id>", so light the `agents` tab — a drill-down
-  // is a descent INTO agents, and this restores the "you are here" cue the
-  // breadcrumb also carries (previously every tab went dark here).
-  $view.querySelectorAll(".tabs a").forEach(a =>
-    a.classList.toggle("on", /\/agents$/.test(a.getAttribute("href") || "")));
-  // swap the top scoreboard to this agent — first from the enriched agents row
-  // we already have (status/model/events/ctx/duration), then the fetch below
-  // fills in tokens + cost.
-  ses.agentFocus = { aid: aid, data: null };
-  updateStatsRow();
-  updateRunning();
-  applyAgentActionVis();     // the session-only header actions don't apply here
-  if (ses.body) {
-    ses.body.textContent = "";
-    const rec = (ses.agents || []).find(a => a.agent_id === aid);
-    ses.body.append(agentCrumbs(sid, aid, rec));   // back-up-the-hierarchy trail
-    const tlWrap = el("div");                       // renderTimelineInto clears its
-    ses.body.append(tlWrap);                        // container, so keep it off the crumbs
-    // a running agent's page grows live; a parked one (ended_at set) is
-    // fetch-once — its transcript won't grow, so don't open a stream.
-    const live = !!rec && rec.ended_at == null;
-    // newest-first, matching the main agent's mirror stream (which prepends —
-    // appendItems), so a subagent's most recent message reads at the top
-    renderTimelineInto(tlWrap,
-                       "/api/session/" + encodeURIComponent(sid) + "/agent/" + encodeURIComponent(aid),
-                       (rec && rec.desc) || aid,
-                       live ? { sid: sid, aid: aid } : null, true,
-                       // feed the agent's tokens/cost rollup up into the scoreboard
-                       (d) => { if (ses.agentFocus && ses.agentFocus.aid === aid) {
-                                  ses.agentFocus.data = d; updateStatsRow(); } });
-  }
+/* The href of one tab in agent scope — the scoped route
+   (#/s/<sid>/a/<aid>/<tab>) that showSession's router entry reads back. Kept
+   beside the crumbs because the tab bar and the "← session" link are the only
+   places that spell the scoped URL. */
+function agentHref(sid, aid, tab) {
+  return "#/s/" + encodeURIComponent(sid) + "/a/" + encodeURIComponent(aid)
+    + (tab && tab !== "mirror" ? "/" + tab : "");
 }
 
-/* The agent-hierarchy breadcrumb on a subagent drill-down — the MAIN agent →
-   this subagent (docs/dashboard.md, *Breadcrumbs*). Just the two agent nodes
-   (the hierarchy is one level deep — a session's flat agent list): the main
-   agent is a link back to its mirror (#/s/<sid>), labelled by the session's
-   title; the current subagent is the highlighted end node. Icons: ◆ the main
-   agent, ◇/◈ the subagent. Clicking the main node is how you go back. */
+/* The href of ONE monitor/job detail, keeping whatever scope its card was
+   listed under: `#/s/<sid>/m/<task>` for the lead's, nested under the agent's
+   route for a scoped one, so a reload/share lands on the same list. */
+function sectionHref(sid, route, task) {
+  const a = (S.ses && S.ses.agent) || "";
+  const base = "#/s/" + encodeURIComponent(sid)
+    + (a ? "/a/" + encodeURIComponent(a) : "");
+  return base + "/" + route + "/" + encodeURIComponent(task);
+}
+
+/* The agent-hierarchy breadcrumb in agent scope — the MAIN agent → this agent
+   (docs/dashboard.md, *Breadcrumbs*). Just the two nodes (the hierarchy is one
+   level deep — a session's flat agent list): the main agent is a link back to
+   its own mirror (#/s/<sid>), labelled by the session's title; the current
+   agent is the highlighted end node. Icons: ◆ the main agent, ◇/◈ the
+   subagent/teammate. Clicking the main node is how you leave scope. */
 function agentCrumbs(sid, aid, rec) {
   const nav = el("div", "crumbs");
   const meta = (S.ses && S.ses.meta) || {};
@@ -1185,120 +1209,6 @@ function agentCrumbs(sid, aid, rec) {
   return nav;
 }
 
-function renderTimelineInto(container, apiUrl, title, live, newestFirst, onData) {
-  container.append(el("div", "empty", "loading " + title + "…"));
-  fetch(apiUrl).then(r => r.json()).then(d => {
-    if (onData) onData(d);            // hand the payload (usage/cost) to the caller
-    if (!container.isConnected) return;
-    container.textContent = "";
-    container.append(timelineHead(d, title));
-    const list = el("div", "tl");
-    const entries = d.entries || [];
-    if (!entries.length) list.append(el("div", "empty", "no recorded activity"));
-    // newestFirst reverses the chronological entries so the most recent reads at
-    // the top (the subagent drill-down, matching the main mirror); the head stays
-    // above regardless. The live SSE below then prepends new increments to match.
-    const ordered = newestFirst ? entries.slice().reverse() : entries;
-    for (const ent of ordered) list.append(timelineEntry(ent));
-    container.append(list);
-    // LIVE agents: resume the SSE at the byte cursor the REST read stopped at
-    // (d.pos — additive; absent for a provider with no incremental support,
-    // e.g. codex, so the drill-down simply stays fetch-once).
-    if (live && d.pos != null) connectAgentStream(live.sid, live.aid, d.pos, list, newestFirst);
-  }).catch(() => {
-    if (!container.isConnected) return;
-    container.textContent = "";
-    container.append(el("div", "empty", "no transcript available for " + title));
-  });
-}
-
-/* The live agent timeline stream: adds new increment `entries` (at the bottom
-   for oldest-first, or the TOP when newestFirst — matching the initial render's
-   order) and applies `resolve` events — a tool_result that arrived in a later
-   increment than its tool_use — by finding the tool entry via its data-tool-id
-   and filling in the result. Reconnects (like the per-session stream) resume at
-   the latest byte cursor so nothing repeats. */
-function connectAgentStream(sid, aid, pos, list, newestFirst) {
-  let cur = pos;
-  const es = new EventSource("/events/agent/" + encodeURIComponent(sid)
-                             + "/" + encodeURIComponent(aid) + "?pos=" + cur);
-  S.ses.agentEs = es;
-  es.onopen = () => sseMark("agent", true, { sid });
-  es.addEventListener("entries", (e) => {
-    const d = JSON.parse(e.data);
-    if (d.pos != null) cur = d.pos;
-    const empty = list.querySelector(".empty");
-    if (empty) empty.remove();
-    // newestFirst: prepend each increment entry in chronological order, so the
-    // increment's newest ends topmost and the whole increment sits above older
-    // ones (the reverse of the append path).
-    for (const ent of d.entries || []) {
-      const node = timelineEntry(ent);
-      if (newestFirst) list.prepend(node); else list.append(node);
-    }
-  });
-  es.addEventListener("resolve", (e) => {
-    const d = JSON.parse(e.data);
-    if (d.pos != null) cur = d.pos;
-    for (const r of d.resolutions || []) applyResolution(list, r);
-  });
-  es.onerror = () => {
-    sseMark("agent", false, { sid });
-    es.close();
-    if (!S.ses || S.ses.agentEs !== es) return;   // navigated away
-    S.ses.agentEs = null;
-    setTimeout(() => {
-      if (S.ses && S.ses.tab === "agent:" + aid && list.isConnected)
-        connectAgentStream(sid, aid, cur, list, newestFirst);
-    }, 1500);
-  };
-}
-
-// A resolution tuple [tool_use_id, output, failed] fills in a tool entry whose
-// tool_result arrived in a later increment; no matching entry (a genuine
-// orphan we never rendered) is a no-op.
-function applyResolution(list, r) {
-  const box = list.querySelector('[data-tool-id="' + cssq(r[0]) + '"]');
-  if (!box) return;
-  const region = toolResultRegion({ output: r[1], failed: !!r[2] });
-  const old = box.querySelector(".tout");
-  if (old) old.replaceWith(region);
-  else { const bd = box.querySelector(".bd"); if (bd) bd.append(region); }
-  const k = box.querySelector(".k");
-  if (k && r[2]) { k.classList.remove("k-tool"); k.classList.add("k-toolfail"); }
-  box.dataset.open = "1";                   // surface the freshly-arrived result
-}
-
-function cssq(s) {
-  s = String(s);
-  return (window.CSS && CSS.escape) ? CSS.escape(s) : s.replace(/["\\]/g, "\\$&");
-}
-
-function closeAgentStream() {
-  if (S.ses && S.ses.agentEs) { S.ses.agentEs.close(); S.ses.agentEs = null; }
-}
-
-function timelineHead(d, title) {
-  const h = el("div", "tlhead");
-  const add = chipAdder(h);            // the same chip shape as the scoreboards
-  add("◈", title);
-  if (d.model) add("model", d.model);
-  if (d.tools) add("tools", String(d.tools));
-  sigmaChip(add, d.usage || {});
-  if (d.bad_lines) add("⚠", d.bad_lines + " bad lines");
-  return h;
-}
-
-function inputSummary(input) {
-  if (!input || typeof input !== "object") return "";
-  const parts = [];
-  for (const [k, v] of Object.entries(input)) {
-    const vs = typeof v === "string" ? v : JSON.stringify(v);
-    parts.push(k + ": " + vs);
-  }
-  return parts.join("  ·  ");
-}
-
 function firstLine(s, n) {
   s = (s || "").trim();
   const nl = s.indexOf("\n");
@@ -1306,113 +1216,7 @@ function firstLine(s, n) {
   return s.length > (n || 160) ? s.slice(0, n || 160) + "…" : s;
 }
 
-function timelineEntry(ent) {
-  const box = el("div", "ent");
-  const hd = el("div", "hd");
-  const bd = el("div", "bd");
-  let kcls = "k-message", ktxt = ent.t, sum = "", open = false;
-
-  if (ent.t === "prompt") {
-    kcls = "k-prompt"; ktxt = "prompt"; sum = firstLine(ent.text); open = true;
-    bd.append(mdOrPre(ent.html, ent.text));
-  } else if (ent.t === "teammsg") {
-    kcls = "k-teammsg"; ktxt = "✉ " + (ent.sender || "team");
-    sum = firstLine(ent.body); open = false;
-    bd.append(mdOrPre(ent.html, ent.body));
-  } else if (ent.t === "message") {
-    kcls = ent.final ? "k-final" : "k-message";
-    ktxt = ent.final ? "result" : "message";
-    sum = firstLine(ent.text); open = !!ent.final;
-    bd.append(mdOrPre(ent.html, ent.text));
-  } else if (ent.t === "compact") {
-    kcls = "k-compact"; ktxt = "compact";
-    sum = "context compacted"; open = false;
-    bd.append(pre(JSON.stringify(ent.meta || {}, null, 2)));
-  } else if (ent.t === "recap") {
-    // Claude Code's away-summary recap — one-line summary of what happened
-    // while you were away (auto after idle, or on-demand /recap).
-    kcls = "k-recap"; ktxt = "↩ recap";
-    sum = firstLine(ent.text); open = false;
-    bd.append(mdOrPre(ent.html, ent.text));
-  } else if (ent.t === "monitor") {
-    // A Monitor tool event (or its stream-ended `status`). The launch itself is
-    // a separate `tool` entry (name "Monitor"); these are the events it fired.
-    kcls = "k-monitor";
-    ktxt = ent.status ? ("◉ monitor " + ent.status) : "◉ monitor event";
-    const body = ent.event || ent.summary || "";
-    sum = firstLine(body); open = false;
-    if (body) bd.append(pre(body));
-  } else if (ent.t === "tool") {
-    kcls = ent.failed ? "k-toolfail" : "k-tool";
-    ktxt = ent.tool || "tool";
-    sum = firstLine(inputSummary(ent.input)); open = false;
-    if (ent.input_html != null) {
-      bd.append(el("div", "lbl", "input"));
-      bd.append(htmlFrag(ent.input_html));
-    } else if (ent.input && Object.keys(ent.input).length) {
-      bd.append(el("div", "lbl", "input"));
-      bd.append(pre(JSON.stringify(ent.input, null, 2)));
-    }
-    bd.append(toolResultRegion(ent));
-  } else if (ent.t === "orphan-result") {
-    kcls = "k-orphan"; ktxt = "result";
-    sum = firstLine(ent.output); open = false;
-    bd.append(pre(ent.output));
-  } else {
-    sum = JSON.stringify(ent).slice(0, 160);
-    bd.append(pre(JSON.stringify(ent, null, 2)));
-  }
-
-  hd.append(el("span", "k " + kcls, ktxt));
-  const sspan = el("span", "sum");
-  sspan.append(tnode(sum || ""));
-  hd.append(sspan);
-  box.dataset.open = open ? "1" : "0";
-  // tool entries carry their tool_use id so a later `resolve` SSE event (a
-  // tool_result that landed in a subsequent increment) can find and fill them.
-  if (ent.t === "tool" && ent.id) box.dataset.toolId = ent.id;
-  hd.onclick = () => { box.dataset.open = box.dataset.open === "1" ? "0" : "1"; };
-  box.append(hd, bd);
-  return box;
-}
-
-// The tool entry's result region (its own .tout block so a `resolve` event can
-// replace just it, leaving the input section intact). No output yet -> "no
-// result recorded"; the live resolve renders the output as a plain <pre> (the
-// lightweight resolution tuple carries no output_html — a rich re-render lands
-// on the next full fetch).
-function toolResultRegion(ent) {
-  const tout = el("div", "tout");
-  if (ent.output != null) {
-    const lbl = el("div", "lbl", ent.failed ? "output · failed" : "output");
-    if (ent.failed) lbl.classList.add("fail");
-    tout.append(lbl);
-    tout.append(ent.output_html != null ? htmlFrag(ent.output_html) : pre(ent.output));
-  } else {
-    tout.append(el("div", "lbl", "no result recorded"));
-  }
-  return tout;
-}
-
 function pre(text) { const p = el("pre"); p.textContent = text == null ? "" : String(text); return p; }
-// Server-rendered markdown (opshtml.md_html — escaped there, the same
-// neutralize() analog as op HTML) is the only thing set via innerHTML here;
-// with no `html` field (older provider) fall back to plain textContent.
-function mdOrPre(html, text) {
-  if (html == null) return pre(text);
-  const d = el("div", "md");
-  d.innerHTML = html;
-  return d;
-}
-// Server-rendered tool input/output HTML (opshtml.tool_html / tool_output_html
-// — escaped there like op HTML). Same innerHTML-is-safe-by-construction basis
-// as mdOrPre; a bare wrapper carries the structured blocks (.oc / .tdiff /
-// .tdl) without the .md markdown styling.
-function htmlFrag(html) {
-  const d = el("div", "thtml");
-  d.innerHTML = html;
-  return d;
-}
 
 /* ---------- errors tab ---------- */
 

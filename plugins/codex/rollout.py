@@ -6,14 +6,16 @@
 # table): the `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl` event grammar —
 # turn_context / event_msg / response_item discrimination, the exec-arguments
 # decode, the patch-change line counts, the exec-output exit extraction, and
-# the cumulative total_token_usage field mapping (usage_split). Two
-# presenters consume its records:
+# the cumulative total_token_usage field mapping (usage_split). ONE presenter
+# consumes its records:
 #
 #   plugins/codex/stream.py Renderer.feed_rollout — the mirror's CAPPED,
 #       styled paint (byte-identical to the pre-split renderer; the e2e
 #       codex suite is the equivalence pin)
-#   timeline() below — the UNCAPPED drill-down read model behind
-#       plugins.activity() (activity() below is the codex provider)
+#
+# There was a second — an uncapped drill-down timeline behind plugins.activity()
+# — and it is gone with that fan-out: a codex run's web view is the mirror it
+# already paints, scoped (docs/dashboard.md *Agent scope*).
 #
 # parse(o) takes one DECODED rollout object and returns a typed record
 # (None = nothing renderable — unknown types fall through silently, exactly
@@ -29,10 +31,9 @@
 #   {"kind": "exec", "cmd": str, "call_id": str}
 #   {"kind": "exec_result", "exit": str|None, "output": str, "call_id": str}
 # parse_line(s) wraps json.loads: {"kind": "bad", "raw": s} for a complete
-# line that isn't JSON. parse_line/parse are pure (no I/O, no state); the
-# only I/O here is timeline()/activity()'s own file read.
+# line that isn't JSON. parse_line/parse are pure (no I/O, no state) — with the
+# timeline gone this module does no I/O at all.
 import json
-import os
 import re
 
 # The exec output's exit-status head line ("Exit code: 2" / "Process exited
@@ -61,9 +62,9 @@ def _patch_delta(ch):
 def usage_split(u):
     """The ONE total_token_usage → (fresh_in, out, cached, total_in) mapping:
     codex's cumulative input_tokens INCLUDES the cached share, so fresh billed
-    input is input - cached. Both consumers — the stream footer's rollup/fold
-    and timeline()'s usage dict — call this; re-encoding the arithmetic
-    per-site is banned (styleguide single-owner rule)."""
+    input is input - cached. The stream footer's rollup/fold calls this;
+    re-encoding the arithmetic per-site is banned (styleguide single-owner
+    rule)."""
     tin = int(u.get("input_tokens") or 0)
     tcache = int(u.get("cached_input_tokens") or 0)
     tout = int(u.get("output_tokens") or 0)
@@ -193,121 +194,3 @@ def parse_line(s):
     except Exception:
         return {"kind": "bad", "raw": s}
     return parse(o)
-
-
-# --- the drill-down timeline (full fidelity — deliberately UNCAPPED) --------
-
-def timeline(path):
-    """Parse a whole rollout into the SAME activity-timeline dict shape
-    plugins/claude_code/transcript.timeline returns ({"entries", "model",
-    "tools", "usage", "bad_lines"}), so the dashboard's drill-down renders a
-    codex run with zero special-casing. Entry mapping:
-      user_message  -> {"t": "prompt", "text"}
-      agent_message -> {"t": "message", "text"[, "final": True on the last]}
-      exec          -> {"t": "tool", "tool": "exec_command",
-                        "input": {"cmd"}, "id"} — paired with its
-                       function_call_output by call_id (the tool_use_id
-                       analog); output/failed fill in from the result, an
-                       unmatched output is an {"t": "orphan-result"}
-      web_search    -> {"t": "tool", "tool": "web_search", "input": {"query"}}
-      patch         -> one {"t": "tool", "tool": "apply_patch"} per changed
-                       file (input: file_path/change/±counts) — codex's own
-                       vocabulary, deliberately not the mirror's Claude-look
-                       verb map (that's paint, plugins/codex/stream.py's)
-      compacted     -> {"t": "compact", "meta": {}}
-    Reasoning records and the task/turn lifecycle are NOT timeline entries —
-    the same fidelity line the claude timeline draws (its parse_line drops
-    thinking blocks). usage is the run's LAST cumulative total_token_usage
-    through usage_split (create=0: codex reports no cache-creation category).
-    Raises OSError on an unreadable path — callers own the audit/swallow."""
-    entries, pend = [], {}
-    model, usage, bad = None, None, 0
-    with open(path, encoding="utf-8") as fh:
-        for raw in fh:
-            raw = raw.strip()
-            if not raw:
-                continue
-            try:
-                rec = parse_line(raw)
-            except Exception:
-                # A JSON line whose payload defeats a field walk (e.g. a
-                # non-dict `action`): counted as bad — surfaced in the
-                # returned bad_lines figure, not swallowed silently.
-                bad += 1
-                continue
-            if rec is None:
-                continue
-            k = rec["kind"]
-            if k == "bad":
-                bad += 1
-            elif k == "turn_context":
-                model = rec["model"] or model
-            elif k == "usage":
-                usage = rec["usage"]
-            elif k == "prompt":
-                entries.append({"t": "prompt", "text": rec["text"]})
-            elif k == "message":
-                entries.append({"t": "message", "text": rec["text"]})
-            elif k == "compact":
-                entries.append({"t": "compact", "meta": {}})
-            elif k == "search":
-                entries.append({"t": "tool", "tool": "web_search",
-                                "input": {"query": rec["query"]}, "id": None})
-            elif k == "exec":
-                e = {"t": "tool", "tool": "exec_command",
-                     "input": {"cmd": rec["cmd"]}, "id": rec["call_id"] or None}
-                entries.append(e)
-                if rec["call_id"]:
-                    pend[rec["call_id"]] = e
-            elif k == "exec_result":
-                failed = bool(rec["exit"] and rec["exit"] != "0")
-                e = pend.pop(rec["call_id"], None)
-                if e is None:
-                    entries.append({"t": "orphan-result",
-                                    "output": rec["output"], "failed": failed})
-                else:
-                    e["output"] = rec["output"]
-                    e["failed"] = failed
-            elif k == "patch":
-                if rec["success"]:
-                    for f in rec["files"]:
-                        entries.append({"t": "tool", "tool": "apply_patch",
-                                        "input": {"file_path": f["path"],
-                                                  "change": f["change"],
-                                                  "added": f["added"],
-                                                  "removed": f["removed"]},
-                                        "id": None})
-                else:
-                    entries.append({"t": "tool", "tool": "apply_patch",
-                                    "input": {}, "id": None, "failed": True})
-    if entries and entries[-1]["t"] == "message":
-        entries[-1]["final"] = True
-    fresh, tout, tcache, _tin = usage_split(usage or {})
-    return {"entries": entries, "model": model, "bad_lines": bad,
-            "tools": sum(1 for e in entries if e["t"] == "tool"),
-            "usage": {"in": fresh, "out": tout, "cache": tcache,
-                      "create": 0, "create_1h": 0}}
-
-
-def activity(sid, agent_id=None):
-    """The codex activity provider behind plugins.activity(): the timeline of
-    one codex run of a hosting session (agent_id = the sessionapi.codex_aid
-    identity the agents() list shows for kind='codex' streams rows), or —
-    with agent_id=None — of a STANDALONE codex session's own rollout (the
-    rollout filename uuid IS the sid, watch.py's standalone match, so the
-    derived aid ends in "-<sid>"). None when the pair isn't a codex run here,
-    when the run is a companion job (its .log activity stream is not a
-    rollout — no parse), or when the rollout file is gone. Resolution reads
-    the audit streams keystone through core/sessionapi.codex_runs(); imports
-    are deferred so parse()/parse_line stay usable without the API (and the
-    API imports no plugin, per the dependency rule)."""
-    from core import sessionapi as API
-    for run in API.codex_runs(sid):
-        aid = run["agent_id"]
-        hit = (aid == agent_id) if agent_id else aid.endswith("-" + sid)
-        if not hit:
-            continue
-        path = run["transcript"]
-        if path.endswith(".jsonl") and os.path.isfile(path):
-            return timeline(path)
-    return None

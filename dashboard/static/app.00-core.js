@@ -419,6 +419,14 @@ function proj(row) {
   const c = row.cwd || "";
   return c ? c.split("/").filter(Boolean).pop() : (row.sid || "").slice(0, 18);
 }
+/* The `?agent=<id>` suffix every scoped read carries — "" outside agent scope,
+   so an unscoped URL is byte-identical to what it was. `sep` is the separator
+   this call site needs ("?" for a bare path, "&" after an existing query). */
+function agentQ(sep) {
+  const a = (S.ses && S.ses.agent) || "";
+  return a ? (sep || "?") + "agent=" + encodeURIComponent(a) : "";
+}
+
 function shortSid(sid) { return (sid || "").length > 20 ? sid.slice(0, 8) + "…" + sid.slice(-4) : sid; }
 // "claude-opus-4-8" → "opus-4.8" — display twin of model.short_model (the
 // Python side is the authority; this only styles the model button's label):

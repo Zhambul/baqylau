@@ -446,4 +446,3 @@ class _SseMixin:
                 return
             tick += 1
             time.sleep(TICK_S)
-

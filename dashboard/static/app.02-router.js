@@ -146,7 +146,19 @@ function route() {
   if (parts[0] === "s" && parts[1]) {
     S.pendingUI = false;
     const sid = decodeURIComponent(parts[1]);
-    if (parts[2] === "a" && parts[3]) return showAgent(sid, decodeURIComponent(parts[3]));
+    // AGENT SCOPE: the whole session view re-pointed at one agent, with its own
+    // tab in the URL (#/s/<sid>/a/<aid>/<tab>) so a scoped page is linkable and
+    // survives a reload (docs/dashboard.md *Agent scope*). A monitor/job detail
+    // nests INSIDE it (…/a/<aid>/m/<task>) — reached unscoped, the task simply
+    // isn't in the lead's list.
+    if (parts[2] === "a" && parts[3]) {
+      const aid = decodeURIComponent(parts[3]);
+      if (parts[4] === "m" && parts[5])
+        return showSection("monitors", sid, decodeURIComponent(parts[5]), aid);
+      if (parts[4] === "j" && parts[5])
+        return showSection("jobs", sid, decodeURIComponent(parts[5]), aid);
+      return showSession(sid, parts[4] || "mirror", aid);
+    }
     // the two drill-downs route through the one section engine (SECTIONS)
     if (parts[2] === "m" && parts[3])
       return showSection("monitors", sid, decodeURIComponent(parts[3]));

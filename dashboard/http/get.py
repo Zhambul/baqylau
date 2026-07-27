@@ -124,7 +124,7 @@ class _GetMixin:
         agent scope is a `?agent=` filter on the ordinary session reads, not an
         endpoint of its own (docs/dashboard.md *Agent scope*)."""
         if not rest:
-            return self._json(session_payload(sid))
+            return self._json(session_payload(sid, _qstr(url, "agent")))
         if len(rest) == 1:
             verb = self._SESSION_GET.get(rest[0])
             if verb:

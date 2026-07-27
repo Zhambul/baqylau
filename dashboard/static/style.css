@@ -428,6 +428,11 @@ code, pre, .mono { font-family: var(--mono); }
 }
 .tabs a:hover { color: var(--text); }
 .tabs .count { color: var(--dim2); margin-left: 6px; font-family: var(--mono); }
+/* "session-wide" beside the memory/errors tabs in agent scope — those two have
+   no agent dimension, so the scope has to be said out loud (docs/dashboard.md
+   *Agent scope*). Pushed to the far end, deliberately quiet. */
+.tabs .tabnote { margin-left: auto; align-self: center; color: var(--dim2);
+  font-size: 11px; padding-right: 4px; }
 
 .split { display: grid; grid-template-columns: minmax(0, 1fr) 290px; gap: 12px; }
 /* the transcript column: the pinned queued-message pane (.pinq) stacked above

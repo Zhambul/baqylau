@@ -27,6 +27,7 @@ const sandbox = {
   setTimeout: () => 1, clearTimeout: () => {},
   performance: { now: () => 0 },
   ...domGlobals(),
+  encodeURIComponent,
   dur: sec => Math.max(0, sec | 0) + "s",
   // app.00-core's text-presentation pin (U+FE0E on emoji-capable glyphs). Identity
   // here: this harness measures ROUTING, and the pin itself is asserted from Python
@@ -36,6 +37,11 @@ const sandbox = {
   liveTab: () => sandbox.__tab,
   postJSON: () => { sandbox.__posted++; return Promise.resolve({}); },
   clog: () => {}, loadOlder: () => { sandbox.__loadOlder++; },
+  // `agentQ` is the agent-scope query suffix (app.00-core.js) — a cross-part
+  // global like clog/pre, stubbed with its real 3-line body so the URLs this
+  // harness records are the ones the browser would send
+  agentQ: (sep) => { const a = (sandbox.S && sandbox.S.ses && sandbox.S.ses.agent) || "";
+                     return a ? (sep || "?") + "agent=" + encodeURIComponent(a) : ""; },
   // the OUTCOME vocabulary lives with the agent cards (app.11-chrome.js
   // agentStatus); the engine under test only JOINS to it, so the stub simply
   // echoes a state planted on the agent record. That the real mapping is the one

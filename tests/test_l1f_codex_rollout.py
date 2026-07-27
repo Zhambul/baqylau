@@ -15,7 +15,6 @@ if REPO not in sys.path:
 
 import core.audit as A
 from core import paths as P
-from core import sessionapi as API
 from plugins.codex import rollout as RO
 
 
@@ -150,116 +149,11 @@ def _write(tmp_path, lines, name="rollout-2026-07-06T10-00-00-u1.jsonl"):
     return str(p)
 
 
-def test_timeline_shape_pairing_and_usage(tmp_path):
-    path = _write(tmp_path, [
-        {"type": "session_meta", "payload": {"cwd": "/w",
-                                             "originator": "codex_exec"}},
-        {"type": "turn_context", "payload": {
-            "model": "gpt-5-codex",
-            "collaboration_mode": {"settings": {"reasoning_effort": "medium"}}}},
-        _ev("task_started"),
-        _ev("user_message", message="fix the flaky test"),
-        _ev("agent_reasoning", text="thinking hard"),   # not a timeline entry
-        _rsp("function_call", name="exec_command", call_id="c1",
-             arguments=json.dumps({"cmd": ["pytest", "-q"]})),
-        _rsp("function_call_output", call_id="c1",
-             output="Exit code: 1\nFAILED test_x"),
-        _rsp("web_search_call", action={"query": "pytest flaky"}),
-        _ev("patch_apply_end", success=True, changes={
-            "/w/a.py": {"type": "update", "unified_diff": "@@\n-x\n+y\n+z\n"}}),
-        _ev("context_compacted"),
-        _ev("token_count", info={"total_token_usage": {
-            "input_tokens": 1000, "cached_input_tokens": 600,
-            "output_tokens": 50, "total_tokens": 1050}}),
-        _ev("agent_message", message="all green now"),
-        _ev("task_complete"),
-    ])
-    tl = RO.timeline(path)
-    kinds = [e["t"] for e in tl["entries"]]
-    assert kinds == ["prompt", "tool", "tool", "tool", "compact", "message"]
-    ex = tl["entries"][1]
-    assert ex["tool"] == "exec_command" and ex["input"] == {"cmd": "pytest -q"}
-    assert ex["output"] == "Exit code: 1\nFAILED test_x" and ex["failed"] is True
-    assert tl["entries"][2] == {"t": "tool", "tool": "web_search",
-                                "input": {"query": "pytest flaky"}, "id": None}
-    patch = tl["entries"][3]
-    assert patch["tool"] == "apply_patch"
-    assert patch["input"] == {"file_path": "/w/a.py", "change": "update",
-                              "added": 2, "removed": 1}
-    assert tl["entries"][-1]["final"] is True         # the returned result
-    # same shape as the claude timeline: model / tools / usage / bad_lines
-    assert tl["model"] == "gpt-5-codex" and tl["tools"] == 3
-    assert tl["usage"] == {"in": 400, "out": 50, "cache": 600,
-                           "create": 0, "create_1h": 0}
-    assert tl["bad_lines"] == 0
-
-
-def test_timeline_orphan_result_and_bad_lines(tmp_path):
-    p = tmp_path / "r.jsonl"
-    p.write_text(_l(_rsp("function_call_output", call_id="ghost",
-                         output="Exit code: 7\nboom")) + "\n{oops\n",
-                 encoding="utf-8")
-    tl = RO.timeline(str(p))
-    assert tl["entries"] == [{"t": "orphan-result",
-                              "output": "Exit code: 7\nboom", "failed": True}]
-    assert tl["bad_lines"] == 1
-
-
-def test_timeline_failed_patch_is_one_failed_tool_entry(tmp_path):
-    path = _write(tmp_path, [_ev("patch_apply_end", success=False, changes={
-        "/w/a.py": {"type": "update", "unified_diff": "@@\n+x\n"}})])
-    tl = RO.timeline(path)
-    assert tl["entries"] == [{"t": "tool", "tool": "apply_patch",
-                              "input": {}, "id": None, "failed": True}]
-
-
 # ----------------------------------------------- the activity provider (end-to-end)
 
 def _seed_run(sid, src, label="cli", end="task-complete"):
     rid = A.stream_start(P.mirror_log(sid), "codex", task_id=label, src_path=src)
     A.stream_end(rid, end, lines_emitted=3)
-
-
-def test_activity_resolves_a_codex_run_from_the_streams_keystone(tmp_path):
-    path = _write(tmp_path, [
-        _ev("user_message", message="review the diff"),
-        _ev("agent_message", message="looks fine")])
-    _seed_run("cxa-sess", path)
-    import plugins
-    aid = API.codex_aid(path)
-    assert aid == "rollout-2026-07-06T10-00-00-u1"
-    tl = plugins.activity("cxa-sess", aid)
-    assert tl and [e["t"] for e in tl["entries"]] == ["prompt", "message"]
-    assert tl["entries"][0]["text"] == "review the diff"
-    # an unknown agent id stays unclaimed by every provider
-    assert plugins.activity("cxa-sess", "no-such-run") is None
-
-
-def test_activity_main_thread_matches_a_standalone_rollout(tmp_path):
-    # standalone codex: the rollout filename uuid IS the session id, so the
-    # provider answers the MAIN-thread drill-down (agent_id=None) with it.
-    sid = "11111111-2222-3333-4444-555555555555"
-    path = _write(tmp_path, [_ev("user_message", message="standalone hello")],
-                  name="rollout-2026-07-06T10-00-00-%s.jsonl" % sid)
-    _seed_run(sid, path)
-    import plugins
-    tl = plugins.activity(sid)
-    assert tl and tl["entries"] == [{"t": "prompt", "text": "standalone hello"}]
-
-
-def test_activity_companion_log_runs_have_no_drilldown(tmp_path):
-    # a companion job's .log is an activity log, not a rollout — listed by
-    # agents()/codex_runs(), but the provider must decline to parse it.
-    log = tmp_path / "job-ab12cd34.log"
-    log.write_text("[2026-07-06T10:00:00.000Z] Running command: ls\n",
-                   encoding="utf-8")
-    _seed_run("cxc-sess", str(log), label="Review",
-              end="sidecar-status: completed")
-    import plugins
-    assert plugins.activity("cxc-sess", "job-ab12cd34") is None
-    runs = API.codex_runs("cxc-sess")
-    assert len(runs) == 1 and runs[0]["agent_id"] == "job-ab12cd34"
-    assert runs[0]["desc"] == "Review"
 
 
 # ------------------------------------------------------------------ single owner

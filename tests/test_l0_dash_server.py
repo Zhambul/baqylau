@@ -2133,37 +2133,35 @@ def test_http_jobs_endpoint(dash):
     assert code == 200 and "line one" in out and "line two" in out
 
 
-def test_http_agent_timeline(dash, tmp_path):
+def test_agent_scope_payload_and_removed_routes(dash, tmp_path):
+    """Agent scope serves the agent's token rollup on the SESSION payload
+    (`?agent=`), and the drill-down endpoints it replaced are gone."""
     tp = tmp_path / "agent-ag2.jsonl"
     tp.write_text(
         json.dumps({"type": "assistant", "message": {
-            "id": "m1", "model": "claude-x",
+            "id": "m1", "model": "claude-opus-4-8",
             "usage": {"input_tokens": 10, "output_tokens": 5},
-            "content": [{"type": "text", "text": "hi there"},
-                        {"type": "tool_use", "id": "t1", "name": "Bash",
-                         "input": {"command": "ls"}}]}}) + "\n" +
-        json.dumps({"type": "user", "message": {
-            "content": [{"type": "tool_result", "tool_use_id": "t1",
-                         "content": "listing"}]}}) + "\n")
+            "content": [{"type": "text", "text": "hi there"}]}}) + "\n")
     log = P.mirror_log("dash3")
     A.session_start({"session_id": "dash3", "cwd": "/w", "transcript_path": ""})
     rid = A.stream_start(log, "subagent", agent_id="ag2", src_path=str(tp))
     A.stream_end(rid, "stop-sentinel", lines_emitted=2)
-    d = _get_json(dash + "/api/session/dash3/agent/ag2")
-    kinds = [e["t"] for e in d["entries"]]
-    assert kinds == ["message", "tool"] and d["model"] == "claude-x"
-    tool = d["entries"][1]
-    assert tool["tool"] == "Bash" and tool["output"] == "listing"
-    # mdify enriches the tool entry additively: a Bash command gets a
-    # highlighted input_html; the raw input stays untouched.
-    assert "<pre class=\"oc\">" in tool["input_html"]
-    assert tool["input"] == {"command": "ls"}
+    # unscoped: no agent_usage at all (it costs a transcript fold — only the
+    # scoped request pays it)
+    plain = _get_json(dash + "/api/session/dash3")
+    assert "agent_usage" not in plain
     # agents list carries the streams keystone fields the cards render
-    ags = _get_json(dash + "/api/session/dash3")["agents"]
-    assert ags and ags[0]["end_reason"] == "stop-sentinel"
-    # the /agent response carries a byte cursor `pos` (additive) so a live
-    # client can hand it to the agent SSE for a race-free resume
-    assert d["pos"] > 0
+    assert plain["agents"] and plain["agents"][0]["end_reason"] == "stop-sentinel"
+    d = _get_json(dash + "/api/session/dash3?agent=ag2")["agent_usage"]
+    assert d["model"] == "claude-opus-4-8"
+    assert d["usage"]["in"] == 10 and d["usage"]["out"] == 5
+    assert d["cost"] > 0                       # priced by the shared accountant
+    # the drill-down endpoints agent scope replaced
+    for path in ("/api/session/dash3/agent/ag2", "/api/session/dash3/activity",
+                 "/events/agent/dash3/ag2"):
+        with pytest.raises(urllib.error.HTTPError) as e:
+            urllib.request.urlopen(dash + path, timeout=5)
+        assert e.value.code == 404
 
 
 def _agent_transcript(tmp_path, sid, aid):
@@ -2345,50 +2343,58 @@ def test_git_dirty_marker(dash, tmp_path):
                                        "root": None, "dirty": True}
 
 
-def test_activity_since_fanout(dash, tmp_path):
-    """plugins.activity_since resolves (sid, agent_id) to the claude provider's
-    (entries, resolutions, new_pos); an unknown pair falls through to None."""
-    _agent_transcript(tmp_path, "fanout1", "agF")
-    got = plugins.activity_since("fanout1", "agF", 0)
-    assert got is not None
-    ents, res, pos = got
-    assert [e["t"] for e in ents] == ["message", "tool"]
-    assert ents[1]["output"] == "listing"          # paired in the same window
-    assert res == [] and pos > 0
-    assert plugins.activity_since("nope", "nada", 0) is None
+def test_agent_scope_filters_the_mirror_to_one_agent(dash, tmp_path):
+    """The scoped mirror keeps only that agent's `src`-stamped ops — the lead's
+    own and a DIFFERENT agent's both drop out (docs/dashboard.md *Agent
+    scope*)."""
+    A.session_start({"session_id": "scope1", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("scope1")
+    O.emit(log, O.label("lead ran something", O.SLATE, g="glead"))
+    O.emit(log, O.label("sub A worked", O.SLATE, g="ga"), src="sub:agA")
+    O.emit(log, O.label("teammate B worked", O.SLATE, g="gb"), src="team:agB")
+    # unscoped: the lead's own op only
+    items = _get_json(dash + "/api/session/scope1/backlog")["items"]
+    html = " ".join(i["html"] for i in items)
+    assert "lead ran something" in html
+    assert "sub A worked" not in html and "teammate B worked" not in html
+    # scoped to agA: only its op
+    items = _get_json(dash + "/api/session/scope1/backlog?agent=agA")["items"]
+    html = " ".join(i["html"] for i in items)
+    assert "sub A worked" in html
+    assert "lead ran something" not in html and "teammate B worked" not in html
+    # a teammate is named by the same agent_id space, and does not leak into a
+    # sibling's scope
+    items = _get_json(dash + "/api/session/scope1/backlog?agent=agB")["items"]
+    assert "teammate B worked" in " ".join(i["html"] for i in items)
 
 
-def test_sse_agent_streams_entries(dash, tmp_path):
-    """The /events/agent SSE announces the increment from the given cursor as
-    an `entries` event, server-enriched exactly like the REST endpoint."""
-    _agent_transcript(tmp_path, "sseA", "agS")
-    data = _sse_event(dash + "/events/agent/sseA/agS?pos=0", "entries")
-    assert data
-    d = json.loads(data)
-    assert d["pos"] > 0
-    kinds = [e["t"] for e in d["entries"]]
-    assert kinds == ["message", "tool"]
-    tool = d["entries"][1]
-    assert "<pre class=\"oc\">" in tool["input_html"]   # enrich_entries ran
-
-
-def test_activity_entries_carry_markdown_html(dash, tmp_path):
-    # /activity post-processes the timeline: message/prompt entries gain an
-    # `html` field (md_html of their text) so the page renders markdown; the
-    # raw text field stays untouched (additive shape).
-    tp = tmp_path / "mdconv.jsonl"
-    tp.write_text(
-        json.dumps({"type": "user", "message": {"content": "**do** it"}}) + "\n" +
-        json.dumps({"type": "assistant", "message": {
-            "id": "m1", "content": [
-                {"type": "text", "text": "here is a **bold** answer"}]}}) + "\n")
-    A.session_start({"session_id": "dashmd", "cwd": "/w", "transcript_path": str(tp)})
-    d = _get_json(dash + "/api/session/dashmd/activity")
-    msg = next(e for e in d["entries"] if e["t"] == "message")
-    assert "<strong>bold</strong>" in msg["html"]
-    assert msg["text"] == "here is a **bold** answer"      # raw untouched
-    prompt = next(e for e in d["entries"] if e["t"] == "prompt")
-    assert "<strong>do</strong>" in prompt["html"]
+def test_jobs_and_monitors_are_lead_only_until_scoped(dash, tmp_path):
+    """A session's Jobs/Monitors tabs show the LEAD's own work; an agent's is
+    behind that agent's scope, with the command the audit recovered."""
+    A.session_start({"session_id": "scope2", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("scope2")
+    # the lead's own bg job: its command op shares the taskId group
+    O.emit(log, O.code("echo lead", g="btask-lead"))
+    A.stream_end(A.stream_start(log, "bg", task_id="btask-lead"), "writer-gone")
+    # an AGENT's bg job — the stream carries its owner (CLAUDE_STREAM_AGENT)
+    A.stream_end(A.stream_start(log, "bg", agent_id="agJ", task_id="btask-sub"),
+                 "writer-gone")
+    # …and the hook that launched it carries the command the ops group misses
+    A.hook_event({"session_id": "scope2", "hook_event_name": "PostToolUse",
+                  "tool_name": "Bash", "agent_id": "agJ",
+                  "tool_use_id": "toolu_9", "tool_input": {"command": "echo sub"},
+                  "tool_response": {"backgroundTaskId": "btask-sub"}},
+                 handler="claude-cmd-fmt.py")
+    lead = _get_json(dash + "/api/session/scope2/jobs")["jobs"]
+    assert [j["task"] for j in lead] == ["btask-lead"]
+    assert lead[0]["command"] == "echo lead"
+    sub = _get_json(dash + "/api/session/scope2/jobs?agent=agJ")["jobs"]
+    assert [j["task"] for j in sub] == ["btask-sub"]
+    # the command came from the launch hook, and `group` points at the ops group
+    # the substream actually painted under (the tool_use_id, not the taskId)
+    assert sub[0]["command"] == "echo sub" and sub[0]["group"] == "toolu_9"
+    # the badge count follows the same lead-only rule
+    assert _get_json(dash + "/api/session/scope2")["job_count"] == 1
 
 
 def test_hidden_agent_husk_rows_are_filtered(dash):

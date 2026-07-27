@@ -67,20 +67,25 @@ def agents_model_effort(agents, effort):
     return agents
 
 
-def stamp_agent_cost(tl):
-    """Stamp a subagent drill-down payload with `cost` — approximate USD for its
-    OWN token rollup, priced from `usage` + the run's last model via the shared
-    accountant (the web per-agent scoreboard's ≈cost, docs/dashboard.md *Subagent
-    scoreboard swap*). None for an unknown/empty model (codex runs, husk reads) —
-    the client just omits the ≈cost chip. This transcript pricing is the ONLY
-    per-agent cost figure: OTEL `costs()` is aggregate by query_source
-    (main/subagent/auxiliary), never attributable to a single agent_id."""
+def agent_usage(sid, agent):
+    """ONE agent's {model, usage, cost} for the agent-scope scoreboard, or None
+    when no plugin has a transcript for it (a codex run declines — it prices its
+    own tokens at its footer). `cost` is approximate USD for that token rollup,
+    priced from the run's last model via the shared accountant, and is omitted
+    for an unknown/empty model — the client just drops the ≈cost chip.
+
+    This transcript pricing is the ONLY per-agent cost figure available: OTEL
+    `costs()` is aggregate by query_source (main/subagent/auxiliary) and can
+    never be attributed to a single agent_id."""
+    tl = plugins.agent_usage(sid, agent)
+    if not tl:
+        return None
     u = tl.get("usage") or {}
-    if not u:
-        return
-    tl["cost"] = ACC.cost_usd(tl.get("model"), u.get("in", 0), u.get("out", 0),
-                              u.get("cache", 0), u.get("create", 0),
-                              u.get("create_1h", 0))
+    if u:
+        tl["cost"] = ACC.cost_usd(tl.get("model"), u.get("in", 0), u.get("out", 0),
+                                  u.get("cache", 0), u.get("create", 0),
+                                  u.get("create_1h", 0))
+    return tl
 
 
 def memory_scope(cwd):
@@ -135,11 +140,20 @@ BADGES = (
 )
 
 
-def session_payload(sid):
+def session_payload(sid, agent=""):
     """One session's overview — session() plus the secondary tabs' badge counts
     (BADGES; the full rows stay behind /errors, /monitors, /jobs, /memory) and
-    the display title."""
+    the display title.
+
+    `agent` additionally stamps `agent_usage` — that ONE agent's token rollup
+    and priced cost, for the scoreboard the page swaps in under agent scope
+    (docs/dashboard.md *Agent scope*). It is per-request rather than a field on
+    every agents row because it folds a whole transcript: paying that for all of
+    a 28-agent session's rows on every overview would be absurd, and only the
+    scoped one is ever shown."""
     data = API.session(sid)
+    if agent:
+        data["agent_usage"] = agent_usage(sid, agent)
     data["agents"] = agents_ctx(visible_agents(data.get("agents") or []))
     # the Memory tab is SCOPED: only sessions inside the enabled project
     # (aggregator-adapters) get it. The flag gates the tab client-side (hidden

@@ -47,8 +47,7 @@ def all_plugins():
 PROVIDERS = {
     "on_session_start": 3,   # (log, cwd, sid)      — attach watchers at SessionStart
     "census": 1,             # (log)                — the scoreboard ✉ row
-    "activity": 2,           # (sid, agent_id)      — the drill-down timeline
-    "activity_since": 3,     # (sid, agent_id, pos) — its live increment
+    "agent_usage": 2,        # (sid, agent_id)      — one agent's token rollup
     "monitors": 1,           # (sid)                — the monitors read model
     "session_title": 1,      # (transcript_path)    — the display title
     "title_and_rename": 1,   # (transcript_path)    — title + the tail rename
@@ -169,31 +168,16 @@ def census(log):
     return parts, ops
 
 
-def activity(sid, agent_id=None):
-    """Drill-down fan-out (docs/sessionapi.md): the first plugin that
-    recognizes (sid, agent_id) returns its FULL-FIDELITY activity timeline;
-    None when no plugin does. claude_code: plugins/claude_code/transcript.
-    timeline over the agent's — or, with agent_id=None, the session's main —
-    transcript. codex: plugins/codex/rollout.timeline over the run's native
-    rollout (agent_id = the sessionapi.codex_aid identity; with
-    agent_id=None a standalone codex session's own rollout). Exceptions
-    propagate, same contract as census(): the callers are read-side tools
-    (dashboards/CLIs), not hooks, and swallowing here would hide which
-    provider broke."""
-    return _first("activity", sid, agent_id)
-
-
-def activity_since(sid, agent_id, pos):
-    """LIVE drill-down fan-out (docs/dashboard.md): the incremental companion
-    to activity() — the first plugin that recognizes (sid, agent_id) returns
-    (entries, resolutions, new_pos) from byte cursor `pos`; None when none
-    does. claude_code: plugins/claude_code/transcript.timeline_since over the
-    agent's (or, with agent_id=None, the session's main) transcript. codex has
-    NO incremental provider yet (its rollout renderer lacks the parse split),
-    so a codex run's drill-down stays fetch-once — the fan-out simply finds no
-    activity_since on that plugin and moves on. Same exception contract as
-    activity(): the callers are read-side tools, not hooks."""
-    return _first("activity_since", sid, agent_id, pos)
+def agent_usage(sid, agent_id):
+    """Per-agent usage fan-out (docs/dashboard.md *Agent scope*): the first
+    plugin that recognizes (sid, agent_id) returns that agent's token rollup +
+    model as {"model", "usage"}; None when no plugin does. claude_code folds the
+    agent's transcript (transcript.agent_usage); codex deliberately declines —
+    a run's tokens are folded from its rollout and priced at its footer, so
+    there is nothing for the web to re-price. Exceptions propagate, same
+    contract as census(): the caller is the read-side dashboard, not a hook, and
+    swallowing here would hide which provider broke."""
+    return _first("agent_usage", sid, agent_id)
 
 
 def monitors(sid):
