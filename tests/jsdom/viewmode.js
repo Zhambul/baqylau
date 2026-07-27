@@ -32,6 +32,12 @@ const sandbox = {
   liveTab: () => sandbox.__tab,
   postJSON: () => { sandbox.__posted++; return Promise.resolve({}); },
   clog: () => {}, loadOlder: () => { sandbox.__loadOlder++; },
+  // the OUTCOME vocabulary lives with the agent cards (app.11-chrome.js
+  // agentStatus); the engine under test only JOINS to it, so the stub simply
+  // echoes a state planted on the agent record. That the real mapping is the one
+  // consulted is asserted from Python (it must call agentStatus, not re-read
+  // end_reason itself).
+  agentStatus: a => ["", (a && a.st) || ""],
   renderAttention: () => {}, applyFilter: () => {},
   S: null, __tab: "", __loadOlder: 0, __posted: 0,
   // /history stub for the load-older loop. __pages records the block counts asked
@@ -376,6 +382,22 @@ function orderScene() {
   });
 }
 
+// ---- and the DOT on an agent note: grey while its agent runs, green when it
+// finished, red when it didn't. The join is by `data-agent` into the agents
+// payload, so this drives the real tintAgentNotes over a planted payload — plus
+// the per-row override (a failing op inside the block reddens that row alone) and
+// a row with no agent at all (team mail), which must stay untinted.
+function dotScene() {
+  const ses = scene("verbose", [F.aLaunch, F.aResult, F.bLaunch, F.mail]);
+  ses.agents = [{ agent_id: "a1", st: "st-ok" }, { agent_id: "a2", st: "st-run" }];
+  const rows = [...ses.stream.children];
+  // the feed is newest-top, so the scene's specs land reversed:
+  // [mail, bLaunch(a2), aResult(a1), aLaunch(a1)]
+  rows[2].dataset.bad = "1";        // ONE of a1's two rows carries a failing op
+  sandbox.tintAgentNotes();
+  return rows.map(c => [c.dataset.agent || "-", c.dataset.out || "-"]);
+}
+
 runFill("focus", "focus", 40)
   .then(() => runFill("verbose", "verbose", 40))
   .then(() => runFill("allCommands", "focus", 40, { mix: false }))
@@ -383,6 +405,7 @@ runFill("focus", "focus", 40)
   .then(orderScene)
   .then(() => switchScene("focus")).then(r => { out.switchFocus = r; })
   .then(() => switchScene("verbose")).then(r => { out.switchVerbose = r; })
+  .then(() => { out.dots = dotScene(); })
   .then(() => {
     out.fills = fills;
     process.stdout.write(JSON.stringify(out, null, 1));

@@ -81,10 +81,12 @@ class El {
     this.children.push(n);
   }
   _all(out) { for (const c of this.children) { out.push(c); c._all(out); } return out; }
-  querySelectorAll(sel) {                       // only ".cls" / ".cls[data-x]"
+  querySelectorAll(sel) {              // only ".cls" / ".cls[data-x]" / "[data-x]"
     const cls = sel.split("[")[0].replace(".", "");
     const attr = (/\[data-([a-z]+)\]/.exec(sel) || [])[1];
-    return this._all([]).filter(n => n._cls().includes(cls)
+    // an attribute-ONLY selector filters on the attribute alone (the note-dot tint
+    // asks for every `[data-agent]` row, block card or loose line alike)
+    return this._all([]).filter(n => (!cls || n._cls().includes(cls))
       && (!attr || n.dataset[attr] !== undefined));
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }

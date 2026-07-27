@@ -143,7 +143,7 @@ def _init(argv):
     REN = SR.Renderer(log=LOG, agent=AGENT, label=LABEL, rgb=SUB_RGB, sub_fg=SUB_FG,
                       op_tag=op_tag, ctx_tag=ctx_tag, take_subfg=take_subfg,
                       spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer,
-                      agent_dur=agent_dur)
+                      agent_dur=agent_dur, team=(PALETTE == "team"))
 
 
 # There are deliberately NO context-fill THRESHOLDS here. The per-turn ctx tag

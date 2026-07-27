@@ -52,14 +52,15 @@ ACT_MONITOR = "monitor"   # a monitor block (long-lived, own stream)
 ACT_READ    = "read"      # a Read one-liner (native, or a collapsed code-read command)
 ACT_EDIT    = "edit"      # an Update one-liner (Edit/MultiEdit/NotebookEdit)
 ACT_WRITE   = "write"     # a Write one-liner
-ACT_AGENT   = "agent"     # a subagent/teammate launch, prompt or result
+ACT_AGENT   = "agent"     # a SUBAGENT launch, prompt or result (a one-shot delegate)
+ACT_TEAM    = "team"      # …the same, for an agent-TEAM member (a named, mailable peer)
 ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
 ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
 ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
 ACT_MSG     = "msg"       # conversation text (stamped by read.mirror, not here)
 
 ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
-        ACT_AGENT, ACT_TASK, ACT_MAIL, ACT_WARN, ACT_MSG)
+        ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_WARN, ACT_MSG)
 
 # The main session's own command colours — the semantic table, imported. A chip
 # in any of these is main-session command activity; anything else is a palette
@@ -96,6 +97,15 @@ _DIFF_RE = re.compile(r"\)\s+\+(\d+)(?:\s+-(\d+))?|\)\s+-(\d+)")
 # The audit warning light's own one-liner (core/errwatch.py emits `⚠ audit: …`);
 # it must never be swallowed by a collapse, so it gets its own class.
 _WARN_GLYPH = "⚠"
+
+
+def _is_team(op):
+    """Is this op an agent-TEAM member's, rather than a subagent's? The producer
+    already says so in the `src` stamp it wears for the web mirror's main-agent-only
+    drop (`team:<id>` vs `sub:<id>` — core/ops.py owns that vocabulary), so nothing
+    here parses a name or a colour. An op with no stamp at all (pre-`src` history, or
+    the main session's own launch header) is not claimed as a teammate."""
+    return str(op.get("src") or "").startswith("team:")
 
 
 def _plain(op):
@@ -151,10 +161,13 @@ _LEGACY_NOTE = ((" %s %s" % SF.MARK_PROMPT, "launched"),
 
 
 def legacy_agent_note(op):
-    """`Agent "<who>" launched|finished` recovered from a pre-`note` subagent chip,
-    or None. Reads the marker, not the whole chip: `<who>` is simply the text before
-    it, and the model/ctx tags after it are dropped (they belong on the agent's
-    card). No duration — the chip never carried one; a live op's own note does."""
+    """`Agent "<type>" launched|finished` / `Teammate @<name> …` recovered from a
+    pre-`note` subagent chip, or None. Reads the marker, not the whole chip: `<who>` is
+    simply the text before it, and the model/ctx tags after it are dropped (they belong
+    on the agent's card). No duration — the chip never carried one; a live op's own note
+    does. Which of the two registers it gets comes from the op's `src` stamp, which is
+    OLDER than `note`, so history is worded right too; an op older than both reads as an
+    Agent (the neutral one, and the only guess available)."""
     try:
         if op.get("t") != "label" or op.get("note"):
             return None
@@ -162,7 +175,7 @@ def legacy_agent_note(op):
         for mark, verb in _LEGACY_NOTE:
             at = text.find(mark)
             if at > 0:
-                return 'Agent "%s" %s' % (text[:at].strip(), verb)
+                return SF.agent_note(text[:at].strip(), verb, team=_is_team(op))
         return None
     except Exception:
         return None                     # unreadable: keep the chip
@@ -299,6 +312,11 @@ def _classify(op):
             return ACT_WARN, bad
         m = _FILE_RE.match(text)
         return (_VERB_ACT.get(m.group(1)) if m else None), bad
+    # Which of the two agent classes this op would be, if it turns out to be agent
+    # activity at all: a TEAMMATE's blocks count and collapse as teammates ("ran 2
+    # teammates, ran 4 agents"), because they are a different kind of thing and the
+    # notes now say so. Read off `src`, never the name or the palette.
+    agent_act = ACT_TEAM if _is_team(op) else ACT_AGENT
     head = text[:1]
     if not head:
         # An empty / unreadable chip names nothing. It must NOT reach the agent
@@ -327,9 +345,9 @@ def _classify(op):
         # ▶ is shared: a main-session command chip wears a semantic colour, a
         # subagent launch header wears its slot's palette colour.
         cmd = tuple(op.get("c") or ()) in _CMD_RGB
-        return (ACT_BASH if cmd else ACT_AGENT), bad
+        return (ACT_BASH if cmd else agent_act), bad
     if head == _GLYPH_RESUMED:
-        return ACT_AGENT, bad
+        return agent_act, bad
     # No main-session glyph at all: a subagent/teammate/codex stream chip
     # (`<who> ⇢ prompt`, `⇠ result`, a codex run header) — agent activity.
-    return ACT_AGENT, bad
+    return agent_act, bad

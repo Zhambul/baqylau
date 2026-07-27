@@ -1211,6 +1211,13 @@ body.modal-open { overflow: hidden; }
   font: 12px/1.5 var(--mono); color: var(--dim);
 }
 .anote .anmark { flex: none; width: 7px; font-size: 9px; text-align: center; }
+/* …and the mark carries the OUTCOME, the same three states a run summary's `.vdot`
+   shows: grey while the agent runs, green when it finished, red when it didn't
+   (`data-out`, stamped on the row by tintAgentNotes from the agents payload — the op
+   itself cannot know, least of all a LAUNCH note's). A mail note has no outcome and
+   no `data-out`, so it stays dim. */
+[data-out="ok"] .anmark { color: var(--green); }
+[data-out="bad"] .anmark { color: var(--red); }
 .anote .atext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk:hover > .bhead .anote { color: var(--text-soft); }
 /* a BLOCKLESS note (the mail read notice) wears the note block's own box, so it

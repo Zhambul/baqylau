@@ -650,6 +650,10 @@ function updateAgents() {
     if (!agents.length) ses.agentsGrid.append(el("div", "empty", "no subagents in this session"));
     for (const a of agents) ses.agentsGrid.append(agentCard(a));
   }
+  // …and the mirror's agent NOTES carry the same outcome on their dot (they read
+  // agentStatus above, so this event is what turns a launch note green when its
+  // agent ends — no op is written for that)
+  tintAgentNotes();
 }
 
 /* ---------- monitors (list tab + drill-down) ---------- */

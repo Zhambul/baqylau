@@ -180,6 +180,15 @@ def _body_follows(ops, i):
     return nxt.get("g") == g if g else not nxt.get("g")
 
 
+def _mail_holder(op):
+    """Is this a mail chip that can HOLD a message — the `✉` sent row or a `●` arrival,
+    but never a `◉ read · …` notice, which reports on a message and has no body of its
+    own? The distinction is what keeps the synthetic group below honest: a read notice
+    followed by some other producer's bare gutter would otherwise swallow it."""
+    got = actclass.mail_pair(op)
+    return bool(got) and got[2] != "read"
+
+
 def _empty_body(ops, i, key):
     """Does the block opened at ops[i] have NOTHING behind its click — its body op
     present in this batch but rendering to nothing? Fails toward SHOWING: a body that
@@ -242,8 +251,9 @@ def op_items(ops, key="", ids=None, carry=None):
     prev_act = None
     prev_mid = None
     head = None                 # index of the group-less header a body op belongs under
+    cs = carry if carry is not None else {}     # this render's continuation state
     # pre-`mid` mail: pair -> the token of its open message, across this render's batches
-    mail_n = (carry if carry is not None else {}).setdefault("mail", {})
+    mail_n = cs.setdefault("mail", {})
     for i, op in enumerate(ops):
         if not isinstance(op, dict):
             continue
@@ -269,6 +279,31 @@ def op_items(ops, key="", ids=None, carry=None):
         if not h:
             continue
         it = {"g": op.get("g") or None, "t": t, "html": h}
+        # PRE-`mid` MAIL is two TOP-LEVEL rows on disk — a `● from → to` label and the
+        # message body as a bare gutter, NEITHER carrying a copy group (the send-time
+        # row that groups them did not exist yet). The page folds a block by its `g`,
+        # so those two could never become one clickable line: the message sat open
+        # under its own header instead of behind it ("the actual message should be
+        # expandable from `Message team-lead → rev-ui-util`, following the pattern of
+        # other stuff"). So the pair is handed a SYNTHETIC group here, `mail:<row id>`
+        # — a shape no producer can mint (a copy group is `b<n>` or a tool_use_id), and
+        # it stashes nothing: these ops carry no ⧉ links to resolve. Only the item
+        # IMMEDIATELY after the label may claim it (`pending`, consumed on read) — the
+        # body lookahead is what makes that safe, since a `◉ read` notice has no body
+        # and the next group-less gutter could be anyone's. A cut BETWEEN the two ops
+        # therefore leaves them ungrouped, as before: the pair is written in one
+        # transaction and read in one id range, so the live path cannot split them, and
+        # history cuts on conversation records.
+        pending, cs["mailg"] = cs.pop("mailg", None), None
+        if not it["g"] and t in _BODY_OPS and pending:
+            # …and the group stays open for a RUN of body ops: one message's text is
+            # one op today, but a second bare gutter behind the first is the same
+            # message's continuation, and leaving it loose puts it back in the feed
+            # (above its own block, since the feed reverses) — which is the artefact
+            # this grouping exists to remove.
+            cs["mailg"] = it["g"] = pending
+        elif not it["g"] and _mail_holder(op) and _body_follows(ops, i):
+            cs["mailg"] = it["g"] = "mail:%s" % oid
         # WHOSE agent block this is (`sub:<id>` / `team:<id>` — core/ops.py's src),
         # so the page can join it to the agents payload: the duration for a finish
         # note, and — the reason it matters more — counting DISTINCT AGENTS in a

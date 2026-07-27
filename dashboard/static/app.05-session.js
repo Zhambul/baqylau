@@ -473,6 +473,7 @@ function appendItems(items) {
         if (b.root === last) { S.ses.blocks.delete(g); break; }   // a detached node
     last.remove();
   }
+  tintAgentNotes();              // the notes' dots follow their agents' outcomes
   applyViewMode();               // re-cut the collapsed runs over the final DOM
   updateFilterCount();
 }
@@ -530,6 +531,7 @@ function appendOlder(items) {
   for (let i = tops.length - 1; i >= 0; i--) frag.append(tops[i]);
   if (S.ses.moreEl) st.insertBefore(frag, S.ses.moreEl);
   else st.append(frag);
+  tintAgentNotes();              // history's notes carry their outcome too
   applyViewMode();
   updateFilterCount();
 }
@@ -686,7 +688,7 @@ function loadOlder(want) {
 // classified where the structured op is, not re-sniffed out of rendered HTML.
 const ACT_KIND = {
   bash: "commands", bg: "commands", monitor: "commands", warn: "commands",
-  agent: "agents", read: "files", edit: "files", write: "files",
+  agent: "agents", team: "agents", read: "files", edit: "files", write: "files",
   msg: "messages",
 };
 
@@ -740,6 +742,33 @@ function stampItem(elem, it) {
   elem.dataset.vk = String(++S.ses.viewSeq);
   elem.dataset.vt = String(Date.now() / 1000);
   applyFilterTo(elem);
+}
+
+// An agent note's DOT carries the OUTCOME, exactly like a collapsed run's `.vdot`:
+// grey while the agent is still going, green once it finished, red when it didn't.
+// It was always dim, so `⏺ Agent "Fix common/ui terminal bugs" finished` said nothing
+// about how it went ("why is it grey and not green/red based on the outcome?").
+//
+// The outcome cannot come off the op — a LAUNCH note is written before there is one,
+// and even a finish note only knows its own op failed — so it is joined from the
+// agents payload by `data-agent`, through `agentStatus()`: the SAME st-run/st-ok/st-bad
+// vocabulary the rail's cards read, so a note and its card can never disagree. Stamped
+// as `data-out` on the ROW (the CSS tints the mark inside it), and re-run on every
+// `agents` SSE, which is how a launch note goes green the moment its agent ends.
+function tintAgentNotes() {
+  const ses = S.ses;
+  if (!ses || !ses.stream) return;
+  const by = new Map();
+  for (const a of ses.agents || []) by.set(a.agent_id, a);
+  for (const row of ses.stream.querySelectorAll("[data-agent]")) {
+    const a = by.get(row.dataset.agent);
+    const st = a ? agentStatus(a)[1] : "";
+    // a failing op inside the block reddens it too (`data-bad` — the same rule the
+    // run summary's dot follows), so a bad result shows even before the agent's row
+    // has caught up
+    row.dataset.out = (row.dataset.bad === "1" || st === "st-bad") ? "bad"
+      : st === "st-ok" ? "ok" : "run";
+  }
 }
 
 function streamItems() {
@@ -825,7 +854,8 @@ const VIEW_DEFAULT = "default";
 const VIEW_FOLD = {
   verbose: [],
   default: ["bash", "read", "task", "mail"],
-  focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "task", "mail"],
+  focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "team",
+          "task", "mail"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -840,6 +870,11 @@ const VIEW_FRAGMENTS = [
   ["edit", "editing", "edited", "file", "files"],
   ["read", "reading", "read", "file", "files"],
   ["agent", "running", "ran", "agent", "agents"],
+  // …and a TEAMMATE counts as its own kind, beside the subagents. Claude Code has
+  // no fragment for it (its own summary line predates the agent team), so this
+  // follows the same shape and the note wording it must agree with
+  // (core/streamfmt.TEAM_WORD): a named peer is not a one-shot delegate.
+  ["team", "running", "ran", "teammate", "teammates"],
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],
@@ -864,7 +899,7 @@ const VIEW_COUNTER = { write: "edit" };
 // with 21 of them, and "passed 4 messages" where two had been sent. `data-agent`
 // is the producer-source id and `data-mid` the mail msg_id, both stamped
 // server-side (opshtml.op_items) from the op itself.
-const VIEW_SUBJECT = { agent: "agent", mail: "mid" };
+const VIEW_SUBJECT = { agent: "agent", team: "agent", mail: "mid" };
 
 // Don't show a run's elapsed until it has actually been running a moment —
 // Claude Code's own threshold for the same chip, and it keeps a fast run from

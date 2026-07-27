@@ -75,12 +75,16 @@ class Renderer:
 
     def __init__(self, *, log, agent, label, rgb, sub_fg,
                  op_tag, ctx_tag, take_subfg, spawn_fg_tailer, spawn_tailer,
-                 agent_dur=None):
+                 agent_dur=None, team=False):
         self.log = log
         self.agent = agent
         self.label = label
         self.rgb = rgb
         self.sub_fg = sub_fg
+        # An agent-TEAM member rather than a Task-spawned subagent (the lifecycle's
+        # `team` palette — same machinery, different KIND of agent). Only the web
+        # note's wording turns on it: `Teammate @<name>` vs `Agent "<type>"`.
+        self.team = team
         # Injected from the lifecycle module: model/effort tag + per-turn ctx tag
         # (both depend on model resolution, which stays in substream.py), and the
         # three tailer hooks (fg tee hand-off consume + the two spawners).
@@ -194,20 +198,19 @@ class Renderer:
         O.emit(self.log, O.gut(AMBER + txt + RST, self.rgb))
 
     def agent_note(self, verb, dur=False):
-        """This agent's web-mirror one-liner for a launch/finish — `Agent "<name>"
-        launched` / `… finished · 21m 31s` (core/ops.py's "note"). One builder so the
-        two blocks cannot drift, and quoted the way Claude Code's own default density
-        words it. `dur` appends how long the agent ran, when the lifecycle injected a
-        way to know (a launch has nothing to report yet)."""
-        note = 'Agent "%s" %s' % (self.label, verb)
+        """This agent's web-mirror one-liner for a launch/finish — `Agent "<type>"
+        launched` / `Teammate @<name> finished · 21m 31s` (core/ops.py's "note"). One
+        builder so the two blocks cannot drift; the WORDING (and which of Claude Code's
+        two registers a teammate vs a subagent gets) belongs to core/streamfmt, which
+        the web presenter reads too. `dur` appends how long the agent ran, when the
+        lifecycle injected a way to know (a launch has nothing to report yet)."""
+        d = ""
         if dur and self._agent_dur:
             try:
                 d = self._agent_dur()
             except Exception:
                 d = ""              # a note without a duration beats no note
-            if d:
-                note += " · " + d
-        return note
+        return SF.agent_note(self.label, verb, team=self.team, dur=d)
 
     def render_prompt(self, text):
         # The spawn prompt is the other subagent block the web dashboard's main

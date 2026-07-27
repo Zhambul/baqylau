@@ -35,6 +35,27 @@ def cap(text, n):
 MARK_PROMPT = ("⇢", "prompt")
 MARK_RESULT = ("⇠", "result")
 
+# …and how those headers are WORDED for the web (the op's `note`). Claude Code has
+# two registers for the two kinds of agent and so do we, verbatim: a Task-spawned
+# subagent is `Agent "<type>"` (quoted), an agent-TEAM member is `Teammate @<name>`
+# (measured against the 2.1.220 TUI, which prints `⏺ Teammate @fix-smoke-dedup
+# finished`). They are genuinely different things — a teammate is a named, long-lived
+# peer you can mail, a subagent is a one-shot delegate — and one word for both read as
+# a bug ("I want a clear distinction Agent from Teammate"). Here, in core, because BOTH
+# sides need it: the producer stamps the note (substream_render.agent_note) and the web
+# presenter recovers it for pre-`note` ops (opshtml/actclass.legacy_agent_note), and a
+# dashboard module may not reach into a plugin for a string.
+AGENT_WORD = 'Agent "%s"'
+TEAM_WORD = "Teammate @%s"
+
+
+def agent_note(label, verb, team=False, dur=""):
+    """`Agent "Explore" launched` / `Teammate @fix-smoke-dedup finished · 21m 31s` —
+    the web mirror's one-liner for an agent's launch/finish. `dur` is appended when
+    the caller has one (a launch has nothing to report yet)."""
+    note = ((TEAM_WORD if team else AGENT_WORD) % label) + " " + verb
+    return note + " · " + dur if dur else note
+
 
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
     """The block-header label op: '<who> <glyph> <kind>[  tag]…' in the stream's

@@ -146,14 +146,18 @@ def test_a_groupless_body_op_inherits_the_row_it_follows():
     from plugins.claude_code import msgs as MSGS
 
     # …a mail row and its message with no group between them (history's shape, and
-    # any un-logged producer's)
+    # any un-logged producer's) are GROUPED here instead — see the synthetic-group
+    # test below — so the body is inside the block and needs no class of its own
     items = opshtml.op_items(MSGS.sent_ops("lead", "rev-ui", "the report",
                                            "please send your final report", "m1"))
-    assert [it.get("act") for it in items] == ["mail", "mail"]
-    # …and a chain of body ops keeps inheriting, not just the first
+    assert [it.get("act") for it in items] == ["mail", None]
+    assert items[0]["g"] and items[0]["g"] == items[1]["g"]
+    # …and a RUN of bodies behind one chip all land in that block (one message's text
+    # is one op today; a second bare gutter is its continuation, not a feed row)
     chain = opshtml.op_items(MSGS.sent_ops("lead", "rev-ui", "s", "a", "m1")
                              + [O.gut("b", MSGS.MSG_NEW_RGB)])
-    assert [it.get("act") for it in chain] == ["mail", "mail", "mail"]
+    assert [it.get("act") for it in chain] == ["mail", None, None]
+    assert chain[2]["g"] == chain[0]["g"], "a run of bodies stays in its block"
     # a GROUPED body still inherits from its own block, not from a neighbour…
     grouped = opshtml.op_items([_lbl("▶ foreground", O.SLATE, g="t1"),
                                 O.gut("out", O.SLATE, g="t1")])
@@ -195,13 +199,18 @@ def test_a_mail_message_is_ONE_block_and_survives_a_per_op_render(dash, tmp_path
     assert [it.get("act") for it in live] == ["mail", None]
     assert live[0]["g"] == live[1]["g"] == ops[0]["g"]
 
-    # LEGACY history (ops written before the grouping) has only the inheritance to
-    # lean on, and that is what the per-op calls defeated: both paths must batch
+    # LEGACY history (ops written before the grouping) is grouped by the READ side
+    # instead (a synthetic `mail:<id>` — see the test below), which is why both render
+    # paths must still BATCH consecutive ops: the lookahead that decides it, like the
+    # inheritance before it, cannot see past one call
     old = MSGS.sent_ops("rev-observe", "team-lead", "4 BUGs", "[to main] 4 BUGs", "m1")
     assert not any(o.get("g") for o in old)
-    assert [it.get("act") for it in M.merge_live(old, [])] == ["mail", "mail"]
+    merged = M.merge_live(old, [])
+    assert [it.get("act") for it in merged] == ["mail", None]
+    assert merged[0]["g"] == merged[1]["g"] and merged[0]["g"].startswith("mail:")
     window = M._render_window([(1, "op", old[0]), (2, "op", old[1])], 0, "")
-    assert [it.get("act") for it in window] == ["mail", "mail"]
+    assert [it.get("act") for it in window] == ["mail", None]
+    assert window[0]["g"] == window[1]["g"] == "mail:1"
     # a conversation record BETWEEN them still flushes the run — a message is no
     # op's block, and inheriting `msg` would make a mail body conversation text
     split = M._render_window([(1, "op", old[0]),
@@ -541,6 +550,14 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
 
     # a failure inside a collapsed run still shows: the dot goes red
     assert d["failed"]["dot"] == "bad"
+
+    # An agent NOTE's dot carries the same three states as that summary dot — grey
+    # running, green finished, red not ("why is it grey and not green/red based on the
+    # outcome?"). No op can say: a LAUNCH note is written before there is an outcome,
+    # so the row is joined to the agents payload by `data-agent` and re-tinted on every
+    # `agents` event. Scene: a1 finished (one of its two rows carrying a failing op, so
+    # that row alone reddens), a2 still running, and a mail row that is nobody's agent.
+    assert d["dots"] == [["-", "-"], ["a2", "run"], ["a1", "bad"], ["a1", "ok"]]
     # the ⚠ audit warning never folds — and it splits the run it sits in
     assert d["warnBreaksRuns"] == {"sums": 2, "shown": ["warn", "msg"]}
 
@@ -772,33 +789,39 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
             opshtml.op_items([old_new, old_body, old_read], "sid")] == [None, None, 1]
     assert opshtml.op_items([old_new, old_read], "sid")[0].get("plumb") == 1
     legacy = opshtml.op_items([old_new, old_body, old_read], "sid")
-    # …and the body is placed UNDER its own header. The feed is newest-on-top, so the
-    # page reverses this list — which put a group-less body ABOVE the arrival it
-    # belongs to, wedged under the `· read` notice of the message before it. The body
-    # therefore comes FIRST here and reverses into "arrival, then its body".
+    # …and the arrival and its body are ONE BLOCK (the synthetic group below), so the
+    # message opens from the note line instead of sitting under it — which is also what
+    # settles the ORDER: a group-less body reverses ABOVE the row it belongs to (the
+    # feed is newest-top), and it read as belonging to the `· read` notice of the
+    # message before it
     assert [("body" if "ogut" in i["html"] else "note") for i in legacy] == \
-        ["body", "note", "note"]
-    assert "check the diff" in legacy[0]["html"]
-    assert "Message lead → rev-ui</span>" in legacy[1]["html"]
+        ["note", "body", "note"]
+    assert legacy[0]["g"] == legacy[1]["g"]
+    assert "Message lead → rev-ui</span>" in legacy[0]["html"]
+    assert "check the diff" in legacy[1]["html"]
     # all three rows are ONE message: with no msg_id in pre-`mid` history the subject
     # is the `<from> → <to>` pair plus the ARRIVAL's row id, so the summary counts one
+    # (the BODY needs no subject of its own — it is inside the arrival's block now, and
+    # the summary counts top-level rows)
     ids = [11, 12, 13]
     keyed = opshtml.op_items([old_new, old_body, old_read], "sid", ids)
-    assert [i.get("mid") for i in keyed] == ["pair:lead → rev-ui#11"] * 3
+    assert [i.get("mid") for i in keyed] == \
+        ["pair:lead → rev-ui#11", None, "pair:lead → rev-ui#11"]
     # …the arrival's own id, which is what keeps two messages the same way apart (the
     # pair alone collapsed both into one) AND survives the batch boundaries of one
     # render (a per-batch counter gave both a `#1` and merged them again)
     twice = opshtml.op_items([old_new, old_body, old_read, old_new, old_read],
                              "sid", [11, 12, 13, 14, 15])
-    assert {i["mid"] for i in twice} == {"pair:lead → rev-ui#11", "pair:lead → rev-ui#14"}
+    assert {i["mid"] for i in twice if i.get("mid")} == \
+        {"pair:lead → rev-ui#11", "pair:lead → rev-ui#14"}
     # a read notice whose arrival is outside this batch opens its own subject, and can
     # never be merged into an arrival that only comes later
     orphan = opshtml.op_items([old_read, old_new, old_body], "sid", [20, 21, 22])
     assert orphan[0]["mid"] == "pair:lead → rev-ui#20"
-    assert len({i["mid"] for i in orphan}) == 2
+    assert len({i["mid"] for i in orphan if i.get("mid")}) == 2
     # without ids (the live path, where every op carries a real mid) the key falls
     # back to a per-call position — still one subject for the trio
-    assert len({i["mid"] for i in legacy}) == 1
+    assert len({i["mid"] for i in legacy if i.get("mid")}) == 1
     # A CONVERSATION RECORD BETWEEN an arrival and its read splits them across two
     # batches of the same render (a message is no op's block, so it flushes the run).
     # The `carry` dict is what keeps the association: the reviewed session has exactly
@@ -808,13 +831,114 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
                               (12, "msg", {"kind": "message", "text": "hi"}),
                               (13, "op", old_read)], 0, "")
     mail = [i for i in split if i.get("act") == "mail"]
-    assert len(mail) == 3 and len({i["mid"] for i in mail}) == 1
+    assert len(mail) == 2 and len({i["mid"] for i in mail}) == 1
     # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
     # the classifier — mail wears the semantic green, a monitor its slot palette)
     from core import slots
     mon = _lbl("◉ monitor · npm", slots.color("monitor", 1))
     assert AC.legacy_note(mon) is None
     assert 'class="chip"' in opshtml.op_items([mon], "sid")[0]["html"]
+
+
+def test_an_ungrouped_mail_message_is_still_ONE_expandable_block():
+    """PRE-`mid` mail is two TOP-LEVEL rows on disk — a `●` chip and the message body
+    as a bare gutter, neither carrying a copy group (the send-time row that groups them
+    came later). The page folds by `g`, so the message SAT OPEN under its own header
+    instead of behind it: "the actual message should be expandable from `Message
+    team-lead → rev-ui-util`, following the pattern of other stuff". So the read side
+    hands the pair a synthetic group — and only ever the pair."""
+    from dashboard import opshtml
+    from plugins.claude_code import msgs as MSGS
+
+    arrival = _lbl("● lead → rev-ui", MSGS.MSG_NEW_RGB)
+    body = O.gut("please send your final review report", MSGS.MSG_NEW_RGB)
+    read = _lbl("◉ read · lead → rev-ui", MSGS.MSG_READ_RGB)
+
+    items = opshtml.op_items([arrival, body], "sid", [41, 42])
+    assert [i["g"] for i in items] == ["mail:41", "mail:41"], "one block, keyed by row"
+    assert items[0]["note"] == 1 and "ogut" in items[1]["html"]
+
+    # a group id no PRODUCER can mint, so it can never collide with a real copy group
+    # (those are `b<n>` or a tool_use_id) — and it stashes nothing: there is no ⧉ link
+    assert "mail:" not in str(MSGS.sent_ops("a", "b", "s", "text", "m1"))
+    assert "data-cc" not in items[0]["html"] + items[1]["html"]
+
+    # a READ NOTICE has no body, so it takes no group and cannot swallow the next row
+    loose = O.gut("some other producer's bare gutter", O.SLATE)
+    assert [i.get("g") for i in opshtml.op_items([read, loose], "sid", [43, 44])] \
+        == [None, None]
+    # …nor can a mail chip reach past the op right after it
+    far = opshtml.op_items([arrival, read, body], "sid", [45, 46, 47])
+    assert [i.get("g") for i in far] == [None, None, None]
+
+
+def test_an_agent_notes_dot_is_tinted_by_its_agents_outcome(dash):
+    """The dot's three states are DRAWN, and the outcome behind them has ONE owner.
+    The engine only joins (`data-agent` -> the agents payload) and stamps `data-out`;
+    the mapping from an agent row to running/ok/bad is `agentStatus` in the chrome
+    file, the same function the rail's cards read — so a note and its card cannot
+    disagree, and nothing here re-parses `end_reason`. The tint itself is executed in
+    the jsdom harness (test_view_mode_engine_collapses_runs_and_words_them)."""
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    tint = re.search(r"function tintAgentNotes\(\) \{(.*?)\n\}", ses, re.S).group(1)
+    assert "agentStatus(" in tint, "the outcome mapping must be the shared one"
+    assert "end_reason" not in tint, "re-deriving the outcome here is the drift"
+    assert 'dataset.out' in tint
+    # it runs on new rows AND on every agents event (the launch note's only way to
+    # learn that its agent ended — no op is written for that)
+    assert ses.count("tintAgentNotes();") >= 2, "both append paths must tint"
+    code, chrome = _get(dash + "/static/app.11-chrome.js")
+    assert code == 200
+    upd = re.search(r"function updateAgents\(\) \{(.*?)\n\}", chrome, re.S).group(1)
+    assert "tintAgentNotes();" in upd
+
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    assert '[data-out="ok"] .anmark' in css and "var(--green)" in css
+    assert '[data-out="bad"] .anmark' in css
+    # …and the dim default stays on `.anote` itself, so a row with no outcome (team
+    # mail) is untinted rather than green
+    assert re.search(r"\.anote \{[^}]*color: var\(--dim\)", css, re.S)
+
+
+def test_a_teammate_is_not_worded_or_counted_as_a_subagent():
+    """Claude Code has two registers and so must we: a Task-spawned subagent is
+    `Agent "<type>"`, an agent-TEAM member is `Teammate @<name>` (its own TUI prints
+    `⏺ Teammate @fix-smoke-dedup finished`). One word for both read as a bug — "I want
+    a clear distinction Agent from Teammate in those summaries and message
+    transcripts" — and they ARE different things: a named, mailable peer vs a one-shot
+    delegate. Which one an op is comes from the `src` stamp it already wears, never
+    from its name or its colour, so history is worded right too."""
+    from core import slots
+    from core import streamfmt as SF
+    from dashboard import opshtml
+    from dashboard.opshtml import actclass as AC
+
+    def chip(who, src, palette, note=None):
+        op = SF.chip(who, *SF.MARK_RESULT, slots.color(palette, 0), g="b1",
+                     web=True, note=note)
+        op["src"] = src
+        return op
+
+    # the PRODUCER's own wording, one builder for both registers
+    assert SF.agent_note("Explore", "launched") == 'Agent "Explore" launched'
+    assert SF.agent_note("fix-smoke-dedup", "finished", team=True, dur="21m 31s") \
+        == "Teammate @fix-smoke-dedup finished · 21m 31s"
+
+    # …recovered the same way for pre-`note` ops, off `src` (which is OLDER than `note`)
+    assert AC.legacy_agent_note(chip("rev-ui-util", "team:a1", "team")) \
+        == "Teammate @rev-ui-util finished"
+    assert AC.legacy_agent_note(chip("Explore", "sub:a2", "sub")) \
+        == 'Agent "Explore" finished'
+    # an op older than the src stamp has nothing to go on and stays an Agent
+    assert AC.legacy_agent_note(chip("Explore", "", "sub")) == 'Agent "Explore" finished'
+
+    # …and a teammate COUNTS as its own kind, so a collapsed run says which it ran
+    assert AC.classify(chip("rev-ui-util", "team:a1", "team")) == (AC.ACT_TEAM, False)
+    assert AC.classify(chip("Explore", "sub:a2", "sub")) == (AC.ACT_AGENT, False)
+    served = opshtml.op_items([chip("rev-ui-util", "team:a1", "team")], "sid")
+    assert served[0]["act"] == "team" and served[0]["agent"] == "a1"
 
 
 def test_most_team_mail_is_a_lifecycle_frame_and_says_so(tmp_path):

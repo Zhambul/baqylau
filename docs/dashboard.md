@@ -4909,6 +4909,33 @@ reformat in the presenter — parsing a chip back apart to reword it is the snif
 hook), so the note and the footer cannot disagree. One builder, `agent_note`, words
 both lines.
 
+**An AGENT and a TEAMMATE are worded apart**, in Claude Code's own two registers: a
+Task-spawned subagent is `Agent "<type>"` (quoted), an agent-TEAM member is
+`Teammate @<name>` — verbatim what its TUI prints (`⏺ Teammate @fix-smoke-dedup
+finished`, 2.1.220). One word for both read as a bug (*"I want a clear distinction Agent
+from Teammate in those summaries and message transcripts"*), and they ARE different
+things: a named, long-lived peer you can mail, versus a one-shot delegate. The wording
+lives in `core/streamfmt.agent_note` (`AGENT_WORD`/`TEAM_WORD`) because BOTH sides need
+it — the producer stamps the note, and the presenter recovers it for pre-`note` ops — and
+a dashboard module may not reach into a plugin for a string. Which register an op gets is
+read off the `src` stamp it already wears (`team:` vs `sub:`), never its name or its
+colour; `src` is OLDER than `note`, so history is worded right too, and an op older than
+both reads as an Agent (the neutral guess). A teammate also COUNTS as its own kind
+(`actclass.ACT_TEAM`, `ran 2 teammates` beside `ran 4 agents`), so a collapsed run says
+which it ran rather than merging the two.
+
+**The note's DOT carries the outcome** — the same three states a collapsed run's `.vdot`
+shows: grey while the agent runs, green once it finished, red when it did not (*"why is
+it grey and not green/red based on the outcome?"*). It cannot come off the op: a LAUNCH
+note is written before there is an outcome, and a finish note knows only about its own
+op. So the row is joined to the agents payload by `data-agent` and stamped `data-out`
+(`tintAgentNotes`), re-run on every `agents` SSE event — which is what turns a launch
+note green the moment its agent ends, an event no op is written for. The mapping from an
+agent row to running/ok/bad is `agentStatus`, the same function the rail's cards read, so
+a note and its card can never disagree; a failing op inside the block (`data-bad`)
+reddens that row on its own, exactly as it does for the summary dot. A row with no agent
+(team mail) gets no `data-out` and stays dim.
+
 **A brief carries no injected reminders, and an empty one gets no click.** Claude
 Code injects `<system-reminder>` blocks into the text it hands an agent, so a launch
 note opened onto the roster of every addressable teammate instead of the task.
@@ -5146,10 +5173,23 @@ over an empty click did. Both are worded by their owner (`msgs.note_message` /
 (`actclass.legacy_mail_note`, colour-gated exactly like the classifier so a monitor's
 `◉` is never reworded).
 
-**History keeps its `Message` rows.** Before the send-time row existed, an arrival WITH a
-body was the only trace a real message left, so `mail_plumbing` spares those (the body
-lookahead in `op_items`) — demoting them would leave every pre-2026-07-27 session showing
-no mail at all outside verbose. Those bodies are the SUMMARY, not the message; the text
+**History keeps its `Message` rows — and they are ONE BLOCK too.** Before the send-time
+row existed, an arrival WITH a body was the only trace a real message left, so
+`mail_plumbing` spares those (the body lookahead in `op_items`) — demoting them would
+leave every pre-2026-07-27 session showing no mail at all outside verbose. Those ops are
+two TOP-LEVEL rows on disk, though — a `●` chip and the body as a bare gutter, neither
+carrying a copy group, because the send-time row that groups them came later — and the
+page folds a block by its `g`, so the message sat OPEN under its own header instead of
+behind it (*"the actual message should be expandable from `Message team-lead →
+rev-ui-util`, following the pattern of other stuff"*). So the read side hands the pair a
+SYNTHETIC group, `mail:<row id>` — a shape no producer can mint (a real copy group is
+`b<n>` or a tool_use_id) and one that stashes nothing, since these ops carry no ⧉ links
+to resolve. Three guards make it safe: only a chip that CAN hold a message opens one (a
+`◉ read` notice never has a body and would otherwise swallow the next producer's bare
+gutter — `_mail_holder`), only the op immediately after it may claim it (plus any further
+consecutive body ops, which are the same message's continuation), and a batch CUT between
+the two leaves them ungrouped as before — the pair is written in one transaction and read
+in one id range, so the live path cannot split them. Those bodies are the SUMMARY, not the message; the text
 of a historical message is not in the mirror at all and can only come from the audit's
 own `SendMessage` payloads (a join measured exact on the reviewed session: 2 of 2 rows
 matched by sender + summary, one yielding a 6,364-character report) or from the sending
