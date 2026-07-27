@@ -167,6 +167,17 @@ out.teamFocus = { sums: sums(teamF).map(s => s.text), shown: shown(teamF) };
 // no summary line at all, since a hidden act is not counted into one
 const onlyTeam = scene("focus", [F.prompt, F.agent, F.mail, F.task, F.reply]);
 out.teamOnly = { sums: sums(onlyTeam).length, shown: shown(onlyTeam) };
+// EXPANDING a run reveals what its summary COUNTED — never what the mode hid.
+// The hidden items sit inside the run's span, and revealing the span wholesale
+// brought every agent/mail/task row back on the first click a reader made.
+const teamExp = scene("focus", team);
+sumRow(teamExp).onclick();
+out.teamExpanded = { shown: shown(teamExp),
+                     rail: teamExp.stream.children
+                       .filter(c => c.classList.contains("vrun")).length,
+                     railLast: teamExp.stream.children
+                       .filter(c => c.classList.contains("vrun-last"))
+                       .map(c => c.dataset.act) };
 
 // focus, mid-turn: the newest message is PROVISIONAL (greyed), older prose is
 // gone, and once the tab settles that same message is the result (full weight)

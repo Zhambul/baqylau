@@ -482,6 +482,16 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # a session that is ONLY plumbing collapses to the conversation alone — no
     # summary line survives, because a hidden act is counted into nothing
     assert d["teamOnly"] == {"sums": 0, "shown": ["msg", "msg"]}
+    # EXPANDING a summary reveals what it COUNTED, never what the mode HID. The
+    # hidden rows sit inside the run's span, and revealing the span wholesale
+    # brought every agent/mail/task row back — on the first click a reader made,
+    # and `viewOpen` then remembered it, which is why focus "still showed the
+    # subagents" long after they were dropped.
+    assert d["teamExpanded"]["shown"] == ["msg", "edit", "bash", "msg"]
+    # …and the group rail spans only those visible members, so it cannot end on a
+    # display:none node (which reads as an unterminated group)
+    assert d["teamExpanded"]["rail"] == 2
+    assert d["teamExpanded"]["railLast"] == ["bash"]
 
     # …and while the turn is STILL RUNNING that newest message is PROVISIONAL —
     # greyed, because the result is still coming — going to full weight when the

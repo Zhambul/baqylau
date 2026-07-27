@@ -1037,7 +1037,15 @@ function applyViewMode() {
   // back, and drops an in-progress text selection. Same reasoning, and the same
   // shape, as `statsSig` for the header.
   const plan = [];
-  const strays = [];                   // hidden-but-uncounted (an injected prompt)
+  // Every item the mode DROPS — an injected prompt, and in focus the team
+  // plumbing. Tracked as one list rather than only the ones falling outside a run,
+  // because a hidden item is hidden WHEREVER it lands: trailing a run, inside a
+  // collapsed run's span, or inside an EXPANDED one. That last case is why this
+  // exists: expanding a summary revealed its whole span, so one click on any
+  // summary line brought back every agent launch, result and mail row focus had
+  // just dropped — and `viewOpen` remembers the expansion, so it stayed back.
+  const hidden = items.filter((_e, k) => disp[k] === "hide");
+  const isHide = new Set(hidden);
   const dims = items.filter((_e, k) => disp[k] === "dim");
   const isDim = new Set(dims);
   // "dim" is a PAINT, not a placement: it continues a run exactly as "hide" did,
@@ -1057,9 +1065,6 @@ function applyViewMode() {
     }
     const span = items.slice(i, last + 1);
     const members = span.filter((_, k) => disp[i + k] === "fold");
-    // hidden items TRAILING the run's last folded member aren't part of it (they
-    // hide on their own); a span with no folded member at all is all-strays
-    strays.push(...items.slice(members.length ? last + 1 : i, j));
     i = j;
     if (!members.length) continue;
     const key = span[span.length - 1].dataset.vk || "";
@@ -1078,7 +1083,7 @@ function applyViewMode() {
   // Everything the painted lines DEPEND on — deliberately not the elapsed
   // seconds, which the 1s timer owns (a signature carrying the clock would
   // rebuild the DOM every second, the very thing this avoids).
-  const sig = mode + "!" + strays.map(s => s.dataset.vk).join(",")
+  const sig = mode + "!" + hidden.map(s => s.dataset.vk).join(",")
     + "!" + dims.map(s => s.dataset.vk).join(",") + "!"
     + plan.map(p => [p.key, p.open ? 1 : 0, p.running ? 1 : 0, p.bad ? 1 : 0,
                      p.anchor, p.members.map(m => m.dataset.vk).join(".")].join(":"))
@@ -1089,7 +1094,7 @@ function applyViewMode() {
   for (const old of [...ses.stream.children])
     if (old.classList.contains("vsum")) old.remove();
   clearViewMarks(items);
-  for (const s of strays) hideIt(s);
+  for (const s of hidden) hideIt(s);
   for (const s of dims) s.classList.add("vdim");
   for (const p of plan) {
     if (p.open) {
@@ -1100,8 +1105,12 @@ function applyViewMode() {
       // Marking beats re-parenting into a wrapper: SSE inserts by position, the
       // block map holds live references and the eviction sweep walks top-level
       // children — moving items would break all three.
-      for (const m of p.span) m.classList.add("vrun");
-      p.span[p.span.length - 1].classList.add("vrun-last");
+      // …over the span's VISIBLE members only: a hidden item stays hidden inside
+      // an expanded run (it is not what the summary stood for), and the rail must
+      // not end on a display:none node or the group looks unterminated.
+      const shown = p.span.filter(m => !isHide.has(m));
+      for (const m of shown) m.classList.add("vrun");
+      if (shown.length) shown[shown.length - 1].classList.add("vrun-last");
       // The revealed blocks arrive FOLDED. Expanding a summary asks "which
       // actions were these?", not "dump every command's output" — a run of five
       // commands opening at full body is the wall the collapse existed to

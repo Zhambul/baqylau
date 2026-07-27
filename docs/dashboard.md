@@ -4884,6 +4884,21 @@ the mode exists to omit. Nothing is lost — an agent's full detail was never in
 this stream anyway (it lives in the per-agent drill-down), and both other modes
 still show the blocks.
 
+**A hidden item is hidden wherever it lands — including inside an EXPANDED run.**
+The hidden rows are not outside the runs; they sit *within* a run's span (that is
+what `inRun` covers), and expanding a summary revealed the whole span. So one click
+on any summary line brought back every agent launch, result and mail row the mode
+had just dropped — 7 visible rows became 165 on the reported session — and
+`viewOpen` remembers the expansion, so it stayed back. The pass therefore tracks
+every hidden item as ONE list and hides them all unconditionally; an expanded run
+reveals only the members its summary COUNTED. The group rail is drawn over the
+span's VISIBLE members for the same reason: `.vrun-last` on a `display:none` node
+leaves the group looking unterminated. Both halves are executed by the JS harness
+(`teamExpanded`) — this is the kind of bug a grep cannot see and a non-clicking
+test never reaches: the two earlier fixes for the same report were each verified by
+replaying real sessions through the real engine, and both looked right, because the
+replay never clicked.
+
 Getting there needed the classifier to actually KNOW those rows, which it did not:
 
 - **Team mail had no class at all.** Its arrival chip is `● <from> → <to>` in
