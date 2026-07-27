@@ -706,6 +706,12 @@ DASHBOARD_PLUGIN_REACHES = {
                                       "plugins.claude_code.msgs",
                                       "plugins.claude_code.task_fmt"},
     "dashboard/opshtml/tools.py": {"plugins.claude_code.tools"},
+    # op_html strips Claude Code's injected <system-reminder> blocks out of a
+    # subagent's brief/result body, for ops written before producers did it
+    # themselves — parked ops cannot be re-stamped. The strip's owner is
+    # transcript.py (it is a fact about Claude Code's transcript TEXT), and calling
+    # it is strictly better than a second regex here.
+    "dashboard/opshtml/ops.py": {"plugins.claude_code.transcript"},
     # The memory tab IS a claude_code feature end to end: the vault root, the
     # project scope gate and the note/backlink readers all belong to
     # plugins/claude_code/memory.py, and the styleguide names read/session

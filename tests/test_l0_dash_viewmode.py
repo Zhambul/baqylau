@@ -628,7 +628,11 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     assert len(items) == 2, [i["html"] for i in items]
     for it, verb in zip(items, ("launched", "finished · 21m 31s")):
         assert 'class="anote"' in it["html"]
-        assert ("⏺ Agent &quot;Symbol sweep&quot; " + verb) in it["html"]
+        # marker and words in separate spans — that is what lets the line sit on the
+        # summary line's grid (a 7px dot column, an 8px gap, then the text)
+        assert '<span class="anmark">⏺</span>' in it["html"]
+        assert ('<span class="atext">Agent &quot;Symbol sweep&quot; %s</span>' % verb) \
+            in it["html"]
         # none of the chip's own vocabulary survives on this surface
         for gone in ("chip", "⇢", "⇠", "opus-5·high", "ctx 22%", "⧉"):
             assert gone not in it["html"], gone
@@ -642,7 +646,7 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
                   slots.color("sub", 2), g="b9", lk=O.COPY_ALL, web=True)
     old["src"] = "sub:afix-infra-vcs-1234"
     legacy = opshtml.op_items([old], "sid")[0]
-    assert "⏺ Agent &quot;Fix infra/vcs subprocess bugs&quot; finished" in legacy["html"]
+    assert "Agent &quot;Fix infra/vcs subprocess bugs&quot; finished" in legacy["html"]
     assert "ctx 22%" not in legacy["html"] and legacy["note"] == 1
 
     # a label with NO note is untouched — the coloured chip is still the default
@@ -662,7 +666,17 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     assert code == 200
     rules = dict((sel.strip(), body) for sel, body in
                  re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
-    assert "var(--mono)" in rules[".blk > .bhead .anote"]
+    # the note line sits on the SUMMARY line's grid, to the pixel: same padding,
+    # same 7px marker column, same 8px gap, same font. They are the same kind of
+    # line, and a note indented differently from `Ran 2 shell commands` reads as a
+    # ragged pair (the reported "not visually aligned").
+    vsum, note = rules[".vsum"], rules[".blk > .bhead .anote"]
+    head = rules[".stream > .blk[data-note] > .bhead"]
+    for prop in ("gap: 8px", "font: 12px/1.5 var(--mono)", "align-items: baseline"):
+        assert prop in vsum and prop in note, prop
+    assert "padding: 5px 13px" in vsum and "padding: 5px 13px" in head
+    assert "width: 7px" in rules[".vsum .vdot"]
+    assert "width: 7px" in rules[".anote .anmark"]     # the ⏺ stands in that column
     assert "box-shadow: none" in rules['.stream > .blk[data-note]']
     assert 'var(--card)' in rules['.stream > .blk[data-note][data-open="1"]']
 
@@ -691,6 +705,28 @@ def test_an_agents_brief_carries_no_injected_system_reminders(dash):
     src = open(os.path.join(REPO, "plugins", "claude_code",
                             "substream_render.py"), encoding="utf-8").read()
     assert "TR.strip_reminders(text)" in src
+
+    # …AND the read side covers ops already on disk, which no restart re-stamps.
+    # Only a subagent's own body (`web`) is touched — the strip must not roam over
+    # command output or file content that happens to quote the tag.
+    from core import ops as O
+    from core import slots
+    from dashboard import opshtml
+    rgb = slots.color("sub", 0)
+    brief = O.gut(real, rgb, g="b1", web=True)
+    assert "system-reminder" not in opshtml.op_items([brief], "sid")[0]["html"]
+    assert "Review the clients subtree" in opshtml.op_items([brief], "sid")[0]["html"]
+    # a TEAMMATE's spawn record is nothing BUT reminders (its instructions arrive as
+    # mail): the body op is dropped, so the launch note has no empty panel to open
+    only = O.gut("<system-reminder>roster</system-reminder>", rgb, g="b2", web=True)
+    assert opshtml.op_items([only], "sid") == []
+    # an UNSTAMPED gut (a command's output) is left exactly as it is
+    out = O.gut("<system-reminder>quoted in a grep hit</system-reminder>", rgb, g="b3")
+    assert "system-reminder" in opshtml.op_items([out], "sid")[0]["html"]
+    # …and the page does not offer a click that reveals nothing
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    assert "if (!b.body.childElementCount) return;" in ses
 
 
 def test_hiding_a_row_beats_its_own_layout_rule(dash):

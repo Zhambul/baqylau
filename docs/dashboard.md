@@ -4892,6 +4892,15 @@ the line opens the block's body, which is the thing worth having — the agent's
 on the launch line, its result on the finish line. The block arrives CLOSED (unlike
 a live command block) for the same reason, and never re-closes one you opened.
 
+**It sits on the summary line's grid, to the pixel.** The two are the same kind of
+line — one activity notice — so the note's `⏺` stands in `.vsum`'s 7px DOT column and
+its words start where the summary's words start (13px padding, 7px marker, 8px gap),
+with the same font, margins and hover. That is why the marker and the sentence are
+separate spans: one `⏺ text` string lands at neither column, because the glyph's own
+advance width is not `7px + 8px`, and the pair then reads as ragged (the reported "not
+visually aligned"). Both rules are asserted against each other, property by property,
+so changing one without the other fails.
+
 The wording is the PRODUCER's, carried as the op's `note` (core/ops.py): the
 terminal keeps its dense colour-coded chip, the browser gets the sentence. Not a
 reformat in the presenter — parsing a chip back apart to reword it is the sniffing
@@ -4899,6 +4908,17 @@ reformat in the presenter — parsing a chip back apart to reword it is the snif
 `emit_footer` reads it (the agent's own slot row, via the injected `agent_dur`
 hook), so the note and the footer cannot disagree. One builder, `agent_note`, words
 both lines.
+
+**A brief carries no injected reminders, and an empty one gets no click.** Claude
+Code injects `<system-reminder>` blocks into the text it hands an agent, so a launch
+note opened onto the roster of every addressable teammate instead of the task.
+Producers strip it (`transcript.strip_reminders`), and `op_html` strips it again for
+ops already on disk — scoped to `web`-stamped gut bodies, which are exactly a
+subagent's brief and result, so the strip can never roam over command output or file
+content that merely quotes the tag. A body that strips to NOTHING drops out entirely:
+a TEAMMATE's spawn record is only reminders (its real instructions arrive as mail, so
+there is no brief to show), and the page also refuses a click that would reveal an
+empty panel.
 
 Pre-`note` ops get the wording recovered read-side from the `⇢ prompt` / `⇠ result`
 MARKER (`core/streamfmt.MARK_*`, named there because two surfaces read it):

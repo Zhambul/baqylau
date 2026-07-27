@@ -9,6 +9,7 @@ from core import codefmt as CF
 from core import render as R
 from dashboard.opshtml import actclass
 from dashboard.opshtml.ansi import CODE_W, ansi_html, _esc, _rgb
+from plugins.claude_code import transcript as TR
 
 
 
@@ -102,7 +103,12 @@ def op_html(op, key=""):
         # `⇠ result  fable-5·high  ctx 22% · 225k/1M` competes with that.
         note = op.get("note") or actclass.legacy_agent_note(op)
         if note:
-            return ("<div class=\"anote\">%s%s</div>"
+            # marker + text as separate spans, so the line can sit on the SAME grid
+            # as a collapsed run's summary (`.vsum`: a 7px dot, an 8px gap, then the
+            # words). One `⏺ …` string in a single div put the glyph and the text at
+            # neither column, and the two line kinds read as a ragged pair.
+            return ("<div class=\"anote\"><span class=\"anmark\">%s</span>"
+                    "<span class=\"atext\">%s</span></div>"
                     % (NOTE_GLYPH, html.escape(note)))
         chip = ("<span class=\"chip\" style=\"background:%s\">%s</span>"
                 % (_rgb(op.get("c")), ansi_html(op.get("s", ""))))
@@ -116,6 +122,19 @@ def op_html(op, key=""):
     if t == "gut":
         s = _gutbody(op) if (op.get("lex") or op.get("num") is not None) \
             else op.get("s", "")
+        if op.get("web"):
+            # A SUBAGENT's brief or result (the only gut ops carrying `web` —
+            # core/ops.py). Claude Code injects <system-reminder> blocks into the
+            # text it hands an agent, so a brief opened with the roster of every
+            # addressable teammate instead of the task ("when I click on launch I see
+            # a system reminder and not the actual first prompt"). Producers strip it
+            # now (transcript.strip_reminders); this covers the ops already on disk,
+            # which no restart can re-stamp. An empty result drops the op entirely —
+            # a TEAMMATE's spawn record is nothing BUT reminders (its real
+            # instructions arrive as mail), and an empty panel is worse than none.
+            s = TR.strip_reminders(s)
+            if not s.strip():
+                return ""
         cls = "ogut panel" if op.get("bg") is not None else "ogut"
         style = "border-left-color:%s" % _rgb(op.get("c"))
         if op.get("bg") is not None:
@@ -149,8 +168,9 @@ def ops_html(ops, key=""):
 _BODY_OPS = ("gut", "code")
 
 # The bullet a web NOTE line opens with — Claude Code's own marker for the same
-# kind of one-line activity notice in its transcript.
-NOTE_GLYPH = "⏺ "
+# kind of one-line activity notice in its transcript. It stands in the summary
+# line's DOT column (see the `.anote` rules), so no trailing space: the gap is CSS.
+NOTE_GLYPH = "⏺"
 
 
 def op_items(ops, key=""):

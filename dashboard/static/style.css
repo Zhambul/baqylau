@@ -1195,19 +1195,33 @@ body.modal-open { overflow: hidden; }
    agent's own card. The terminal pane keeps the chip — a pane reader scans by
    colour. Its BLOCK is still a block: clicking the line opens the body, which is
    the agent's brief (launched) or its result (finished). */
+/* ALIGNED WITH `.vsum` ABOVE, deliberately and to the pixel: the two are the same
+   kind of line — one activity notice — and read as a ragged pair otherwise. The
+   summary's grid is `padding-left: 13px`, a 7px dot, an 8px gap, then the words; the
+   note puts its ⏺ in that dot column and its text in that text column, which is why
+   the glyph and the sentence are separate spans (`.anmark`/`.atext` — NOT `.adot`,
+   which is the attention pill's own dot) (a single "⏺ text" string lands at
+   neither column, since the glyph's own advance width is not 7px + 8px). Same font,
+   same padding, same margins, same hover — change one, change both. */
 .blk > .bhead .anote {
+  display: flex; align-items: baseline; gap: 8px; min-width: 0;
   font: 12px/1.5 var(--mono); color: var(--dim);
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
+.anote .anmark { flex: none; width: 7px; font-size: 9px; text-align: center; }
+.anote .atext { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .blk:hover > .bhead .anote { color: var(--text-soft); }
-/* …and the card itself recedes: no panel fill or hairline, so a run of agent notes
-   reads as a list of lines rather than a stack of cards. */
+/* …and the card itself recedes to a plain line: no panel fill, no hairline, and the
+   header carries `.vsum`'s exact box, so a run of agent notes reads as a list of
+   lines rather than a stack of cards. */
 .stream > .blk[data-note] {
-  box-shadow: none; background: none; margin: 0; padding: 0 0 0 13px;
+  box-shadow: none; background: none; margin: 3px 0; padding: 0;
 }
+.stream > .blk[data-note] > .bhead { padding: 5px 13px; }
+.stream > .blk[data-note] > .bhead:hover { background: var(--panel); }
+/* opened by a click, it becomes a card again — the body it reveals is a whole brief
+   or a whole result, which needs the panel to read as one thing. */
 .stream > .blk[data-note][data-open="1"] {
-  box-shadow: var(--card); background: var(--panel); padding: 4px 0 6px 13px;
-  margin: 6px 0;
+  box-shadow: var(--card); background: var(--panel); margin: 6px 0; padding-bottom: 4px;
 }
 
 /* ---- the mirror stream -------------------------------------------------- */

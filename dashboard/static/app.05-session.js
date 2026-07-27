@@ -321,6 +321,11 @@ function createBlock() {
   const b = { root, chips, sum, body, userSet: false, kindLocked: false };
   head.onclick = (e) => {
     if (e.target.closest("a")) return;           // ⧉ links keep working
+    // nothing to reveal, nothing to toggle: a TEAMMATE's launch note has no body
+    // (its spawn record is only Claude Code's injected reminders, dropped server-
+    // side — its real instructions arrive as mail), and opening an empty panel
+    // reads as a broken click
+    if (!b.body.childElementCount) return;
     b.userSet = true;
     // …mirrored onto the node, because the view-mode pass reads this off the DOM:
     // it folds the blocks a run reveals, and must not re-fold one you opened
