@@ -167,11 +167,20 @@ def neutralize(s):
     return _ESC_LEFT.sub("", _CTRL.sub(keep, s))
 
 
+# The OSC 8 hyperlink brackets, named because two other modules must recognise
+# them in a painted line rather than only write them: core/streamfmt composes an
+# op's tags INSIDE a trailing link (so a file one-liner is one click target) and
+# reads past a leading one when undoing a pre-field `<who> ` prefix.
+LINK_OPEN = "\x1b]8;;"
+LINK_ST = "\x1b\\"
+LINK_END = LINK_OPEN + LINK_ST
+
+
 def hyperlink(url, text):
     """Wrap `text` in an OSC 8 hyperlink (zero display width). kitty resolves a
     click through ~/.config/kitty/open-actions.conf — the mirror's ⧉ copy links
     (claude-copy:// scheme) ride on this."""
-    return "\x1b]8;;" + url + "\x1b\\" + text + "\x1b]8;;\x1b\\"
+    return LINK_OPEN + url + LINK_ST + text + LINK_END
 
 
 def wrap_gutter(text, width, gut, gw, bg=None):

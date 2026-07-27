@@ -25,7 +25,9 @@ import plugins
 import core.audit as A
 from core import ops as O
 from core import paths as P
+from core import slots as SL
 from core import state as S
+from core import streamfmt as SF
 from dashboard import prefs
 from dashboard import server as DS
 
@@ -2431,6 +2433,55 @@ def test_agent_scope_filters_the_mirror_to_one_agent(dash, tmp_path):
     # sibling's scope
     items = _get_json(dash + "/api/session/scope1/backlog?agent=agB")["items"]
     assert "teammate B worked" in " ".join(i["html"] for i in items)
+
+
+def test_agent_scope_reads_pre_field_history_like_the_present(dash, tmp_path):
+    """Ops written BEFORE `who`/`tags` were fields have the agent's name and its
+    model/ctx chips baked into the paint text, and no restart can re-stamp a
+    parked session. The scoped mirror undoes that composition structurally — off
+    the block MARKER for a header, off the stream COLOUR for a body line — which
+    is what makes history read like the present.
+
+    Not cosmetic: the name led the text, so every gate keyed on what a block
+    OPENS with missed. The agent's prose blocks stayed in the stream BESIDE the
+    bubbles its own transcript produces (doubled prompts, messages and results),
+    and its file one-liners kept a name the header already says."""
+    rgb = SL.SUB_PALETTE[0]
+    A.session_start({"session_id": "scope3", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("scope3")
+    # the pre-field shapes, built by composing the fields back in exactly as the
+    # old producers did (core/streamfmt.compose) — no hand-spelled bytes
+    def baked(op):
+        op = dict(op)
+        op["s"] = SF.compose(op)
+        op.pop("who", None)
+        op.pop("tags", None)
+        return op
+    msg = SF.chip("rev-ui", *SF.MARK_MESSAGE, rgb, tags=("opus-5·high", "ctx 1%"),
+                  g="gm")
+    incoming = SF.chip("rev-ui", SF.MARK_MAIL, SF.MAIL_FROM % "team-lead", rgb,
+                       g="gi")
+    outgoing = SF.chip("rev-ui", SF.MARK_MAIL, SF.MAIL_TO % "team-lead", rgb,
+                       g="go")
+    O.emit(log, baked(msg), O.gut("my prose", rgb, g="gm"), src="sub:agH")
+    O.emit(log, baked(incoming), O.gut("your brief", rgb, g="gi"), src="sub:agH")
+    O.emit(log, baked(outgoing), O.gut("my report", rgb, g="go"), src="sub:agH")
+    O.emit(log, baked(O.gut(SF.file_line("Read", "iam.py", O.BLUE), rgb,
+                            who="rev-ui", tags=("opus-5·high", "ctx 1%"))),
+           src="sub:agH")
+
+    items = _get_json(dash + "/api/session/scope3/backlog?agent=agH")["items"]
+    html = " ".join(i["html"] for i in items)
+    # the agent's own PROSE — its assistant text and the mail it was SENT — is
+    # dropped: the transcript merge is where a scope reads conversation from
+    assert "my prose" not in html and "your brief" not in html
+    # …but mail it SENT has no transcript record at all, so the op is all there is
+    assert "my report" in html
+    # the file one-liner reads as the LEAD's: no name, and the same `line` shape
+    # (a gut op names no activity class, so agent reads were unfilterable)
+    reads = [i for i in items if i.get("act") == "read"]
+    assert len(reads) == 1 and reads[0]["t"] == "line"
+    assert "rev-ui" not in html
 
 
 def test_jobs_and_monitors_are_lead_only_until_scoped(dash, tmp_path):

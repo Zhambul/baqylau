@@ -61,24 +61,55 @@ def test_the_terminal_composes_who_back_onto_the_line():
     chip = SF.chip("explore", "▶", "foreground", RGB, tags=("opus",))
     assert R.strip_ansi(mir._render(chip, 100)).strip() \
         == "explore ▶ foreground  opus"
-    line = O.gut("Update(iam.py)", RGB, who="explore")
-    assert "explore Update(iam.py)" in R.strip_ansi(mir._render(line, 100))
+    line = O.gut("Update(iam.py)", RGB, who="explore", tags=("opus", "ctx 4%"))
+    assert "explore Update(iam.py)  opus  ctx 4%" \
+        in R.strip_ansi(mir._render(line, 100))
     # …and an op with no `who` (the main session's own) is untouched
     assert R.strip_ansi(mir._render(O.gut("plain", RGB), 100)).strip() \
         .endswith("plain")
 
 
+def test_tags_compose_inside_a_trailing_hyperlink():
+    """A file one-liner is ONE click target end to end: the click-to-view link
+    wraps the whole line, so the tags composed at paint time go INSIDE it. Baked
+    into the text they always were; as a field the composer has to put them back
+    in the same place, or the tag text silently stops being clickable."""
+    body = R.hyperlink("claude-copy:///s/t/view", "Read(a.py)")
+    got = SF.compose(O.gut(body, RGB, who="explore", tags=("opus",)))
+    assert got.endswith(R.LINK_END) and got.count(R.LINK_END) == 1
+    assert "opus" in got[:-len(R.LINK_END)]
+
+
+def test_strip_who_undoes_the_composition_for_history():
+    """Ops written before `who` was a field have the name baked in, and no
+    restart can re-stamp a parked session — so the composition is undone by its
+    exact inverse. Byte-exact, not pattern-matched: a body line that merely
+    CONTAINS the stream colour keeps every byte."""
+    op = O.gut("Read(a.py)", RGB, who="explore")
+    baked = SF.compose(op)                     # what the old producer wrote
+    assert SF.strip_who(baked, RGB) == "Read(a.py)"
+    # …behind a click-to-view hyperlink opener, the one thing allowed in front
+    linked = R.LINK_OPEN + "u" + R.LINK_ST + baked
+    assert SF.strip_who(linked, RGB) == R.LINK_OPEN + "u" + R.LINK_ST + "Read(a.py)"
+    # …and nothing else is touched
+    assert SF.strip_who("Read(a.py)", RGB) == "Read(a.py)"
+    assert SF.strip_who("mid " + R.fg(*RGB) + "x " + R.RST + "y", RGB) \
+        == "mid " + R.fg(*RGB) + "x " + R.RST + "y"
+    assert SF.strip_who(R.fg(*RGB) + "no-trailing-space" + R.RST, RGB) \
+        == R.fg(*RGB) + "no-trailing-space" + R.RST
+
+
 def test_chip_substream_tags():
-    # The substream header: model tag + ctx ride as trailing double-spaced chips,
-    # empties skipped — the same concatenation, minus the who now on its own field.
+    # The substream header: the model tag + ctx are the op's own FIELD, never in
+    # its text — like `who`, they say WHICH agent, which the web's agent scope
+    # says once. Empties are skipped; all-empty carries no field at all.
+    got = SF.chip("explore", "✎", "message", RGB, tags=("opus", "ctx 42%"))
+    assert got["s"] == "✎ message" and got["tags"] == ["opus", "ctx 42%"]
     assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("opus", "ctx 42%"))["s"] == "✎ message  opus  ctx 42%"
+                   tags=("", "ctx 42%"))["tags"] == ["ctx 42%"]
     assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("", "ctx 42%"))["s"] == "✎ message  ctx 42%"
-    assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("opus", ""))["s"] == "✎ message  opus"
-    assert SF.chip("explore", "✎", "message", RGB,
-                   tags=("", ""))["s"] == "✎ message"
+                   tags=("opus", ""))["tags"] == ["opus"]
+    assert "tags" not in SF.chip("explore", "✎", "message", RGB, tags=("", ""))
 
 
 # --- gutter / dim_gut ----------------------------------------------------------

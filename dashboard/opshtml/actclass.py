@@ -243,24 +243,34 @@ _HEAD_MARKS = frozenset((_GLYPH_BASH, _GLYPH_BG, _GLYPH_MONITOR, _GLYPH_WS,
                          SF.MARK_MESSAGE[0], SF.MARK_MAIL))
 
 
-def strip_tags(text):
-    """A block header's text with its trailing model/ctx TAGS removed — what a
-    header reads as in AGENT SCOPE (docs/dashboard.md *Agent scope*).
+def lead_head(text):
+    """A block header's text as the LEAD's own — the pre-field `<who> ` prefix
+    and the trailing model/ctx TAGS removed (docs/dashboard.md *Agent scope*).
 
-    `opus-4.8·high  ctx 0% · 9k/1M` on every block is the per-agent identity cue
-    the shared terminal pane needs; a scope is one agent and its scoreboard shows
-    both figures once, so in scope they are noise on every line. What's left is
-    exactly what the LEAD's own blocks say — `▶ foreground`, `✎ message`,
-    `✉ from team-lead` — which is what lets the same quiet-note register word
-    them.
+    Both are the same thing: per-agent identity, which the shared TERMINAL pane
+    needs on every line and an agent SCOPE — one agent, named once in its header —
+    does not. `opus-4.8·high  ctx 0% · 9k/1M` is noise once the scoreboard shows
+    both figures; the name is noise for the same reason. What's left is exactly
+    what the lead's own blocks say — `▶ foreground`, `✎ message`, `✉ from
+    team-lead` — which is what lets the same quiet-note register word them.
+
+    The name is only ever in the text for ops written BEFORE `who` became a field
+    (core/streamfmt.compose_who); live chips open at the marker and the `find`
+    below returns 0 for them, so one rule covers both eras. It is cut by finding
+    the block MARKER rather than by matching a name, because the marker set is
+    closed and owned right here while the name is not knowable from the op — the
+    same technique legacy_agent_note already reads these chips with. (A body op's
+    prefix has no marker to key on and is undone by colour instead, in
+    streamfmt.strip_who — its docstring says why the two halves live apart.)
 
     Tags are split on the DOUBLE space `chip()` joins them with, so a kind
-    containing single spaces (`from team-lead`) survives whole. Text that opens
-    with no known marker is returned unchanged — a header this doesn't recognise
-    keeps what it says rather than being cut on a guess."""
-    if text[:1] not in _HEAD_MARKS:
+    containing single spaces (`from team-lead`) survives whole. Text with no known
+    marker anywhere is returned unchanged — a header this doesn't recognise keeps
+    what it says rather than being cut on a guess."""
+    at = min((text.find(m) for m in _HEAD_MARKS if m in text), default=-1)
+    if at < 0:
         return text
-    return text.split("  ", 1)[0].strip()
+    return text[at:].split("  ", 1)[0].strip()
 
 
 # The agent palettes a substream's OWN chips wear (core/slots.py owns the tables).
@@ -272,13 +282,20 @@ _AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
 # The markers on an agent's own PROSE blocks — the brief it was handed, its
 # assistant text, its final result. core/streamfmt owns all three.
 _PROSE_MARKS = (SF.MARK_PROMPT[0], SF.MARK_RESULT[0], SF.MARK_MESSAGE[0])
+# …and the fourth, which needs a word as well as a glyph: an INCOMING piece of
+# team mail is part of the agent's conversation and lands in its transcript as a
+# `teammsg` record, so it is prose. An OUTGOING one is not — the transcript has
+# no record of a SendMessage, so dropping the op would lose it entirely. The
+# direction is only legible from the kind word, whose owner is core/streamfmt
+# (MAIL_FROM/MAIL_TO), never re-spelled here.
+_MAIL_IN = (SF.MARK_MAIL + " " + SF.MAIL_FROM % "").rstrip()
 
 
 def prose_block(op):
     """True for the header of an agent's own PROSE block (`⇢ prompt`,
-    `✎ message`, `⇠ result`) — the blocks AGENT SCOPE drops because it reads that
-    agent's conversation from its transcript instead (docs/dashboard.md *Agent
-    scope*).
+    `✎ message`, `⇠ result`, `✉ from <peer>`) — the blocks AGENT SCOPE drops
+    because it reads that agent's conversation from its transcript instead
+    (docs/dashboard.md *Agent scope*).
 
     The lead's stream works exactly this way already: its prose is not in the ops
     at all, only in its transcript, and the merge puts it back as bubbles. The
@@ -290,13 +307,20 @@ def prose_block(op):
 
     Colour-gated to the agent palettes so a lead-stream op can never match: `✎`
     and `⇢` are not the lead's vocabulary, but the gate costs nothing and keeps
-    the "whose op is this" question answered the one way this module answers it."""
+    the "whose op is this" question answered the one way this module answers it.
+
+    Reads the text as `lead_head` leaves it, so a pre-field header — which opens
+    with the agent's NAME, not its marker — is recognised too. Without that every
+    one of those blocks stayed in the stream beside the bubble the transcript
+    produced, which is the doubled prompts/messages/results a scoped mirror over
+    history showed."""
     try:
         if op.get("t") != "label":
             return False
         if tuple(op.get("c") or ()) not in _AGENT_RGB:
             return False
-        return _plain(op)[:1] in _PROSE_MARKS
+        text = lead_head(_plain(op))
+        return text[:1] in _PROSE_MARKS or text.startswith(_MAIL_IN)
     except Exception:
         return False                    # unreadable: keep it (fail toward showing)
 
@@ -326,17 +350,41 @@ def as_lead(op):
     this point — classification, the quiet register, folding, summaries, filters —
     then runs on one vocabulary and needs no notion of scope at all.
 
-    The agent's NAME is not part of this: producers carry it as the op's own
-    `who` field (core/ops.py), which the terminal composes at paint time and the
-    web simply never renders — so there is nothing to strip and no string to
-    parse. Only the tags, the palette and the outer bar are left to normalise.
+    The agent's NAME is normally not part of this either: producers carry it as
+    the op's own `who` field (core/ops.py), which the terminal composes at paint
+    time and the web simply never renders. Ops written BEFORE that field have it
+    baked into their text, and no restart can re-stamp a parked session — so the
+    composition is undone here for them (lead_head for a header, streamfmt's
+    strip_who for a body line). Not cosmetic: with the name still leading the
+    text, every gate below keyed on what a block OPENS with missed, so history's
+    prose blocks stayed in the stream beside their own transcript bubbles.
 
     Anything unrecognised passes through untouched."""
     out = op
+    if out.get("t") == "gut":
+        # a body line's `<who> ` is wrapped in the stream's own colour — the one
+        # shape that carries it (a file-op one-liner), undone by its owner
+        s = out.get("s") or ""
+        lean = s if out.get("who") else SF.strip_who(s, out.get("c") or ())
+        if not out.get("g") and _FILE_RE.match(R.strip_ansi(lean).strip()):
+            # …and THAT one-liner is the lead's own file op, painted for a shared
+            # pane: a `gut` so it hangs off this stream's gutter bar, where the
+            # lead's is a bare `line`. In scope the bar says nothing (one agent),
+            # and the difference costs more than it looks — a gut op names no
+            # ACTIVITY CLASS, so an agent's reads and edits were invisible to the
+            # kind filter and to every view-mode summary. `line` carries the same
+            # click-to-view and memory tags, so the conversion is total.
+            return O.line(lean, view=out.get("v"), mem=bool(out.get("mem")))
+        if lean == s and out.get("outer") is None:
+            return out
+        out = dict(out)
+        out["s"] = lean
+        out.pop("outer", None)
+        return out
     if out.get("t") != "label":
         return out
     text = _plain(out)
-    stripped = strip_tags(text)
+    stripped = lead_head(text)
     c = tuple(out.get("c") or ())
     # a command-family header in an AGENT palette: the lead paints that block in a
     # semantic colour, and the colour is what cmd_note/classify gate on

@@ -72,10 +72,13 @@ token fragment, `file_line` — the file-op one-liner
 hand-build it — and `file_display`, the location-aware name that goes inside
 those parens (bare basename under the session cwd, `✎ name` for a session
 scratchpad file, dim abbreviated dir + basename for anything else outside the
-project); the per-caller extras — who-prefix, model/ctx tags, ✗ mark, the
-click-to-view hyperlink — stay caller-side; extracted from the byte-identical
-copies the renderers each grew — shared surface lives in core because the
-dependency rule forbids codex importing claude_code),
+project); WHO produced a block and its model/ctx TAGS are the op's own fields
+(core/ops.py) and `compose`/`strip_who` here are the one owner of how the
+terminal paints them back and how history's baked-in copies are undone, while
+the remaining per-caller extras — the ✗ mark, the click-to-view hyperlink —
+stay caller-side; extracted from the byte-identical copies the renderers each
+grew — shared surface lives in core because the dependency rule forbids codex
+importing claude_code),
 `render.py` (the ANSI rendering PRIMITIVES — was `claude_render.py`: width
 math, palette/`pick`, strip/wrap/gutters, the security-critical `neutralize()`,
 inline markdown; keeps thin `format_code`/`render` delegating aliases),

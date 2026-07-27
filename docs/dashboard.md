@@ -4781,10 +4781,48 @@ the unstamped (plus `web`-stamped) ops, with a scope it keeps only that agent's.
 `read/mirror.agent_scope` resolves the scope to a SET of exact `src` strings
 rather than passing the bare id, because the stamps are not uniform — a codex run
 is stamped `codex:<label>` while its agent id is the rollout basename
-(`sessionapi.codex_aid`), so its label is looked up off the run's row. In agent
-scope the main thread's **conversation is left out of the merge**: an agent's own
-messages are already ops, so merging the lead's prompts and replies in would put
-a second conversation inside the agent's stream.
+(`sessionapi.codex_aid`), so its label is looked up off the run's row.
+
+**The conversation is the same call, keyed by identity.** `plugins.conversation(
+sid, pos, agent_id)` reads the LEAD's main thread for `""` and that agent's own
+transcript for an id, and the merge is otherwise untouched — so an agent's prose
+becomes message bubbles exactly as the lead's does, and everything built on that
+(the view modes, focus mode's prompt/final-reply rule, the ⧉ links) works in
+scope without knowing scope exists. The agent's prose OPS are dropped in exchange
+(`actclass.prose_block`: the `⇢ prompt`, `✎ message`, `⇠ result` and `✉ from
+<peer>` headers, each with its body, by copy group) — the substream paints them
+because the terminal pane has no other channel for an agent's text, but here they
+would be the one thing rendered twice. Direction matters for mail: an incoming
+message is also a transcript `teammsg` record, an OUTGOING `✉ to <peer>` has no
+record at all and is kept, which is why `core/streamfmt` owns the two direction
+words (`MAIL_FROM`/`MAIL_TO`) rather than the substream spelling them inline.
+
+**One normalisation, not a second render path.** `actclass.as_lead` runs right
+after the scope filter and is THE only place agent scope differs from the session
+view. The terminal needs every per-agent block to say which agent it is — a
+`<who>` name, the `opus-5·high  ctx 5% · 50k/1M` tags, the agent's palette
+colour, the outer gutter bar — because one pane is shared by all of them; a scope
+is one identity and says it once in the header. Worse, those differences made
+every downstream stage fail to recognise the block: `cmd_note` is colour-gated,
+the activity classifier reads the leading glyph, the view modes count what those
+two answer. So an agent's `▶ foreground` fell through to the legacy coloured pill
+while the lead's became a quiet `⏺` line. Normalising here — drop the tags,
+recolour a command header to the semantic colour the lead's wears, drop the outer
+bar, and turn a file one-liner's `gut` op into the `line` op the lead's file ops
+are (same click-to-view and memory tags, and a gut op names no activity class, so
+an agent's reads and edits were unfilterable) — leaves one vocabulary for
+everything below.
+
+The name and the tags are not string surgery: producers carry them as the op's
+own `who`/`tags` FIELDS (`core/ops.py`), which the terminal composes at paint
+time (`streamfmt.compose`) and the web simply never renders. Ops written before
+those fields have them baked into the text and no restart can re-stamp a parked
+session, so the composition is undone structurally for history — off the block
+MARKER for a header (`actclass.lead_head`), off the stream COLOUR for a body line
+(`streamfmt.strip_who`, compose's byte-exact inverse). That is not cosmetic: with
+the name leading the text, every gate keyed on what a block OPENS with missed,
+and history's prose blocks stayed in the stream beside their own transcript
+bubbles — doubled prompts, messages and results.
 
 **One SSE, not two.** Agent scope has no stream of its own — `?agent=` on
 `/events/session/<sid>` scopes the mirror channel only, so a scoped page still
@@ -4803,10 +4841,14 @@ overview would be absurd, and only the scoped one is ever shown. A codex run
 declines the fan-out: its tokens are folded from its rollout and priced at its
 footer, so there is nothing for the web to re-price.
 
-**Known gap: pre-stamp history.** Ops written before the `src` stamp carry no
-producer source, so an OLD parked session's agent scope shows an empty mirror.
-This is accepted deliberately — the drill-down timeline was the only view of that
-history, and it is gone.
+**Known gaps in history.** Ops written before the `src` stamp carry no producer
+source, so an OLD parked session's agent scope shows an empty mirror — accepted
+deliberately, since the drill-down timeline was the only view of that history and
+it is gone. And a pre-`tags`-field body line keeps its `opus-5·high  ctx 5%`
+chips: unlike the name, they sit at the END of the text with no marker or colour
+boundary to key on, and the only precise handle would be the model/ctx wording
+itself — exactly the fragile string-matching the fields exist to remove. New ops
+carry the field and drop them.
 
 ### What this replaced, and why
 
@@ -5246,7 +5288,11 @@ must survive — the drop may never be a guess about an op it cannot see.
 
 Nothing else renders it any more: the drill-down timeline that used to fold the
 same roster record into a `prompt` entry is gone with the rest of that read model
-(*Agent scope*), and the scoped mirror shows the ops, which never carried it.
+(*Agent scope*). The scoped mirror reads the agent's conversation from that same
+transcript now, so it would be the one surface that could bring the record back —
+it doesn't, because `transcript.conversation` strips reminders before yielding a
+record and a reminder-only one yields nothing (verified against a 28-agent
+session: every agent's first bubble is its brief).
 
 Pre-`note` ops get the wording recovered read-side from the `⇢ prompt` / `⇠ result`
 MARKER (`core/streamfmt.MARK_*`, named there because two surfaces read it):

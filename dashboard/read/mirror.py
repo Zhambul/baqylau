@@ -256,35 +256,33 @@ def _snap(entries, start):
 
 
 def agent_scope(sid, agent):
-    """WHOSE stream to render: `{"srcs", "who"}` for one agent of a session, or
-    None for the ordinary main-agent-only session view (a falsy `agent`).
+    """WHOSE stream to render: the set of producer-source (`src`) stamps that
+    belong to one agent of a session, or None for the ordinary main-agent-only
+    session view (a falsy `agent`). It is what the ops are filtered on
+    (opshtml.in_scope).
 
-    `srcs` is the set of producer-source (`src`) stamps that belong to it, which
-    is what the ops are filtered on (opshtml.in_scope). A subagent and a teammate
-    are both named by their hook agent_id, so both spellings are accepted. A
-    CODEX run is the exception the SET exists for: it is stamped `codex:<label>`
-    (plugins/codex/watch.spawn) while its synthesized agent id is the rollout
-    basename (sessionapi.codex_aid), so its label is looked up off the run's row
-    — matching the id against the stamp would silently show an empty mirror.
+    A subagent and a teammate are both named by their hook agent_id, so both
+    spellings are accepted. A CODEX run is the exception the SET exists for: it
+    is stamped `codex:<label>` (plugins/codex/watch.spawn) while its synthesized
+    agent id is the rollout basename (sessionapi.codex_aid), so its label is
+    looked up off the run's row — matching the id against the stamp would
+    silently show an empty mirror.
 
-    `who` is the agent's display name, and it is here because the substream
-    prefixes it onto every block it paints — chip headers AND file-op one-liners
-    alike — to keep agents apart in the shared terminal pane. A scope is one
-    agent, so opshtml.as_lead strips it back off. Empty when the name is
-    unknowable (a session whose state DB has been swept), and then nothing is
-    stripped: a wrong strip would eat a real first word, and a redundant name is
-    the lesser fault."""
+    The agent's NAME is deliberately not part of this. It used to be, to strip
+    the name the substream baked into every block it painted; producers carry it
+    as the op's own `who` field now (core/ops.py), and what history baked in is
+    undone structurally, off the block marker and the stream colour
+    (actclass.lead_head / streamfmt.strip_who) — so no consumer needs to be told
+    an agent's name to render its stream."""
     if not agent:
         return None
     srcs = {"sub:" + agent, "team:" + agent}
-    who = ""
     for rec in API.agents(sid):
-        if rec.get("agent_id") == agent:
-            who = rec.get("desc") or ""
-            if rec.get("kind") == "codex" and who:
-                srcs.add("codex:" + who)
+        if rec.get("agent_id") == agent and rec.get("kind") == "codex":
+            if rec.get("desc"):
+                srcs.add("codex:" + rec["desc"])
             break
-    return {"srcs": srcs, "who": who}
+    return srcs
 
 
 def _render_window(entries, start, key, cmds=(), scope=None):

@@ -39,10 +39,18 @@ MARK_RESULT = ("⇠", "result")
 # here for the same reason as the pair above — the web presenter has to find them
 # to know where a header's `<who>` prefix ENDS, which is what AGENT SCOPE strips
 # (the name is redundant when the whole view is that agent; docs/dashboard.md
-# *Agent scope*). Only the glyph is shared: the kind word differs per mail
-# direction, so it stays at the call site.
+# *Agent scope*).
 MARK_MESSAGE = ("✎", "message")
 MARK_MAIL = "✉"
+# …and the two DIRECTIONS that mail chip's kind word spells. Named here, beside
+# the glyph, because the direction is load-bearing on the web: an INCOMING message
+# is part of the agent's conversation and arrives a second time as a transcript
+# record (`teammsg`), so agent scope drops the op and keeps the bubble, while an
+# OUTGOING one has no record at all and must be kept. A presenter cannot tell them
+# apart without these words, and re-spelling them at the reader is how the two
+# halves drift.
+MAIL_FROM = "from %s"
+MAIL_TO = "to %s"
 
 # …and how those headers are WORDED for the web (the op's `note`). Claude Code has
 # two registers for the two kinds of agent and so do we, verbatim: a Task-spawned
@@ -87,20 +95,95 @@ def skill_note(name, failed=False):
 
 
 def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
-    """The block-header label op: '<glyph> <kind>[  tag]…' in the stream's
-    colour, with `who` carried as the op's own field rather than concatenated
-    into the text (core/ops.py's "who" — the terminal composes it at paint time,
-    the web ignores it). `tags` are optional trailing chips (model/effort tag,
-    ctx %) — empty ones are skipped, each joins with a double space. g/lk are the
-    ⧉ copy-group wiring (core/copy.py), passed straight through to O.label.
-    web=True keeps this stamped op in the web dashboard's main mirror (a subagent
-    prompt/result header — see core/ops.py's "web" field), and `note` is that
-    surface's own wording for it (the quiet one-liner, tags dropped)."""
-    s = f"{glyph} {kind}"
-    for t in tags:
-        if t:
-            s += f"  {t}"
-    return O.label(s, rgb, g=g, lk=lk, web=web, note=note, who=who)
+    """The block-header label op: `<glyph> <kind>` in the stream's colour, with
+    `who` (the agent's name) and `tags` (its model/effort + ctx chips) carried as
+    the op's OWN fields rather than concatenated into the text (core/ops.py — the
+    terminal composes both at paint time via compose() below, the web ignores
+    them). Empty tags are skipped. g/lk are the ⧉ copy-group wiring
+    (core/copy.py), passed straight through to O.label. web=True keeps this
+    stamped op in the web dashboard's main mirror (a subagent prompt/result
+    header — see core/ops.py's "web" field), and `note` is that surface's own
+    wording for it (the quiet one-liner)."""
+    return O.label(f"{glyph} {kind}", rgb, g=g, lk=lk, web=web, note=note,
+                   who=who, tags=tags)
+
+
+def compose(op, s=None):
+    """An op's paint text with its WHO prefix and its model/ctx TAGS composed
+    back in — the shape the TERMINAL pane paints, and the ONE owner of that shape.
+
+    Every op of a per-agent stream carries both (core/ops.py's "who" and "tags"),
+    because the terminal pane is shared: without them a subagent's `Read` and the
+    lead's are the same line, under no stated model. They are the op's own FIELDS,
+    not part of `s`, so the web dashboard's agent scope — the one surface where
+    both are redundant, the whole view being that agent — can simply not render
+    them. The renderer (bin/claude-mirror.py) composes them here instead, in the
+    two shapes the two op kinds need: a `label` is painted wholesale in the
+    stream's colour, so the name is plain text at its head and the tags plain at
+    its tail; a `gut` body carries its own SGR, so each piece is coloured and
+    closed itself.
+
+    Tags land INSIDE a trailing OSC 8 hyperlink when the text has one, so a
+    file-op one-liner stays one click target end to end (the click-to-view link
+    wraps the whole line — core/copy.py). `s` overrides the op's text for a caller
+    that has already transformed it (the renderer's highlight/line-number pass).
+    An op with neither field is returned unchanged.
+
+    strip_who below is this function's inverse for the prefix, and the two must
+    stay in step."""
+    text = op.get("s", "") if s is None else s
+    who, tags = op.get("who"), op.get("tags") or ()
+    if not who and not tags:
+        return text
+    label = op.get("t") == "label"
+    if who:
+        text = (who + " " + text) if label \
+            else (R.fg(*op["c"]) + who + " " + R.RST + text)
+    if tags:
+        tail = "".join(("  " + t) if label else ("  " + R.DIM + t + R.RST)
+                       for t in tags)
+        if text.endswith(R.LINK_END):
+            text = text[:-len(R.LINK_END)] + tail + R.LINK_END
+        else:
+            text += tail
+    return text
+
+
+def strip_who(s, rgb):
+    """A BODY line's pre-field `<who> ` prefix removed — compose_who's exact
+    inverse, for ops ALREADY ON DISK.
+
+    `who` became a field only recently; every op written before that has the name
+    baked into `s` in exactly the shape compose_who now builds. A parked session
+    cannot be re-stamped, so agent scope would show the name (and, worse, fail to
+    recognise the block: its whole normalisation keys on what the text OPENS with).
+    Undoing the composition is the only way history reads like the present.
+
+    Byte-exact rather than pattern-matched: the span removed is precisely
+    `fg(rgb) <name> RST` at the head of the line, allowed to sit behind an OSC 8
+    hyperlink opener (a file-op one-liner's click-to-view link, which is emitted
+    first and must survive). Anything else is returned untouched — a body op whose
+    text merely happens to contain the stream's colour keeps every byte.
+
+    Headers are NOT handled here: a chip's name is plain text with no colour to
+    key on, and its boundary is the block MARKER that follows it — a vocabulary
+    that lives with the presenter reading it (dashboard/opshtml/actclass.py)."""
+    if len(rgb or ()) != 3:
+        return s                    # no stream colour: nothing to key the span on
+    pre = R.fg(*rgb)
+    at = s.find(pre)
+    if at < 0:
+        return s
+    if at and not (s.startswith(R.LINK_OPEN) and s[:at].endswith(R.LINK_ST)):
+        return s                    # only an OSC 8 opener may precede the name
+    beg = at + len(pre)
+    end = s.find(R.RST, beg)
+    if end < 0:
+        return s
+    name = s[beg:end]
+    if not name.endswith(" ") or "\x1b" in name or "\n" in name:
+        return s                    # not a bare `<name> ` run: leave it alone
+    return s[:at] + s[end + len(R.RST):]
 
 
 def gutter(text, rgb, g=None, web=False):

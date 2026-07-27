@@ -77,6 +77,7 @@ from core import paths as P
 from core import codefmt as CF
 from core import render as R
 from core import sessionapi as St   # the read-side door — presentation channel only
+from core import streamfmt as SF
 from core.noaudit import load_audit
 
 A = load_audit()   # always-on audit trail (CLAUDE_AUDIT=0 disables); inert stub if it can't import
@@ -197,19 +198,6 @@ def _copy_links(g, lk):
     return "".join(parts), width
 
 
-def _who(op):
-    """An op's paint text with its WHO prefix restored — the agent name every
-    per-stream block leads with so the shared pane keeps its agents apart.
-    The producer carries it as a FIELD now (core/ops.py's "who") instead of
-    concatenating it into the text, because the web dashboard's agent scope is
-    the one surface that must NOT show it and was reduced to parsing it back off
-    a string. Composed here, so the pane is byte-identical to before; an op with
-    no `who` (the main session's own) is unchanged."""
-    s = op.get("s", "")
-    who = op.get("who")
-    return (who + " " + s) if who else s
-
-
 def _render(op, w):
     # Every op's text passes R.neutralize on its way to the pane: the ops
     # stream carries RAW command output, and a replayed escape sequence
@@ -230,7 +218,7 @@ def _render(op, w):
             if avail >= lw + 24:                       # keep a useful chip width; a very
                 links = link_txt                       # narrow pane just drops the links
                 avail -= lw
-        chip = R.label(fit(R.neutralize(_who(op)), max(1, avail)),
+        chip = R.label(fit(R.neutralize(SF.compose(op)), max(1, avail)),
                        op["c"]) + links
         if outer:
             return R.fg(*outer) + "│ " + R.RST + chip
@@ -247,10 +235,7 @@ def _render(op, w):
             gw = 2
         s = viewbody(op) if (op.get("lex") or op.get("num") is not None) \
             else op.get("s", "")
-        # the WHO prefix in this stream's own colour — the same shape the
-        # producer used to bake in (see _who)
-        if op.get("who"):
-            s = R.fg(*op["c"]) + op["who"] + " " + R.RST + s
+        s = SF.compose(op, s)      # the WHO prefix in this stream's colour
         return R.wrap_gutter(R.neutralize(s), w, gprefix, gw, bg=op.get("bg"))
     if t == "line":
         return R.neutralize(op.get("s", ""))

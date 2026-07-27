@@ -100,22 +100,30 @@ def rule():
     return {"t": "rule"}
 
 
-# WHO produced this block, as a SEPARATE field rather than baked into `s`.
-# Every op of a per-agent stream carries the agent's name, because the TERMINAL
-# pane is shared: without it a subagent's Read and the lead's are the same line.
-# It used to be concatenated into the paint text at the producer, which meant the
-# one surface that does NOT need it — the web dashboard's agent scope, where the
-# whole view is that one agent — had to parse it back off a string (ANSI and
-# all), and got it wrong on every op shape it hadn't anticipated. As a field the
-# terminal composes it at paint time (bin/claude-mirror.py `_who`) and the web
-# simply ignores it. Absent for the main session's own ops, which have no "who".
+# WHO produced this block and under WHAT model/context, as SEPARATE fields rather
+# than baked into `s`.
+#
+# Every op of a per-agent stream carries both — the agent's name ("who") and its
+# `opus-5·high` / `ctx 5% · 50k/1M` chips ("tags") — because the TERMINAL pane is
+# shared: without them a subagent's Read and the lead's are the same line, and
+# nothing says which model is burning which context. They used to be concatenated
+# into the paint text at the producer, which meant the one surface that needs
+# NEITHER — the web dashboard's agent scope, where the whole view is that one
+# agent and its header shows model and context once — had to parse them back off
+# a string (ANSI and all), and got it wrong on every op shape it hadn't
+# anticipated. As fields the terminal composes them at paint time
+# (core/streamfmt.compose, called by bin/claude-mirror.py) and the web simply
+# ignores them. Both absent for the main session's own ops, which have no agent.
 
 
 def label(s, c, outer=None, g=None, lk=None, web=False, note=None, mid=None,
-          who=None):
+          who=None, tags=()):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)
+    tags = [str(t) for t in (tags or ()) if t]
+    if tags:
+        o["tags"] = tags
     if web:
         o["web"] = 1
     if note:
@@ -156,10 +164,13 @@ def code(s, ind="  ", g=None):
 
 
 def gut(s, c, outer=None, g=None, bg=None, lex=None, num=None, view=None,
-        web=False, mem=False, mid=None, who=None):
+        web=False, mem=False, mid=None, who=None, tags=()):
     o = {"t": "gut", "s": s, "c": _rgb(c)}
     if who:
         o["who"] = str(who)            # see label()'s `who`
+    tags = [str(t) for t in (tags or ()) if t]
+    if tags:
+        o["tags"] = tags               # …and its `tags`
     if web:
         o["web"] = 1
     if mid:

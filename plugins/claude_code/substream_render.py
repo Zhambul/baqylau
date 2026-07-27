@@ -239,7 +239,7 @@ class Renderer:
         # An incoming agent-team message (mail from another teammate or the lead).
         self.flush_msg()
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip(SF.MARK_MAIL, "from " + (sender or "?"),
+        O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_FROM % (sender or "?"),
                                    g=g, lk=O.COPY_ALL),
                self.gutter(cap(body.strip(), CAP_TEAMMSG), g=g))
 
@@ -271,12 +271,12 @@ class Renderer:
             else:
                 added, removed = CT.diff_counts(name_tool, inp)
                 rng = CT.edit_range(result.get("structuredPatch") if isinstance(result, dict) else None)
-        # Lead with WHO did it — the agent's name/type in its own colour — so a Read/Update/
-        # Write is attributable to the subagent (or teammate) that ran it, the same identity
-        # cue chip() puts on this agent's Bash ops. The gutter bar already carries the colour,
-        # but the explicit name is what the eye reads. The one-liner itself is the shared
-        # core builder (streamfmt.file_line — same anatomy as the main session's file ops
-        # and codex patches).
+        # WHO did it — the agent's name/type — rides as the op's own field below, so a
+        # Read/Update/Write is attributable to the subagent (or teammate) that ran it,
+        # the same identity cue chip() puts on this agent's Bash ops. The gutter bar
+        # already carries the colour, but the explicit name is what the eye reads. The
+        # one-liner itself is the shared core builder (streamfmt.file_line — same
+        # anatomy as the main session's file ops and codex patches).
         # Same location-aware display as the main session's file ops
         # (streamfmt.file_display: ✎ scratchpad / dim out-of-project dir); the
         # tailer inherits the hook's cwd = the session directory, so the
@@ -297,11 +297,10 @@ class Renderer:
         is_mem = MEM.is_memory(path) and MEM.in_scope()
         if is_mem:
             line += "  " + R.DIM + MEM.MARK + RST
-        tag = self._op_tag()
-        if tag:
-            line += "  " + R.DIM + tag + RST
-        if ctx:
-            line += "  " + R.DIM + ctx + RST
+        # …the model/effort + ctx chips ride as the op's own `tags` field, not
+        # baked into the line (core/ops.py: the terminal composes them at paint
+        # time, the web's agent scope drops them — see the `who` beside them).
+        tags = (self._op_tag(), ctx)
         # Click-to-view, exactly like the main session's file ops (file_fmt.py owns
         # the block builder): stash the pre-rendered content under the agent's
         # tool_use_id, bake the /view hyperlink into the line (the OSC 8 sequence is
@@ -317,7 +316,7 @@ class Renderer:
                 result if isinstance(result, dict) else {}, line,
                 who="substream render", extra={"agent": self.agent})
         O.emit(self.log, O.gut(line, self.rgb, view=vid, mem=is_mem,
-                               who=self.label))
+                               who=self.label, tags=tags))
         if is_mem:
             MEM.record(self.log, path, label, agent=self.agent)
         # Feed the session scoreboard so its files/+/- chips (and the tools breakdown)
@@ -377,7 +376,7 @@ class Renderer:
         # agent's un-bumped token tail; reconcile_spend recovers it, but don't crash).
         text = result_text(inp.get("message") or inp.get("content") or inp.get("summary") or "")
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip(SF.MARK_MAIL, "to " + to, ctx, g=g, lk=O.COPY_ALL),
+        O.emit(self.log, self.chip(SF.MARK_MAIL, SF.MAIL_TO % to, ctx, g=g, lk=O.COPY_ALL),
                self.gutter(cap(text.strip(), CAP_SENDMSG), g=g))
         self.pend[tid] = ("sendmsg", "")
 
