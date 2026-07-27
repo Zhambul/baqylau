@@ -787,15 +787,20 @@ const VIEW_DEFAULT = "default";
 // stays its own visible block, which is also what an unclassified item gets —
 // a classification gap fails toward SHOWING content, never toward hiding it.
 //
-// The TEAM PLUMBING (`agent`/`task`/`mail`) folds in both collapsing modes, and
-// deliberately does NOT get dropped from the counters. Focus briefly hid it
-// outright — no row, no fragment — which was wrong on the summary's own terms: the
-// summary exists to account for everything the turn did, so a mode that silently
-// omits work makes it a lie rather than a précis. What actually kept those rows on
-// screen was a CSS cascade bug (see style.css `.vhide`), not the counting.
+// `agent` folds in FOCUS but not in DEFAULT — the one act the two modes disagree
+// about. Claude Code's own default density prints agent activity as its own lines
+// ("6 background agents launched", "Agent \"…\" finished · 21m 16s"), because on a
+// lead session that IS the work: who you dispatched and who came back is the shape
+// of the turn, not a detail of it. So default leaves the mirror's launch/resume
+// headers and each agent's ⇢ prompt / ⇠ result card standing, while focus — one
+// line for the whole turn — folds them in with everything else.
+//
+// Nothing is ever dropped from the COUNTERS by a mode (there is no second axis;
+// see docs/dashboard.md *View modes* for the one that was tried and rejected):
+// what a mode collapses, its summary still accounts for.
 const VIEW_FOLD = {
   verbose: [],
-  default: ["bash", "read", "agent", "task", "mail"],
+  default: ["bash", "read", "task", "mail"],
   focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "task", "mail"],
 };
 

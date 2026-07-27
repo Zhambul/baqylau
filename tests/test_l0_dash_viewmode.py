@@ -467,21 +467,24 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
         ["Edited 1 file +12 -3, read 3 files, ran 4 shell commands"]
     assert d["focus"]["shown"] == ["msg", "msg"]
 
-    # TEAM PLUMBING — a lead session's agents, task rows and mail. Both collapsing
-    # modes fold it: the rows go, the COUNT stays. Default…
+    # AGENTS are the one act the two modes disagree about. DEFAULT leaves them
+    # standing as their own lines — who you dispatched and who came back IS the
+    # shape of a lead session's turn, which is how Claude Code's own default
+    # density prints it — and folds only the rest into its summary…
+    assert d["teamDefault"]["shown"] == ["msg", "agent", "edit", "agent", "msg"]
     assert d["teamDefault"]["sums"] == [
-        "Ran 1 agent",
-        "Ran 1 agent, ran 1 shell command, tracked 1 task, passed 2 messages"]
-    # …and focus the same, merged into its single line. Focus briefly DROPPED these
-    # from the counters too (no row, no fragment) and that was wrong on the
-    # summary's own terms: the summary accounts for what the turn did, so a mode
-    # that silently omits work makes it a lie rather than a précis. What kept those
-    # rows on screen was the CSS cascade bug, not the counting.
+        "Ran 1 shell command, tracked 1 task, passed 2 messages"]
+    # …while FOCUS is one line for the whole turn, so they fold in with everything
+    # else — and are still COUNTED there. Focus briefly dropped them from the
+    # counters (no row, no fragment) and that was wrong on the summary's own terms:
+    # a one-line account that omits the largest part of a turn is a lie about the
+    # turn, not a précis of it. What kept those rows on screen was the CSS cascade
+    # bug, not the counting.
     assert d["teamFocus"]["sums"] == [
         "Edited 1 file +12 -3, ran 2 agents, ran 1 shell command,"
         " tracked 1 task, passed 2 messages"]
     assert d["teamFocus"]["shown"] == ["msg", "msg"]
-    # a session that is ONLY plumbing still gets its line — the work happened
+    # a focus session that is ONLY plumbing still gets its line — the work happened
     assert d["teamOnly"] == {"sums": 1, "shown": ["msg", "msg"]}
     # EXPANDING that summary reveals every member it counted, agents and mail
     # included, under one rail

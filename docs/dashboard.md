@@ -4836,8 +4836,9 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
 
 - **verbose** — every block, exactly as the dashboard rendered before this
   feature. Nothing is ever hidden.
-- **default** — runs of adjacent read/command/agent activity (plus task rows and
-  team mail) collapse into ONE clickable summary line. File **mutations stay expanded**, so an Update/Write
+- **default** — runs of adjacent read/command activity (plus task rows and team
+  mail) collapse into ONE clickable summary line, while **agent activity stays
+  standing** as its own lines (see below). File **mutations stay expanded**, so an Update/Write
   always breaks the run and is always on screen; so do conversation messages and
   the ⚠ audit one-liner. **This is the default mode** (`prefs.VIEW_DEFAULT`), the
   same one Claude Code's `viewMode` defaults to — the dashboard reads like the
@@ -4868,11 +4869,25 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   re-cut every focus-mode stream into more summary lines, which is a different
   feature from greying one bubble.
 
-**The team plumbing FOLDS — it is never uncounted.** A subagent's
-launch/prompt/result blocks (`agent`), task-list rows (`task`) and agent-team mail
-(`mail`) collapse in both non-verbose modes, and their counts stay in the summary
-line: focus reads `Edited 1 file +12 -3, ran 2 agents, ran 1 shell command,
-tracked 1 task, passed 2 messages`. The rows are gone; the accounting is not.
+**`agent` is the one act the two modes disagree about.** Task rows (`task`) and
+team mail (`mail`) fold in both; **agent activity folds only in focus**. Claude
+Code's own default density prints agent work as its own lines — `6 background
+agents launched`, `Agent "Fix common/ui terminal bugs" finished · 21m 16s` — because
+on a lead session that IS the turn: who you dispatched and who reported back is the
+shape of the work, not a detail of it. So default leaves the mirror's launch/resume
+headers (`▶︎ rev-ui-util · Review common/ui`, `↻ … · teammate · …`) and each agent's
+`⇢ prompt` / `⇠ result` cards standing, and folds only the rest. Focus — one line
+for the whole turn — folds them in with everything else, and still COUNTS them:
+`Edited 1 file +12 -3, ran 2 agents, ran 1 shell command, tracked 1 task, passed 2
+messages`. The rows are gone there; the accounting is not.
+
+Not yet matched to Claude Code's exact phrasing: our launch header is one line per
+agent rather than a count plus an `@name` list, and the web mirror has no per-agent
+`finished · 21m 16s` line — the normal completion marker is the `⇠ result` card
+(the `■ <type> ended · <dur>` chip is only a safety net for a streamer that died,
+and the substream's own footer is `src`-stamped, so the web drops it). The duration
+IS known (the agent cards show it, from `started_at`/`ended_at`), so a finish line
+is a small addition if wanted.
 
 **Rejected: a second axis that dropped them from the counters.** Focus briefly had
 a `VIEW_HIDE` table — no row, no fragment, no counter — on the reasoning that a

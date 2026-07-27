@@ -194,7 +194,10 @@ out.plural = sums(scene("default",
 out.failed = sums(scene("default",
   [F.prompt, F.fg, { act: "bash", g: "t9", bad: 1 }]))[0];
 out.live = sums(scene("default", [F.prompt, F.read, F.fg], "executing"))[0];
-out.memory = sums(scene("default",
+// FOCUS, not default: default leaves agents standing as their own rows now, and
+// this verdict is about the memory WORDING plus the fragment ORDER (agent before
+// commands) — both of which need the agent folded into the same line.
+out.memory = sums(scene("focus",
   [F.prompt, F.memread, F.memread, F.agent]))[0].text;
 out.editSummary = sums(scene("focus",
   [F.prompt, F.fg, F.upd, F.wr, F.read, F.reply]))[0].text;
