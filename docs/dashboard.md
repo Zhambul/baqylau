@@ -4884,6 +4884,26 @@ the mode exists to omit. Nothing is lost — an agent's full detail was never in
 this stream anyway (it lives in the per-agent drill-down), and both other modes
 still show the blocks.
 
+**Hiding must outrank layout (`display: none !important`).** The class was right
+and the row still showed: `.vhide`/`.fhide` are ONE-CLASS selectors and so is every
+stream row's own rule — and some of those set `display` (`.ol`, a loose chip row, is
+`display: flex`). Equal specificity means the CASCADE fell to source order, and
+`.ol` is declared below the hide classes, so a loose chip row was **never hidden**
+however correctly the page marked it: a subagent launch header
+(`▶︎ explore2 · Symbol reference sweep`) and a `●` mail row sat in focus mode
+wearing `.vhide`, while `.blk` cards — which set no `display` of their own —
+vanished properly. That asymmetry is what made the bug look like a classification
+problem: the agent BLOCKS obeyed focus and the loose HEADERS did not.
+
+`!important` is deliberate here and nowhere else in the file. Raising specificity
+(`.stream > .vhide`) or moving the hide classes below every row rule would both
+work today and break silently on the next row kind that needs a `display`;
+`!important` is the only form that says "no layout rule outranks this". It is
+asserted as a property of the stylesheet, not a string match:
+`test_hiding_a_row_beats_its_own_layout_rule`. Note the JS harness could never
+catch this — it executes the engine but applies no CSS — which is why three
+successive JS fixes each verified clean while the stream on screen was unchanged.
+
 **A hidden item is hidden wherever it lands — including inside an EXPANDED run.**
 The hidden rows are not outside the runs; they sit *within* a run's span (that is
 what `inRun` covers), and expanding a summary revealed the whole span. So one click

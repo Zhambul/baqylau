@@ -1129,12 +1129,27 @@ body.modal-open { overflow: hidden; }
 }
 .pendhint { font: 12px/1.5 var(--sans); color: var(--dim); }
 
+/* HIDING BEATS LAYOUT — hence `!important` on both classes, which is otherwise
+   banned in this file. Every stream row is styled by its own one-class rule and
+   some of those set `display` (`.ol` is `display: flex`, and any future row kind
+   may need its own). A hide class is ALSO one class, so the cascade decided it on
+   SOURCE ORDER — and `.ol` is declared 50 lines below, which meant a loose chip
+   row was NEVER hidden: a subagent launch header (`▶︎ explore2 · Symbol reference
+   sweep`) and a `● from → to` mail row sat in focus mode with `.vhide` on them,
+   while `.blk` cards — which set no display — vanished correctly. The JS was
+   right the whole time; three fixes chased a bug the stylesheet was undoing, and
+   the JS harness cannot see it because it never applies CSS.
+   Raising specificity (`.stream > .vhide`) or moving these below every row rule
+   would both work TODAY and silently break on the next row kind that sets
+   display; `!important` is the only form that says "no layout rule outranks
+   this". Asserted by test_hiding_a_row_beats_its_own_layout_rule. */
 /* hidden by the kind filter; never removed (SSE keeps appending) */
-.fhide { display: none; }
+.fhide { display: none !important; }
 /* hidden by the VIEW MODE (collapsed into a `.vsum` run summary, or — in focus
-   mode — an injected prompt). A separate class from `.fhide` because the two axes
-   are independent: sharing one would let either pass un-hide the other's items. */
-.vhide { display: none; }
+   mode — an injected prompt / the team plumbing). A separate class from `.fhide`
+   because the two axes are independent: sharing one would let either pass un-hide
+   the other's items. */
+.vhide { display: none !important; }
 /* focus mode's MID-TURN prose: kept, but pushed into the background so the eye
    lands on your prompt and the reply the turn ends on. Greyed rather than hidden
    — the running commentary is still worth a glance, and dropping it outright is

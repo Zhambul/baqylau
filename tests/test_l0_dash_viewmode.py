@@ -587,6 +587,41 @@ def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
     assert "max-height: 480px" in generic and "overflow: auto" in generic
 
 
+def test_hiding_a_row_beats_its_own_layout_rule(dash):
+    """The bug three JS fixes chased and none could reach: `.vhide`/`.fhide` are
+    ONE-CLASS selectors, and so is every stream row's own rule — some of which set
+    `display` (`.ol` is `display: flex`). Equal specificity means the CASCADE
+    decided it by source order, and `.ol` is declared BELOW the hide classes, so a
+    loose chip row was never hidden however correctly the page marked it: a
+    subagent launch header and a `●` mail row stayed on screen in focus mode with
+    `.vhide` on them, while `.blk` cards (no display of their own) vanished
+    properly. The JS harness cannot catch this — it never applies CSS.
+
+    So the rule is `display: none !important`, the one place this file allows it.
+    Checked as a PROPERTY of the stylesheet rather than a string match on one
+    selector: no row rule may out-cascade a hide, whichever is declared first."""
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css)
+
+    hides = [(sel, body) for sel, body in rules
+             if sel.strip() in (".fhide", ".vhide")]
+    assert len(hides) == 2, "both hide axes must be declared"
+    for sel, body in hides:
+        assert "display: none !important" in body, \
+            "%s must outrank any row's own display" % sel
+
+    # …and the hazard is real, not hypothetical: at least one row class DOES set
+    # display and IS declared after them (if that ever stops being true, the
+    # !important is still what keeps the next one safe)
+    order = {sel.strip(): i for i, (sel, _b) in enumerate(rules)}
+    competing = [sel.strip() for sel, body in rules
+                 if "display:" in body and re.fullmatch(r"\.[a-z0-9]+", sel.strip())
+                 and "none" not in body]
+    assert any(order[c] > order[".vhide"] for c in competing), \
+        "expected a later row rule with its own display (the reason for !important)"
+
+
 def test_system_bubble_is_styled_and_is_not_a_rewind_target(dash):
     """The ⚙ SYSTEM flavour has to be DRAWN — a distinct, deliberately neutral
     colour (core/ops.py's SLATE, one `--sys` var rather than a hex per rule), so
