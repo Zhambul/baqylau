@@ -50,7 +50,11 @@ def test_result_table_registrations():
     assert RT["sendmsg"] is SR.Renderer._res_silent
     assert RT["fg-live"] is SR.Renderer._res_fg_live
     assert RT["bg"] is SR.Renderer._res_job
-    assert RT["monitor"] is SR.Renderer._res_job
+    # a MONITOR is silent on both halves — monitor_fmt.py (the one formatter with
+    # no agent_id guard) owns an agent's monitor block, keyed by the taskId its
+    # tailer paints under, so a second header here was a stub that never
+    # received the output
+    assert RT["monitor"] is SR.Renderer._res_silent
     # fg and other (incl. any unknown kind) fall to the generic body render.
     assert "fg" not in RT and "other" not in RT
 

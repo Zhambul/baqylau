@@ -192,12 +192,18 @@ function connectSession(sid) {
     if (S.ses.gitChip) setGitChip(S.ses.gitChip, g);
   });
   es.addEventListener("title", (e) => {
-    // a web rename or a fresh auto ai-title — retitle the header in place,
-    // but never clobber an inline rename edit in progress
+    // a web rename or a fresh auto ai-title — retitle the header in place, but
+    // never clobber an inline rename edit in progress, and never in AGENT SCOPE:
+    // there the header name is that AGENT's (renderAgentScoreboard paints it
+    // into the same element). The session's title is still recorded on `meta`,
+    // so leaving scope shows the fresh one. Without the guard the name was
+    // correct for a second and then reverted to the session's on the next slow
+    // tick — the same guard the state badge beside it already had ("it does have
+    // a name, but of the original agent").
     const t = JSON.parse(e.data).title || "";
     if (!S.ses) return;
     if (S.ses.meta) S.ses.meta.title = t;
-    if (t && S.ses.projEl && !S.ses.projEl.querySelector("input"))
+    if (t && !S.ses.agentFocus && S.ses.projEl && !S.ses.projEl.querySelector("input"))
       S.ses.projEl.textContent = t;
   });
   es.addEventListener("effort", (e) => {
@@ -323,23 +329,24 @@ function connectSession(sid) {
 
 // Stream items ({g, t, html}) fold into collapsible BLOCK cards by copy-group
 // id: label ops become the block's summary chips (start chip, then the
-// finished/duration chip), everything else goes to the fold-away body. The
-// LAST `KEEP_OPEN` blocks stay expanded (the recent-activity tail you're
-// actually reading); anything older folds to its one-line summary as new
-// blocks push it out of the window — unless the user toggled it themselves,
-// which always wins. Ungrouped items (messages, file-op one-liners) stay
-// inline.
-const KEEP_OPEN = 5;
+// finished/duration chip), everything else goes to the fold-away body.
+//
+// EVERY block arrives FOLDED — its one-line summary is the feed, and the body
+// is what the click is for ("everything by default should be not expanded ...
+// make sure that everything is not expanded, not only those I mentioned").
+// A block that expands itself is a block that decides how much of your screen
+// it deserves, and the ones that took the most were the least interesting: a
+// ToolSearch's request/response pair, a TaskGet's payload, the wall of output
+// from a command that ran a minute ago. The agent NOTES had already been
+// singled out for this treatment (fillBlock's `it.note`); this is the same rule
+// with no exceptions left, so the feed is a list of what happened and depth is
+// always one click.
+//
+// Only a user toggle opens one, and it is sticky (`userSet`/`data-userset`) —
+// which is why there is no re-fold pass any more: nothing here ever opens a
+// block, so nothing needs to close it. Ungrouped items (messages, file-op
+// one-liners) are single lines and stay inline, unaffected.
 const HISTORY_FETCH = 40;      // blocks per lazy-backlog /history page
-
-function enforceWindow() {
-  const blocks = [...S.ses.blocks.values()];
-  const cut = blocks.length - KEEP_OPEN;
-  blocks.forEach((b, i) => {
-    if (i < cut && !b.userSet && b.root.dataset.open === "1")
-      b.root.dataset.open = "0";
-  });
-}
 
 // The stream is a FEED: newest on top. Items arrive oldest→newest and each
 // is inserted at the top, so the batch lands newest-first; a block keeps the
@@ -351,7 +358,7 @@ function enforceWindow() {
 // (appendOlder).
 function createBlock() {
   const root = el("div", "blk");
-  root.dataset.open = "1";                       // enforceWindow folds elders
+  root.dataset.open = "0";                       // folded until YOU open it
   root.dataset.kind = "commands";                // refineBlockKind upgrades to "agents"
   const head = el("div", "bhead");
   const chips = el("span", "bchips");
@@ -513,11 +520,8 @@ function fillBlock(b, it) {
     if (it.note) {
       b.noteOnly = true;
       b.root.dataset.note = "1";
-      // …and it arrives CLOSED, unlike a live command block: the line is what the
-      // reader wants (`⏺ Agent "…" finished · 21m 31s`) and the body — a whole
-      // brief, or a whole result — is what the click is for. Never re-closes a
-      // block you opened yourself (`userset`, the same guard the run pass uses).
-      if (!b.root.dataset.userset) b.root.dataset.open = "0";
+      // (it arrives closed like every other block now — see createBlock. This
+      // treatment started here, on agent notes, and is the rule.)
     }
     b.chips.insertAdjacentHTML("beforeend", it.html);
   } else {
@@ -558,7 +562,6 @@ function appendItems(items) {
   drainQueue(items);
   drainPending(items);
   dropSuperseded(items);
-  enforceWindow();
   while (st.childElementCount > 3000) {
     let last = st.lastElementChild;
     if (last === S.ses.moreEl) last = last.previousElementSibling;  // the load-older
@@ -576,9 +579,9 @@ function appendItems(items) {
 // The lazy-backlog downward path (item 3): a chunk of OLDER items (server order
 // oldest->newest) appended at the BOTTOM of the feed — the feed is newest-top,
 // so older loads downward, and each successive page is older still, going lower.
-// Blocks born in this chunk start FOLDED and are NOT tracked in the live
-// S.ses.blocks map or the KEEP_OPEN window (they are history, not the live
-// tail). A group that STRADDLES the load boundary (already live in the map) has
+// Blocks born in this chunk are NOT tracked in the live S.ses.blocks map (they
+// are history, not the live tail) — they start folded like every other block.
+// A group that STRADDLES the load boundary (already live in the map) has
 // its older ops appended into the existing card body at the end — acceptable;
 // older ops trail the newer ones (docs/dashboard.md).
 //

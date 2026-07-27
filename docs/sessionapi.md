@@ -32,6 +32,19 @@ Two kinds of surface in one module:
   `codex_runs(sid)` / `codex_aid(src_path)`, `costs(sid)`, `errors(sid)`,
   `sid_chain(sid)`, `running(sid)` / `fg_running(sid)`.
 
+  `agent_transcript(sid, agent_id)` is filtered to `TRANSCRIPT_KINDS`
+  (`subagent`/`teammate`) rather than taking the agent's newest stream row of any
+  kind. Once nested tailers began carrying their owner
+  (`hookkit.stream_env(agent=)` — the attribution agent scope is built on), an
+  agent's `fg` rows sit under its own id with the command's `.subfg.<tid>.out`
+  tee file as their `src_path`, and the unfiltered "newest row" resolved to that:
+  `transcript.agent_path` failed its isfile test and answered None, so an agent
+  that had run a shell command lost its WHOLE conversation in agent scope (brief,
+  messages and result all gone — ops only), while an agent that had only run
+  background jobs was fine, because a `bg` row's src_path is empty and the
+  subagents/ layout fallback caught it. "The keystone maps an agent to its
+  transcript" only holds if the query says which kinds it means.
+
   `running(sid)` and `fg_running(sid)` are the two grains of "what is executing
   right now", and are also deliberately kept apart. `running` reads the `live`
   slot table: it answers *how many* things of each kind are alive (the header's

@@ -862,14 +862,32 @@ def memory_count(sid):
     return len(memory(sid))
 
 
+# The stream KINDS whose `src_path` is an agent's TRANSCRIPT. Every other kind
+# an agent owns (its bg jobs, its monitors, its foreground commands) now carries
+# that agent's id too — `hookkit.stream_env(agent=)`, the attribution agent scope
+# is built on — and an `fg` row's src_path is the command's tee file. So "the
+# agent's newest stream" stopped meaning "the agent's transcript" the moment
+# nested tailers were attributed, and the query has to say which kinds it means.
+TRANSCRIPT_KINDS = ("subagent", "teammate")
+
+
 def agent_transcript(sid, agent_id):
-    """The transcript path for one agent — the newest streams row's src_path
-    ('' when the audit never saw a streamer for it; plugins.activity() then
-    falls back to the layout derivation)."""
+    """The transcript path for one agent — the newest TRANSCRIPT-bearing streams
+    row's src_path ('' when the audit never saw a streamer for it; the caller
+    then falls back to the subagents/ layout derivation).
+
+    Kind-filtered, and that is load-bearing: unfiltered, the newest row for a
+    busy agent is one of its own foreground commands, whose src_path is a
+    `.subfg.<tid>.out` tee file. `transcript.agent_path` then failed its isfile
+    test and answered None — so an agent that had run a shell command lost its
+    WHOLE conversation in agent scope (no brief, no messages, no result: ops
+    only), while one that had only run background jobs was fine, because a bg
+    row's src_path is empty and the layout fallback caught it."""
     chain = sid_chain(sid)
     q = ("SELECT src_path FROM streams WHERE agent_id=? AND session_id IN (%s)"
-         " ORDER BY started_at DESC LIMIT 1" % _in_clause(len(chain)))
-    rows = _rows(audit_db(), q, (agent_id, *chain))
+         " AND kind IN (%s) ORDER BY started_at DESC LIMIT 1"
+         % (_in_clause(len(chain)), _in_clause(len(TRANSCRIPT_KINDS))))
+    rows = _rows(audit_db(), q, (agent_id, *chain, *TRANSCRIPT_KINDS))
     return (rows[0][0] or "") if rows else ""
 
 

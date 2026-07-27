@@ -276,11 +276,24 @@ for the counters these streams feed).
       DB — and without spawning the `bg-recheck` (the session is over and
       SessionEnd already cleared the tab).
   - **Nested background / monitor → double gutter.** When a subagent launches a
-    `run_in_background` command (or a Monitor), the streamer extracts the task id
-    from the tool_result and spawns `claude-stream.py` with the subagent's colour
-    as an *outer* gutter on top of the job's own palette-slot *inner* gutter
-    (`│ │ …`). So a subagent's several background jobs share its outer colour but
-    differ by inner colour, and stay distinct from other subagents' jobs.
+    `run_in_background` command, the streamer extracts the task id from the
+    tool_result and spawns `claude-stream.py` with the subagent's colour as an
+    *outer* gutter on top of the job's own palette-slot *inner* gutter (`│ │ …`).
+    So a subagent's several background jobs share its outer colour but differ by
+    inner colour, and stay distinct from other subagents' jobs.
+  - **A MONITOR is the exception: the substream paints nothing at all.**
+    `monitor_fmt.py` is the one formatter with no `agent_id` guard (deliberately —
+    CLAUDE.md's main-session-only invariant names it), so it renders an agent's
+    Monitor too, keyed by the **taskId**, which is also what the tailer it spawns
+    paints under — description, lifetime, streamed events and the finish chip all
+    land in that block. The substream's own header + command was therefore a
+    second, permanently empty block for the same call: two `◉ monitor` headers and
+    two copies of the command, one of them holding all the output. So
+    `_use_monitor` emits nothing and its result is `_res_silent` (its "Monitor
+    started (task …)" text only restates the taskId the other header shows). Note
+    the asymmetry with fg/bg, where `cmd_fmt` SKIPS agent events and the substream
+    owns the block instead — for those two the tailer joins the substream's copy
+    group, and for a monitor it is the other way round.
   - The **description** isn't in the `SubagentStart` payload, and the on-disk
     `agent-<id>.meta.json` that has it is written at subagent *start* with no end
     marker (so it can't signal completion). So a `PreToolUse` hook on the

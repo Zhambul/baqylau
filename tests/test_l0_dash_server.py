@@ -208,6 +208,30 @@ def test_two_step_confirm_has_one_implementation(dash):
     assert bodies["app.11-chrome.js"].count("armConfirm(") == 3
 
 
+def test_agent_scope_survives_what_the_page_repaints(dash):
+    """Three page-side properties of agent scope, each of them a fix for a way
+    the scope silently stopped being visible or reachable.
+
+    1. Clearing the tab body goes through ONE door (`resetBody`), which re-lays
+       the scope crumb — a monitor/job drill-down, the memory grid and an open
+       note all replace the body wholesale and used to wipe the only way back up.
+    2. The `title` SSE never repaints the header name in scope: there it is the
+       AGENT's, and the push reverted it to the session's on the next slow tick.
+    3. A job's output is fetched by its ops COPY GROUP, not its taskId — an
+       agent's job paints under the tool_use_id, so asking by task returned an
+       empty body for every subagent job."""
+    parts = {}
+    for p in ("app.05-session.js", "app.11-chrome.js"):
+        code, parts[p] = _get(dash + "/static/" + p)
+        assert code == 200
+    chrome, session = parts["app.11-chrome.js"], parts["app.05-session.js"]
+    assert "function resetBody()" in chrome
+    # …and nobody clears the body behind its back: the ONE clear is resetBody's own
+    assert chrome.count('ses.body.textContent = ""') == 1
+    assert "S.ses.agentFocus && S.ses.projEl" in session
+    assert "j.group || j.task" in chrome
+
+
 def test_no_dead_page_functions(dash):
     """Every function declared by the SPA is called by someone. The parts are
     classic scripts sharing one global scope (app.NN-*.js, ordered), which makes

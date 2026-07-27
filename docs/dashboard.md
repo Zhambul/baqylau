@@ -4678,8 +4678,7 @@ so the live top-prepends never disturb it) shows while `S.ses.oldest > 0` and
 clicking fetches `/history` and appends the page via `appendOlder()` — the
 mirror image of the live `appendItems()` top-prepend. `appendOlder` inserts at
 the bottom; blocks born in a history page start FOLDED and are NOT tracked in
-the live `S.ses.blocks` map or the `KEEP_OPEN` window (they are history, not the
-live tail); a straddling group already in the live map has its older ops folded
+the live `S.ses.blocks` map (they are history, not the live tail); a straddling group already in the live map has its older ops folded
 into that card's body at the end (older ops trail — acceptable). Filters apply to
 lazily loaded items (`appendOlder` runs the shared `applyFilterTo`). The button
 hides once `/history` reports `oldest == 0`.
@@ -4803,10 +4802,23 @@ plain truncation, in fact: a nested scroller is easy to miss, needs a hover to
 use, and eats the page's own scroll when the pointer crosses it.
 `test_conversation_text_is_not_in_a_nested_scroll_box` pins both halves.
 
+**Every block arrives FOLDED.** `createBlock` sets `data-open="0"` and nothing on
+the page ever opens one — only a click does, and that is sticky (`userSet` /
+`data-userset`), which is why there is no re-fold pass: nothing opens, so nothing
+needs closing. The `KEEP_OPEN` window (the newest five blocks expanded) is gone
+with `enforceWindow`, and so is the agent NOTE's special case, which was this
+same rule applied to one block kind. The reasoning generalised: a block that
+expands itself decides how much of your screen it deserves, and the ones taking
+the most were the least interesting — a `ToolSearch`'s request/response pair, a
+`TaskGet` payload, the output of a command that finished a minute ago. The feed
+is a list of WHAT HAPPENED; depth is always one click ("everything by default
+should be not expanded … not only those I mentioned"). Single-line items
+(messages, file-op one-liners) are unaffected — they have no body to fold.
+
 The card look is otherwise **CSS only** (`style.css`
 `.blk`/`.bhead`/`.bsum`/`.bbody` + the `.stream > .opl/.ol/.og/.ogut` rule). The
-fold/expand machinery — `createBlock`, the `data-open` toggle, the `KEEP_OPEN`
-window, click-to-view, and ⧉ copy — is UNCHANGED; only the appearance moved. Deliberately NOT ported from the activity
+rest of the fold machinery — the `data-open` toggle, click-to-view, ⧉ copy — is
+UNCHANGED; only the appearance moved. Deliberately NOT ported from the activity
 tab: its information architecture (a short *category* pill like `BASH`/`READ`
 with the detail in the summary). The mirror keeps its own richer pill (glyph +
 command/name) and what it shows — the request was the *look*, not the data.
@@ -4987,6 +4999,23 @@ is a link to the session's own mirror (`#/s/<sid>`) labelled by the session titl
 end pill. Rendered as a boxed bar (`.crumbs`), it sits at the top of `ses.body`,
 above whatever the open tab renders.
 
+**It is a property of the body RESET, not of one painter.** Clearing `ses.body`
+goes through the single `resetBody()`, which re-lays the scope crumb; every
+painter that replaces the body wholesale calls it. It was appended once by
+`renderSessionChrome` instead, and each of those painters — a monitor/job
+drill-down, the memory grid, an open note — wiped it and put back only its own
+crumb, so opening one of an agent's background jobs left you inside that agent
+with nothing on screen saying so and no way up but the browser's Back. Pinned by
+`test_agent_scope_survives_what_the_page_repaints`, which also holds the count of
+body clears at one.
+
+**The header NAME is the agent's, and stays that way.** `renderAgentScoreboard`
+paints `◇ <agent>` into the same element the session title uses, and the `title`
+SSE — which fires on the slow tick for a rename or a fresh auto-title — is gated
+on `!agentFocus`, exactly like the state badge beside it. Ungated it reverted the
+name to the session's a second after you entered scope, so the scoreboard read as
+belonging to the lead.
+
 ### Monitor events
 
 A `Monitor` tool launch and its **events** — which Claude Code writes to the
@@ -5091,8 +5120,14 @@ The full **output is not carried in the list** (a build log can be huge). The
 drill-down (`#/s/<sid>/j/<task>` → `showJob`, `ses.jobFocus`-guarded like the
 others) shows the command + a meta grid (task, lines, started/ended/duration, end
 reason), then fetches the **output on demand** from those same ops via the
-existing `⧉out` copy endpoint (`GET /api/session/<sid>/copy/<task>/out` →
-`core.copy.collect`) into a scrollable box. `jobStatus` maps state to the agent
+existing `⧉out` copy endpoint (`GET /api/session/<sid>/copy/<gid>/out` →
+`core.copy.collect`) into a scrollable box. `<gid>` is the row's served
+**`group`**, not its taskId: those are the same thing for the lead's own jobs
+(the tailer paints under the taskId) but NOT for an agent's, whose block the
+substream opened under the **tool_use_id** before any taskId existed. Asking by
+task returned an empty body for every subagent job — visible output in the mirror
+tab, "(no output)" in the drill-down of the same job — which is what `group` is
+carried for. `task` remains the fallback for a row that predates the field. `jobStatus` maps state to the agent
 cards' `data-st` tint: `running` while live, else `finished` (a bg job's normal
 `writer-gone`/vanished completion), with `timed out` off `end_reason`.
 

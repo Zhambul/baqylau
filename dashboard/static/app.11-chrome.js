@@ -47,10 +47,7 @@ function renderSessionChrome(tab) {
   const body = el("div");
   ses.body = body;
   $view.append(body);
-  // the way back up out of agent scope, above whatever the tab renders
-  if (ses.agent)
-    body.append(agentCrumbs(S.cur, ses.agent,
-                            (ses.agents || []).find(a => a.agent_id === ses.agent)));
+  resetBody();                // the way out of agent scope, above every tab
   chromeBody(ses, tab, body);
   applyAgentActionVis();      // session-only header actions don't apply in scope
 }
@@ -883,7 +880,7 @@ function repaintSectionDetail(kind) {
   if (!ses || !ses[sec.focus] || !ses.body) return;
   const task = ses[sec.focus];
   const item = (ses[sec.list] || []).find(x => x.task === task);
-  ses.body.textContent = "";
+  resetBody();
   ses.body.append(sectionCrumbs(kind, S.cur, item || { task: task }));
   const wrap = el("div");
   ses.body.append(wrap);
@@ -998,7 +995,7 @@ function jobCard(j) {
 function paintMemory() {
   const ses = S.ses;
   if (!ses || !ses.body || ses.tab !== "memory") return;
-  ses.body.textContent = "";
+  resetBody();
   if (ses.noteTrail && ses.noteTrail.length) { renderNoteView(); return; }
   const wrap = el("div", "sgrid memgrid");
   ses.memGrid = wrap;
@@ -1058,7 +1055,7 @@ function renderNoteView() {
   if (!ses || !ses.body) return;
   const trail = ses.noteTrail || [];
   const d = trail[trail.length - 1];
-  ses.body.textContent = "";
+  resetBody();
   ses.body.append(noteCrumbs(trail));
   if (!d) return;
   const wrap = el("div", "note");
@@ -1148,7 +1145,14 @@ function renderJobDetail(container, j) {
   info.append(grid);
   container.append(info);
 
-  // output lives in the ops, not the transcript — fetch it from the copy endpoint
+  // Output lives in the ops, not the transcript — fetch it from the copy
+  // endpoint, by the job's ops COPY GROUP. Which is the taskId for the lead's
+  // own jobs (its tailer paints under it) but the tool_use_id for an AGENT's,
+  // whose block the substream opened before any taskId existed — so the server
+  // carries `group` for exactly this, and asking by `task` returned an empty
+  // body for every subagent job ("I clicked on the background jobs of that
+  // subagent and I cannot see the output it is making"). `task` stays the
+  // fallback for a row that predates the field.
   const outwrap = el("div", "mevents");
   outwrap.append(el("div", "mhead", "output"));
   const box = el("div", "joutput");
@@ -1156,7 +1160,7 @@ function renderJobDetail(container, j) {
   outwrap.append(box);
   container.append(outwrap);
   fetch("/api/session/" + encodeURIComponent(S.cur) + "/copy/"
-        + encodeURIComponent(j.task) + "/out")
+        + encodeURIComponent(j.group || j.task) + "/out")
     .then(r => r.text())
     .then(t => {
       if (!box.isConnected) return;
@@ -1186,6 +1190,27 @@ function sectionHref(sid, route, task) {
   const base = "#/s/" + encodeURIComponent(sid)
     + (a ? "/a/" + encodeURIComponent(a) : "");
   return base + "/" + route + "/" + encodeURIComponent(task);
+}
+
+/* Empty the tab body and lay down what belongs ABOVE every tab's content: in
+   agent scope, the way back out of it. THE one door for clearing the body, so
+   that "the scope crumb is always there" is a property of the reset rather than
+   a line each painter has to remember.
+
+   It didn't, and that was the bug: the crumbs were appended once by
+   renderSessionChrome, and every painter that later replaced the body wholesale
+   — a monitor/job drill-down, the memory grid, an open note — wiped them and put
+   only its OWN crumb back. So opening one of an agent's background jobs left you
+   inside that agent with nothing on screen saying so and no way up but the
+   browser's Back ("when I click on monitors or jobs on a subagent, I still want
+   to have that breadcrumb — it never goes away"). */
+function resetBody() {
+  const ses = S.ses;
+  if (!ses || !ses.body) return;
+  ses.body.textContent = "";
+  if (ses.agent)
+    ses.body.append(agentCrumbs(S.cur, ses.agent,
+                                (ses.agents || []).find(a => a.agent_id === ses.agent)));
 }
 
 /* The agent-hierarchy breadcrumb in agent scope — the MAIN agent → this agent

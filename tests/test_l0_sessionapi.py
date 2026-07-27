@@ -170,6 +170,32 @@ def test_agents_merges_streams_with_state_records(monkeypatch, tmp_path):
     assert API.agent_transcript("ag-sess", "nope") == ""
 
 
+def test_agent_transcript_ignores_the_agents_own_jobs(monkeypatch, tmp_path):
+    """An agent's transcript is resolved from its TRANSCRIPT-bearing stream, not
+    from whichever of its streams started last.
+
+    Nested tailers carry their owning agent now (CLAUDE_STREAM_AGENT — the
+    attribution agent scope is built on), so an agent that runs a foreground
+    command has `fg` rows under its own id whose src_path is the command's tee
+    file. Unfiltered, the newest row won and `transcript.agent_path` failed its
+    isfile test — an agent that had run a shell command lost its whole
+    conversation in scope (no brief, no messages, no result)."""
+    monkeypatch.setattr(P, "PREFIX", str(tmp_path) + "/claude-mirror-")
+    monkeypatch.setattr(P, "HISTORY_DIR", str(tmp_path / "park"))
+    log = P.mirror_log("fg-sess")
+    A.stream_end(A.stream_start(log, "subagent", agent_id="ag1",
+                                src_path="/tp/subagents/agent-ag1.jsonl"), "stop")
+    # …started LATER, and with a src_path of its own: the agent's fg command
+    A.stream_end(A.stream_start(log, "fg", agent_id="ag1",
+                                src_path="/tmp/x.log.subfg.toolu_1.out"), "sentinel")
+    assert API.agent_transcript("fg-sess", "ag1") == "/tp/subagents/agent-ag1.jsonl"
+    # a teammate resolves the same way; a bg/monitor row can never shadow either
+    A.stream_end(A.stream_start(log, "teammate", agent_id="ag2",
+                                src_path="/tp/subagents/agent-ag2.jsonl"), "stop")
+    A.stream_end(A.stream_start(log, "bg", agent_id="ag2", task_id="b1"), "gone")
+    assert API.agent_transcript("fg-sess", "ag2") == "/tp/subagents/agent-ag2.jsonl"
+
+
 def test_agents_includes_codex_runs(monkeypatch, tmp_path):
     """kind='codex' streams rows ride the agents list in the SAME row shape
     (additive read model): agent_id is the synthesized codex_aid (codex

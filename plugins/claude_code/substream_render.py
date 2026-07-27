@@ -361,9 +361,23 @@ class Renderer:
         self.pend[tid] = ("file", (name, inp, ctx))
 
     def _use_monitor(self, name, inp, tid, ctx):
-        cmd = inp.get("command", "")
-        O.emit(self.log, self.chip("◉", "monitor", ctx, g=tid), O.code(cmd, g=tid))
-        self.pend[tid] = ("monitor", cmd)
+        # PAINTS NOTHING, deliberately — the one tool this renderer defers on.
+        # `monitor_fmt.py` has no agent_id guard (unlike every other formatter,
+        # and by design — CLAUDE.md's main-session-only invariant names it as the
+        # exception): it renders an AGENT's Monitor too, keyed by the taskId, and
+        # it is the richer block by far — description, lifetime, the streamed
+        # events, the finish chip — because the taskId is what the tailer it
+        # spawns paints under. Emitting our own header + command here on top of
+        # that put TWO monitor blocks and TWO copies of the command in the stream
+        # for one Monitor call, the second one holding all the output; the first
+        # was a stub that could never receive any.
+        #
+        # The RESULT is silent for the same reason (_RESULT below): its "Monitor
+        # started (task <id>, …)" text is the taskId the other block's header
+        # already states. Note this is not the fg/bg shape — there `cmd_fmt`
+        # SKIPS agent events, so the substream owns those blocks and the tailer
+        # joins its copy group.
+        self.pend[tid] = ("monitor", inp.get("command", ""))
 
     def _use_sendmsg(self, name, inp, tid, ctx):
         # Mail this teammate sends to another teammate / the lead. Show recipient +
@@ -495,8 +509,11 @@ class Renderer:
             O.bump(self.log, tool="Bash", commands=1, **({"failed": 1} if err else {}))
 
     # pend kind -> result handler; anything else (fg / other) is a body render.
+    # `monitor` is SILENT on both halves — monitor_fmt.py owns an agent's monitor
+    # block end to end (see _use_monitor); _res_job stays for `bg`, which the
+    # substream does own and whose result carries the taskId its tailer needs.
     _RESULT = {"file": _res_file, "agent": _res_silent, "sendmsg": _res_silent,
-               "fg-live": _res_fg_live, "bg": _res_job, "monitor": _res_job}
+               "fg-live": _res_fg_live, "bg": _res_job, "monitor": _res_silent}
 
     def on_tool_result(self, b, tur=None):
         self.flush_msg()

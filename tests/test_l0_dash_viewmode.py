@@ -749,9 +749,11 @@ def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
     code, ses = _get(dash + "/static/app.05-session.js")
     assert code == 200
     assert "b.noteOnly = true;" in ses and "!b.noteOnly" in ses
-    # …and that a note block arrives CLOSED (the line is the point), without ever
-    # re-closing one the reader opened
-    assert 'if (!b.root.dataset.userset) b.root.dataset.open = "0";' in ses
+    # …and that it arrives CLOSED — which is now true of EVERY block, not just a
+    # note (createBlock): the summary line is the feed and the body is what the
+    # click is for. Only a user toggle opens one, and that is sticky.
+    assert 'root.dataset.open = "0";' in ses
+    assert 'root.dataset.open = "1"' not in ses
     # and the card recedes to a plain line until it is opened
     code, css = _get(dash + "/static/style.css")
     assert code == 200
