@@ -310,18 +310,32 @@ function limitLabel(hit) {
   return (hit.model ? hit.model + " " : "") + "limit hit";
 }
 
-function acctPill(a) {
+// The account name as shown: "c2 · claude-01" (the default account has no slug).
+function acctName(a) {
+  return a.slug ? a.slug + " · " + a.label : a.label;
+}
+
+// `cols` is the UNION of window keys across every rendered account and `anyOut`
+// whether ANY of them is logged out — both computed once by renderAccounts, so
+// every row lays out the same columns in the same order and the rows STACK
+// (docs/dashboard.md *Row alignment*). A row missing a window still renders it,
+// as a ghost; a window whose reset was dropped (rolled over) still reserves its
+// reset column; a row that is fine still reserves the ⚠ badge's slot.
+function acctPill(a, cols, anyOut) {
   const u = a.usage;
   const pill = el("div", "acct");
-  const name = a.slug ? a.slug + " · " + a.label : a.label;
-  pill.append(el("span", "aname", name));
+  pill.append(el("span", "aname", acctName(a)));
   // LOGGED OUT: the account's OAuth login was revoked/expired — a session on it
   // died on error='authentication_failed' (server flag a.logged_out, cleared on
   // the next successful session). Warn outright and up front: the usage bars are
   // stale, and a launch here dies immediately. (docs/dashboard.md.)
-  if (a.logged_out) {
-    const chip = el("span", "uauth", "⚠ logged out");
-    chip.title = a.logged_out_msg || "run /login — the account's login was revoked";
+  // The badge sits BEFORE the bars, so a healthy row keeps its slot (hidden, not
+  // absent) or the one dead account would shove its own bars out of column.
+  if (anyOut) {
+    const chip = el("span", "uauth" + (a.logged_out ? "" : " ghost"), "⚠ logged out");
+    if (a.logged_out)
+      chip.title = a.logged_out_msg || "run /login — the account's login was revoked";
+    else chip.setAttribute("aria-hidden", "true");
     pill.append(chip);
   }
   const wins = usageWindows(u);
@@ -330,28 +344,35 @@ function acctPill(a) {
     return pill;
   }
   const bar = (label, pct, resetKey) => {
-    const seg = el("span", "ubar" + (pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
+    const has = typeof pct === "number";       // false → this account has no
+    const seg = el("span", "ubar" + (!has ? " ghost"    // snapshot for the window
+      : pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
     seg.append(el("span", "ulabel", label));
     const track = el("span", "utrack");
     const fill = el("span", "ufill");
-    fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+    fill.style.width = (has ? Math.max(0, Math.min(100, pct)) : 0) + "%";
     track.append(fill);
-    seg.append(track, el("span", "upct", pct + "%"));
-    const reset = u && u[resetKey];
+    seg.append(track, el("span", "upct", has ? pct + "%" : "—"));
+    // The reset column is ALWAYS present, even when the window carries no reset
+    // (effective_usage DROPS it once the window has rolled over — an idle
+    // account's 5h reads 0% with no reset). Absent, the bar would be 17ch
+    // narrower than the other account's and everything after it would slide.
+    const reset = has && u && u[resetKey];
+    const box = el("span", "ureset");
     if (reset) {
       // dim "resets in" prefix, keep the duration (4h 12m) at full weight
       const txt = resetAgo(reset);          // "in 4h 12m" | "in <1m" | "now"
-      const box = el("span", "ureset");
       const hasIn = txt.startsWith("in ");
       box.append(el("span", "rlbl", hasIn ? "resets in " : "resets "));
       box.append(el("span", "rval", hasIn ? txt.slice(3) : txt));
-      seg.append(box);
     }
+    seg.append(box);
     return seg;
   };
-  // one bar per captured window — the 5h/7d pair plus any model-scoped
-  // window the CLI reports (e.g. "7d fable"), same order as served
-  wins.forEach(k => pill.append(bar(windowLabel(k), u[k], k + "_reset")));
+  // one bar per column — the 5h/7d pair plus any model-scoped window the CLI
+  // reports (e.g. "7d fable"), in the served order (renderAccounts' union)
+  cols.forEach(k => pill.append(bar(windowLabel(k), u ? u[k] : undefined,
+                                    k + "_reset")));
   // The account is BLOCKED right now (a session on it died on error=
   // rate_limit — the `limit-hit` stamp, served only while still active):
   // say so outright; the frozen usage bar alone reads ~95% at exactly the
@@ -378,6 +399,12 @@ function resetAgo(epochS) {
   return "in " + parts.filter(p => !p.startsWith("0")).join(" ");
 }
 
+// The name column's width, in monospace characters — the widest account name
+// across the strip (never narrower than the historical 14ch, so a single short
+// name doesn't make the bars jump left). Fixed columns are what let the rows
+// stack; the font is `--mono`, so `ch` is exact.
+const ANAME_MIN_CH = 14;
+
 function renderAccounts(list) {
   if (!$accounts) return;
   // show an account with a usage snapshot OR a logged-out warning (a dead
@@ -385,5 +412,18 @@ function renderAccounts(list) {
   const shown = (list || []).filter(a => a.usage || a.logged_out);
   $accounts.hidden = !shown.length;
   $accounts.textContent = "";
-  for (const a of shown) $accounts.append(acctPill(a));
+  // The rows are read as a STACK — c1's 5h bar directly above c2's 5h bar — so
+  // the column set is decided ONCE for the whole strip, not per row: the union
+  // of every account's windows in served order (an account whose model-window
+  // fetch didn't match has no `seven_day_fable`, and dropping the column from
+  // that row alone would shift nothing on it but everything after it on the
+  // others). docs/dashboard.md *Row alignment*.
+  const cols = [];
+  for (const a of shown)
+    for (const k of usageWindows(a.usage)) if (!cols.includes(k)) cols.push(k);
+  const anyOut = shown.some(a => a.logged_out);
+  const nameCh = shown.reduce((n, a) => Math.max(n, acctName(a).length),
+                              ANAME_MIN_CH);
+  $accounts.style.setProperty("--aname-w", nameCh + "ch");
+  for (const a of shown) $accounts.append(acctPill(a, cols, anyOut));
 }

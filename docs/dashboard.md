@@ -3854,9 +3854,10 @@ page** (`#accounts`) — `plugins.accounts()` with usage aggregated per slug (th
 freshest snapshot across that account's sessions —
 `core/sessionapi.account_usage`, shared with the rate-limit migration's target
 picker), polled slowly and hidden until some account has usage. The pill
-renders **one bar per captured window** (app.js `usageWindows`/`windowLabel`
-— `five_hour` → "5h", `seven_day` → "7d", a future `seven_day_fable` → "7d
-fable"), in the served order; the new-session picker's option text joins the
+renders **one bar per window captured anywhere on the strip** (app.js
+`usageWindows`/`windowLabel`, the union in `renderAccounts` — *Row alignment*
+below — `five_hour` → "5h", `seven_day` → "7d", a future `seven_day_fable` →
+"7d fable"), in the served order; the new-session picker's option text joins the
 same windows. The served
 `usage` is the **effective** snapshot (`sessionapi.effective_usage`): any
 window — the 5h/7d pair or a model-scoped one (`sessionapi.usage_windows`,
@@ -3869,6 +3870,38 @@ as `resets now` — a pill that read "5h 29% · resets now" for hours was the
 symptom (the client must not fix this itself: the rolled-over arithmetic is
 single-owner, server-side). The `web-launch` audit row records the chosen
 `account`.
+
+**Row alignment (the strip is read as a STACK).** The accounts are compared
+column-by-column — c1's 5h bar directly above c2's 5h bar, the two `7d` resets
+in one line — so every row must lay out the SAME columns at the SAME widths.
+Everything is monospace (`--mono`), so the columns are fixed in `ch` and are
+exact; what kept breaking alignment was *structure*, three ways, each fixed by
+rendering the column anyway rather than by measuring:
+
+- **A window with no reset.** `effective_usage` DROPS the reset epoch of a
+  rolled-over window (above), so an idle account's 5h reads `0%` with no
+  `resets in …` tail. Omitting the element made that bar ~17ch narrower and
+  slid every later window left. `acctPill` now always appends the `.ureset`
+  span, empty when there's nothing to say.
+- **A reset the column can't hold.** The fixed reset column was `16ch`, sized
+  from `"resets in 6d 23h"`. The hours form is *wider* —
+  `"resets in 23h 59m"` is 17 — so an account with hours left overflowed while
+  one with days fit, which is the "one account has several days, the other
+  several minutes, and they still don't line up" report. The column is `17ch`,
+  the true max of `resetAgo()`.
+- **A window (or a badge) only one account has.** The per-model window
+  (`seven_day_fable`) attaches only where the OAuth fetch matched a slug
+  (*Per-model usage bars*), and `⚠ logged out` sits BEFORE the bars. So the
+  column set is decided ONCE for the whole strip in `renderAccounts` — the
+  UNION of every shown account's windows, in served order — and each row
+  renders all of it: a window this account has no snapshot for becomes a
+  `.ubar.ghost` (label + empty track + `—`), and a healthy account still
+  reserves the badge's slot (`.uauth.ghost`, `visibility: hidden`). The name
+  column likewise sizes to the widest name on the strip (`--aname-w`, floor
+  `ANAME_MIN_CH`).
+
+Identical row widths also mean the rows FOLD at the same point, so the
+alignment survives the narrow-screen wrap `.acct` exists for.
 
 **Per-model usage bars (the OAuth `/usage` fetch).** The `/usage` screen's
 third bar — a **weekly per-MODEL cap** (e.g. "Fable") — is exposed by no

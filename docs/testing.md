@@ -165,6 +165,21 @@ vanishing, which makes "is it clickable right now" the feature itself — a matr
 computed by two closures and a handful of static gates. A grep can read those
 closures; only running them says what came out.
 
+And a sixth: `tests/jsdom/accounts.js` renders the ACCOUNTS STRIP out of
+`app.01-attention.js` and reports each row's box structure, behind
+`test_accounts_strip_rows_stack_column_for_column` /
+`test_reset_column_fits_the_widest_reset_text`. Its subject is a property of
+the two rows TOGETHER — c1's 5h bar has to sit directly above c2's
+(docs/dashboard.md *Row alignment*) — which no single row's source states and
+which a grep therefore cannot check: every misalignment was a row that
+legitimately had LESS to say (a rolled-over window whose reset the server
+dropped, a per-model window the OAuth fetch never matched, the ⚠ badge only
+the dead account carries) rendering fewer boxes than its neighbour. Building
+both rows and diffing their cell sequences is the check; the same harness also
+MEASURES the widest `resetAgo()` string over every duration up to 8 days, so
+the fixed reset column in `style.css` is pinned to a measurement rather than to
+someone's guess at which form is longest (it was wrong: hours beat days).
+
 The DOM shim these harnesses share lives in
 `tests/jsdom/domshim.js` (`El` + `domGlobals()`): a copy per harness would be
 exactly the duplication these harnesses were written to catch. Note that a

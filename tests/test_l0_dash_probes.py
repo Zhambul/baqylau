@@ -613,3 +613,84 @@ def test_session_kv_read_has_one_owner():
     kv_at on an sdb _audit_target already resolved for them.)"""
     hits = [f for f, src in _dash_py("dashboard/read") if "kv_at(" in src]
     assert hits == ["dashboard/read/meta.py"], hits
+
+
+def test_accounts_strip_rows_stack_column_for_column():
+    """The accounts strip, EXECUTED rather than grepped: tests/jsdom/accounts.js
+    renders the real `renderAccounts` over the DOM shim and reports each row's
+    box structure.
+
+    The strip is READ AS A STACK — c1's 5h bar directly above c2's, the two
+    "resets in …" tails in one line (docs/dashboard.md *Row alignment*) — and
+    that is a property of the rows TOGETHER, which no single row's source
+    states and no grep can check. Every reported misalignment was a row that
+    legitimately had LESS to say rendering FEWER boxes than its neighbour:
+
+      * an idle account's 5h window has ROLLED OVER, so effective_usage drops
+        its reset and the "resets in …" cell vanished with it (~17ch), sliding
+        every later window left — the reported symptom;
+      * the per-model window (`seven_day_fable`) attaches only where the OAuth
+        /usage fetch matched a slug, so one row had three bars and the other
+        two;
+      * `⚠ logged out` sits BEFORE the bars, so only the dead account's bars
+        were pushed right.
+
+    All three now render the column anyway (a ghost bar / an empty reset cell /
+    a `visibility: hidden` badge), which is what these signatures pin.
+    Skipped without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "accounts.js"),
+         os.path.join(REPO, "dashboard", "static", "app.01-attention.js")],
+        capture_output=True, text=True, timeout=60)
+    d = json.loads(r.stdout)
+    assert d["ok"], d["errors"]
+    assert r.returncode == 0, r.stderr
+
+    for name, case in d["cases"].items():
+        rows = case["rows"]
+        assert len(rows) == 2, (name, rows)
+        # every row lays out the SAME cells in the SAME order (the signature is
+        # ghost-blind and value-blind by construction — a placeholder is the
+        # same box with the ink turned down)
+        assert rows[0] == rows[1], (name, rows)
+        # and every window carries its reset cell, present or empty
+        for bar in [c for c in rows[0] if c["kind"] == "ubar"]:
+            assert bar["cells"] == ["ulabel", "utrack", "upct", "ureset"], \
+                (name, bar)
+
+    # the placeholders are where the missing data is, and NOT anywhere else
+    assert d["cases"]["live_shape"]["ghosts"] == [[False] * 4, [False] * 4]
+    assert d["cases"]["model_window_on_one"]["ghosts"][1][-1] is True
+    assert d["cases"]["one_logged_out"]["ghosts"] == \
+        [[False, False, False, False], [False, True, False, False]]
+
+    # the ghosted 5h/7d-fable bar says "—", not a fabricated 0%
+    assert "7d fable—" in d["cases"]["model_window_on_one"]["text"][1]
+    # the name column sizes to the widest name on the strip ("c2 · " + 19)
+    assert d["cases"]["model_window_on_one"]["aname"] == "24ch"
+
+
+def test_reset_column_fits_the_widest_reset_text(dash):
+    """The fixed reset column in style.css must be as wide as the widest text
+    `resetAgo()` can produce, or a window whose reset happens to be LONGER
+    overflows and pushes every later column — the "one account has days left,
+    the other hours, and they still don't line up" report. The days form
+    ("resets in 6d 23h", 16) is NOT the widest: the hours form ("resets in 23h
+    59m") is 17. The harness measures it over every duration up to 8 days
+    rather than trusting the arithmetic here."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "accounts.js"),
+         os.path.join(REPO, "dashboard", "static", "app.01-attention.js")],
+        capture_output=True, text=True, timeout=60)
+    widest = json.loads(r.stdout)["widest_reset"]
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    m = re.search(r"\.ubar \.ureset \{ min-width: (\d+)ch", css)
+    assert m, "the fixed reset column"
+    assert int(m.group(1)) >= widest["n"], (m.group(1), widest)

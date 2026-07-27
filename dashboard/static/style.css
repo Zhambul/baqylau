@@ -536,7 +536,11 @@ body.in-session #accounts { display: none; }
         padding: 7px 14px; border-radius: var(--r);
         background: color-mix(in srgb, var(--mid) 5%, transparent);
         box-shadow: inset 0 0 0 1px var(--hair); }
-.acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none; min-width: 14ch; }
+/* the name column is as wide as the widest account name on the strip (--aname-w,
+   set by renderAccounts in `ch` — the font is mono, so it's exact); a fixed
+   width here is the first of the columns that make the rows stack */
+.acct .aname { color: var(--text-soft); font: 600 11px/1 var(--mono); flex: none;
+  min-width: var(--aname-w, 14ch); }
 .acct .adim { color: var(--dim2); font: 11px/1 var(--mono); }
 .ubar { display: inline-flex; align-items: center; gap: 5px; }
 /* separate each usage window (5h · 7d · 7d fable) with a hairline + extra
@@ -567,11 +571,23 @@ body.in-session #accounts { display: none; }
 .ubar .upct { color: var(--text); font: 650 10px/1 var(--mono);
   min-width: 4ch; text-align: right; flex: none; }
 .ubar .ureset, .acct > .ureset { color: var(--text-soft); font: 11px/1 var(--mono); white-space: nowrap; }
-/* fixed reset-text column (the widest is ~"resets in 6d 23h") — the last
-   variable-width part of a window, so pinning it aligns the dividers */
-.ubar .ureset { min-width: 16ch; flex: none; margin-left: 6px; }
+/* fixed reset-text column — the last variable-width part of a window, so
+   pinning it aligns the dividers. 17ch is the WIDEST resetAgo() output:
+   "resets in 23h 59m" (17) beats the days form "resets in 6d 23h" (16), and at
+   16ch an hours-and-minutes reset overflowed its column and pushed everything
+   after it — the c1-has-days / c2-has-hours misalignment. The span is rendered
+   even when the window has no reset, so the empty column still holds. */
+.ubar .ureset { min-width: 17ch; flex: none; margin-left: 6px; }
 /* de-emphasise the "resets in" prefix; the duration keeps the ureset weight */
 .ubar .ureset .rlbl { color: var(--dim); }
+/* a window this account has no snapshot for (the other one does — the column
+   exists for the whole strip, docs/dashboard.md *Row alignment*): keep the box,
+   drop the ink */
+.ubar.ghost .ulabel, .ubar.ghost .upct { color: var(--dim2); }
+.ubar.ghost .utrack { opacity: .45; }
+/* the ⚠ badge's reserved slot on an account that is NOT logged out — hidden,
+   not absent, so the dead account's bars stay in column with the others */
+.acct .uauth.ghost { visibility: hidden; }
 /* the account is BLOCKED right now (an active `limit-hit` stamp — the usage
    bar alone freezes at ~95% at exactly the moment requests start bouncing) */
 .acct .ulimit {

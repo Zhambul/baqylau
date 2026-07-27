@@ -16,12 +16,27 @@ class El {
     // enough of the event surface for the harnesses that DRIVE a form: the
     // sources attach a few listeners (blur, input) and never dispatch them
     this._on = {};
+    // `style` is a plain bag of the properties the sources assign, PLUS
+    // setProperty/getPropertyValue — the only channel for a CUSTOM property
+    // (`--aname-w`, the accounts strip's name-column width): `style["--x"] = v`
+    // is a no-op in a real browser, so a source that aligns columns through a
+    // var can only be driven here if the shim speaks setProperty.
     this.style = {};
+    Object.defineProperties(this.style, {       // non-enumerable: `style` stays
+      setProperty: {                            // a plain bag of what was SET
+        value(k, v) { this[k] = v; } },
+      getPropertyValue: {
+        value(k) { return this[k] === undefined ? "" : this[k]; } },
+    });
     this.addEventListener = (t, f) => { (this._on[t] = this._on[t] || []).push(f); };
     this.removeEventListener = () => {};
     this.dispatch = (t) => { for (const f of this._on[t] || []) f({}); };
     this.focus = () => {};
     this.blur = () => {};
+    this.attrs = {};
+    this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
+    this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
+    this.removeAttribute = (k) => { delete this.attrs[k]; };
     const self = this;
     this.classList = {
       // varargs, like the real DOM: `add("rec", "pre")` must add BOTH — a
