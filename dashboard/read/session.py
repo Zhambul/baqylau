@@ -206,8 +206,12 @@ def session_payload(sid, agent=""):
     data["plan"] = plan_pending(sid) if data.get("live") else None
     # deliberately NOT live-gated: the `tasks` kv survives park (Claude Code
     # deletes the on-disk task files at session end — the stash is the only
-    # record left), so a parked session still shows its final task list
-    data["tasks"] = session_tasks(sid)
+    # record left), so a parked session still shows its final task list. The
+    # card's ✕ dismissal rides alongside it (tasks_card) — the flag is what
+    # makes the hide cross-device, and it survives park for the same reason
+    card = tasks_card(sid)
+    data["tasks"] = card["tasks"]
+    data["tasks_hidden"] = card["hidden"]
     # deliberately NOT live-gated: the active /goal lives in the transcript
     # (which persists past park, unlike the task files), so a parked session
     # still shows its final/achieved goal — read-side, no hook (docs/dashboard.md
@@ -399,6 +403,39 @@ def session_tasks(sid):
     stash = session_kv(sid, "tasks")
     tasks = stash.get("tasks") if isinstance(stash, dict) else None
     return tasks if isinstance(tasks, list) and tasks else None
+
+
+def tasks_done(tasks):
+    """True when `tasks` is a non-empty list in which EVERY task is completed —
+    the one gate on the card's ✕ (docs/dashboard.md, *Web tasks*). The predicate
+    lives here, not in the button: the page disables the ✕, the POST rejects a
+    409, and both must mean the same thing. A junk (non-dict) entry counts as
+    not-completed, so it can never make a live list look finished."""
+    return bool(tasks) and all(isinstance(t, dict) and t.get("status") == "completed"
+                               for t in tasks)
+
+
+def tasks_hidden(sid, tasks):
+    """True when the user dismissed the tasks card AND that dismissal still
+    applies to `tasks` — i.e. the list is still finished and still the SAME set
+    of ids that was dismissed (dashboard/prefs.py, tasks-hidden). A new task, or
+    a completed one re-opened, fails one of those and the card comes back on its
+    own; there is deliberately no un-hide gesture. Purely visual — nothing here
+    reads or writes a task's real state."""
+    if not tasks_done(tasks):
+        return False
+    hidden = set(prefs.tasks_hidden_ids(sid))
+    return bool(hidden) and all(str(t.get("id")) in hidden for t in tasks)
+
+
+def tasks_card(sid):
+    """The pinned tasks card's whole wire state — `{"tasks": <list|None>,
+    "hidden": <bool>}`. ONE value so the SSE channel diffs the list and the
+    dismissal TOGETHER: hiding the card on the phone changes no task, so a
+    tasks-only diff would leave the desktop's copy pinned until the next
+    TaskUpdate (the cross-device half of the gesture)."""
+    tasks = session_tasks(sid)
+    return {"tasks": tasks, "hidden": tasks_hidden(sid, tasks)}
 
 
 def plan_pending(sid):

@@ -280,7 +280,12 @@ function connectSession(sid) {
   es.addEventListener("tasks", (e) => {
     const d = JSON.parse(e.data);
     if (!S.ses) return;
-    if (S.ses.meta) S.ses.meta.tasks = d.tasks || null;
+    // the event carries the card's WHOLE state: the list AND whether it was
+    // dismissed — so a ✕ on another device un-pins this page's copy too
+    if (S.ses.meta) {
+      S.ses.meta.tasks = d.tasks || null;
+      S.ses.meta.tasks_hidden = !!d.hidden;
+    }
     renderTasks();
   });
   es.addEventListener("goal", (e) => {

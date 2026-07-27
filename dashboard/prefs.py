@@ -9,6 +9,8 @@
 #                                                one per directory)
 #   view-mode          →  {sid: mode}           (each session's mirror density —
 #                                                verbose | default | focus)
+#   tasks-hidden       →  {sid: {ids, ts}}      (each session's DISMISSED tasks
+#                                                card — purely visual)
 #
 # This is DELIBERATELY unlike the per-session kv helpers in core/state.py:
 #   - it is GLOBAL (one row set per machine), not keyed by session_id;
@@ -32,6 +34,7 @@
 import json
 import os
 import sqlite3
+import time
 
 from core import paths as P
 from core.noaudit import load_audit
@@ -456,3 +459,74 @@ def set_renamed_title(sid, name):
     Atomic read-modify-write (mutate_map) so two concurrent renames of DIFFERENT
     sessions can't lose each other's entry; best-effort like set()."""
     return mutate_map(RENAME_KEY, lambda d: d.__setitem__(str(sid), name))
+
+
+# --- the pinned tasks card's ✕ (a finished list, dismissed) ---------------------
+# Which sessions had their tasks card DISMISSED (docs/dashboard.md, *Web tasks*),
+# stored under one kv key as {session_id: {ids, ts}}. PURELY VISUAL, like
+# view-mode and unlike every other ✕ on the page: no task is completed, deleted
+# or touched by this — Claude Code's own task records are never written by the
+# dashboard at all (they are the TUI's, and the `tasks` kv is only a snapshot of
+# them). The card just stops being painted.
+#
+# Global like the other dashboard prefs precisely BECAUSE the dismissal has to
+# follow you: hiding a finished list on the phone must not leave it pinned on the
+# desktop, and localStorage would give every device its own answer. It survives
+# park, like the list it hides.
+#
+# The stored value is the ID SET that was hidden, not a bare True, because the
+# card must COME BACK when the list moves on. The ✕ is only offered once EVERY
+# task is completed (the server enforces that, not just the button's disabled
+# state), so "still hidden" means "still that same finished list": a new task —
+# or a completed one re-opened — makes the current list differ and the card
+# re-appears on its own. That is the whole un-hide story; a bare flag would need
+# a button to undo it, and a card you dismissed would otherwise swallow the next
+# thing Claude Code planned.
+#
+# `ts` is the hide time, kept only to PRUNE: the map would otherwise gain a row
+# per session whose list was ever dismissed, forever (renamed-title accepts that
+# because a rename is a handful of sessions; a finished task list is most of
+# them). Same recency prune as the new-session drafts.
+TASKS_HIDE_KEY = "tasks-hidden"
+TASKS_HIDE_MAX = 200
+
+
+def _tasks_hide_entry(d):
+    """One stored dismissal normalized to {ids, ts} — the shape every reader
+    gets, whatever junk the value holds. Ids are compared as STRINGS (the task
+    files' `id` is a string, but a hand-edited store could hold numbers)."""
+    if not isinstance(d, dict):
+        return {"ids": [], "ts": 0}
+    ids = d.get("ids")
+    ts = d.get("ts")
+    return {"ids": [str(i) for i in ids] if isinstance(ids, list) else [],
+            "ts": ts if isinstance(ts, (int, float)) else 0}
+
+
+def tasks_hidden_ids(sid):
+    """The task ids `sid`'s dismissed card covered ([] when never dismissed /
+    unreadable). The CALLER decides whether that dismissal still applies to the
+    current list — see dashboard/read/session.py tasks_hidden, the one predicate
+    (this store is a dumb kv, like hidden-dirs)."""
+    d = get(TASKS_HIDE_KEY, {})
+    return _tasks_hide_entry(d.get(str(sid)) if isinstance(d, dict) else None)["ids"]
+
+
+def set_tasks_hidden(sid, ids, ts=None):
+    """Dismiss `sid`'s tasks card for exactly the task `ids` (a list), or RESTORE
+    it when `ids` is None (the entry is deleted, so the map stays the small set of
+    dismissed sessions). Prunes to TASKS_HIDE_MAX by recency. Returns the updated
+    map; atomic read-modify-write (mutate_map), best-effort like set()."""
+    stamp = time.time() if ts is None else float(ts)
+
+    def _apply(d):
+        if ids is None:
+            d.pop(str(sid), None)
+            return
+        d[str(sid)] = {"ids": [str(i) for i in ids], "ts": stamp}
+        if len(d) > TASKS_HIDE_MAX:
+            # oldest-first by ts, keeping this write (it has the newest clock)
+            for k in sorted(d, key=lambda k: _tasks_hide_entry(d[k])["ts"]
+                            )[:len(d) - TASKS_HIDE_MAX]:
+                d.pop(k, None)
+    return mutate_map(TASKS_HIDE_KEY, _apply)

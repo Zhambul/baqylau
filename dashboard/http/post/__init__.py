@@ -101,6 +101,7 @@ class _PostMixin(_TypingMixin, _InterruptMixin, _DialogMixin, _StateMixin,
         "notify": _StateMixin.post_notify_mute,
         "viewing": _TelemetryMixin.post_viewing,
         "viewmode": _StateMixin.post_view_mode,
+        "tasks-hide": _StateMixin.post_tasks_hide,
     }
     _FIXED_POST = {
         ("presence",): _TelemetryMixin.post_presence,

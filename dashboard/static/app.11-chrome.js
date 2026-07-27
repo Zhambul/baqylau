@@ -1326,9 +1326,18 @@ function renderGoal() {
 // top of the mirror tab — fed by the `tasks` kv snapshot task_fmt.py re-reads
 // from Claude Code's on-disk task dir on every task-touching hook, so it works
 // live AND parked (the on-disk files are deleted at session end; the stash is
-// the only surviving record). Read-only: unlike ask/plan there is no dialog to
-// drive — the TUI has no modal to answer. Completed tasks render struck-through
-// and dimmed; the in_progress one carries the accent and shows its activeForm.
+// the only surviving record). Read-only as far as the TASKS go: unlike ask/plan
+// there is no dialog to drive — the TUI has no modal to answer, and nothing here
+// ever completes or deletes a task. Completed tasks render struck-through and
+// dimmed; the in_progress one carries the accent and shows its activeForm.
+//
+// The one gesture is the header's ✕: DISMISS a finished list, so a card whose
+// work is done stops taking the top of the mirror. Purely visual and stored
+// server-side (dashboard/prefs.py `tasks-hidden`), so it holds across devices
+// and across park — and offered only once EVERY task is completed (the button is
+// disabled otherwise and the POST 409s). It needs no un-hide: the dismissal is
+// stamped with that finished list's ids, so the next task Claude Code creates —
+// or a completed one re-opened — brings the card straight back.
 
 function buildTasksCard() {
   const wrap = el("div", "taskswrap");
@@ -1337,19 +1346,58 @@ function buildTasksCard() {
   return wrap;
 }
 
+// The ✕ that dismisses a finished tasks card. Two-step confirm (armConfirm, the
+// same "a misclick here costs you something, so ask once" rule as ✕ close /
+// ⊜ compact) — the arm dies if a `tasks` event rebuilds the card mid-confirm,
+// which is correct: a list that just changed is a different list to dismiss.
+function tasksHideBtn(tasks, allDone) {
+  const btn = el("button", "taskshide", "✕");
+  if (!allDone) {
+    btn.disabled = true;
+    btn.title = "hide this card once every task is completed";
+    return btn;
+  }
+  btn.title = "hide this finished list (comes back with the next task)";
+  armConfirm(btn, "✕", "hide?", () => {
+    const sid = S.cur;
+    const meta = S.ses && S.ses.meta;
+    if (!meta) return;
+    meta.tasks_hidden = true;      // optimistic — the card goes at once
+    renderTasks();
+    postJSON("/api/session/" + encodeURIComponent(sid) + "/tasks-hide",
+             { hidden: true },
+             { audit: "tasks-hide", sid, auditData: { tasks: tasks.length } })
+      .then(() => toast("done", "tasks hidden",
+                        "the card returns with the next task"))
+      .catch(e => {
+        // the write never landed — put the card back rather than leave the page
+        // showing a dismissal no other device will ever see
+        if (S.cur === sid && S.ses && S.ses.meta) {
+          S.ses.meta.tasks_hidden = false;
+          renderTasks();
+        }
+        toast("ask", "hide failed", (e && e.error) || "");
+      });
+  });
+  return btn;
+}
+
 function renderTasks() {
   const ses = S.ses;
   if (!ses || !ses.tasksEl) return;
   const wrap = ses.tasksEl;
   wrap.textContent = "";
   const tasks = (ses.meta && ses.meta.tasks) || null;
-  wrap.hidden = !tasks || !tasks.length;
+  // `tasks_hidden` is the SERVER's verdict (read/session.py tasks_hidden — the
+  // dismissal AND whether it still applies to this list), never a local flag
+  wrap.hidden = !tasks || !tasks.length || !!(ses.meta && ses.meta.tasks_hidden);
   if (wrap.hidden) return;
   const done = tasks.filter(t => t.status === "completed").length;
   const card = el("div", "taskscard");
   const head = el("div", "taskshead");
   head.append(el("span", "taskstitle", "tasks"));
   head.append(el("span", "taskscount", done + "/" + tasks.length + " done"));
+  head.append(tasksHideBtn(tasks, done === tasks.length));
   card.append(head);
   const list = el("div", "tasklist");
   tasks.forEach(t => {

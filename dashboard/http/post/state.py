@@ -11,6 +11,7 @@ from dashboard import (prefs)
 from dashboard.config import (EFFORTS,
                               MODEL_OK)
 from dashboard.read.lists import (dir_live_sessions)
+from dashboard.read.session import (session_tasks, tasks_done)
 from dashboard.notify.broker import BROKER
 
 A = load_audit()
@@ -219,6 +220,47 @@ class _StateMixin:
         prefs.set_notify_muted(sid, muted)
         A.state_file("", "", "notify-mute", {"sid": sid, "muted": muted})
         return self._json({"ok": True, "muted": muted})
+
+    def post_tasks_hide(self, sid):
+        """Dismiss (or restore) the session's pinned tasks card — the card's ✕
+        (docs/dashboard.md *Web tasks*). Body: `hidden` (bool). PURELY VISUAL,
+        like post_view_mode and unlike every other ✕ on the page: no task is
+        completed or deleted, and Claude Code's own task records are not written
+        at all (the `tasks` kv is a snapshot of them, and the next task-touching
+        hook re-stashes it). Writes only the durable global prefs store
+        (dashboard/prefs.py), so the dismissal follows you across devices and
+        works live AND parked.
+
+        A list with any UNFINISHED task can't be dismissed — a 409, the
+        authoritative guard behind the disabled ✕ (tasks_done; the client also
+        disables the button, but a stale page could still POST). What gets stored
+        is that finished list's ID SET, so a later task — or a re-opened one —
+        brings the card back by itself (there is no un-hide button; `hidden:
+        false` exists for the page to undo its own optimistic paint after a
+        failed write). Behind _post_guard like every control-plane POST; audited
+        as a `web-taskshide` state_files row (global — empty log/path like
+        notify-mute)."""
+        body = self._post_guard()
+        if body is None:
+            return
+        hidden = body.get("hidden")
+        if not isinstance(hidden, bool):
+            return self._reject_input("web-taskshide", "bad hidden",
+                                      "hidden must be a boolean",
+                                      {"hidden": hidden}, sid=sid)
+        tasks = session_tasks(sid) if hidden else None
+        # Not an input error — the body is well-formed — so a distinct `why`,
+        # but the same audited-reject shape (no errors row / errwatch chip).
+        if hidden and not tasks_done(tasks):
+            return self._reject_input(
+                "web-taskshide", "tasks unfinished",
+                "every task must be completed before the card can be hidden",
+                {"sid": sid, "tasks": len(tasks or [])}, code=409, sid=sid)
+        ids = [str(t.get("id")) for t in tasks] if hidden else None
+        prefs.set_tasks_hidden(sid, ids)
+        A.state_file("", "", "web-taskshide",
+                     {"sid": sid, "hidden": hidden, "ids": ids or []})
+        return self._json({"ok": True, "hidden": hidden})
 
     def post_view_mode(self, sid):
         """Set the session mirror's VIEW MODE — the filter bar's

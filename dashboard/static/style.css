@@ -601,6 +601,19 @@ body.in-session #accounts { display: none; }
   text-transform: uppercase; letter-spacing: .1em;
 }
 .taskscount { margin-left: auto; color: var(--dim); font: 500 11px/1.3 var(--sans); }
+/* the card's ✕ — dismiss a FINISHED list. An .xclose sibling, but its armed
+   state is AMBER, not red: this destroys nothing (no task is touched, and the
+   card returns with the next one), so it must not wear the close/compact
+   warning colour. Disabled until every task is completed. */
+.taskshide {
+  flex: none; border: none; cursor: pointer;
+  background: transparent; color: var(--dim2);
+  border-radius: calc(var(--r) / 2);
+  padding: 1px 6px; font: 600 11px/1.4 var(--sans);
+}
+.taskshide:hover:not(:disabled) { color: var(--text); box-shadow: var(--card-hover); }
+.taskshide.arm { color: var(--bg); background: var(--amber); }
+.taskshide:disabled { opacity: .45; cursor: default; }
 .tasklist {
   display: flex; flex-direction: column; gap: 2px;
   max-height: 28vh; overflow-y: auto;

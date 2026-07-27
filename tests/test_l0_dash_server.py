@@ -201,8 +201,9 @@ def test_two_step_confirm_has_one_implementation(dash):
             continue
         assert 'classList.add("arm")' not in body, \
             "%s hand-rolls the two-step confirm — use armConfirm()" % p
-    # …and the two sites that used to own copies now go through it
-    assert bodies["app.11-chrome.js"].count("armConfirm(") == 2
+    # …and every confirmed gesture in the session chrome goes through it: the two
+    # sites that used to own copies (✕ close, ⊜ compact) plus the tasks card's ✕
+    assert bodies["app.11-chrome.js"].count("armConfirm(") == 3
 
 
 def test_no_dead_page_functions(dash):
@@ -1372,6 +1373,57 @@ def test_tasks_card_payload_and_sse(dash):
     assert _get_json(dash + "/api/session/tsk1")["tasks"] is None
 
 
+def test_tasks_card_hide_roundtrip_and_reappear(dash):
+    """Dismissing the pinned tasks card (docs/dashboard.md, *Web tasks*): the ✕
+    is offered only once EVERY task is completed (an unfinished list 409s — the
+    authoritative guard behind the disabled button), the dismissal is PURELY
+    VISUAL (the `tasks` kv is untouched — no task is completed or deleted) and
+    lands in the durable global prefs store so it holds across devices and park,
+    and it is stamped with that finished list's IDS so a NEW task brings the card
+    straight back with no un-hide gesture."""
+    A.session_start({"session_id": "tsk2", "cwd": "/w", "transcript_path": ""})
+    log = P.mirror_log("tsk2")
+    live = [{"id": "1", "subject": "Ship it", "status": "completed"},
+            {"id": "2", "subject": "Test it", "status": "in_progress"}]
+    S.kv_set(log, "tasks", {"tasks": live})
+    assert _get_json(dash + "/api/session/tsk2")["tasks_hidden"] is False
+    # an unfinished list can't be dismissed — 409, nothing stored
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/tsk2/tasks-hide", {"hidden": True})
+    assert e.value.code == 409
+    assert prefs.tasks_hidden_ids("tsk2") == []
+    # every task completed → the dismissal takes, and rides the payload + SSE
+    done = [dict(t, status="completed") for t in live]
+    S.kv_set(log, "tasks", {"tasks": done})
+    code, body = _post(dash + "/api/session/tsk2/tasks-hide", {"hidden": True})
+    assert code == 200 and json.loads(body)["hidden"] is True
+    assert prefs.tasks_hidden_ids("tsk2") == ["1", "2"]
+    ov = _get_json(dash + "/api/session/tsk2")
+    assert ov["tasks_hidden"] is True
+    # purely visual: the task list itself is untouched, kv and wire alike
+    assert [t["id"] for t in ov["tasks"]] == ["1", "2"]
+    assert S.kv_get(log, "tasks") == {"tasks": done}
+    data = _sse_event(dash + "/events/session/tsk2?after=0&mpos=0", "tasks")
+    assert data and json.loads(data)["hidden"] is True
+    # a NEW task is a different list — the card comes back on its own
+    S.kv_set(log, "tasks", {"tasks": done + [{"id": "3", "subject": "Doc it",
+                                              "status": "pending"}]})
+    assert _get_json(dash + "/api/session/tsk2")["tasks_hidden"] is False
+    # …and stays back even once IT completes (a task the dismissal never covered)
+    S.kv_set(log, "tasks", {"tasks": done + [{"id": "3", "subject": "Doc it",
+                                              "status": "completed"}]})
+    assert _get_json(dash + "/api/session/tsk2")["tasks_hidden"] is False
+    # hidden:false is the page's own undo (a failed optimistic paint) — the
+    # entry is DELETED, and the body must be a bool
+    S.kv_set(log, "tasks", {"tasks": done})
+    assert _get_json(dash + "/api/session/tsk2")["tasks_hidden"] is True
+    code, _ = _post(dash + "/api/session/tsk2/tasks-hide", {"hidden": False})
+    assert code == 200 and prefs.tasks_hidden_ids("tsk2") == []
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/tsk2/tasks-hide", {"hidden": "yes"})
+    assert e.value.code == 400
+
+
 def test_ask_draft_persist_payload_and_sse(dash, monkeypatch):
     """The web ask card's UNSUBMITTED selections survive a device switch (docs/
     dashboard.md, *Web ask*): POST /ask-draft writes the `ask-draft` kv (a pure
@@ -1888,6 +1940,17 @@ def test_prefs_mutate_map_accumulates_atomically(monkeypatch, tmp_path):
                                                          "sidB": "other"}
     assert prefs.renamed_title("sidA") == "picked"
     assert prefs.renamed_title("nope") == ""       # never renamed
+    # the tasks-card dismissal too: per-sid id sets, a restore DELETES the entry,
+    # and the map is pruned to the TASKS_HIDE_MAX most recent dismissals
+    prefs.set_tasks_hidden("sidA", ["1", 2], ts=10.0)
+    assert prefs.tasks_hidden_ids("sidA") == ["1", "2"]   # ids stored as strings
+    prefs.set_tasks_hidden("sidB", ["7"], ts=11.0)
+    assert prefs.tasks_hidden_ids("sidA") == ["1", "2"]   # sidA not lost
+    assert prefs.set_tasks_hidden("sidA", None).keys() == {"sidB"}
+    assert prefs.tasks_hidden_ids("sidA") == []           # never dismissed
+    for i in range(prefs.TASKS_HIDE_MAX + 3):
+        m = prefs.set_tasks_hidden("s%d" % i, ["1"], ts=100.0 + i)
+    assert len(m) == prefs.TASKS_HIDE_MAX and "sidB" not in m   # oldest evicted
     # degraded (unopenable store — dirname is a FILE): still returns the
     # intended map, never raises
     afile = tmp_path / "afile"

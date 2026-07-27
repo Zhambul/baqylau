@@ -472,7 +472,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a heartbeat DERIVED from the served `view_ttl_s` (TTL/2.5, *Served limits* above) while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
 | `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
-| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
+| `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `tasks-hide` (`{"hidden": bool}` → dismiss/restore the pinned tasks CARD, a prefs write, no terminal and no task touched — *Web tasks* below; 400 non-bool, **409 unless every task is completed**), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`git`/`title`/`running`/`fgrun`/`tab`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors[?agent=<aid>]` | the Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*) |
@@ -3314,8 +3314,47 @@ completed `✓` (green mark, the whole row dimmed and the subject
 **struck through**). A `⛓ #n` chip marks a task blocked on open
 dependencies (`blockedBy`), the header counts `done/total`, and the
 full `description` rides each row's hover title. The card hides when
-the session has no tasks. Read-only — unlike ask/plan there is no
-modal to drive, so there is no POST endpoint.
+the session has no tasks. The task list itself is read-only — unlike
+ask/plan there is no modal to drive, and nothing on the page ever
+completes, re-opens or deletes a task (those are the TUI's; the `tasks`
+kv is only a snapshot of Claude Code's own records).
+
+**Dismissing a finished card (the header ✕).** A list whose work is
+done still sits pinned above everything else, so the header carries a
+`✕` that hides the card. Three properties, each deliberate:
+
+- **Only when every task is completed.** The button is `disabled`
+  otherwise, and `POST /api/session/<sid>/tasks-hide` **409s** on an
+  unfinished list — the same disabled-button/authoritative-409 pair as
+  the list page's group-hide ✕, because a stale page can still POST. The
+  predicate has ONE implementation (`read/session.py tasks_done`), so
+  the button and the endpoint cannot disagree.
+- **Purely visual, and cross-device.** It writes nothing but the
+  `tasks-hidden` key of the durable global prefs store (`dashboard/
+  prefs.py`) — no task, no session state, no terminal. Global like
+  `view-mode`/`notify-muted` rather than per-browser `localStorage`
+  precisely so it FOLLOWS you: dismissing on the phone must un-pin the
+  desktop page already open on that session. That is also why the SSE
+  channel's value is the card's whole state (`tasks_card` → `{tasks,
+  hidden}`) instead of the bare list — the dismissal moves no task, so a
+  list-only diff would never fire and the other device would keep the
+  card until the next `TaskUpdate`. It survives park with the list.
+- **No un-hide button — the ids are the expiry.** What gets stored is
+  that finished list's ID SET, and the card is hidden only while every
+  task is still completed AND every current id is in that set. So the
+  next `TaskCreate` (or a completed task re-opened) makes it a different
+  list and the card comes straight back. A bare `true` flag would have
+  needed an un-hide gesture, and a card you dismissed once would then
+  swallow the next thing Claude Code plans — the failure mode worth
+  designing out. `hidden: false` exists on the endpoint anyway, but only
+  as the page's own undo when the optimistic paint's POST fails.
+
+The gesture is a two-step confirm (`armConfirm`, `✕` → `hide?` → fires),
+the same "ask once" helper as ✕ close and ⊜ compact — but its armed
+state is AMBER, not their red: nothing here is destructive and the
+button must not claim otherwise. Audited as a `web-taskshide`
+`state_files` row (`{sid, hidden, ids}`), pruned to `TASKS_HIDE_MAX`
+dismissals by recency.
 
 **Where the data comes from (and why a stash, again).** Task state
 DOES live on disk — `<CLAUDE_CONFIG_DIR|~/.claude>/tasks/session-<first
@@ -3340,11 +3379,13 @@ nothing — kv_set would CREATE the DB whose existence is the
 session-alive signal (this previously bit: the old task_fmt's
 unconditional `O.emit` created ghost DBs for headless team sessions).
 
-`session_payload` carries the list as `data["tasks"]` — deliberately
-**NOT live-gated** (unlike `ask`/`plan`): the kv survives park, so a
-parked session still shows its final task list. The per-session SSE
-diff-emits a `tasks` event on the slow cadence (tasks change per-hook,
-not per-keystroke; nobody is blocked waiting on this card).
+`session_payload` carries the list as `data["tasks"]` (and the
+dismissal as `data["tasks_hidden"]`) — deliberately **NOT live-gated**
+(unlike `ask`/`plan`): the kv survives park, so a parked session still
+shows its final task list. The per-session SSE diff-emits a `tasks`
+event carrying both fields (`tasks_card`) on the slow cadence (tasks
+change per-hook, not per-keystroke; nobody is blocked waiting on this
+card).
 
 ## Web goal (the pinned goal card)
 

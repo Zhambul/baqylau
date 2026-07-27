@@ -28,7 +28,7 @@ from dashboard.read.mirror import (agent_scope, merged_backlog, merge_live,
 from dashboard.read.session import (BADGES, agents_ctx, agents_model_effort,
                                     visible_agents, ask_draft,
                                     ask_pending, ask_wire, composer_draft, composer_queue,
-                                    plan_pending, session_tasks,
+                                    plan_pending, tasks_card,
                                     input_box, SUGGEST_TABS)
 
 A = load_audit()
@@ -115,8 +115,12 @@ _SLOW_CHANS = (
 ) + _badge_chans() + (
     # the pinned tasks card — a task create / status flip re-stashes the
     # `tasks` kv (task_fmt.py). Slow: tasks change per-hook, not per-keystroke,
-    # and nobody is blocked waiting on this card, unlike ask/plan
-    _Chan("tasks", "tasks", lambda c: session_tasks(c.sid), "tasks"),
+    # and nobody is blocked waiting on this card, unlike ask/plan. The value is
+    # the card's WHOLE state ({tasks, hidden}) rather than the bare list, so
+    # dismissing a finished card on one device un-pins it on every other one —
+    # that write moves no task, so a list-only diff would never fire (the wire
+    # shape is unchanged for the list: `hidden` is a second field beside it)
+    _Chan("tasks", "tasks", lambda c: tasks_card(c.sid), None),
     # the pinned goal card — the active `/goal` scanned from the transcript
     # tail (read-side, no hook fires). Slow, for the same reason as tasks
     _Chan("goal", "goal", lambda c: session_goal(c.tpath), "goal"),
