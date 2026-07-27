@@ -95,6 +95,15 @@ def op_html(op, key=""):
     if t == "rule":
         return "<div class=\"orule\"></div>"
     if t == "label":
+        # A web-facing NOTE (core/ops.py) replaces the chip entirely: one quiet
+        # `⏺ …` line in the register of a collapsed run's summary, no stream colour,
+        # no model/ctx tags, no ⧉ links. The block's BODY is what the reader clicks
+        # for (a subagent's brief, or its result), and a coloured chip announcing
+        # `⇠ result  fable-5·high  ctx 22% · 225k/1M` competes with that.
+        note = op.get("note") or actclass.legacy_agent_note(op)
+        if note:
+            return ("<div class=\"anote\">%s%s</div>"
+                    % (NOTE_GLYPH, html.escape(note)))
         chip = ("<span class=\"chip\" style=\"background:%s\">%s</span>"
                 % (_rgb(op.get("c")), ansi_html(op.get("s", ""))))
         g = op.get("g")
@@ -139,6 +148,10 @@ def ops_html(ops, key=""):
 # identity (a label/line op is what names a class).
 _BODY_OPS = ("gut", "code")
 
+# The bullet a web NOTE line opens with — Claude Code's own marker for the same
+# kind of one-line activity notice in its transcript.
+NOTE_GLYPH = "⏺ "
+
 
 def op_items(ops, key=""):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
@@ -175,10 +188,25 @@ def op_items(ops, key=""):
         t = op.get("t")
         if t in ("rule", "blank") or (op.get("src") and not op.get("web")):
             continue
+        if actclass.agent_header(op):
+            # the main session's own `▶ <type> · <desc>` launch/resume header —
+            # dropped here because the substream's ⇢ prompt block says the same
+            # thing AND holds the brief behind the click (see agent_header)
+            continue
         h = op_html(op, key)
         if not h:
             continue
         it = {"g": op.get("g") or None, "t": t, "html": h}
+        # WHOSE agent block this is (`sub:<id>` / `team:<id>` — core/ops.py's src),
+        # so the page can join it to the agents payload: the duration for a finish
+        # note, and — the reason it matters more — counting DISTINCT AGENTS in a
+        # collapsed run instead of agent-ish ROWS ("running 77 agents" for a session
+        # with 21 of them: launch + prompt + result + resume, each counted once).
+        src = op.get("src") or ""
+        if ":" in src:
+            it["agent"] = src.split(":", 1)[1]
+        if op.get("note") or actclass.legacy_agent_note(op):
+            it["note"] = 1          # this header IS the whole line (see op_html)
         # The ACTIVITY CLASS the view modes collapse a run of items on
         # (docs/dashboard.md, *View modes*) — classified here, once, instead of
         # sniffed back out of the rendered HTML by the page.

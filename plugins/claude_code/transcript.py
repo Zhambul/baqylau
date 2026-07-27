@@ -155,6 +155,26 @@ def input_summary(inp):
     return "\n".join(lines)
 
 
+# Claude Code injects `<system-reminder>` blocks INTO the text it hands an agent —
+# the addressable-teammates roster, the CLAUDE.md nudge, and friends. They are
+# machinery, not the brief: a subagent's ⇢ prompt block opened with two nested
+# reminders and the roster of every other agent before a word of the actual task
+# ("why do I see system reminders of the subagents in the main mirror"). Stripped
+# here rather than at the paint site because it is a fact about Claude Code's
+# transcript text, which this module owns; nested/unclosed forms are handled by
+# taking the OUTERMOST span non-greedily and then sweeping any stray tag left over.
+_REMINDER = re.compile(r"<system-reminder>.*?</system-reminder>\s*", re.S | re.I)
+_REMINDER_TAG = re.compile(r"</?system-reminder>\s*", re.I)
+
+
+def strip_reminders(text):
+    """`text` with Claude Code's injected <system-reminder> blocks removed. Empty
+    in, empty out; a text that is ONLY reminders becomes ''."""
+    if not text:
+        return text
+    return _REMINDER_TAG.sub("", _REMINDER.sub("", text)).strip()
+
+
 def classify_user_text(text):
     """("teammsg", sender, body) for a wrapped teammate message, else
     ("prompt", text, None). `text` is the raw user content string."""

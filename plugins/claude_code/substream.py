@@ -142,7 +142,8 @@ def _init(argv):
     # state (pending message, pend ledger, ctx-tag turn tracking, the footer's rollup).
     REN = SR.Renderer(log=LOG, agent=AGENT, label=LABEL, rgb=SUB_RGB, sub_fg=SUB_FG,
                       op_tag=op_tag, ctx_tag=ctx_tag, take_subfg=take_subfg,
-                      spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer)
+                      spawn_fg_tailer=spawn_fg_tailer, spawn_tailer=spawn_tailer,
+                      agent_dur=agent_dur)
 
 
 # There are deliberately NO context-fill THRESHOLDS here. The per-turn ctx tag
@@ -248,6 +249,16 @@ def ctx_tag():
         return ""
     mx = model_ctx()
     return f"ctx {used * 100 // mx}% · {kfmt(used)}/{kfmt(mx)}"
+
+
+def agent_dur():
+    """How long this agent has been running, as `21m 31s` — the finish note's
+    duration on the web mirror (core/ops.py's "note"). Reads the START from the same
+    place emit_footer does, the agent's own slot row, so the two cannot disagree; ""
+    when the row is gone (a stolen/released slot), and the note then omits it."""
+    got = claude_slots.lookup_id("sub", LOG, AGENT)
+    ts = got[1] if (got and got[1]) else 0
+    return O.fmt_dur(max(0.0, time.time() - ts)) if ts else ""
 
 
 alive = S.pid_alive                 # EPERM (foreign-owned) counts as alive

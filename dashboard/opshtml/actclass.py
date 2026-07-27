@@ -37,6 +37,7 @@ import re
 
 from core import ops as O
 from core import render as R
+from core import streamfmt as SF
 from plugins.claude_code import msgs as MSGS
 from plugins.claude_code import task_fmt as TASKS
 from plugins.claude_code.tools import FILE_LABEL
@@ -138,6 +139,50 @@ def diffstat(op):
         return int(m.group(1) or 0), int(m.group(2) or m.group(3) or 0)
     except Exception:
         return 0, 0
+
+
+# A subagent's ⇢ prompt / ⇠ result markers, from their owner (core/streamfmt), and
+# the web wording each maps to. Producers now write that wording themselves as the
+# op's `note` (core/ops.py); this is the fallback for ops ALREADY ON DISK, which
+# cannot be re-stamped — a parked or long-running session would otherwise keep
+# showing the terminal's colour-coded chip forever.
+_LEGACY_NOTE = ((" %s %s" % SF.MARK_PROMPT, "launched"),
+                (" %s %s" % SF.MARK_RESULT, "finished"))
+
+
+def legacy_agent_note(op):
+    """`Agent "<who>" launched|finished` recovered from a pre-`note` subagent chip,
+    or None. Reads the marker, not the whole chip: `<who>` is simply the text before
+    it, and the model/ctx tags after it are dropped (they belong on the agent's
+    card). No duration — the chip never carried one; a live op's own note does."""
+    try:
+        if op.get("t") != "label" or op.get("note"):
+            return None
+        text = _plain(op)
+        for mark, verb in _LEGACY_NOTE:
+            at = text.find(mark)
+            if at > 0:
+                return 'Agent "%s" %s' % (text[:at].strip(), verb)
+        return None
+    except Exception:
+        return None                     # unreadable: keep the chip
+
+
+def agent_header(op):
+    """True for the MAIN session's own subagent launch/resume header (`▶ <type> ·
+    <desc>` / `↻ …`, in a slot-palette colour). The web mirror drops it: the
+    substream's ⇢ prompt block says the same thing AND carries the brief behind the
+    click, so keeping both puts two launch lines in the feed for one launch
+    (docs/dashboard.md *View modes*). Structural, like everything here — the glyph
+    plus a palette (not semantic) colour."""
+    try:
+        if op.get("t") != "label" or op.get("g"):
+            return False
+        if tuple(op.get("c") or ()) in _CMD_RGB:
+            return False                      # a semantic colour is main-session work
+        return _plain(op)[:1] in (_GLYPH_BASH, _GLYPH_RESUMED)
+    except Exception:
+        return False                          # unreadable: keep it (fail toward showing)
 
 
 def classify(op):

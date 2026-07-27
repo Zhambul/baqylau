@@ -13,14 +13,20 @@ for the counters these streams feed).
   events; the streamer owns subagent rendering.)
   - **`claude-substream.py`** (spawned detached by `SubagentStart`) tails
     `<dir>/<session>/subagents/agent-<id>.jsonl` and renders, in order: the
-    **prompt** (`<type> ⇢ prompt`), each **message** (`<type> ✎ message`), each
+    **prompt** (`<type> ⇢ prompt` — with Claude Code's injected
+    `<system-reminder>` blocks stripped, `transcript.strip_reminders`: the roster of
+    addressable teammates and friends arrived ahead of the actual brief, and they are
+    machinery, not the task), each **message** (`<type> ✎ message`), each
     **command** (`<type> ▶ foreground` / `<type> ▷ background` — agent name +
     kind keyword), **file ops** (`<type> Read(name)` / `<type> Update(name) +N -M`
     — led by the agent's name in its colour, so a Read/Update/Write is attributable
     to the subagent or teammate that ran it), other tools, and the subagent's
     **returned result** — its final message, labelled `<type> ⇠ result` to set it
     apart from intermediate `✎ message` chatter — then the `■ <type> ended · Ns`
-    footer. All in the subagent's colour. (Messages are committed one event late
+    footer. The two blocks the WEB mirror surfaces (`⇢ prompt` / `⇠ result`) also
+    carry a `note` — `⏺ Agent "<name>" launched` / `… finished · 21m 31s` — the
+    browser's own quiet wording for them, duration read from the same slot row
+    `emit_footer` uses (docs/dashboard.md *View modes*). The pane keeps the chip. All in the subagent's colour. (Messages are committed one event late
     so the last one can be tagged `⇠ result`.)
   - **A message and the result are UNCAPPED; everything else is excerpted.** Every
     other block kind the renderer paints has a line ceiling (the `CAP_*` table in

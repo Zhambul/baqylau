@@ -50,6 +50,18 @@
 # op_items keeps them despite the stamp; everything in between stays drill-down
 # only. Inert everywhere else (the terminal renderer and op_html ignore it).
 #
+# A "web"-surfaced label may also carry "note": the WEB-FACING WORDING for that
+# block header. The terminal wants the dense, colour-coded chip a pane reader
+# scans (`Fix git/config commands ⇠ result  fable-5·high  ctx 22% · 225k/1M`); the
+# web mirror wants one quiet sentence in the same register as a collapsed run's
+# summary line (`⏺ Agent "Fix git/config commands + glab" finished`), with the
+# model/ctx tags dropped — they belong on the agent's own card, not in the feed.
+# So the PRODUCER writes both: `s` for the pane, `note` for the browser
+# (opshtml.op_html renders `note` when present, and the terminal ignores it, the
+# mirror image of how "web" works). Deliberately the producer's job and not a
+# reformat in the presenter: the wording is stream vocabulary, and parsing a chip
+# back apart to reword it is the sniffing actclass exists to have ended.
+#
 # Any label/code/gut op may additionally carry "g": a COPY-GROUP id tying the ops of
 # one activity block together (the Bash tool_use_id, the backgroundTaskId for a
 # background job, or any synthesised per-block id). A g-tagged label is painted with
@@ -80,10 +92,12 @@ def rule():
     return {"t": "rule"}
 
 
-def label(s, c, outer=None, g=None, lk=None, web=False):
+def label(s, c, outer=None, g=None, lk=None, web=False, note=None):
     o = {"t": "label", "s": s, "c": _rgb(c)}
     if web:
         o["web"] = 1
+    if note:
+        o["note"] = str(note)      # the web mirror's wording for this header
     if outer is not None:
         o["outer"] = _rgb(outer)
     if g:

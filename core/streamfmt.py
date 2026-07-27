@@ -25,18 +25,30 @@ def cap(text, n):
     return "\n".join(lines[:n]) + f"\n… ({more} more line{'s' if more != 1 else ''})"
 
 
-def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False):
+# The two block markers a subagent's WEB-surfaced headers wear — `<who> ⇢ prompt`
+# and `<who> ⇠ result` (glyph, kind). Named here, in the shared block-shaping
+# vocabulary, because two surfaces read them: substream_render builds the chips
+# from them, and the web presenter recovers `Agent "<who>" launched / finished`
+# from a chip written BEFORE producers started carrying that wording themselves
+# (core/ops.py's "note"). A parked session's ops cannot be re-stamped, so history
+# needs the marker; live ops carry the note and never consult it.
+MARK_PROMPT = ("⇢", "prompt")
+MARK_RESULT = ("⇠", "result")
+
+
+def chip(who, glyph, kind, rgb, tags=(), g=None, lk=None, web=False, note=None):
     """The block-header label op: '<who> <glyph> <kind>[  tag]…' in the stream's
     colour. `tags` are optional trailing chips (model/effort tag, ctx %) — empty
     ones are skipped, each joins with a double space. g/lk are the ⧉ copy-group
     wiring (core/copy.py), passed straight through to O.label. web=True keeps this
     stamped op in the web dashboard's main mirror (a subagent prompt/result
-    header — see core/ops.py's "web" field)."""
+    header — see core/ops.py's "web" field), and `note` is that surface's own
+    wording for it (the quiet one-liner, tags dropped)."""
     s = f"{who} {glyph} {kind}"
     for t in tags:
         if t:
             s += f"  {t}"
-    return O.label(s, rgb, g=g, lk=lk, web=web)
+    return O.label(s, rgb, g=g, lk=lk, web=web, note=note)
 
 
 def gutter(text, rgb, g=None, web=False):

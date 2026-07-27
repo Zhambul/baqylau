@@ -74,7 +74,8 @@ class Renderer:
     """
 
     def __init__(self, *, log, agent, label, rgb, sub_fg,
-                 op_tag, ctx_tag, take_subfg, spawn_fg_tailer, spawn_tailer):
+                 op_tag, ctx_tag, take_subfg, spawn_fg_tailer, spawn_tailer,
+                 agent_dur=None):
         self.log = log
         self.agent = agent
         self.label = label
@@ -88,6 +89,10 @@ class Renderer:
         self._take_subfg = take_subfg
         self._spawn_fg_tailer = spawn_fg_tailer
         self._spawn_tailer = spawn_tailer
+        # …and how long this agent has been running, for the finish note's `· 21m 31s`
+        # (the slot row holds the start ts; the footer reads it the same way). Optional:
+        # without it the note simply carries no duration.
+        self._agent_dur = agent_dur
 
         self.fg_live = {}         # tool_use_id -> the subfg hand-off rec, while its fg tailer runs
         self.pend = {}            # tool_use_id -> (kind, cmd)
@@ -126,7 +131,7 @@ class Renderer:
 
     # --- small line/block builders ------------------------------------------
 
-    def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False):
+    def chip(self, glyph, kind, ctx="", g=None, lk=None, web=False, note=None):
         # ctx (e.g. "ctx 42% · 84k/200k") rides in the chip header for the first op of a
         # turn, rather than on its own gutter line below it. g ties a block's header + its
         # code/gut body ops into one ⧉ copy group — a tool_use_id for commands, else a
@@ -135,7 +140,7 @@ class Renderer:
         # blocks (core/copy.py), just double-guttered here. Shape shared with the codex
         # stream via core/streamfmt.py; the model tag + ctx ride as trailing tags.
         return SF.chip(self.label, glyph, kind, self.rgb,
-                       tags=(self._op_tag(), ctx), g=g, lk=lk, web=web)
+                       tags=(self._op_tag(), ctx), g=g, lk=lk, web=web, note=note)
 
     def gutter(self, text, g=None, web=False):
         return SF.gutter(text, self.rgb, g=g, web=web)
@@ -153,13 +158,20 @@ class Renderer:
         # advanced to the next turn), so emit that, not the live value.
         if self.pending_msg is None:
             return
-        glyph, kind = ("⇠", "result") if is_result else ("✎", "message")
+        glyph, kind = SF.MARK_RESULT if is_result else ("✎", "message")
+        # …and, for the result, the web mirror's own one-liner (core/ops.py "note"):
+        # `⏺` + this, in the register of a collapsed run's summary. No model/ctx tag —
+        # that belongs on the agent's card, not in the feed. The DURATION is appended
+        # by the page from the agents payload (it knows started_at/ended_at; this
+        # process would have to re-derive them).
+        note = self.agent_note("finished", dur=True) if is_result else None
         # The final result is one of the two subagent blocks the web dashboard's
         # main mirror surfaces (web=True); intermediate ✎ messages stay drill-down
         # only — see core/ops.py's "web" field and dashboard/opshtml.op_items.
         g = O.new_group(self.log)
         O.emit(self.log,
-               self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL, web=is_result),
+               self.chip(glyph, kind, self.pending_tag, g=g, lk=O.COPY_ALL,
+                         web=is_result, note=note),
                # UNCAPPED, deliberately — the one excerpt in this renderer with no
                # line ceiling (see the CAP_* table's note). An agent's message and
                # its returned result are what the whole stream exists to deliver;
@@ -181,13 +193,31 @@ class Renderer:
         txt += f" ({trig})"
         O.emit(self.log, O.gut(AMBER + txt + RST, self.rgb))
 
+    def agent_note(self, verb, dur=False):
+        """This agent's web-mirror one-liner for a launch/finish — `Agent "<name>"
+        launched` / `… finished · 21m 31s` (core/ops.py's "note"). One builder so the
+        two blocks cannot drift, and quoted the way Claude Code's own default density
+        words it. `dur` appends how long the agent ran, when the lifecycle injected a
+        way to know (a launch has nothing to report yet)."""
+        note = 'Agent "%s" %s' % (self.label, verb)
+        if dur and self._agent_dur:
+            try:
+                d = self._agent_dur()
+            except Exception:
+                d = ""              # a note without a duration beats no note
+            if d:
+                note += " · " + d
+        return note
+
     def render_prompt(self, text):
         # The spawn prompt is the other subagent block the web dashboard's main
         # mirror surfaces (web=True) — see flush_msg above and core/ops.py's "web".
         self.flush_msg()
         g = O.new_group(self.log)
-        O.emit(self.log, self.chip("⇢", "prompt", g=g, lk=O.COPY_ALL, web=True),
-               self.gutter(cap(text.strip(), CAP_PROMPT), g=g, web=True))
+        O.emit(self.log, self.chip(*SF.MARK_PROMPT, g=g, lk=O.COPY_ALL, web=True,
+                                   note=self.agent_note("launched")),
+               self.gutter(cap(TR.strip_reminders(text).strip(), CAP_PROMPT),
+                           g=g, web=True))
 
     def render_teammsg(self, sender, body):
         # An incoming agent-team message (mail from another teammate or the lead).

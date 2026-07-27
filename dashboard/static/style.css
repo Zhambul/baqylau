@@ -1186,6 +1186,30 @@ body.modal-open { overflow: hidden; }
 .vsum .dadd { color: var(--green); }
 .vsum .drem { color: var(--red); }
 
+/* A SUBAGENT NOTE — `⏺ Agent "Fix git/config commands + glab" finished · 21m 31s`
+   (core/ops.py's "note", worded by the producer). Deliberately the same register as
+   a collapsed run's summary line above: quiet mono, dim, no stream colour and no
+   model/ctx tags. The coloured chip it replaces on THIS surface
+   (`… ⇠ result  fable-5·high  ctx 22% · 225k/1M`) shouted an agent's bookkeeping at
+   the same weight as the conversation, and those numbers already live on the
+   agent's own card. The terminal pane keeps the chip — a pane reader scans by
+   colour. Its BLOCK is still a block: clicking the line opens the body, which is
+   the agent's brief (launched) or its result (finished). */
+.blk > .bhead .anote {
+  font: 12px/1.5 var(--mono); color: var(--dim);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.blk:hover > .bhead .anote { color: var(--text-soft); }
+/* …and the card itself recedes: no panel fill or hairline, so a run of agent notes
+   reads as a list of lines rather than a stack of cards. */
+.stream > .blk[data-note] {
+  box-shadow: none; background: none; margin: 0; padding: 0 0 0 13px;
+}
+.stream > .blk[data-note][data-open="1"] {
+  box-shadow: var(--card); background: var(--panel); padding: 4px 0 6px 13px;
+  margin: 6px 0;
+}
+
 /* ---- the mirror stream -------------------------------------------------- */
 .stream {
   background: color-mix(in srgb, var(--bg) 88%, black);

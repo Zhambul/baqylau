@@ -84,6 +84,7 @@ function item(spec) {
   if (spec.add) e.dataset.add = String(spec.add);
   if (spec.rem) e.dataset.rem = String(spec.rem);
   if (spec.g) e.dataset.g = spec.g;
+  if (spec.agent) e.dataset.agent = spec.agent;
   if (spec.act && spec.act !== "msg") e.dataset.open = "1";   // a block card,
   //                          born expanded like appendItems' live-tail blocks
   if (spec.userset) e.dataset.userset = "1";
@@ -119,6 +120,11 @@ const F = {
   memread: { act: "read", kind: "memory" },
   task: { act: "task", kind: "commands" },        // ✚/✓ task-list rows
   mail: { act: "mail", kind: "commands" },        // ● team mail (header + body)
+  // a subagent's own blocks, both carrying its src id: one AGENT, four rows
+  aLaunch: { act: "agent", kind: "agents", agent: "a1" },
+  aResult: { act: "agent", kind: "agents", agent: "a1" },
+  bLaunch: { act: "agent", kind: "agents", agent: "a2" },
+  bResult: { act: "agent", kind: "agents", agent: "a2" },
   // a user-SHAPED turn Claude Code injected: a Stop hook's feedback, a loaded
   // skill's SKILL.md body, a resume nudge (transcript isMeta)
   hookmsg: { act: "msg", kind: "messages", msg: "prompt", injected: 1 },
@@ -167,6 +173,15 @@ out.teamFocus = { sums: sums(teamF).map(s => s.text), shown: shown(teamF) };
 // no summary line at all, since a hidden act is not counted into one
 const onlyTeam = scene("focus", [F.prompt, F.agent, F.mail, F.task, F.reply]);
 out.teamOnly = { sums: sums(onlyTeam).length, shown: shown(onlyTeam) };
+// the AGENT counter counts AGENTS, not agent-ish rows: two subagents, each with a
+// launch note and a finish note, is "ran 2 agents" — counting rows said 77 for a
+// session with 21 of them
+out.agentCount = sums(scene("focus",
+  [F.prompt, F.aLaunch, F.bLaunch, F.aResult, F.bResult, F.reply]))[0].text;
+// …and a row with no src id still counts once (unattributable, never uncounted)
+out.agentCountNoId = sums(scene("focus",
+  [F.prompt, F.agent, F.agent, F.reply]))[0].text;
+
 // EXPANDING a run reveals what its summary COUNTED — never what the mode hid.
 // The hidden items sit inside the run's span, and revealing the span wholesale
 // brought every agent/mail/task row back on the first click a reader made.

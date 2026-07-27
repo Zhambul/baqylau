@@ -407,12 +407,24 @@ function fillBlock(b, it) {
       S.ses.fgEnded = it.g;
       S.ses.fgRun = null;
     }
+    // a NOTE header (a subagent's `⏺ Agent "…" launched / finished · 21m 31s`) IS the
+    // whole line — no first-body-line summary beside it, because the body is what the
+    // click is for: the brief, or the result
+    if (it.note) {
+      b.noteOnly = true;
+      b.root.dataset.note = "1";
+      // …and it arrives CLOSED, unlike a live command block: the line is what the
+      // reader wants (`⏺ Agent "…" finished · 21m 31s`) and the body — a whole
+      // brief, or a whole result — is what the click is for. Never re-closes a
+      // block you opened yourself (`userset`, the same guard the run pass uses).
+      if (!b.root.dataset.userset) b.root.dataset.open = "0";
+    }
     b.chips.insertAdjacentHTML("beforeend", it.html);
   } else {
     b.body.insertAdjacentHTML("beforeend", it.html);
     while (b.body.childElementCount > MAX_BLOCK_BODY)
       b.body.firstElementChild.remove();       // trim oldest (top) — arrival order
-    if (!b.sum.textContent && b.body.lastElementChild) {
+    if (!b.sum.textContent && b.body.lastElementChild && !b.noteOnly) {
       const line = (b.body.lastElementChild.textContent || "")
         .trim().split("\n").find(l => l.trim());
       if (line) b.sum.textContent = line.slice(0, 160);
@@ -674,6 +686,7 @@ const ACT_KIND = {
 };
 
 function refineBlockKind(b, it) {
+  if (it.agent) b.root.dataset.agent = it.agent;       // whose agent block (src id)
   if (b.root.dataset.kind === "agents") return;        // agent wins, monotonic
   if (it.g) b.root.dataset.g = it.g;                   // the run pass reads it
   if (/class="og"/.test(it.html)) {                    // outer gutter == nested subagent job
@@ -711,6 +724,8 @@ function stampItem(elem, it) {
   if (it.add) elem.dataset.add = String(it.add);   // a mutation's line counts, for
   if (it.rem) elem.dataset.rem = String(it.rem);   //   focus mode's edit summary
   if (it.kind) elem.dataset.msg = it.kind;
+  if (it.agent) elem.dataset.agent = it.agent;   // the run summary counts agents,
+  //                                                not agent-ish rows
   if (it.meta) elem.dataset.injected = "1";   // a prompt Claude Code injected,
   //                                             not one the human typed
   elem.dataset.vk = String(++S.ses.viewSeq);
@@ -899,12 +914,23 @@ function buildRunSummary(key, members, running, anchor, bad, open) {
   row.append(el("span", "vdot" + (running ? "" : bad ? " bad" : " done")));
   const text = el("span", "vtext");
   const counts = { add: 0, rem: 0 };
+  // AGENTS are counted per AGENT, not per row: one subagent contributes a launch
+  // note and a finish note (and a resume, and a second result if it reports twice),
+  // so counting rows said "ran 77 agents" for a session with 21 of them. `data-agent`
+  // is the served src id (opshtml.op_items); a row without one is its own key, so an
+  // unattributable agent row still counts once.
+  const agents = new Set();
   for (const m of members) {
     const c = viewCounter(m);
-    if (c) counts[c] = (counts[c] | 0) + 1;
+    if (c === "agent") {
+      agents.add(m.dataset.agent || ("vk" + m.dataset.vk));
+    } else if (c) {
+      counts[c] = (counts[c] | 0) + 1;
+    }
     counts.add += +(m.dataset.add || 0);       // served per item (actclass.diffstat)
     counts.rem += +(m.dataset.rem || 0);
   }
+  if (agents.size) counts.agent = agents.size;
   text.append(...viewSummaryNodes(counts, running));
   row.append(text);
   const timer = el("span", "vtimer");

@@ -4881,13 +4881,39 @@ for the whole turn — folds them in with everything else, and still COUNTS them
 `Edited 1 file +12 -3, ran 2 agents, ran 1 shell command, tracked 1 task, passed 2
 messages`. The rows are gone there; the accounting is not.
 
-Not yet matched to Claude Code's exact phrasing: our launch header is one line per
-agent rather than a count plus an `@name` list, and the web mirror has no per-agent
-`finished · 21m 16s` line — the normal completion marker is the `⇠ result` card
-(the `■ <type> ended · <dur>` chip is only a safety net for a streamer that died,
-and the substream's own footer is `src`-stamped, so the web drops it). The duration
-IS known (the agent cards show it, from `started_at`/`ended_at`), so a finish line
-is a small addition if wanted.
+**A subagent reads as two quiet NOTE lines, not two coloured cards.** On this
+surface an agent's two web-surfaced blocks render as
+`⏺ Agent "Fix git/config commands + glab" launched` and
+`⏺ Agent "…" finished · 21m 31s` — the register of a collapsed run's summary line,
+no stream colour, no `⧉` links, and **no model/ctx tags**: those numbers
+(`fable-5·high  ctx 22% · 225k/1M`) already live on the agent's own card, and in the
+feed they shouted an agent's bookkeeping at the weight of the conversation. Clicking
+the line opens the block's body, which is the thing worth having — the agent's brief
+on the launch line, its result on the finish line. The block arrives CLOSED (unlike
+a live command block) for the same reason, and never re-closes one you opened.
+
+The wording is the PRODUCER's, carried as the op's `note` (core/ops.py): the
+terminal keeps its dense colour-coded chip, the browser gets the sentence. Not a
+reformat in the presenter — parsing a chip back apart to reword it is the sniffing
+`actclass` exists to have ended. The **duration** comes from the same place
+`emit_footer` reads it (the agent's own slot row, via the injected `agent_dur`
+hook), so the note and the footer cannot disagree. One builder, `agent_note`, words
+both lines.
+
+Pre-`note` ops get the wording recovered read-side from the `⇢ prompt` / `⇠ result`
+MARKER (`core/streamfmt.MARK_*`, named there because two surfaces read it):
+`<who>` is the text before it, the tags after it are dropped, and there is no
+duration because the chip never carried one. A parked session's ops cannot be
+re-stamped, and would otherwise show the terminal's chip forever.
+
+The main session's own `▶ <type> · <desc>` launch header is **dropped** on the web
+(`actclass.agent_header`): the substream's launch note says the same thing and holds
+the brief, so keeping both put two launch lines in the feed per launch. The
+trade-off: an agent whose substream never emits a prompt op has no launch line here
+(its card in the rail and its finish note still show it).
+
+Still not matched to Claude Code exactly: our launch is one line per agent rather
+than a count plus an `@name` list.
 
 **Rejected: a second axis that dropped them from the counters.** Focus briefly had
 a `VIEW_HIDE` table — no row, no fragment, no counter — on the reasoning that a
@@ -4975,6 +5001,14 @@ Getting there needed the classifier to actually KNOW those rows, which it did no
   already on disk ungrouped and only the read side can still help them.
 - **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
   basis (`task_fmt.GLYPHS`).
+
+**The agent counter counts AGENTS, not agent-ish rows.** One subagent contributes a
+launch note and a finish note (plus a resume header, plus a second result if it
+reports twice), so counting rows announced `running 77 agents` for a session with 21
+of them. Every agent item now carries `agent` — the producer-source id parsed from
+`src` (`sub:<id>`/`team:<id>`), which IS the agents payload's `agent_id` — and the
+run's counter is the size of that id set. A row with no id counts once rather than
+dropping out: unattributable, never uncounted.
 
 Because they are classes now, both collapsing modes fold them and need words for
 them:

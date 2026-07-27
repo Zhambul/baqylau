@@ -486,6 +486,14 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     assert d["teamFocus"]["shown"] == ["msg", "msg"]
     # a focus session that is ONLY plumbing still gets its line — the work happened
     assert d["teamOnly"] == {"sums": 1, "shown": ["msg", "msg"]}
+    # the AGENT counter counts AGENTS, not agent-ish ROWS. One subagent contributes
+    # a launch note and a finish note (plus a resume, plus a second result if it
+    # reports twice), so counting rows announced "ran 77 agents" for a session with
+    # 21 of them. `data-agent` is the served src id; a row without one counts once
+    # rather than dropping out — unattributable, never uncounted.
+    assert d["agentCount"] == "Ran 2 agents"           # 2 agents, 4 rows
+    assert d["agentCountNoId"] == "Ran 2 agents"       # 2 rows, no ids
+
     # EXPANDING that summary reveals every member it counted, agents and mail
     # included, under one rail
     assert d["teamExpanded"]["shown"] == \
@@ -585,6 +593,104 @@ def test_conversation_text_is_not_in_a_nested_scroll_box(dash):
     # …while a generic block body (a command's output — skimmed) keeps its box
     generic = rules[".bbody"]
     assert "max-height: 480px" in generic and "overflow: auto" in generic
+
+
+def test_a_subagent_block_reads_as_one_quiet_note_line(dash):
+    """A subagent's two web-surfaced blocks render as `⏺ Agent "<name>" launched` /
+    `… finished · 21m 31s` — the register of a collapsed run's summary, not the
+    terminal's colour-coded chip (`… ⇠ result  fable-5·high  ctx 22% · 225k/1M`,
+    which shouted an agent's bookkeeping at the weight of the conversation; those
+    numbers already live on the agent's card). The WORDING is the producer's
+    (core/ops.py's `note`), not a reformat of the chip here: parsing a chip back
+    apart to reword it is exactly the sniffing actclass exists to have ended.
+
+    The block is still a block, so the line stays clickable — its body is the
+    agent's brief (launched) or its result (finished), which is what the reader
+    wants from it."""
+    from core import ops as O
+    from core import slots
+    from dashboard import opshtml
+
+    def agent_op(text, note, g):
+        op = O.label(text, slots.color("sub", 0), g=g, lk=O.COPY_ALL, web=True,
+                     note=note)
+        op["src"] = "sub:aexplore2-abc123"        # the substream's stamp
+        return op
+
+    prompt = agent_op("explore2 ⇢ prompt  opus-5·high", 'Agent "Symbol sweep" launched', "b1")
+    result = agent_op("explore2 ⇠ result  opus-5·high  ctx 22% · 225k/1M",
+                      'Agent "Symbol sweep" finished · 21m 31s', "b2")
+    header = O.label("▶ explore2 · Symbol reference sweep", slots.color("sub", 0))
+
+    items = opshtml.op_items([header, prompt, result], "sid")
+    # the MAIN session's own launch header is dropped: the prompt block says the same
+    # thing and carries the brief, so keeping both is two launch lines per launch
+    assert len(items) == 2, [i["html"] for i in items]
+    for it, verb in zip(items, ("launched", "finished · 21m 31s")):
+        assert 'class="anote"' in it["html"]
+        assert ("⏺ Agent &quot;Symbol sweep&quot; " + verb) in it["html"]
+        # none of the chip's own vocabulary survives on this surface
+        for gone in ("chip", "⇢", "⇠", "opus-5·high", "ctx 22%", "⧉"):
+            assert gone not in it["html"], gone
+        assert it["act"] == "agent" and it["note"] == 1
+        assert it["agent"] == "aexplore2-abc123"    # the join key for the counter
+
+    # a chip written BEFORE producers carried the wording gets it recovered from the
+    # marker: a parked (or long-running) session's ops cannot be re-stamped, and would
+    # otherwise show the terminal's chip forever. No duration — the chip never had one.
+    old = O.label("Fix infra/vcs subprocess bugs ⇠ result  fable-5·high  ctx 22% · 225k/1M",
+                  slots.color("sub", 2), g="b9", lk=O.COPY_ALL, web=True)
+    old["src"] = "sub:afix-infra-vcs-1234"
+    legacy = opshtml.op_items([old], "sid")[0]
+    assert "⏺ Agent &quot;Fix infra/vcs subprocess bugs&quot; finished" in legacy["html"]
+    assert "ctx 22%" not in legacy["html"] and legacy["note"] == 1
+
+    # a label with NO note is untouched — the coloured chip is still the default
+    plain = opshtml.op_items([O.label("▶ foreground", O.SLATE, g="t1")], "sid")[0]
+    assert 'class="chip"' in plain["html"] and "anote" not in plain["html"]
+
+    # …and the page knows to let the note BE the line (no first-body-line summary
+    # crowding it), which it reads off the served item rather than the HTML
+    code, ses = _get(dash + "/static/app.05-session.js")
+    assert code == 200
+    assert "b.noteOnly = true;" in ses and "!b.noteOnly" in ses
+    # …and that a note block arrives CLOSED (the line is the point), without ever
+    # re-closing one the reader opened
+    assert 'if (!b.root.dataset.userset) b.root.dataset.open = "0";' in ses
+    # and the card recedes to a plain line until it is opened
+    code, css = _get(dash + "/static/style.css")
+    assert code == 200
+    rules = dict((sel.strip(), body) for sel, body in
+                 re.findall(r"\n(\.[^\n{]+?)\s*\{([^}]*)\}", css))
+    assert "var(--mono)" in rules[".blk > .bhead .anote"]
+    assert "box-shadow: none" in rules['.stream > .blk[data-note]']
+    assert 'var(--card)' in rules['.stream > .blk[data-note][data-open="1"]']
+
+
+def test_an_agents_brief_carries_no_injected_system_reminders(dash):
+    """Claude Code injects `<system-reminder>` blocks into the text it hands an
+    agent — the addressable-teammates roster and friends — so a subagent's brief
+    opened with two nested reminders and a list of its peers before a word of the
+    actual task ("why do I see system reminders of the subagents"). Stripped in
+    transcript.py, which owns Claude Code's transcript text shapes, so the terminal
+    pane loses them too."""
+    from plugins.claude_code import transcript as TR
+
+    real = ("<system-reminder>\n<system-reminder>\nOther agents active in this "
+            "session, addressable via SendMessage({to: name, message}): main, "
+            "rev-observe, rev-ui-util.\n</system-reminder>\n\n"
+            "Review the clients subtree and report every bug you find.")
+    assert TR.strip_reminders(real) == \
+        "Review the clients subtree and report every bug you find."
+    # a brief that is ONLY reminders collapses to nothing rather than to tag soup
+    assert TR.strip_reminders("<system-reminder>noise</system-reminder>") == ""
+    # ordinary text is untouched, and empties survive being passed through
+    assert TR.strip_reminders("plain brief") == "plain brief"
+    assert TR.strip_reminders("") == "" and TR.strip_reminders(None) is None
+    # the renderer's prompt block goes through it (one call site, the ⇢ prompt body)
+    src = open(os.path.join(REPO, "plugins", "claude_code",
+                            "substream_render.py"), encoding="utf-8").read()
+    assert "TR.strip_reminders(text)" in src
 
 
 def test_hiding_a_row_beats_its_own_layout_rule(dash):
