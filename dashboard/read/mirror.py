@@ -296,12 +296,16 @@ def _render_window(entries, start, key, cmds=()):
     and a team-mail body stayed unclassifiable — hence visible in focus). A
     conversation entry flushes the run, since a message is not any op's block."""
     out, pend, pids = [], [], []
+    carry = {}                     # one render pass's cross-batch state (see op_items)
 
     def flush():
         if pend:
-            # the ops' row ids ride along: pre-`mid` team mail reconstructs a subject
-            # key from the arrival's id, which has to survive these batch boundaries
-            out.extend(opshtml.op_items(pend, key, pids))
+            # the ops' row ids ride along, and `carry` keeps what one batch learned:
+            # pre-`mid` team mail reconstructs a subject key from the arrival's id,
+            # and its read notice may well land in the NEXT batch (a conversation
+            # record between them flushes the run) — where it would otherwise read as
+            # a message of its own
+            out.extend(opshtml.op_items(pend, key, pids, carry))
             pend.clear()
             pids.clear()
 

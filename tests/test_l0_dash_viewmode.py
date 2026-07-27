@@ -774,6 +774,16 @@ def test_a_mail_row_is_a_quiet_note_holding_the_message(dash, tmp_path):
     # without ids (the live path, where every op carries a real mid) the key falls
     # back to a per-call position — still one subject for the trio
     assert len({i["mid"] for i in legacy}) == 1
+    # A CONVERSATION RECORD BETWEEN an arrival and its read splits them across two
+    # batches of the same render (a message is no op's block, so it flushes the run).
+    # The `carry` dict is what keeps the association: the reviewed session has exactly
+    # this shape, and without it that read counted as a second message.
+    from dashboard.read import mirror as M
+    split = M._render_window([(11, "op", old_new), (12, "op", old_body),
+                              (12, "msg", {"kind": "message", "text": "hi"}),
+                              (13, "op", old_read)], 0, "")
+    mail = [i for i in split if i.get("act") == "mail"]
+    assert len(mail) == 3 and len({i["mid"] for i in mail}) == 1
     # a MONITOR's ◉ is not mail and is never reworded (the colour decides, as in
     # the classifier — mail wears the semantic green, a monitor its slot palette)
     from core import slots

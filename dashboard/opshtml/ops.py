@@ -174,7 +174,7 @@ _BODY_OPS = ("gut", "code")
 NOTE_GLYPH = "⏺"
 
 
-def op_items(ops, key="", ids=None):
+def op_items(ops, key="", ids=None, carry=None):
     """A batch of ops -> [{g, t, html}, …] for the SESSION STREAM: the app
     folds same-`g` items into one collapsible block (the label ops become the
     block's summary chips), so a finished command reads as one line instead
@@ -207,12 +207,19 @@ def op_items(ops, key="", ids=None):
     the ONE thing that needs an identity no op carries: pre-`mid` team mail, whose
     reconstructed subject key must be stable across batches and fetches (see below).
     Without them the key falls back to a per-call position, which is unique within
-    the batch — enough for the live path, where every op has a real `mid`."""
+    the batch — enough for the live path, where every op has a real `mid`.
+
+    `carry` is continuation state for ONE render pass, owned by the caller and handed
+    to every batch of it (a render is many calls: a conversation record flushes the
+    run). Today it holds pre-`mid` mail's open-subject map, so a read notice still
+    finds its arrival when a message landed between them — without it that read
+    opened a subject of its own and the summary counted a message too many."""
     out = []
     prev_act = None
     prev_mid = None
     head = None                 # index of the group-less header a body op belongs under
-    mail_n = {}                 # pre-`mid` mail: pair -> the token of its open message
+    # pre-`mid` mail: pair -> the token of its open message, across this render's batches
+    mail_n = (carry if carry is not None else {}).setdefault("mail", {})
     for i, op in enumerate(ops):
         if not isinstance(op, dict):
             continue

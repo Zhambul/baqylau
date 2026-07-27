@@ -5039,8 +5039,11 @@ Getting there needed the classifier to actually KNOW those rows, which it did no
   `#1` from two batches is one key. The row id is stable across every batch and fetch,
   which is why `op_items` takes the `ids` the history paths already carry for their
   window cuts. Mail is chronological, so a read always trails its arrival; one whose
-  arrival fell outside the batch opens its own subject rather than merging into
-  whichever arrival comes later.
+  arrival fell outside the render opens its own subject rather than merging into
+  whichever arrival comes later. Within one render it always finds it: a conversation
+  record between an arrival and its read flushes the run and splits them across
+  batches — the reviewed session's shape — so the caller owns a `carry` dict holding
+  what one batch learned and hands it to every batch of the pass.
 - **Task rows** (`✚ task #7 · …` / `✓ …`) get `task`, on the same imported-glyph
   basis (`task_fmt.GLYPHS`).
 
