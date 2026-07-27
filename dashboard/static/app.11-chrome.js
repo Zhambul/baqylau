@@ -107,15 +107,18 @@ function chromeIdentity(ses, meta) {
    session view (style.css `body.in-session`), so the corner is free for the
    ones that are about the session you are actually reading.
 
-   Two `.actrow`s side by side, the same two the session's own header used to
-   stack: #1 the session-level gestures, #2 the quick commands. Mounted here
-   rather than built inline so there is ONE owner of "the header belongs to this
-   session" — and one place to empty it when you leave (clearHeaderActions,
-   called by the router for every non-session route). */
+   Two `.actrow`s side by side, ordered by how often you reach for them rather
+   than by what they do to the session: the QUICK COMMANDS lead (✦ model ✧
+   effort ⊜ compact — the knobs you turn mid-conversation), then the session
+   gestures (✎ rename ⇆ migrate ◉ alerts ↶ rewind ■ stop ✕ close), ending on the
+   two most destructive so a fumbled click lands on nothing worse than a rewind
+   arm. Mounted here rather than built inline so there is ONE owner of "the
+   header belongs to this session" — and one place to empty it when you leave
+   (clearHeaderActions, called by the router for every non-session route). */
 function mountHeaderActions(ses, meta) {
   if (!$sessact) return;
   clearHeaderActions();
-  for (const row of [chromeActions(ses, meta), chromeQuickCmds(ses, meta)])
+  for (const row of [chromeQuickCmds(ses, meta), chromeActions(ses, meta)])
     if (row.childElementCount) $sessact.append(row);
   $sessact.hidden = !$sessact.childElementCount;
 }
@@ -152,10 +155,10 @@ const COMPACT_MIN_PROMPTS = 2;
 // window to type into (the server rejects them too — this just says so first).
 const NO_WINDOW = "this session is parked — there is no terminal to type into";
 
-/* actrow #1: the session-level gestures. rename / migrate / alerts work live AND
-   parked (they touch the transcript or a dashboard pref, not the terminal); stop
-   / rewind / close need a window to type into, and resume is the parked-only
-   counterpart. */
+/* The header bar's SECOND row: the session-level gestures. rename / migrate /
+   alerts work live AND parked (they touch the transcript or a dashboard pref,
+   not the terminal); rewind / stop / close need a window to type into and close
+   the row on its destructive end, and resume is the parked-only counterpart. */
 function chromeActions(ses, meta) {
   const act = el("div", "actrow");
   const windowed = !!(meta.live && meta.kitty_window_id);
@@ -243,7 +246,7 @@ function chromeActions(ses, meta) {
            : "a turn is running — stop it first, then rewind");
   };
   ses.stopMode(liveTab());
-  act.append(stop, rew);
+  act.append(rew, stop);       // rewind before stop — the row ends destructive
   // close: closes the session's kitty tab — a graceful stop (Claude Code
   // exits on the HUP and SessionEnd runs the normal lifecycle).
   // Two-step confirm: first click arms for 4s, second click fires.
@@ -285,19 +288,20 @@ function chromeActions(ses, meta) {
   return act;
 }
 
-/* actrow #2: the quick commands — compact + the model/effort pickers, each
-   typing the TUI's own slash command into the session (docs/dashboard.md, *Web
-   quick commands*). Every one of them needs a window to type into, so on a
+/* The header bar's LEADING row: the quick commands — the model/effort pickers +
+   compact, each typing the TUI's own slash command into the session
+   (docs/dashboard.md, *Web quick commands*). First because these are the knobs
+   you reach for mid-conversation. Every one needs a window to type into, so on a
    parked session they are all greyed rather than absent (see gate()). */
 function chromeQuickCmds(ses, meta) {
   const act2 = el("div", "actrow");
   const windowed = !!(meta.live && meta.kitty_window_id);
   // compact: two-step confirm like close — a misclick summarizes the whole
-  // conversation out from under you, so it arms first
+  // conversation out from under you, so it arms first. Built first, APPENDED
+  // last: the two pickers lead the row (see the append order below).
   const cpt = el("button", "sstop actses", "⊜ compact");
   cpt.dataset.tip = "compact the conversation (/compact)";
   armConfirm(cpt, "⊜ compact", "compact now?", () => sendQuickCmd("compact"));
-  act2.append(cpt);
   // model: dropdown picker; the label shows the ctx probe's current model
   // (live via the `ctx` SSE event → updateStatsRow)
   const mwrap = el("span", "qcwrap actses");
@@ -308,7 +312,6 @@ function chromeQuickCmds(ses, meta) {
   mdl.onclick = () => openQuickMenu(mwrap, "model", MODEL_CHOICES,
                                     curModelFamily());
   mwrap.append(mdl);
-  act2.append(mwrap);
   // effort: dropdown picker (current effort is config-only — not readable
   // from any transcript, see plugins/claude_code/model.py — so no label)
   const ewrap = el("span", "qcwrap actses");
@@ -319,7 +322,7 @@ function chromeQuickCmds(ses, meta) {
   eff.onclick = () => openQuickMenu(ewrap, "effort", EFFORT_CHOICES,
                                     (ses.meta && ses.meta.effort) || "");
   ewrap.append(eff);
-  act2.append(ewrap);
+  act2.append(mwrap, ewrap, cpt);
   // a red tab = a modal dialog is up — pasted text would land IN it (the
   // server 409s too; disabling just says so up front). Live via the same
   // SSE tab event as stopMode.

@@ -2004,10 +2004,13 @@ def test_header_corner_belongs_to_the_open_session(dash):
     hidden = re.search(r"((?:body\.in-session #\w+,\s*)+body\.in-session #\w+)"
                        r"\s*\{\s*display: none", css)
     assert hidden, "the list-page header buttons are no longer hidden in-session"
-    for btn in ("statsbtn", "notifytoggle", "fsbtn", "newbtn"):
+    for btn in ("statsbtn", "notifytoggle", "fsbtn", "wakebtn", "newbtn"):
         assert "#" + btn in hidden.group(1), btn
-    # the one exception: engaged fullscreen keeps its ⛶, which is then the EXIT
+    # the two that come back when they carry information: the ⛶ while fullscreen
+    # is ENGAGED (it is the exit then), and the conn dot once it is NOT green (a
+    # dropped stream on a session view is exactly what you need told)
     assert "body.in-session.fs-on #fsbtn" in css
+    assert 'body.in-session #conn[data-on="1"]' in css
 
 
 def test_page_reads_the_served_limits_not_its_own_copies(dash):

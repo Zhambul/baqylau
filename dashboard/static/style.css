@@ -146,30 +146,40 @@ code, pre, .mono { font-family: var(--mono); }
    dashboard reads at a glance (docs/dashboard.md, *Global alerts toggle*). */
 #notifytoggle.off { color: var(--dim2); text-decoration: line-through; }
 #notifytoggle.off:hover { color: var(--dim); }
-/* LIST-PAGE-ONLY header buttons: ▦ stats, ◉ alerts (the GLOBAL master switch),
-   ⛶ fullscreen and "+ session" are gestures ABOUT the crowd of sessions, not
-   about the one you're reading — the same reasoning that already hides the
-   #accounts strip in a session view. In a session that corner belongs to the
-   session's OWN actions (#sessact below), which include a per-session ◉ alerts
-   toggle the global one would sit next to looking identical. The conn dot and
-   the wake/notif buttons stay: those are status/permission affordances, not
-   list gestures. The hidden buttons stay WIRED — a #/stats bookmark or ⌃⇧←/→
-   works from anywhere; they are simply not shown here. */
+/* LIST-PAGE-ONLY header chrome: ▦ stats, ◉ alerts (the GLOBAL master switch),
+   ⛶ fullscreen, "+ session", the ☀ keep-awake toggle and the connection dot are
+   about the crowd of sessions / the page itself, not about the one session
+   you're reading — the same reasoning that already hides the #accounts strip in
+   a session view. In a session that corner belongs to the session's OWN actions
+   (#sessact below), which include a per-session ◉ alerts toggle the global one
+   would sit next to looking identical. Everything here stays WIRED — a #/stats
+   bookmark, ⌃⇧←/→ or an already-held wake lock works from anywhere; these are
+   simply not SHOWN here. (`#notifbtn` is the exception that stays: it appears
+   only when the browser has notifications un-granted, and it is the one door to
+   granting them.) */
 body.in-session #statsbtn,
 body.in-session #notifytoggle,
 body.in-session #fsbtn,
+body.in-session #wakebtn,
 body.in-session #newbtn { display: none; }
-/* ONE exception: while fullscreen is actually ENGAGED the ⛶ comes back, because
-   it is then the EXIT affordance — entering fullscreen on the list and opening a
-   session would otherwise strand you with no visible way out (`body.fs-on`, kept
-   in sync by the fullscreenchange handler in app.12-shell.js). */
+/* Two exceptions, both of the same shape — a control is hidden only while it
+   carries NO information:
+   · the ⛶ comes back while fullscreen is actually ENGAGED, because it is then
+     the EXIT affordance, and entering fullscreen on the list then opening a
+     session would strand you with no visible way out (`body.fs-on`, kept in
+     sync by the fullscreenchange handler in app.12-shell.js);
+   · the connection dot is hidden only while it is GREEN (`data-on="1"` — the
+     stream is up, which is the state you never need told). A dropped stream
+     turns it grey, and that you do need told: a session view whose SSE is down
+     is a page quietly showing stale state. */
+body.in-session #conn[data-on="1"] { display: none; }
 body.in-session.fs-on #fsbtn { display: revert; }
-/* …and what takes their place: the open session's own action bar (✎ rename ⇆
-   migrate ◉ alerts ■ stop ↶ rewind ✕ close · ⊜ compact + the model/effort
-   pickers), mounted here by app.11-chrome.js. Two .actrow groups side by side
-   — the same two that used to stack under the session title — so the row gap
-   inside a group reads as one group and the gap between them separates the
-   session gestures from the quick commands.
+/* …and what takes their place: the open session's own action bar (✦ model ✧
+   effort ⊜ compact · ✎ rename ⇆ migrate ◉ alerts ↶ rewind ■ stop ✕ close),
+   mounted here by app.11-chrome.js. Two .actrow groups side by side — the same
+   two that used to stack under the session title — so the row gap inside a
+   group reads as one group and the gap between them separates the quick
+   commands from the session gestures.
 
    The header wraps rather than scrolls under the count: nine buttons plus the
    brand do not fit a phone, and a horizontally-scrolled header hides ✕ close

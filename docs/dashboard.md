@@ -4346,23 +4346,35 @@ per-session, exactly like the `ns-prefs` write).
 
 ## Header action bar (the page header's corner belongs to the open session)
 
-The page header's top-right holds the LIST's gestures — ▦ stats, ◉ alerts (the
-global master switch), ⛶ fullscreen, ＋session. Every one of them is about the
-**crowd** of sessions, and none is about the session you are reading. So inside
-a session view they stand down (`body.in-session`, the class the router already
+The page header's top-right holds the LIST's chrome — ▦ stats, ◉ alerts (the
+global master switch), ⛶ fullscreen, ＋session, the ☀ keep-awake toggle and the
+connection dot. Every one of them is about the **crowd** of sessions or about
+the page itself, and none is about the session you are reading. So inside a
+session view they stand down (`body.in-session`, the class the router already
 sets and the `#accounts` strip already hides on) and that corner is handed to the
 session's OWN actions instead: `#sessact`, filled by `mountHeaderActions`
 (app.11-chrome.js) with the same two `.actrow` groups that used to stack under
-the session title — ✎ rename · ⇆ migrate · ◉ alerts · ■ stop · ↶ rewind · ✕
-close, then ⊜ compact · ✦ model ▾ · ✧ effort ▾ (*Web quick commands*).
+the session title — ✦ model ▾ · ✧ effort ▾ · ⊜ compact (*Web quick commands*),
+then ✎ rename · ⇆ migrate · ◉ alerts · ↶ rewind · ■ stop · ✕ close.
 
-One exception to the stand-down: **⛶ comes back while fullscreen is actually
-engaged** (`body.fs-on`, synced from the `fullscreenchange` handler), because it
-is then the EXIT — entering fullscreen on the list and opening a session would
-otherwise strand you with no visible way out. ◉ alerts goes because the session
-bar carries a per-session ◉ alerts of its own, and two identical-looking toggles
-side by side is a coin flip. The conn dot and the wake/notification buttons stay:
-those are status and permission affordances, not list gestures.
+**The order is by reach, not by kind.** The quick commands lead — they are the
+knobs you turn mid-conversation, several times a session — then the session
+gestures, ending on ↶ rewind · ■ stop · ✕ close so the destructive end of the row
+is the far end. That order is pinned by a test, because the bar is a
+muscle-memory target: rearranging it silently is how ✕ close ends up where ■ stop
+was. ◉ alerts stands down from the list set for a different reason than the
+rest — the session bar carries a per-session ◉ alerts of its own, and two
+identical-looking toggles side by side is a coin flip.
+
+Two controls come back when they carry information, which is the same rule
+stated twice: **⛶ while fullscreen is actually engaged** (`body.fs-on`, synced
+from the `fullscreenchange` handler) — it is the EXIT then, and entering
+fullscreen on the list and opening a session would otherwise strand you with no
+visible way out; and the **connection dot once it is NOT green**
+(`#conn[data-on="1"]` is what hides). Green means the stream is up, which is the
+state you never need told; grey means a session view is quietly showing stale
+state, which you do. `#notifbtn` never hides: it appears only when the browser
+has notifications un-granted, and it is the one door to granting them.
 
 **Mounting.** `renderSessionChrome` calls `mountHeaderActions` where it used to
 `head.append` the rows, so there is still exactly one builder per row and one
@@ -4445,8 +4457,8 @@ rule, applied to the page:
 | phase | builds |
 | --- | --- |
 | `chromeIdentity` | `l1` — title · state badge · parked chip · directory · sid · git chip · account chip |
-| `chromeActions` | `actrow` #1 — ✎ rename / ⇆ migrate / ◉ alerts / ■ stop / ↶ rewind / ✕ close, plus ↻ resume when parked. Mounted in the PAGE HEADER, not the head (*Header action bar*) |
-| `chromeQuickCmds` | `actrow` #2 — ⊜ compact + the model/effort pickers, same mount |
+| `chromeQuickCmds` | the LEADING `.actrow` — ✦ model / ✧ effort / ⊜ compact. Mounted in the PAGE HEADER, not the head (*Header action bar*) |
+| `chromeActions` | the second — ✎ rename / ⇆ migrate / ◉ alerts / ↶ rewind / ■ stop / ✕ close, plus ↻ resume when parked; same mount |
 | `chromeLiveRows` | the three rows that start empty and are filled by the patchers: `statsrow` · `ctxrow` · `runrow` |
 | `chromeTabs` | the tab strip + its badges (fetched list length, else the payload's cheap eager count) |
 | `chromeBody` | the open tab's body — the mirror composite, or a grid + the fetch that fills it |

@@ -511,11 +511,13 @@ def test_header_action_bar_gates_every_button(tmp_path):
     def off(state):
         return {k for k, v in d[state].items() if v["disabled"]}
 
-    # the same nine buttons in EVERY live state — greyed, never gone
+    # the same nine buttons in EVERY live state, in ONE order — greyed, never
+    # gone, and never rearranged (the row is a muscle-memory target: the quick
+    # commands lead, the session gestures follow, destructive last)
     for state in ("idle", "running", "asking", "fresh", "unknown"):
-        assert list(d[state]) == ["✎ rename", "⇆ migrate", "◉ alerts", "■ stop",
-                                  "↶ rewind", "✕ close", "⊜ compact",
-                                  "✦ model ▾", "✧ effort ▾"], state
+        assert list(d[state]) == ["✦ model ▾", "✧ effort ▾", "⊜ compact",
+                                  "✎ rename", "⇆ migrate", "◉ alerts",
+                                  "↶ rewind", "■ stop", "✕ close"], state
     # idle: nothing to stop; rewind is exactly the complement of stop
     assert off("idle") == {"■ stop"}
     assert off("running") == {"↶ rewind"}
