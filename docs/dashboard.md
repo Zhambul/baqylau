@@ -464,7 +464,7 @@ reflow for free and keeps the no-build rule.
 | `/api/notify-config` | `{enabled}` — the GLOBAL alerts master switch (`prefs.notify_enabled()`, default ON); the list page's `#notifytoggle` seeds its ◉/○ label from this on load (*Global alerts toggle* below) |
 | `POST /api/notify` | **control plane** (a FIXED route, distinct from `/api/session/<sid>/notify`): `{"enabled": bool}` → write the durable global `notify-enabled` pref, audit a `notify-global` `state_files` row, and push a `notify-config` SSE event so every other open page repaints; the ONE master switch over all toasts/OS notifs + Telegram/web-push, overriding per-session mutes when OFF (*Global alerts toggle* below); 400 non-bool |
 | `POST /api/session/<sid>/message` | **control plane:** `{"text", "attachments"?, "clear_draft"?}` → type it (+ Enter) into the session's kitty window (`Frontend.paste_text`); `attachments` are `@`-mention paths prepended to the text (*Web attachments* below); replies `{ok, queued, tab}` — `queued: true` when the send landed mid-turn in Claude Code's own message queue (a `QUEUE_TABS` tab colour VERIFIED against a live screen, `_turn_live` — a terminal-side cancel freezes the colour mid-turn); 409 headless, 400 empty, 503 no terminal |
-| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `MODEL_ARG_OK`), `effort` (arg: `EFFORTS`) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
+| `POST /api/session/<sid>/command` | **control plane:** `{"cmd", "arg"?}` → the scoreboard's quick-command row (*Web quick commands* below): a FIXED vocabulary of the TUI's own slash commands — `compact` (argless), `model` (arg: `MODEL_ARG_OK`), `effort` (arg: `EFFORTS`), `rename` (argless — bare `/rename`, Claude Code generates the title itself; the ✦ auto button inside the inline-rename input, *Web rename* below) — pasted like a composer send; model/effort auto-answer the TUI's switch-confirm menu (`dashboard/confirmdialog.py`, non-queued only); replies `{ok, queued, tab, confirm?}`; 400 off-vocabulary, 409 headless or a dialog open (red tab), 503 no terminal |
 | `POST /api/session/<sid>/stop` | **control plane:** close the session's kitty tab (`Frontend.close_tab` — a graceful stop: Claude Code exits on the HUP and SessionEnd runs the normal lifecycle); 409 headless, 503 no terminal |
 | `POST /api/upload` | **control plane:** `{"sid"?, "name", "mime", "data"(base64)}` → stage the bytes under `paths.UPLOADS_DIR/<sid\|staging>/` and return `{path(abs), name, mime, is_image}`; the composer injects `path` as an `@`-mention (*Web attachments* below). JSON+base64 (no multipart), cap raised to `UPLOAD_MAX`; 400 bad base64, 413 oversize |
 | `POST /api/clipboard/files` | **local-machine read** (no terminal write, nothing staged): `{"names": [basename, …], "sid"?}` → `{paths: [abs, …]}`, the FULL paths of those files on the host's pasteboard (`dashboard/clipboard.py`). The one way a pasted file becomes a usable path instead of an upload — the browser only ever sees a basename (*Web attachments* → *Pasting a copied FILE*). Returns paths ONLY when the basenames match exactly (`clipboard.match` — a remote device's clipboard is not the host's); a miss is a 200 with `[]`, audited either way as a `web-clipboard` row; 400 missing/non-string `names` |
@@ -1756,9 +1756,12 @@ Server side (`post_command`) the vocabulary is CLOSED — `{"cmd": "compact"}`
 (argless), `{"cmd": "model", "arg"}` with the arg validated against
 `MODEL_ARG_OK` (`MODEL_OK`'s one-clean-word alphabet plus the CLI's literal
 `[1m]` context suffix, e.g. `sonnet[1m]`), `{"cmd": "effort", "arg"}` against
-`EFFORTS`; anything else is `400` and never reaches the terminal (free-form
-text is the composer's job — this endpoint exists so a *button* can't be
-talked into typing arbitrary bytes). Delivery is exactly a composer send
+`EFFORTS`, `{"cmd": "rename"}` (argless — bare `/rename` makes Claude Code
+generate the session title itself; a NAMED rename never rides this channel,
+that is post_rename's transcript append, which also works parked — *Web
+rename* below); anything else is `400` and never reaches the terminal
+(free-form text is the composer's job — this endpoint exists so a *button*
+can't be talked into typing arbitrary bytes). Delivery is exactly a composer send
 (live `claude_session` window resolve, bracketed paste + separate CR), so a
 mid-turn command lands in Claude Code's message queue and runs at the turn
 boundary — the reply carries `queued`/`tab` like `/message` and the page
@@ -2333,6 +2336,29 @@ whether the durable prefs override was recorded); an append failure is also
 an `A.error`. The per-session SSE stream gained a **`title`** event (slow
 cadence, on change, like `ctx`/`git`) — which also means a fresh AUTO
 ai-title now live-updates an open session header, not just renames.
+
+**✦ auto — bare `/rename` (Claude names it).** The inline-rename input
+carries a second affordance beside the box: **✦ auto** types the TUI's own
+argless `/rename`, which makes Claude Code GENERATE the session title itself
+(the CLI's auto-rename). Deliberately NOT this endpoint: nothing rides the
+transcript-append channel — the button goes through the quick-command POST
+(`{"cmd": "rename"}`, *Web quick commands* above) so it inherits that
+channel's whole contract for free: live-window resolve, bracketed-paste
+delivery, mid-turn queueing (`queued` → "Claude names it when the turn
+ends"), the red-tab 409, and the `web-command` audit rows — no new audit
+surface. Consequences worth stating: it only works on a LIVE session (a
+parked one has no TUI to do the generating — the button greys with the
+reason, same `gate()` rule as the header bar, and the reachability matrix in
+tests/jsdom/headeract.js pins it), and the click closes the input restoring
+the OLD title, because the new one arrives asynchronously — Claude Code
+writes its generated name to the transcript, and the existing `title` SSE
+push repaints the header/card when it lands (the `(path, size)` title cache
+self-invalidates on the append, nothing new needed). The generated name
+lands as a fresh in-tail naming record, so it supersedes any stale
+`renamed-title` prefs override by the existing `tail_rename` rule above —
+last rename wins, whichever side typed it. The button's `onmousedown`
+`preventDefault`s so the click doesn't blur-cancel the input out of the DOM
+before its own handler runs.
 
 ## Web rewind (`POST /api/session/<sid>/rewind-to`) — the full thing, no kitty hop
 

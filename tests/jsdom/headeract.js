@@ -81,6 +81,23 @@ function bar(meta, tab) {
   return out;
 }
 
+/* The ✦ auto button INSIDE the inline-rename input (startRenameHeader,
+   app.10-control.js): bare /rename over the quick-command channel, so it
+   carries the same terminal-typing gate as the quick commands — but it is
+   built on demand when ✎ rename opens the input, not by the bar mount, so it
+   is driven separately here. */
+function autoRename(meta, tab) {
+  const ses = { meta: meta, projEl: new El("span"), agentFocus: null,
+                agents: [] };
+  ses.projEl.textContent = "old title";
+  sandbox.S.ses = ses;
+  sandbox.S.sessions = [{ sid: "sid1", tab: tab }];
+  sandbox.startRenameHeader();
+  const btn = ses.projEl.querySelector(".renameauto");
+  return { present: !!btn, disabled: !!(btn && btn.disabled),
+           title: (btn && btn.title) || "" };
+}
+
 const LIVE = { live: true, kitty_window_id: "7", cwd: "/w", prompts: 9 };
 const out = {
   idle: bar(LIVE, ""),
@@ -91,6 +108,13 @@ const out = {
   // no count to be had (a transcript no parser speaks) — never a reason to grey
   unknown: bar({ ...LIVE, prompts: null }, ""),
   parked: bar({ live: false, cwd: "/w", prompts: 9 }, ""),
+  // ✦ auto (inline rename): clickable live, greyed with the reason when a
+  // dialog is up (pasted text would land IN it) or the session is parked
+  autorename: {
+    idle: autoRename(LIVE, ""),
+    asking: autoRename(LIVE, "awaiting-command"),
+    parked: autoRename({ live: false, cwd: "/w", prompts: 9 }, ""),
+  },
   // the bar is emptied when you leave the session view
   cleared: (() => { sandbox.clearHeaderActions();
                     return { n: sessact.childElementCount,

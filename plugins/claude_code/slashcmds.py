@@ -45,6 +45,7 @@ BUILTINS = (
     ("permissions", "view or update permissions"),
     ("pr-comments", "get comments from a GitHub PR"),
     ("release-notes", "view release notes"),
+    ("rename", "rename the session (bare = Claude names it)"),
     ("resume", "resume a previous conversation"),
     ("review", "review a pull request"),
     ("rewind", "rewind the conversation"),

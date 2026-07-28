@@ -154,11 +154,14 @@ class _TypingMixin:
         `/compact`, `{"cmd": "model", "arg": <alias|id>}` → `/model <arg>`,
         `{"cmd": "effort", "arg": <level>}` → `/effort <arg>` (both may open
         the TUI's switch-confirm menu, auto-answered Yes below — the reply's
-        `confirm` field). A FIXED
+        `confirm` field), `{"cmd": "rename"}` → `/rename` (argless — bare
+        `/rename` makes Claude Code GENERATE the title itself, the web
+        auto-rename; a NAMED rename never comes through here, post_rename's
+        transcript append works parked too). A FIXED
         vocabulary, 400 on anything else — the arg is validated
         (MODEL_ARG_OK / EFFORTS) precisely because it is typed into a
-        terminal, and compact takes no arg (the closed vocabulary IS the
-        point; free-form text is the composer's job). Delivery matches
+        terminal, and compact/rename take no arg (the closed vocabulary IS
+        the point; free-form text is the composer's job). Delivery matches
         post_message (bracketed paste + CR via the live claude_session
         window), so mid-turn the command lands in the TUI's message queue and
         runs at the turn boundary (`queued` in the reply) — but a RED tab
@@ -171,6 +174,8 @@ class _TypingMixin:
         cmd, arg = body.get("cmd"), body.get("arg")
         if cmd == "compact" and not arg:
             text = "/compact"
+        elif cmd == "rename" and not arg:
+            text = "/rename"
         elif cmd == "model" and isinstance(arg, str) \
                 and MODEL_ARG_OK.match(arg):
             text = "/model " + arg

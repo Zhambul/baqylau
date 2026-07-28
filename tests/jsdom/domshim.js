@@ -33,6 +33,7 @@ class El {
     this.dispatch = (t) => { for (const f of this._on[t] || []) f({}); };
     this.focus = () => {};
     this.blur = () => {};
+    this.select = () => {};
     this.attrs = {};
     this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
     this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);
@@ -82,6 +83,11 @@ class El {
   }
   append(...kids) {
     for (const k of this._flat(kids)) this.children.push(this._adopt(k));
+  }
+  replaceChildren(...kids) {           // real DOM: drop everything (own text
+    for (const k of this.children.splice(0)) k.parentNode = null;  // included),
+    this._text = "";                                               // then append
+    this.append(...kids);
   }
   insertBefore(node, ref) {
     const at = this.children.indexOf(ref);

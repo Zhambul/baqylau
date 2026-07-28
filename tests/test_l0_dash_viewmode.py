@@ -539,6 +539,14 @@ def test_header_action_bar_gates_every_button(tmp_path):
                              "✦ model ▾", "✧ effort ▾"}
     assert "parked" in d["parked"]["✕ close"]["title"]
     assert d["parked"]["↻ resume"]["disabled"] is False
+    # the ✦ auto button inside the inline-rename input (bare /rename — Claude
+    # names the session): same terminal-typing gate as the quick commands —
+    # clickable live, greyed with the reason on a red tab or a parked session
+    ar = d["autorename"]
+    assert ar["idle"]["present"] and ar["idle"]["disabled"] is False
+    assert "/rename" in ar["idle"]["title"]      # enabled = the working tooltip
+    assert ar["asking"]["disabled"] and "question" in ar["asking"]["title"]
+    assert ar["parked"]["disabled"] and "parked" in ar["parked"]["title"]
     # leaving the session hands the corner back to the list's own buttons
     assert d["cleared"] == {"n": 0, "hidden": True}
 

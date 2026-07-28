@@ -466,8 +466,13 @@ def test_post_command_sends_slash_text(dash, monkeypatch):
     code, body = _post(dash + "/api/session/qc1/command",
                        {"cmd": "effort", "arg": "low"})
     assert code == 200 and json.loads(body)["confirm"] == "none"
+    # ✦ auto-rename: bare /rename — argless like compact, and no confirm
+    # watch (Claude Code names the session, no switch-confirm menu opens)
+    code, body = _post(dash + "/api/session/qc1/command", {"cmd": "rename"})
+    assert code == 200 and json.loads(body) == {"ok": True, "queued": False,
+                                                "tab": ""}
     assert fe.pasted == [("61", "/compact"), ("61", "/model sonnet[1m]"),
-                         ("61", "/effort low")]
+                         ("61", "/effort low"), ("61", "/rename")]
     assert fe.sent == [] and fe.keyed == []
 
 
@@ -606,7 +611,8 @@ def test_ask_dialog_open_when_chip_bar_scrolled_off():
 def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
     # fixed vocabulary: unknown command, missing/dirty model arg (a shell
     # metacharacter must never reach the terminal), unknown effort level,
-    # and compact-with-arg all reject without a keystroke
+    # and compact/rename-with-arg all reject without a keystroke (a NAMED
+    # rename is post_rename's transcript append, never typed text)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "62")
@@ -615,7 +621,8 @@ def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
                 {"cmd": "model", "arg": "opus; rm -rf /"},
                 {"cmd": "model", "arg": "opus[2m]"},
                 {"cmd": "effort", "arg": "turbo"},
-                {"cmd": "compact", "arg": "focus on the tests"}):
+                {"cmd": "compact", "arg": "focus on the tests"},
+                {"cmd": "rename", "arg": "my session"}):
         with pytest.raises(urllib.error.HTTPError) as e:
             _post(dash + "/api/session/qc2/command", bad)
         assert e.value.code == 400

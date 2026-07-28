@@ -456,7 +456,10 @@ function setBadgeAgent(badge, sttxt, stcls) {
 function startRenameHeader() {
   // inline rename: swap the header title span for an input; Enter submits,
   // Esc/blur cancels. The server cleans the name (control-strip + cap) and
-  // replies the stored title, which also rides the `title` SSE push.
+  // replies the stored title, which also rides the `title` SSE push. Beside
+  // the input, ✦ auto types the TUI's own bare `/rename` instead — Claude
+  // Code GENERATES the title itself (the quick-command channel, so it needs
+  // a live window and inherits the red-tab refusal).
   const ses = S.ses;
   if (!ses || !ses.projEl || ses.projEl.querySelector("input")) return;
   const span = ses.projEl;
@@ -495,7 +498,31 @@ function startRenameHeader() {
     else if (e.key === "Escape") cancel();
   };
   inp.onblur = () => cancel();          // a stray click = cancel, same as Esc
-  span.replaceChildren(inp);
+  // ✦ auto — bare /rename, a terminal-typing action: greyed with the reason
+  // when there is no window to type into (parked/headless) or a modal dialog
+  // is up (the same conditions the header's quick commands gate on).
+  const auto = el("button", "sstop renameauto", "✦ auto");
+  auto.dataset.tip = "let Claude name this session (/rename)";
+  const meta = ses.meta || {};
+  const windowed = !!(meta.live && meta.kitty_window_id);
+  gate(auto, windowed && liveTab() !== "awaiting-command",
+       !windowed ? NO_WINDOW
+                 : "a question is waiting — answer it in the card");
+  // preventDefault keeps the click from stealing the input's focus first —
+  // the blur-cancel above would tear the button out of the DOM mid-click
+  auto.onmousedown = (e) => e.preventDefault();
+  auto.onclick = () => {
+    if (done) return;
+    done = true;
+    restore(old);              // the `title` SSE repaints when the name lands
+    postJSON("/api/session/" + encodeURIComponent(S.cur) + "/command",
+             { cmd: "rename" }, { audit: "command", auditData: { cmd: "rename" } })
+      .then((r) => toast("done", "/rename",
+                         r.queued ? "queued — Claude names it when the turn ends"
+                                  : "sent — Claude is picking a name"))
+      .catch((e) => toast("ask", "auto-rename failed", (e && e.error) || ""));
+  };
+  span.replaceChildren(inp, auto);
   inp.focus();
   inp.select();
 }

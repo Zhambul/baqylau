@@ -398,6 +398,9 @@ body.in-session.fs-on #fsbtn { display: revert; }
   border: 1px solid var(--dim2); border-radius: var(--r); padding: 2px 8px;
 }
 .shead .proj input.renamein:focus { outline: none; border-color: var(--dim); }
+/* the ✦ auto button beside it — bare /rename, Claude names the session */
+.shead .proj .renameauto { margin-left: 6px; font-size: 12px;
+                           vertical-align: middle; }
 .shead .sid { color: var(--dim); font-size: 11px; font-family: var(--mono); }
 .shead .sid.copysid { cursor: pointer; }
 .shead .sid.copysid:hover { color: var(--text-soft); text-decoration: underline dotted; }
