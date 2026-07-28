@@ -2346,7 +2346,9 @@ dialog opens; with an argument it uses the literal text), bounces with
 "Could not generate a name: no conversation context yet" on an empty
 conversation, and lands the result through the same
 `{type:"agent-name",agentName,sessionId}` transcript append the manual
-`/rename` uses. Deliberately NOT this endpoint: nothing rides the
+`/rename` uses. Auto-generation shipped in CLI v2.1.41 (the official
+CHANGELOG: "auto-generate session name from conversation context when
+called without arguments"), so any version this repo runs against has it. Deliberately NOT this endpoint: nothing rides the
 transcript-append channel — the button goes through the quick-command POST
 (`{"cmd": "rename"}`, *Web quick commands* above) so it inherits that
 channel's whole contract for free: live-window resolve, bracketed-paste
