@@ -114,6 +114,10 @@ const out = {
     idle: autoRename(LIVE, ""),
     asking: autoRename(LIVE, "awaiting-command"),
     parked: autoRename({ live: false, cwd: "/w", prompts: 9 }, ""),
+    // an EMPTY conversation: bare /rename bounces ("no conversation context
+    // yet"), so the button says so; an unknown count never greys (⊜'s rule)
+    empty: autoRename({ ...LIVE, prompts: 0 }, ""),
+    unknown: autoRename({ ...LIVE, prompts: null }, ""),
   },
   // the bar is emptied when you leave the session view
   cleared: (() => { sandbox.clearHeaderActions();

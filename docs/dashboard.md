@@ -2340,7 +2340,13 @@ ai-title now live-updates an open session header, not just renames.
 **✦ auto — bare `/rename` (Claude names it).** The inline-rename input
 carries a second affordance beside the box: **✦ auto** types the TUI's own
 argless `/rename`, which makes Claude Code GENERATE the session title itself
-(the CLI's auto-rename). Deliberately NOT this endpoint: nothing rides the
+— verified against the installed 2.1.220 binary, not guessed from docs: bare
+`/rename` generates a name from the conversation context IMMEDIATELY (no
+dialog opens; with an argument it uses the literal text), bounces with
+"Could not generate a name: no conversation context yet" on an empty
+conversation, and lands the result through the same
+`{type:"agent-name",agentName,sessionId}` transcript append the manual
+`/rename` uses. Deliberately NOT this endpoint: nothing rides the
 transcript-append channel — the button goes through the quick-command POST
 (`{"cmd": "rename"}`, *Web quick commands* above) so it inherits that
 channel's whole contract for free: live-window resolve, bracketed-paste
@@ -2348,8 +2354,10 @@ delivery, mid-turn queueing (`queued` → "Claude names it when the turn
 ends"), the red-tab 409, and the `web-command` audit rows — no new audit
 surface. Consequences worth stating: it only works on a LIVE session (a
 parked one has no TUI to do the generating — the button greys with the
-reason, same `gate()` rule as the header bar, and the reachability matrix in
-tests/jsdom/headeract.js pins it), and the click closes the input restoring
+reason, same `gate()` rule as the header bar; an EMPTY conversation greys it
+too, `meta.prompts < 1`, the ⊜ compact bounce class with the same
+unknown-count-never-greys rule, and the reachability matrix in
+tests/jsdom/headeract.js pins all of it), and the click closes the input restoring
 the OLD title, because the new one arrives asynchronously — Claude Code
 writes its generated name to the transcript, and the existing `title` SSE
 push repaints the header/card when it lands (the `(path, size)` title cache

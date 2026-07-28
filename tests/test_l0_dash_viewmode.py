@@ -547,6 +547,10 @@ def test_header_action_bar_gates_every_button(tmp_path):
     assert "/rename" in ar["idle"]["title"]      # enabled = the working tooltip
     assert ar["asking"]["disabled"] and "question" in ar["asking"]["title"]
     assert ar["parked"]["disabled"] and "parked" in ar["parked"]["title"]
+    # an empty conversation: bare /rename bounces ("no conversation context
+    # yet"), so the button says so — but an unknown count never greys
+    assert ar["empty"]["disabled"] and "empty" in ar["empty"]["title"]
+    assert ar["unknown"]["disabled"] is False
     # leaving the session hands the corner back to the list's own buttons
     assert d["cleared"] == {"n": 0, "hidden": True}
 

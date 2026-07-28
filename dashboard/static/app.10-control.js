@@ -499,14 +499,19 @@ function startRenameHeader() {
   };
   inp.onblur = () => cancel();          // a stray click = cancel, same as Esc
   // ✦ auto — bare /rename, a terminal-typing action: greyed with the reason
-  // when there is no window to type into (parked/headless) or a modal dialog
-  // is up (the same conditions the header's quick commands gate on).
+  // when there is no window to type into (parked/headless), a modal dialog
+  // is up (the same conditions the header's quick commands gate on), or the
+  // conversation is EMPTY — bare /rename bounces with "Could not generate a
+  // name: no conversation context yet" (v2.1.220), the ⊜ compact bounce
+  // class; like that gate, an UNKNOWN count never greys.
   const auto = el("button", "sstop renameauto", "✦ auto");
   auto.dataset.tip = "let Claude name this session (/rename)";
   const meta = ses.meta || {};
   const windowed = !!(meta.live && meta.kitty_window_id);
-  gate(auto, windowed && liveTab() !== "awaiting-command",
+  const empty = typeof meta.prompts === "number" && meta.prompts < 1;
+  gate(auto, windowed && !empty && liveTab() !== "awaiting-command",
        !windowed ? NO_WINDOW
+         : empty ? "nothing to name yet — the conversation is empty"
                  : "a question is waiting — answer it in the card");
   // preventDefault keeps the click from stealing the input's focus first —
   // the blur-cancel above would tear the button out of the DOM mid-click
