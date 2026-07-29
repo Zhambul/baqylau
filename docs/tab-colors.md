@@ -299,6 +299,67 @@ traces back to that one gap; what differs is how fast each case can be *noticed*
   path, and no Esc is ever sent into an open dialog.
 
 
+## Codex — the second tab producer
+
+A **standalone codex** host (codex run on its own in a kitty tab, docs/codex.md)
+colours its tab through the SAME `core/tabpaint.py` engine — it is the second
+producer the split-out was for. It contributes only its own decision table +
+window resolver (`plugins/codex/tabstatus.py`), driven by the codex hook
+DISPATCHER `plugins/codex/dispatch.py` (entry `claude-codex-hook.py`, wired to
+codex's nine non-SessionStart events, docs/wiring.md). The dedup +
+persist-on-`rc==0` + `tab_transitions` audit are the engine's, unchanged.
+
+The mapping (codex hook event → state), each a pure function of that event so
+duplicate/out-of-order hooks only re-assert what the tab shows:
+
+| Codex event | State | Colour |
+|-------------|-------|--------|
+| `UserPromptSubmit` | `thinking` | magenta |
+| `PreToolUse` `request_user_input` | `awaiting-command` | red (codex asking you) |
+| `PreToolUse` shell/exec/`apply_patch` | `executing` | blue |
+| `PreToolUse` (other) · `PostToolUse` · `PreCompact` · `SubagentStart/Stop` | `working` | magenta |
+| `PermissionRequest` | `awaiting-command` | red |
+| `Stop` (per turn) | `awaiting-response` | green |
+| `PostCompact` | *(no-op — the next event repaints)* | — |
+
+The `tab_transitions` rows carry a codex-prefixed `dispatch` label
+(`codex-pretool`/`codex-stop`/`codex-interrupt`/…) so the existing
+tab-left-on-busy anomaly and the audit-debug playbook work unchanged.
+
+**The nested guard.** Those nine events fire for a **codex-inside-Claude**
+subagent run (`codex exec`, e.g. the codex:rescue skill in this repo) too, whose
+tab belongs to the Claude host. Only a standalone host may paint. Deciding
+standalone-vs-nested per event would cost a `kitten @` subprocess (`hostpane.
+tab_host_sid`) on every `PreToolUse`, so `plugins/codex/session.py` decides it
+**once** at SessionStart and records the standalone host + its tab window in the
+global tab DB (`core/tabs.codex_host_*`); the dispatcher reads that as a cheap
+sqlite lookup and BAILS (audited `nested-skip`) when the sid is not a known
+standalone host. Cleared at teardown.
+
+**Interrupt recovery — the codex twin of `interrupt-watch`.** Codex fires **no
+Stop on interrupt** (the same no-hook-on-cancel gap): a turn cancelled at the
+terminal writes a `turn_aborted` RECORD to the rollout and nothing else, so the
+tab would sit magenta/blue forever. `UserPromptSubmit` arms one detached
+`codex-interrupt-watch` per window (re-invoking `claude-codex-hook.py
+interrupt-watch <rollout> <sid> <win>`, an audited `streams` row via
+`core.tail.stream_lifecycle`). It tails the rollout and, on a `turn_aborted`
+matched **as a record through `rollout.parse` — never a raw byte scan** (growth
+that merely quotes the marker is not a cancel, the same invariant as claude's
+`is_interrupt_line`), flips the stale busy colour green through the engine —
+**unless a new turn STEERS off it**: codex's queue+Esc delivers the queued prompt
+the instant the abort lands, appending a `task_started` + a `user_message`
+(`prompt`) record right after the abort line, and a green flip there would paint
+"done" over the delivered turn's think. So it settles one tick, checks what
+FOLLOWS the abort, and on a steer advances past it and keeps watching (the same
+"check what follows the record" logic claude's watcher uses for a queued prompt).
+End reasons mirror claude's (`interrupt-detected-flipped-green` / `turn-over` /
+`no-interrupt-within-30m` / `session-parked`). The rollout is located by
+`transcript_path` when it is a rollout, else a bounded glob by `uuid == sid`.
+
+The mid-thinking cancel gap (an Esc before the model produced anything, which
+writes no `turn_aborted`) stays deliberately unhandled, exactly as for a terminal
+Esc in Claude — no idle-timeout backstop.
+
 ## Notes / tweaking
 
 - **`--dangerously-skip-permissions`** (the `claude` alias): permission prompts

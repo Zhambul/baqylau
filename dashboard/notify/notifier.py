@@ -29,6 +29,7 @@
 import os
 import time
 
+import plugins
 from core import sessionapi as API
 from core.noaudit import load_audit
 from dashboard import askdialog, config, prefs, suggestion
@@ -173,6 +174,8 @@ class Notifier:
         self.sent = []                 # [dict(payload, sent_at, handle)]
         self.fe = None                 # cached Frontend for the dialog-region
         #                                read (refreshed on the slow cadence)
+        self._claude_host = {}         # sid -> is the session a claude_code host?
+        #                                (the screen-scrape gate; refreshed with winmap)
 
     # The bus surface, kept as delegations: a Notifier IS a publisher to its
     # callers, and the watcher's own pushes read better as self.push(...).
@@ -187,17 +190,40 @@ class Notifier:
 
     def refresh_winmap(self):
         m = {}
+        hosts = {}
         for row in API.sessions(SESSIONS_LIMIT):
             win = row.get("kitty_window_id")
             # newest-first: the first (newest) session keeps the window
             if win and win not in m:
                 m[win] = row
+            sid = row.get("sid")
+            if sid and sid not in hosts:
+                # The screen-scrape gate: only a claude_code host has the
+                # AskUserQuestion dialog / faint-SGR input geometry the two
+                # scrapes below read. An unprovable/empty path stays claude
+                # (owns_by None) — the safe direction (scraping still degrades
+                # to None on a real miss); a proven codex rollout reads False.
+                owner = plugins.owns_by(row.get("transcript_path") or "") \
+                    if row.get("transcript_path") else None
+                hosts[sid] = owner in (None, "claude_code")
         self.winmap = m
+        self._claude_host = hosts
         # the frontend used to read a red tab's dialog region (below). Resolved
         # here, not per-scan: a hunt for kitty's socket is a subprocess, and a
         # missing terminal control channel degrades cleanly to None → no
         # dialog-activity signal, alerts fire as before.
         self.fe = launch.frontend()
+
+    def _screen_scrapable(self, sid):
+        """Whether the two Claude-geometry screen scrapes below (_dialog_region /
+        _input_typed) apply to this session's host. Only a claude_code host has
+        the AskUserQuestion dialog + faint-SGR input box they read; a codex host's
+        screen returns garbage (verified), so those scrapes must be skipped for it
+        — the tab-move / focus / composing signals still resolve a codex alert.
+        Defaults True for an unknown sid (a session that appeared a beat after the
+        last winmap refresh — the safe direction, and the scrape itself degrades
+        to None on a real miss)."""
+        return self._claude_host.get(sid, True)
 
     def _dialog_region(self, win):
         """The AskUserQuestion dialog pane's text on window `win`, or None when
@@ -327,6 +353,8 @@ class Notifier:
         if entry.get("kind") == "asking":
             if not screen:
                 return None
+            if not self._screen_scrapable(sid):
+                return None                      # codex host — no dialog scrape
             # You answering AT THE TERMINAL — typing a free-text answer or
             # toggling a selection — moves neither the tab off red nor the
             # transcript (the dialog is still open, unsubmitted), so nothing
@@ -345,7 +373,7 @@ class Notifier:
             # submit. Its trace is REAL (non-faint) content in the input box (a
             # settled tab pre-fills only a FAINT ghost suggestion, which
             # `suggestion.typed` ignores).
-            if screen and self._input_typed(win):
+            if screen and self._screen_scrapable(sid) and self._input_typed(win):
                 return "terminal-input"
             # "If I've SEEN the final message, no notification." A done tab's
             # final message is on screen the moment it goes green, so ANY glance

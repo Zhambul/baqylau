@@ -327,8 +327,11 @@ def test_standalone_teardown_parks_db_on_host_exit(test_env, codex, reaper):
     pane = [r for r in oracle.q(
         test_env, "SELECT action, ok, detail FROM pane_events WHERE session_id=?",
         (codex.s.sid,))]
-    assert any(a == "close" and "standalone" in (d or "")
-               for a, _ok, d in pane), "teardown must audit the pane close"
+    # teardown now routes through core.hostpane.host_end (the ONE session-end
+    # owner shared with Claude), so the pane close is audited generically as
+    # "close" (the codex-specific reason now rides the session-end row, which this
+    # fixture — a bare state DB with no audit sessions row — doesn't exercise).
+    assert any(a == "close" for a, _ok, _d in pane), "teardown must audit the pane close"
 
 
 def test_standalone_session_handler_opens_mirror(run_hook, test_env, session,

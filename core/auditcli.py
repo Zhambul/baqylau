@@ -330,6 +330,23 @@ ANOMALY_SECTIONS = [
      "  AND json_valid(post.content) "
      "  AND json_extract(post.content,'$.action')='remove' "
      "  AND post.ts > pre.ts)", 1),
+    # A codex tab painted for a session that never opened a STANDALONE codex host
+    # — the NESTED-GUARD leak (docs/tab-colors.md, docs/codex.md). Codex's
+    # non-SessionStart hooks fire for a codex-inside-Claude subagent run too, and
+    # only a standalone codex host may paint the kitty tab (its own tab, not the
+    # Claude host's). The dispatcher gates on the codex_hosts registry
+    # (core/tabs.py), recorded at a NON-nested SessionStart, whose write leaves a
+    # `codex-session` hook_event with a `standalone-open…` decision. A codex-*
+    # tab transition (dispatch LIKE 'codex%') applied for a sid with no such
+    # hook_event means the gate leaked and a NESTED codex repainted the Claude
+    # host's tab. (The teardown's own `codex-clear` transition is exempt in
+    # practice: it only fires on a real standalone host, which HAS the row.)
+    ("codex tab painted with no standalone codex host (nested-guard leak)",
+     "SELECT ts, dispatch, prev_state, new_state, reason FROM tab_transitions t "
+     "WHERE session_id=? AND dispatch LIKE 'codex%' AND applied=1 "
+     "AND NOT EXISTS (SELECT 1 FROM hook_events h WHERE h.session_id=t.session_id "
+     "  AND h.handler='codex-session' "
+     "  AND h.decision LIKE 'standalone-open%')", 1),
     # A nested bg/monitor tailer whose OWNER can be resolved from neither
     # source: not from its own streams row (hookkit.stream_env's
     # CLAUDE_STREAM_AGENT, stamped by the three nested launch sites) and not

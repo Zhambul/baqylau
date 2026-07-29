@@ -167,7 +167,8 @@
 
 - **`~/.codex/config.toml` + `~/.codex/hooks.json`** — the STANDALONE codex host
   (codex CLI ≥ 0.142). Like Claude's hook table, this wiring lives outside the
-  repo. Enable codex's hook system and point its `SessionStart` at the entry:
+  repo. Enable codex's hook system, point its `SessionStart` at the session entry,
+  and every OTHER codex event at the tab/interrupt dispatcher:
   ```toml
   # ~/.codex/config.toml
   [features]
@@ -175,19 +176,41 @@
   ```
   ```json
   // ~/.codex/hooks.json  (auto-loaded next to config.toml)
-  { "hooks": { "SessionStart": [ {
-      "matcher": "startup|resume|clear",
-      "hooks": [ { "type": "command",
+  { "hooks": {
+      "SessionStart": [ { "matcher": "startup|resume|clear", "hooks": [ {
+        "type": "command",
         "command": "/ABS/PATH/baqylau/bin/claude-codex-session.py",
-        "statusMessage": "kitty mirror" } ] } ] } }
+        "statusMessage": "kitty mirror" } ] } ],
+      "UserPromptSubmit":  [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "PreToolUse":        [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "PostToolUse":       [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "PermissionRequest": [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "PreCompact":        [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "PostCompact":       [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "SubagentStart":     [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "SubagentStop":      [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ],
+      "Stop":              [ { "hooks": [ { "type": "command", "command": "/ABS/PATH/baqylau/bin/claude-codex-hook.py" } ] } ]
+  } }
   ```
-  Codex hooks are Claude-compatible (stdin JSON: `session_id`/`cwd`/`source`/…),
-  so `claude-codex-session.py` reads the payload exactly as a Claude hook does.
+  Codex hooks are Claude-compatible (stdin JSON: `session_id`/`cwd`/`source`/`tool_name`/
+  `transcript_path`/…), so both entries read the payload exactly as a Claude hook
+  does. **SessionStart stays on `claude-codex-session.py`** (it stands up the mirror
+  pane and records the standalone-host bit); **the other nine events go to the ONE
+  dispatcher `claude-codex-hook.py`** (→ `plugins/codex/dispatch.py`), which drives
+  the codex TAB colour (magenta busy · blue exec · red asking · green done) over the
+  shared paint engine and arms the interrupt-recovery watcher — see
+  [tab-colors.md](tab-colors.md) › *Codex*. Only a STANDALONE codex host paints its
+  tab; a codex-inside-Claude (`codex exec`) run's events reach the same dispatcher
+  but bail on the nested guard (the tab belongs to the Claude host). `PostCompact` is
+  wired for completeness but currently repaints nothing (the next event does).
   **One manual trust step:** codex will not run a non-managed hook until it is
   trusted — on the next `codex` launch, run `/hooks` in the TUI and trust it (or
   pass `--dangerously-bypass-hook-trust`); editing the hook re-triggers review
-  (trust is keyed to the hook's hash). Codex has **no SessionEnd hook** — teardown
-  rides the codex-process liveness signal instead (see [codex.md](codex.md) › *standalone*).
+  (trust is keyed to the hook's hash). **`WorktreeCreate`/`WorktreeRemove` must NOT
+  be wired** to it, for the same delegating-hook reason as Claude's (above). Codex
+  has **no SessionEnd hook** — teardown rides the codex-process liveness signal
+  instead, now routed through `hostpane.host_end` so it also stamps `session_end`
+  and clears the tab (see [codex.md](codex.md) › *standalone* / *tab colours*).
 
 ## Interpreter: skip the pyenv shim (`retarget-python.py`)
 

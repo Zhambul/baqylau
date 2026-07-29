@@ -473,7 +473,16 @@ def input_box(sid):
     resolves or the box is empty. The CALLER gates on a settled tab + no pending
     ask/plan so we only screen-scrape when the box is worth reading — this just
     resolves the authoritative live window (the memoized claude_session=<sid>
-    map, never a reused start-time id) and probes it ONCE for both."""
+    map, never a reused start-time id) and probes it ONCE for both.
+
+    HOST-GATED: only a claude_code host has this faint-SGR ghost-suggestion
+    geometry — a codex host's screen returns garbage through the Claude scrape
+    (verified), so a session owned by another tool gets NO probe. session_caps
+    keeps the DEFAULT_HOST for an unprovable/empty path, so a legitimate
+    daemon-origin Claude session (scrubbed env, no transcript yet) is unaffected."""
+    host, _ = session_caps((API.session_row(sid) or {}).get("transcript_path") or "")
+    if host != DEFAULT_HOST:
+        return None, None
     fe = launch.frontend()
     if fe is None:
         return None, None

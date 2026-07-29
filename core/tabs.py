@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS tab(win TEXT PRIMARY KEY, state TEXT);
 CREATE TABLE IF NOT EXISTS watchers(kind TEXT, win TEXT, pid INTEGER, PRIMARY KEY(kind, win));
 CREATE TABLE IF NOT EXISTS sids(sid TEXT PRIMARY KEY, ts REAL);
 CREATE TABLE IF NOT EXISTS adopt_pending(cwd TEXT PRIMARY KEY, sid TEXT, ts REAL);
+CREATE TABLE IF NOT EXISTS codex_hosts(sid TEXT PRIMARY KEY, win TEXT, ts REAL);
 """
 
 
@@ -216,6 +217,44 @@ def adopt_take(cwd, sid):
 
 def adopt_drop(cwd, sid):
     adopt_take(cwd, sid)
+
+
+# --- standalone-codex-host registry (the codex tab producer's nested gate) --------
+# Codex has NO tab-owning SessionStart of its own beyond claude-codex-session.py,
+# and its OTHER hook events (pretool/stop/…) fire for BOTH a standalone codex host
+# AND a codex-inside-Claude subagent run. Only the standalone host may paint the
+# kitty tab (a nested run's tab belongs to the Claude host). plugins/codex/session.py
+# resolves standalone-vs-nested ONCE at SessionStart (hostpane.tab_host_sid, a
+# kitten subprocess) and records the standalone host + its tab window HERE; the
+# codex hook DISPATCHER then reads it per event as a cheap sqlite lookup instead of
+# re-running tab_host_sid on every PreToolUse. Lives in this GLOBAL runtime DB
+# (like `sids`) because every codex hook process must reach it; self-clears on
+# reboot. Cleared at teardown (plugins/codex/watch.py, via host_end).
+
+def codex_host_mark(sid, win):
+    """Record that `sid` is a STANDALONE codex host owning tab window `win`
+    (written once by a NON-nested codex SessionStart). Prunes 30-day-old rows.
+    `win` may be "" (a scrubbed env resolved no window — the host exists but its
+    tab can't be painted); the dispatcher distinguishes that from "not a host"."""
+    if not sid:
+        return
+    tw("INSERT OR REPLACE INTO codex_hosts(sid, win, ts) VALUES(?, ?, ?)",
+       (sid, win or "", time.time()))
+    tw("DELETE FROM codex_hosts WHERE ts < ?", (time.time() - 30 * 86400,))
+
+
+def codex_host_win(sid):
+    """The tab window id of standalone codex host `sid`, or None when `sid` is
+    NOT a known standalone host (a nested codex-inside-Claude run, or an unknown
+    sid) — the dispatcher's nested gate. A known host with an unresolved window
+    returns "" (paint is then impossible but it is still not nested)."""
+    rows = sqc(TABDB, "SELECT win FROM codex_hosts WHERE sid=?", (sid,))
+    return rows[0] if rows else None
+
+
+def codex_host_clear(sid):
+    """Drop a standalone codex host row at teardown (its pid died)."""
+    tw("DELETE FROM codex_hosts WHERE sid=?", (sid,))
 
 
 

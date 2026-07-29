@@ -309,23 +309,36 @@ def standalone_scan(seen):
 def teardown():
     """STANDALONE SessionEnd surrogate. Codex fires no SessionEnd hook, so when
     the codex host pid dies (exit OR a hard Ctrl-C, which fires nothing) this is
-    how the mirror closes: park the state DB (-> *.keep, so a codex `resume`
-    replays history; renaming makes the DB path vanish, which also stops the
-    scoreboard bar) and close the panes. The watcher's cached DB connection means
-    the finally's lock_release writes to the parked inode, never recreating the
-    file."""
+    how the session closes: route through the ONE host-teardown owner
+    core.hostpane.host_end — session-end audit -> close panes -> park the state DB
+    (-> *.keep, so a codex `resume` replays history; renaming makes the DB path
+    vanish, which stops the scoreboard bar) -> drop the tab DB row. The `win` is
+    passed so the tab is cleared too: the old park-only teardown wrote NO
+    session_end and cleared NO tab, so a codex session's `ended_at` stayed NULL
+    (an anomaly signal) and its tab lingered red/green forever. host_end drops the
+    tab DB row; the visible tab COLOUR is repainted to the theme default here (a
+    frontend paint host_end deliberately leaves to the caller), and the
+    standalone-host registry row is cleared last. The watcher's cached DB
+    connection means the finally's lock_release writes to the parked inode."""
     from core import hostpane as HP
-    from core import paths as P
-    action = HP.park_db(SID, LOG)
-    A.state_file(LOG, P.parked_db(LOG), action, "codex host pid gone")
+    from core import tabpaint
+    from core import tabs
     try:
         import frontends
         fe = frontends.get(resolve=True)
-        if fe.usable():
-            HP.close_mirror(fe, SID)
     except Exception:
-        A.error(LOG, "codex standalone teardown (close panes)")
-    A.pane(SID, "close", 1, "standalone codex host exited")
+        from frontends.base import Frontend
+        fe = Frontend()
+        A.error(LOG, "codex standalone teardown (resolve frontend)")
+    win = tabs.codex_host_win(SID) or ""
+    if fe.usable() and win:
+        try:
+            tabpaint.paint(fe, win, "clear", "codex host pid gone",
+                           sid=SID, dispatch="codex-clear")
+        except Exception:
+            A.error(LOG, "codex standalone teardown (tab clear)")
+    HP.host_end(fe, SID, LOG, "codex host pid gone", win=win)
+    tabs.codex_host_clear(SID)
 
 
 def main():

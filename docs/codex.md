@@ -241,9 +241,21 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
       `Stop`, per-turn) — the same class as "Claude fires nothing on cancel", so the
       same doctrine applies: teardown rides a **liveness signal**. `session.py`
       resolves the codex process pid (ppid walk) and hands it to the watcher, which
-      parks the DB + closes the panes when that pid dies — even on a hard Ctrl-C
-      (which fires no hook at all). This is *more* robust than the Claude path: the
-      pid is always a truthful end-of-session signal.
+      tears the session down when that pid dies — even on a hard Ctrl-C (which fires
+      no hook at all). This is *more* robust than the Claude path: the pid is always
+      a truthful end-of-session signal. Teardown now routes through the ONE
+      host-teardown owner **`core.hostpane.host_end`** (the same door Claude's
+      SessionEnd uses), passing the tab `win`, so besides parking the DB + closing
+      the panes it also stamps **`session_end`** (the codex `sessions` row's
+      `ended_at` used to stay NULL — a "stream never ended"-shaped gap) and clears
+      the tab (the tab DB row + a `codex-clear` paint back to the theme default —
+      the tab used to linger red/green forever). The standalone-host registry row
+      (`core/tabs.codex_host_*`) is dropped last.
+    - **Tab colours.** A standalone codex host colours its kitty tab through the
+      shared paint engine, via codex's own hook events (`claude-codex-hook.py`) — see
+      [tab-colors.md](tab-colors.md) › *Codex* for the event→state map, the
+      standalone-only nested guard, and the `turn_aborted` interrupt-recovery
+      watcher (codex fires no Stop on interrupt).
     - **Nested vs standalone.** Codex ALSO runs as a Claude subagent (`codex exec`),
       inheriting Claude's pane — so its `SessionStart` hook fires there too. But that
       Claude session's watcher already streams the run (source B, `codex_exec`
@@ -280,6 +292,21 @@ which audits a degrade.
   `thread/name/set`, ask via the `request_user_input` reply). Leaving a gesture
   inert is not a stub gap: a False cap is the correct answer while the transport
   is unwired.
+- **Claude screen-scrapers are host-gated OFF codex.** Once codex writes
+  `awaiting-response`/`awaiting-command` tab rows (its tab producer, above), three
+  Claude-GEOMETRY screen scrapes would start firing on codex panes and return
+  garbage: the ghost-suggestion probe (`dashboard/read/session.input_box`) and the
+  notifier's dialog-region + terminal-input reads
+  (`dashboard/notify/notifier._dialog_region` / `_input_typed`). Each is now gated
+  on the session's HOST being `claude_code` (via `owns_by`/`session_caps`; an
+  unprovable/empty path stays the claude default, so a daemon-origin Claude session
+  is unaffected) — a codex host gets NO ghost-suggestion probe and NO
+  askdialog/suggestion notifier probe. The host-agnostic alert signals
+  (tab-moved / focus / composing) still resolve a codex alert, so **cross-session
+  toast/Telegram/Web-Push notifications fire for a codex tab going red/green with
+  no notifier change beyond this gating** — the codex `sessions` row carries the
+  `kitty_window_id` env-stamped at SessionStart, which the notifier's winmap maps
+  to the tab.
 - **Read providers (`plugins/codex/read.py`, over `rollout.parse`).**
   - `context(path)` — the last `token_count`'s **`last_token_usage.total_tokens`**
     over `model_context_window` (the cumulative `total_token_usage` never resets

@@ -40,6 +40,7 @@ from core.noaudit import load_audit                # noqa: E402
 A = load_audit()   # audit trail (real module, or an inert stub if it can't import)
 from core import hostpane as HP                    # noqa: E402
 from core import paths as P                        # noqa: E402
+from core import tabs as T                         # noqa: E402  (standalone-host registry)
 
 
 def read_payload():
@@ -165,6 +166,19 @@ def main():
     HP.close_stale_mirrors(fe, sid, anchor)   # a prior-sid pane (resume/clear)
     b = bias()
     HP.open_mirror(fe, BIN, sid, log, b, anchor=anchor)
+
+    # Record THIS standalone codex host + its tab window so the codex hook
+    # DISPATCHER (claude-codex-hook.py) can paint the tab for the OTHER nine codex
+    # events (pretool/stop/…) as a cheap sqlite lookup — instead of re-running the
+    # nested-vs-standalone tab_host_sid subprocess on every event. A NESTED codex
+    # never reaches here (the host guard above returned), so no row is written for
+    # it and the dispatcher's nested gate bails. (KITTY_WINDOW_ID rides the codex
+    # SessionStart env — codex is not daemon-spawned like Claude's agents view —
+    # so `anchor` is normally the real tab window; "" degrades to no tab paint.)
+    try:
+        T.codex_host_mark(sid, str(anchor or ""))
+    except Exception:
+        A.error(log, "codex_host_mark", {"sid": sid})
 
     ok = HP.mirror_exists(fe, sid)
     try:
