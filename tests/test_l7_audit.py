@@ -340,6 +340,39 @@ def test_anomalies_registry_smoke(test_env):
         conn.close()
 
 
+def test_anomalies_survives_truncated_state_file_json(test_env):
+    """A.state_file caps content at 2000 bytes, so an oversized record lands on
+    disk truncated MID-JSON — and json_extract RAISES on such a row, which once
+    aborted the whole anomalies run at its first json_extract section (a
+    web-rewind-to row carrying a screen capture, 2026-07-29). The queries skip
+    unreadable rows (json_valid guards) and a failing section must degrade to
+    its own line, never kill the run. Seeded through the real A.state_file so
+    the truncation is the product's own."""
+    code = ("from core import audit as A\n"
+            "A.state_file('/tmp/claude-mirror-%s.log', 'db', 'web-rewind-to',\n"
+            "             {'win': '1', 'ok': False, 'tab': 'awaiting-command',\n"
+            "              'mode': 'both', 'ups': 4, 'step': 'open',\n"
+            "              'screen': 'x' * 4000})\n" % SID)
+    p = subprocess.run([sys.executable, "-c", code], env=dict(test_env),
+                       cwd=REPO, capture_output=True, text=True, timeout=15)
+    assert p.returncode == 0, p.stderr
+    import sqlite3
+    conn = sqlite3.connect(oracle.audit_db(test_env))
+    try:                       # the seed really is the truncated-JSON shape
+        content, = conn.execute("SELECT content FROM state_files WHERE "
+                                "action='web-rewind-to'").fetchone()
+        assert len(content) == 2000
+        assert not conn.execute("SELECT json_valid(?)", (content,)).fetchone()[0]
+    finally:
+        conn.close()
+    out = cli(test_env, "anomalies", SID)
+    assert out.returncode == 0, out.stderr
+    assert "malformed JSON" not in (out.stdout + out.stderr)
+    assert "QUERY FAILED" not in out.stdout       # guards skip the row outright
+    # the run reached the sections PAST the one that used to crash
+    assert "unattributed token/cost bumps" in out.stdout
+
+
 # ------------------------------------------------------- degradation paths
 
 def test_spool_fallback_and_ingest(run_hook, test_env, session):

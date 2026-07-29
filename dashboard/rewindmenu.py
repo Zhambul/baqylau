@@ -95,12 +95,19 @@ def entry_matches(entry, target):
 def menu_region(screen):
     """The visible text from the LAST checkpoint-menu header down, or "" when
     no menu is on screen. Anchoring at the last header skips scrollback (old
-    prompt echoes, even a previously captured menu) above the live one."""
+    prompt echoes, even a previously captured menu) above the live one.
+
+    The header LINE is matched whitespace-tolerantly: the TUI renders it with
+    trailing padding (`"  Rewind \\n"`, the styled row's fill), and a byte-exact
+    `"\\n  Rewind\\n"` match missed it — every web rewind bailed `step: "open"`
+    while the menu sat open on screen (measured 2026-07-29, session 69caa362;
+    the header sibling of the MENU_FOOT chord drift above)."""
     if not screen:
         return ""
     # the \n-prefix lets a header on the very first screen row still anchor
-    i = ("\n" + screen).rfind("\n  %s\n" % MENU_HEADER)
-    return screen[max(0, i - 1):] if i >= 0 else ""
+    hits = list(re.finditer(
+        r"\n  %s[ \t]*\n" % re.escape(MENU_HEADER), "\n" + screen))
+    return screen[max(0, hits[-1].start() - 1):] if hits else ""
 
 
 def menu_open(screen):

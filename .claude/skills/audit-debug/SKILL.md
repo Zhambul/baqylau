@@ -329,14 +329,28 @@ New always-audited swallow sites (previously silent — their absence used to ma
 
 - **A web rewind failed with `step: "open"` ("checkpoint menu never appeared")
   with NO stray chat message**: suspect MARKER DRIFT before anything else — the
-  menu very likely DID open and `menu_open` stopped recognizing it. The row now
-  carries a clipped `screen` (the capture the step gave up on): if it shows the
-  `Rewind` list, the detector is stale, not the terminal. Claude Code composes
-  that footer at runtime (`<chord> to <action>`, chord label ∈ `Enter`/`enter`/
-  `⏎`), so a version bump can change it without changing any literal in the
-  binary — matching the composed half is the bug (v2.1.220 broke the title-case
-  match, 2026-07-25). Re-measure against a live window; never guess a new one.
-  Rows from BEFORE that fix carry no `screen`, so they can't be told apart.
+  menu very likely DID open and `menu_open` stopped recognizing it. The paired
+  `errors` row (func `dashboard rewind-to (open)`) carries a clipped `screen`
+  (the capture the step gave up on — its context column, stored untruncated):
+  if it shows the `Rewind` list, the detector is stale, not the terminal. TWO
+  measured instances: the FOOTER (Claude Code composes it at runtime —
+  `<chord> to <action>`, chord label ∈ `Enter`/`enter`/`⏎` — so a version bump
+  changes it without changing any literal in the binary; v2.1.220 broke the
+  title-case match, fixed 2026-07-25 by matching only the `to continue` tail),
+  and the HEADER (the TUI pads the row — `"  Rewind \n"` with a trailing
+  space — which the byte-exact `menu_region` anchor missed, fixed 2026-07-29
+  on session 69caa362 with a whitespace-tolerant line match; the tell was a
+  `screen` showing BOTH the menu AND the healthy footer). Re-measure against a
+  live window; never guess a new marker. `errors` rows from before 2026-07-25
+  carry no `screen`, so they can't be told apart. NB the screen was BRIEFLY
+  (2026-07-25 → 2026-07-29) also duplicated onto the `web-rewind-to`
+  state_files row, where it blew `A.state_file`'s 2000-byte content cap: such
+  a row is truncated MID-JSON on disk, and it used to abort the whole
+  `anomalies` run with `sqlite3.OperationalError: malformed JSON` at the first
+  `json_extract` section — the CLI now guards `state_files.content` extracts
+  with `json_valid` (unreadable rows are skipped) and degrades a failing
+  section to a `QUERY FAILED (…)` line instead of dying, so on a current build
+  that crash means a NEW unguarded `json_extract` was added.
 
 - **A web rewind failed with `step: "open"` AND a nonsense fragment appeared as
   a chat message**: the classic shape is

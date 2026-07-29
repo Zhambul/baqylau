@@ -404,7 +404,9 @@ class _MenuFE(_FakeFE):
 
     def get_text(self, win, extent="screen"):
         if self.state == "menu":
-            rows = ["❯ a scrollback prompt echo at column 0", "", "  Rewind",
+            # the header row arrives PADDED ("  Rewind ") on the live TUI —
+            # the trailing space that broke the byte-exact anchor (2026-07-29)
+            rows = ["❯ a scrollback prompt echo at column 0", "", "  Rewind ",
                     "", "  Restore the code and/or conversation to the point…"]
             for i, p in enumerate(self.prompts + ["(current)"]):
                 rows += [("  ❯ " if i == self.cursor else "    ") + p, ""]
@@ -416,7 +418,7 @@ class _MenuFE(_FakeFE):
             # the real confirm screen states the code consequence — absent
             # code options always pair with "The code will be unchanged."
             has_code = any("code" in o.lower() for o in self.options)
-            rows = ["", "  Rewind", "", "  Confirm you want to restore to the"
+            rows = ["", "  Rewind ", "", "  Confirm you want to restore to the"
                     " point before you sent this message:", "",
                     "  The code will be restored +1 -1 in f.txt." if has_code
                     else "  The code will be unchanged.", ""]
@@ -614,6 +616,11 @@ def test_rewindmenu_parsers_pin_the_real_screens():
     }
     assert not RM.menu_open("❯ composer\n  -- INSERT --")
     assert RM.menu_region("no menu here at all") == ""
+    # the header row arrives PADDED ("  Rewind \n") on the live TUI — the
+    # trailing space defeated the old byte-exact anchor, so every web rewind
+    # bailed `step: open` on an open menu (2026-07-29, session 69caa362)
+    assert RM.menu_open(_MENU_SCREEN.replace("  Rewind\n", "  Rewind \n"))
+    assert RM.confirm_open(_CONFIRM_SCREEN.replace("  Rewind\n", "  Rewind  \n"))
 
 
 def test_rewindmenu_entry_match_is_truncation_aware():

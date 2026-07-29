@@ -389,14 +389,18 @@ class _TypingMixin:
         except rewindmenu.MenuError as e:
             # the screen the failing step gave up on, clipped — without it a
             # `step: "open"` row cannot tell "the menu never opened" from "our
-            # marker stopped matching a menu that did" (the 2026-07-25 drift)
+            # marker stopped matching a menu that did" (the 2026-07-25 drift).
+            # It rides ONLY the errors row (context is untruncated there): put
+            # in the state_files row too, it blew A.state_file's 2000-byte cap
+            # and the truncated JSON crashed every json_extract anomaly query
+            # over state_files.content (2026-07-29, session 69caa362).
             seen = clip_screen(e.screen) if e.screen else ""
             A.error(log, "dashboard rewind-to (%s)" % e.step,
                     {"sid": sid, "win": win, "mode": mode, "detail": str(e),
                      "screen": seen})
             A.state_file(log, sdb, "web-rewind-to",
                          {"win": win, "ok": False, "tab": tab, "mode": mode,
-                          "ups": ups, "step": e.step, "screen": seen})
+                          "ups": ups, "step": e.step})
             return self._json({"error": str(e), "step": e.step}, 409)
         A.state_file(log, sdb, "web-rewind-to",
                      {"win": win, "ok": True, "tab": tab, "mode": mode,

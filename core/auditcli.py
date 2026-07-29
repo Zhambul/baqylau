@@ -21,6 +21,7 @@
 """claude-audit.py — query and write the baqylau audit trail."""
 import json
 import os
+import sqlite3
 import sys
 import time
 
@@ -195,9 +196,15 @@ ANOMALY_SECTIONS = [
     # gesture whose recorded tab was awaiting-command yet was NOT the guard's
     # refusal — means the guard regressed (removed, or a NEW red-bearing state
     # slipped past it) and an Esc landed in an open dialog, declining the ask.
+    # NB every json_extract over state_files.content below rides a json_valid
+    # guard: A.state_file caps content at 2000 bytes, so an oversized record is
+    # truncated MID-JSON on disk and json_extract RAISES on it — one such row
+    # aborted the whole anomalies run (2026-07-29, a web-rewind-to row carrying
+    # a screen capture). Triage tooling must never die on its own evidence.
     ("web Esc gesture fired on a red dialog-open tab (declines the ask)",
      "SELECT ts, action, content FROM state_files WHERE session_id=? "
      "AND action IN ('web-interrupt', 'web-rewind', 'web-rewind-to') "
+     "AND json_valid(content) "
      "AND json_extract(content, '$.tab') = 'awaiting-command' "
      "AND COALESCE(json_extract(content, '$.step'), '') != 'dialog'", 1),
     # A `web-hint` row with phase='stale' is an OPTIMISTIC web action (op =
@@ -213,7 +220,8 @@ ANOMALY_SECTIONS = [
     # `web-answer`/`web-plan` row for ok, and whether the PostToolUse fired).
     ("optimistic web action never reconciled (stuck greyed UI: web-hint stale)",
      "SELECT ts, content FROM state_files WHERE session_id=? "
-     "AND action='web-hint' AND json_extract(content, '$.phase')='stale'", 1),
+     "AND action='web-hint' AND json_valid(content) "
+     "AND json_extract(content, '$.phase')='stale'", 1),
     # A `web-stop` ATTEMPT with no paired `done` — post_stop entered close_tab
     # and it never returned (an unbounded kitten socket connect, a stuck close).
     # This is the SERVER-SIDE counterpart the `web-hint op=close … stale`
@@ -223,9 +231,11 @@ ANOMALY_SECTIONS = [
     # close_tab, so a hung close left NOTHING here and the diagnosis dead-ended.)
     ("dashboard close entered but never completed (web-stop attempt, no done)",
      "SELECT a.ts, a.content FROM state_files a WHERE a.session_id=? "
-     "AND a.action='web-stop' AND json_extract(a.content, '$.phase')='attempt' "
+     "AND a.action='web-stop' AND json_valid(a.content) "
+     "AND json_extract(a.content, '$.phase')='attempt' "
      "AND NOT EXISTS (SELECT 1 FROM state_files d WHERE d.session_id=a.session_id "
-     "  AND d.action='web-stop' AND json_extract(d.content, '$.phase')='done' "
+     "  AND d.action='web-stop' AND json_valid(d.content) "
+     "  AND json_extract(d.content, '$.phase')='done' "
      "  AND json_extract(d.content, '$.win')=json_extract(a.content, '$.win') "
      "  AND d.ts >= a.ts)", 1),
     # A dashboard STOP (interrupt) whose verify never saw the working spinner
@@ -234,7 +244,7 @@ ANOMALY_SECTIONS = [
     # miss (a 502 to the page); its presence IS the "stop did nothing" bug.
     ("web interrupt never landed (web-interrupt stopped:false — the Esc missed)",
      "SELECT ts, content FROM state_files WHERE session_id=? "
-     "AND action='web-interrupt' "
+     "AND action='web-interrupt' AND json_valid(content) "
      "AND json_extract(content, '$.stopped')=0", 1),
     # "I stopped the turn and my QUEUED message vanished." Claude Code hands the
     # turn to a queued prompt the instant the Esc lands, so the screen keeps
@@ -249,11 +259,12 @@ ANOMALY_SECTIONS = [
     ("stop re-pressed with a message QUEUED and no queue drain seen "
      "(the delivered prompt may have been killed)",
      "SELECT i.ts, i.content FROM state_files i WHERE i.session_id=? "
-     "AND i.action='web-interrupt' "
+     "AND i.action='web-interrupt' AND json_valid(i.content) "
      "AND json_extract(i.content, '$.attempts') > 1 "
      "AND COALESCE(json_extract(i.content, '$.drained'), '') = '' "
      "AND EXISTS (SELECT 1 FROM state_files q WHERE q.session_id=i.session_id "
-     "  AND q.action='web-send' AND json_extract(q.content, '$.queued')=1 "
+     "  AND q.action='web-send' AND json_valid(q.content) "
+     "  AND json_extract(q.content, '$.queued')=1 "
      "  AND q.ts < i.ts AND q.ts > i.ts - 1800)", 1),
     # An off-device alert that was DELIVERED and then never taken back — the
     # Telegram message or the iPad banner is still sitting there after you dealt
@@ -280,11 +291,11 @@ ANOMALY_SECTIONS = [
     # the handles for already-sent alerts live in the old process's memory).
     ("Telegram alert sent that can never be retracted (no bot credentials)",
      "SELECT ts, content FROM state_files WHERE action='telegram-notify' "
-     "AND json_extract(content, '$.sid')=? "
+     "AND json_valid(content) AND json_extract(content, '$.sid')=? "
      "AND json_extract(content, '$.retractable')=0", 1),
     ("off-device alert left behind (notify-retract not ok)",
      "SELECT ts, content FROM state_files WHERE action='notify-retract' "
-     "AND json_extract(content, '$.sid')=? "
+     "AND json_valid(content) AND json_extract(content, '$.sid')=? "
      "AND COALESCE(json_extract(content, '$.ok'), 0)=0", 1),
     # "I got NO alert at all." Presence is what decides that now, and its one
     # false-positive shape is a browser that reports itself in use when you are
@@ -297,7 +308,7 @@ ANOMALY_SECTIONS = [
     # normal, a session's whole alert history being these is the bug.
     ("off-device alerts suppressed by browser presence (device-active)",
      "SELECT ts, content FROM state_files WHERE action='notify-suppress' "
-     "AND json_extract(content, '$.sid')=? "
+     "AND json_valid(content) AND json_extract(content, '$.sid')=? "
      "AND json_extract(content, '$.reason')='device-active'", 1),
     # A compaction that ARMED the ctx bar's animation and never cleared it:
     # PreCompact wrote the `compacting` latch and no PostCompact followed. Real
@@ -312,9 +323,11 @@ ANOMALY_SECTIONS = [
     ("compaction armed the ctx bar and never cleared (no PostCompact)",
      "SELECT pre.ts, json_extract(pre.content,'$.trigger') AS trigger "
      "FROM state_files pre WHERE pre.session_id=? AND pre.action='compacting' "
+     "AND json_valid(pre.content) "
      "AND json_extract(pre.content,'$.action')='write' "
      "AND NOT EXISTS (SELECT 1 FROM state_files post "
      "  WHERE post.session_id=pre.session_id AND post.action='compacting' "
+     "  AND json_valid(post.content) "
      "  AND json_extract(post.content,'$.action')='remove' "
      "  AND post.ts > pre.ts)", 1),
     # A nested bg/monitor tailer whose OWNER can be resolved from neither
@@ -545,6 +558,7 @@ ANOMALY_SECTIONS = [
     # scoreboard number it fed can only be traced by timestamp correlation.
     ("unattributed token/cost bumps (should be bump-agent with meta)",
      "SELECT ts, content FROM state_files WHERE session_id=? AND action='bump' "
+     "AND json_valid(content) "
      "AND (json_extract(content, '$.deltas.tokens') IS NOT NULL "
      "OR json_extract(content, '$.deltas.cost') IS NOT NULL) ORDER BY ts", 1),
     # Cost is OTEL-authoritative; the transcript fold survives ONLY as a SessionEnd
@@ -647,7 +661,14 @@ def cli_anomalies(sid):
         print("audit db unavailable"); return
 
     def section(title, q, params=()):
-        rows = conn.execute(q, params).fetchall()
+        # One bad row must not abort the whole triage run (a truncated-JSON
+        # state_files row once killed every section after it): report the
+        # failing section loudly and keep going.
+        try:
+            rows = conn.execute(q, params).fetchall()
+        except sqlite3.Error as e:
+            print(f"== {title}: QUERY FAILED ({e})")
+            return
         print(f"== {title}: {len(rows)}")
         for r in rows:
             print("   " + " | ".join("" if v is None else str(v) for v in r))

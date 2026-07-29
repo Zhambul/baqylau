@@ -2482,11 +2482,31 @@ reading the screen back (`Frontend.get_text`), never pressing blind:
   *Experimenting with live sessions*): screen markers are version-fragile, and
   a composed one is fragile twice over.
 
-  The failing step now also carries the SCREEN it gave up on
-  (`StepError.screen` → a clipped `screen` field on the `web-rewind-to` row and
-  its `errors` row). Without it, `step: "open"` cannot distinguish "the menu
-  never opened" from "our marker stopped matching a menu that did" — which is
-  why this took three rounds to find instead of one look.
+  **Marker drift, round two — the HEADER (2026-07-29, session 69caa362).** The
+  TUI renders the `Rewind` header row PADDED (`"  Rewind \n"`, the styled
+  row's fill), and `menu_region`'s byte-exact `"\n  Rewind\n"` anchor missed
+  it — so the region was empty, `menu_open` was False, and every web rewind
+  again bailed `step: "open"` on a menu that was open (the captured screen
+  even showed the healthy `Enter to continue` footer, which is what named the
+  anchor, not the footer, as the culprit). The anchor is now a
+  whitespace-tolerant line match (`\n  Rewind[ \t]*\n`, last occurrence),
+  which blinds ALL of `menu_region`'s consumers at once when it misses —
+  `menu_open`, `confirm_open`, `cursor_entry`, `confirm_options` — so a
+  header drift takes the whole driver down, and the pinned-screen tests
+  exercise the padded form.
+
+  The failing step also carries the SCREEN it gave up on (`StepError.screen`,
+  clipped) — but ONLY on the `errors` row, whose context column is stored
+  untruncated. Without it, `step: "open"` cannot distinguish "the menu never
+  opened" from "our marker stopped matching a menu that did" — which is why
+  the first drift took three rounds to find instead of one look. It was
+  briefly duplicated onto the `web-rewind-to` state_files row too, which is
+  how the second drift was found AND why that duplication is gone: the screen
+  blew `A.state_file`'s 2000-byte content cap, and the truncated-mid-string
+  JSON made every `json_extract` anomaly query over `state_files.content`
+  raise `malformed JSON`, aborting the whole `anomalies` run (the CLI now also
+  guards those queries with `json_valid` and degrades a failing section to
+  its own line — triage tooling must never die on its own evidence).
 
 The endpoint refuses a BUSY tab outright (409 — mid-turn the gesture
 means cancel, and a typed `/rewind` would just queue as a message; stop
