@@ -27,7 +27,7 @@ def all_plugins():
 # --- the PROVIDER surface ------------------------------------------------------
 # The optional functions a plugin may expose, and the arity each fan-out calls
 # it with. A plugin implements as many as it has something to say about
-# (claude_code 22 of 23, codex 1, otel 1) and the fan-outs below skip the rest —
+# (claude_code 23 of 26, codex 12 of 26, otel 1 of 26) and the fan-outs below skip the rest —
 # which is the whole point of an optional surface, and also its hazard: a
 # provider whose name is misspelled, or whose signature drifts from its
 # fan-out's call, is not an error anywhere. It is simply never found, and the

@@ -212,7 +212,7 @@ asked once per session per poll. `plugins.owns_by(path)`
 names the owning tool for the one CONTROL-plane caller that needs it: the
 dashboard refuses to relaunch `claude --resume <sid>` for a session claude_code
 does not own (docs/dashboard.md *Resume & send*).
-**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty-three
+**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty-six
 optional functions a plugin may expose and the arity each fan-out calls it with,
 and every lookup goes through `plugins.provider(plugin, name)` rather than a
 bare `getattr`. This is what `frontends/` has had all along in
@@ -227,8 +227,8 @@ directions: every name a fan-out reaches for is declared (parsed out of the
 fan-outs themselves, so a new one can't skip the table), every declared row is
 actually called by one, every row is implemented by at least one plugin, and
 every implementation accepts the arity its fan-out passes. A plugin still
-implements only what it has something to say about — claude_code 22 of 23, codex
-1, otel 1.
+implements only what it has something to say about — claude_code 23 of 26, codex
+12 of 26, otel 1 of 26.
 
 **The HOST-tool CONTROL interface.** Reads have `PROVIDERS`; writes have
 `plugins/host.py`. A host tool's CONTROL plane — the whole gestures the
