@@ -50,6 +50,11 @@ dashboard/http/post/        the control plane, one module per concern, composed
                             beacons + presence) · files (attachments, clipboard
                             paths, dictation grants) · session (new/migrate/
                             rename)
+dashboard/ext/              the web-EXTENSION registry (__init__: all_ext /
+                            SURFACE / provider / the fan-outs the core files
+                            consume) + one package per extension —
+                            ext/memory/ (descriptor · read.py · notehtml.py)
+                            is the first (*Web extensions* below)
 dashboard/opshtml/          paint ops -> HTML (the web presenter), split by concern:
                             ansi · ops · markdown · tools
 dashboard/static/           the single-page app (vanilla JS/CSS, no build step) —
@@ -62,7 +67,9 @@ dashboard/static/           the single-page app (vanilla JS/CSS, no build step) 
 The dashboard was decomposed from two monoliths (a ~4800-line `server.py` and a
 ~900-line `opshtml.py`) into the packages above; `server.py` is now a thin
 facade. Dependency direction (nothing imports the dashboard back): `config` <-
-everything; `read` / `control` / `notify` import core+plugins+frontends+config;
+everything; `ext` imports config/opshtml (and its own plugin vocabulary — see
+*Web extensions*); `read` / `control` / `notify` import
+core+plugins+frontends+config and the `ext` REGISTRY ROOT only;
 `http` imports all of the above; `server` re-exports `http`. Patchable knobs and
 cross-module helpers the handlers call are read MODULE-QUALIFIED (`config.X`,
 `launch.X`, `presence.X`) so a test patches the one owning module.
@@ -92,7 +99,13 @@ over if/elif ladders):
 | `_SESSION_POST` | a one-segment session verb | `(self, sid)` |
 
 Adding an endpoint is a table line plus a named method whose docstring is its
-design note. The GET signatures are uniform so the dispatch stays a `getattr` —
+design note. After each table misses, a SECOND, function-valued lookup is tried
+over the extension registry's merged route tables (`ext.session_gets()` /
+`fixed_gets()` / `session_posts()` / `fixed_posts()` — memory's `/memory` +
+`/note` are the first; an ext POST gets `_post_guard` applied by the tier via
+`_ext_post`, so an extension can no more skip the browser-vector defense than a
+built-in can), which is what lets an extension add endpoints without editing
+these files (*Web extensions*). The GET signatures are uniform so the dispatch stays a `getattr` —
 most fixed handlers ignore `url`, and passing it always is cheaper than a
 per-endpoint argument decision.
 
@@ -196,6 +209,65 @@ at this height; `dashboard/` is that tier made importable so the server is
 testable in-process. It reaches a terminal ONLY through `frontends.get()` and
 the `Frontend` interface — never a kitty-only attribute (the frontends contract
 grep test enforces this).
+
+## Web extensions (`dashboard/ext/`)
+
+A per-session, usually project-gated dashboard feature — a session tab with a
+badge, its API routes, optional SSE channels, an optional top-level page, and
+(when it observes the session) a hook-side producer — declared as ONE package
+under `dashboard/ext/<name>/` and registered in `ext.all_ext()`. The memory tab
+is the first (*Memory tab*); the planned adapters-cli views (logs / metrics /
+deployments) are why the seam exists. The mirror-image of
+`plugins/__init__.py`: an explicit in-repo list (no discovery), a declared
+`SURFACE`, `provider()` as the single door.
+
+**The guarantee is that adding an extension edits no core dashboard file.**
+Core files consume only the registry root's fan-outs, and a contract test
+(`test_no_module_outside_ext_imports_an_extension_package`) forbids anything
+outside `dashboard/ext/` from importing `dashboard.ext.<name>`. Where each
+declared capability lands:
+
+| capability | consumed by |
+| --- | --- |
+| `NAME` / `LABEL` / `TAB_AFTER` / `BADGE_SCOPED` | the JS descriptor mirrors them; `NAME` is at once the tab key, the SSE badge event, the payload-field stem (`<NAME>_scope`, `<NAME>_count`) and the JS `name` |
+| `scope(cwd)` | `read/session.ext_scope` — the ONE application point (cwd canonicalized there, once); stamps `data[<name>_scope]` and gates the badge to 0 off-scope |
+| `badge(sid, agent)` | woven into the `BADGES` table (`read/session._ext_badge` via `ext.badge_rows()`), so the overview payload and the derived SSE badge channel cannot disagree |
+| `payload(data, sid)` | extra `session_payload` fields |
+| `session_get` / `fixed_get` / `session_post` / `fixed_post` | the second route lookup (*Routing* above); handlers return the jsonable, the tier wraps + guards |
+| `sse_chans()` | spliced onto `_SLOW_CHANS` (`ext.Chan` — the shape the sse tables themselves use; producers read the `_Tick` context: sid, sdb, win, cwd, tpath, eff, tab, agent) |
+
+**The producer half is NOT here.** A hook-side observer (memory's ❖ mark + kv
+snapshot on every file op) registers in `plugins/claude_code/fileobs.py` (the
+`Obs(key, match, mark, record)` table both file-op formatters loop over); the
+descriptor's `PRODUCER` names it for the reader only — the dashboard never
+calls it. The split is what keeps the layering coherent: the web half needs
+dashboard machinery (opshtml/notehtml, above plugins), the producer is called
+FROM plugin hook handlers (below dashboard). An ext module may reach its own
+plugin vocabulary module directly with a `DASHBOARD_PLUGIN_REACHES` row.
+
+**The JS half** is an ordered classic part `app.NN-ext-<name>.js`, listed
+manually in `index.html` AFTER `app.11-chrome.js` — the manual list IS the JS
+registry (no dynamic loading: in-repo extensions gain nothing from it and it
+would break the `?v=<BOOT_ID>` cache-busting). At load it calls `extRegister`
+(app.11-chrome.js, beside the SECTIONS machinery registration merges into)
+with `{name, label, after, scopeField, scoped, init, body, section, page}`;
+the SECTIONS conventions (`api=list=name`, `tabEl` `<name>Tab`, `countField`
+`<name>_count`), the tab-strip insertion + scope gating, the chromeBody
+dispatch and the `#/x/<route>` page arm are all pinned by `tests/jsdom/ext.js`
+— the executable spec an extension author codes against.
+
+**Adding an extension, the whole checklist:** the `dashboard/ext/<name>/`
+package + its line in `all_ext()` · the `app.NN-ext-<name>.js` part + its
+`index.html` script tag · a banner-commented block in `style.css` · an optional
+`fileobs.py` row for its producer · a `DASHBOARD_PLUGIN_REACHES` row if it
+reaches its plugin module · docs. Nothing else moves.
+
+**Deliberately not abstracted** (one member each — a second member earns the
+generalization): the `mem=` paint-op flag / `data-mem` / the terminal ❖
+stream-filter kind / app.05's mem run-summary chips (memory's own vocabulary);
+`sessionapi.memory`/`memory_count` (plain kv reads); per-extension stylesheets
+(one `style.css`, banner-commented blocks); ext FAST-cadence SSE channels and
+broker events.
 
 ## Server design (each choice rejects a specific trap)
 
@@ -477,7 +549,7 @@ reflow for free and keeps the no-build rule.
 | `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`compacting`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
 | `GET /api/session/<sid>/monitors[?agent=<aid>]` | the Monitor tool runs (command/description/lifetime + events, merging transcript + audit streams state) for the monitors tab (*Monitors tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*) |
 | `GET /api/session/<sid>/jobs[?agent=<aid>]` | the background Bash jobs (command + lifecycle state, merging audit streams + ops + the launch hook) for the jobs tab (*Jobs tab*) — the LEAD's own by default, one agent's with `?agent=` (*Agent scope*); output via the `/copy/<group>/out` endpoint |
-| `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched, BOTH ways: `memory` (the flat newest-touch-first list — `{path, name, verb, agent, count, ts}` from the `memory` kv, the tab badge's authority) and `tree` (the same records grouped into the vault's own folder tree — `{name, path, dirs, notes, count, writes}`, `read/mirror.memory_tree` — which is what the tab renders) (*Memory tab*) |
+| `GET /api/session/<sid>/memory` | the memory-wiki notes the session touched, BOTH ways: `memory` (the flat newest-touch-first list — `{path, name, verb, agent, count, ts}` from the `memory` kv, the tab badge's authority) and `tree` (the same records grouped into the vault's own folder tree — `{name, path, dirs, notes, count, writes}`, `ext/memory/read.memory_tree` — which is what the tab renders) (*Memory tab*) |
 | `GET /api/session/<sid>/note?path=<abs>` / `?stem=<stem>` | one memory-wiki note rendered for the viewer (`{name, frontmatter, html, backlinks, missing}`); path-traversal-guarded to `~/wiki/01` (*Memory tab*) |
 
 SSE is plain polling server-side (`TICK_S` per session, `GLOBAL_TICK_S`
@@ -5569,7 +5641,11 @@ A session-view tab **`memory`** (between `jobs` and `errors`) lists the
 — recall (Read), persist (Write), or revise (Update/Edit). `plugins/claude_code/
 memory.py` is the single owner of that vocabulary (the root, the project scope, the
 `is_memory` test, the project gate, the mirror ❖ `MARK`, the `memory` kv, and the
-read-side vault helpers).
+read-side vault helpers). The tab is the first **web extension**
+(`dashboard/ext/memory/` server-side, `app.11-ext-memory.js` in the page, the
+producer registered as `fileobs.py`'s one row — *Web extensions* above), so its
+dashboard half lives in its own package and the core files know it only through
+the `dashboard.ext` registry.
 
 **Scoped to one project.** The wiki (`~/wiki/01`) is shared across all of
 `code/01`, but the feature is deliberately enabled ONLY for sessions inside
@@ -5585,7 +5661,11 @@ scope.
 subagent) renders a file op under the root, it appends ❖ (`memory.MARK`) to the
 one-liner and tags the op `mem` (`ops.line`/`ops.gut`), which `opshtml` surfaces as
 `data-mem` so the page sorts it into its own **`memory`** stream-item kind
-(*Stream item kinds* below), distinct from generic `files`.
+(*Stream item kinds* below), distinct from generic `files`. Both formatters
+reach memory through the file-op OBSERVER table (`plugins/claude_code/
+fileobs.py` — the extension's producer registration, memory its one row), not
+by hard-coding the feature; the `mem=` flag stays memory's own vocabulary,
+keyed off the row name.
 
 **Tab data path.** Both producers also `memory.record()` the touched note into a
 per-session **`memory` kv** (state DB, survives park) — `{files: [{path, name,
@@ -5595,7 +5675,7 @@ the main-agent-only *mirror*, this is **team-wide**: a subagent (e.g. a note-wri
 records under `self.agent`, so the tab shows who touched each note. The read model
 is `sessionapi.memory(sid)` (`kv_at`, live-or-parked), newest-touch first; the badge
 rides a cheap `memory` SSE — one row of the badge table below, and the ONE place
-the project-scope gate is applied (`read/session.memory_count`, shared with the
+the project-scope gate is applied (`read/session._ext_badge` over `ext_scope`, shared with the
 overview payload: off-scope both report 0, since off-scope there is no tab to
 badge. The stream used to push the real count there — benign on screen, but a
 per-tick kv read for nobody and two readings of one rule).
@@ -5613,7 +5693,7 @@ semantics), the subagent name (if any), the `×N` repeat count — and opens the
 viewer. `✎M` counts the notes we CHANGED (Write = created, Update = revised); a Read
 is recall, not work on the note.
 
-The tree is **built server-side** (`read/mirror.memory_tree`, served as `tree`
+The tree is **built server-side** (`ext/memory/read.memory_tree`, served as `tree`
 beside `memory` on the same endpoint — the flat list stays the badge's authority):
 the browser only renders it, the same split as the stats page. `memory.rel()` is the
 one place the root prefix is stripped (root() owns the root, so the split off it

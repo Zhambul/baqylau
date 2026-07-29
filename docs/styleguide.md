@@ -37,14 +37,22 @@ in a comment at the site and in the commit message.
   root, **and `frontends/`** (for its control plane — the two write endpoints
   reach the terminal through `frontends.get()`); nothing imports `dashboard/`
   except its bin/ entry and tests. `bin/` scripts may import anything.
-- **"the `plugins` registry root" has a written-down exception list.** Five
+- Inside `dashboard/` the tiers are `config`/`opshtml` <- `ext` <- `read`/
+  `control`/`notify` <- `http`. **`dashboard/ext/` is the extension sub-tier**
+  (docs/dashboard.md *Web extensions*): core dashboard files import only the
+  registry root `dashboard.ext`, and nothing outside `dashboard/ext/` imports
+  `dashboard.ext.<name>` (`test_no_module_outside_ext_imports_an_extension_
+  package`) — that seal is what makes "adding an extension edits no core file"
+  true rather than aspirational.
+- **"the `plugins` registry root" has a written-down exception list.** A few
   dashboard modules reach a `plugins/claude_code/` module directly, and each is
   deliberate: the web presenter of Claude Code's own tool payloads
   (`opshtml/actclass.py`, `opshtml/tools.py` — the single-owner `FILE_LABEL` /
   file-op shapes, on a per-op render path where a fan-out per lookup would be
-  the wrong trade), the memory tab (`read/mirror.py`, `read/session.py` — a
-  claude_code feature end to end, whose scope gate this table already assigns to
-  `read/session.memory_scope`), and the take-back stash's observation half
+  the wrong trade), the memory extension reaching its OWN plugin vocabulary
+  module (`ext/memory/read.py` -> `memory.py` — a claude_code feature end to
+  end; an extension package reaching its own producer's vocabulary is the
+  sanctioned shape), and the take-back stash's observation half
   (`http/post/interrupt.py`, likewise already assigned below). The list is
   `DASHBOARD_PLUGIN_REACHES` in `tests/test_l1_contracts.py` and it is enforced
   in both directions — a new reach fails until it is routed through a provider
@@ -146,7 +154,8 @@ backed by grep-style regression tests that will fail the build):
 | Claude Code's on-disk task-dir format (`<config>/tasks/session-<first uuid segment>/<id>.json`) + the `tasks` kv snapshot | `plugins/claude_code/task_fmt.py` (`tasks_dir`/`read_tasks`; the dashboard reads the kv, never the dir) |
 | The task line's GLYPHS (`✚` created / `✓` completed) | `plugins/claude_code/task_fmt.py` — `GLYPH_NEW`/`GLYPH_DONE`/`GLYPHS`; the web classifier (`opshtml/actclass.py`) IMPORTS them to recover the `task` activity class, because a paint op carries no "this is a task row" field |
 | Agent-team MAIL in the mirror: the `✉` sent / `●` delivered / `◉ read · ` glyphs, their yellow/green colours, both wordings (`Message …` for the row that CARRIES a message, `Mail … · delivered/read/idle` for the poller reporting on one), the body cap, Claude Code's teammate LIFECYCLE-FRAME vocabulary (`idle_notification`/`task_assignment`/… — the JSON its inbox records carry instead of prose), and the ops themselves | `plugins/claude_code/msgs.py` — `GLYPH_SENT`/`GLYPH_NEW`/`GLYPH_READ`/`READ_PREFIX`/`MSG_*_RGB`/`note_message`/`note_mail`/`CAP_TEXT`/`FRAME_PHRASE`/`FRAME_TEXT`/`frame`/`frame_words` (one builder words a frame for BOTH surfaces, so the pane's chip and the web's note cannot disagree about the same frame) + `sent_ops(...)` (the MESSAGE block, emitted by `mail_fmt.py` at send time — chip and text share a copy-group) and `event_ops(events, log)` (the poller's one-line transitions). Both stamp the message's `msg_id` as the op's `mid`. The plugin's `census()` returns the poller's ops, so the tool-agnostic `claude-scorebar.py` only emits what it is handed (it may not import a plugin's internals, and an entry script cannot be imported by the classifier that reads the glyphs back). Read side: `opshtml/actclass.mail_pair` is the ONE parser of those chips (wording fallback, legacy subject key, plumbing flag), and `mail_plumbing` the one place the "message vs mail system" rule lives |
-| Memory-wiki vocabulary: the root path (`~/wiki/01`), the project SCOPE (`~/code/01/aggregator-adapters`), the memory-op test, the project gate, the mirror ❖ `MARK`, the `memory` kv snapshot (write side), and the vault link-resolve/backlink/read helpers | `plugins/claude_code/memory.py` (`root()`/`project()`/`is_memory`/`in_scope`/`MARK`/`record`/`resolve`/`backlinks`/`read_note`; producers gate `is_memory(path) and in_scope(cwd)`, the dashboard serves `memory_scope` + reads the kv + renders notes via `dashboard/ext/memory/notehtml.py`, docs/dashboard.md *Memory tab*; the dashboard-side APPLICATION of that gate is `dashboard/read/session.memory_scope`/`memory_count` — its two readers, the overview payload and the SSE badge table, must not each re-apply it) |
+| Memory-wiki vocabulary: the root path (`~/wiki/01`), the project SCOPE (`~/code/01/aggregator-adapters`), the memory-op test, the project gate, the mirror ❖ `MARK`, the `memory` kv snapshot (write side), and the vault link-resolve/backlink/read helpers | `plugins/claude_code/memory.py` (`root()`/`project()`/`is_memory`/`in_scope`/`MARK`/`record`/`resolve`/`backlinks`/`read_note`; the producers reach it through `fileobs.py`'s registration row, the dashboard through the `dashboard/ext/memory/` extension package — which serves `memory_scope`, reads the kv and renders notes via `dashboard/ext/memory/notehtml.py`, docs/dashboard.md *Memory tab*; the dashboard-side APPLICATION of the gate is `dashboard/read/session.ext_scope`/`_ext_badge` — its two readers, the overview payload and the SSE badge table, must not each re-apply it) |
+| The web-dashboard EXTENSION surface (what an extension may declare — NAME/LABEL/TAB_AFTER/BADGE_SCOPED/PRODUCER + scope/badge/payload/route tables/sse_chans — and the fan-outs the core dashboard files consume) | `dashboard/ext/__init__.py` (`all_ext()` the explicit registry, `SURFACE`, `provider()` the single door, `Chan`/`Badge`, `badge_rows`/`session_gets`/`fixed_gets`/`session_posts`/`fixed_posts`/`sse_chans`); the JS twin is `extRegister` in `app.11-chrome.js`. Nothing outside `dashboard/ext/` imports `dashboard.ext.<name>` (contract-tested both ways in tests/test_l1_contracts.py) — that is the "adding an extension edits no core file" guarantee, docs/dashboard.md *Web extensions* |
 | The FILE-OP OBSERVER registration (which features see every main/subagent file op to bake a mirror marker and record a per-session kv snapshot) | `plugins/claude_code/fileobs.py` — the `Obs(key, match, mark, record)` `OBSERVERS` table + `matches(path, cwd)`; `file_fmt.py` and `substream_render.py` loop over it instead of hard-coding a feature (which is how the memory rows were enumerated at both sites before). A dashboard extension's hook-side producer registers here; the feature's own vocabulary stays in its own module (memory's in `memory.py`), the row is just the registration |
 | Pending modal-dialog kv keys (`ask-pending`/`plan-pending` stash + the `ask-draft` clear boundary) | `plugins/claude_code/ask_fmt.py` (`KEY`/`PLAN_KEY`/`DRAFT_KEY`; the dashboard WRITES `ask-draft` via `post_ask_draft`, but ask_fmt owns when it clears — same boundary as `ask-pending`) |
 | Monitor signature-token extraction (the `find_proc` wire contract) | `plugins/claude_code/stream.monitor_sig` |
