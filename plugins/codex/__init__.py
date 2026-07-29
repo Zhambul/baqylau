@@ -34,3 +34,118 @@ def on_session_start(log, cwd, sid):
 # rollout at its footer and booked straight into the scoreboard (its own
 # CODEX_PRICES — plugins/codex/stream.py), so there is no transcript for the web
 # to re-price. The fan-out finding nothing here is the correct outcome, not a gap.
+
+
+# --- the PROVIDER surface (docs/sessionapi.md; plugins.PROVIDERS declares each) ---
+# codex is now a first-class HOST and read source: it OWNS its rollouts and
+# answers the path-keyed read fan-outs for them (ctx/prompts/title/conversation/
+# effort), plus the codex-specific usage_windows + pending_dialog. Every one is a
+# thin delegation to the concern module (rollout=parse, read=rollout read models,
+# title=naming, hostctl=control, usage=app-server) — the same shape claude_code's
+# __init__ providers take. Read-only: these add NO audit rows (like ctx/goal),
+# EXCEPT usage_windows, which audits a degrade (usage.py).
+
+
+def owns(path):
+    """The ownership provider (plugins.owns / owns_by / host_of, and the gate
+    every path-keyed read fan-out applies through plugins._first_path) — True only
+    for a codex rollout this plugin genuinely speaks. Without it, first-plugin-wins
+    hands a codex rollout to a Claude parser whose bounded fast paths answer
+    confidently about a file they never read. See rollout.owns."""
+    from plugins.codex import rollout
+    return rollout.owns(path)
+
+
+def host():
+    """The HOST-control provider (plugins.host_named / hosts / host_of) — codex's
+    plugins.host.HostControl adapter. In P3 it drives NO gesture (caps all False),
+    so the dashboard greys codex's control buttons until P5 wires the app-server
+    transport. Imports `hostctl` (NOT `host` — this provider FUNCTION shadows a
+    `host` submodule). See plugins/codex/hostctl.py."""
+    from plugins.codex import hostctl
+    return hostctl.get()
+
+
+def context(transcript_path, main=False):
+    """The context-saturation provider (plugins.context fan-out) — a codex
+    rollout's last-turn total over its context window, as {used, window, pct,
+    model}; None for a fresh/unreadable rollout. See read.context."""
+    from plugins.codex import read
+    return read.context(transcript_path, main=main)
+
+
+def prompts(transcript_path):
+    """The human-prompt-count provider (plugins.prompts fan-out) — non-synthetic
+    user turns in a codex rollout, capped; None when none. Backs the ⊜ compact
+    gate for a codex session. See read.prompts."""
+    from plugins.codex import read
+    return read.prompts(transcript_path)
+
+
+def conversation(sid, pos=0, agent_id=""):
+    """The conversation provider (plugins.conversation fan-out) — ONE codex
+    identity's prose bubbles from its rollout (a sidecar run by agent_id, the
+    standalone host's own thread otherwise). THE core of codex sidecar → subagent
+    parity (docs/codex.md, docs/dashboard.md *Agent scope*). See read.conversation."""
+    from plugins.codex import read
+    return read.conversation(sid, pos, agent_id)
+
+
+def session_title(transcript_path):
+    """The session-title provider (plugins.session_title fan-out) — a codex
+    session's threads.title (state index), else its first user prompt. See
+    title.session_title."""
+    from plugins.codex import title
+    return title.session_title(transcript_path)
+
+
+def title_and_rename(transcript_path):
+    """The title+tail-rename provider (plugins.title_and_rename fan-out) — codex
+    keeps the name in its state index, not the rollout, so tail_rename is always
+    "". See title.title_and_rename."""
+    from plugins.codex import title
+    return title.title_and_rename(transcript_path)
+
+
+def renameable(transcript_path):
+    """The rename-ownership provider (plugins.renameable fan-out) — True for a
+    codex rollout this plugin owns (keeps a Claude /rename off a codex host's
+    window and vice-versa). See title.renameable."""
+    from plugins.codex import title
+    return title.renameable(transcript_path)
+
+
+def set_session_title(transcript_path, name):
+    """The session-rename provider (plugins.set_session_title fan-out) — write
+    threads.title for a codex session (the PARKED web-rename path; live rename is
+    P5's HostControl.rename); None for a non-codex path. See title.set_session_title."""
+    from plugins.codex import title
+    return title.set_session_title(transcript_path, name)
+
+
+# DELIBERATELY NO effort_default provider. That fan-out is cwd-keyed (not
+# ownership-gated by owns(), because a cwd names no file to claim) and picks the
+# first TRUTHY answer — so a codex provider reading the GLOBAL ~/.codex/config.toml
+# `model_reasoning_effort` would answer for a CLAUDE session too, the moment Claude
+# has no saved effort of its own, shadowing the model's default (a Claude opus
+# agent card read "low" off this machine's codex config). Codex's own effort is not
+# a cwd fact anyway: it lives per-turn in the rollout (turn_context.effort, surfaced
+# by context()), and the ✧ effort button is capability-gated OFF for codex (no live
+# /effort). So codex declines this fan-out entirely — read.codex_effort stays as the
+# rollout-side reader context() uses, not a cwd-keyed provider.
+
+
+def pending_dialog(sid):
+    """The pending-dialog provider (plugins.pending_dialog fan-out) — a codex
+    run's OPEN request_user_input question for the web ask card (P5 drives it),
+    or None. See read.pending_dialog."""
+    from plugins.codex import read
+    return read.pending_dialog(sid)
+
+
+def usage_windows():
+    """The account rate-limit provider (plugins.usage_windows fan-out) — codex's
+    5h/weekly windows over `codex app-server` account/rateLimits/read (P6 renders
+    them), or None. See usage.usage_windows."""
+    from plugins.codex import usage
+    return usage.usage_windows()

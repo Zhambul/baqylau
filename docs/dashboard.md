@@ -7744,6 +7744,24 @@ the label up off the run's row (*Agent scope*). A codex run exposes no
 its footer (`CODEX_PRICES`), so the scoped scoreboard simply shows no Σ/≈cost
 rather than a second, differently-derived figure.
 
+**Codex as a first-class host (read side).** A STANDALONE codex session (its
+own tab, its native SessionStart hook) is now a first-class host card: it gets
+a ctx bar, a title, and a ⊜ compact gate from codex's own read providers over
+its rollout (`plugins/codex/read.py` `context`/`prompts`, `plugins/codex/
+title.py`), and its blocks fold as `ran N codex runs` under their own
+`ACT_CODEX` act rather than the generic `ran N agents`. A codex SIDECAR inside
+a Claude session reads like a subagent in agent scope: its prose becomes
+conversation BUBBLES from its rollout (`plugins.conversation` over the
+response-item register — rollout-backed runs only; a companion `.log` run has
+no rollout to re-bubble and keeps its prose ops), while its `▶` exec / patch
+ops stay, and `actclass.prose_block` drops the rollout-backed prose ops in
+scope so nothing doubles. Codex's control buttons (interrupt/rename/compact/
+ask…) are greyed by the caps gate until the control gestures land — its
+`CodexHost` overrides no gesture yet, so every `caps` bit reads False. Rate
+limits come from `plugins/codex/usage.py` `usage_windows()` (the `codex
+app-server` `account/rateLimits/read` JSON-RPC, not the per-session rollout
+figure). See docs/codex.md *Codex in the web dashboard*.
+
 ## Design language
 
 Hermes-harness-inspired (Nous Research's Hermes Agent dashboard): the whole

@@ -254,3 +254,100 @@ its own mirror when run standalone (wiring in [wiring.md](wiring.md)).
       nested from standalone, needs a per-user rc edit, and misses codex launched
       any other way. The native hook fires for every entry point and carries the
       session identity the wrapper lacked.
+
+## Codex in the web dashboard (a first-class HOST + read source)
+
+codex is a **host tool**, not only a mirror stream: it OWNS its rollouts and
+answers the same read fan-outs a Claude session does (title, ctx bar,
+conversation, the compact gate), plus two codex-specific ones. Every provider is
+**read-side** and adds NO audit rows (like ctx/goal), except `usage_windows`,
+which audits a degrade.
+
+- **Ownership (`plugins/codex/rollout.owns`, the single-owner recogniser).** A
+  `rollout-<ts>-<uuid>.jsonl` under a `sessions/` tree is codex's; anything else is
+  not (a Claude transcript above all — a bare `<uuid>.jsonl`). It is a PURE
+  filename/layout test (no file read): ownership must be answerable once per
+  session per poll, and the `rollout-…-<full uuid>` stem is codex-specific, so the
+  vocabularies cannot collide. This is what gates every path-keyed read fan-out
+  (`plugins._first_path`) so a codex rollout never reaches a Claude parser and
+  vice-versa, and what makes `plugins.owns_by(rollout)` name `codex` (so
+  `session_caps` attributes the session to the codex host).
+- **The codex HostControl (`plugins/codex/hostctl.CodexHost`).** `name="codex"`,
+  `launchable=True`, `resume_words → ["resume", sid]`. In this phase it drives NO
+  control gesture, so its derived caps read all-**False** and the dashboard GREYS
+  every control button for a codex session — the honest state until the codex
+  app-server transport is wired (interrupt via `turn/interrupt`, rename via
+  `thread/name/set`, ask via the `request_user_input` reply). Leaving a gesture
+  inert is not a stub gap: a False cap is the correct answer while the transport
+  is unwired.
+- **Read providers (`plugins/codex/read.py`, over `rollout.parse`).**
+  - `context(path)` — the last `token_count`'s **`last_token_usage.total_tokens`**
+    over `model_context_window` (the cumulative `total_token_usage` never resets
+    across compaction and must NOT be used), `model` from the last `turn_context`.
+    Feeds the ctx bar on session/agent cards.
+  - `prompts(path)` — non-synthetic user `chat` turns (capped, fail-open None like
+    Claude's), from the RESPONSE_ITEM register so a post-abort/queued prompt still
+    counts. Feeds the ⊜ compact gate.
+  - `conversation(sid, pos, agent_id)` — maps the RESPONSE_ITEM register onto the
+    dashboard's conversation records: a non-synthetic `chat` → a `prompt` (user)
+    or `message` (assistant) bubble, a `think` → a `message` bubble. Resolves a
+    SIDECAR run by `agent_id` (`sessionapi.codex_runs`) and the STANDALONE host's
+    own thread otherwise. This is the core of sidecar → subagent parity below.
+- **Titles (`plugins/codex/title.py`, the single-owner naming source).** codex
+  keeps the session name in its per-machine sqlite index
+  `~/.codex/state_<N>.sqlite` (`threads.title`, keyed by the thread uuid == the
+  rollout uuid), NOT in the rollout — so `title_and_rename` returns an empty
+  tail-rename (nothing in-file to reconcile the durable web-rename override
+  against), `session_title` falls back to the first real user prompt, and
+  `set_session_title` writes `threads.title` (the PARKED web-rename path; a LIVE
+  rename is P5's `HostControl.rename`). The numbered filename is version-fragile,
+  so the index is resolved by globbing the highest `N` and every read degrades to
+  "" on any error.
+- **`pending_dialog(sid)`** — the OPEN `request_user_input` (codex's plan-mode
+  question) derived READ-side from the rollout tail: the newest `ask` record with
+  no following `function_call_output` for its call id. The web question card's
+  read surface (P5 drives the answer).
+- **`usage_windows()`** — codex account rate limits over the APP SERVER (`codex
+  app-server` JSON-RPC `account/rateLimits/read`, a bounded TTL-cached spawn that
+  needs no live session — the stable source, unlike the nullable per-session
+  `token_count.rate_limits`). Normalised to `{planType, windows:[{used_pct,
+  window_mins, resets_at}]}`; degrades to None on any failure and audits it once
+  (`A.error`), never raises.
+- **effort** — `model_reasoning_effort` from `~/.codex/config.toml`, behind
+  `plugins.effort_default` (codex has no per-project/account effort config).
+
+### View modes — a codex run is its own act
+
+A codex block wears the **codex palette** (`core/slots.CODEX_PALETTE`, disjoint
+from every other), so `opshtml.actclass` classifies it `ACT_CODEX` — a standalone
+codex host's blocks used to fall through to the generic `agent` act and read "ran
+N agents". `ACT_CODEX` has a matching `VIEW_FRAGMENTS` row (`ran N codex runs`)
+and folds in default + focus, so default NAMES the codex run and verbose unfolds
+it (the page's `act`↔fragment table is grep-pinned in both directions).
+
+### Sidecar → subagent parity
+
+A codex run launched INSIDE a Claude session must read like a subagent in agent
+scope: its intermediate messages/reasoning/commands all visible. Three parts:
+1. **Grammar** — the rollout `chat`/`think`/exec/patch records already parse.
+2. **`conversation()`** — the run's PROSE becomes bubbles from its rollout,
+   exactly as a Claude subagent's does.
+3. **Prose-op drop, ROLLOUT-backed only.** In scope, a codex run's prose ops
+   (`⇢`/`✎`/`⇠`/`⋯`) are dropped so the bubbles don't DOUBLE them
+   (`actclass.prose_block`), while its exec/patch ops STAY. But this drop fires
+   ONLY for a run whose transcript is a rollout (`.jsonl`) — a **companion `.log`**
+   run has no rollout to re-bubble from, so its prose must stay as ops.
+   `read/mirror.agent_scope` signals the difference with a `codexprose:<label>`
+   marker in the scope set (present only for a rollout-backed run); `prose_block`
+   drops a codex prose op only when that marker is present.
+
+### The standalone self-run empty-scope fix
+
+A codex running on its OWN writes its session transcript AS a rollout (uuid ==
+sid), and the standalone watcher streams that very rollout under the audit
+`streams` kind `codex` — so it used to appear in `sessionapi.codex_runs()` as a
+clickable "agent". But it is the SESSION itself, and a standalone run's ops are
+UNSTAMPED (codex is the main agent), so clicking it scoped to `{codex:<label>}`
+matched no op and yielded an EMPTY mirror. `codex_runs()` now drops the run whose
+rollout IS the session's own `transcript_path`, so only genuine SIDECAR runs
+(inside a Claude host, a different transcript) list as agents.

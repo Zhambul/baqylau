@@ -788,14 +788,14 @@ def test_ownership_falls_back_to_the_first_record(tmp_path):
 def test_owns_by_names_one_owner_at_most(tmp_path):
     """`owns_by` returns the owning plugin's short name, None when nobody
     claims the file — and NO path is claimed by two plugins. The last part is
-    the invariant that keeps first-plugin-wins meaningful once a second tool
-    declares ownership; today codex declares none, and "unclaimed" is the
-    honest answer for a rollout, not a wrong one."""
+    the invariant that keeps first-plugin-wins meaningful now that a second tool
+    declares ownership: claude_code owns its transcripts, codex owns its rollouts,
+    and no path is claimed by both."""
     import plugins
 
     tpath, rollout = _claude_transcript(tmp_path), _codex_rollout(tmp_path)
     assert plugins.owns_by(tpath) == "claude_code"
-    assert plugins.owns_by(rollout) is None
+    assert plugins.owns_by(rollout) == "codex"
     assert plugins.owns_by(str(tmp_path / "projects" / "h" / "gone.jsonl")) is None
     assert plugins.owns_by("") is None
     for path in (tpath, rollout):
@@ -823,30 +823,42 @@ def test_path_keyed_fanouts_still_answer_for_an_owned_transcript(tmp_path):
     assert plugins.goal(tpath) is None
 
 
-def test_no_path_keyed_fanout_answers_for_a_rollout_it_doesnt_own(tmp_path):
-    """The bug this exists for: `plugins.prompts(<codex rollout>)` was 8.
+def test_a_rollout_is_owned_by_codex_not_the_claude_parser(tmp_path):
+    """The bug this exists for: `plugins.prompts(<codex rollout>)` was 8 — the
+    Claude parser answering for a file that is not its own.
 
-    Note what is NOT fixed here — `prompt_count` still fails open on a big
-    file, because for a Claude transcript that is the right answer (the count
-    only ever argues for DISABLING a button). The parser is asked a question it
-    cannot answer honestly; the fix is to stop asking it."""
+    The fix is ownership, and now that CODEX declares it, the fan-out routes a
+    rollout to codex and SKIPS the Claude parser. codex may still fail open on a
+    big rollout (its compact gate does, exactly as the Claude one does for a big
+    transcript — the count only ever argues for DISABLING a button), but that is
+    codex's honest answer about codex's file: the leak was the WRONG plugin
+    answering, and it no longer does. `transcript.prompt_count` called DIRECTLY
+    still fails open — the point is that the fan-out no longer calls it here."""
     import plugins
+    from plugins import claude_code
     from plugins.claude_code import transcript
 
     rollout = _codex_rollout(tmp_path)
     assert transcript.prompt_count(rollout) == transcript.PROMPT_CAP, \
-        "the parser's fail-open fast path is the premise of this test"
-    assert plugins.prompts(rollout) is None
+        "the Claude parser's fail-open fast path is the premise of this test"
+    # the Claude parser is skipped; codex owns and answers
+    assert plugins.owns_by(rollout) == "codex"
+    assert plugins._owns(claude_code, rollout) is False
+    assert plugins.prompts(rollout) == transcript.PROMPT_CAP  # codex's own fail-open
+    assert plugins.renameable(rollout) is True
+    # nothing to report from this rollout's CONTENT (no title/usage/goal in it)
     assert plugins.session_title(rollout) == ""
     assert plugins.title_and_rename(rollout) == ("", "")
-    assert plugins.renameable(rollout) is False
     assert plugins.context(rollout) is None
-    assert plugins.goal(rollout) is None
+    assert plugins.goal(rollout) is None                     # codex has no goal provider
 
 
-def test_set_session_title_never_writes_to_an_unowned_file(tmp_path):
-    """The one path-keyed fan-out that WRITES: a rollout must not grow a Claude
-    `agent-name` record, and the owned transcript must still take one."""
+def test_set_session_title_never_writes_a_claude_record_to_a_rollout(tmp_path):
+    """The one path-keyed fan-out that WRITES: a rollout must never grow a Claude
+    `agent-name` record. The Claude owner takes one; codex owns the rollout and
+    writes its OWN name store (its `threads.title` index, absent in this fixture,
+    so its write returns False) — never the rollout FILE, so it stays byte-stable
+    either way."""
     import os
 
     import plugins
@@ -855,7 +867,9 @@ def test_set_session_title_never_writes_to_an_unowned_file(tmp_path):
     before = os.path.getsize(rollout)
     assert plugins.set_session_title(tpath, "Renamed by the web") is True
     assert plugins.session_title(tpath) == "Renamed by the web"
-    assert plugins.set_session_title(rollout, "Renamed by the web") is None
+    # codex owns the rollout: it writes threads.title (no index here -> False),
+    # NOT the rollout file — so the rollout never gains a Claude agent-name record
+    assert plugins.set_session_title(rollout, "Renamed by the web") is False
     assert os.path.getsize(rollout) == before
 
 
@@ -863,13 +877,17 @@ def test_a_plugin_without_owns_is_asked_exactly_as_before(tmp_path, monkeypatch)
     """Ownership is OPT-IN: the gate skips a plugin only when that plugin
     DECLARES `owns`. A plugin that never said which files are its own keeps
     being asked about everything, which is what made this change a no-op for
-    codex/otel — and what stops a future plugin going silent by omission."""
+    otel — and what stops a future plugin going silent by omission.
+
+    `otel` is the example now that codex declares `owns` (its rollout ownership);
+    otel is a cross-cutting subsystem, not an agent tool, and has no files of its
+    own, so it is the plugin still asked about everything."""
     import plugins
-    from plugins import claude_code, codex
+    from plugins import claude_code, otel
     from plugins.claude_code import transcript
 
     rollout = _codex_rollout(tmp_path)
-    assert plugins._owns(codex, rollout) is True             # declares no owns
+    assert plugins._owns(otel, rollout) is True              # declares no owns
     assert plugins._owns(claude_code, rollout) is False
     monkeypatch.delattr(claude_code, "owns")
     assert plugins.prompts(rollout) == transcript.PROMPT_CAP, \
@@ -930,21 +948,26 @@ def test_claude_code_host_drives_every_gesture():
 
 
 def test_hosts_and_host_of(tmp_path):
-    """hosts() enumerates the launchable tools for the new-session picker;
-    host_of resolves a path to its owning host via owns_by (None for a rollout —
-    codex declares no `owns` yet — and for an empty/unknown path)."""
+    """hosts() enumerates the launchable tools for the new-session picker (both
+    claude_code and codex now); host_of resolves a path to its owning host via
+    owns_by — claude_code for a transcript, codex for a rollout, None for an
+    empty/unknown path."""
     import plugins
+    from plugins.host import GESTURES
 
     hs = {h["name"]: h for h in plugins.hosts()}
-    assert "claude_code" in hs
+    assert "claude_code" in hs and "codex" in hs
     assert hs["claude_code"]["launchable"] is True and hs["claude_code"]["label"]
+    assert hs["codex"]["launchable"] is True and hs["codex"]["label"]
 
     tpath, rollout = _claude_transcript(tmp_path), _codex_rollout(tmp_path)
     assert plugins.host_of(tpath).name == "claude_code"
-    assert plugins.host_of(rollout) is None
+    assert plugins.host_of(rollout).name == "codex"
     assert plugins.host_of("") is None
     assert plugins.host_named("nope") is None
     assert plugins.host_caps("claude_code")["interrupt"] is True
+    # codex drives no gesture yet (P5): every cap False
+    assert plugins.host_caps("codex") == {g: False for g in GESTURES}
     assert plugins.host_caps("nope") == {}
 
 

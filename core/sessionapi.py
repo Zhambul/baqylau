@@ -642,6 +642,20 @@ def codex_runs(sid):
                       "src_path, task_id, started_at, ended_at, end_reason,"
                       " lines_emitted",
                       lambda r: codex_aid(r[0]), fold)
+    # Drop the STANDALONE host's OWN run. A codex running on its own writes its
+    # session transcript AS a rollout (uuid == sid), and the standalone watcher
+    # streams that very rollout under kind='codex' — so it lands here as a "run".
+    # But it is the SESSION itself, not a nested sidecar: a standalone run's ops
+    # are UNSTAMPED (codex is the main agent there), so listing it as an agent
+    # mints a clickable card whose scope — {codex:<label>} — matches no op, and
+    # clicking it yields an EMPTY mirror (the self-run empty-scope bug,
+    # docs/codex.md). Its rollout IS the session's own transcript, which is the
+    # tell. A SIDECAR codex run (inside a Claude host) has a different transcript
+    # from the Claude session and is kept.
+    own = (session_row(sid) or {}).get("transcript_path") or ""
+    if own:
+        out = {aid: r for aid, r in out.items()
+               if (r.get("transcript") or "") != own}
     return sorted(out.values(), key=lambda r: r.get("started_at") or 0)
 
 

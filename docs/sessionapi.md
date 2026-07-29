@@ -147,6 +147,18 @@ declines drill-down (its activity log is not a rollout); a STANDALONE codex
 session's own rollout answers `activity(sid)` with no agent_id — the
 rollout filename uuid IS the sid.
 
+`codex_runs()` DROPS a standalone host's OWN run from the agent list, precisely
+because the rollout uuid is the sid: that run's rollout equals the session's own
+`transcript_path`, and its ops are UNSTAMPED (codex is the main agent there, so
+there is no `codex:<label>` src on them). Listed as a scoped agent, clicking it
+would scope the mirror to `{codex:<label>}` and match ZERO ops — an empty mirror
+(the self-run empty-scope bug). Excluding it leaves only genuine SIDECAR runs
+(inside a Claude host, whose rollout differs from the Claude session's own
+transcript), whose stamped ops the scope resolves correctly; the codex
+`conversation` provider then re-bubbles a rollout-backed sidecar's prose from its
+own rollout, exactly as a Claude subagent's transcript does (docs/codex.md
+*Sidecar → subagent parity*).
+
 ## Fidelity ladder (what drill-down can and cannot show)
 
 The read model's fidelity limit is its sources', stated rather than hidden:

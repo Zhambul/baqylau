@@ -1,0 +1,265 @@
+# plugins/codex/read.py — codex ROLLOUT read models for the web dashboard.
+#
+# The dashboard's read-side providers a codex run answers (ctx saturation, the
+# ⊜ compact gate's prompt count, the scoped mirror's conversation bubbles, the
+# pending question card, the saved effort level). Each is the codex twin of a
+# plugins/claude_code/transcript.py read model and is wired into the SAME
+# registry fan-out (plugins/__init__.py), gated by codex's `owns` — so a Claude
+# transcript never reaches here and a codex rollout never reaches a Claude parser
+# (plugins._first_path). Read-only: like ctx/goal on the Claude side these add NO
+# audit rows (the number is derived, and the rollout it derives from is already
+# the durable record).
+#
+# The PARSE half is plugins/codex/rollout.py (the one owner of the rollout record
+# grammar); this module only READS files and maps rollout.parse's typed records
+# onto the dashboard's shapes. It is the codex analogue of transcript.py's
+# context_probe / prompt_count / conversation_for, kept here (not in rollout.py)
+# so rollout.py stays pure/I/O-free.
+import json
+import os
+from datetime import datetime
+
+from core import tail as TL
+
+from plugins.codex import rollout as RO
+
+# Bounded windows — the same discipline as transcript.py: a saturation/gate read
+# must never cost a full multi-MB rollout scan (a `codex exec` rollout runs to
+# hundreds of KB), so the tail/head is capped and the size gate fails OPEN.
+CTX_TAIL_B = 262144          # tail bytes context() scans for the last token_count
+PROMPT_SCAN_B = 256 * 1024   # a rollout bigger than this is `cap` unread (fail-open)
+PROMPT_CAP = 8               # stop counting prompts here — the gate never needs more
+
+
+def _complete_lines(path, pos):
+    """Complete text lines from byte `pos`: ([line, …], new_pos). A trailing
+    partial line is NOT consumed (new_pos stops before it) so json never sees a
+    torn record — the codex twin of transcript._complete_lines (the dependency
+    rule forbids importing the Claude module for it)."""
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(pos)
+            data = fh.read()
+    except OSError:
+        return [], pos
+    end = data.rfind(b"\n")
+    if end < 0:
+        return [], pos
+    return data[:end].decode("utf-8", "replace").split("\n"), pos + end + 1
+
+
+def _line_ts(s):
+    """The rollout line's ENVELOPE `timestamp` as an epoch float, or None. Codex
+    stamps every record's envelope with an ISO-8601 `timestamp`; the conversation
+    merge interleaves bubbles into the op stream by it (the op stream carries a
+    wall-clock `_ts`), falling back to arrival order when absent."""
+    try:
+        v = json.loads(s).get("timestamp")
+    except Exception:
+        return None
+    if not isinstance(v, str) or not v:
+        return None
+    try:
+        return datetime.fromisoformat(v.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return None
+
+
+def context(path, main=False):
+    """Context saturation for a codex rollout — the LAST `token_count` record's
+    `last_token_usage.total_tokens` over `model_context_window`, as {"used",
+    "window", "pct", "model"}; None when the tail holds no usable usage (a fresh
+    run, an unreadable file). The codex twin of transcript.context_probe.
+
+    codex's CUMULATIVE `total_token_usage` never resets across a compaction, so
+    the ctx bar reads the LAST TURN's total (`last`) — the one figure that
+    measures the live occupancy (docs/codex.md *token_count keeps three things*).
+    `model` is the last `turn_context`'s model id; `main` is accepted for the
+    provider arity but ignored — codex has no sidechain records to skip."""
+    lines = TL.tail_lines(path, CTX_TAIL_B)
+    if lines is None:
+        return None
+    used = window = None
+    model = ""
+    for raw in reversed(lines):
+        if used is None and b'"token_count"' in raw:
+            try:
+                rec = RO.parse(json.loads(raw))
+            except Exception:
+                rec = None
+            if rec and rec["kind"] == "usage" and isinstance(rec.get("last"), dict) \
+                    and isinstance(rec.get("window"), int) and rec["window"] > 0:
+                tot = rec["last"].get("total_tokens")
+                if isinstance(tot, int) and tot > 0:
+                    used, window = tot, rec["window"]
+        elif not model and b'"turn_context"' in raw:
+            try:
+                rec = RO.parse(json.loads(raw))
+            except Exception:
+                rec = None
+            if rec and rec["kind"] == "turn_context":
+                model = rec.get("model") or ""
+        if used is not None and model:
+            break
+    if used is None or not window:
+        return None
+    return {"used": used, "window": window,
+            "pct": min(100, used * 100 // window), "model": model}
+
+
+def prompts(path, cap=PROMPT_CAP):
+    """How many NON-synthetic user turns a codex rollout holds, capped at `cap`;
+    None when it has nothing to say. The codex twin of transcript.prompt_count and
+    the ⊜ compact gate's codex source — so it FAILS OPEN identically (a rollout
+    over PROMPT_SCAN_B is `cap` unread, an unreadable one `cap`, an empty one
+    None), because the count only ever argues for DISABLING the button.
+
+    A real user turn is a `response_item/message` with role user that is not
+    codex machinery (rollout.is_synthetic — the context blocks codex re-injects
+    as user messages every turn). The RESPONSE_ITEM register is used, not the
+    event_msg `user_message`, so a post-abort/queued prompt still counts."""
+    if not path:
+        return None
+    try:
+        if os.path.getsize(path) > PROMPT_SCAN_B:
+            return cap
+        with open(path, "rb") as f:
+            raw = f.read(PROMPT_SCAN_B)
+    except OSError:
+        return cap
+    n = 0
+    for ln in raw.split(b"\n"):
+        if b'"message"' not in ln:            # cheap prefilter before the parse
+            continue
+        try:
+            rec = RO.parse(json.loads(ln))
+        except Exception:
+            continue
+        if rec and rec["kind"] == "chat" and rec.get("role") == "user" \
+                and not rec.get("synthetic"):
+            n += 1
+            if n >= cap:
+                break
+    return n or None
+
+
+def _rollout_for(sid, agent_id):
+    """The rollout path for one identity, or "": a SIDECAR/subagent codex run
+    (agent_id names it — resolved off sessionapi.codex_runs, whose transcript IS
+    the run's rollout), or the STANDALONE host's own session rollout (agent_id
+    empty — session_row's transcript_path, gated by owns). Lazy import of
+    sessionapi (a read-side dependency, not a hook path)."""
+    from core import sessionapi as API
+    if agent_id:
+        for rec in API.codex_runs(sid):
+            if rec.get("agent_id") == agent_id:
+                path = rec.get("transcript") or ""
+                return path if RO.owns(path) and os.path.isfile(path) else ""
+        return ""
+    path = (API.session_row(sid) or {}).get("transcript_path") or ""
+    return path if RO.owns(path) and os.path.isfile(path) else ""
+
+
+def conversation(sid, pos=0, agent_id=""):
+    """ONE codex identity's conversation records from byte `pos`, as
+    (records, new_pos) — the codex twin of transcript.conversation_for, behind
+    plugins.conversation(). None when this plugin has no rollout for the pair
+    (the fan-out then asks / has already been answered by the next plugin).
+
+    Maps the RESPONSE_ITEM register (docs/codex.md *Two registers*): a
+    non-synthetic `chat` becomes a `prompt` (role user) or `message` (assistant)
+    bubble, a `think` (reasoning summary) a `message` bubble — the record shape
+    dashboard/read/mirror.conv_items merges (kind/text/anchor/ts). Each carries
+    the line's envelope `ts`; `anchor` is None (a codex op's copy-group is a
+    random new_group carrying no tool_use id to match on, so the merge places a
+    bubble by TIMESTAMP — the codex op stream's `_ts` is real-time-tailed, close
+    enough for order).
+
+    THIS is codex sidecar → subagent parity (deliverable C): agent scope drops a
+    codex run's PROSE ops (opshtml.actclass.prose_block, codex palette) and takes
+    its prose from HERE instead, exactly as a Claude subagent's does — while its
+    exec/patch ops stay in the scoped mirror. The STANDALONE main-thread branch
+    (agent_id empty) resolves too, but note the fan-out asks claude_code FIRST and
+    its rollout parse returns an empty [] (a non-None answer) — which SHADOWS this
+    branch on purpose: a standalone codex run already paints its prose into its
+    (unstamped) ops, so bubbles here would DOUBLE it. The branch exists for
+    direct callers/tests and a future main-view that drops those ops."""
+    path = _rollout_for(sid, agent_id)
+    if not path:
+        return None
+    lines, new_pos = _complete_lines(path, pos)
+    out = []
+    for s in lines:
+        s = s.strip()
+        if not s:
+            continue
+        try:
+            rec = RO.parse(json.loads(s))
+        except Exception:
+            continue
+        if rec is None:
+            continue
+        k = rec["kind"]
+        ts = _line_ts(s)
+        if k == "chat" and not rec.get("synthetic"):
+            role = rec.get("role") or ""
+            if role == "user":
+                out.append({"kind": "prompt", "text": rec["text"],
+                            "anchor": None, "ts": ts})
+            elif role == "assistant":
+                out.append({"kind": "message", "text": rec["text"],
+                            "anchor": None, "ts": ts})
+            # developer/system non-synthetic turns are codex machinery — skip
+        elif k == "think" and rec.get("text"):
+            out.append({"kind": "message", "text": rec["text"],
+                        "anchor": None, "ts": ts})
+    return out, new_pos
+
+
+def pending_dialog(sid):
+    """The codex run's OPEN question, or None — the pending `request_user_input`
+    (rollout `ask` record) with no answer after it, as {"kind": "ask",
+    "tool_use_id", "questions": [...]} for the web question card (P5 drives it;
+    this is the read surface). Derived READ-SIDE from the standalone host's own
+    rollout tail (agent_id-less — a sidecar's questions surface in agent scope
+    later): the newest `ask` record whose call is not yet answered by a following
+    `function_call_output` is open. `tool_use_id` is the ask's call id so the
+    driver can pair the answer. None when no rollout / no open ask."""
+    path = _rollout_for(sid, "")
+    if not path:
+        return None
+    lines = TL.tail_lines(path, CTX_TAIL_B)
+    if lines is None:
+        return None
+    answered = set()
+    for raw in reversed(lines):
+        # An answer (function_call_output) for a call id closes that ask; scan
+        # newest→oldest and return the first ask still open.
+        if b'"function_call_output"' in raw or b'"custom_tool_call_output"' in raw:
+            try:
+                cid = (json.loads(raw).get("payload") or {}).get("call_id")
+            except Exception:
+                cid = None
+            if cid:
+                answered.add(cid)
+            continue
+        if b'"request_user_input"' not in raw:
+            continue
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue
+        rec = RO.parse(o)
+        if not rec or rec["kind"] != "ask":
+            continue
+        cid = (o.get("payload") or {}).get("call_id") or ""
+        if cid in answered:
+            continue
+        return {"kind": "ask", "tool_use_id": cid, "questions": rec["questions"]}
+    return None
+
+
+# NOTE: codex deliberately provides NO cwd-keyed effort_default (see
+# plugins/codex/__init__.py) — a global-config read would leak into Claude
+# sessions. A codex session's effort is a per-turn rollout fact, surfaced by
+# context() from turn_context.effort.

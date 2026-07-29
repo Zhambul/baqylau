@@ -1984,10 +1984,12 @@ def test_post_new_session_refuses_resume_of_an_unowned_transcript(dash,
     rides the same session cards and the same "resume & send" composer, but its
     sid is a rollout uuid: `claude --resume <it>` finds no conversation — the
     dead tab of the guard above, with a perfectly healthy file on disk. The
-    gate is plugins.owns_by (docs/dashboard.md *Resume & send*), and the
-    refusal lands a web-launch ok:False, why=unsupported tool row. Teaching
-    codex to relaunch itself is a later phase; refusing loudly is the honest
-    interim."""
+    gate is plugins.owns_by (docs/dashboard.md *Resume & send*): now that codex
+    declares ownership it names the rollout "codex" (was unclaimed/None), and
+    either way a non-`claude_code` owner is refused with a web-launch ok:False,
+    why=unsupported tool row. Teaching codex to relaunch itself (via its own
+    `codex resume`) is a later phase; refusing the claude `--resume` loudly is the
+    honest interim."""
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)

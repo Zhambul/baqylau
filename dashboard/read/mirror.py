@@ -291,6 +291,14 @@ def agent_scope(sid, agent):
         if rec.get("agent_id") == agent and rec.get("kind") == "codex":
             if rec.get("desc"):
                 srcs.add("codex:" + rec["desc"])
+                # A ROLLOUT-backed codex run (its transcript is a .jsonl)
+                # re-bubbles its prose through plugins.conversation, so its prose
+                # OPS are dropped in scope (opshtml.actclass.prose_block) — the
+                # marker below is that signal. A COMPANION .log run has no rollout,
+                # so it gets no marker and its prose stays as ops (docs/codex.md
+                # *sidecar parity*).
+                if (rec.get("transcript") or "").endswith(".jsonl"):
+                    srcs.add("codexprose:" + rec["desc"])
             break
     return srcs
 

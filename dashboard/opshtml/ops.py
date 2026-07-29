@@ -353,7 +353,7 @@ def op_items(ops, key="", ids=None, carry=None, scope=None):
             op = actclass.as_lead(op)
             t = op.get("t")             # as_lead may re-shape the op (gut -> line)
             g = op.get("g") or None
-            if actclass.prose_block(op):
+            if actclass.prose_block(op, scope):
                 if g:
                     cs.setdefault("drop", set()).add(g)
                 continue

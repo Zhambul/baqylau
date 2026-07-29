@@ -72,6 +72,8 @@ PROVIDERS = {
     "prompts": 1,            # (transcript_path)    — human prompts, capped
     "conversation": 3,       # (sid, pos, agent_id) — ONE identity's records
     "ask_preamble": 2,       # (sid, tool_use_id)   — the ask card's preamble
+    "pending_dialog": 1,     # (sid)                — a host's OPEN modal (ask)
+    "usage_windows": 0,      # ()                   — a host's rate-limit windows
 }
 
 
@@ -548,3 +550,24 @@ def ask_preamble(sid, tool_use_id):
     plugin that recognizes the sid, None otherwise. "" when the plugin owns the
     sid but found no prose. Same exception contract as conversation()."""
     return _first("ask_preamble", sid, tool_use_id)
+
+
+def pending_dialog(sid):
+    """A host's OPEN modal dialog for the web question/plan card — the first
+    plugin that recognizes the sid returns {"kind", "tool_use_id", …}, None
+    otherwise. The Claude ask/plan dialogs ride a hook-stashed kv
+    (dashboard/read/session.ask_pending), so claude_code exposes no provider
+    here; codex has no such hook (docs/codex.md), so it derives the pending
+    request_user_input READ-side from the rollout tail. Read-side like
+    conversation(); same exception contract as census()."""
+    return _first("pending_dialog", sid)
+
+
+def usage_windows():
+    """A host's own account rate-limit windows — {planType, windows:[{used_pct,
+    window_mins, resets_at}]} from the first plugin that has them, None otherwise.
+    Claude's per-account caps ride the status-line/model_windows path; codex has
+    no status line, so it reads them off `codex app-server`
+    account/rateLimits/read (plugins.codex.usage). Read-side; same exception
+    contract as accounts() (the caller is the read-side dashboard, not a hook)."""
+    return _first("usage_windows")

@@ -59,12 +59,15 @@ ACT_TASK    = "task"      # a task-list row (✚ created / ✓ completed)
 ACT_MAIL    = "mail"      # agent-team mail surfaced in the mirror (● / ◉ read)
 ACT_SKILL   = "skill"     # a Skill invocation (✦ / `Skill(<name>)`)
 ACT_TOOL    = "tool"      # any OTHER tool call (· ToolSearch / WebFetch / Grep …)
+ACT_CODEX   = "codex"     # a codex run's block (standalone host OR sidecar) — its
+#                           OWN act, so default names the codex run rather than
+#                           folding it into "ran N agents" (docs/codex.md)
 ACT_WARN    = "warn"      # the audit warning light's ⚠ one-liner
 ACT_MSG     = "msg"       # conversation text (stamped by read.mirror, not here)
 
 ACTS = (ACT_BASH, ACT_BG, ACT_MONITOR, ACT_READ, ACT_EDIT, ACT_WRITE,
         ACT_AGENT, ACT_TEAM, ACT_TASK, ACT_MAIL, ACT_SKILL, ACT_TOOL,
-        ACT_WARN, ACT_MSG)
+        ACT_CODEX, ACT_WARN, ACT_MSG)
 
 # The main session's own command colours — the semantic table, imported. A chip
 # in any of these is main-session command activity; anything else is a palette
@@ -287,6 +290,18 @@ def lead_head(text):
 # reads as command family.
 _AGENT_RGB = frozenset(tuple(c) for c in (SL.SUB_PALETTE + SL.TEAM_PALETTE))
 
+# The codex palette a codex run's chips wear (core/slots.CODEX_PALETTE) — disjoint
+# from every other palette and from the semantic colours, so a chip in it is a
+# codex block whoever the host is (a standalone codex session, unstamped; a codex
+# sidecar inside a Claude host, `codex:<label>`-stamped). Classifying it ACT_CODEX
+# is deliverable B; dropping its PROSE in agent scope is deliverable C.
+_CODEX_RGB = frozenset(tuple(c) for c in SL.CODEX_PALETTE)
+# codex's reasoning chip glyph (plugins/codex/stream.py `⋯ reasoning`) — its
+# prompt/message/result glyphs already coincide with the substream's _PROSE_MARKS
+# (⇢/✎/⇠); only reasoning is codex-only, and its `think` bubbles come from
+# plugins.conversation in scope, so it drops with the rest.
+_CODEX_REASONING = "⋯"
+
 # The markers on an agent's own PROSE blocks — the brief it was handed, its
 # assistant text, its final result. core/streamfmt owns all three.
 _PROSE_MARKS = (SF.MARK_PROMPT[0], SF.MARK_RESULT[0], SF.MARK_MESSAGE[0])
@@ -302,11 +317,20 @@ _MAIL_MARKS = tuple((SF.MARK_MAIL + " " + w % "").rstrip()
                     for w in (SF.MAIL_FROM, SF.MAIL_TO))
 
 
-def prose_block(op):
+def prose_block(op, scope=None):
     """True for the header of an agent's own PROSE block (`⇢ prompt`,
     `✎ message`, `⇠ result`, `✉ from|to <peer>`) — the blocks AGENT SCOPE drops
     because it reads that agent's conversation from its transcript instead
     (docs/dashboard.md *Agent scope*).
+
+    A CODEX sidecar's prose (docs/codex.md *sidecar parity*) drops the same way,
+    but ONLY when the run is ROLLOUT-backed — its `chat`/`think` bubbles then come
+    from plugins.conversation, exactly as a Claude subagent's do. A COMPANION
+    `.log` run has no rollout to re-bubble from, so its prose must STAY as ops;
+    read/mirror.agent_scope signals the difference with a `codexprose:<label>`
+    marker in `scope` (present only for a rollout-backed run), which is why this
+    predicate now takes the scope set. Without the marker a codex prose op is
+    kept, so a companion run's scoped mirror is unchanged.
 
     The lead's stream works exactly this way already: its prose is not in the ops
     at all, only in its transcript, and the merge puts it back as bubbles. The
@@ -328,6 +352,15 @@ def prose_block(op):
     try:
         if op.get("t") != "label":
             return False
+        # a rollout-backed codex sidecar's prose (colour-agnostic — a codex chip
+        # wears its own palette, not an agent one — keyed on the src stamp + the
+        # scope marker)
+        src = str(op.get("src") or "")
+        if scope and src.startswith("codex:") \
+                and ("codexprose:" + src[len("codex:"):]) in scope:
+            h = lead_head(_plain(op))[:1]
+            if h in _PROSE_MARKS or h == _CODEX_REASONING:
+                return True
         if tuple(op.get("c") or ()) not in _AGENT_RGB:
             return False
         text = lead_head(_plain(op))
@@ -585,7 +618,16 @@ def _classify(op):
     # activity at all: a TEAMMATE's blocks count and collapse as teammates ("ran 2
     # teammates, ran 4 agents"), because they are a different kind of thing and the
     # notes now say so. Read off `src`, never the name or the palette.
-    agent_act = ACT_TEAM if _is_team(op) else ACT_AGENT
+    # A CODEX run is a THIRD kind (docs/codex.md): its chips wear the codex palette
+    # (disjoint from every other), so a codex block — a standalone host's own
+    # (unstamped) or a sidecar's (`codex:<label>`) — classifies ACT_CODEX and the
+    # default summary NAMES it ("ran N codex runs") instead of "ran N agents".
+    if tuple(op.get("c") or ()) in _CODEX_RGB:
+        agent_act = ACT_CODEX
+    elif _is_team(op):
+        agent_act = ACT_TEAM
+    else:
+        agent_act = ACT_AGENT
     head = text[:1]
     if not head:
         # An empty / unreadable chip names nothing. It must NOT reach the agent

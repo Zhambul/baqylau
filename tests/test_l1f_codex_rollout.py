@@ -274,7 +274,7 @@ def test_request_user_input_question_schema():
                                        {"label": "one"}]}]}
     rec = RO.parse(_rsp("function_call", name="request_user_input", call_id="a1",
                         arguments=json.dumps(args)))
-    assert rec == {"kind": "ask", "questions": [
+    assert rec == {"kind": "ask", "call_id": "a1", "questions": [
         {"id": "q1", "header": "Scope", "question": "Which files?",
          "options": [{"label": "all", "description": "the repo"},
                      {"label": "one", "description": ""}]}]}

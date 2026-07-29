@@ -57,14 +57,16 @@
 #   {"kind": "patch_call", "patch": str, "call_id": str}
 #   {"kind": "patch_result", "ok": bool|None, "exit": str|None,
 #    "output": str, "call_id": str}
-#   {"kind": "ask", "questions": [{"id", "header", "question",
+#   {"kind": "ask", "call_id": str, "questions": [{"id", "header", "question",
 #                                  "options": [{"label", "description"}]}]}
 #   {"kind": "compact_boundary", "message": str, "replaced": int,
 #    "window_id": …, "previous_window_id": …}
 # parse_line(s) wraps json.loads: {"kind": "bad", "raw": s} for a complete
 # line that isn't JSON. parse_line/parse are pure (no I/O, no state) — with the
-# timeline gone this module does no I/O at all.
+# timeline gone this module does no I/O at all (owns() below is a pure
+# filename/layout test — the codex twin of transcript.owns — so that stays true).
 import json
+import os
 import re
 
 # The exec output's exit-status head line ("Exit code: 2" / "Process exited
@@ -75,6 +77,36 @@ EXIT_SCAN_B = 300
 
 # A custom_tool_call_output with no exit code says "Success" instead.
 OK_WORD = "Success"
+
+# The canonical codex ROLLOUT path layout (docs/codex.md): a `rollout-*.jsonl`
+# file under a `.../sessions/YYYY/MM/DD/` tree (`~/.codex/sessions/…` in
+# production; the `sessions` ancestor is the stable, non-$HOME-pinned part a
+# fixture reproduces). `owns()` recognises one by that FILENAME PREFIX + one
+# ancestor dir — the single-owner codex path recogniser (docs/styleguide.md
+# single-owner table), the codex twin of plugins/claude_code/transcript.owns.
+# Deliberately a PURE filename/layout test: a rollout's records are the grammar
+# above, but ownership must be answerable once per session per poll WITHOUT
+# opening the file, and the `rollout-` stem is codex-specific (a Claude transcript
+# is a bare `<uuid>.jsonl`, an agent sidecar `agent-<id>.jsonl`), so the two
+# vocabularies cannot collide. The `sessions/` ancestor keeps a stray
+# `rollout-*.jsonl` elsewhere from being claimed.
+
+
+def owns(path):
+    """Is `path` a codex rollout this plugin SPEAKS — the `owns` provider behind
+    plugins._first_path (the ownership gate on every path-keyed read fan-out) and
+    plugins.owns_by / host_of (the dashboard's host attribution)? True for a
+    `rollout-*.jsonl` under a `sessions/` tree, False for everything else — a
+    Claude transcript above all (its parsers fail OPEN on a file they never fully
+    read, so an ungated fan-out would hand a codex rollout to a Claude parser; the
+    same reason claude_code grew `owns`). An empty path (codex sent no
+    transcript_path in its SessionStart payload) is not ours — session_caps then
+    keeps the session on the empty-path default rather than attributing it here."""
+    if not path or not path.endswith(".jsonl"):
+        return False
+    if not os.path.basename(path).startswith("rollout-"):
+        return False
+    return "sessions" in os.path.normpath(path).split(os.sep)[:-1]
 
 # The SYNTHETIC-message vocabulary: a `response_item/message` whose text opens
 # with one of these is codex's own machinery talking to the model, not a turn
@@ -323,7 +355,11 @@ def _call_ask(p, args):
                 for o in (q.get("options") or ()) if isinstance(o, dict)]
         out.append({"id": q.get("id") or "", "header": q.get("header") or "",
                     "question": q.get("question") or "", "options": opts})
-    return {"kind": "ask", "questions": out} if out else None
+    # call_id rides along so a presenter can pair the ask with its
+    # function_call_output ANSWER without re-reading the raw payload (the web
+    # question card's pending_dialog read — plugins/codex/read.py).
+    return {"kind": "ask", "call_id": p.get("call_id") or "",
+            "questions": out} if out else None
 
 
 # function_call `name` → its argument grammar. `shell` is the pre-0.1x

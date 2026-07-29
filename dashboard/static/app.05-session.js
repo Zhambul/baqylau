@@ -830,6 +830,11 @@ const ACT_KIND = {
   // …and so does any OTHER tool call (ToolSearch, WebFetch, Grep — an agent's
   // `· <name>` block): same reasoning, the session doing something.
   tool: "commands",
+  // a CODEX run's block (standalone host OR sidecar) — the session doing
+  // something via codex, so the commands kind (docs/codex.md). It gets its OWN
+  // act (not "agent") so the default summary NAMES it ("ran N codex runs")
+  // instead of "ran N agents".
+  codex: "commands",
 };
 
 function refineBlockKind(b, it) {
@@ -987,9 +992,9 @@ const VIEW_DEFAULT = "default";
 // output you came to read.
 const VIEW_FOLD = {
   verbose: [],
-  default: ["bash", "read", "monitor", "task", "mail"],
+  default: ["bash", "read", "monitor", "task", "mail", "codex"],
   focus: ["bash", "read", "bg", "monitor", "edit", "write", "agent", "team",
-          "task", "mail", "skill"],
+          "task", "mail", "skill", "codex"],
 };
 
 // THE SUMMARY VOCABULARY — Claude Code's own, extracted from the 2.1.220 binary
@@ -1019,6 +1024,10 @@ const VIEW_FRAGMENTS = [
   ["bash", "running", "ran", "shell command", "shell commands"],
   ["bg", "running", "ran", "background job", "background jobs"],
   ["monitor", "watching", "watched", "monitor", "monitors"],
+  // a CODEX run (standalone host OR sidecar) — named so the default summary reads
+  // "ran 1 codex run" instead of "ran N agents" (docs/codex.md). Not Claude Code
+  // vocabulary (codex is another tool), so it follows the agent shape.
+  ["codex", "running", "ran", "codex run", "codex runs"],
   // team plumbing — folded (and COUNTED) in both collapsing modes. Not Claude
   // Code vocabulary (it has no agent-team surface to word), so these two follow
   // the same shape: an active participle and a plain past tense.
@@ -1040,7 +1049,7 @@ const VIEW_COUNTER = { write: "edit" };
 // with 21 of them, and "passed 4 messages" where two had been sent. `data-agent`
 // is the producer-source id and `data-mid` the mail msg_id, both stamped
 // server-side (opshtml.op_items) from the op itself.
-const VIEW_SUBJECT = { agent: "agent", team: "agent", mail: "mid" };
+const VIEW_SUBJECT = { agent: "agent", team: "agent", mail: "mid", codex: "agent" };
 
 // Don't show a run's elapsed until it has actually been running a moment —
 // Claude Code's own threshold for the same chip, and it keeps a fast run from
