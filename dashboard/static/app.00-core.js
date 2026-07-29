@@ -23,6 +23,7 @@ const $statsbtn = document.getElementById("statsbtn");
 const $sessact = document.getElementById("sessact");   // the header action bar
 const $modal = document.getElementById("modal");
 const $accounts = document.getElementById("accounts");
+const $codexusage = document.getElementById("codexusage");   // codex usage strip
 
 const S = {
   sessions: [],          // last global snapshot

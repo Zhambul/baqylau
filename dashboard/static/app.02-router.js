@@ -8,6 +8,14 @@ function refreshAccounts() {
     .then(renderAccounts).catch(() => {});
 }
 
+// the codex usage strip beside the accounts one (GET /api/codex-usage). Poll-
+// only (no SSE): codex's windows are TTL-cached server-side over a bounded
+// `codex app-server` spawn, so a 60s fallback poll is plenty and never floods.
+function refreshCodexUsage() {
+  fetch("/api/codex-usage").then(r => r.json())
+    .then(renderCodexUsage).catch(() => {});
+}
+
 /* ---------- global event stream ---------- */
 
 function connectGlobal() {

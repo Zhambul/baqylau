@@ -71,6 +71,34 @@ class ClaudeCodeHost(HostControl):
         as the ONE tool that can pick a conversation up this way)."""
         return ["--resume", sid] if sid else []
 
+    def launch_words(self, opts):
+        """The `claude` "$@" tail for a web new-session launch: `--resume`/
+        `--continue` and `--model`/`--effort` riding as positional words ahead of
+        the prompt (docs/dashboard.md *Resume & send*). This IS the word-builder
+        that used to live inline in dashboard.http.post.session.post_new_session —
+        moved here byte-identically so both hosts compose their launch through the
+        one HostControl seam. `opts` = {resume, cont, model, effort, prompt}; each
+        flag is emitted only when its value is set (`cont` is claude-only — codex
+        has no --continue)."""
+        opts = opts or {}
+        resume = opts.get("resume") or ""
+        cont = opts.get("cont")
+        model = opts.get("model") or ""
+        effort = opts.get("effort") or ""
+        prompt = opts.get("prompt") or ""
+        return ((["--resume", resume] if resume else [])
+                + (["--continue"] if cont else [])
+                + (["--model", model] if model else [])
+                + (["--effort", effort] if effort else [])
+                + ([prompt] if prompt.strip() else []))
+
+    def launch_cmd(self, account_alias=""):
+        """claude_code's login-shell command word: the account switcher's alias
+        (`c1`/`c2`) or the plain `claude` default. `account_alias` is what the
+        dashboard already resolved through plugins.account_alias (a registry-
+        vetted bareword); this host varies by account, unlike codex."""
+        return account_alias or "claude"
+
 
 _HOST = None
 

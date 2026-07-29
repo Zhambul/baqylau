@@ -156,6 +156,16 @@ class HostControl:
         (model/effort/prompt/…); [] when unsupported."""
         return []
 
+    def launch_cmd(self, account_alias=""):
+        """The login-shell command WORD plugins.launch_argv fixes for this host
+        (`codex` for codex; `claude`/`c1`/`c2` for claude_code, which varies by
+        the account switcher — hence the pre-validated `account_alias` a caller
+        resolved). A host with no account switcher IGNORES the alias. This is the
+        launch/lifecycle twin of launch_words: launch_words is the "$@" tail,
+        launch_cmd is the fixed bareword ahead of it. Default: the host's own
+        `name` (right for a host whose command IS its name, e.g. codex)."""
+        return self.name
+
     def lifecycle_end(self, sid, log, reason):
         """Best-effort teardown when a session ends (park/close bookkeeping).
         The inert default does nothing."""

@@ -426,3 +426,59 @@ function renderAccounts(list) {
   $accounts.style.setProperty("--aname-w", nameCh + "ch");
   for (const a of shown) $accounts.append(acctPill(a, cols, anyOut));
 }
+
+/* ---------- codex usage strip (beside the accounts strip) ---------- */
+// codex has no subscription SWITCHER (no per-account rows), so its rate limits
+// are ONE host-wide reading, rendered as a single pill in the accounts strip's
+// visual language (.acct/.ubar/…) directly under it (GET /api/codex-usage →
+// plugins.usage_windows, docs/dashboard.md *Codex usage strip*). Painted by the
+// boot fetch + the same ACCOUNTS_POLL_MS fallback poll as the accounts strip
+// (refreshCodexUsage, app.02-router.js); hidden entirely when codex is
+// unconfigured/unreachable (empty payload). Deliberately NOT folded into
+// accounts_payload — an account registry and a single host reading are
+// different shapes.
+
+// A codex window's short label from its duration (primary is usually the 5h
+// window, secondary the weekly): 300min → "5h", 10080min → "1w"; falls back to
+// primary/secondary by position when the duration is missing.
+function codexWindowLabel(mins, i) {
+  if (typeof mins === "number" && mins > 0) {
+    if (mins % (60 * 24 * 7) === 0) return (mins / (60 * 24 * 7)) + "w";
+    if (mins % (60 * 24) === 0) return (mins / (60 * 24)) + "d";
+    if (mins % 60 === 0) return (mins / 60) + "h";
+    return mins + "m";
+  }
+  return i === 0 ? "primary" : "secondary";
+}
+
+function renderCodexUsage(u) {
+  if (!$codexusage) return;
+  const wins = (u && Array.isArray(u.windows)) ? u.windows : [];
+  $codexusage.hidden = !wins.length;
+  $codexusage.textContent = "";
+  if (!wins.length) return;
+  const pill = el("div", "acct");
+  const plan = (u.planType || "").trim();
+  pill.append(el("span", "aname", plan ? "Codex · " + plan : "Codex"));
+  wins.forEach((w, i) => {
+    const pct = typeof w.used_pct === "number" ? w.used_pct : null;
+    const seg = el("span", "ubar" + (pct === null ? " ghost"
+      : pct >= 90 ? " hot" : pct >= 70 ? " warn" : ""));
+    seg.append(el("span", "ulabel", codexWindowLabel(w.window_mins, i)));
+    const track = el("span", "utrack");
+    const fill = el("span", "ufill");
+    fill.style.width = (pct === null ? 0 : Math.max(0, Math.min(100, pct))) + "%";
+    track.append(fill);
+    seg.append(track, el("span", "upct", pct === null ? "—" : Math.round(pct) + "%"));
+    const box = el("span", "ureset");
+    if (w.resets_at) {
+      const txt = resetAgo(w.resets_at);      // "in 4h 12m" | "in <1m" | "now"
+      const hasIn = txt.startsWith("in ");
+      box.append(el("span", "rlbl", hasIn ? "resets in " : "resets "));
+      box.append(el("span", "rval", hasIn ? txt.slice(3) : txt));
+    }
+    seg.append(box);
+    pill.append(seg);
+  });
+  $codexusage.append(pill);
+}

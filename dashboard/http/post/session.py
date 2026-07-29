@@ -20,15 +20,16 @@ from dashboard.control.launch import launch_argv
 
 A = load_audit()
 
-RESUME_TOOL = "claude_code"   # the ONE tool `claude --resume <sid>` can pick a
-#                               conversation up for (plugins.owns_by names a
-#                               transcript's owner). A parked CODEX session rides
-#                               the same session cards and the same "resume &
-#                               send" composer, but its sid is a rollout uuid —
-#                               resuming it is a launch path codex does not have
-#                               yet, so this handler refuses instead of running
-#                               the wrong tool. Replacing the comparison with a
-#                               per-tool launch provider is that work, not this.
+DEFAULT_TOOL = "claude_code"  # the host a new-session launch uses when the body
+#                               names none — the historical claude_code default,
+#                               and the owner assumed for a resume whose transcript
+#                               has no audit row (left to the CLI, unprovable). A
+#                               FRESH launch's `tool` picks the host directly; a
+#                               RESUME resolves the OWNING host (plugins.owns_by)
+#                               so a parked codex session comes back with
+#                               `codex resume <sid>` and a claude one stays
+#                               `claude --resume <sid>` — the per-tool launch
+#                               provider that used to be a flat refusal.
 
 
 class _Steps:
@@ -55,16 +56,22 @@ class _SessionMixin:
 
     def post_new_session(self):
         """Launch a new session in a new tab (Frontend.launch_tab). 400 when the
-        cwd isn't an existing directory or model/effort/resume/continue don't
-        validate (model: one clean argv word; effort: the CLI's EFFORTS levels;
-        resume: a clean session id, exclusive with continue); 503 when no
-        terminal resolves; else the launch, with `--resume <sid>`/`--continue`
-        and `--model`/`--effort` riding as positional "$@" words ahead of the
-        prompt. The response carries the new tab's window id when the terminal
+        cwd isn't an existing directory or model/effort/resume/continue/tool
+        don't validate (model: one clean argv word; effort: the CLI's EFFORTS
+        levels; resume: a clean session id, exclusive with continue; tool: a
+        LAUNCHABLE host, plugins.hosts); 409 when a resume's OWNING host can't be
+        launched; 503 when no terminal resolves. The launching HOST composes the
+        argv through its HostControl (launch_words + launch_cmd): a fresh launch
+        uses the picked `tool` (claude_code → `claude --resume/--continue
+        --model/--effort … prompt`; codex → `codex [resume <sid>] -C -m -c
+        model_reasoning_effort= … prompt`), a resume the host that OWNS the parked
+        conversation (plugins.owns_by), so a codex session resumes with `codex
+        resume`. The response carries the new tab's window id when the terminal
         reports one, and a launch_wake watcher thread hurries the session's
         SSE appearance (see its block). Audited as a `web-launch` state_files
-        row (no session db exists yet, so its log/path are empty; `win` = the
-        launched window; `ms` = the per-step latency breakdown, see _Steps)."""
+        row (no session db exists yet, so its log/path are empty; `tool` = the
+        launching host; `win` = the launched window; `ms` = the per-step latency
+        breakdown, see _Steps)."""
         body = self._post_guard()
         if body is None:
             return
@@ -98,12 +105,23 @@ class _SessionMixin:
             return self._reject_input("web-launch", "resume+continue",
                                 "resume and continue are exclusive",
                                 {"resume": resume})
+        # tool: which HOST to launch (the new-session form's tool picker —
+        # claude_code / codex). Validated against the LAUNCHABLE hosts registry
+        # (plugins.hosts), so an unknown/non-launchable tool 400s rather than
+        # composing an argv for a host that isn't there. A resume overrides this
+        # with the owning host below; a fresh launch uses it directly.
+        tool = body.get("tool")
+        tool = tool if isinstance(tool, str) and tool else DEFAULT_TOOL
+        launchable = {h["name"] for h in plugins.hosts() if h.get("launchable")}
+        if tool not in launchable:
+            return self._reject_input("web-launch", "bad tool", "unknown tool",
+                                {"tool": tool})
         # account: the switcher slug to launch under (default `claude` when
         # absent). Resolved to a registry-vetted command word — never the raw
         # value flows into the launch shell string.
         acct = body.get("account")
-        cmd = plugins.account_alias(acct) if acct else "claude"
-        if cmd is None:
+        alias = plugins.account_alias(acct) if acct else "claude"
+        if alias is None:
             return self._reject_input("web-launch", "bad account", "unknown account",
                                 {"account": acct})
         prompt = body.get("prompt")
@@ -114,15 +132,59 @@ class _SessionMixin:
         # mentions alone are a valid initial prompt.
         attachments = self._attachment_paths(body)
         prompt = self._with_attachments(prompt, attachments)
-        words = ((["--resume", resume] if resume else [])
-                 + (["--continue"] if cont else [])
-                 + (["--model", model] if model else [])
-                 + (["--effort", effort] if effort else [])
-                 + ([prompt] if prompt.strip() else []))
-        argv = launch_argv(words, cmd)
+        # Resolve the launching HOST, then compose its argv through the one
+        # HostControl seam (launch_words + launch_cmd) both hosts share. A FRESH
+        # launch uses the picked `tool`; a RESUME uses the host that OWNS the
+        # parked conversation (plugins.owns_by) — a codex rollout comes back with
+        # `codex resume <sid>`, a claude transcript stays `claude --resume <sid>`
+        # (byte-identical to before). An owner we can't launch (an unclaimed
+        # transcript, or a tool with no host) is refused rather than run under the
+        # wrong tool — the codex-aware successor to the old flat RESUME_TOOL 409.
+        r_tpath, host_name = "", tool
+        if resume:
+            r_tpath = (API.session_row(resume) or {}).get("transcript_path") or ""
+            host_name = (plugins.owns_by(r_tpath) or "") if r_tpath else DEFAULT_TOOL
+        # A resume target whose KNOWN transcript is GONE can't be resumed at all,
+        # by any host: `claude --resume` / `codex resume` both open a tab that dies
+        # at once (observed live, 2026-07-21). This check precedes the owner guard
+        # DELIBERATELY: ownership is decided by parsing the file, so a missing file
+        # is unowned by construction (owns() needs a readable file), and reporting
+        # it as "unsupported tool" would bury the real cause — the conversation is
+        # gone. An UNKNOWN sid (no row → r_tpath "") is left to the CLI. The live
+        # window / owner guards below still apply to a present transcript.
+        if r_tpath and not os.path.isfile(r_tpath):
+            A.state_file("", "", "web-launch",
+                         {"cwd": cwd, "resume": resume or "", "tool": host_name,
+                          "ok": False, "why": "transcript missing"})
+            return self._json(
+                {"error": "session transcript is gone — can't resume",
+                 "sid": resume}, 410)
+        host = plugins.host_named(host_name)
+        if host is None or not host.launchable:
+            A.error("", "dashboard new-session (unsupported tool)",
+                    {"sid": resume or "", "tool": host_name, "path": r_tpath})
+            A.state_file("", "", "web-launch",
+                         {"cwd": cwd, "resume": resume or "", "tool": host_name,
+                          "ok": False, "why": "unsupported tool"})
+            return self._json(
+                {"error": ("resume not yet supported for this session's tool"
+                           if resume else "unknown tool"),
+                 "sid": resume or "", "tool": host_name}, 409)
+        # A resume's model/effort ride ONLY when the picked tool matches the owner
+        # — a codex resume must never receive a claude `--model` (nor a claude
+        # resume a codex `-c`); a mismatch keeps the session's own (the common
+        # case — the "resume & send" composer sends neither anyway). A fresh
+        # launch always carries them.
+        match = (not resume) or (tool == host_name)
+        words = host.launch_words(
+            {"cwd": cwd, "resume": resume or "", "cont": bool(cont),
+             "model": (model if match else "") or "",
+             "effort": (effort if match else "") or "", "prompt": prompt})
+        argv = launch_argv(words, host.launch_cmd(alias))
         opts = {"cwd": cwd, "model": model or "", "effort": effort or "",
                 "resume": resume or "", "cont": bool(cont),
-                "account": acct or "", "attachments": len(attachments)}
+                "account": acct or "", "attachments": len(attachments),
+                "tool": host.name}
         # Per-STEP timings, folded into the row as `ms` (below). The handler runs
         # up to four subprocess round-trips before it answers — the osascript
         # clipboard probe (~150 ms measured), `lsappinfo` front-app, a resume's
@@ -149,47 +211,14 @@ class _SessionMixin:
         # any cached/page state); fresh and --continue launches are unaffected.
         # The page gets the live window back so it can focus/message it instead.
         if resume:
-            # A resume target whose transcript .jsonl is GONE can't be resumed:
-            # `claude --resume` finds no conversation and the freshly launched
-            # tab exits at once — a silent dead tab the user reads as "resume
-            # did nothing" (observed live on an aggregator session whose file
-            # was never persisted, 2026-07-21). Reject up front when the sid's
-            # KNOWN transcript path (its audit row) is absent on disk; an
-            # unknown sid (no row / no path) is left to the CLI — we can't prove
-            # it's broken. All accounts share ~/.claude/projects (the switcher
-            # symlinks each configs/<slug>/projects to it), so the launch
-            # account is irrelevant to this check.
-            r_tpath = (API.session_row(resume) or {}).get("transcript_path") or ""
-            if r_tpath and not os.path.isfile(r_tpath):
-                step.mark("row")
-                A.state_file("", "", "web-launch",
-                             dict(opts, ok=False, why="transcript missing",
-                                  ms=step.ms))
-                return self._json(
-                    {"error": "session transcript is gone — can't resume",
-                     "sid": resume}, 410)
-            # And a resume target owned by ANOTHER TOOL can't be resumed with
-            # THIS argv: `claude --resume <sid>` needs a Claude conversation,
-            # while a parked codex host's sid is a rollout uuid. It rides the
-            # same session cards and the same "resume & send" composer, so the
-            # page can ask for it in good faith — and the launch would open a
-            # tab where claude finds no such conversation, the same silent dead
-            # tab the missing-transcript guard above exists for. Refuse rather
-            # than run the wrong tool. Unknown transcripts (no audit row, no
-            # path) still go to the CLI, same reasoning as above: we can't prove
-            # anything about a file we've never been told about, and today only
-            # claude_code declares ownership at all (plugins.owns_by).
-            owner = plugins.owns_by(r_tpath) if r_tpath else RESUME_TOOL
-            if owner != RESUME_TOOL:
-                step.mark("row")
-                A.error("", "dashboard new-session (resume unsupported tool)",
-                        {"sid": resume, "tool": owner or "", "path": r_tpath})
-                A.state_file("", "", "web-launch",
-                             dict(opts, ok=False, why="unsupported tool",
-                                  tool=owner or "", ms=step.ms))
-                return self._json(
-                    {"error": "resume not yet supported for this session's tool",
-                     "sid": resume, "tool": owner or ""}, 409)
+            # The transcript-missing 410 is checked EARLY (before the owner guard,
+            # above) — a gone conversation is host-common and its own cause. Here
+            # only the live-window backstop remains: never resume-launch a session
+            # that ALREADY has a live tab (a second launch would run a duplicate
+            # process against the SAME transcript — two tabs, interleaved writes).
+            # The page issues a resume only when it believes the session is PARKED,
+            # but a stale page (dashboard restart + dropped SSE) can misjudge a
+            # live one; window_for_session is a fresh authoritative kitten scan.
             step.mark("row")
             live_win = fe.window_for_session(resume) or ""
             step.mark("livewin")

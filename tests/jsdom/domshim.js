@@ -34,6 +34,9 @@ class El {
     this.focus = () => {};
     this.blur = () => {};
     this.select = () => {};
+    // a no-op: dropdown()/suggest() scroll the highlighted row into view on open
+    // — a harness that DRIVES a dropdown (newsession's tool picker) reaches it
+    this.scrollIntoView = () => {};
     this.attrs = {};
     this.setAttribute = (k, v) => { this.attrs[k] = String(v); };
     this.getAttribute = (k) => (k in this.attrs ? this.attrs[k] : null);

@@ -5,6 +5,7 @@
 # own kv, the rest in the durable global prefs store (dashboard/prefs.py).
 import time
 
+import plugins
 from core import state as ST
 from core.noaudit import load_audit
 from dashboard import (prefs)
@@ -130,9 +131,11 @@ class _StateMixin:
 
         Body: `cwd` (string), `model`/`effort` (validated against the same
         allowlists post_new_session uses — a bad value is dropped, never
-        stored, so a corrupt pref can't later feed the launch path). Missing
-        fields are simply omitted from the stored record. Best-effort: a write
-        failure is a 500 but the launch itself already succeeded."""
+        stored, so a corrupt pref can't later feed the launch path), `tool` (a
+        LAUNCHABLE host name, plugins.hosts — the last-used tool the picker
+        pre-selects). Missing fields are simply omitted from the stored record.
+        Best-effort: a write failure is a 500 but the launch itself already
+        succeeded."""
         body = self._post_guard()
         if body is None:
             return
@@ -146,6 +149,10 @@ class _StateMixin:
         effort = body.get("effort")
         if effort in EFFORTS:
             rec["effort"] = effort
+        tool = body.get("tool")
+        if isinstance(tool, str) and tool in {
+                h["name"] for h in plugins.hosts() if h.get("launchable")}:
+            rec["tool"] = tool
         if not prefs.set("new-session", rec):
             A.error("", "dashboard ns-prefs (write failed)", {"rec": rec})
             return self._json({"error": "prefs not saved"}, 500)

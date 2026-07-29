@@ -14,7 +14,8 @@ from core.noaudit import load_audit
 from dashboard import config, dictate, ext, prefs, webpush
 from dashboard.config import RESUMABLE_MAX
 from dashboard.notify import presence
-from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_payload,
+from dashboard.read.lists import (accounts_payload, codex_usage_payload,
+                                  resumable_payload, sessions_payload,
                                   stats_payload, wire_row)
 from dashboard.read.mirror import (history, merged_backlog,
                                    ops_payload, view_payload,
@@ -58,6 +59,7 @@ class _GetMixin:
     # per-endpoint argument decision.
     _FIXED_GET = {
         ("sessions",): "get_sessions", ("accounts",): "get_accounts",
+        ("hosts",): "get_hosts", ("codex-usage",): "get_codex_usage",
         ("stats",): "get_stats", ("dictate",): "get_dictate",
         ("commands",): "get_commands", ("ns-prefs",): "get_ns_prefs",
         ("ns-draft",): "get_ns_draft", ("resumable",): "get_resumable",
@@ -152,6 +154,21 @@ class _GetMixin:
 
     def get_accounts(self, url):
         return self._json(accounts_payload())
+
+    def get_hosts(self, url):
+        """the launchable HOST tools for the new-session form's tool picker —
+        [{name, label, launchable}, …], host first (plugins.hosts). The page
+        shows the picker only when more than one host is launchable; a machine
+        with only claude_code hides it entirely (docs/dashboard.md *Tool
+        picker*). Read-only, no audit rows."""
+        return self._json(plugins.hosts())
+
+    def get_codex_usage(self, url):
+        """the codex host's rate-limit windows for the top usage strip, beside
+        the Claude accounts (docs/dashboard.md *Codex usage strip*). {} when
+        codex is unconfigured/unreachable — the strip then renders nothing.
+        Read-only, no audit rows (the degrade is audited in plugins.codex.usage)."""
+        return self._json(codex_usage_payload())
 
     def get_stats(self, url):
         """the GitHub-Insights-style Stats page: cross-session heatmap / pulse /

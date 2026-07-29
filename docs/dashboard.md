@@ -130,6 +130,45 @@ session owned by a tool that leaves a gesture inert (a not-yet-wired codex, a
 future copilot/opencode) — which is what makes adding a tool a new plugin
 package rather than an edit to every handler.
 
+**Tool picker (multi-tool launch).** The new-session form's *tool* row picks the
+HOST a FRESH launch runs — Claude Code or Codex — from `GET /api/hosts`
+(`plugins.hosts` → `[{name, label, launchable}]`, cached in `S.hosts`); the row
+HIDES when only one host is launchable, so a single-tool machine sees the form
+exactly as before. The picked tool follows through the form: the model/effort
+option sets swap (Codex offers its `gpt-*-codex` models — an empty *codex
+default* leaves `-m` off — and low/medium/high reasoning-effort, versus Claude's
+fable/opus/… and low…max), and the ACCOUNT picker HIDES for Codex (no
+subscription switcher). The last-used tool persists in the durable new-session
+prefs (`{cwd, model, effort, tool}`, *New-session prefs*). The launch POST carries
+`tool`; `post_new_session` validates it against the launchable-hosts registry
+(unknown → 400) and composes the argv through that host's HostControl seam —
+`launch_words` (the `"$@"` tail) + `launch_cmd` (the fixed login-shell command
+word: `claude`/`c1`/`c2` for Claude Code via the account alias, `codex` for
+Codex). This is the ONE argv builder both hosts share; `post_new_session` no
+longer encodes Claude's flags inline. A RESUME is instead OWNER-routed — the
+handler resolves `plugins.owns_by(transcript)` and composes through THAT host, so
+a parked Codex session comes back with `codex resume <sid>` and a Claude one stays
+`claude --resume <sid>` (byte-identical to before); the form's model/effort ride a
+resume only when the picked tool MATCHES the owner (a Codex resume must never get
+a Claude `--model`), so the common *resume & send* drops them and Codex keeps its
+own model. An owner the dashboard can't launch (an unclaimed transcript, a tool
+with no host) is a 409. The web-launch audit row names the launching `tool`. See
+docs/codex.md *Launching & resuming codex from the web*.
+
+**Codex usage strip.** Codex has no account SWITCHER (`plugins.accounts` is empty
+for it), so its rate limits are ONE host-wide reading rendered as its own pill in
+the top usage strip, directly beside the Claude accounts — `GET /api/codex-usage`
+→ `read/lists.codex_usage_payload` over the `plugins.usage_windows` fan-out
+(`codex app-server` `account/rateLimits/read`, bounded + TTL-cached in
+`plugins.codex.usage`; a degrade is audited THERE, once, never in the read model),
+painted by `app.01-attention.renderCodexUsage` into `#codexusage`. Poll-only on
+the same `ACCOUNTS_POLL_MS` fallback cadence as the accounts strip — no SSE, since
+the windows are already TTL-cached over a bounded app-server spawn. Labelled
+`Codex · <planType>`; hidden entirely when Codex is unconfigured/unreachable (an
+empty payload). Deliberately NOT folded into `accounts_payload`: an account
+registry and a single host reading are different shapes. Read-only, adds no audit
+rows (like `accounts_payload`/ctx/goal).
+
 **The POST tables hold the handler FUNCTIONS, not method-name strings.** That is
 what let the control plane split: a table that can only name methods of `self`
 forces every handler into one class, and the POST plane had grown to 45 methods

@@ -153,7 +153,8 @@ def resumable_payload(cwd, limit, q=""):
         if canon.setdefault(rc, canon_cwd(rc)) != want:
             continue
         sid = row["sid"]
-        title = session_title(row.get("transcript_path") or "")
+        tpath = row.get("transcript_path") or ""
+        title = session_title(tpath)
         if ql and ql not in (title or "").lower() and ql not in sid.lower():
             continue
         sdb = API.session_db(row)      # the live DB, else its durable park
@@ -161,7 +162,7 @@ def resumable_payload(cwd, limit, q=""):
         # sessions_payload applies, launch.demote_if_dead) — a resume of a truly-
         # live session 409s anyway, but the row marks it so the picker can flag it.
         launch.demote_if_dead(row, live_wins, sid)
-        ctx = session_ctx(row.get("transcript_path") or "", main=True)
+        ctx = session_ctx(tpath, main=True)
         slug = session_slug(sid)
         out.append({
             "sid": sid,
@@ -170,6 +171,13 @@ def resumable_payload(cwd, limit, q=""):
             "live": bool(row.get("live")),
             "model": (ctx or {}).get("model") or "",
             "effort": plugins.effort_default(want, slug),
+            # WHICH host owns this conversation — so the resume picker can switch
+            # the new-session form's tool (a codex rollout resumes with `codex
+            # resume`, a claude transcript with `claude --resume`). The launch is
+            # OWNER-routed server-side regardless (post_new_session), so this is a
+            # UI convenience, not the source of truth. Defaults to the claude_code
+            # host when unclaimed (owns_by is None for a file no plugin speaks).
+            "tool": plugins.owns_by(tpath) or "claude_code",
             "account": {"slug": slug,
                         "label": labels.get(slug) or (slug or "default")},
         })
@@ -299,6 +307,21 @@ def accounts_key(payload):
     when a snapshot, stamp, or window boundary actually moves."""
     return json.dumps([{k: v for k, v in a.items() if k != "sched_score"}
                        for a in payload], default=str, sort_keys=True)
+
+
+def codex_usage_payload():
+    """The codex host's account rate-limit windows for the top usage strip,
+    shown BESIDE the Claude accounts (docs/dashboard.md *Codex usage strip*). A
+    DEDICATED read surface, deliberately NOT folded into accounts_payload: codex
+    has no account SWITCHER (plugins.accounts is empty for it), so its usage is a
+    single host-wide reading, not a per-account registry. Reads codex's own
+    windows off `codex app-server` account/rateLimits/read through the
+    plugins.usage_windows fan-out (bounded + TTL-cached in plugins.codex.usage; a
+    failure is audited THERE, once, never here). Returns {planType, windows:
+    [{used_pct, window_mins, resets_at}]}, or {} when codex is unconfigured /
+    unreachable / not installed (the strip then renders nothing). Read-only, adds
+    NO audit rows (like accounts_payload/ctx)."""
+    return plugins.usage_windows() or {}
 
 
 # The stats aggregate's TTL memo (read/cache.ttl_cached, keyed by the single

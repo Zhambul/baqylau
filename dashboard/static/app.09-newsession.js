@@ -787,8 +787,30 @@ function nsConversation(F) {
   Object.assign(F, { picker, resumeRow, freshRow, fresh, syncFresh });
 }
 
+// The model/effort options + first-ever defaults per HOST. codex differs from
+// claude: its models are the gpt-*-codex family (a "" = "codex default" leaves
+// the -m flag off so codex's own config picks), and its effort is the reasoning
+// level that rides `-c model_reasoning_effort` (low/medium/high — codex has no
+// xhigh/max; "" leaves it at the config default). The server validates whatever
+// is sent (MODEL_OK / EFFORTS), and an empty value is simply not sent.
+const TOOL_MODELS = {
+  claude_code: [["fable", "fable"], ["opus", "opus"],
+                ["sonnet", "sonnet"], ["haiku", "haiku"]],
+  codex: [["", "codex default"], ["gpt-5.1-codex", "gpt-5.1-codex"],
+          ["gpt-5-codex", "gpt-5-codex"]],
+};
+const TOOL_EFFORTS = {
+  claude_code: [["low", "low"], ["medium", "medium"], ["high", "high"],
+                ["xhigh", "xhigh"], ["max", "max"]],
+  codex: [["", "codex default"], ["low", "low"], ["medium", "medium"],
+          ["high", "high"]],
+};
+const TOOL_MODEL_DEF = { claude_code: "fable", codex: "" };
+const TOOL_EFFORT_DEF = { claude_code: "high", codex: "" };
+const toolOpts = (tbl, t) => tbl[t] || tbl.claude_code;
+
 function nsPickers(F) {
-  const { last, dir, picker, fresh, syncFresh } = F;
+  const { last, dir, picker, fresh, syncFresh, presetTool } = F;
 
   // model + effort side by side — concrete values only, no "default" entry
   // (the user always launches with explicit flags; the remembered last-used
@@ -801,19 +823,25 @@ function nsPickers(F) {
     row.append(sel.el);
     return [row, sel];
   };
-  const [modelRow, model] = pick("model", [
-    ["fable", "fable"], ["opus", "opus"],
-    ["sonnet", "sonnet"], ["haiku", "haiku"],
-  ]);
-  model.value = model.has(last.model) ? last.model : "fable";
-  const [effortRow, effort] = pick("effort", [
-    ["low", "low"], ["medium", "medium"],
-    ["high", "high"], ["xhigh", "xhigh"], ["max", "max"],
-  ]);
-  effort.value = effort.has(last.effort) ? last.effort : "high";
-  // Track whether the user has touched a picker by hand — the resume prefill
-  // below (async) must not clobber a deliberate choice made while it was in
-  // flight (same discipline as acctPicked).
+
+  // TOOL — which HOST to launch (claude_code / codex). Everything below FOLLOWS
+  // the tool: the model/effort option sets (TOOL_MODELS/TOOL_EFFORTS) and whether
+  // an account is picked at all (codex has no subscription switcher). Populated
+  // from /api/hosts (cached S.hosts); the row HIDES when only one host is
+  // launchable — a single-tool machine sees the form exactly as before.
+  // docs/dashboard.md *Tool picker*.
+  const [toolRow, tool] = pick("tool", []);
+  toolRow.classList.add("nstoolrow");
+  toolRow.style.display = "none";
+  let toolPicked = false;
+  const hostList = () => (Array.isArray(S.hosts) && S.hosts.length) ? S.hosts
+    : [{ name: "claude_code", label: "Claude Code", launchable: true }];
+
+  const [modelRow, model] = pick("model", []);   // filled per-tool by syncTool()
+  const [effortRow, effort] = pick("effort", []);
+  // Track whether the user has touched a picker by hand — the resume prefill and
+  // the tool sync (both async / re-run) must not clobber a deliberate choice made
+  // while they were in flight (same discipline as acctPicked).
   let modelPicked = false, effortPicked = false;
   effort.onpick = () => { effortPicked = true; };
 
@@ -842,8 +870,12 @@ function nsPickers(F) {
   acct.onpick = () => { acctPicked = true; };
   const limitBlocks = (a) =>
     a.limit_hit && (!a.limit_hit.model || a.limit_hit.model === model.value);
+  // an account is picked only when there IS a switcher AND the tool uses one
+  // (codex has none) — the row's visibility and the autoAcct short-circuit both
+  // read this.
+  const acctVisible = () => acctList.length && tool.value !== "codex";
   const autoAcct = () => {
-    if (acctPicked || !acctList.length) return;
+    if (acctPicked || !acctList.length || tool.value === "codex") return;
     // never auto-select a logged-out account (its login is revoked — a launch
     // there dies on auth); fall back to the full list only if ALL are logged out
     const live = acctList.filter(a => !a.logged_out);
@@ -856,7 +888,7 @@ function nsPickers(F) {
   model.onpick = () => { modelPicked = true; autoAcct(); };
   const fillAccts = (list) => {
     acctList = list;
-    acctRow.style.display = list.length ? "" : "none";
+    acctRow.style.display = acctVisible() ? "" : "none";
     acct.fill(list.map(a => {
       // every captured window rides into the option text ("5h 40% · 7d 55%
       // · 7d fable 80%") — same enumeration as the usage strip's bars
@@ -877,25 +909,64 @@ function nsPickers(F) {
       acct.value = last.account;
     else autoAcct();
   };
-  if (S.accts) fillAccts(S.accts);
+  // Apply the current tool's option sets to model/effort and the account row's
+  // visibility. Called on the initial fill, a tool switch, and a resume-row pick
+  // that carries another tool. A hand-picked model/effort survives; otherwise it
+  // reselects the remembered value if the new options still offer it, else the
+  // tool's first-ever default.
+  const syncTool = () => {
+    const t = tool.value || "claude_code";
+    model.fill(toolOpts(TOOL_MODELS, t));
+    if (!modelPicked)
+      model.value = model.has(last.model) ? last.model : (TOOL_MODEL_DEF[t] || "");
+    effort.fill(toolOpts(TOOL_EFFORTS, t));
+    if (!effortPicked)
+      effort.value = effort.has(last.effort) ? last.effort : (TOOL_EFFORT_DEF[t] || "");
+    acctRow.style.display = acctVisible() ? "" : "none";
+    autoAcct();
+  };
+  tool.onpick = () => { toolPicked = true; syncTool(); };
+  const fillTools = (list) => {
+    const launchable = (list || []).filter(h => h && h.launchable);
+    tool.fill(launchable.map(h => [h.name, h.label || h.name]));
+    const want = presetTool || last.tool || "claude_code";
+    if (tool.has(want)) tool.value = want;
+    // one host → the picker is noise; hide the row (the launch still sends
+    // tool=claude_code, the server default).
+    toolRow.style.display = launchable.length > 1 ? "" : "none";
+    syncTool();
+  };
+  fillTools(hostList());                       // tool/model/effort defaults first…
+  if (!Array.isArray(S.hosts))
+    fetch("/api/hosts").then(r => r.json())
+      .then(list => { S.hosts = list; if (!toolPicked) fillTools(list); })
+      .catch(() => {});
+  if (S.accts) fillAccts(S.accts);             // …then the account pick sees them
   fetch("/api/accounts").then(r => r.json())
     .then(list => { S.accts = list; fillAccts(list); }).catch(() => {});
 
   // Resuming should continue where the SESSION was, not where the launcher last
-  // was: on every resume-row selection, reuse that session's own model (its
-  // transcript-tail model from /api/resumable) and effort (its last-applied
-  // /effort level), overriding the global last-used ns-prefs defaults set above —
-  // unless the user has already hand-picked (modelPicked/effortPicked). The
-  // account is DELIBERATELY not reused: autoAcct re-runs against the chosen model
-  // so the launch still load-balances (docs/dashboard.md *Resume picker*).
+  // was: on every resume-row selection, switch to the session's OWN tool (a codex
+  // rollout → codex + its model/effort options) and reuse that session's model
+  // (its transcript-tail model from /api/resumable) and effort (its last-applied
+  // level), overriding the global last-used ns-prefs defaults — unless the user
+  // has already hand-picked (toolPicked/modelPicked/effortPicked). The launch is
+  // OWNER-routed server-side regardless (post_new_session), so the tool switch is
+  // a UI convenience. The account is DELIBERATELY not reused: autoAcct re-runs
+  // against the chosen model so the launch still load-balances.
   picker.onSelect = (r) => {
+    if (r.tool && !toolPicked && r.tool !== tool.value && tool.has(r.tool)) {
+      tool.value = r.tool;
+      syncTool();
+    }
     const fam = (shortModel(r.model) || "").split("-")[0];
     if (!modelPicked && fam && model.has(fam)) model.value = fam;
     if (!effortPicked && r.effort && effort.has(r.effort)) effort.value = r.effort;
     autoAcct();
   };
   syncFresh();                       // initial visibility + (if resuming) load
-  Object.assign(F, { modelRow, model, effortRow, effort, acctRow, acct });
+  Object.assign(F, { toolRow, tool, modelRow, model, effortRow, effort,
+                     acctRow, acct });
 }
 
 function nsLayout(F) {
@@ -998,7 +1069,8 @@ function nsPrompt(F) {
 }
 
 function nsActions(F) {
-  const { dir, sug, fresh, picker, prompt, pdic, nsTray, acct, model, effort } = F;
+  const { dir, sug, fresh, picker, prompt, pdic, nsTray, acct, model, effort,
+          tool } = F;
 
   const actions = el("div", "nsactions");
   const cancel = el("button", "nsbtn", "cancel");
@@ -1018,11 +1090,14 @@ function nsActions(F) {
     if (nsTray.pending())
       return toast("ask", "attachment still uploading", "one moment…");
     submit.disabled = true;
-    const body = { cwd };
+    const codex = tool.value === "codex";
+    const body = { cwd, tool: tool.value || "claude_code" };
     const atts = nsTray.paths();
     if (atts.length) body.attachments = atts;
     if (resumeSel) body.resume = resumeSel;
-    if (acct.value) body.account = acct.value;
+    // codex has no subscription switcher — never send an account for it (the
+    // server would resolve an alias the codex host then ignores)
+    if (acct.value && !codex) body.account = acct.value;
     if (model.value) body.model = model.value;
     if (effort.value) body.effort = effort.value;
     if (prompt.value.trim()) body.prompt = prompt.value.trim();
@@ -1048,7 +1123,7 @@ function nsActions(F) {
     // launch, which is what checkJump wants.
     const show = { mode: body.resume ? "resume" : "new",
                    model: model.value, effort: effort.value,
-                   account: acct.value, prompt: body.prompt || "" };
+                   account: codex ? "" : acct.value, prompt: body.prompt || "" };
     armJump(cwd, body.resume, { show, pend: true });
     const mine = S.jump;               // this launch's watch — a later one wins
     closeNewSession();
@@ -1059,7 +1134,8 @@ function nsActions(F) {
     else location.hash = "#/launching";
     postJSON("/api/sessions/new", body, { audit: "new", sid: "" })
       .then((d) => {
-        nsRemember({ cwd, model: model.value, effort: effort.value });
+        nsRemember({ cwd, model: model.value, effort: effort.value,
+                     tool: tool.value });
         // the exact-match window id, folded into the watch already running (and
         // re-checked at once: the session may have appeared while we waited)
         if (S.jump === mine && d && d.win) { mine.win = d.win; checkJump(); }
@@ -1075,7 +1151,7 @@ function nsActions(F) {
         // it: a user who navigated away mid-flight is not to be yanked back.
         if (location.hash === "#/launching") location.hash = "#/";
         nsRetry = { cwd, model: model.value, effort: effort.value,
-                    account: acct.value };
+                    account: acct.value, tool: tool.value };
         saveNsDraft(cwd, sentPrompt, true);
         openNewSession(cwd, body.resume);
         toast("ask", "launch failed", (e && e.error) || "");
@@ -1091,10 +1167,11 @@ function nsActions(F) {
 }
 
 function nsMount(F) {
-  const { panel, dirRow, freshRow, resumeRow, split2, split, promptRow,
+  const { panel, dirRow, toolRow, freshRow, resumeRow, split2, split, promptRow,
           actions, dir, fresh, prompt } = F;
 
-  panel.append(dirRow, freshRow, resumeRow, split2, split, promptRow, actions);
+  panel.append(dirRow, toolRow, freshRow, resumeRow, split2, split, promptRow,
+               actions);
   const back = el("div", "nsback");
   back.onclick = (e) => { if (e.target === back) closeNewSession(); };
   back.append(panel);
@@ -1118,14 +1195,18 @@ function nsMount(F) {
 }
 
 // Open the new-session modal. `prefillCwd` seeds the directory field;
-// `resumeSid` opens straight onto that conversation in the resume picker.
-function openNewSession(prefillCwd, resumeSid) {
+// `resumeSid` opens straight onto that conversation in the resume picker;
+// `presetTool` preselects the tool picker (a caller that already knows the host,
+// e.g. a codex resume deep-link) — the resume picker also switches the tool from
+// the chosen row's own host, so this is usually unnecessary.
+function openNewSession(prefillCwd, resumeSid, presetTool) {
   $modal.textContent = "";
   const panel = el("div", "nspanel");
   panel.append(el("div", "nstitle", "new session"));
   // a failed launch's own selections outrank the remembered last-used ones,
   // once (nsRetry) — the reopened form is that launch, ready to re-submit
-  const F = { prefillCwd, resumeSid, panel, last: nsRetry || nsLast() };
+  const F = { prefillCwd, resumeSid, presetTool, panel,
+              last: nsRetry || nsLast() };
   nsRetry = null;
   nsDirField(F);
   nsConversation(F);

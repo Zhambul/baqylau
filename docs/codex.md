@@ -285,13 +285,21 @@ which audits a degrade.
   vice-versa, and what makes `plugins.owns_by(rollout)` name `codex` (so
   `session_caps` attributes the session to the codex host).
 - **The codex HostControl (`plugins/codex/hostctl.CodexHost`).** `name="codex"`,
-  `launchable=True`, `resume_words → ["resume", sid]`. In this phase it drives NO
-  control gesture, so its derived caps read all-**False** and the dashboard GREYS
-  every control button for a codex session — the honest state until the codex
-  app-server transport is wired (interrupt via `turn/interrupt`, rename via
+  `launchable=True`, `resume_words → ["resume", sid]`, and `launch_words(opts)` —
+  the codex argv the web new-session launch composes: `resume <sid>` (+`-C`/`-m`/
+  `-c model_reasoning_effort=`/prompt) or a fresh `-C <cwd> -m <model>
+  -c model_reasoning_effort=<eff> "<prompt>"` (codex has NO `--effort` flag and NO
+  `--continue`; verified against codex-cli 0.144.1). The command WORD `plugins.
+  launch_argv` fixes is just `codex` (the base `HostControl.launch_cmd` default
+  over `name` — codex has no account switcher, unlike claude_code, whose
+  `launch_cmd` resolves the `c1`/`c2` alias). It still drives NO control GESTURE
+  (interrupt/rename/…), so its derived caps read all-**False** and the dashboard
+  GREYS every control button for a live codex session — the honest state until the
+  codex app-server transport is wired (interrupt via `turn/interrupt`, rename via
   `thread/name/set`, ask via the `request_user_input` reply). Leaving a gesture
   inert is not a stub gap: a False cap is the correct answer while the transport
-  is unwired.
+  is unwired. Launch/resume are lifecycle plumbing, NOT gesture-gated, so they
+  work now.
 - **Claude screen-scrapers are host-gated OFF codex.** Once codex writes
   `awaiting-response`/`awaiting-command` tab rows (its tab producer, above), three
   Claude-GEOMETRY screen scrapes would start firing on codex panes and return
@@ -342,6 +350,35 @@ which audits a degrade.
   (`A.error`), never raises.
 - **effort** — `model_reasoning_effort` from `~/.codex/config.toml`, behind
   `plugins.effort_default` (codex has no per-project/account effort config).
+
+### Launching & resuming codex from the web
+
+The new-session form's **tool picker** (claude_code / codex, `GET /api/hosts` →
+`plugins.hosts`; the row hides on a single-host machine) chooses the host for a
+FRESH launch; a RESUME is routed by the OWNING host instead — `post_new_session`
+resolves `plugins.owns_by(transcript)` and composes through THAT host's
+`launch_words`, so a parked codex session comes back with `codex resume <sid>`
+while a claude one stays `claude --resume <sid>` (byte-identical to before). The
+form's model/effort ride a resume only when the picked tool MATCHES the owner — a
+codex resume must never receive a claude `--model` — so the common `resume & send`
+(default tool = claude) drops them and codex keeps its own model. codex's model
+options are the `gpt-*-codex` family (an empty "codex default" leaves `-m` off),
+its effort is the `-c model_reasoning_effort` level (low/medium/high), and the
+account picker HIDES for codex (no subscription switcher). The web-launch audit
+row names the launching `tool`. An owner the dashboard can't launch (an unclaimed
+transcript, a tool with no host) is a 409, never the wrong tool.
+
+### Codex usage strip
+
+`plugins.usage_windows()` (the app-server rate limits above) renders as its OWN
+pill in the dashboard's top usage strip, BESIDE the Claude accounts —
+`GET /api/codex-usage` → `dashboard.read.lists.codex_usage_payload`, painted by
+`app.01-attention.renderCodexUsage` into `#codexusage`, poll-only on the same
+`ACCOUNTS_POLL_MS` fallback cadence (no SSE — the windows are TTL-cached over a
+bounded app-server spawn). Deliberately NOT folded into `accounts_payload`: an
+account SWITCHER registry and a single host-wide reading are different shapes, and
+`plugins.accounts()` is empty for codex. Hidden when codex is
+unconfigured/unreachable (empty payload). Labelled `Codex · <planType>`.
 
 ### View modes — a codex run is its own act
 

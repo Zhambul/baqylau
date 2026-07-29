@@ -2038,13 +2038,22 @@ def test_new_session_form_phases_hand_off_everything(tmp_path):
     assert r.returncode == 0, r.stderr
     d = json.loads(r.stdout)
     assert d["ok"], d["errors"]
-    # every phase produced its rows: directory, resume, fresh, account,
+    # every phase produced its rows: directory, tool, resume, fresh, account,
     # model, effort, prompt
-    assert d["rows"] == 7, d
+    assert d["rows"] == 8, d
     assert d["panel"] == 1 and d["prompt"] == 1 and d["actions"] == 1
-    # …and the launch reached the endpoint with the directory the form opened on
+    # the TOOL picker: present + visible (two launchable hosts), defaulting to
+    # Claude Code, and picking Codex flows through nsPickers' tool→syncTool
+    # hand-off (a missed one would ReferenceError → d["ok"] False above).
+    assert d["tool_visible"] is True, d
+    assert d["tool_default"] == "Claude Code", d
+    assert d["tool_after"] == "Codex", d
+    # …and the launch reached the endpoint with the directory the form opened on,
+    # carrying the chosen tool (codex) and — codex has no switcher — no account
     assert d["posted"] == ["/api/sessions/new"], d
     assert d["launch_cwd"] == "/tmp/proj", d
+    assert d["launch_tool"] == "codex", d
+    assert d["launch_account"] == "", d
     # The waiting room is OPTIMISTIC: by the time the request is in flight the
     # jump watch is armed and the page is already at #/launching. Gating that on
     # the response (where it first shipped) put the whole POST — measured p50

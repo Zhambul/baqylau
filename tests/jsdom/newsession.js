@@ -44,8 +44,13 @@ const sandbox = {
   navigator: { userAgent: "node", onLine: true },
   ...domGlobals(),
   // -- page state + helpers from the other parts --
+  // two LAUNCHABLE hosts so the tool picker is visible AND offers codex (a
+  // single-host machine hides the row); the form's /api/hosts fetch never
+  // settles (fetch stub), so this cache IS what the picker builds from.
   S: { sessions: [], accts: null, nsPrefs: {}, nsDrafts: {}, cur: null,
-       ses: null, jump: null, pendingUI: false },
+       ses: null, jump: null, pendingUI: false,
+       hosts: [{ name: "claude_code", label: "Claude Code", launchable: true },
+               { name: "codex", label: "Codex", launchable: true }] },
   IS_IPAD: false,
   $modal: modal,
   $newbtn: new El("button"), $statsbtn: new El("button"),
@@ -114,8 +119,28 @@ step("toggle", () => {
   if (input.onchange) input.onchange();
 });
 
-// 3. the launch: nsActions' go(), which reads dir/fresh/picker/prompt/pdic/
-//    nsTray/acct/model/effort — five earlier phases at once.
+// 3. the TOOL picker (nsPickers): the row is present + visible (two launchable
+//    hosts), defaults to claude_code, and picking codex flows through the
+//    dropdown's onpick → syncTool (which re-fills model/effort + hides the
+//    account row). Reaches nsPickers' tool/syncTool/fillTools hand-offs.
+step("tool", () => {
+  const toolRow = modal.querySelectorAll(".nstoolrow")[0];
+  if (!toolRow) throw new Error("no tool row built");
+  out.tool_visible = toolRow.style.display !== "none";
+  const lab = toolRow.querySelectorAll(".nsdroplab")[0];
+  out.tool_default = lab ? lab.textContent : "";
+  const btn = toolRow.querySelectorAll(".nsdropbtn")[0];
+  if (!btn || !btn.onclick) throw new Error("no tool dropdown button");
+  btn.onclick();                            // open the menu → paints its options
+  const items = toolRow.querySelectorAll(".nsdropitem");
+  const codex = items.find((i) => i.textContent.indexOf("Codex") >= 0);
+  if (!codex) throw new Error("no codex option");
+  codex.onclick({ preventDefault() {} });   // pick codex → tool.onpick → syncTool
+  out.tool_after = lab ? lab.textContent : "";
+});
+
+// 4. the launch: nsActions' go(), which reads dir/fresh/picker/prompt/pdic/
+//    nsTray/acct/model/effort/tool — six earlier phases at once (now codex).
 step("launch", () => {
   const btns = modal.querySelectorAll(".nsbtn");
   const submit = btns.find((b) => b._cls().includes("primary"));
@@ -125,6 +150,10 @@ step("launch", () => {
 out.posted = posted.map((p) => p.url);
 const launch = posted.find((p) => p.url === "/api/sessions/new") || {};
 out.launch_cwd = (launch.body && launch.body.cwd) || "";
+// the tool routed to the launch body — "codex" after the tool step's switch, and
+// (codex has no switcher) no account rides along
+out.launch_tool = (launch.body && launch.body.tool) || "";
+out.launch_account = (launch.body && launch.body.account) || "";
 // the optimistic hand-off, as it stood WHILE the launch request was open
 out.launch_armed = !!launch.armed;
 out.launch_hash = launch.hash || "";

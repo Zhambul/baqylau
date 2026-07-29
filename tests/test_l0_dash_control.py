@@ -1203,6 +1203,93 @@ def test_post_new_session_model_effort(dash, monkeypatch, tmp_path):
     assert len(fe.launched) == n
 
 
+def test_post_new_session_codex_launch(dash, monkeypatch, tmp_path):
+    """A fresh codex launch routes through the CODEX host: the fixed command word
+    is `codex` (not an account alias), the cwd rides as `-C`, the model as `-m`,
+    and the effort as `-c model_reasoning_effort=` (codex has no --effort flag),
+    with the prompt the trailing positional. The web-launch row names the tool."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    code, _ = _post(dash + "/api/sessions/new",
+                    {"cwd": str(tmp_path), "tool": "codex",
+                     "model": "gpt-5.1-codex", "effort": "high",
+                     "prompt": "do it"})
+    assert code == 200
+    cwd, argv = fe.launched[-1]
+    assert cwd == str(tmp_path)
+    _sh, flags, script, dollar0 = argv[:4]
+    assert flags == "-lic" and script == 'codex "$@"' and dollar0 == "codex"
+    assert argv[4:] == ["-C", str(tmp_path), "-m", "gpt-5.1-codex",
+                        "-c", "model_reasoning_effort=high", "do it"]
+    assert (_last_state_file("", "web-launch") or {}).get("tool") == "codex"
+
+
+def test_post_new_session_codex_resume_is_owner_routed(dash, monkeypatch, tmp_path):
+    """A RESUME is routed by the OWNING host, not the request's tool: a parked
+    codex session (plugins.owns_by → codex) comes back with `codex resume <sid>`
+    even though the body's tool defaults to claude — and the mismatched claude
+    model/effort are DROPPED (a codex resume must never get a claude --model)."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    # PARKED: with KITTY_WINDOW_ID in the env (this runs inside kitty),
+    # A.session_start would stamp a live window id and the resume guard would
+    # refuse it as "session already live" — a resume launches only against a
+    # parked session.
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+    # a GENUINE codex rollout layout (rollout-*.jsonl under a `sessions/` tree),
+    # so the server process's REAL plugins.owns_by resolves it to codex — a
+    # test-process monkeypatch can't reach the separate dash server.
+    d = tmp_path / "sessions" / "2026" / "07" / "29"
+    d.mkdir(parents=True, exist_ok=True)
+    tpath = d / "rollout-1-abc.jsonl"
+    tpath.write_text("{}\n")                     # the missing-file 410 guard
+    A.session_start({"session_id": "cdx-1", "cwd": str(tmp_path),
+                     "transcript_path": str(tpath)})
+    code, _ = _post(dash + "/api/sessions/new",
+                    {"cwd": str(tmp_path), "resume": "cdx-1",
+                     "model": "opus", "effort": "high", "prompt": "carry on"})
+    assert code == 200
+    _cwd, argv = fe.launched[-1]
+    assert argv[1:4] == ["-lic", 'codex "$@"', "codex"]
+    # resume subcommand + id FIRST; claude model/effort dropped (tool mismatch)
+    assert argv[4:] == ["resume", "cdx-1", "-C", str(tmp_path), "carry on"]
+    assert (_last_state_file("", "web-launch") or {}).get("tool") == "codex"
+
+
+def test_post_new_session_bad_tool_is_400(dash, monkeypatch, tmp_path):
+    """An unknown/non-launchable tool is a clean 400 (validated against the
+    launchable hosts registry), never an argv composed for a host that isn't
+    there."""
+    _inject_fe(monkeypatch, _FakeFE())
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new", {"cwd": str(tmp_path), "tool": "nope"})
+    assert e.value.code == 400
+
+
+def test_hosts_endpoint_lists_launchable_hosts(dash):
+    """GET /api/hosts feeds the new-session tool picker — claude_code + codex,
+    each with a launchable flag."""
+    hosts = _get_json(dash + "/api/hosts")
+    names = {h["name"] for h in hosts}
+    assert {"claude_code", "codex"} <= names
+    assert all(isinstance(h["launchable"], bool) for h in hosts)
+
+
+def test_codex_usage_endpoint_renders_stubbed_windows(dash, monkeypatch):
+    """GET /api/codex-usage renders plugins.usage_windows() for the usage strip;
+    {} when codex is unconfigured/unreachable (the strip then hides)."""
+    import plugins
+    monkeypatch.setattr(plugins, "usage_windows",
+                        lambda: {"planType": "pro",
+                                 "windows": [{"used_pct": 42, "window_mins": 300,
+                                              "resets_at": 0}]})
+    data = _get_json(dash + "/api/codex-usage")
+    assert data["planType"] == "pro"
+    assert data["windows"][0]["used_pct"] == 42
+    monkeypatch.setattr(plugins, "usage_windows", lambda: None)
+    assert _get_json(dash + "/api/codex-usage") == {}
+
+
 def _stop_rows(sid):
     """The `web-stop` state_files rows (the close attempt/done pair), ts-ordered.
     Same spool-drain dance as _hint_rows."""
