@@ -24,8 +24,10 @@ const MENU_BLUR_MS = 150;
    cursors and painted blocks belong to whichever scope produced them. */
 function showSession(sid, tab, agent) {
   agent = agent || "";
-  // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror
-  if (!["mirror", "agents", "monitors", "jobs", "memory", "errors"].includes(tab)) tab = "mirror";
+  // unknown / retired tab (e.g. an old #/…/activity bookmark) → the mirror;
+  // extension tabs (EXT — memory is the first) count as known
+  if (!["mirror", "agents", "monitors", "jobs", "errors"].includes(tab) && !EXT[tab])
+    tab = "mirror";
   if (S.cur !== sid) {
     leaveSession();
     S.cur = sid;
@@ -37,8 +39,6 @@ function showSession(sid, tab, agent) {
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
-              memory: null, memTree: null, memShut: new Set(),
-              noteTrail: null, noteFocus: null,
               loadingOlder: false, queue: [], pending: [],
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
               // the view mode + its derived state: `view` is seeded from the
@@ -48,6 +48,9 @@ function showSession(sid, tab, agent) {
               // expanded, `viewSeq` names items, `viewFill` bounds the auto-load
               view: VIEW_DEFAULT, viewOpen: new Set(), viewSeq: 0,
               viewTimer: null, viewFill: 0 };
+    // each extension stamps its own per-session state slots (memory: the
+    // fetched list/tree, the collapse set, the open-note trail)
+    for (const x of extList()) if (x.init) x.init(S.ses);
     loadSessionData(sid);
   } else if ((S.ses.agent || "") !== agent) {
     // SCOPE CHANGE on the same session (into an agent, between agents, or back
@@ -228,9 +231,10 @@ function connectSession(sid) {
   es.addEventListener("running", (e) => { if (!S.ses) return; S.ses.running = JSON.parse(e.data); updateRunning(); });
   es.addEventListener("fgrun", (e) => { setFgRun((JSON.parse(e.data) || {}).fg || null); });
   es.addEventListener("errors", (e) => { updateErrCount(JSON.parse(e.data).count | 0); });
-  // the three secondary-tab badges are one shape (SECTIONS, app.11-chrome.js):
+  // the secondary-tab badges — built-ins plus every extension's (one shape:
+  // SECTIONS, app.11-chrome.js; an ext badge's SSE event is its name):
   // patch the count, and refresh that list when its tab is the one open
-  for (const kind of ["monitors", "jobs", "memory"])
+  for (const kind of ["monitors", "jobs", ...Object.keys(EXT)])
     es.addEventListener(kind, (e) =>
       updateSectionCount(kind, JSON.parse(e.data).count | 0));
   es.addEventListener("ask", (e) => {

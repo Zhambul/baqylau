@@ -148,7 +148,7 @@ def test_page_session_verbs_are_all_routed(dash):
     code, index = _get(dash + "/")
     assert code == 200
     verbs = set()
-    for p in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index))):
+    for p in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z-]+\.js)", index))):
         code, body = _get(dash + "/static/" + p)
         assert code == 200
         verbs |= set(re.findall(r'"/api/session/"\s*\+\s*[^+]+\+\s*"/([a-z-]+)',
@@ -195,7 +195,7 @@ def test_two_step_confirm_has_one_implementation(dash):
     code, index = _get(dash + "/")
     assert code == 200
     bodies = {}
-    for p in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index))):
+    for p in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z-]+\.js)", index))):
         code, bodies[p] = _get(dash + "/static/" + p)
         assert code == 200
     assert "function armConfirm(" in bodies["app.00-core.js"]
@@ -254,7 +254,7 @@ def test_no_dead_page_functions(dash):
     call)."""
     code, index = _get(dash + "/")
     assert code == 200
-    parts = sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index)))
+    parts = sorted(set(re.findall(r"/static/(app\.\d\d-[a-z-]+\.js)", index)))
     assert len(parts) > 5, parts
     bodies = {}
     for p in parts:

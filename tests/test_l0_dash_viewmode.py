@@ -424,7 +424,7 @@ def test_page_reads_the_served_act_instead_of_sniffing_glyphs(dash):
     in the client."""
     code, index = _get(dash + "/")
     assert code == 200
-    for part in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z]+\.js)", index))):
+    for part in sorted(set(re.findall(r"/static/(app\.\d\d-[a-z-]+\.js)", index))):
         code, body = _get(dash + "/static/" + part)
         assert code == 200
         assert "CMD_GLYPH" not in body, part
@@ -449,7 +449,8 @@ def test_secondary_tab_sections_are_one_engine(tmp_path):
         pytest.skip("no node on PATH")
     r = subprocess.run(
         [node, os.path.join(REPO, "tests", "jsdom", "sections.js"),
-         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-ext-memory.js")],
         capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     d = json.loads(r.stdout)
@@ -485,6 +486,38 @@ def test_secondary_tab_sections_are_one_engine(tmp_path):
     assert d["badges"]["memory"] == {"count": "1", "meta": 1, "painted": None}
 
 
+def test_a_fake_extension_gets_the_whole_registration_contract(tmp_path):
+    """The JS extension registry, EXECUTED with a FAKE extension — the
+    executable spec an extension author codes against (tests/jsdom/ext.js,
+    docs/dashboard.md *Web extensions*): a bare extRegister inherits the
+    SECTIONS conventions (api=list=name, tabEl <name>Tab, countField
+    <name>_count), the tab strip builds its tab at the declared anchor only
+    when meta[scopeField] says so (eager served count until the fetched list's
+    length beats it), chromeBody dispatches an EXT tab to the descriptor's own
+    body(), and #/x/<route> resolves through extPage → showExtPage. Skipped
+    without `node` (docs/testing.md)."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("no node on PATH")
+    r = subprocess.run(
+        [node, os.path.join(REPO, "tests", "jsdom", "ext.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+        capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)
+
+    assert d["section"] == {"api": "fake", "list": "fake", "tabEl": "fakeTab",
+                            "countField": "fake_count", "label": "fakes",
+                            "scoped": False}
+    assert d["tabsInScope"] == [["fake", "fakes", 7]]   # at its anchor, eager count
+    assert d["tabsOffScope"] == []                      # no scope flag -> no tab
+    assert d["tabsFetched"] == [["fake", "fakes", 2]]   # list length beats it
+    assert d["bodyCalls"] == 1
+    assert (d["pageCalls"], d["pageTitle"]) == (1, "fake page")
+    assert d["pageMiss"] is None
+    assert d["extListNames"] == ["fake"]
+
+
 def test_memory_tab_renders_the_vault_tree(tmp_path):
     """The memory tab's TREE, EXECUTED rather than grepped: tests/jsdom/
     memtree.js drives the real renderMemoryTree/memDir/memNote/toggleMemDir
@@ -502,7 +535,8 @@ def test_memory_tab_renders_the_vault_tree(tmp_path):
         pytest.skip("no node on PATH")
     r = subprocess.run(
         [node, os.path.join(REPO, "tests", "jsdom", "memtree.js"),
-         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js")],
+         os.path.join(REPO, "dashboard", "static", "app.11-chrome.js"),
+         os.path.join(REPO, "dashboard", "static", "app.11-ext-memory.js")],
         capture_output=True, text=True, timeout=60)
     assert r.returncode == 0, r.stderr
     d = json.loads(r.stdout)

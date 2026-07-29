@@ -250,7 +250,7 @@ class _Base(BaseHTTPRequestHandler):
     # the SPA parts (app.NN-name.js, split from the former monolithic app.js) are
     # admitted by SHAPE, not a per-file whitelist entry — still no user-path
     # resolution (a strict basename pattern), just no dict bloat for the 13 parts.
-    _APP_PART = re.compile(r"^app\.[0-9]{2}-[a-z]+\.js$")
+    _APP_PART = re.compile(r"^app\.[0-9]{2}-[a-z-]+\.js$")
 
     def static(self, name):
         ctype = STATIC.get(name)
@@ -278,7 +278,7 @@ class _Base(BaseHTTPRequestHandler):
             # audit record reads document.currentScript.src for this same ?v=,
             # so the LAST part (app.13-init.js, where that record now lives) must
             # carry it too — which this covers by stamping them all.
-            data = re.sub(rb'(/static/app\.[0-9]{2}-[a-z]+\.js)',
+            data = re.sub(rb'(/static/app\.[0-9]{2}-[a-z-]+\.js)',
                           rb'\1?v=' + BOOT_ID.encode(), data)
             data = data.replace(b"/static/style.css", b"/static/style.css?v=" + BOOT_ID.encode())
             # ...and the ICONS, for the same reason: a REGENERATED icon is new

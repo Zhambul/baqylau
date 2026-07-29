@@ -67,7 +67,10 @@ vm.createContext(sandbox);
 // `const SECTIONS = …` is a LEXICAL top-level binding, so it never becomes a
 // property of the vm global the way a `function` declaration does. Evaluate the
 // source and the export in ONE script so they share that scope.
-vm.runInContext(fs.readFileSync(process.argv[2], "utf8")
+// every app part on argv, concatenated into ONE script so lexical top-level
+// bindings (const SECTIONS/EXT) are shared — the chrome part plus the
+// extension part(s) that register into it (app.11-ext-memory.js)
+vm.runInContext(process.argv.slice(2).map(p => fs.readFileSync(p, "utf8")).join("\n")
                 + "\n;globalThis.SECTIONS = SECTIONS;",
                 sandbox, { filename: process.argv[2] });
 
@@ -96,7 +99,7 @@ function freshSes() {
     monitorsGrid: null, jobsGrid: null,
     // the REAL setTabBadge runs (the source's own declaration shadows any
     // stub), so give it the meta map and the three tab anchors it patches
-    meta: {}, monTab: new El("a"), jobTab: new El("a"), memTab: new El("a"),
+    meta: {}, monTab: new El("a"), jobTab: new El("a"), memoryTab: new El("a"),
   };
   sandbox.S.ses = ses;
   return ses;

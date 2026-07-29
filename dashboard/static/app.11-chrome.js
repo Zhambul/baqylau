@@ -25,9 +25,9 @@ function renderSessionChrome(tab) {
   clearSectionPoll("monitors");   // leaving a secondary tab stops its live poll
   clearSectionPoll("jobs");
   const meta = ses.meta || {};
-  // the Memory tab only exists for in-scope (aggregator-adapters) sessions — a
-  // deep-link / stale bookmark to it elsewhere falls back to the mirror
-  if (tab === "memory" && !meta.memory_scope) tab = "mirror";
+  // a SCOPED extension tab (memory: in-scope aggregator-adapters sessions
+  // only) — a deep-link / stale bookmark to it elsewhere falls back to the mirror
+  if (EXT[tab] && EXT[tab].scopeField && !meta[EXT[tab].scopeField]) tab = "mirror";
   $view.textContent = "";
 
   const head = el("div", "shead");
@@ -388,17 +388,15 @@ function chromeTabs(ses, meta, tab) {
   // ◷ background jobs — actual list length once fetched, else the cheap eager count
   ses.jobTab = mk("jobs", "jobs",
                   ses.jobs ? ses.jobs.length : (meta.job_count || 0));
-  // ❖ memory-wiki notes touched — actual list length once fetched, else the
-  // cheap eager count. SCOPED: only sessions inside the enabled project
-  // (aggregator-adapters, meta.memory_scope) get the tab at all.
-  if (meta.memory_scope)
-    ses.memTab = mk("memory", "memory",
-                    ses.memory ? ses.memory.length : (meta.memory_count || 0));
+  // …then every EXTENSION tab anchored here (memory — ❖ wiki notes touched,
+  // gated by its scopeField so only in-scope sessions get the tab at all)
+  for (const anchor of ["mirror", "agents", "monitors", "jobs"])
+    extTabs(ses, meta, mk, anchor);
   ses.errTab = mk("errors", "errors", meta.error_count || 0);   // live ⚠ count patches it
-  // memory + errors have no agent dimension (a note is the team's, an error is
-  // a script's), so in agent scope they still show the SESSION's — said out
-  // loud rather than left ambiguous.
-  if (scoped && (tab === "memory" || tab === "errors"))
+  // errors and the unscoped extension tabs (memory) have no agent dimension (a
+  // note is the team's, an error is a script's), so in agent scope they still
+  // show the SESSION's — said out loud rather than left ambiguous.
+  if (scoped && (tab === "errors" || (EXT[tab] && !EXT[tab].scoped)))
     tabs.append(el("span", "tabnote", "session-wide"));
   return tabs;
 }
@@ -458,10 +456,8 @@ function chromeBody(ses, tab, body) {
     if (ses[sec.list]) renderSectionGrid(tab);   // cached from a prior fetch
     else wrap.append(el("div", "empty", "loading " + sec.label + "…"));
     loadSection(tab);                     // (re)fetch fresh + start the live poll
-  } else if (tab === "memory") {
-    if (!ses.memory) body.append(el("div", "empty", "loading memory…"));
-    paintMemory();                        // grid, or the note viewer if one is open
-    loadSection("memory");
+  } else if (EXT[tab]) {
+    EXT[tab].body(ses, body);             // the extension's own tab renderer
   } else if (tab === "errors") {
     renderErrorsInto(body);
   }
@@ -839,9 +835,76 @@ function monitorCard(m) {
    below is generic over it. (The SECONDARY_POLL_MS constant had already been
    unified for exactly this reason — the constant, and then nothing else.)
 
-   Memory is a member too, for its fetch + badge, but it renders through its own
-   paintMemory (a grid OR an open note viewer) and has no per-item drill-down —
+   An EXTENSION's tab (extRegister below — memory is the first) is a member
+   too, for its fetch + badge; it usually renders through its own painter
+   (memory: a grid OR an open note viewer) and has no per-item drill-down —
    `repaint` and the absence of `detail` are what say so. */
+
+/* ---------- dashboard EXTENSIONS (the JS half; docs/dashboard.md *Web
+   extensions*) ----------
+
+   The server half is dashboard/ext/<name>/ (same `name`). An extension ships
+   as its own ordered classic part (app.NN-ext-<name>.js, listed in index.html
+   AFTER this file — the manual list IS the registry order) and calls
+   extRegister at load with a descriptor:
+
+     name        the tab key = the server ext's NAME (SSE event, <name>_count)
+     label       the tab strip label
+     after       which built-in tab it follows ("jobs"); errors stays last
+     scopeField  meta field gating the tab ("memory_scope"); absent = always on
+     scoped      does the tab follow AGENT scope (false ⇒ "session-wide" note)
+     init(ses)   stamp the extension's per-session state slots
+     body(ses, body)   render the open tab into `body`
+     section     merged into SECTIONS (stash/repaint/showing/… — the generic
+                 fetch/badge/poll engine covers the rest by convention:
+                 api=list=name, tabEl=<name>Tab, countField=<name>_count)
+     page        optional top-level page {route, title, render(wrap)} → #/x/<route>
+
+   Lives HERE rather than app.00 because registration MERGES into SECTIONS —
+   the tab machinery this file owns; every reader below runs long after load,
+   so parts that load earlier (the router, app.05's whitelist) can reach EXT
+   at runtime. */
+const EXT = {};
+
+function extRegister(d) {
+  EXT[d.name] = d;
+  if (d.section)
+    SECTIONS[d.name] = Object.assign(
+      { api: d.name, list: d.name, tabEl: d.name + "Tab",
+        countField: d.name + "_count", label: d.label || d.name,
+        scoped: !!d.scoped },
+      d.section);
+}
+
+function extList() { return Object.values(EXT); }
+
+function extPage(route) {
+  return extList().find(x => x.page && x.page.route === route) || null;
+}
+
+/* An extension's top-level page (#/x/<route> — the router's arm; nothing
+   registers one yet, pinned by tests/jsdom/ext.js). */
+function showExtPage(x) {
+  document.title = x.page.title || x.label;
+  $view.textContent = "";
+  const wrap = el("div", "extpage");
+  $view.append(wrap);
+  x.page.render(wrap);
+}
+
+/* The extension tabs anchored after built-in tab `anchor` — chromeTabs calls
+   this after each built-in it builds. The badge is the fetched list's length
+   once we have it, else the eager served count, same as every section tab. */
+function extTabs(ses, meta, mk, anchor) {
+  for (const x of extList()) {
+    if ((x.after || "jobs") !== anchor) continue;
+    if (x.scopeField && !meta[x.scopeField]) continue;
+    const sec = SECTIONS[x.name];
+    ses[sec.tabEl] = mk(x.name, x.label || x.name,
+                        ses[sec.list] ? ses[sec.list].length
+                                      : (meta[sec.countField] || 0));
+  }
+}
 
 const SECTIONS = {
   monitors: {
@@ -861,17 +924,6 @@ const SECTIONS = {
     empty: "no background jobs in this session", missing: "job not found",
     name: (j) => firstLine(j.command) || j.task,
     card: (j) => jobCard(j), detail: (wrap, j) => renderJobDetail(wrap, j),
-  },
-  memory: {
-    api: "memory", list: "memory", tabEl: "memTab", countField: "memory_count",
-    label: "memory",
-    // the flat list stays the badge's authority; the FOLDER TREE beside it in
-    // the same payload is what the tab renders (server-computed — the vault's
-    // own structure, docs/dashboard.md *Memory tab*)
-    stash: (ses, d) => { ses.memTree = d.tree || null; },
-    // the tree repaints only when it is the thing on screen — an open note
-    // viewer stays put while the list refreshes underneath it
-    repaint: () => { if (!noteOpen()) paintMemory(); },
   },
 };
 
@@ -900,12 +952,6 @@ function resetScopedSections() {
 function sortedItems(items) {
   return [...items].sort((x, y) => (!!y.live - !!x.live)
     || ((y.started_at || 0) - (x.started_at || 0)));
-}
-
-/* Is the memory tab showing an open note rather than its grid? */
-function noteOpen() {
-  const ses = S.ses;
-  return !!(ses && ses.noteTrail && ses.noteTrail.length);
 }
 
 function loadSection(kind) {
@@ -973,7 +1019,10 @@ function setSectionCount(kind, n) {
 
 function updateSectionCount(kind, n) {
   const ses = setSectionCount(kind, n);
-  const showing = kind === "memory" ? !noteOpen() : true;
+  // a section may say its list is NOT the thing on screen (memory's `showing`
+  // is false while a note viewer is open) — don't refresh under it
+  const sec = SECTIONS[kind];
+  const showing = sec.showing ? sec.showing() : true;
   if (ses && ses.tab === kind && showing) loadSection(kind);
 }
 
@@ -1139,202 +1188,6 @@ function jobCard(j) {
   else if (j.started_at) meta.append(el("span", "", ago(j.started_at)));
   card.append(meta);
   return card;
-}
-
-/* ---------- memory tab (the memory-wiki notes a session touched) ---------- */
-
-/* Paint the memory tab body: the note tree, or the note viewer when a note
-   (or a followed [[wikilink]]) is open. */
-function paintMemory() {
-  const ses = S.ses;
-  if (!ses || !ses.body || ses.tab !== "memory") return;
-  resetBody();
-  if (ses.noteTrail && ses.noteTrail.length) { renderNoteView(); return; }
-  const wrap = el("div", "memtree");
-  ses.memWrap = wrap;
-  ses.body.append(wrap);
-  renderMemoryTree();
-}
-
-/* The touched notes in the VAULT's own folder structure (server-built —
-   read/mirror.memory_tree), so the tab answers "did we work on platform, or on
-   providers (and which), or on tooling" at a glance instead of listing note
-   names in touch order. Folders are open by default and collapse on click. */
-function renderMemoryTree() {
-  const ses = S.ses;
-  if (!ses || !ses.memWrap) return;
-  ses.memWrap.textContent = "";
-  const root = ses.memTree;
-  if (!root || !root.count) {
-    ses.memWrap.append(el("div", "empty", "no memory notes touched in this session"));
-    return;
-  }
-  ses.memWrap.append(memSummary(root));
-  memChildren(ses.memWrap, root, 0);
-}
-
-/* A node's rows: its sub-folders first, then the notes filed on it directly —
-   the order the server froze (folders before notes, each alphabetical). */
-function memChildren(host, node, depth) {
-  for (const d of node.dirs || []) memDir(host, d, depth);
-  for (const n of node.notes || []) host.append(memNote(n, depth));
-}
-
-function memSummary(root) {
-  const sum = el("div", "memsum");
-  sum.append(el("span", "n", root.count + (root.count === 1 ? " note" : " notes")));
-  if (root.writes)
-    sum.append(el("span", "w", "✎ " + root.writes + " written"));
-  return sum;
-}
-
-/* One folder row + (unless collapsed) everything under it. The rows are a FLAT
-   list indented by depth rather than nested containers — a collapse is a
-   repaint, and nesting only buys an animation we don't have. */
-function memDir(host, node, depth) {
-  const open = !memShut().has(node.path);
-  const row = el("div", "memdir" + (depth ? "" : " top"));
-  row.style.paddingLeft = memPad(depth);
-  row.append(el("span", "mtw", open ? "▾" : "▸"));
-  row.append(el("span", "mdname", node.name));
-  const meta = el("span", "mdmeta");
-  meta.append(el("span", "mdcount", String(node.count)));
-  if (node.writes) meta.append(el("span", "mdwrites", "✎" + node.writes));
-  row.append(meta);
-  row.title = (open ? "collapse " : "expand ") + node.path;
-  row.onclick = () => toggleMemDir(node.path);
-  host.append(row);
-  if (open) memChildren(host, node, depth + 1);
-}
-
-/* One note row — the same chips the flat cards carried (verb colour, the
-   subagent that touched it, a ×N repeat count), under its folder. */
-function memNote(n, depth) {
-  const row = el("div", "memnote");
-  row.style.paddingLeft = memPad(depth);
-  const verb = (n.verb || "Read").toLowerCase();
-  row.append(el("span", "vchip v-" + verb, verb));
-  row.append(el("span", "memname", n.label || n.name || "?"));
-  if (n.agent) row.append(el("span", "memagent", "⇢ " + n.agent));
-  if (n.count > 1) row.append(el("span", "memcount", "×" + n.count));
-  row.onclick = () => openNoteRef({ path: n.path }, true);
-  return row;
-}
-
-function memPad(depth) { return (6 + depth * 16) + "px"; }
-
-/* Which folders are collapsed, by vault-relative path. Per session and kept
-   across repaints: the tab reloads on every `memory` SSE tick, and a fold that
-   sprang back open under your hand each time a note was touched would be worse
-   than no fold at all. */
-function memShut() {
-  const ses = S.ses;
-  if (!ses.memShut) ses.memShut = new Set();
-  return ses.memShut;
-}
-
-function toggleMemDir(path) {
-  const shut = memShut();
-  if (shut.has(path)) shut.delete(path);
-  else shut.add(path);
-  renderMemoryTree();
-}
-
-/* Open a note by absolute path (a grid row) or bare stem (a followed
-   [[wikilink]]). `reset` starts a fresh breadcrumb trail (a grid click);
-   following a link pushes onto it. */
-function openNoteRef(ref, reset) {
-  const ses = S.ses, sid = S.cur;
-  if (!ses || !sid) return;
-  const q = ref.path ? ("path=" + encodeURIComponent(ref.path))
-                     : ("stem=" + encodeURIComponent(ref.stem || ""));
-  fetch("/api/session/" + encodeURIComponent(sid) + "/note?" + q)
-    .then(r => r.json())
-    .then(d => {
-      if (S.cur !== sid || !S.ses) return;
-      if (reset || !S.ses.noteTrail) S.ses.noteTrail = [];
-      S.ses.noteTrail.push(d);
-      S.ses.noteFocus = d.path || d.name;
-      paintMemory();
-      // start the newly-opened note from its top — following a link deep in one
-      // note shouldn't land you mid-way down the next (the page scrolls the
-      // window; the sticky header stays pinned)
-      window.scrollTo(0, 0);
-    })
-    .catch(() => {});
-}
-
-function renderNoteView() {
-  const ses = S.ses;
-  if (!ses || !ses.body) return;
-  const trail = ses.noteTrail || [];
-  const d = trail[trail.length - 1];
-  resetBody();
-  ses.body.append(noteCrumbs(trail));
-  if (!d) return;
-  const wrap = el("div", "note");
-  if (d.missing) {
-    wrap.append(el("div", "empty", "note not found: " + (d.name || "?")));
-    ses.body.append(wrap);
-    return;
-  }
-  if (d.frontmatter && d.frontmatter.length) {
-    const fm = el("div", "note-fm");
-    for (const [k, v] of d.frontmatter) { fm.append(el("span", "fk", k), el("span", "fv", v)); }
-    wrap.append(fm);
-  }
-  const bodyEl = el("div", "note-body");
-  bodyEl.innerHTML = d.html || "";        // server-rendered, escape-first (opshtml/notehtml)
-  wrap.append(bodyEl);
-  if (d.backlinks && d.backlinks.length) {
-    const bl = el("div", "note-backlinks");
-    bl.append(el("div", "lbl", "backlinks"));
-    for (const stem of d.backlinks) {
-      const a = el("a", "wl", stem);
-      a.dataset.note = stem;
-      bl.append(a);
-    }
-    wrap.append(bl);
-  }
-  // follow a [[wikilink]] / backlink. DIRECT per-anchor onclick, NOT delegation:
-  // these anchors have no href, and mobile Safari won't dispatch a bubbled click
-  // from a tap on such an element to a container listener — the same reason the
-  // grid cards (which DO open on the phone) use a direct onclick. Covers both the
-  // body links and the backlinks (both live under `wrap`); dead links get none.
-  wrap.querySelectorAll("a.wl").forEach(a => {
-    if (a.classList.contains("dead")) return;
-    a.onclick = (ev) => { ev.preventDefault(); openNoteRef({ stem: a.dataset.note }); };
-  });
-  ses.body.append(wrap);
-}
-
-/* The note breadcrumb — ❖ memory (back to the grid) › note › followed note … */
-function noteCrumbs(trail) {
-  const nav = el("div", "crumbs");
-  const back = el("a", "crumb");
-  back.href = "#/s/" + encodeURIComponent(S.cur) + "/memory";
-  back.title = "back to the memory list";
-  back.append(el("span", "cg", "❖"), tnode(" memory"));
-  back.onclick = (e) => {
-    e.preventDefault();
-    S.ses.noteTrail = []; S.ses.noteFocus = null; paintMemory();
-  };
-  nav.append(back);
-  trail.forEach((d, i) => {
-    nav.append(el("span", "csep", "›"));
-    if (i === trail.length - 1) {
-      const cur = el("span", "crumb cur");
-      cur.append(el("span", "cg", "❖"), tnode(" " + (d.name || "?")));
-      nav.append(cur);
-    } else {
-      const a = el("a", "crumb");
-      a.href = "javascript:void 0";
-      a.append(tnode(d.name || "?"));
-      a.onclick = (e) => { e.preventDefault(); S.ses.noteTrail = trail.slice(0, i + 1); paintMemory(); };
-      nav.append(a);
-    }
-  });
-  return nav;
 }
 
 function renderJobDetail(container, j) {

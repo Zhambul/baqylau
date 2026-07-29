@@ -188,6 +188,13 @@ function route() {
     return location.replace("#/");
   }
   if (parts[0] === "stats") { S.pendingUI = false; return showStats(); }
+  // an EXTENSION's top-level page (#/x/<route>, docs/dashboard.md *Web
+  // extensions* — none registered yet, pinned by tests/jsdom/ext.js); an
+  // unknown route falls through to the list
+  if (parts[0] === "x" && parts[1]) {
+    const x = extPage(parts[1]);
+    if (x) { S.pendingUI = false; return showExtPage(x); }
+  }
   S.pendingUI = false;
   showList();
 }

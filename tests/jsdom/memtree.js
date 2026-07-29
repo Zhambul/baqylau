@@ -54,8 +54,11 @@ sandbox.document.addEventListener = () => {};
 sandbox.window = sandbox;
 sandbox.window.addEventListener = () => {};
 vm.createContext(sandbox);
-vm.runInContext(fs.readFileSync(process.argv[2], "utf8"), sandbox,
-                { filename: process.argv[2] });
+// every app part on argv, concatenated into ONE script (the chrome part
+// defines extRegister/SECTIONS; app.11-ext-memory.js holds the renderers
+// under test and registers into them)
+vm.runInContext(process.argv.slice(2).map(p => fs.readFileSync(p, "utf8")).join("\n"),
+                sandbox, { filename: process.argv[2] });
 // the source declares its OWN openNoteRef (a top-level `function` becomes a
 // property of the vm global), so the stub above is overwritten by the real one
 // at evaluation — re-point it AFTER, or a note click fetches instead of being
