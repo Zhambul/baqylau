@@ -135,7 +135,8 @@ const F = {
   prompt: { act: "msg", kind: "messages", msg: "prompt" },
   reply: { act: "msg", kind: "messages", msg: "message" },
   warn: { act: "warn", kind: "commands" },
-  memread: { act: "read", kind: "memory" },
+  memread: { act: "read", kind: "memory" },     // ❖ a wiki note READ
+  memwr: { act: "edit", kind: "memory" },       // ❖ a wiki note WRITTEN
   mon: { act: "monitor", kind: "commands" },      // ◉ a monitor block
   skill: { act: "skill", kind: "commands" },      // ⏺ Skill(<name>)
   task: { act: "task", kind: "commands" },        // ✚/✓ task-list rows
@@ -301,6 +302,25 @@ out.injected = {
 // turn ends on (the memory-note nudge that hid every real result). The injected
 // bubble itself stays hidden, and the runs either side still merge into one
 // summary — only the reply search is cut.
+// The SECOND errand boundary: a memory-wiki WRITE. The model often persists
+// BEFORE the Stop hook can nudge, and then the hook's boundary releases the
+// "persisted the note" line rather than the answer — so the write cuts too.
+// The control is the SAME shape with an ordinary file edit in place of the ❖
+// write: it folds and does NOT cut, so the answer stays hidden there.
+const errand = [F.prompt, F.fg, F.reply, F.memwr, F.reply, F.stopmsg, F.reply];
+const errandCtl = [F.prompt, F.fg, F.reply, F.upd, F.reply, F.stopmsg, F.reply];
+out.memErrand = {
+  focus: shown(scene("focus", errand)).length,
+  control: shown(scene("focus", errandCtl)).length,
+  // …and DEFAULT is untouched: it keeps every message anyway, and the ❖ write
+  // is a mutation, so it stands as its own row rather than folding
+  default: shown(scene("default", errand)),
+};
+// …a memory READ is Claude Code looking something UP to answer you — the work
+// itself, mid-turn by nature. It must not release a second reply.
+out.memReadNoCut = shown(scene("focus",
+  [F.prompt, F.fg, F.reply, F.memread, F.reply])).length;
+
 const stop = [F.prompt, F.fg, F.reply, F.stopmsg, F.read, F.reply];
 out.stopResume = {
   focus: shown(scene("focus", stop)),

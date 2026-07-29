@@ -778,6 +778,23 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # provisional: the answer behind the hook is settled, at full weight.
     assert d["stopResume"]["busy"] == ["msg:dim", "msg", "msg"]
 
+    # The Stop hook is only the SECOND half of the boundary. The model often
+    # persists its note BEFORE the hook can nudge, and then the hook's boundary
+    # releases the "persisted the note" line rather than the answer — measured
+    # on the reported session, where 5 of 6 turns read right and the sixth had
+    # a ❖ wiki write sitting between the answer and the bookkeeping. So a
+    # MEMORY-WIKI WRITE cuts too: prompt + the answer + both bookkeeping
+    # replies, against the same shape with an ordinary edit (which folds and
+    # cuts nothing, leaving the answer hidden).
+    assert d["memErrand"]["focus"] == 4
+    assert d["memErrand"]["control"] == 3
+    # DEFAULT is untouched — it keeps every message anyway, and a ❖ write is a
+    # mutation, so it stands as its own row (the cut is focus-only).
+    assert d["memErrand"]["default"] == ["msg", "msg", "edit", "msg", "msg"]
+    # …and a memory READ is Claude Code looking something UP to ANSWER you: the
+    # work itself, mid-turn by nature, so it releases nothing.
+    assert d["memReadNoCut"] == 2
+
     # the summary is clickable BOTH ways (it stays put while expanded — it is the
     # only way back), and a redundant pass is a no-op (the signature guard, which
     # is what keeps a live stream from rebuilding the feed under a reader)

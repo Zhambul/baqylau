@@ -1189,6 +1189,24 @@ function applyViewMode() {
   // [replies … activity … prompt], so everything above the first prompt we meet
   // belongs to the turn in progress.
   let inNewestTurn = true;
+  // An ERRAND BOUNDARY — the point in a turn where the work you asked for
+  // stopped and Claude Code's own housekeeping began. Everything after it is
+  // bookkeeping, so the message in FRONT of it is a final answer in its own
+  // right and focus mode restarts its reply search there (a prompt does the
+  // same, and additionally shows itself and starts a new turn). The errand is
+  // also, by definition, over: what follows is not the provisional prose of a
+  // turn in flight, so the reply it releases is never greyed.
+  //
+  // Two things mark one, both from the SAME reported bug (docs/dashboard.md,
+  // *View modes*): a memory-note nudge that ran on every turn left focus mode
+  // showing "persisted the note" and dropping the answer.
+  //   · a blocking STOP HOOK's feedback (`data-resumed`) — it fires BECAUSE
+  //     the turn ended, so the reply above it is what the turn ended on;
+  //   · a MEMORY-WIKI WRITE (`mem-write`) — persisting a note is the errand
+  //     itself, and the model often does it BEFORE the hook can nudge, which
+  //     is why the hook alone was not enough: the message the hook boundary
+  //     rescued was then the "persisted the note" line, not the answer.
+  const errandCut = () => { sawReply = false; inNewestTurn = false; };
   const disp = items.map(elem => {
     const kind = elem.dataset.kind;
     if (kind === "messages") {
@@ -1203,20 +1221,13 @@ function applyViewMode() {
       //
       // …EXCEPT one that RESUMED a turn Claude Code had already ENDED
       // (`data-resumed` — a blocking Stop hook's feedback, transcript
-      // _RESUMES_TURN). That hook fires BECAUSE the turn ended, so the reply
-      // above it is a final ANSWER, not commentary: it closes the reply search
-      // (the older message becomes a "final" one in its own right) while still
-      // not being a prompt — the run either side of it merges as before, and
-      // the counters are untouched. Without this, a Stop hook that nudges on
-      // EVERY turn (a memory-note reminder) hid every real result behind the
-      // "persisted the note" reply that followed it: focus mode showed the
-      // bookkeeping and dropped the answer. The bubble itself stays hidden —
-      // it is still not something you said.
+      // _RESUMES_TURN): one of the two ERRAND BOUNDARIES (`errandCut` below).
+      // The bubble itself stays hidden — it is still not something you said.
       if (elem.dataset.injected) {
-        if (elem.dataset.resumed) { sawReply = false; inNewestTurn = false; }
+        if (elem.dataset.resumed) errandCut();
         return "hide";
       }
-      if (mk === "prompt") { sawReply = false; inNewestTurn = false; return "show"; }
+      if (mk === "prompt") { errandCut(); return "show"; }
       if (mode === "focus" && mk === "message") {
         // Exactly ONE message survives per turn — the newest, which is the one
         // the turn ends on. The rest are the running commentary and stay hidden.
@@ -1242,6 +1253,16 @@ function applyViewMode() {
     // message. Verbose returns before any of this and shows every one of them, each
     // labelled `Mail … · delivered/read/idle`.
     if (elem.dataset.plumb) return "hide";
+    // …the SECOND errand boundary: a memory-wiki WRITE (the ❖ ops — `data-mem`
+    // + an edit/write act, which viewCounter already words as "wrote N
+    // memories"). It still FOLDS into the summary like any other activity;
+    // what it additionally does is release the reply in front of it. Only in
+    // focus (default keeps every message anyway), and only for a WRITE — a
+    // memory READ is Claude Code looking something up to ANSWER you, which is
+    // the work itself and mid-turn by nature. `data-mem` is stamped only for
+    // sessions in the one project that opted into the memory wiki
+    // (plugins/claude_code/memory.in_scope), so this rule is dormant elsewhere.
+    if (mode === "focus" && viewCounter(elem) === "mem-write") errandCut();
     return fold.includes(elem.dataset.act || "") ? "fold" : "show";
   });
 

@@ -5700,9 +5700,10 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
 - **focus** — your prompts and each turn's FINAL reply at full weight, its
   mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and ONE summary
   line accounting for everything else the turn did. Every intermediate step folds
-  into it; nothing is dropped from its counters. A turn a blocking **Stop hook**
-  resumed has TWO final replies — the answer the hook interrupted and the reply
-  the errand ends on (*injected prompts*, below).
+  into it; nothing is dropped from its counters. A turn that broke off into
+  HOUSEKEEPING — a blocking Stop hook's nudge, a memory-wiki write — releases a
+  final reply at each of those points, so the answer is never buried behind the
+  bookkeeping that followed it (*Errand boundaries*, below).
 
   Mid-turn prose is greyed rather than dropped, which it was at first. Hiding it
   read as content VANISHING: only the NEWEST message in a turn is its "final"
@@ -6217,23 +6218,59 @@ final-reply rule — the reply after a loaded skill, a compaction summary or a
 piece of teammate mail still belongs to the prompt you typed, and treating every
 injection as a boundary surfaced a second "final" reply per injection.
 
-**Except the one that RESUMED an ended turn** (`transcript._RESUMES_TURN` →
-the record's `resumed`, the item's `resumed`, the DOM's `data-resumed`). A
-blocking **Stop hook** is not a mid-turn injection at all: it fires *because the
-turn ended*, so the reply in front of its feedback is a turn's **answer**, and
-everything after it is the hook's errand. Reported from a project whose Stop hook
-nudges every turn to persist memory notes (`.claude/hooks/wiki_nudge.py` in
-`aggregator-adapters`): focus mode kept exactly one message per turn, that
-message was always the `persisted the note` bookkeeping reply, and the actual
-result was folded away as mid-turn prose — *"because of the stop hook which
-nudges to store memory notes in focus mode I lose the actual result message"*.
-So a `resumed` injection **closes the reply search** (the message above it
-becomes a final reply in its own right, at full weight even while the resumed
-turn is still running — it is settled, only the newest reply is provisional)
-while remaining, in every other respect, an injection: the bubble itself is still
-hidden, it is still not a prompt, the counters are untouched, and the run either
-side merges exactly as before (the revealed answer breaks its run the way any
-shown message does).
+**Except the one that RESUMED an ended turn** — the first of the two **errand
+boundaries** (`errandCut`, below).
+
+#### Errand boundaries
+
+An **errand boundary** is the point in a turn where the work you asked for
+stopped and Claude Code's own housekeeping began. Focus mode restarts its reply
+search there: the message in FRONT of it is a final answer in its own right, at
+full weight even while the turn is still running (the errand is over by
+definition — only a turn genuinely in flight has provisional prose). Everything
+else about the items is unchanged: they still fold, still count, and the run
+either side merges exactly as before (a revealed answer breaks its run the way
+any shown message does).
+
+Reported from a project whose Stop hook nudges every turn to persist memory
+notes (`.claude/hooks/wiki_nudge.py` in `aggregator-adapters`): focus mode kept
+exactly one message per turn, that message was always the `persisted the note`
+bookkeeping reply, and the actual result was folded away as mid-turn prose —
+*"because of the stop hook which nudges to store memory notes in focus mode I
+lose the actual result message"*. Two things mark a boundary, and the bug needed
+**both**:
+
+1. **A blocking Stop hook's feedback** (`transcript._RESUMES_TURN` → the
+   record's `resumed`, the item's `resumed`, the DOM's `data-resumed`). It is
+   not a mid-turn injection at all: it fires *because the turn ended*, so the
+   reply in front of it is what the turn ended on. The bubble itself stays
+   hidden and is still not a prompt — only the reply search moves.
+2. **A memory-wiki WRITE** (the ❖ ops — `data-mem` plus an edit/write act,
+   i.e. `viewCounter`'s `mem-write`). Persisting a note *is* the errand, and the
+   model frequently does it **before** the hook can nudge — which is exactly why
+   the hook alone was not enough. Measured over the reported session
+   (`69caa362`), the hook boundary fixed 5 of 6 turns; the sixth read
+   `answer → ❖ Update(preprod-envoy-lb.md) → "Persisted the zone-placement
+   map…" → Stop hook feedback → "Already persisted this turn…"`, so the message
+   the hook released was itself bookkeeping. A memory **READ** deliberately does
+   NOT cut: looking something up is how Claude Code ANSWERS you — the work
+   itself, mid-turn by nature. The rule is focus-only (default keeps every
+   message anyway) and naturally dormant outside the one project that opted into
+   the memory wiki, since `data-mem` is stamped only there
+   (`plugins/claude_code/memory.in_scope`).
+
+**Why not a rule that keeps only ONE message per turn** (moving which message is
+"final" instead of releasing an extra one), which would preserve focus mode's
+one-reply promise exactly: because a bookkeeping reply is not always *only*
+bookkeeping — the same session has `Persisted. The sweep turned up two things
+worth flagging beyond my earlier answer: …`. Dropping the post-errand reply
+would lose that. Offered as an explicit choice and declined; a wiki-heavy turn
+showing four messages is the accepted cost, and it is the same direction every
+other gap in this engine fails — **toward showing content, never toward hiding
+it**. **Why not stop hiding mid-turn prose altogether** (dimming it, which is
+what this section's own *focus* bullet reads like): it makes focus ≈ verbose for
+conversation, and the whole point of the mode is that a long turn's running
+commentary is not on screen. Also offered and declined.
 
 The mark is anchored TEXT (`^\s*Stop hook feedback:` — Claude Code's own
 wording, 4.5k occurrences across the local transcript corpus), for the same
