@@ -207,4 +207,39 @@ for (const kind of seq) {
   });
 }
 
+/* Repaint-skip: the poll refetches every SECONDARY_POLL_MS while anything is
+   live, and an UNCHANGED payload must leave the DOM alone — the wholesale
+   teardown flickered the grid (and flashed "loading output…" over a job
+   drill-down) every tick while a quiet live job changed nothing. A sentinel
+   child survives the same-bytes reload and is torn down by a changed one. */
+const settle = () => new Promise(r => {
+  let n = 0;
+  const tick = () => (++n < 30 ? Promise.resolve().then(tick) : r());
+  tick();
+});
+chain = chain.then(() => {
+  const sec = sandbox.SECTIONS.jobs;
+  const ses = freshSes();
+  ses.tab = "jobs";
+  const wrap = new El("div", "sgrid");
+  wrap.isConnected = true;
+  ses[sec.grid] = wrap;
+  const sentinel = new El("div", "sentinel");
+  sandbox.loadSection("jobs");
+  return settle().then(() => {
+    wrap.append(sentinel);
+    sandbox.loadSection("jobs");                       // same bytes → no repaint
+    return settle();
+  }).then(() => {
+    out.skip = { same: wrap.children.includes(sentinel) };
+    FIXTURES.jobs = FIXTURES.jobs.concat(
+      [{ task: "j-new", command: "true", live: false, started_at: 400 }]);
+    sandbox.loadSection("jobs");                       // moved → full repaint
+    return settle();
+  }).then(() => {
+    out.skip.changed = !wrap.children.includes(sentinel);
+    out.skip.cards = wrap.children.length;
+  });
+});
+
 chain.then(() => process.stdout.write(JSON.stringify(out, null, 1)));

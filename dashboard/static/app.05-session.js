@@ -39,6 +39,9 @@ function showSession(sid, tab, agent) {
               timer: null, poll: null, blocks: new Map(), moreEl: null,
               monitors: null, monitorFocus: null, monPoll: null,
               jobs: null, jobFocus: null, jobPoll: null,
+              // the section engine's repaint-skip signatures + the job
+              // drill-down's output cache/box (app.11-chrome.js loadSection)
+              secRaw: {}, jobOut: null, jobOutBox: null,
               loadingOlder: false, queue: [], pending: [],
               askPend: null, planPend: null,   // in-flight optimistic ask/plan decisions
               // the view mode + its derived state: `view` is seeded from the

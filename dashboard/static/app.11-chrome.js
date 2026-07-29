@@ -924,6 +924,10 @@ const SECTIONS = {
     empty: "no background jobs in this session", missing: "job not found",
     name: (j) => firstLine(j.command) || j.task,
     card: (j) => jobCard(j), detail: (wrap, j) => renderJobDetail(wrap, j),
+    // a live job's OUTPUT grows outside the jobs payload (it lives in the ops),
+    // so an unchanged-list poll still refreshes the open drill-down's output —
+    // in place, only when the text moved
+    tick: () => refreshJobOutput(),
   },
 };
 
@@ -944,7 +948,12 @@ function resetScopedSections() {
     clearSectionPoll(kind);
     ses[sec.list] = null;
     ses[sec.focus] = null;
+    // …and the repaint-skip signature: a null list means "nothing painted", and
+    // a stale signature matching the next fetch would skip the paint that fills
+    // the placeholder in
+    if (ses.secRaw) ses.secRaw[kind] = null;
   }
+  ses.jobOut = null;                       // the output cache is the scope's too
 }
 
 /* live-first, then most-recently-started on top — the order every section
@@ -964,9 +973,26 @@ function loadSection(kind) {
     .then(r => r.json())
     .then(d => {
       if (S.cur !== sid || !S.ses) return;
+      // Repaint ONLY when the payload moved. The poll re-fetches every
+      // SECONDARY_POLL_MS while anything is live, and a wholesale
+      // teardown-and-rebuild on each tick flickered the grid — and flashed
+      // "loading output…" over a job drill-down's output — while a quiet live
+      // job changed nothing at all ("nothing really changes… I don't want the
+      // flickering"). Same shape as statsSig: diff the content, not the clock.
+      const raw = JSON.stringify(d);
+      const same = (S.ses.secRaw = S.ses.secRaw || {})[kind] === raw;
+      S.ses.secRaw[kind] = raw;
       S.ses[sec.list] = d[sec.api] || [];
       if (sec.stash) sec.stash(S.ses, d);
       setSectionCount(kind, S.ses[sec.list].length);
+      if (same) {
+        // the list is what it was — leave the DOM alone; a job's OUTPUT can
+        // still be growing (it lives in the ops, not this payload), so the
+        // section's `tick` refreshes it in place
+        if (sec.tick) sec.tick();
+        scheduleSectionPoll(kind);
+        return;
+      }
       if (sec.repaint) { sec.repaint(); return; }
       if (S.ses[sec.focus]) repaintSectionDetail(kind);
       else renderSectionGrid(kind);
@@ -1215,19 +1241,61 @@ function renderJobDetail(container, j) {
   const outwrap = el("div", "mevents");
   outwrap.append(el("div", "mhead", "output"));
   const box = el("div", "joutput");
-  box.append(el("div", "empty", "loading output…"));
+  // seed from the last-fetched text (ses.jobOut) so a repaint — the poll saw
+  // the list move, or you navigated back — never flashes "loading output…"
+  // over output that was just on screen; only a first-ever open shows it
+  const ses = S.ses;
+  const cached = ses && ses.jobOut && ses.jobOut.task === j.task
+    ? ses.jobOut.text : null;
+  if (cached != null) paintJobOutput(box, j, cached);
+  else box.append(el("div", "empty", "loading output…"));
   outwrap.append(box);
   container.append(outwrap);
-  fetch("/api/session/" + encodeURIComponent(S.cur) + "/copy/"
+  if (ses) ses.jobOutBox = box;            // where refreshJobOutput lands
+  fetchJobOutput(j, box);
+}
+
+function paintJobOutput(box, j, t) {
+  box.textContent = "";
+  box.append(t.trim() ? pre(t) : el("div", "empty",
+    j.live ? "no output yet" : "(no output)"));
+}
+
+/* Fetch one job's output and swap it into `box` ONLY when the text moved —
+   the DOM (and the user's scroll/selection in it) is left alone on the quiet
+   ticks. Output lives in the ops, not the transcript — the ⧉out copy endpoint,
+   by the job's ops COPY GROUP (see renderJobDetail's group note). */
+function fetchJobOutput(j, box) {
+  const ses = S.ses, sid = S.cur;
+  fetch("/api/session/" + encodeURIComponent(sid) + "/copy/"
         + encodeURIComponent(j.group || j.task) + "/out")
     .then(r => r.text())
     .then(t => {
-      if (!box.isConnected) return;
-      box.textContent = "";
-      box.append(t.trim() ? pre(t) : el("div", "empty",
-        j.live ? "no output yet" : "(no output)"));
+      if (!box.isConnected || S.cur !== sid || S.ses !== ses) return;
+      const prev = ses.jobOut && ses.jobOut.task === j.task
+        ? ses.jobOut.text : null;
+      ses.jobOut = { task: j.task, text: t };
+      if (t === prev) return;              // unchanged — leave the DOM alone
+      paintJobOutput(box, j, t);
     })
-    .catch(() => { if (box.isConnected) { box.textContent = ""; box.append(el("div", "empty", "output unavailable")); } });
+    .catch(() => {
+      // keep whatever is showing (cached output beats an error note); only a
+      // box still on its "loading output…" placeholder learns of the failure
+      if (box.isConnected && !(ses && ses.jobOut && ses.jobOut.task === j.task)) {
+        box.textContent = "";
+        box.append(el("div", "empty", "output unavailable"));
+      }
+    });
+}
+
+/* The unchanged-list poll's refresh of an OPEN job drill-down (SECTIONS.jobs
+   `tick`): same box, same job, in-place. */
+function refreshJobOutput() {
+  const ses = S.ses;
+  if (!ses || !ses.jobFocus || !ses.jobOutBox || !ses.jobOutBox.isConnected)
+    return;
+  const j = (ses.jobs || []).find(x => x.task === ses.jobFocus);
+  if (j) fetchJobOutput(j, ses.jobOutBox);
 }
 
 /* ---------- agent scope ---------- */

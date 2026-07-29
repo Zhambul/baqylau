@@ -484,6 +484,11 @@ def test_secondary_tab_sections_are_one_engine(tmp_path):
     assert d["badges"]["monitors"] == {"count": "2", "meta": 2, "painted": 2}
     assert d["badges"]["jobs"] == {"count": "2", "meta": 2, "painted": 2}
     assert d["badges"]["memory"] == {"count": "1", "meta": 1, "painted": None}
+    # repaint-skip: the live poll re-fetches every SECONDARY_POLL_MS, and an
+    # UNCHANGED payload must leave the DOM alone — the wholesale teardown
+    # flickered the grid (and flashed "loading output…" over a job drill-down)
+    # every tick while nothing changed. A changed payload still repaints.
+    assert d["skip"] == {"same": True, "changed": True, "cards": 3}
 
 
 def test_a_fake_extension_gets_the_whole_registration_contract(tmp_path):

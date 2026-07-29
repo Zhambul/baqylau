@@ -5527,6 +5527,28 @@ monitors` — one transcript parse) and, while any monitor is `live`, re-fetched
 a light client poll (`scheduleSectionPoll`, `SECONDARY_POLL_MS`); the poll stops when none is live
 or you leave the tab.
 
+**The poll never repaints an unchanged view.** `loadSection` diffs each fetch
+against the previous payload (`ses.secRaw`, a per-section `JSON.stringify`
+signature — the `statsSig` idea applied to the section engine) and, when the
+bytes are identical, leaves the DOM alone entirely: no grid teardown, no
+drill-down rebuild. Without it, every 4-second tick while anything was live tore
+the whole tab body down and rebuilt it — the grid visibly flickered, and a job
+drill-down flashed **"loading output…"** over output that was already on screen,
+each tick, while a quiet live job changed nothing at all ("nothing really
+changes… I don't want the flickering", 2026-07-30). A changed payload still
+repaints wholesale, which is the right cost exactly when something moved. The
+one thing a byte-identical list can't speak for is a live **job's output** —
+that grows in the ops, not the jobs payload — so `SECTIONS.jobs` carries a
+`tick` hook (`refreshJobOutput`) that the unchanged path still runs: it
+re-fetches the open drill-down's output and swaps the box's content ONLY when
+the text moved (`fetchJobOutput`, cached per task in `ses.jobOut`), so scroll
+position and selection survive the quiet ticks. The same cache seeds a repaint's
+output box in place of the "loading output…" placeholder, which is now
+first-open-only. The known cost: while the payload holds still, the client-side
+`ago()` ages on cards/meta rows freeze until the next real change — a fair
+trade for a stable screen. Pinned by `tests/jsdom/sections.js` (the sentinel
+survives a same-bytes reload, a changed one tears it down).
+
 Monitors, jobs and memory are ONE engine, not three: the `SECTIONS` descriptor
 in `app.11-chrome.js` names what differs (endpoint, the `S.ses` field the list
 caches into, the grid/poll/tab-anchor fields, the route letter, the glyph and
