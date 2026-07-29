@@ -51,6 +51,7 @@ PROVIDERS = {
     "monitors": 1,           # (sid)                — the monitors read model
     "session_title": 1,      # (transcript_path)    — the display title
     "title_and_rename": 1,   # (transcript_path)    — title + the tail rename
+    "renameable": 1,         # (transcript_path)    — can it be /rename'd?
     "set_session_title": 2,  # (transcript_path, name) — the rename write
     "accounts": 0,           # ()                   — the switcher registry
     "account_alias": 1,      # (slug)               — its launch command word
@@ -219,13 +220,28 @@ def title_and_rename(transcript_path):
                   default=("", ""), accept=any)
 
 
+def renameable(transcript_path):
+    """Rename-ownership fan-out (path-keyed like session_title): True when some
+    plugin owns this transcript as a renameable session — the gate the
+    dashboard's LIVE rename asks BEFORE typing `/rename` into the window, since
+    a codex standalone host's window carries the same `claude_session` tag
+    while its transcript_path is a rollout (it would receive a command it has
+    no idea about). The parked path's gate is set_session_title's own None
+    return, which shares this predicate."""
+    return _first("renameable", transcript_path, default=False, truthy=True)
+
+
 def set_session_title(transcript_path, name):
     """Session-rename fan-out (path-keyed like session_title — the write half
     of that read): the first plugin that OWNS the file appends its naming
     record and returns True; None when no plugin recognizes the path (the
     dashboard then 409s — e.g. a codex rollout, which must never receive a
     Claude `agent-name` record). Exceptions (OSError from the append)
-    propagate — the caller is the dashboard's control plane, not a hook."""
+    propagate — the caller is the dashboard's control plane, not a hook.
+
+    The PARKED half of the rename only: a live session is renamed through
+    Claude Code's own `/rename`, which owns the in-memory title this record
+    would otherwise be overwritten by (docs/session-naming-findings.md §4)."""
     return _first("set_session_title", transcript_path, name)
 
 

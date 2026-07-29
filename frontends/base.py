@@ -231,12 +231,19 @@ class Frontend:
         return False
 
     def set_tab_title(self, win, title):
-        """Explicitly title the tab CONTAINING window `win` (the web rename).
-        STICKY in kitty: an explicit tab title stops following the active
-        window's OSC title — Claude Code's auto ai-title — for the rest of the
-        session, which is deliberate for a deliberately-named session
-        (docs/session-naming-findings.md §4). True when the terminal accepted
-        the call, else False."""
+        """Explicitly title the tab CONTAINING window `win`. STICKY in kitty:
+        an explicit tab title stops following the active window's OSC title —
+        which is how Claude Code publishes the session name — for the rest of
+        the session (docs/session-naming-findings.md §4). True when the
+        terminal accepted the call, else False.
+
+        DELIBERATELY unused by the web rename since 2026-07-29, and don't put
+        it back: a live rename goes through Claude Code's own `/rename`, which
+        re-emits that OSC, so the tab follows on its own. Calling this too
+        would make the tab a SECOND writer of the name — free to disagree with
+        the one the session actually has, which is precisely the split the
+        rename bug presented as (a tab asserting the manual name while every
+        other reader had the auto one)."""
         return False
 
     # --- viewport scroll / read ---------------------------------------------

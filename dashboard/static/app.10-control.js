@@ -460,6 +460,12 @@ function startRenameHeader() {
   // the input, ✦ auto types the TUI's own bare `/rename` instead — Claude
   // Code GENERATES the title itself (the quick-command channel, so it needs
   // a live window and inherits the red-tab refusal).
+  //
+  // A NAMED rename takes the same channel when the session is LIVE (the
+  // server replies `channel: "tui"`): Claude Code owns the name, so the title
+  // arrives on the `title` SSE once it applies — which is at the TURN BOUNDARY
+  // when the reply says `queued`, so there is nothing to show optimistically
+  // then. A PARKED rename (`channel: "transcript"`) lands immediately.
   const ses = S.ses;
   if (!ses || !ses.projEl || ses.projEl.querySelector("input")) return;
   const span = ses.projEl;
@@ -479,10 +485,20 @@ function startRenameHeader() {
     postJSON("/api/session/" + encodeURIComponent(S.cur) + "/rename", {name},
              { audit: "rename" })
       .then((d) => {
+        if (d.queued) {
+          // Claude Code has it in its message queue — showing the new name now
+          // would assert a rename it has not made yet (and may never, if the
+          // queue is Escaped out); the `title` SSE repaints when it lands
+          restore(old);
+          toast("done", "/rename",
+                "queued — applies when the turn ends");
+          return;
+        }
         if (ses.meta) ses.meta.title = d.title || name;
         restore(d.title || name);
         toast("done", "renamed",
-              d.tab_retitled ? "picker + tab" : "picker (tab on next resume)");
+              d.channel === "tui" ? "sent to Claude Code"
+                                  : "picker (applies on resume)");
       })
       .catch((e) => {
         restore(old);

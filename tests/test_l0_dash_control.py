@@ -611,8 +611,9 @@ def test_ask_dialog_open_when_chip_bar_scrolled_off():
 def test_post_command_bad_vocabulary_is_400(dash, monkeypatch):
     # fixed vocabulary: unknown command, missing/dirty model arg (a shell
     # metacharacter must never reach the terminal), unknown effort level,
-    # and compact/rename-with-arg all reject without a keystroke (a NAMED
-    # rename is post_rename's transcript append, never typed text)
+    # and compact/rename-with-arg all reject without a keystroke (this
+    # endpoint's vocabulary is ARGLESS `/rename` — the ✦ auto button; a NAMED
+    # rename is post_rename's, which types the same command with the name)
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "62")
@@ -673,46 +674,90 @@ def _rename_transcript(tmp_path, sid, *objs):
     return str(p)
 
 
-def test_post_rename_appends_and_retitles_live(dash, monkeypatch, tmp_path):
-    from plugins.claude_code import transcript as TR
+def test_post_rename_live_types_claude_codes_own_rename(dash, monkeypatch,
+                                                        tmp_path):
+    # THE CHANNEL FIX (2026-07-29): a LIVE rename is Claude Code's own
+    # `/rename <name>`, pasted — NOT a record we append. Claude Code re-emits
+    # its in-memory `agent-name` every turn, so a record it did not write is
+    # clobbered within one turn; making it change its own mind is the only
+    # thing every reader (picker, OSC tab title, hook payload, dashboard)
+    # follows.
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "42")
     tp = _rename_transcript(tmp_path, "ren1",
                             {"type": "user", "message": {"content": "hi"}},
                             {"type": "ai-title", "aiTitle": "auto title"})
-    A.session_start({"session_id": "ren1", "cwd": "/w", "transcript_path": tp})
+    A.session_start({"session_id": "ren1", "cwd": "/w", "transcript_path": tp,
+                     "kitty_window_id": "42"})
+    with open(tp, encoding="utf-8") as fh:
+        before = fh.read()
     code, body = _post(dash + "/api/session/ren1/rename", {"name": "my session"})
     assert code == 200
     assert json.loads(body) == {"ok": True, "title": "my session",
-                                "tab_retitled": True}
-    # the appended record IS the /rename channel: last line, sessionId from
-    # the filename stem, and it round-trips through the title parser
+                                "channel": "tui", "queued": False}
+    # pasted (mode-proof), and the transcript is left ALONE — Claude Code
+    # writes the record itself when it applies the command
+    assert fe.pasted == [("42", "/rename my session")]
     with open(tp, encoding="utf-8") as fh:
-        rec = json.loads(fh.read().splitlines()[-1])
-    assert rec == {"type": "agent-name", "agentName": "my session",
-                   "sessionId": "ren1"}
-    assert TR.session_title(tp) == "my session"
-    assert fe.titled == [("42", "my session")]
+        assert fh.read() == before
+    # and the tab is NOT retitled: a sticky title would be a second writer of
+    # the name, free to disagree with the session's own
+    assert fe.titled == []
 
 
-def test_post_rename_parked_no_window_still_appends(dash, monkeypatch,
-                                                    tmp_path):
-    # DELIBERATELY unlike post_message: no live window is NOT an error — the
-    # JSONL rename still lands, only the tab retitle degrades
+def test_post_rename_live_mid_turn_reports_queued(dash, monkeypatch, tmp_path):
+    # mid-turn the paste lands in the TUI's message queue and applies at the
+    # turn boundary — the page must not claim the name yet
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "43")
+    tp = _rename_transcript(tmp_path, "ren1b",
+                            {"type": "user", "message": {"content": "hi"}})
+    A.session_start({"session_id": "ren1b", "cwd": "/w", "transcript_path": tp,
+                     "kitty_window_id": "43"})
+    monkeypatch.setattr(DS.API, "tab_states", lambda: {"43": "working"})
+    code, body = _post(dash + "/api/session/ren1b/rename", {"name": "later"})
+    assert code == 200 and json.loads(body)["queued"] is True
+    assert fe.pasted == [("43", "/rename later")]
+
+
+def test_post_rename_live_refuses_on_open_dialog(dash, monkeypatch, tmp_path):
+    # a red awaiting-command tab means a modal dialog is up: pasted text would
+    # land IN it (the same refusal post_command makes)
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "44")
+    tp = _rename_transcript(tmp_path, "ren1c",
+                            {"type": "user", "message": {"content": "hi"}})
+    A.session_start({"session_id": "ren1c", "cwd": "/w", "transcript_path": tp,
+                     "kitty_window_id": "44"})
+    monkeypatch.setattr(DS.API, "tab_states",
+                        lambda: {"44": "awaiting-command"})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/session/ren1c/rename", {"name": "nope"})
+    assert e.value.code == 409
+    assert fe.pasted == []
+
+
+def test_post_rename_parked_no_window_appends(dash, monkeypatch, tmp_path):
+    # DELIBERATELY unlike post_message: no live window is NOT an error — it
+    # selects the PARKED half, where the append is safe (nothing is running to
+    # re-emit over it) and `claude --resume` reads the file fresh
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
     tp = _rename_transcript(tmp_path, "ren2",
                             {"type": "user", "message": {"content": "hi"}})
     A.session_start({"session_id": "ren2", "cwd": "/w", "transcript_path": tp})
+    fe.wins["ren2"] = None                    # no live claude_session tag
     code, body = _post(dash + "/api/session/ren2/rename", {"name": "parked one"})
     assert code == 200
     d = json.loads(body)
-    assert d["ok"] is True and d["tab_retitled"] is False
+    assert d["ok"] is True and d["channel"] == "transcript"
     with open(tp, encoding="utf-8") as fh:
         assert json.loads(fh.read().splitlines()[-1])["agentName"] == "parked one"
-    assert fe.titled == []
+    assert fe.pasted == [] and fe.titled == []
 
 
 def test_post_rename_no_terminal_still_appends(dash, monkeypatch, tmp_path):
@@ -724,7 +769,7 @@ def test_post_rename_no_terminal_still_appends(dash, monkeypatch, tmp_path):
                             {"type": "user", "message": {"content": "hi"}})
     A.session_start({"session_id": "ren3", "cwd": "/w", "transcript_path": tp})
     code, body = _post(dash + "/api/session/ren3/rename", {"name": "still works"})
-    assert code == 200 and json.loads(body)["tab_retitled"] is False
+    assert code == 200 and json.loads(body)["channel"] == "transcript"
     with open(tp, encoding="utf-8") as fh:
         assert json.loads(fh.read().splitlines()[-1])["agentName"] == "still works"
 
@@ -744,7 +789,7 @@ def test_post_rename_empty_name_is_400(dash, monkeypatch, tmp_path):
         assert e.value.code == 400
     with open(tp, encoding="utf-8") as fh:
         assert fh.read() == before
-    assert fe.titled == []
+    assert fe.pasted == []
 
 
 def test_post_rename_no_transcript_is_409(dash, monkeypatch, tmp_path):
@@ -768,15 +813,19 @@ def test_post_rename_no_transcript_is_409(dash, monkeypatch, tmp_path):
 def test_post_rename_unsupported_transcript_is_409(dash, monkeypatch,
                                                    tmp_path):
     # a transcript_path OUTSIDE the projects/ layout (a codex standalone
-    # host's rollout) must never receive a Claude agent-name record
-    _inject_fe(monkeypatch, _FakeFE())
+    # host's rollout) must receive NEITHER a Claude agent-name record NOR a
+    # typed /rename — and its window carries the same claude_session tag, so
+    # the plugins.renameable gate runs BEFORE the live/parked branch
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "9")
     d = tmp_path / "rollouts"
     d.mkdir()
     tp = str(d / "rollout-ren6.jsonl")
     with open(tp, "w", encoding="utf-8") as fh:
         fh.write(_jl({"type": "session_meta"}))
-    A.session_start({"session_id": "ren6", "cwd": "/w", "transcript_path": tp})
+    A.session_start({"session_id": "ren6", "cwd": "/w", "transcript_path": tp,
+                     "kitty_window_id": "9"})
     with open(tp, encoding="utf-8") as fh:
         before = fh.read()
     with pytest.raises(urllib.error.HTTPError) as e:
@@ -784,39 +833,43 @@ def test_post_rename_unsupported_transcript_is_409(dash, monkeypatch,
     assert e.value.code == 409
     with open(tp, encoding="utf-8") as fh:
         assert fh.read() == before
+    assert fe.pasted == []
 
 
 def test_post_rename_strips_controls_and_caps(dash, monkeypatch, tmp_path):
-    # control bytes (the OSC/CSI injection class) never enter the stored
-    # name or the set-tab-title arg; over-long names cap at RENAME_MAX
+    # control bytes (the OSC/CSI injection class) never enter the name — which
+    # on the LIVE path is text PASTED into a terminal, so the strip is what
+    # keeps an OSC out of the command line; over-long names cap at RENAME_MAX
     fe = _FakeFE()
     _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "11")
     tp = _rename_transcript(tmp_path, "ren7",
                             {"type": "user", "message": {"content": "hi"}})
-    A.session_start({"session_id": "ren7", "cwd": "/w", "transcript_path": tp})
+    A.session_start({"session_id": "ren7", "cwd": "/w", "transcript_path": tp,
+                     "kitty_window_id": "11"})
     code, body = _post(dash + "/api/session/ren7/rename",
                        {"name": "a\x1b]2;evil\x07b\nc"})
     stored = json.loads(body)["title"]
     assert stored == "a ]2;evil b c"
+    assert fe.pasted[-1] == ("11", "/rename a ]2;evil b c")
     long = "x" * (DS.config.RENAME_MAX + 300)
     code, body = _post(dash + "/api/session/ren7/rename", {"name": long})
     assert json.loads(body)["title"] == "x" * DS.config.RENAME_MAX
-    with open(tp, encoding="utf-8") as fh:
-        rec = json.loads(fh.read().splitlines()[-1])
-    assert rec["agentName"] == "x" * DS.config.RENAME_MAX
-    assert fe.titled[-1] == ("11", "x" * DS.config.RENAME_MAX)
+    assert fe.pasted[-1] == ("11", "/rename " + "x" * DS.config.RENAME_MAX)
 
 
 def test_post_rename_updates_session_payload_title(dash, monkeypatch,
                                                    tmp_path):
-    # the (path, size) title cache self-invalidates on the append — the very
-    # next GET shows the new name (list + header payloads share session_title)
-    _inject_fe(monkeypatch, _FakeFE())
+    # PARKED: the (path, size) title cache self-invalidates on the append — the
+    # very next GET shows the new name (list + header payloads share
+    # session_title)
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "12")
     tp = _rename_transcript(tmp_path, "ren8",
                             {"type": "ai-title", "aiTitle": "auto"})
     A.session_start({"session_id": "ren8", "cwd": "/w", "transcript_path": tp})
+    fe.wins["ren8"] = None                    # parked: no live window
     assert _get_json(dash + "/api/session/ren8")["title"] == "auto"
     _post(dash + "/api/session/ren8/rename", {"name": "picked by hand"})
     assert _get_json(dash + "/api/session/ren8")["title"] == "picked by hand"
@@ -824,16 +877,19 @@ def test_post_rename_updates_session_payload_title(dash, monkeypatch,
 
 def test_post_rename_override_survives_tail_window_rollback(dash, monkeypatch,
                                                            tmp_path):
-    # THE ROLLBACK FIX: the /rename `agent-name` scrolls out of session_title's
-    # 64KB tail-window in a long session while fresh ai-title rows sit near EOF,
-    # so the transcript ladder reverts to the auto title. The durable override
+    # THE ROLLBACK FIX, on the PARKED path (the only one that writes the record
+    # itself): the /rename `agent-name` scrolls out of session_title's 64KB
+    # tail-window in a long session while fresh ai-title rows sit near EOF, so
+    # the transcript ladder reverts to the auto title. The durable override
     # (prefs `renamed-title`) is what keeps the DASHBOARD title from rolling back.
     from plugins.claude_code import transcript as TR
-    _inject_fe(monkeypatch, _FakeFE())
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
     monkeypatch.setenv("KITTY_WINDOW_ID", "77")
     tp = _rename_transcript(tmp_path, "ren9",
                             {"type": "ai-title", "aiTitle": "auto"})
     A.session_start({"session_id": "ren9", "cwd": "/w", "transcript_path": tp})
+    fe.wins["ren9"] = None                    # parked: no live window
     code, _ = _post(dash + "/api/session/ren9/rename", {"name": "kept name"})
     assert code == 200
     # simulate time passing: append enough fresh ai-title rows to push the

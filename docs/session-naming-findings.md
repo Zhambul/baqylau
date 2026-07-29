@@ -6,11 +6,14 @@ programmatically by a script/hook (not only by a human typing `/rename`).
 
 **Status:** research + on-disk verification complete — and since 2026-07-18 **partially
 implemented in THIS repo** as the web dashboard's rename button (docs/dashboard.md *Web
-rename*): the JSONL-append + `set-tab-title` composition recommended in §5, with the
-`agent-name` writer living next to its parser (`plugins/claude_code/transcript.set_session_title`,
-single-owner + grep-test-enforced), the endpoint at `dashboard/server.py post_rename`, and
-`web-rename` audit rows. The SessionStart-hook auto-naming half remains unimplemented (its
-intended target was a *separate* hooks/scripts project).
+rename*), with the `agent-name` writer living next to its parser
+(`plugins/claude_code/transcript.set_session_title`, single-owner + grep-test-enforced), the
+endpoint at `dashboard/http/post/session.py post_rename`, and `web-rename` audit rows. **Revised
+2026-07-29:** the JSONL-append + `set-tab-title` composition §5 recommends is a *parked-session*
+mechanism only — on a LIVE session Claude Code overwrites the appended record within one turn
+(§4, *The in-memory title is AUTHORITATIVE*), so the live path now types Claude Code's own
+`/rename <name>` and sets no tab title. The SessionStart-hook auto-naming half remains
+unimplemented (its intended target was a *separate* hooks/scripts project).
 
 > Environment where this was verified: macOS, kitty, Claude Code with
 > `CLAUDE_CODE_SESSION_ID` present, session file format as of 2026-07. **Field names and
@@ -32,7 +35,9 @@ intended target was a *separate* hooks/scripts project).
 - **The name lives in the session JSONL** and a script *can* append a rename record at any
   time. On this installed version the record is `agent-name`/`agentName` (NOT the
   `custom-title` some blogs claim). This reaches the **picker on next resume**, but does **not**
-  relabel the **live tab**.
+  relabel the **live tab** — and on a **running** session it does not last either: Claude Code
+  re-emits its in-memory name every turn and overwrites yours (§4, measured). Append to PARKED
+  sessions; rename a running one with `/rename <name>` instead.
 - **The kitty tab title is a separate channel** — Claude Code emits an OSC title escape; kitty
   shows it as the window/tab title. This repo never sets it (only `set-tab-color`). To move the
   live tab immediately, use `kitten @ set-tab-title`, which also makes the tab stop following
@@ -67,20 +72,30 @@ best-effort bounded read (never a full multi-MB transcript scan):
 2. `ai-title` — Claude Code's auto title (last one; near EOF, tail-window read).
 
 > **The tail-window rollback, and the durable override.** Both 1 and 2 are read
-> from the LAST `TITLE_TAIL_B` (64KB) only. But `agent-name` is written ONCE while
-> Claude Code re-emits `ai-title` near EOF every few turns — so in a long session
-> the rename scrolls past the 64KB window and rung 1 finds nothing, dropping to the
-> auto `ai-title`: the rename *appears to roll back* (confirmed 2026-07-22; this was
-> previously filed as "the one accepted gap"). This is a display-only decay — the
-> `--resume` picker does a full read and keeps the custom name. The **dashboard**
-> closes it with a durable override (`dashboard/prefs.py` `renamed-title`, keyed by
-> the transcript `.jsonl` stem): `plugins.title_and_rename()` returns `(title,
-> tail_rename)`, and the dashboard prefers the override ONLY when `tail_rename` is
-> empty, so a fresh in-tail rename (terminal `/rename`, or renaming again) still
-> wins (docs/dashboard.md *Web rename*). Widening the window / a full backward scan
-> was rejected: an UN-renamed session has no `agent-name` anywhere, so proving its
-> absence costs a full multi-MB read on the hot list-render path — the O(1) override
-> is both cheaper and rollback-proof.
+> from the LAST `TITLE_TAIL_B` (64KB) only. An `agent-name` written ONCE — by an
+> external appender, i.e. a PARKED rename — scrolls past the 64KB window in a long
+> session while Claude Code re-emits `ai-title` near EOF, so rung 1 finds nothing
+> and drops to the auto `ai-title`: the rename *appears to roll back* (confirmed
+> 2026-07-22; this was previously filed as "the one accepted gap"). This is a
+> display-only decay — the `--resume` picker does a full read and keeps the custom
+> name. The **dashboard** closes it with a durable override (`dashboard/prefs.py`
+> `renamed-title`, keyed by the transcript `.jsonl` stem):
+> `plugins.title_and_rename()` returns `(title, tail_rename)`, and the dashboard
+> prefers the override ONLY when `tail_rename` is empty, so a fresh in-tail rename
+> (terminal `/rename`, or renaming again) still wins (docs/dashboard.md *Web
+> rename*). Widening the window / a full backward scan was rejected: an UN-renamed
+> session has no `agent-name` anywhere, so proving its absence costs a full
+> multi-MB read on the hot list-render path — the O(1) override is both cheaper and
+> rollback-proof.
+>
+> A name Claude Code itself holds never decays this way: it re-emits `agent-name`
+> every turn, so it is permanently inside the tail window (§4, *The in-memory title
+> is AUTHORITATIVE*). That is also the rule's limit, and was a bug for 7 days: the
+> "a fresh in-tail rename supersedes the override" test assumed `agent-name` could
+> only come from a rename, so after ANY `/rename` (including the ✦ auto one) Claude
+> Code's re-emitted record stood the override down and a later externally-appended
+> rename lost. Fixed at the source — a LIVE rename is now `/rename` itself, so
+> there is nothing to disambiguate.
 3. `summary` — the last `summary` record in the head window (prepended on resume).
 4. First REAL user prompt — first line of the first non-`isMeta` user turn whose
    content does NOT start with `<` (`<command-*>`/`<local-command-*>` wrappers are
@@ -230,8 +245,45 @@ does not cause a re-emit. It updates on next relaunch/`--resume`, or when an in-
 | Action | Live tab title | `--resume` picker |
 |---|---|---|
 | `/rename` in-session | ✅ updates now (re-emits OSC) | ✅ |
-| Edit JSONL externally | ❌ not until relaunch | ✅ next launch |
+| Edit JSONL externally | ❌ not until relaunch | ⚠️ **only if the session is not running** — see below |
 | `kitten @ set-tab-title` | ✅ immediate | ❌ (tab only) |
+
+### The in-memory title is AUTHORITATIVE, and it overwrites you (2026-07-29)
+
+Stronger than "does not cause a re-emit", and the correction that matters: **Claude Code
+re-emits its in-memory `agent-name` as a fresh transcript record at every turn boundary**, so a
+record appended by anyone else is not merely invisible to the live session — it is *overwritten
+within one turn*, and the picker sees the auto name too.
+
+Measured on session `6ad5823e` (a `/rename`-generated name, then a manual web rename 7 minutes
+later). Naming records by byte offset:
+
+```
+ 483125 … 619788   agent-name 'fix-timeout-504-errors'  ×5   ← generated by an argless /rename
+ 650825            agent-name '1x2 gameList timeouts'   ×1   ← the manual rename, appended by us
+ 655017 … 1054427  agent-name 'fix-timeout-504-errors'  ×13  ← re-emitted, to EOF
+```
+
+The manual record survived ~4 KB — one turn. Two independent live channels confirm Claude Code
+never learned about it:
+
+- the kitty **window** title (the OSC of §4) read `⠂ fix-timeout-504-errors` throughout, while
+  the *tab* showed the manual name only because `kitten @ set-tab-title` had made it sticky;
+- **`session_title` is present in hook payloads** (`UserPromptSubmit`, and `SessionStart` as §1
+  notes) — every one after the manual rename still carried `fix-timeout-504-errors`.
+
+That last point is also the cheapest live read of the authoritative name: it is in the payload
+the dispatcher already audits, so `hook_events` answers "what does Claude Code think this
+session is called" without touching the transcript.
+
+**Consequence for implementers:** an external append is a *parked-session* mechanism. To rename
+a RUNNING session durably you must make Claude Code change its own mind — type `/rename <name>`
+(a bracketed paste; §5's caveat 2 about racing the live writer then disappears too, since you
+are no longer writing the file). This repo's web rename does exactly that as of 2026-07-29
+(docs/dashboard.md *Web rename*): TUI channel when live, append + durable override when parked.
+It also stopped setting the tab title on the live path — Claude Code re-emits the OSC itself,
+and a second writer of the name is what let the tab and the dashboard disagree in the first
+place.
 
 **To move the live tab immediately:** `kitten @ set-tab-title`. Important kitty behavior: once
 you set an explicit tab title, the tab **stops following the active window title** — so it will
@@ -281,9 +333,19 @@ Feasible with a single script. Both inputs verified present here:
    `web-rename` audit rows per the repo's audit-coverage rule (docs/dashboard.md *Web rename*).
    Any OTHER JSONL write still needs the same scrutiny — the safety caveats above stand.
 
-**Recommended lowest-risk composition:** always set the **tab** (safe, instant); append the
-**`agent-name`** line only when **not mid-turn** (e.g. Stop hook settle), so the picker catches
-up without racing the live writer.
+**Recommended lowest-risk composition** *(superseded 2026-07-29 — kept because the reasoning
+below is still right for the case it now covers)*: always set the **tab** (safe, instant);
+append the **`agent-name`** line only when **not mid-turn** (e.g. Stop hook settle), so the
+picker catches up without racing the live writer.
+
+**What replaced it.** For a **running** session, don't compose anything: type `/rename <name>`
+and let Claude Code do both (it owns the in-memory title, writes the record, re-emits the OSC).
+That removes every caveat above at once — no concurrent write (caveat 2), no asymmetric timing
+(caveat 1: one write moves both), no sticky-override trade-off (caveat 4), and the format
+fragility (caveat 3) drops to the command name instead of the record shape. The composition
+above remains correct for a **parked** session, where there is no `/rename` to type and nothing
+running to race or overwrite — and there the tab half is moot (no tab), so it reduces to the
+append alone. See §4's 2026-07-29 finding for why the live append was never durable.
 
 ---
 

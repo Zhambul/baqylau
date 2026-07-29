@@ -557,20 +557,35 @@ def title_and_rename(path):
     return _title_from_ladder(path, named, ai), named
 
 
+def renameable(path):
+    """Does this plugin OWN `path` as a renameable Claude session transcript
+    (`…/projects/<hash>/<sid>.jsonl`, present on disk)? The ONE gate both
+    rename channels ask: `set_session_title` below, before appending the
+    record itself, and the dashboard's LIVE path, before pasting Claude Code's
+    own `/rename` into the window — a codex standalone host's window carries
+    the same `claude_session` tag (plugins/codex/session.py) but its
+    transcript_path is a codex ROLLOUT, which must receive neither. A missing
+    file is not renameable: it must never be created just to name it."""
+    return bool(path) and path.endswith(".jsonl") and os.path.isfile(path) and \
+        os.path.basename(os.path.dirname(os.path.dirname(path))) == "projects"
+
+
 def set_session_title(path, name):
     """Append the `agent-name` naming record — the /rename channel `_title_records`
     parses back (docs/session-naming-findings.md §2) — to a Claude session
-    transcript: the web rename's write half. True on success; None when `path`
-    is not a Claude session transcript (`…/projects/<hash>/<sid>.jsonl` — a
-    codex standalone host's transcript_path is a codex ROLLOUT, and a missing
-    file must never be created just to name it). OSError propagates — the
-    caller (dashboard/server.py post_rename) turns it into a 502 + A.error;
-    this is a user-facing request/reply path, not a hook, so no swallow here.
-    `sessionId` derives from the FILENAME stem, not the caller's sid — an
-    adopt/fork chain's current sid differs from the transcript's own (the
-    findings doc: "sessionId must match the filename")."""
-    if not path.endswith(".jsonl") or not os.path.isfile(path) or \
-            os.path.basename(os.path.dirname(os.path.dirname(path))) != "projects":
+    transcript: the web rename's write half FOR A PARKED SESSION. True on
+    success; None when `path` is not a Claude session transcript (`renameable`
+    above). OSError propagates — the caller (dashboard post_rename) turns it
+    into a 502 + A.error; this is a user-facing request/reply path, not a hook,
+    so no swallow here. `sessionId` derives from the FILENAME stem, not the
+    caller's sid — an adopt/fork chain's current sid differs from the
+    transcript's own (the findings doc: "sessionId must match the filename").
+
+    NEVER call this on a LIVE session (docs/session-naming-findings.md §4, the
+    2026-07-29 finding): Claude Code re-emits its own in-memory `agent-name`
+    at every turn boundary, so a record it did not write is overwritten within
+    one turn. A live rename goes through the TUI's own `/rename`."""
+    if not renameable(path):
         return None
     sid = os.path.basename(path)[:-len(".jsonl")]
     rec = json.dumps({"type": "agent-name", "agentName": name,

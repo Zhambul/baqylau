@@ -471,7 +471,7 @@ reflow for free and keeps the no-build rule.
 | `POST /api/clientlog` | **frontend audit** (audit-only, no terminal write): `{"client", "device", "conn"{online,view,es,conn}, "events":[{t,sid,ev,…}]}` → one `web-client` `state_files` row per event, scoped to each event's own `sid` (*Frontend audit (clientlog)* below); every row carries this browser's `device` id (device-attributable — the frontend side of notification *Device routing*); the browser reporting the transport + connection + JS-error timeline the server can't see; ≤`CLIENTLOG_MAX` events, scalars only; 400 non-list events |
 | `POST /api/presence` | **device presence** (no terminal write, no per-beat audit): `{"device", "sid"?}` → stamp `_DEVICE_SEEN[device]` (so the on-device push routes to the most-recently-used device — *Web push* → *Device routing*) and, when `sid` present, refresh the `_VIEWING` deadline (the "you're watching this session" suppress). Sent on a heartbeat DERIVED from the served `view_ttl_s` (TTL/2.5, *Served limits* above) while the page is visible+focused, from ANY view; the client's single presence beat, superseding the old per-session `viewing` beat (that endpoint still exists) |
 | `POST /api/sessions/new` | **control plane:** `{"cwd", "account"?, "resume"?, "continue"?, "model"?, "effort"?, "prompt"?, "attachments"?}` → launch `<account-alias> [--resume sid \| --continue] [--model m] [--effort e] [prompt]` in a new tab at `cwd` (`Frontend.launch_tab`); `account` is a switcher slug → its vetted alias command word (default `claude`); responds `{ok, win}` — `win` the new tab's window id when the terminal reported one (the page's exact jump-match key, "" otherwise) — and starts the `launch_wake` SSE hurry-up watch; 400 bad cwd/model/effort/resume/account, 503 no terminal |
-| `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → append the `agent-name` naming record to the session's transcript (`plugins.set_session_title` — the `/rename` channel, docs/session-naming-findings.md) and, when a live window exists, `Frontend.set_tab_title` (*Web rename* below); works for live AND parked sessions; replies `{ok, title, tab_retitled}`; 400 empty name, 409 no transcript / unsupported (a codex rollout), 502 append failed |
+| `POST /api/session/<sid>/rename` | **control plane:** `{"name"}` → rename a session through the channel that owns its name (*Web rename* below): LIVE, paste Claude Code's own `/rename <name>` into its window; PARKED, append the `agent-name` naming record ourselves (`plugins.set_session_title`, docs/session-naming-findings.md) + the durable prefs override; replies `{ok, title, channel: tui\|transcript, queued?}`; 400 empty name, 409 no transcript / unsupported (a codex rollout) / a dialog is open, 502 send or append failed |
 | `POST /api/session/<sid>/…` | **control plane**, each with its own section below: `interrupt` (Esc in the session's window), `rewind` (open the checkpoint menu; idle only), `rewind-to` (*Web rewind* — the full checkpoint restore), `answer` (*Web ask* — AskUserQuestion; a `chat`+`message` body routes a typed preview-question answer through "chat about this" then delivers the text) + `ask-draft` (persist the unsubmitted ask selections, no terminal write), `composer-draft` + `composer-queue` (persist the unsent message / pending ⧗ chips, no terminal write — *Web composer draft* / *Web composer queue*), `hint-audit` (audit-only beacon for the optimistic composer bubble's lifecycle — a `web-hint` state_files row, no terminal write, no session state — *Optimistic composer bubble*), `plan-options` + `plan-decision` (*Web plan mode* — ExitPlanMode), `notify` (`{"muted"}` → opt this session in/out of the deferred Telegram alert, a prefs write, no terminal — *Telegram alerts* below), `viewmode` (`{"mode": verbose|default|focus}` → this session's mirror DENSITY, a prefs write, no terminal and emphatically not Claude Code's own `viewMode` setting — *View modes* above; 400 outside the vocabulary), `tasks-hide` (`{"hidden": bool}` → dismiss/restore the pinned tasks CARD, a prefs write, no terminal and no task touched — *Web tasks* below; 400 non-bool, **409 unless every task is completed**), `viewing` (a presence heartbeat sent only while the page is visible+focused+on this session — refreshes the in-memory `_VIEWING` deadline so the deferred alert suppresses while you're watching; empty body, no terminal write, no session state, no per-beat audit — *Telegram alerts* below) |
 | `/events` | global SSE: a `hello` (the server's `BOOT_ID` — the EventSource auto-reconnects across a server restart, and a changed boot id tells an OPEN page its loaded JS may be stale; the client toasts "dashboard updated — refresh", click to reload. Twice a redeploy shipped under an open page and its old handlers running against the new server read as a product bug), then a full `sessions` snapshot on connect + on membership/order change, `sessions-delta` `{rows}` for content-only changes (paused-blind per-row diff, wire-stripped rows — *The list renders once, then patches* below), an `accounts` event (the full `/api/accounts` payload) whenever the accounts strip's data changes (sched_score-blind diff — same section) + `notify` toasts |
 | `/events/session/<sid>?after=N&mpos=M[&agent=<aid>]` | per-session SSE (`agent` scopes the MIRROR channel only — *Agent scope*): `ops`/`msgs`/`stats`/`agents`/`costs`/`ctx`/`compacting`/`git`/`title`/`running`/`fgrun`/`tab`/`prompts`/`errors`/`monitors`/`jobs`/`memory`/`ask`/`ask-draft`/`plan`/`tasks`/`composer-draft`/`composer-queue`, each on change; a fresh connection's first `ops` event is the merged backlog, tail-limited, carrying `oldest` (see below). Every field other than `ops` is a row of the stream's CHANNEL TABLE (`_SLOW_CHANS`/`_FAST_CHANS`, see *The stream's pushed fields are a channel table*), and the four tab-badge counts (`errors`/`monitors`/`jobs`/`memory`) keep their own table inside it — `_BADGE_COUNTS`, a cheap count wired to a `{"count": n}` event of the same name, its values `(sid, cwd)` callables so the count resolves at call time (a patched `sessionapi` moves the pushed number) and so `memory` can route through its scope-gating owner instead of a second reading of the rule; adding a badge is a table row |
@@ -607,10 +607,13 @@ the TERMINAL through the `Frontend` interface (`send_text` / `send_key` /
 `launch_tab`, over
 the same silenced `kitten @` machinery the tab painter uses), and Claude Code's
 own hooks then produce whatever state results. The ONE exception that writes
-session state is `rename` (*Web rename* below): a single atomic O_APPEND line
-into the session's transcript JSONL — the same record Claude Code's own
-`/rename` writes, through the record shape's owner
-(`plugins/claude_code/transcript.set_session_title`), never a re-encoding.
+session state is `rename` (*Web rename* below), and only for a PARKED session:
+a single atomic O_APPEND line into its transcript JSONL — the same record
+Claude Code's own `/rename` writes, through the record shape's owner
+(`plugins/claude_code/transcript.set_session_title`), never a re-encoding. A
+LIVE rename writes nothing: it types `/rename <name>` and lets Claude Code
+write its own name, because a record it did not write is re-emitted over
+within one turn (*Web rename*).
 The dashboard stays a consumer of
 session data; it is now also a driver of the terminal.
 
@@ -2269,73 +2272,102 @@ ignored and the dead magenta still flips.
 `{"name"}` renames a session — the ✎ button in the session header's action
 row swaps the title into an inline input (Enter submits, Esc/blur cancels;
 its keydown handler `stopPropagation`s unconditionally so Esc never leaks to
-the document-level interrupt gesture). The mechanism is the one
-docs/session-naming-findings.md verified: **append the
-`{"type":"agent-name","agentName":…,"sessionId":…}` naming record to the
-session's transcript JSONL** via `plugins.set_session_title(tpath, name)` —
-a path-keyed fan-out to the record shape's single owner,
-`plugins/claude_code/transcript.set_session_title` (grep-test-enforced:
-`agentName` appears in no other product module). The record is what Claude
-Code's own `/rename` writes: the `--resume` picker reads it on next launch,
-`session_title` prefers it over every later auto `ai-title`, and the
-`(path, size)` title cache self-invalidates because the append grows the
-file — the list card retitles on the next global SSE snapshot and the open
-header on the per-session `title` push (below).
+the document-level interrupt gesture).
 
-Deliberate choices, and why:
+**Two channels, chosen by whether the session is LIVE**, because a running
+Claude Code owns its own name and a parked one has nobody to ask:
 
-- **Live AND parked.** Unlike every other control-plane endpoint, no
-  terminal (503) / no window (409) is NOT an error — the append needs no
-  terminal, so a parked session (or a dashboard started outside kitty)
-  renames fine and only the tab retitle degrades (`tab_retitled: false`).
-  The writer refuses paths outside the `~/.claude/projects/<hash>/` layout
-  (→ 409 `unsupported session`): a codex standalone host's `transcript_path`
-  is a codex ROLLOUT and must never receive a Claude naming record. A
-  missing file is never created just to name it (409 `no transcript`).
-- **Always append, even mid-turn.** A single atomic O_APPEND line is
-  low-risk against Claude Code's own appender (the findings doc §5); gating
-  on tab state would make renames randomly fail. The tab state at rename
-  time rides the `web-rename` audit row, so a hypothetical torn-line race is
-  diagnosable after the fact.
-- **The live kitty tab retitles NOW** via the new
-  `Frontend.set_tab_title(win, name)` (`kitten @ set-tab-title --match
-  window_id:<win>`) — a JSONL append alone doesn't move a live tab (the tab
-  mirrors Claude Code's in-memory OSC title, seeded from the JSONL only at
-  startup). kitty makes an explicit tab title STICKY: that tab stops
-  following the window's OSC titles — i.e. future auto `ai-title` changes —
-  for the rest of the session, which is exactly right for a
-  deliberately-named session. No raw-socket fast path (deliberately
-  different from `set_tab_color`): this is a rare user action, not the
-  blocking hook path.
-- **Input hygiene:** control bytes are stripped (`NAME_CTRL`) — the name
-  goes verbatim into a `set-tab-title` argument and the picker, the exact
-  OSC/CSI injection class `render.neutralize()` exists for — and capped at
-  `RENAME_MAX` (120); empty-after-cleaning is 400. A name starting with `-`
-  may be eaten by the kitten CLI as a flag (rc≠0 → `tab_retitled: false`);
-  the JSONL rename still lands.
-- **A durable override defeats the tail-window rollback.** The `agent-name`
-  record is written ONCE, but Claude Code keeps re-emitting `ai-title` near
-  EOF every few turns; once the rename scrolls more than `TITLE_TAIL_B`
-  (64KB) behind EOF, the bounded tail scan no longer sees it and
-  `session_title` reverts to the newest `ai-title` — the rename *appears to
-  roll back* (the confirmed bug; this WAS a documented "accepted gap"). So the
-  rename ALSO stashes a durable, tail-window-proof override in the global
-  prefs store (`dashboard/prefs.py` `renamed-title`, `{stem: name}`, keyed by
-  the transcript's `.jsonl` stem — adopt/fork-proof, survives park). The
-  dashboard's `session_title` wrapper reconciles via
-  `plugins.title_and_rename(tpath)` → `(display_title, tail_rename)`: it
-  prefers the override ONLY when `tail_rename` is empty (the rename scrolled
-  out), so a FRESH in-tail rename — a terminal `/rename`, or renaming again —
-  still supersedes it (last rename wins). The transcript append stays the
-  canonical channel the `--resume` picker (a full read) reads; the override is
-  purely the dashboard-display belt so ITS title never reverts.
+- **LIVE → Claude Code's own `/rename <name>`**, pasted into the session's
+  window through the one slash-command channel (`launch.type_command` —
+  bracketed paste, mode-proof against `editorMode: vim`, clipboard-image
+  guarded). Claude Code updates its in-memory session title, writes the
+  `agent-name` record itself, and re-emits the OSC title the kitty tab
+  follows. One write, and every reader agrees.
+- **PARKED (no live window / no terminal) → append the record ourselves**
+  (`plugins.set_session_title(tpath, name)`, a path-keyed fan-out to the
+  record shape's single owner `plugins/claude_code/transcript.set_session_title`
+  — grep-test-enforced: `agentName` appears in no other product module) plus
+  the durable prefs override below. Safe precisely because nothing is
+  running: no in-memory title to disagree with it, no turn boundary to
+  overwrite it, and `claude --resume` reads the file fresh.
+
+### Why the live path must NOT write the record itself
+
+This was a real bug, found 2026-07-29 (session `6ad5823e`): a manual web
+rename "disappeared" from the dashboard after a few minutes while the kitty
+tab kept showing it. Both halves have the same cause.
+
+Claude Code holds the session name **in memory** and re-emits it as an
+`agent-name` record **at every turn boundary**. A record it did not write is
+therefore not merely ignored (which docs/session-naming-findings.md §4
+already said) — it is *overwritten within one turn*. Measured in that
+session's transcript: the manual rename's record survived ~4 KB, then Claude
+Code's own auto name was re-appended 13 times through EOF. Meanwhile
+`session_title` in the `UserPromptSubmit` hook payloads and the kitty
+*window* title (the OSC) both went on reporting the auto name for the rest of
+the session — Claude Code never learned about the append at all.
+
+That also breaks the override reconcile below, which stands the override down
+whenever the tail carries an `agent-name` — a rule written when `agent-name`
+could only come from a rename. So the auto name won everywhere except the one
+channel we own outright: the sticky tab title. Hence the split above, and:
+
+- **No `Frontend.set_tab_title` on the live path** (it now has no production
+  caller; `frontends/base.py` says why). Claude Code re-emits the OSC, so the
+  tab follows on its own AND keeps following future titles. Retitling as well
+  would make the tab a SECOND writer of the name, free to disagree with the
+  one the session actually has — a queued rename the user then Escapes out of
+  would leave the tab asserting a name nothing else knows. That divergence IS
+  the shape the bug presented as. (One legacy: a tab made sticky by a
+  PRE-2026-07-29 web rename stays frozen for the rest of that session — kitty
+  stickiness is per tab and permanent.)
+- **Mid-turn a live rename QUEUES** (`queued: true`, the reply's field) — it
+  lands in the TUI's message queue and applies at the turn boundary, exactly
+  like ✦ auto and the other quick commands. The page deliberately does NOT
+  show the new name then: it would assert a rename Claude Code has not made
+  yet and may never make. The `title` SSE repaints when it lands.
+- **A red `awaiting-command` tab is a 409** — a modal dialog is open and
+  pasted text would land IN it (the same refusal `post_command` makes).
+
+Other deliberate choices:
+
+- **Live AND parked.** Unlike every other control-plane endpoint, no terminal
+  (503) / no window (409) is NOT an error — it *selects the parked half*, so a
+  parked session (or a dashboard started outside kitty) renames fine.
+  `plugins.renameable(tpath)` gates BOTH channels (→ 409 `unsupported
+  session`): a codex standalone host's `transcript_path` is a codex ROLLOUT,
+  which must receive neither a Claude naming record nor a typed `/rename` —
+  and its window carries the same `claude_session` tag, so this check runs
+  before the live/parked branch. A missing file is never created just to name
+  it (409 `no transcript`).
+- **Input hygiene:** control bytes are stripped (`NAME_CTRL`) — on the live
+  path the name is text PASTED INTO A TERMINAL, the exact OSC/CSI injection
+  class `render.neutralize()` exists for — and capped at `RENAME_MAX` (120);
+  empty-after-cleaning is 400.
+- **A durable override defeats the tail-window rollback** — on the PARKED
+  path, the only one that writes the record itself. That record is written
+  ONCE, but Claude Code keeps re-emitting `ai-title` near EOF; once the rename
+  scrolls more than `TITLE_TAIL_B` (64KB) behind EOF, the bounded tail scan no
+  longer sees it and `session_title` reverts to the newest `ai-title` — the
+  rename *appears to roll back*. So the parked rename ALSO stashes a durable,
+  tail-window-proof override in the global prefs store (`dashboard/prefs.py`
+  `renamed-title`, `{stem: name}`, keyed by the transcript's `.jsonl` stem —
+  adopt/fork-proof, survives park). The dashboard's `session_title` wrapper
+  reconciles via `plugins.title_and_rename(tpath)` → `(display_title,
+  tail_rename)`: it prefers the override ONLY when `tail_rename` is empty, so
+  a FRESH in-tail rename — a terminal `/rename`, or renaming again — still
+  supersedes it (last rename wins). A LIVE rename needs none of this: Claude
+  Code re-emits its `agent-name` every turn, so the name it now holds is
+  permanently inside the tail window.
 
 Every post-validation attempt is a **`web-rename`** `state_files` row
-(`{win, chars, ok, tab, tab_retitled, override?, reason?}` — `override` is
-whether the durable prefs override was recorded); an append failure is also
-an `A.error`. The per-session SSE stream gained a **`title`** event (slow
-cadence, on change, like `ctx`/`git`) — which also means a fresh AUTO
-ai-title now live-updates an open session header, not just renames.
+(`{win, chars, ok, tab?, channel, queued?, clip?, override?, reason?}` —
+`channel` is `tui` or `transcript`, naming which half ran; `override` whether
+the durable prefs override was recorded); a failure is also an `A.error`
+(`dashboard rename (send failed)` / `(append failed)`). The per-session SSE
+stream gained a **`title`** event (slow cadence, on change, like `ctx`/`git`)
+— which also means a fresh AUTO ai-title live-updates an open session header,
+not just renames, and it is what a queued rename lands on.
 
 **✦ auto — bare `/rename` (Claude names it).** The inline-rename input
 carries a second affordance beside the box: **✦ auto** types the TUI's own

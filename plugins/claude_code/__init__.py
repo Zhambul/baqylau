@@ -56,6 +56,15 @@ def title_and_rename(transcript_path):
     return transcript.title_and_rename(transcript_path)
 
 
+def renameable(transcript_path):
+    """The rename-ownership provider (plugins.renameable fan-out) — True when
+    this plugin owns the file as a Claude session transcript, i.e. the session
+    can be renamed through the `/rename` channel at all. See
+    transcript.renameable."""
+    from plugins.claude_code import transcript
+    return transcript.renameable(transcript_path)
+
+
 def set_session_title(transcript_path, name):
     """The session-rename provider (plugins.set_session_title fan-out) — append
     the `agent-name` naming record to a Claude session transcript; None for

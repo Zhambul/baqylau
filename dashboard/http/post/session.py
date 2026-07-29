@@ -9,11 +9,12 @@ import plugins
 from core import paths as P
 from core import sessionapi as API
 from core import spawn as SP
+from core import tabs
 from core.noaudit import load_audit
 from dashboard import (prefs)
 from dashboard import config
 from dashboard.config import (EFFORTS,
-                              MODEL_OK, NAME_CTRL, SID_OK)
+                              MODEL_OK, NAME_CTRL, QUEUE_TABS, SID_OK)
 from dashboard.control import launch
 from dashboard.control.launch import launch_argv
 
@@ -282,17 +283,25 @@ class _SessionMixin:
         return self._json({"ok": True, "to": target["slug"]})
 
     def post_rename(self, sid):
-        """Rename a session: append the `agent-name` naming record to its
-        transcript (plugins.set_session_title — the /rename channel, docs/
-        session-naming-findings.md) and, when a live window exists, also
-        Frontend.set_tab_title so the kitty tab moves NOW (sticky — the tab
-        stops following auto ai-titles; docs/dashboard.md *Web rename*).
-        DELIBERATELY unlike post_message, no terminal / no window is NOT an
-        error here — a parked session (or a dashboard outside kitty) still
-        gets the JSONL rename and only the tab retitle degrades. Always
-        appends, even mid-turn (a single atomic O_APPEND line — the tab state
-        rides the audit row so a race is diagnosable). Every post-validation
-        attempt is a `web-rename` state_files row, failures also an A.error."""
+        """Rename a session through the ONE channel that owns its name —
+        Claude Code itself when the session is LIVE (`_rename_live`: paste
+        `/rename <name>`), the transcript record + durable override when it is
+        PARKED (`_rename_parked`). DELIBERATELY unlike post_message, no
+        terminal / no live window is NOT an error: it selects the parked half,
+        so a parked session (or a dashboard outside kitty) still renames.
+
+        Why the live path may NOT write the record itself (the 2026-07-29
+        bug, docs/session-naming-findings.md §4): Claude Code holds the session
+        name IN MEMORY and re-emits it as an `agent-name` record at every turn
+        boundary, so a record it did not write is overwritten within one turn —
+        measured, a manual rename survived 4KB and was then re-clobbered 13
+        times while `session_title` in the hook payloads and the OSC tab title
+        both went on reporting the OLD name. Every reader (the picker, the tab,
+        the dashboard, the payload) derives from that in-memory title, so the
+        only durable way to rename a RUNNING session is to make Claude Code
+        change its own mind. Every post-validation attempt is a `web-rename`
+        state_files row whose `channel` names which half ran; failures also an
+        A.error."""
         body = self._post_guard()
         if body is None:
             return
@@ -311,36 +320,87 @@ class _SessionMixin:
                          {"win": "", "chars": len(name), "ok": False,
                           "reason": "no transcript"})
             return self._json({"error": "no transcript"}, 409)
+        if not plugins.renameable(tpath):
+            # no plugin owns the file (a codex standalone host's rollout): it
+            # must receive neither a Claude `agent-name` record NOR a typed
+            # `/rename` — and its window carries the same claude_session tag,
+            # so this gate has to come BEFORE the live/parked branch
+            A.state_file(log, sdb, "web-rename",
+                         {"win": "", "chars": len(name), "ok": False,
+                          "reason": "unsupported"})
+            return self._json({"error": "unsupported session"}, 409)
         fe = launch.frontend()
         win = (fe.window_for_session(sid) or "") if fe else ""
-        tab = (API.tab_states().get(win) or "") if win else ""
+        if win:
+            tab = API.tab_states().get(win) or ""
+            return self._rename_live(sid, name, log, sdb, fe, win, tab)
+        return self._rename_parked(sid, name, log, sdb, tpath)
+
+    def _rename_live(self, sid, name, log, sdb, fe, win, tab):
+        """The LIVE half of post_rename: Claude Code's own `/rename <name>`,
+        pasted through the one slash-command channel (launch.type_command —
+        mode-proof against `editorMode: vim`, clipboard-image guarded). Claude
+        Code then updates its in-memory title, writes the `agent-name` record
+        itself and re-emits the OSC the kitty tab follows, so all four readers
+        agree from ONE write.
+
+        Mid-turn it lands in the TUI's message queue and applies at the turn
+        boundary (`queued`, exactly like the ✦ auto button and the other quick
+        commands); a RED tab is a 409 for the reason post_command refuses one —
+        pasted text would land IN the open dialog, its digits deciding it.
+
+        No `Frontend.set_tab_title` here on purpose: a sticky tab title would
+        be a SECOND writer of the name, free to disagree with the one the
+        session actually has (a queued rename the user then Escapes out of
+        would leave the tab asserting a name nothing else knows) — which is the
+        exact split the bug this replaced presented as."""
+        if tab == tabs.AWAITING_COMMAND:
+            A.state_file(log, sdb, "web-rename",
+                         {"win": win, "chars": len(name), "ok": False,
+                          "tab": tab, "channel": "tui",
+                          "reason": "dialog open"})
+            return self._json({"error": "a dialog is open — answer it first"},
+                              409)
+        ok, clip = launch.type_command(fe, win, "/rename " + name)
+        queued = tab in QUEUE_TABS
+        A.state_file(log, sdb, "web-rename",
+                     {"win": win, "chars": len(name), "ok": ok, "tab": tab,
+                      "channel": "tui", "queued": queued, "clip": clip})
+        if not ok:
+            A.error(log, "dashboard rename (send failed)",
+                    {"sid": sid, "win": win})
+            return self._json({"error": "send failed"}, 502)
+        return self._json({"ok": True, "title": name, "channel": "tui",
+                           "queued": queued})
+
+    def _rename_parked(self, sid, name, log, sdb, tpath):
+        """The PARKED half of post_rename: append the `agent-name` naming
+        record ourselves (plugins.set_session_title) plus a durable prefs
+        override. Safe precisely because nothing is running — no in-memory
+        title to disagree with it, and no turn boundary to overwrite it — and
+        `claude --resume` reads the file fresh, so the name is there when the
+        session comes back.
+
+        The DURABLE OVERRIDE is still needed on this path: that single record
+        scrolls out of session_title's 64KB tail-window in a long session while
+        Claude Code's re-emitted `ai-title` rows sit near EOF, and the dashboard
+        title would roll back to the auto one (docs/dashboard.md *Web rename*).
+        Best-effort like every prefs write — a failure just falls back to the
+        transcript read."""
         try:
             appended = plugins.set_session_title(tpath, name)
         except OSError:
             A.error(log, "dashboard rename (append failed)", {"sid": sid})
             A.state_file(log, sdb, "web-rename",
-                         {"win": win, "chars": len(name), "ok": False,
-                          "tab": tab})
+                         {"win": "", "chars": len(name), "ok": False,
+                          "channel": "transcript"})
             return self._json({"error": "append failed"}, 502)
-        if appended is None:        # no plugin owns the file (a codex rollout)
-            A.state_file(log, sdb, "web-rename",
-                         {"win": win, "chars": len(name), "ok": False,
-                          "reason": "unsupported"})
-            return self._json({"error": "unsupported session"}, 409)
-        # DURABLE OVERRIDE: the transcript `agent-name` append is the canonical
-        # channel (it reaches `claude --resume`), but that single record scrolls
-        # out of session_title's 64KB tail-window in a long session and the
-        # rename appears to "roll back" to the auto ai-title. Stash a durable,
-        # tail-window-proof override keyed by the transcript stem so the DASHBOARD
-        # title never reverts (docs/dashboard.md, *Web rename*). Best-effort like
-        # every prefs write — a failure just falls back to the transcript read.
         stem = os.path.basename(tpath)
         stem = stem[:-len(".jsonl")] if stem.endswith(".jsonl") else stem
         stored = prefs.set_renamed_title(stem, name)
         override_ok = isinstance(stored, dict) and stored.get(stem) == name
-        tab_retitled = bool(fe.set_tab_title(win, name)) if (fe and win) else False
         A.state_file(log, sdb, "web-rename",
-                     {"win": win, "chars": len(name), "ok": True, "tab": tab,
-                      "tab_retitled": tab_retitled, "override": override_ok})
+                     {"win": "", "chars": len(name), "ok": bool(appended),
+                      "channel": "transcript", "override": override_ok})
         return self._json({"ok": True, "title": name,
-                           "tab_retitled": tab_retitled})
+                           "channel": "transcript"})
