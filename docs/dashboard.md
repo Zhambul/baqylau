@@ -1107,6 +1107,22 @@ backstop — a `resume: <sid>` whose known transcript path is absent 410s
 row, before any tab is launched. The account is irrelevant to this check: the
 subscription switcher symlinks every `configs/<slug>/projects` to the shared
 `~/.claude/projects`, so all accounts see the same transcript (or its absence).
+**Wrong-tool guard:** the same `--resume` argv is also wrong when the
+transcript is fine but belongs to ANOTHER TOOL. A parked codex standalone host
+rides the same session cards and the same composer (its window carries the same
+`claude_session` tag — the reason *Web rename* needs `plugins.renameable`), but
+its sid is a rollout uuid: `claude --resume <rollout-uuid>` resumes nothing, the
+gone-transcript dead tab with a healthy file behind it. So `post_new_session`
+asks `plugins.owns_by(transcript_path)` and only builds the argv for the tool
+that can run it (`RESUME_TOOL` — `claude_code`); anything else 409s with
+`resume not yet supported for this session's tool` and a `web-launch`
+`ok: false`, `why: unsupported tool`, `tool: <owner>` row plus an `A.error`. An
+UNKNOWN transcript (no audit row, no path) is still handed to the CLI, exactly
+as the gone-transcript check does — we can't prove anything about a file we
+were never told about. Resuming codex FOR REAL is a launch path codex does not
+have yet; a refusal that names the reason is the honest interim, and it is the
+one control-plane caller of the ownership seam every path-keyed READ fan-out
+now applies for itself (docs/architecture.md, the `owns` provider).
 
 **The "/" menu** (the composer AND the new-session form's first-prompt box —
 one shared `slashMenu` helper in app.js). A leading `/` with no whitespace yet

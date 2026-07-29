@@ -420,12 +420,21 @@ def parse_line(s):
     return None
 
 
+PROJECTS_DIR = "projects"   # ~/.claude/projects/<cwd-hash>/<sid>.jsonl — Claude
+#                             Code's own on-disk transcript layout. Not a path
+#                             this repo mints, so it is not core/paths' business;
+#                             it is a FACT ABOUT CLAUDE CODE, which makes this
+#                             module its owner (docs/styleguide.md)
+AGENT_SUBDIR = "subagents"  # …/<sid>/subagents/agent-<id>.{jsonl,meta.json} —
+#                             the per-agent sidecar dir agent_paths() derives
+
+
 def agent_paths(parent_tpath, agent_id):
     """(jsonl, meta_json) for a subagent of the session whose PARENT transcript
     is parent_tpath — the <base>/subagents/agent-<id>.{jsonl,meta.json} layout
     (the one owner of that derivation; substream._init binds through it)."""
     base = parent_tpath[:-6] if parent_tpath.endswith(".jsonl") else parent_tpath
-    subdir = os.path.join(base, "subagents")
+    subdir = os.path.join(base, AGENT_SUBDIR)
     return (os.path.join(subdir, "agent-%s.jsonl" % agent_id),
             os.path.join(subdir, "agent-%s.meta.json" % agent_id))
 
@@ -557,17 +566,103 @@ def title_and_rename(path):
     return _title_from_ladder(path, named, ai), named
 
 
+def _jsonl_file(path):
+    """A .jsonl that EXISTS ON DISK — the shared precondition of the two layout
+    predicates below. A missing file is never ours: rename must never CREATE a
+    transcript just to name it, and a path with nothing behind it tells the
+    read fan-outs nothing they could act on."""
+    return bool(path) and path.endswith(".jsonl") and os.path.isfile(path)
+
+
+def _session_transcript(path):
+    """`…/projects/<hash>/<sid>.jsonl` — a Claude Code SESSION transcript. The
+    ONE spelling of that layout (owns/renameable both go through it)."""
+    return _jsonl_file(path) and os.path.basename(
+        os.path.dirname(os.path.dirname(path))) == PROJECTS_DIR
+
+
+def _agent_transcript(path):
+    """`…/projects/<hash>/<sid>/subagents/agent-<id>.jsonl` — a session
+    transcript's per-AGENT sidecar (the agent_paths layout). Ours to parse, but
+    not a session: nothing about it is renameable."""
+    d = os.path.dirname(path or "")
+    return _jsonl_file(path) and os.path.basename(d) == AGENT_SUBDIR and \
+        os.path.basename(os.path.dirname(os.path.dirname(
+            os.path.dirname(d)))) == PROJECTS_DIR
+
+
+CLAIM_HEAD_B = 8192   # head bytes owns() reads when the LAYOUT doesn't settle it
+
+# The raw `type` values a Claude Code transcript record can carry — the
+# discrimination parse_line() does, as a set, so owns() can recognise one of our
+# files by its FIRST record instead of its directory. Only top-level types: a
+# codex rollout's records are session_meta/response_item/turn_context/event_msg
+# and its inner `payload.type` is never read here, so the two vocabularies
+# cannot collide.
+RECORD_TYPES = frozenset((
+    "summary", "user", "assistant", "system", "attachment",
+    "queue-operation", "agent-name", "ai-title", "file-history-snapshot",
+))
+
+
+def _claude_head(path):
+    """Does the file's HEAD hold a record only Claude Code writes? The content
+    half of owns(), for a transcript that is ours but not where we expect (a
+    relocated CLAUDE_CONFIG_DIR, a copied file, a fixture). Bounded to
+    CLAIM_HEAD_B and torn-line safe — an unparseable line is simply not
+    evidence. False on any OSError: unreadable is not ours to claim."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(CLAIM_HEAD_B)
+    except OSError:
+        return False
+    for raw in head.split(b"\n"):
+        if not raw.strip():
+            continue
+        try:
+            o = json.loads(raw)
+        except Exception:
+            continue                    # noise, or the head's torn last line
+        if isinstance(o, dict) and o.get("type") in RECORD_TYPES:
+            return True
+    return False
+
+
+def owns(path):
+    """Is `path` a file this plugin SPEAKS — the `owns` provider behind
+    plugins._first_path (the ownership gate on every path-keyed read fan-out)
+    and plugins.owns_by (the dashboard's resume guard)? True for a session
+    transcript, for one of its agent sidecars, and for any other .jsonl whose
+    head carries a Claude record; False for everything else, a codex rollout
+    above all.
+
+    It exists because first-plugin-wins is first-PARSER-wins, and these parsers
+    are BOUNDED and FAIL OPEN by design: prompt_count returns its cap for any
+    file over PROMPT_SCAN_B without reading a byte, which is right for a large
+    Claude transcript and nonsense for the 429KB codex rollout it measured 8
+    human prompts in. A parser that cannot read the whole file cannot always
+    tell whose file it is. The two things that can are the LAYOUT (a stat, and
+    what every real session has) and the FIRST RECORD (a bounded head read) —
+    layout first, because it costs no read and is the case that always holds;
+    the head is the fallback that keeps a transcript living somewhere unusual
+    from going silently unowned. Neither is the whole file: ownership must stay
+    affordable to ask once per session per poll."""
+    return (_session_transcript(path) or _agent_transcript(path)
+            or (_jsonl_file(path) and _claude_head(path)))
+
+
 def renameable(path):
-    """Does this plugin OWN `path` as a renameable Claude session transcript
+    """Does this plugin own `path` as a RENAMEABLE Claude session transcript
     (`…/projects/<hash>/<sid>.jsonl`, present on disk)? The ONE gate both
     rename channels ask: `set_session_title` below, before appending the
     record itself, and the dashboard's LIVE path, before pasting Claude Code's
     own `/rename` into the window — a codex standalone host's window carries
     the same `claude_session` tag (plugins/codex/session.py) but its
-    transcript_path is a codex ROLLOUT, which must receive neither. A missing
-    file is not renameable: it must never be created just to name it."""
-    return bool(path) and path.endswith(".jsonl") and os.path.isfile(path) and \
-        os.path.basename(os.path.dirname(os.path.dirname(path))) == "projects"
+    transcript_path is a codex ROLLOUT, which must receive neither.
+
+    Narrower than owns() on purpose: an agent sidecar is ours to READ and has
+    no session name to write."""
+    return _session_transcript(path)
 
 
 def set_session_title(path, name):

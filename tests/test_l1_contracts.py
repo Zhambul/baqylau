@@ -613,8 +613,9 @@ def test_every_plugin_fanout_reaches_a_declared_provider():
         if not isinstance(n, ast.Call):
             continue
         fn = n.func
-        # the two fan-out primitives take the name as their first argument …
-        if isinstance(fn, ast.Name) and fn.id in ("_first", "_concat_unique"):
+        # the three fan-out primitives take the name as their first argument …
+        if isinstance(fn, ast.Name) and fn.id in ("_first", "_first_path",
+                                                  "_concat_unique"):
             a = n.args[0]
             if isinstance(a, ast.Constant):
                 reached.add(a.value)
@@ -673,6 +674,206 @@ def test_plugin_providers_match_the_declared_arity():
     # dead weight that reads as supported
     orphans = sorted(set(plugins.PROVIDERS) - set(seen))
     assert not orphans, "declared providers no plugin implements: %s" % orphans
+
+
+# --- the path-keyed OWNERSHIP gate (owns / owns_by / _first_path) -----------------
+# PROVIDERS says what a plugin may be asked and with what arity; it cannot say
+# WHICH FILES a plugin may be asked about, and first-plugin-wins is therefore
+# first-PARSER-wins. That is not hypothetical: every Claude transcript reader here
+# is bounded and fails open by design — `prompt_count` returns its cap for any file
+# over PROMPT_SCAN_B without reading a byte of it — so `plugins.prompts()` answered
+# 8 human prompts for a 429KB CODEX ROLLOUT. The size of another tool's file decided
+# a Claude-shaped answer, and the ⊜ compact gate believed it.
+#
+# So the path-keyed fan-outs go through `_first_path`, which skips a plugin whose
+# declared `owns(path)` says no. This is the corpus that pins both halves: a real
+# Claude transcript still answers exactly as before, and a rollout answers with the
+# empty defaults instead of the host's.
+
+def _claude_transcript(tmp_path, sid="ac9f0f2e-0000-4000-8000-000000000001"):
+    """A file at Claude Code's OWN on-disk layout — `<…>/projects/<cwd-hash>/
+    <sid>.jsonl` — carrying a summary record and one real human prompt. The
+    layout is the fixture: `owns` answers from it, deliberately, because a
+    bounded parser cannot answer from content it never reads."""
+    import os
+    d = tmp_path / "projects" / "-Users-me-code-proj"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / (sid + ".jsonl")
+    recs = [{"type": "summary", "summary": "My session"},
+            {"type": "user", "message": {"role": "user",
+                                         "content": "count the widgets"}}]
+    p.write_text("".join(json.dumps(r) + "\n" for r in recs), encoding="utf-8")
+    return os.path.join(str(d), sid + ".jsonl")
+
+
+def _codex_rollout(tmp_path):
+    """A codex rollout at ITS layout (`sessions/<Y>/<M>/<D>/rollout-….jsonl`),
+    deliberately bigger than transcript.PROMPT_SCAN_B — the measured shape of
+    the bug. Its records carry none of the byte prefilters the Claude probes
+    look for, so every wrong answer this file can produce comes from a fast
+    path that never read it."""
+    import os
+    from plugins.claude_code import transcript
+    d = tmp_path / ".codex" / "sessions" / "2026" / "07" / "29"
+    d.mkdir(parents=True, exist_ok=True)
+    p = d / "rollout-2026-07-29T10-00-00-0f0f0f0f.jsonl"
+    line = json.dumps({"type": "response_item",
+                       "payload": {"type": "message", "role": "human",
+                                   "text": "x" * 400}}) + "\n"
+    n = transcript.PROMPT_SCAN_B // len(line) + 8      # comfortably over the cap
+    p.write_text(line * n, encoding="utf-8")
+    assert os.path.getsize(str(p)) > transcript.PROMPT_SCAN_B
+    return str(p)
+
+
+def _agent_sidecar(tpath, agent_id="0001"):
+    """One of an owned transcript's per-agent sidecars, at the layout
+    transcript.agent_paths derives — `<sid>/subagents/agent-<id>.jsonl`."""
+    import os
+
+    from plugins.claude_code import transcript
+    jsonl, _meta = transcript.agent_paths(tpath, agent_id)
+    os.makedirs(os.path.dirname(jsonl), exist_ok=True)
+    with open(jsonl, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({"type": "user",
+                             "message": {"role": "user", "content": "go"}}) + "\n")
+    return jsonl
+
+
+def test_ownership_covers_the_agent_sidecars_too(tmp_path):
+    """An AGENT transcript is ours as well, and the gate has to say so: the
+    dashboard's per-agent ctx bars call plugins.context() with the streams
+    keystone `src_path`, i.e. `…/<sid>/subagents/agent-<id>.jsonl`
+    (dashboard/read/session.agents_ctx, main=False — an agent transcript is its
+    sidechain turns). An `owns` that recognised only the SESSION layout would
+    have silently blanked every agent's bar. Renaming one, though, is
+    meaningless — which is why `renameable` stays the narrower predicate."""
+    import plugins
+
+    from plugins.claude_code import transcript
+
+    agent = _agent_sidecar(_claude_transcript(tmp_path))
+    assert transcript._agent_transcript(agent) is True   # claimed by LAYOUT
+    assert plugins.owns_by(agent) == "claude_code"
+    assert plugins._owns(plugins.claude_code, agent) is True
+    assert plugins.renameable(agent) is False
+    assert plugins.set_session_title(agent, "nope") is None
+
+
+def test_ownership_falls_back_to_the_first_record(tmp_path):
+    """A transcript that is OURS but not where we expect — a relocated config
+    dir, a copy, most of the suite's own fixtures — is still ours: the bounded
+    head read finds a record only Claude Code writes. The fallback exists
+    because "not at the layout" must not mean "not mine"; it cannot claim a
+    codex rollout, whose records are its own top-level vocabulary
+    (session_meta/response_item/…), which is exactly the collision the
+    top-level-`type`-only rule avoids."""
+    import plugins
+
+    stray = tmp_path / "stray.jsonl"
+    stray.write_text(json.dumps({"type": "user",
+                                 "message": {"role": "user", "content": "hi"}})
+                     + "\n", encoding="utf-8")
+    assert plugins.owns_by(str(stray)) == "claude_code"
+    assert plugins.prompts(str(stray)) == 1
+
+    theirs = tmp_path / "theirs.jsonl"
+    theirs.write_text(json.dumps({"type": "session_meta",
+                                  "payload": {"id": "0f0f"}}) + "\n",
+                      encoding="utf-8")
+    assert plugins.owns_by(str(theirs)) is None
+    assert plugins.prompts(str(theirs)) is None
+
+
+def test_owns_by_names_one_owner_at_most(tmp_path):
+    """`owns_by` returns the owning plugin's short name, None when nobody
+    claims the file — and NO path is claimed by two plugins. The last part is
+    the invariant that keeps first-plugin-wins meaningful once a second tool
+    declares ownership; today codex declares none, and "unclaimed" is the
+    honest answer for a rollout, not a wrong one."""
+    import plugins
+
+    tpath, rollout = _claude_transcript(tmp_path), _codex_rollout(tmp_path)
+    assert plugins.owns_by(tpath) == "claude_code"
+    assert plugins.owns_by(rollout) is None
+    assert plugins.owns_by(str(tmp_path / "projects" / "h" / "gone.jsonl")) is None
+    assert plugins.owns_by("") is None
+    for path in (tpath, rollout):
+        claimers = []
+        for p in plugins.all_plugins():
+            fn = plugins.provider(p, "owns")
+            if fn is not None and fn(path):
+                claimers.append(p.__name__)
+        assert len(claimers) <= 1, "two plugins claim %s: %s" % (path, claimers)
+
+
+def test_path_keyed_fanouts_still_answer_for_an_owned_transcript(tmp_path):
+    """The no-regression half: for a real Claude transcript the gate changes
+    nothing — every path-keyed fan-out answers exactly what its provider says."""
+    import plugins
+
+    tpath = _claude_transcript(tmp_path)
+    assert plugins.session_title(tpath) == "My session"
+    assert plugins.title_and_rename(tpath) == ("My session", "")
+    assert plugins.renameable(tpath)
+    assert plugins.prompts(tpath) == 1
+    # read by the same owned path, with nothing to report — a real answer, not
+    # a refusal (both probes return None on a transcript with no usage/goal)
+    assert plugins.context(tpath) is None
+    assert plugins.goal(tpath) is None
+
+
+def test_no_path_keyed_fanout_answers_for_a_rollout_it_doesnt_own(tmp_path):
+    """The bug this exists for: `plugins.prompts(<codex rollout>)` was 8.
+
+    Note what is NOT fixed here — `prompt_count` still fails open on a big
+    file, because for a Claude transcript that is the right answer (the count
+    only ever argues for DISABLING a button). The parser is asked a question it
+    cannot answer honestly; the fix is to stop asking it."""
+    import plugins
+    from plugins.claude_code import transcript
+
+    rollout = _codex_rollout(tmp_path)
+    assert transcript.prompt_count(rollout) == transcript.PROMPT_CAP, \
+        "the parser's fail-open fast path is the premise of this test"
+    assert plugins.prompts(rollout) is None
+    assert plugins.session_title(rollout) == ""
+    assert plugins.title_and_rename(rollout) == ("", "")
+    assert plugins.renameable(rollout) is False
+    assert plugins.context(rollout) is None
+    assert plugins.goal(rollout) is None
+
+
+def test_set_session_title_never_writes_to_an_unowned_file(tmp_path):
+    """The one path-keyed fan-out that WRITES: a rollout must not grow a Claude
+    `agent-name` record, and the owned transcript must still take one."""
+    import os
+
+    import plugins
+
+    tpath, rollout = _claude_transcript(tmp_path), _codex_rollout(tmp_path)
+    before = os.path.getsize(rollout)
+    assert plugins.set_session_title(tpath, "Renamed by the web") is True
+    assert plugins.session_title(tpath) == "Renamed by the web"
+    assert plugins.set_session_title(rollout, "Renamed by the web") is None
+    assert os.path.getsize(rollout) == before
+
+
+def test_a_plugin_without_owns_is_asked_exactly_as_before(tmp_path, monkeypatch):
+    """Ownership is OPT-IN: the gate skips a plugin only when that plugin
+    DECLARES `owns`. A plugin that never said which files are its own keeps
+    being asked about everything, which is what made this change a no-op for
+    codex/otel — and what stops a future plugin going silent by omission."""
+    import plugins
+    from plugins import claude_code, codex
+    from plugins.claude_code import transcript
+
+    rollout = _codex_rollout(tmp_path)
+    assert plugins._owns(codex, rollout) is True             # declares no owns
+    assert plugins._owns(claude_code, rollout) is False
+    monkeypatch.delattr(claude_code, "owns")
+    assert plugins.prompts(rollout) == transcript.PROMPT_CAP, \
+        "without an `owns` the host is asked again — the pre-gate behaviour"
 
 
 # --- the dashboard -> plugin BOUNDARY ---------------------------------------------

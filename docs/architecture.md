@@ -181,9 +181,26 @@ SessionStart handler — see [codex.md](codex.md) › *standalone*). The three
 `on_session_start(log, cwd, sid)` (SessionStart fan-out — how codex attaches
 its watcher to a Claude host; a plugin failure is audited and never blocks the
 host's SessionStart), `census(log)` (the scoreboard's ✉-row fan-out — returning `(parts, ops)`: the row's fragments plus ready-made mirror paint ops for this tick's team-mail transitions, so the tool-agnostic scorebar emits them without knowing the mail vocabulary), and the
-read-side fan-outs (`activity`/`session_title`/`conversation` — first plugin
-that recognizes the key wins).
-**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty
+read-side fan-outs (`session_title`/`context`/`prompts`/`conversation`/… —
+first plugin that recognizes the key wins).
+**The PATH-KEYED fan-outs are ownership-gated** (`_first_path`): a plugin that
+declares the `owns(path)` provider is asked only about files it owns. First
+plugin wins is first PARSER wins, and these parsers are bounded and fail open —
+`prompt_count` returns its cap for any file over `PROMPT_SCAN_B` without reading
+a byte, so `plugins.prompts()` measured 8 human prompts in a 429KB *codex
+rollout*: the size of a file from another tool decided a Claude-shaped answer.
+Ownership is opt-in per plugin (a plugin with no `owns` is asked exactly as
+before, so nothing regressed while claude_code was the only one to declare it),
+because what it buys is precisely the case a parser *cannot* tell — a bounded
+read, a byte prefilter, a fast path over a size limit. claude_code answers it
+from Claude Code's own on-disk SHAPE (the `projects/<hash>/<sid>.jsonl` layout
+and its `subagents/` sidecars, else a bounded head read for a record only
+Claude writes — `transcript.owns`), never from the whole file: ownership is
+asked once per session per poll. `plugins.owns_by(path)`
+names the owning tool for the one CONTROL-plane caller that needs it: the
+dashboard refuses to relaunch `claude --resume <sid>` for a session claude_code
+does not own (docs/dashboard.md *Resume & send*).
+**The provider surface is DECLARED.** `plugins.PROVIDERS` lists the twenty-two
 optional functions a plugin may expose and the arity each fan-out calls it with,
 and every lookup goes through `plugins.provider(plugin, name)` rather than a
 bare `getattr`. This is what `frontends/` has had all along in
@@ -198,8 +215,8 @@ directions: every name a fan-out reaches for is declared (parsed out of the
 fan-outs themselves, so a new one can't skip the table), every declared row is
 actually called by one, every row is implemented by at least one plugin, and
 every implementation accepts the arity its fan-out passes. A plugin still
-implements only what it has something to say about — claude_code 19 of 20, codex
-2, otel 1.
+implements only what it has something to say about — claude_code 21 of 22, codex
+1, otel 1.
 
 **Adding support for another agent tool** = a new `plugins/<tool>/` directory
 implementing whichever hooks it needs (`on_session_start` for a secondary

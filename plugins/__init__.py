@@ -27,7 +27,7 @@ def all_plugins():
 # --- the PROVIDER surface ------------------------------------------------------
 # The optional functions a plugin may expose, and the arity each fan-out calls
 # it with. A plugin implements as many as it has something to say about
-# (claude_code 19 of 20, codex 2, otel 1) and the fan-outs below skip the rest —
+# (claude_code 21 of 22, codex 1, otel 1) and the fan-outs below skip the rest —
 # which is the whole point of an optional surface, and also its hazard: a
 # provider whose name is misspelled, or whose signature drifts from its
 # fan-out's call, is not an error anywhere. It is simply never found, and the
@@ -49,6 +49,8 @@ PROVIDERS = {
     "census": 1,             # (log)                — the scoreboard ✉ row
     "agent_usage": 2,        # (sid, agent_id)      — one agent's token rollup
     "monitors": 1,           # (sid)                — the monitors read model
+    "owns": 1,               # (path)               — is this file ours to read?
+    #                          The gate on every PATH-KEYED row below (see _owns)
     "session_title": 1,      # (transcript_path)    — the display title
     "title_and_rename": 1,   # (transcript_path)    — title + the tail rename
     "renameable": 1,         # (transcript_path)    — can it be /rename'd?
@@ -86,11 +88,15 @@ def _not_none(got):
     return got is not None
 
 
-def _first(method, *args, default=None, truthy=False, accept=None, **kwargs):
+def _first(method, *args, default=None, truthy=False, accept=None, skip=None,
+           **kwargs):
     """FIRST-plugin-wins fan-out primitive: iterate all_plugins(), skip those
     missing `method`, call it, and return the first usable answer; `default`
     when none does. Exceptions propagate (the fan-out callers are read-side
     tools, not hooks); the per-function docstrings own the exact contract.
+
+    `skip(plugin)` drops a plugin before it is even asked — the door
+    _first_path() below hangs the OWNERSHIP gate on; None asks everyone.
 
     What counts as "usable" is the one thing that varies, so it is a parameter:
       `truthy=False` (the norm)  the first result that is `not None` — '' / []
@@ -105,6 +111,8 @@ def _first(method, *args, default=None, truthy=False, accept=None, **kwargs):
                                  hand-rolled the whole loop to say so."""
     ok = accept or (bool if truthy else _not_none)
     for p in all_plugins():
+        if skip is not None and skip(p):
+            continue
         fn = provider(p, method)
         if fn is None:
             continue
@@ -112,6 +120,58 @@ def _first(method, *args, default=None, truthy=False, accept=None, **kwargs):
         if ok(got):
             return got
     return default
+
+
+def _owns(plugin, path):
+    """May `plugin` be asked about `path` at all? True when it DECLARES `owns`
+    and claims the file — and also true when it declares NO `owns`, because a
+    plugin that has never said which files are its own must keep being asked
+    exactly as before (that is what makes the gate below a no-op for everyone
+    but the plugin that opted in)."""
+    fn = provider(plugin, "owns")
+    return True if fn is None else bool(fn(path))
+
+
+def _first_path(method, path, *args, **kwargs):
+    """The PATH-KEYED fan-out primitive: _first(), except a plugin that
+    declares `owns` is only asked about a path it OWNS.
+
+    Without the gate, first-plugin-wins means first-PARSER-wins, and a parser
+    fed a file from another tool does not fail — it answers. Measured: the
+    dashboard's ⊜ compact gate asked `prompts()` about a 429KB CODEX rollout
+    and got 8, because prompt_count's over-PROMPT_SCAN_B fast path returns the
+    cap for any large file (fail-open by design, and correct — for a Claude
+    transcript). The size of an unrelated file decided a Claude-shaped answer.
+
+    The gate is deliberately OPT-IN per plugin rather than "answer only what
+    you own": every one of these providers already returns its empty default
+    for a file it can't parse, so demanding an `owns` from all of them would be
+    a second, redundant statement of the same fact — and a plugin that shipped
+    without one would go silent instead of degrading. What ownership buys is
+    the case where a parser CAN'T tell: a bounded read, a byte prefilter, a
+    fast path over a size limit. Those answer confidently about files they have
+    never read, and only a question about the file's SHAPE — its layout, or its
+    first record — can tell them apart (plugins/claude_code/transcript.owns)."""
+    return _first(method, path, *args, skip=lambda p: not _owns(p, path),
+                  **kwargs)
+
+
+def owns_by(path):
+    """WHICH tool owns `path` — the plugin's short name ("claude_code"), or
+    None when no plugin claims it (a codex rollout today: codex declares no
+    `owns` yet, and "unclaimed" is the honest answer, not a wrong one).
+
+    The read fan-outs never need this — they route through _first_path, which
+    asks the question per plugin — but a CONTROL-plane caller does: the
+    dashboard's resume relaunch builds `claude --resume <sid>`, an argv that is
+    only meaningful for a session claude_code owns (docs/dashboard.md *Resume &
+    send*). First claim wins, host first, and the corpus test pins that no two
+    plugins claim the same file."""
+    for p in all_plugins():
+        fn = provider(p, "owns")
+        if fn is not None and fn(path):
+            return p.__name__.rsplit(".", 1)[-1]
+    return None
 
 
 def _concat_unique(method, key, *args):
@@ -200,8 +260,11 @@ def session_title(transcript_path):
     (path-keyed, unlike the sid-keyed fan-outs: the dashboard's list view
     already holds each row's path — 50 session_row() round-trips per poll
     would be waste). First non-empty wins; '' when no plugin recognizes the
-    file. Same exception contract as census()/activity()."""
-    return _first("session_title", transcript_path, default="", truthy=True)
+    file. Same exception contract as census()/activity().
+
+    Path-keyed means OWNERSHIP-GATED (_first_path): a plugin that declares
+    `owns` is asked only about its own files."""
+    return _first_path("session_title", transcript_path, default="", truthy=True)
 
 
 def title_and_rename(transcript_path):
@@ -216,9 +279,10 @@ def title_and_rename(transcript_path):
     The one fan-out with an explicit `accept`: the result is a PAIR, and every
     tuple is truthy, so `truthy=True` would accept ('', '') from the first
     plugin asked and never reach the second. `any` is the real test — a plugin
-    recognized the file iff it produced at least one of the two names."""
-    return _first("title_and_rename", transcript_path,
-                  default=("", ""), accept=any)
+    recognized the file iff it produced at least one of the two names.
+    Ownership-gated like session_title (_first_path)."""
+    return _first_path("title_and_rename", transcript_path,
+                       default=("", ""), accept=any)
 
 
 def renameable(transcript_path):
@@ -228,8 +292,10 @@ def renameable(transcript_path):
     a codex standalone host's window carries the same `claude_session` tag
     while its transcript_path is a rollout (it would receive a command it has
     no idea about). The parked path's gate is set_session_title's own None
-    return, which shares this predicate."""
-    return _first("renameable", transcript_path, default=False, truthy=True)
+    return, which shares this predicate. The narrow, RENAME-shaped twin of
+    owns(): a plugin may own a file it cannot rename, so the two stay separate
+    rows (claude_code's renameable IS its owns today — see transcript.owns)."""
+    return _first_path("renameable", transcript_path, default=False, truthy=True)
 
 
 def set_session_title(transcript_path, name):
@@ -242,8 +308,10 @@ def set_session_title(transcript_path, name):
 
     The PARKED half of the rename only: a live session is renamed through
     Claude Code's own `/rename`, which owns the in-memory title this record
-    would otherwise be overwritten by (docs/session-naming-findings.md §4)."""
-    return _first("set_session_title", transcript_path, name)
+    would otherwise be overwritten by (docs/session-naming-findings.md §4).
+    Ownership-gated (_first_path) on top of the provider's own predicate — belt
+    and braces, because this is the one path-keyed fan-out that WRITES."""
+    return _first_path("set_session_title", transcript_path, name)
 
 
 def accounts():
@@ -354,8 +422,9 @@ def context(transcript_path, main=False):
     does (a fresh transcript, a codex rollout — no codex provider yet).
     main=True marks a HOST session's main transcript (the claude_code provider
     skips sidechain records there). Same exception contract as
-    census()/activity(): the callers are read-side dashboards, not hooks."""
-    return _first("context", transcript_path, main)
+    census()/activity(): the callers are read-side dashboards, not hooks.
+    Ownership-gated like session_title (_first_path)."""
+    return _first_path("context", transcript_path, main)
 
 
 def goal(transcript_path):
@@ -365,8 +434,8 @@ def goal(transcript_path):
     (Claude Code's `/goal` built-in), or None when there's no active goal / no
     plugin speaks the file. Read-side like context() (no hook fires for /goal),
     same exception contract as census()/activity(): the callers are read-side
-    dashboards, not hooks."""
-    return _first("goal", transcript_path)
+    dashboards, not hooks. Ownership-gated like session_title (_first_path)."""
+    return _first_path("goal", transcript_path)
 
 
 def model_fallback(transcript_path, pos=0):
@@ -389,8 +458,12 @@ def prompts(transcript_path):
     one with nothing in it yet. Backs the dashboard's ⊜ compact gate, which is
     why the None means "don't conclude anything" rather than zero: the count
     only ever argues for disabling a button. Same exception contract as
-    census()/activity(): the callers are read-side dashboards, not hooks."""
-    return _first("prompts", transcript_path)
+    census()/activity(): the callers are read-side dashboards, not hooks.
+
+    The fan-out ownership gate (_first_path) was written FOR this one: a
+    parser's fail-open answer about a file that isn't its own is indistinguish-
+    able from a real count, and a 429KB codex rollout measured 8 prompts."""
+    return _first_path("prompts", transcript_path)
 
 
 def conversation(sid, pos=0, agent_id=""):

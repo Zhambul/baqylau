@@ -39,6 +39,17 @@ def monitors(sid):
     return transcript.session_monitors(sid)
 
 
+def owns(path):
+    """The ownership provider (plugins.owns / owns_by, and the gate every
+    path-keyed fan-out applies through plugins._first_path) — True only for a
+    file this plugin genuinely speaks: a Claude Code session transcript or one
+    of its agent sidecars. Without it, first-plugin-wins hands a codex rollout
+    to a Claude parser whose bounded fast paths answer confidently about a file
+    they never read. See transcript.owns."""
+    from plugins.claude_code import transcript
+    return transcript.owns(path)
+
+
 def session_title(transcript_path):
     """The session-title provider (plugins.session_title fan-out) — the head
     summary record / first real prompt of a Claude transcript. See

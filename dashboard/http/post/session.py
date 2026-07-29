@@ -20,6 +20,16 @@ from dashboard.control.launch import launch_argv
 
 A = load_audit()
 
+RESUME_TOOL = "claude_code"   # the ONE tool `claude --resume <sid>` can pick a
+#                               conversation up for (plugins.owns_by names a
+#                               transcript's owner). A parked CODEX session rides
+#                               the same session cards and the same "resume &
+#                               send" composer, but its sid is a rollout uuid —
+#                               resuming it is a launch path codex does not have
+#                               yet, so this handler refuses instead of running
+#                               the wrong tool. Replacing the comparison with a
+#                               per-tool launch provider is that work, not this.
+
 
 class _Steps:
     """A launch's per-step stopwatch — `mark(name)` closes the step that just
@@ -158,6 +168,28 @@ class _SessionMixin:
                 return self._json(
                     {"error": "session transcript is gone — can't resume",
                      "sid": resume}, 410)
+            # And a resume target owned by ANOTHER TOOL can't be resumed with
+            # THIS argv: `claude --resume <sid>` needs a Claude conversation,
+            # while a parked codex host's sid is a rollout uuid. It rides the
+            # same session cards and the same "resume & send" composer, so the
+            # page can ask for it in good faith — and the launch would open a
+            # tab where claude finds no such conversation, the same silent dead
+            # tab the missing-transcript guard above exists for. Refuse rather
+            # than run the wrong tool. Unknown transcripts (no audit row, no
+            # path) still go to the CLI, same reasoning as above: we can't prove
+            # anything about a file we've never been told about, and today only
+            # claude_code declares ownership at all (plugins.owns_by).
+            owner = plugins.owns_by(r_tpath) if r_tpath else RESUME_TOOL
+            if owner != RESUME_TOOL:
+                step.mark("row")
+                A.error("", "dashboard new-session (resume unsupported tool)",
+                        {"sid": resume, "tool": owner or "", "path": r_tpath})
+                A.state_file("", "", "web-launch",
+                             dict(opts, ok=False, why="unsupported tool",
+                                  tool=owner or "", ms=step.ms))
+                return self._json(
+                    {"error": "resume not yet supported for this session's tool",
+                     "sid": resume, "tool": owner or ""}, 409)
             step.mark("row")
             live_win = fe.window_for_session(resume) or ""
             step.mark("livewin")

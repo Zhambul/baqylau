@@ -1958,9 +1958,13 @@ def test_post_new_session_refuses_resume_of_missing_transcript(dash, monkeypatch
               {"cwd": str(tmp_path), "resume": gone_sid, "prompt": "hi"})
     assert e.value.code == 410
     assert fe.launched == []                    # nothing was launched
-    # a session WITH a present transcript resumes normally
-    tp = _tw(tmp_path, "there.jsonl", {"type": "user", "message": {"content": "hi"}})
+    # a session WITH a present transcript resumes normally — written at Claude
+    # Code's OWN `projects/<hash>/<sid>.jsonl` layout, which the ownership
+    # guard (the test below) now requires of a resume target
     ok_sid = "9c1e2f34-aaaa-4bbb-8ccc-0123456789ac"
+    proj = tmp_path / "projects" / "-Users-me-code-proj"
+    proj.mkdir(parents=True, exist_ok=True)
+    tp = _tw(proj, ok_sid + ".jsonl", {"type": "user", "message": {"content": "hi"}})
     A.session_start({"session_id": ok_sid, "cwd": str(tmp_path), "transcript_path": tp})
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "resume": ok_sid, "prompt": "go"})
@@ -1970,6 +1974,40 @@ def test_post_new_session_refuses_resume_of_missing_transcript(dash, monkeypatch
     _post(dash + "/api/sessions/new",
           {"cwd": str(tmp_path), "resume": unk, "prompt": "x"})
     assert fe.launched[-1][1][4:] == ["--resume", unk, "x"]
+
+
+def test_post_new_session_refuses_resume_of_an_unowned_transcript(dash,
+                                                                  monkeypatch,
+                                                                  tmp_path):
+    """A parked session whose transcript belongs to ANOTHER TOOL is refused
+    (409) rather than relaunched with the wrong one. A codex standalone host
+    rides the same session cards and the same "resume & send" composer, but its
+    sid is a rollout uuid: `claude --resume <it>` finds no conversation — the
+    dead tab of the guard above, with a perfectly healthy file on disk. The
+    gate is plugins.owns_by (docs/dashboard.md *Resume & send*), and the
+    refusal lands a web-launch ok:False, why=unsupported tool row. Teaching
+    codex to relaunch itself is a later phase; refusing loudly is the honest
+    interim."""
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.delenv("KITTY_WINDOW_ID", raising=False)
+    d = tmp_path / "codex" / "sessions" / "2026" / "07" / "29"
+    d.mkdir(parents=True)
+    tp = _tw(d, "rollout-2026-07-29T10-00-00-0f0f0f0f.jsonl",
+             {"type": "session_meta", "payload": {"id": "0f0f0f0f"}})
+    sid = "0f0f0f0f-1111-4222-8333-444455556666"
+    A.session_start({"session_id": sid, "cwd": str(tmp_path),
+                     "transcript_path": tp})
+    with pytest.raises(urllib.error.HTTPError) as e:
+        _post(dash + "/api/sessions/new",
+              {"cwd": str(tmp_path), "resume": sid, "prompt": "hi"})
+    assert e.value.code == 409
+    assert "resume not yet supported" in json.loads(e.value.read())["error"]
+    assert fe.launched == []                    # the wrong tool never ran
+    row = _last_state_file("", "web-launch") or {}
+    assert row.get("ok") is False, row
+    assert row.get("why") == "unsupported tool", row
+    assert row.get("resume") == sid, row
 
 
 def test_launch_argv_falls_back_to_zsh(monkeypatch):
