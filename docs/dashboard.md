@@ -5625,7 +5625,9 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
 - **focus** — your prompts and each turn's FINAL reply at full weight, its
   mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and ONE summary
   line accounting for everything else the turn did. Every intermediate step folds
-  into it; nothing is dropped from its counters.
+  into it; nothing is dropped from its counters. A turn a blocking **Stop hook**
+  resumed has TWO final replies — the answer the hook interrupted and the reply
+  the errand ends on (*injected prompts*, below).
 
   Mid-turn prose is greyed rather than dropped, which it was at first. Hiding it
   read as content VANISHING: only the NEWEST message in a turn is its "final"
@@ -6136,8 +6138,42 @@ rewind picker's click target) exclude `.sys`, since an injected turn can easily 
 newer than the prompt they mean.
 
 An injected prompt also does **not close the turn** for focus mode's
-final-reply rule — the reply after a hook firing still belongs to the prompt you
-typed, and treating it as a boundary surfaced a second "final" reply per firing.
+final-reply rule — the reply after a loaded skill, a compaction summary or a
+piece of teammate mail still belongs to the prompt you typed, and treating every
+injection as a boundary surfaced a second "final" reply per injection.
+
+**Except the one that RESUMED an ended turn** (`transcript._RESUMES_TURN` →
+the record's `resumed`, the item's `resumed`, the DOM's `data-resumed`). A
+blocking **Stop hook** is not a mid-turn injection at all: it fires *because the
+turn ended*, so the reply in front of its feedback is a turn's **answer**, and
+everything after it is the hook's errand. Reported from a project whose Stop hook
+nudges every turn to persist memory notes (`.claude/hooks/wiki_nudge.py` in
+`aggregator-adapters`): focus mode kept exactly one message per turn, that
+message was always the `persisted the note` bookkeeping reply, and the actual
+result was folded away as mid-turn prose — *"because of the stop hook which
+nudges to store memory notes in focus mode I lose the actual result message"*.
+So a `resumed` injection **closes the reply search** (the message above it
+becomes a final reply in its own right, at full weight even while the resumed
+turn is still running — it is settled, only the newest reply is provisional)
+while remaining, in every other respect, an injection: the bubble itself is still
+hidden, it is still not a prompt, the counters are untouched, and the run either
+side merges exactly as before (the revealed answer breaks its run the way any
+shown message does).
+
+The mark is anchored TEXT (`^\s*Stop hook feedback:` — Claude Code's own
+wording, 4.5k occurrences across the local transcript corpus), for the same
+reason `_TEAM_ENVELOPE` is: **there is nothing structural on the record**. A Stop
+hook's feedback and a loaded skill's body are the same `user` + `isMeta` shape,
+under the same `promptId` (Claude Code considers the continuation part of the
+same prompt cycle, so no id boundary exists to read). The one structural tell —
+the `hook_blocking_error` attachment and the `stop_hook_summary` system line — sits
+on the records that **follow** it, which an incremental tail read ending on the
+injection would not have yet; anchoring at the start of the content is what makes
+the text safe instead (a turn that merely quotes the wording, like this file, has
+something in front of it). `Continue from where you left off.` has the same shape
+but is deliberately NOT in the table: it follows a turn that ended in the
+previous session view, whose reply focus mode already showed as final under its
+own prompt. Add a wording there only with a transcript to point at.
 
 **This is a rendering choice, not a setting.** Claude Code has its own
 `viewMode` (settings.json; Ctrl+O toggles verbose/default, `/focus` toggles

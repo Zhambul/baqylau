@@ -96,6 +96,7 @@ function item(spec) {
   if (spec.act) e.dataset.act = spec.act;
   if (spec.msg) e.dataset.msg = spec.msg;
   if (spec.injected) e.dataset.injected = "1";
+  if (spec.resumed) e.dataset.resumed = "1";
   if (spec.bad) e.dataset.bad = "1";
   if (spec.add) e.dataset.add = String(spec.add);
   if (spec.rem) e.dataset.rem = String(spec.rem);
@@ -150,6 +151,11 @@ const F = {
   // a user-SHAPED turn Claude Code injected: a Stop hook's feedback, a loaded
   // skill's SKILL.md body, a resume nudge (transcript isMeta)
   hookmsg: { act: "msg", kind: "messages", msg: "prompt", injected: 1 },
+  // …and the one flavour that RESUMED an ended turn: a blocking Stop hook's
+  // feedback (transcript _RESUMES_TURN). Still hidden, but the reply above it
+  // is that turn's final answer.
+  stopmsg: { act: "msg", kind: "messages", msg: "prompt", injected: 1,
+             resumed: 1 },
 };
 
 /* ---------- readers */
@@ -288,6 +294,20 @@ out.injected = {
   verbose: shown(scene("verbose", inj)).length,
   default: shown(scene("default", inj)),
   focus: shown(scene("focus", inj)),
+};
+
+// …but a Stop hook's feedback RESUMED a turn that had ENDED, so the reply in
+// front of it IS a final answer: focus keeps BOTH it and the reply the resumed
+// turn ends on (the memory-note nudge that hid every real result). The injected
+// bubble itself stays hidden, and the runs either side still merge into one
+// summary — only the reply search is cut.
+const stop = [F.prompt, F.fg, F.reply, F.stopmsg, F.read, F.reply];
+out.stopResume = {
+  focus: shown(scene("focus", stop)),
+  sums: sums(scene("focus", stop)).map(s => s.text),
+  // …and while the RESUMED turn is still running, only its own provisional
+  // reply is greyed — the answer behind the hook is settled, at full weight
+  busy: shown(scene("focus", stop, "working")),
 };
 
 // a block the USER opened inside a revealed run is left alone

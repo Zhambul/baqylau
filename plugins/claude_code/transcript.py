@@ -28,7 +28,8 @@
 #       were away (auto after ~3min idle, or on-demand via /recap), stored as a
 #       `type=system` `subtype=away_summary` line whose plain-text `content` is
 #       the summary. Not a compaction (adds context, doesn't compress it)
-#   {"kind": "prompt", "text": str, "meta": bool}   a user prompt (unstripped) —
+#   {"kind": "prompt", "text": str, "meta": bool, "resumed": bool}
+#       a user prompt (unstripped) —
 #       a plain `user` string OR a `queued_command` attachment (the delivered
 #       form of a message queued mid-turn; commandMode=="prompt" only).
 #       `meta` means the record is shaped like a user turn but the HUMAN DID NOT
@@ -47,6 +48,9 @@
 #       hook's feedback rendered as a YOU bubble is not it (docs/dashboard.md,
 #       *View modes*). session_title has always skipped isMeta rows for the same
 #       reason — this makes that fact reusable instead of re-read per consumer.
+#       `resumed` is the ONE flavour distinction on top of it: this injection
+#       RESUMED a turn Claude Code had already ENDED (see _RESUMES_TURN), so the
+#       reply in front of it was a turn's FINAL answer and not mid-turn prose.
 #   {"kind": "teammsg", "sender": str, "body": str} an incoming teammate message
 #   {"kind": "results", "blocks": [...], "tur": …, "texts": [str, ...]}
 #       a user record carrying tool_result blocks (in order) — `tur` is the
@@ -274,6 +278,43 @@ def _injected(o, text=""):
     return bool(o.get("isMeta") or o.get("interruptedMessageId")
                 or o.get("isCompactSummary")
                 or (text and _TEAM_ENVELOPE.match(text)))
+
+
+# The injections that RESUME a turn Claude Code had already ENDED — as opposed to
+# the ones it writes MID-turn. Anchored at the start of the content, for exactly
+# the reason _TEAM_ENVELOPE is: the record carries no structural flag (measured —
+# a Stop hook's feedback and a loaded skill's body are byte-for-byte the same
+# user/isMeta shape, same `promptId`, and the only structural tell is on a
+# DIFFERENT record: the `hook_blocking_error` attachment / `stop_hook_summary`
+# system line that FOLLOWS it, which an incremental tail read ending on the
+# injection would not have yet). Anchoring is what makes text safe to read: a
+# turn that merely QUOTES the wording — this repo's own docs, a grep hit — has
+# something in front of it and stays an ordinary injection.
+#
+# WHY the distinction exists (docs/dashboard.md, *View modes*): the dashboard's
+# focus mode keeps ONE reply per turn, the one it ends on. A Stop hook fires
+# BECAUSE the turn ended, so the reply in front of its feedback IS a final
+# answer — and a Stop hook that nudges every turn (the aggregator-adapters wiki
+# nudge) therefore hid every real result behind the "persisted the note" reply
+# that followed it. A MID-turn injection (a loaded SKILL.md body, the post-
+# /compact summary, teammate mail) is deliberately NOT in here: the prose before
+# one of those is running commentary, and treating it as a boundary would
+# manufacture an extra "final" reply per injection.
+#
+# `Continue from where you left off.` (the resume nudge) is likewise not here,
+# though it has the same shape: it follows a turn that ended in the PREVIOUS
+# session view, whose reply focus mode already showed as final under its own
+# prompt. Add a wording here only with a transcript to point at.
+_RESUMES_TURN = (
+    re.compile(r"^\s*Stop hook feedback:"),
+)
+
+
+def _resumes_turn(text):
+    """Whether this INJECTED user turn resumed a turn Claude Code had already
+    ended (see _RESUMES_TURN). Callers must have established `meta` first — the
+    marks are read only on a turn the human did not type."""
+    return any(p.match(text or "") for p in _RESUMES_TURN)
 
 
 # Every `kind` parse_line can return — the record vocabulary of this module,
@@ -976,13 +1017,17 @@ class _Conv:
         the conversation and belongs in the verbose stream, but a consumer that
         promises "what YOU said" (the dashboard's focus mode) has to be able to
         tell. Both prompt-bearing kinds (a plain `prompt`, and the `texts` of a
-        `results` record) go through here, which is what keeps that rule single."""
+        `results` record) go through here, which is what keeps that rule single —
+        `resumed` (the injection RESUMED an ended turn, _resumes_turn) rides
+        alongside it for the same reason."""
         t = (text or "").strip()
         if not t or t.startswith("<"):
             return
         extra = {"par": self.par, "uid": self.uid}
         if meta:
             extra["meta"] = True
+            if _resumes_turn(t):
+                extra["resumed"] = True
         self.add("prompt", t, **extra)
 
 

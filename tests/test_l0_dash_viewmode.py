@@ -697,16 +697,29 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # the ⚠ audit warning never folds — and it splits the run it sits in
     assert d["warnBreaksRuns"] == {"sums": 2, "shown": ["warn", "msg"]}
 
-    # An INJECTED prompt (a Stop hook's feedback, a loaded skill's body — the
+    # An INJECTED prompt (a loaded skill's body, the post-/compact summary — the
     # transcript's isMeta) is not something you said: verbose keeps it (it IS in
     # the transcript), both non-verbose modes drop it, and it does NOT close the
-    # turn — so focus still shows exactly ONE final reply, not one per hook
-    # firing.
+    # turn — so focus still shows exactly ONE final reply, not one per injection.
     assert d["injected"]["verbose"] == 5
     assert d["injected"]["default"] == ["msg", "msg", "msg"]   # prompt + 2 replies
-    # prompt + THE reply: still exactly ONE, so the hook firing did not
+    # prompt + THE reply: still exactly ONE, so the injection did not
     # manufacture a second turn-ending message
     assert d["injected"]["focus"] == ["msg", "msg"]
+
+    # …EXCEPT the one flavour that RESUMED an ENDED turn: a blocking Stop hook
+    # fires BECAUSE the turn finished, so the reply in front of its feedback is
+    # that turn's ANSWER. Focus keeps it AND the reply the resumed turn ends on
+    # — the memory-note nudge that ran on every turn otherwise hid every real
+    # result behind the "persisted the note" reply that followed it. The
+    # injected bubble itself stays hidden — it is still not something you said —
+    # and the revealed answer breaks the run around it exactly as any other
+    # shown message does, so the turn's work reads as the two summaries it is.
+    assert d["stopResume"]["focus"] == ["msg", "msg", "msg"]   # prompt + 2 replies
+    assert d["stopResume"]["sums"] == ["Read 1 file", "Ran 1 shell command"]
+    # …and while the resumed turn is STILL RUNNING only its own reply is
+    # provisional: the answer behind the hook is settled, at full weight.
+    assert d["stopResume"]["busy"] == ["msg:dim", "msg", "msg"]
 
     # the summary is clickable BOTH ways (it stays put while expanded — it is the
     # only way back), and a redundant pass is a no-op (the signature guard, which
@@ -1561,6 +1574,10 @@ def test_injected_user_turns_are_flagged_not_rendered_as_yours(dash, tmp_path):
     # …and it reaches the page on the wire item the view modes read
     items = DS.mirror.conv_items(recs)
     assert [it.get("meta") for it in items] == [None, 1, 1]
+    # …with the ONE flavour distinction on top of it: the Stop hook's feedback
+    # RESUMED a turn that had already ended (so focus mode keeps the reply in
+    # front of it), the skill body did not — it arrived mid-turn.
+    assert [it.get("resumed") for it in items] == [None, 1, None]
     # …AND the bubble itself says so: verbose is the one mode that shows these,
     # and there they read ⚙ SYSTEM in their own colour, never YOU
     assert 'class="msg prompt sys"' in items[1]["html"]

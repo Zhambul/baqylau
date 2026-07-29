@@ -106,6 +106,39 @@ def test_a_message_that_only_QUOTES_an_envelope_stays_yours():
     assert plain["meta"] is False
 
 
+_STOP_FB = ("Stop hook feedback:\nWiki persistence check: if this turn "
+            "uncovered any durable fact, persist it before stopping.")
+
+
+def test_stop_hook_feedback_is_the_injection_that_RESUMED_an_ended_turn():
+    # A blocking Stop hook fires BECAUSE the turn ended, so the reply in front of
+    # its feedback is that turn's ANSWER — the fact the dashboard's focus mode
+    # needs to keep it (docs/dashboard.md, *View modes*). Claude Code writes it
+    # as a list-content user record (the shape measured on the corpus), so both
+    # prompt-bearing kinds have to carry the flag.
+    rec = TR.parse_line(_l({"type": "user", "isMeta": True, "message": {
+        "content": [{"type": "text", "text": _STOP_FB}]}}))
+    assert rec["kind"] == "results"
+    assert rec["meta"] is True
+    cx = TR._Conv()
+    TR._conv_results(rec, cx)
+    assert cx.out[0]["meta"] is True and cx.out[0]["resumed"] is True
+
+
+def test_a_MID_turn_injection_does_not_claim_to_have_resumed_a_turn():
+    # The other injections all arrive with the turn still running (a loaded
+    # SKILL.md body, the post-/compact summary, teammate mail): the prose in
+    # front of them is commentary, and marking them would manufacture an extra
+    # "final" reply per injection — the behaviour focus mode already rejected.
+    cx = TR._Conv()
+    cx.add_prompt("Base directory for this skill: /x/.claude/skills/slack", True)
+    # …and the anchor is what makes the mark safe to read out of text at all: a
+    # turn that merely QUOTES the wording (this repo's own docs) is not one.
+    cx.add_prompt("we hide the reply because of Stop hook feedback: the nudge",
+                  True)
+    assert [r.get("resumed") for r in cx.out] == [None, None]
+
+
 def test_a_bare_teammate_block_is_still_teammate_mail_not_system():
     # The envelope mark must not swallow the UNWRAPPED form: that one already has
     # a sender to name, so it keeps its own ✉ record and bubble.

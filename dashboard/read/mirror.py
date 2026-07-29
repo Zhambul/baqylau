@@ -78,6 +78,13 @@ def conv_items(recs, cmds=()):
             # outright (docs/dashboard.md, *View modes*).
             if r.get("meta"):
                 it["meta"] = 1
+                # …and the one FLAVOUR of injection the page acts on: this one
+                # RESUMED a turn Claude Code had already ended (a blocking Stop
+                # hook's feedback), so the reply in front of it was that turn's
+                # ANSWER. Focus mode keeps it instead of folding it into the
+                # mid-turn prose (docs/dashboard.md, *View modes*).
+                if r.get("resumed"):
+                    it["resumed"] = 1
         out.append(it)
     return out
 

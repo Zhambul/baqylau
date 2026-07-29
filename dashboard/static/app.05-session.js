@@ -869,6 +869,8 @@ function stampItem(elem, it) {
   if (it.plumb) elem.dataset.plumb = "1";        // the mail system, not the message
   if (it.meta) elem.dataset.injected = "1";   // a prompt Claude Code injected,
   //                                             not one the human typed
+  if (it.resumed) elem.dataset.resumed = "1"; // …and it RESUMED an ended turn (a
+  //             blocking Stop hook), so the reply above it was a final answer
   elem.dataset.vk = String(++S.ses.viewSeq);
   elem.dataset.vt = String(Date.now() / 1000);
   applyFilterTo(elem);
@@ -958,7 +960,9 @@ const FILTER_KINDS = ["all", "commands", "files", "memory", "agents", "messages"
 // Code wrote itself (a Stop hook's feedback, a loaded skill's body, a resume
 // nudge, the post-/compact summary; `data-injected`, from transcript._injected).
 // Verbose keeps them: it shows the transcript as it is, and they are genuinely
-// in it.
+// in it. One of them still MOVES focus mode without being shown: an injection
+// that resumed an ENDED turn (`data-resumed` — a blocking Stop hook) marks the
+// reply above it as that turn's final answer.
 //
 // Must match dashboard/prefs.py VIEW_MODES / VIEW_DEFAULT (grep-tested). The
 // list is in CONTROL order (densest to sparsest); the default is NOT its first
@@ -1218,7 +1222,22 @@ function applyViewMode() {
       // reply that follows it belongs to the prompt you actually typed, and
       // treating it as a boundary would surface a second "final" reply per
       // injection.
-      if (elem.dataset.injected) return "hide";
+      //
+      // …EXCEPT one that RESUMED a turn Claude Code had already ENDED
+      // (`data-resumed` — a blocking Stop hook's feedback, transcript
+      // _RESUMES_TURN). That hook fires BECAUSE the turn ended, so the reply
+      // above it is a final ANSWER, not commentary: it closes the reply search
+      // (the older message becomes a "final" one in its own right) while still
+      // not being a prompt — the run either side of it merges as before, and
+      // the counters are untouched. Without this, a Stop hook that nudges on
+      // EVERY turn (a memory-note reminder) hid every real result behind the
+      // "persisted the note" reply that followed it: focus mode showed the
+      // bookkeeping and dropped the answer. The bubble itself stays hidden —
+      // it is still not something you said.
+      if (elem.dataset.injected) {
+        if (elem.dataset.resumed) { sawReply = false; inNewestTurn = false; }
+        return "hide";
+      }
       if (mk === "prompt") { sawReply = false; inNewestTurn = false; return "show"; }
       if (mode === "focus" && mk === "message") {
         // Exactly ONE message survives per turn — the newest, which is the one
