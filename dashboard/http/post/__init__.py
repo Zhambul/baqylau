@@ -30,6 +30,7 @@
 from urllib.parse import unquote, urlparse
 
 from core.noaudit import load_audit
+from dashboard import ext
 from dashboard.http.base import valid_sid
 from dashboard.http.post.dialogs import _DialogMixin
 from dashboard.http.post.files import _FilesMixin
@@ -122,10 +123,29 @@ class _PostMixin(_TypingMixin, _InterruptMixin, _DialogMixin, _StateMixin,
         api = parts[1:] if parts[:1] == ["api"] else None
         if api is None:
             return self._json({"error": "not found"}, 404)
-        if len(api) == 3 and api[0] == "session" and valid_sid(api[1]) \
-                and api[2] in self._SESSION_POST:
-            return self._SESSION_POST[api[2]](self, api[1])
+        if len(api) == 3 and api[0] == "session" and valid_sid(api[1]):
+            handler = self._SESSION_POST.get(api[2])
+            if handler:
+                return handler(self, api[1])
+            efn = ext.session_posts().get(api[2])
+            if efn:
+                return self._ext_post(efn, api[1])
         fixed = self._FIXED_POST.get(tuple(api))
         if fixed:
             return fixed(self)
+        efixed = ext.fixed_posts().get(tuple(api))
+        if efixed:
+            return self._ext_post(efixed)
         return self._json({"error": "not found"}, 404)
+
+    def _ext_post(self, fn, sid=None):
+        """An EXTENSION's POST (dashboard/ext — none registered yet; the shape
+        is pinned by the contract tests): this tier owns the control-plane
+        guard, so an extension handler receives the parsed body and returns the
+        jsonable response — it can no more skip the browser-vector defense than
+        a built-in can. Anything the handler WRITES must land its own audit row
+        (the per-feature action vocabulary), same rule as every built-in."""
+        body = self._post_guard()
+        if body is None:
+            return None
+        return self._json(fn(sid, body) if sid is not None else fn(body))

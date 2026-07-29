@@ -1,5 +1,5 @@
-# dashboard/notehtml.py — a memory-wiki NOTE rendered to safe HTML for the
-# dashboard's Memory-tab note viewer (docs/dashboard.md, *Memory tab*).
+# dashboard/ext/memory/notehtml.py — a memory-wiki NOTE rendered to safe HTML
+# for the Memory-tab note viewer (docs/dashboard.md, *Memory tab*).
 #
 # A note is markdown with YAML frontmatter and bare [[wikilinks]]. Body markdown
 # reuses opshtml.md_html (the same escape-FIRST, dependency-free subset the message

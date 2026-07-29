@@ -713,13 +713,14 @@ DASHBOARD_PLUGIN_REACHES = {
     # transcript.py (it is a fact about Claude Code's transcript TEXT), and calling
     # it is strictly better than a second regex here.
     "dashboard/opshtml/ops.py": {"plugins.claude_code.transcript"},
-    # The memory tab IS a claude_code feature end to end: the vault root, the
-    # project scope gate and the note/backlink readers all belong to
-    # plugins/claude_code/memory.py, and the styleguide names read/session
-    # .memory_scope as the dashboard-side APPLICATION of that gate.
-    "dashboard/read/mirror.py": {"plugins.claude_code.memory"},
-    "dashboard/read/session.py": {"plugins.claude_code.memory",
-                                  "plugins.claude_code.model",
+    # The memory EXTENSION (dashboard/ext/memory) IS a claude_code feature end
+    # to end: the vault root, the project scope gate and the note/backlink
+    # readers all belong to plugins/claude_code/memory.py — an extension
+    # reaching its OWN plugin vocabulary module is the sanctioned shape
+    # (docs/styleguide.md *Layering*); the generic read model no longer touches
+    # it (read/session applies every extension's gate through ext.badge_rows).
+    "dashboard/ext/memory/read.py": {"plugins.claude_code.memory"},
+    "dashboard/read/session.py": {"plugins.claude_code.model",
                                   "plugins.claude_code.accounting"},
     # The take-back stash's writer half — the styleguide's own row says "the
     # dashboard's post_interrupt supplies the observation" while transcript.py
@@ -800,3 +801,113 @@ def test_the_dashboard_plugin_allowlist_has_no_stale_rows():
             if ("import " + leaf) not in src and mod not in src:
                 unused.append((rel, mod))
     assert unused == [], "allowlist rows nothing reaches any more: %s" % unused
+
+
+# --- the dashboard EXTENSION registry (dashboard/ext) -------------------------
+# The abstraction's whole point is that adding an extension edits NO core
+# dashboard file — which is only true while core files talk to dashboard.ext
+# (the registry root) and never to dashboard.ext.<name>. Same two-way
+# enforcement style as DASHBOARD_PLUGIN_REACHES above.
+
+def test_no_module_outside_ext_imports_an_extension_package():
+    """Only dashboard/ext/ itself may import dashboard.ext.<name>. Everything
+    else — read/, http/, notify/, opshtml/ — goes through the registry root's
+    fan-outs (ext.badge_rows / ext.session_gets / …), which is what keeps a new
+    extension a new package plus one all_ext() line."""
+    import ast
+    import os
+
+    from conftest import REPO
+
+    offenders = []
+    dash = os.path.join(REPO, "dashboard")
+    for root, dirs, files in os.walk(dash):
+        dirs[:] = [d for d in dirs if d != "__pycache__"]
+        for f in sorted(files):
+            if not f.endswith(".py"):
+                continue
+            path = os.path.join(root, f)
+            rel = os.path.relpath(path, REPO)
+            if rel.startswith("dashboard/ext" + os.sep) \
+                    or rel == "dashboard/ext/__init__.py":
+                continue
+            with open(path, encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), path)
+            for n in ast.walk(tree):
+                mods = []
+                if isinstance(n, ast.ImportFrom):
+                    mod = n.module or ""
+                    if mod.startswith("dashboard.ext."):
+                        mods = [mod]
+                    elif mod == "dashboard.ext":
+                        mods = ["dashboard.ext." + a.name for a in n.names]
+                elif isinstance(n, ast.Import):
+                    mods = [a.name for a in n.names
+                            if a.name.startswith("dashboard.ext.")]
+                offenders += ["%s:%d: %s" % (rel, n.lineno, m) for m in mods]
+    assert offenders == [], (
+        "core dashboard files reaching an extension package (go through the "
+        "dashboard.ext registry root):\n" + "\n".join(offenders))
+
+
+def test_every_extension_conforms_to_the_declared_surface():
+    """Each registered extension carries the required constants with the right
+    types, and every capability it provides is a callable SURFACE declares —
+    the Python half of the descriptor contract (the JS half is pinned by the
+    jsdom extension test)."""
+    from dashboard import ext
+
+    for e in ext.all_ext():
+        name = e.__name__
+        assert isinstance(e.NAME, str) and e.NAME, name
+        assert isinstance(e.LABEL, str) and e.LABEL, name
+        assert isinstance(e.TAB_AFTER, str), name
+        assert isinstance(e.BADGE_SCOPED, bool), name
+        assert isinstance(e.PRODUCER, str), name
+        for cap in ext.SURFACE:
+            if cap[0].isupper():
+                continue
+            fn = ext.provider(e, cap)
+            if fn is None:
+                continue
+            if cap.endswith(("_get", "_post")):
+                assert isinstance(fn, dict), (name, cap)
+                assert all(callable(v) for v in fn.values()), (name, cap)
+            else:
+                assert callable(fn), (name, cap)
+
+
+def test_ext_route_tables_build_and_collide_loudly():
+    """The four merged route tables build (a duplicate verb across extensions
+    is a ValueError at the first request, not a silent last-wins), no extension
+    route shadows a built-in, and provider() refuses an undeclared capability."""
+    import pytest
+
+    from dashboard import ext
+    from dashboard.http.get import _GetMixin
+    from dashboard.http.post import _PostMixin
+
+    sgets, fgets = ext.session_gets(), ext.fixed_gets()
+    sposts, fposts = ext.session_posts(), ext.fixed_posts()
+    assert set(sgets) >= {"memory", "note"}          # the memory tab's routes
+    assert not set(sgets) & set(_GetMixin._SESSION_GET)
+    assert not set(fgets) & set(_GetMixin._FIXED_GET)
+    assert not set(sposts) & set(_PostMixin._SESSION_POST)
+    assert not set(fposts) & set(_PostMixin._FIXED_POST)
+    with pytest.raises(KeyError):
+        ext.provider(ext.all_ext()[0], "no_such_capability")
+
+
+def test_ext_badges_ride_the_badges_table():
+    """Every extension badge surfaces as a BADGES row (field <name>_count,
+    event <name>) — which is exactly what feeds BOTH the overview payload and
+    the derived SSE badge channel, so an extension cannot get one without the
+    other."""
+    from dashboard import ext
+    from dashboard.read import session as rsession
+
+    rows = {b.event: b for b in rsession.BADGES}
+    for r in ext.badge_rows():
+        assert r.name in rows, r.name
+        assert rows[r.name].field == r.name + "_count"
+        assert rows[r.name].scoped == r.scoped

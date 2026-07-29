@@ -5,7 +5,6 @@
 # read model + the notify BROKER's queue. There is deliberately no third stream
 # for agent scope: it is `?agent=` on sse_session, so a scoped page holds ONE
 # connection (docs/dashboard.md *Agent scope*).
-import collections
 import queue
 import time
 
@@ -15,6 +14,7 @@ from core import sessionapi as API
 from core import tabs
 from core.noaudit import load_audit
 from dashboard import config
+from dashboard import ext
 from dashboard import prefs
 from dashboard.config import (BOOT_ID, HEARTBEAT_S, SLOW_EVERY, TICK_S)
 from dashboard.control import launch
@@ -71,7 +71,10 @@ _UNSET = object()               # "no explicit payload" — _push_changed sends 
 # badge name instead of the session) and the tick counter `n` (so the slow
 # cadence became a function of the memory-note count). As rows there are no
 # loop variables left to collide.
-_Chan = collections.namedtuple("_Chan", "key event value wrap")
+# The row shape itself now lives with the extension registry (ext.Chan — an
+# extension declares extra channels in the same vocabulary this file's tables
+# use; the per-tick context its producers read is _Tick below).
+_Chan = ext.Chan
 
 
 def _badge_chan(badge):
@@ -151,7 +154,11 @@ _SLOW_CHANS = (
     # per-session (dashboard/prefs.py, docs/dashboard.md *View modes*); this is
     # only what makes an OPEN page follow it. A prefs read is a tiny kv SELECT
     _Chan("view_mode", "view-mode", lambda c: prefs.view_mode(c.sid), "mode"),
-)
+    # …plus every EXTENSION's own channels (dashboard/ext sse_chans — none
+    # registered yet; an extension's badge channel already derives above via
+    # BADGES). Slow cadence on purpose: nothing an extension shows is
+    # something a user is blocked on.
+) + ext.sse_chans()
 
 # FAST cadence (every tick): the two fields whose LATENCY is the point. `fgrun`
 # resembles the `running` ribbon but cannot join it — the elapsed counts

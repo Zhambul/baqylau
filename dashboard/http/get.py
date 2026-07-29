@@ -11,13 +11,13 @@ from core import copy as CP
 from core import paths as P
 from core import sessionapi as API
 from core.noaudit import load_audit
-from dashboard import config, dictate, prefs, webpush
+from dashboard import config, dictate, ext, prefs, webpush
 from dashboard.config import RESUMABLE_MAX
 from dashboard.notify import presence
 from dashboard.read.lists import (accounts_payload, resumable_payload, sessions_payload,
                                   stats_payload, wire_row)
-from dashboard.read.mirror import (history, memory_tree, merged_backlog,
-                                   note_payload, ops_payload, view_payload,
+from dashboard.read.mirror import (history, merged_backlog,
+                                   ops_payload, view_payload,
                                    HISTORY_BLOCKS, TAIL_BLOCKS)
 from dashboard.read.session import (jobs_payload, monitors_payload,
                                     session_payload)
@@ -68,9 +68,12 @@ class _GetMixin:
     _SESSION_GET = {
         "ops": "get_ops", "history": "get_history", "backlog": "get_backlog",
         "errors": "get_errors",
-        "monitors": "get_monitors", "jobs": "get_jobs", "memory": "get_memory",
-        "note": "get_note",
+        "monitors": "get_monitors", "jobs": "get_jobs",
     }
+    # EXTENSION routes (dashboard/ext — memory's /memory + /note are the first)
+    # are a SECOND, function-valued lookup tried after each table: the built-ins
+    # stay method-name strings on this mixin, an extension's handlers live in
+    # its own package and return the jsonable payload (this tier wraps it).
 
     def route(self, url, parts):
         if not parts:
@@ -96,6 +99,9 @@ class _GetMixin:
         fixed = self._FIXED_GET.get(tuple(api))
         if fixed:
             return getattr(self, fixed)(url)
+        efixed = ext.fixed_gets().get(tuple(api))
+        if efixed:
+            return self._json(efixed(url))
         if len(api) >= 2 and api[0] == "session" and valid_sid(api[1]):
             return self.route_session(url, api[1], api[2:])
         return self._not_found()
@@ -130,6 +136,9 @@ class _GetMixin:
             verb = self._SESSION_GET.get(rest[0])
             if verb:
                 return getattr(self, verb)(sid, url)
+            efn = ext.session_gets().get(rest[0])
+            if efn:
+                return self._json(efn(sid, url))
         if len(rest) == 2 and rest[0] == "view":
             return self.get_view(sid, rest[1])
         if len(rest) == 3 and rest[0] == "copy" \
@@ -285,16 +294,6 @@ class _GetMixin:
     def get_jobs(self, sid, url):
         """…and its background jobs, the same shape through the same door."""
         return self._json({"jobs": jobs_payload(sid, _qstr(url, "agent"))})
-
-    def get_memory(self, sid, url):
-        """The memory-wiki notes this session touched, BOTH ways: the flat
-        newest-touch-first list (the tab badge's authority) and the same records
-        grouped into the vault's folder tree, which is what the tab renders."""
-        mem = API.memory(sid)
-        return self._json({"memory": mem, "tree": memory_tree(mem)})
-
-    def get_note(self, sid, url):
-        return self._json(note_payload(_qstr(url, "path"), _qstr(url, "stem")))
 
     def get_copy(self, sid, gid, what):
         """Serve a mirror block's ⧉ copy text — the WEB twin of the terminal's

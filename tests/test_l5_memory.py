@@ -1,6 +1,6 @@
 # L5 — the memory-wiki feature: the plugins/claude_code/memory.py vocabulary
 # (is_memory / record merge+escalation / vault link resolution), the note
-# markdown→HTML renderer (dashboard/notehtml.py), and the end-to-end capture
+# markdown→HTML renderer (dashboard/ext/memory/notehtml.py), and the end-to-end capture
 # through the real claude-file-fmt.py hook + the substream renderer.
 #
 # The memory root is hardcoded ~/wiki/01; the ONE seam is BAQYLAU_MEMORY_ROOT,
@@ -13,8 +13,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import payloads as P
 from conftest import wait_until
 from core import state as ST
-from dashboard import notehtml as NH
-from dashboard.read import mirror as RM
+from dashboard.ext.memory import notehtml as NH
+from dashboard.ext.memory import read as RM
 from plugins.claude_code import memory as MEM
 from plugins.claude_code import substream_render as SR
 

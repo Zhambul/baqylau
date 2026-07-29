@@ -154,7 +154,9 @@ def test_page_session_verbs_are_all_routed(dash):
         verbs |= set(re.findall(r'"/api/session/"\s*\+\s*[^+]+\+\s*"/([a-z-]+)',
                                 body))
     assert len(verbs) > 20, "the URL shape changed — this guard stopped seeing it"
+    from dashboard import ext as EXT
     routed = (set(DS.Handler._SESSION_GET) | set(DS.Handler._SESSION_POST)
+              | set(EXT.session_gets()) | set(EXT.session_posts())
               | {"agent", "view", "copy"})
     assert not (verbs - routed), "the page fetches unrouted verbs: %s" % (
         sorted(verbs - routed),)
@@ -1245,9 +1247,10 @@ def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
     enumerated separately — the events here, the `*_count` keys in
     session_payload — so a new badge meant two edits in two vocabularies.
 
-    Its `memory` row is the interesting one: that badge is project-SCOPED, and
-    the gate has ONE owner (`read/session.memory_count`) shared with the
-    overview payload. The two readings had drifted apart — the payload reported 0
+    Its `memory` row is the interesting one: an EXTENSION's badge
+    (dashboard/ext), project-SCOPED, and the gate has ONE owner
+    (`read/session._ext_badge` over `ext_scope`) shared with the overview
+    payload. The two readings had drifted apart — the payload reported 0
     off-scope while the stream kept pushing the real count, for a tab the page
     never builds there."""
     from dashboard.read import session as rsession
@@ -1258,9 +1261,10 @@ def test_badge_counts_are_a_table_with_one_scope_owner(monkeypatch, tmp_path):
     monkeypatch.setenv("BAQYLAU_MEMORY_PROJECT", os.path.realpath(str(proj)))
     monkeypatch.setattr(rsession.API, "memory_count", lambda sid: 5)
     off = str(tmp_path / "elsewhere")
-    assert rsession.memory_count("s1", str(proj)) == 5
-    assert rsession.memory_count("s1", off) == 0
-    assert rsession.memory_scope(str(proj)) is True and rsession.memory_scope(off) is False
+    from dashboard import ext as EXT
+    memrow = {r.name: r for r in EXT.badge_rows()}["memory"]
+    assert rsession.ext_scope(memrow.scope, str(proj)) is True
+    assert rsession.ext_scope(memrow.scope, off) is False
     table = {b.event: b for b in rsession.BADGES}
     # the (SSE event, payload field) pairs, pinned — the two spellings the same
     # fact travels under, declared once here and derived by both sides

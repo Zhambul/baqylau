@@ -5648,7 +5648,7 @@ collapse surviving a repaint) — before the tree it had no executing test at al
 server resolves the stem through `memory.resolve()` (a TTL-cached vault index of
 `{stem: path}`, Obsidian bare-name resolution), reads it path-traversal-guarded to
 the root (`memory.read_note`), and renders `{name, frontmatter, html, backlinks,
-missing}`. The body is markdown → **safe HTML** via `dashboard/notehtml.py`, which
+missing}`. The body is markdown → **safe HTML** via `dashboard/ext/memory/notehtml.py`, which
 reuses `opshtml.md_html` (the escape-first, dependency-free subset the message
 bubbles use) and adds `[[wikilink]]` linkification: links are protected as
 control-byte sentinels BEFORE `md_html` and restored as `data-note` anchors AFTER

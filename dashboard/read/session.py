@@ -11,13 +11,12 @@ import time
 import plugins
 from core import sessionapi as API
 from core import tabs
-from dashboard import config, opshtml, prefs, suggestion
+from dashboard import config, ext, opshtml, prefs, suggestion
 from dashboard.control import launch
 from dashboard.read.meta import (canon_cwd, cmd_names, git_info, session_ctx,
                                  session_goal, session_kv, session_prompts,
                                  session_title, session_slug)
 from plugins.claude_code import accounting as ACC
-from plugins.claude_code import memory as MEM
 from plugins.claude_code import model as M
 
 
@@ -89,20 +88,27 @@ def agent_usage(sid, agent):
     return tl
 
 
-def memory_scope(cwd):
-    """True when a session working in `cwd` gets the Memory tab at all — the
-    feature is deliberately scoped to one project (plugins/claude_code/memory
-    `in_scope`), though the wiki it reads is shared across code/01."""
-    return MEM.in_scope(canon_cwd(cwd))
+def ext_scope(scope, cwd):
+    """One extension's project gate, applied to a session's RAW cwd (the gate
+    predicate itself receives it canonical — canonicalized once, HERE, so an
+    extension never re-encodes canon_cwd). A gate-less extension is always in
+    scope. This module is the one APPLICATION point of the gate because its
+    facts have TWO readers each: the overview payload and the SSE stream's live
+    patch. They disagreed once — the stream pushed the real memory count for an
+    off-scope session, at a tab the page never builds there (benign on screen,
+    but a per-tick kv read for nobody, and two readings of one rule)."""
+    return bool(scope(canon_cwd(cwd))) if scope else True
 
 
-def memory_count(sid, cwd):
-    """The Memory tab badge's number, 0 off-scope. The gate lives HERE, with one
-    owner, because the badge has TWO readers: this module's overview payload and
-    the SSE stream's live patch. They disagreed — the stream pushed the real
-    count for an off-scope session, at a tab the page never builds there (benign
-    on screen, but a per-tick kv read for nobody, and two readings of one rule)."""
-    return API.memory_count(sid) if memory_scope(cwd) else 0
+def _ext_badge(row):
+    """One extension's badge as a BADGES row (a named factory, not an inline
+    lambda in the table build — the closure must bind THIS row, ruff B023):
+    payload field `<name>_count`, SSE event `<name>`, count gated to 0
+    off-scope by the same ext_scope the payload's `<name>_scope` flag uses."""
+    return _Badge(row.name, row.name + "_count",
+                  lambda sid, cwd, agent: (row.badge(sid, agent)
+                                           if ext_scope(row.scope, cwd) else 0),
+                  row.scoped)
 
 
 # --- the secondary tabs' BADGE COUNTS: one row per badge, one owner ---------------
@@ -148,10 +154,9 @@ BADGES = (
     # distinct background jobs — a new bg launch bumps it
     _Badge("jobs", "job_count",
            lambda sid, cwd, agent: API.job_count(sid, agent), True),
-    # distinct memory-wiki notes touched — a new op under ~/wiki/01 bumps it
-    _Badge("memory", "memory_count",
-           lambda sid, cwd, agent: memory_count(sid, cwd), False),
-)
+    # …plus every EXTENSION's badge (dashboard/ext — memory's "distinct
+    # wiki notes touched" is the first), scope-gated by _ext_badge.
+) + tuple(_ext_badge(r) for r in ext.badge_rows())
 
 
 def _with_cmd_html(rows):
@@ -211,10 +216,17 @@ def session_payload(sid, agent=""):
     if agent:
         data["agent_usage"] = agent_usage(sid, agent)
     data["agents"] = agents_ctx(visible_agents(data.get("agents") or []))
-    # the Memory tab is SCOPED: only sessions inside the enabled project
-    # (aggregator-adapters) get it. The flag gates the tab client-side (hidden
-    # off-scope); the count still rides along (0 off-scope — nothing recorded).
-    data["memory_scope"] = memory_scope(data.get("cwd") or "")
+    # Each extension tab is SCOPED (memory: only sessions inside
+    # aggregator-adapters get it). The `<name>_scope` flag gates the tab
+    # client-side (hidden off-scope); the badge count still rides along in the
+    # BADGES loop below (0 off-scope — the same gate). An extension's own
+    # `payload` hook may stamp further fields.
+    for e in ext.all_ext():
+        data[e.NAME + "_scope"] = ext_scope(ext.provider(e, "scope"),
+                                            data.get("cwd") or "")
+        fn = ext.provider(e, "payload")
+        if fn:
+            fn(data, sid)
     for b in BADGES:
         data[b.field] = badge_count(b, sid, data.get("cwd") or "", agent)
     data["title"] = session_title(data.get("transcript_path") or "")
