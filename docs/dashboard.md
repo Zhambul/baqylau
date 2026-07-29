@@ -5914,9 +5914,10 @@ re-applying would clear the runs the user just expanded. Deliberately NOT
   mid-turn prose **dimmed** (`.vdim`, 50% — full weight on hover), and ONE summary
   line accounting for everything else the turn did. Every intermediate step folds
   into it; nothing is dropped from its counters. A turn that broke off into
-  HOUSEKEEPING — a blocking Stop hook's nudge, a memory-wiki write — releases a
-  final reply at each of those points, so the answer is never buried behind the
-  bookkeeping that followed it (*Errand boundaries*, below).
+  HOUSEKEEPING — a blocking Stop hook's nudge, or a memory-wiki write behind a
+  reply that reads as bookkeeping — releases a final reply at that point, so the
+  answer is never buried behind the bookkeeping that followed it
+  (*Errand boundaries*, below).
 
   Mid-turn prose is greyed rather than dropped, which it was at first. Hiding it
   read as content VANISHING: only the NEWEST message in a turn is its "final"
@@ -6458,11 +6459,11 @@ lose the actual result message"*. Two things mark a boundary, and the bug needed
    not a mid-turn injection at all: it fires *because the turn ended*, so the
    reply in front of it is what the turn ended on. The bubble itself stays
    hidden and is still not a prompt — only the reply search moves.
-2. **A memory-wiki WRITE** (the ❖ ops — `data-mem` plus an edit/write act,
-   i.e. `viewCounter`'s `mem-write`). Persisting a note *is* the errand, and the
-   model frequently does it **before** the hook can nudge — which is exactly why
-   the hook alone was not enough. Measured over the reported session
-   (`69caa362`), the hook boundary fixed 5 of 6 turns; the sixth read
+2. **A memory-wiki WRITE, while ARMED** (the ❖ ops — `data-mem` plus an
+   edit/write act, i.e. `viewCounter`'s `mem-write`). Persisting a note *is* the
+   errand, and the model frequently does it **before** the hook can nudge —
+   which is exactly why the hook alone was not enough. Measured over the reported
+   session (`69caa362`), the hook boundary fixed 5 of 6 turns; the sixth read
    `answer → ❖ Update(preprod-envoy-lb.md) → "Persisted the zone-placement
    map…" → Stop hook feedback → "Already persisted this turn…"`, so the message
    the hook released was itself bookkeeping. A memory **READ** deliberately does
@@ -6472,15 +6473,73 @@ lose the actual result message"*. Two things mark a boundary, and the bug needed
    the memory wiki, since `data-mem` is stamped only there
    (`plugins/claude_code/memory.in_scope`).
 
+##### What ARMS the memory boundary (and why it must be armed)
+
+Unconditionally, that write boundary fires on **every note a turn persists**, and
+a wiki-heavy turn persists all the way *through* its work. Reported 2026-07-30
+over `be5087af` — three turns, six replies' worth of answer, sixteen replies on
+screen: *"after the stop hook, maybe even before it, there's too many fucking
+messages"*. Each ❖ write released the narration standing in front of it —
+`Now the catalog rows and the neighbour notes that this changes.`,
+`Now the methodological gap in the backtest that my finding exposes.` — which is
+preamble, the one register focus mode exists to remove.
+
+So the write only cuts while **armed**, and what arms it is the reply the segment
+*ends on* being a **bookkeeping report**: `soloReply` — the rendered message is a
+single markdown block, with no other reply between it and the write. The two
+shapes are otherwise **identical on every structural axis there is**, and that is
+worth stating plainly, because the obvious structural rules were tried and each
+one broke the other session:
+
+| | `be5087af` (must NOT release) | `69caa362` (MUST release) |
+|---|---|---|
+| shape | `preamble → ❖ writes + wiki shell → ANSWER → hook` | `ANSWER → ❖ write + wiki shell → "Persisted the zone-placement map." → hook` |
+| assistant record | text and the ❖ Edit share one `message.id` (`stop_reason: tool_use`) | *the same* |
+| segment's replies | 3 | 3 |
+| ops between | ❖ writes, wiki `grep`/`ls`/`qmd update` | ❖ write, the daily-log append |
+
+Rejected, with the measurement each died on:
+
+- **"the write must CLOSE the segment"** (no non-memory activity after it) —
+  persisting is not pure file ops: the wiki workflow ends on
+  `cd ~/wiki/01 && cat >> daily/…/log.md` and `qmd update`. That shell command
+  sits between the ❖ write and the report in `69caa362` too, so the window closed
+  before the write and the answer went back to being hidden.
+- **"at most one cut per segment"** — bounds the damage (16 replies → 10) without
+  fixing it: the one cut still lands on a preamble whenever the housekeeping ran
+  mid-turn.
+- **`stop_reason: "end_turn"`** — a real structural signal, and it turns out to
+  say nothing new: a turn can only end once, so it marks exactly the reply each
+  segment already ends on. In `69caa362`'s sixth turn the answer is a `tool_use`
+  message and the bookkeeping line is the `end_turn` one, i.e. it points the
+  wrong way.
+
+The block count is the ONE thing that separates them, and it is a fact about the
+prose rather than a guess at it: a bookkeeping-only reply names what it wrote and
+stops (`Persisted the zone-placement map and the single-vs-dual locality contrast
+to preprod-envoy-lb.` — 96 characters, one paragraph), while an answer has
+shape. Measured over both sessions' segment-final replies: every bookkeeping-only
+one is 1 block; every real answer is 3–67. It is read off the RENDERED message
+(`.md`'s element children) because that is where "how much is here" lives, and it
+fails gracefully in the direction this engine always fails — a genuinely terse
+answer arms the boundary and *shows one more reply*.
+
+Over the two reported sessions the armed rule gives `be5087af` **exactly two
+replies per turn** (the answer, then the post-hook persistence report — what was
+asked for) and leaves every `69caa362` answer standing, the sixth turn's
+included.
+
 **Why not a rule that keeps only ONE message per turn** (moving which message is
 "final" instead of releasing an extra one), which would preserve focus mode's
 one-reply promise exactly: because a bookkeeping reply is not always *only*
 bookkeeping — the same session has `Persisted. The sweep turned up two things
 worth flagging beyond my earlier answer: …`. Dropping the post-errand reply
-would lose that. Offered as an explicit choice and declined; a wiki-heavy turn
-showing four messages is the accepted cost, and it is the same direction every
-other gap in this engine fails — **toward showing content, never toward hiding
-it**. **Why not stop hiding mid-turn prose altogether** (dimming it, which is
+would lose that. Offered as an explicit choice and declined; it is the same
+direction every other gap in this engine fails — **toward showing content, never
+toward hiding it**. (The "wiki-heavy turns then show four messages" this once
+accepted as the cost is what the ARMING above went on to remove: the release now
+costs one reply, and only where the segment reads as housekeeping.)
+**Why not stop hiding mid-turn prose altogether** (dimming it, which is
 what this section's own *focus* bullet reads like): it makes focus ≈ verbose for
 conversation, and the whole point of the mode is that a long turn's running
 commentary is not on screen. Also offered and declined.

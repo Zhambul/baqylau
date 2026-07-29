@@ -106,6 +106,15 @@ function item(spec) {
   if (spec.act && spec.act !== "msg") e.dataset.open = "1";   // a block card,
   //                          born expanded like appendItems' live-tail blocks
   if (spec.userset) e.dataset.userset = "1";
+  // a conversation bubble carries its rendered markdown, whose BLOCK COUNT the
+  // errand rule reads (soloReply: one block == a bookkeeping report). Default 3
+  // — an ordinary reply has shape; `blocks: 1` is the "persisted the note" line.
+  if (spec.act === "msg") {
+    const md = new El("div", "md");
+    for (let i = 0; i < (spec.blocks === undefined ? 3 : spec.blocks); i++)
+      md.append(new El("p"));
+    e.append(md);
+  }
   e.dataset.vk = String(++seq);
   e.dataset.vt = String(Date.now() / 1000 - 30);   // 30s old: past the 2s floor
   return e;
@@ -134,6 +143,9 @@ const F = {
   agent: { act: "agent", kind: "agents" },
   prompt: { act: "msg", kind: "messages", msg: "prompt" },
   reply: { act: "msg", kind: "messages", msg: "message" },
+  // …a reply that is ONE markdown block: `Persisted the zone-placement map to
+  // preprod-envoy-lb.` — the bookkeeping report shape (soloReply)
+  book: { act: "msg", kind: "messages", msg: "message", blocks: 1 },
   warn: { act: "warn", kind: "commands" },
   memread: { act: "read", kind: "memory" },     // ❖ a wiki note READ
   memwr: { act: "edit", kind: "memory" },       // ❖ a wiki note WRITTEN
@@ -304,13 +316,21 @@ out.injected = {
 // summary — only the reply search is cut.
 // The SECOND errand boundary: a memory-wiki WRITE. The model often persists
 // BEFORE the Stop hook can nudge, and then the hook's boundary releases the
-// "persisted the note" line rather than the answer — so the write cuts too.
-// The control is the SAME shape with an ordinary file edit in place of the ❖
-// write: it folds and does NOT cut, so the answer stays hidden there.
-const errand = [F.prompt, F.fg, F.reply, F.memwr, F.reply, F.stopmsg, F.reply];
-const errandCtl = [F.prompt, F.fg, F.reply, F.upd, F.reply, F.stopmsg, F.reply];
+// "persisted the note" line rather than the answer — so the write cuts too,
+// but ONLY when the reply the segment ends on is that bookkeeping line (one
+// markdown block). Three shapes, same skeleton:
+//   errand    — ❖ write, and the segment ends on a one-block report: it cuts,
+//               so the answer in front of the write comes back;
+//   errandBig — the same, ending on a REPLY WITH SHAPE (an answer that merely
+//               happens to follow the persisting): no cut, one reply per
+//               segment. This is the wiki-heavy turn that showed 4-6 replies;
+//   errandCtl — an ordinary file edit in place of the ❖ write: folds, no cut.
+const errand = [F.prompt, F.fg, F.reply, F.memwr, F.book, F.stopmsg, F.book];
+const errandBig = [F.prompt, F.fg, F.reply, F.memwr, F.reply, F.stopmsg, F.book];
+const errandCtl = [F.prompt, F.fg, F.reply, F.upd, F.book, F.stopmsg, F.book];
 out.memErrand = {
   focus: shown(scene("focus", errand)).length,
+  big: shown(scene("focus", errandBig)).length,
   control: shown(scene("focus", errandCtl)).length,
   // …and DEFAULT is untouched: it keeps every message anyway, and the ❖ write
   // is a mutation, so it stands as its own row rather than folding
@@ -319,7 +339,16 @@ out.memErrand = {
 // …a memory READ is Claude Code looking something UP to answer you — the work
 // itself, mid-turn by nature. It must not release a second reply.
 out.memReadNoCut = shown(scene("focus",
-  [F.prompt, F.fg, F.reply, F.memread, F.reply])).length;
+  [F.prompt, F.fg, F.reply, F.memread, F.book])).length;
+// …and the run between the report and the write is NOT a window: persisting a
+// note runs shell commands of its own (the wiki's `qmd update`, the daily-log
+// append), so a command sitting there must not stop the release.
+out.memErrandOverCmd = shown(scene("focus",
+  [F.prompt, F.fg, F.reply, F.memwr, F.fg, F.book])).length;
+// …but another REPLY between them does: the write is then behind that reply's
+// own errand, not behind the report, and the search has already been served.
+out.memErrandTwoReplies = shown(scene("focus",
+  [F.prompt, F.fg, F.reply, F.memwr, F.book, F.book])).length;
 
 const stop = [F.prompt, F.fg, F.reply, F.stopmsg, F.read, F.reply];
 out.stopResume = {

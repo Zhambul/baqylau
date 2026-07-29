@@ -1073,6 +1073,20 @@ function viewCounter(elem) {
   return VIEW_COUNTER[act] || act;
 }
 
+// Whether a reply reads as a BOOKKEEPING REPORT rather than an answer: it
+// renders as a single markdown block. `Persisted the zone-placement map and the
+// single-vs-dual locality contrast to preprod-envoy-lb.` is one paragraph and
+// nothing else; an answer has shape — paragraphs, a list, a table, a code block
+// (measured over the two reported wiki sessions: every bookkeeping-only reply
+// was 1 block, every real answer 3-67). It is the ONE thing that separates the
+// two errand shapes, which are otherwise identical on every structural axis
+// there is (docs/dashboard.md, *Errand boundaries*), and it is asked of the
+// RENDERED message because that is where "how much is here" lives.
+function soloReply(elem) {
+  const md = elem.querySelector(".md");
+  return !!md && md.children.length <= 1;
+}
+
 // The one-line summary of a run, as nodes: "Read 3 files, ran 2 shell commands"
 // (done) / "Reading 3 files, running 2 shell commands…" (still going). `counts`
 // is a counter->n map carrying optional `add`/`rem` line totals for the edit
@@ -1222,7 +1236,19 @@ function applyViewMode() {
   //     itself, and the model often does it BEFORE the hook can nudge, which
   //     is why the hook alone was not enough: the message the hook boundary
   //     rescued was then the "persisted the note" line, not the answer.
-  const errandCut = () => { sawReply = false; inNewestTurn = false; };
+  //
+  // …but the memory boundary only fires while ARMED, and it is armed by the
+  // reply this segment ENDS on being a bookkeeping report (`soloReply`) — with
+  // no other reply between it and the write. A wiki-heavy turn persists all the
+  // way THROUGH its work, so an unconditional write boundary released the
+  // narration in front of every one of them ("Now the catalog rows and the
+  // neighbour notes that this changes.") and a 3-turn session showed 16 replies
+  // where it should show 6 — reported as *"there's too many fucking messages"*.
+  // Armed, the release costs one reply and only where the segment reads as
+  // housekeeping. Cleared by any OTHER reply (the run is over) and by every cut.
+  let memArmed = false;
+  const errandCut = () => { sawReply = false; inNewestTurn = false;
+                            memArmed = false; };
   const disp = items.map(elem => {
     const kind = elem.dataset.kind;
     if (kind === "messages") {
@@ -1256,9 +1282,15 @@ function applyViewMode() {
         // the answer" and "this is where it's got to".
         const newest = !sawReply;
         sawReply = true;
+        // …and it is this reply that ARMS the memory boundary behind it: a
+        // segment ending on a one-block report is a segment whose last act was
+        // bookkeeping. Any reply that is NOT the segment's last disarms — the
+        // write we are looking for sits in the run DIRECTLY behind that report.
+        memArmed = newest && soloReply(elem);
         if (!newest) return "hide";
         return (busy && inNewestTurn) ? "dim" : "show";
       }
+      memArmed = false;      // a recap / an ask / mail — another reply, same rule
       return "show";
     }
     // MAIL PLUMBING — the inbox poller reporting on a message (delivered / read / a
@@ -1278,7 +1310,14 @@ function applyViewMode() {
     // the work itself and mid-turn by nature. `data-mem` is stamped only for
     // sessions in the one project that opted into the memory wiki
     // (plugins/claude_code/memory.in_scope), so this rule is dormant elsewhere.
-    if (mode === "focus" && viewCounter(elem) === "mem-write") errandCut();
+    //
+    // ARMED only (see `memArmed`): the write releases a reply exactly where the
+    // segment ends on a bookkeeping report. Everything BETWEEN the two is left
+    // alone deliberately — persisting a note runs shell commands of its own (the
+    // wiki's `qmd update`, the daily-log append), and having those close the
+    // window put the release back on the wrong side of the answer.
+    if (mode === "focus" && memArmed && viewCounter(elem) === "mem-write")
+      errandCut();
     return fold.includes(elem.dataset.act || "") ? "fold" : "show";
   });
 

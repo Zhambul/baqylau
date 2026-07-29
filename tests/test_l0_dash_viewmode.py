@@ -827,6 +827,18 @@ def test_view_mode_engine_collapses_runs_and_words_them(dash):
     # cuts nothing, leaving the answer hidden).
     assert d["memErrand"]["focus"] == 4
     assert d["memErrand"]["control"] == 3
+    # …but ONLY where the segment ends on that bookkeeping line (ONE markdown
+    # block). The same shape ending on a reply WITH SHAPE is a turn that
+    # persisted mid-work and then answered: one reply per segment, no release.
+    # Unconditional, the write boundary fired on every note a wiki-heavy turn
+    # wrote and showed 16 replies over 3 turns (reported 2026-07-30).
+    assert d["memErrand"]["big"] == 3
+    # The window is bounded by REPLIES, not by activity: persisting runs shell
+    # commands of its own (`qmd update`, the daily-log append), so one between
+    # the report and the write must not stop the release…
+    assert d["memErrandOverCmd"] == 3
+    # …while another reply does — the search has already been served there.
+    assert d["memErrandTwoReplies"] == 2
     # DEFAULT is untouched — it keeps every message anyway, and a ❖ write is a
     # mutation, so it stands as its own row (the cut is focus-only).
     assert d["memErrand"]["default"] == ["msg", "msg", "edit", "msg", "msg"]
