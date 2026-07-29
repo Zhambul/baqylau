@@ -2108,6 +2108,18 @@ in the transcript"*).
    Ctrl+U/Ctrl+K on an already-empty line. The page keeps its variable as an
    immediate same-page hint, but nothing depends on it any more.
 
+   The clear is **per line, driven by the stash's own line count** (2026-07-29).
+   Ctrl+U/Ctrl+K kill only the line under the cursor, and a take-back can hold a
+   MULTI-LINE draft — session `8b9f870b` restored a 3-line message, the single
+   kill deleted only its last line (`would also work?`), and the resend pasted
+   after the two survivors, delivering the old first line glued in front of the
+   edited text. The stash (`tui-draft`) holds the exact text, so `post_message`
+   kills `newlines+1` lines, a Backspace between kills consuming the newline and
+   hopping the cursor up a line (capped at `DRAFT_CLEAR_LINES_MAX` so a corrupt
+   stash can't become a keystroke storm; a body-flag-only clear with no stash
+   keeps the historical single-line kill). The `web-send` row records the loop
+   as `draft_lines`.
+
 **Root cause of "STOP does nothing" (2026-07-24).** A single Escape does **not** reliably stop a busy turn here, for two compounding reasons: (1) `send-key` reports no per-window delivery and synthesized keys are only **~2/3 reliable** (the same measurement that made the idle rewind path type `/rewind` instead of pressing keys — see *Rewind*); and (2) the user runs Claude Code with **`editorMode: vim`**, so the input box is modal — while a turn runs it is in INSERT mode (`-- INSERT --`), and during the **thinking** phase the first Escape only leaves INSERT mode (INSERT→NORMAL); it never reaches the interrupt handler, so the turn runs to completion. Measured directly: every real single-Esc interrupt on a `thinking` tab missed and ran to its natural `Stop` (`a16a181f`, `3d70feca`), while a mid-STREAM Esc landed; a controlled throwaway diff showed the lone Esc deleting `-- INSERT --` and changing nothing else. This is also why the retired cancel gesture's **two** Escapes measured "3/3 reliable" — the first exits INSERT, the second interrupts; the verified re-press below reaches the same place without a second button.
 
 **Robust verified re-press.** So on a BUSY tab (`thinking`/`working`/`executing`) the endpoint presses Escape, then RE-PRESSES *while the turn is still LIVE*, up to `INTERRUPT_TRIES` times. Liveness is **not** a marker string — spinner glyphs animate, gerunds vary, and the thinking level changes how long each phase lasts, so no fixed literal (`esc to interrupt`, `tok/s`, …) is robust. Instead it is **whether the screen is still CHANGING**: two `Frontend.get_text` captures `INTERRUPT_RETRY_S` apart (well above the TUI's own ~150 ms double-Esc window, so re-presses never read as a double-Esc) — a running turn always ticks its spinner / elapsed-timer / stream within that window at *every* thinking level, a stopped one is static. It stops the instant the screen goes static (dead), so an already-idle box never gets a stray Esc. The `web-interrupt` row carries `attempts`, `stopped` (True = verified static/dead · False = still animating after every re-press, the Esc never landed · None = idle press / unreadable) and `probes` — the per-capture phase snapshots. When `stopped` is **False** the endpoint returns `502` and spawns **no** `escape-recheck` (flipping the tab green would mask a live turn, exactly how the failure hid), so the page toasts a real failure. Every capture is also folded into an **`interrupt-probe`** `state_files` row (`insert`/`toks`/`spin` flags + a tail per capture point) — the durable ground truth for diagnosing a recurrence across thinking levels.
@@ -2129,8 +2141,9 @@ from the web side. Measured end to end in session `3266f418` (2026-07-27):
 `enqueue` at 20:31:05 (a `queued: true` web send), **four** Escapes at 20:33:21,
 a `queue-operation`/`dequeue` with no delivered prompt behind it, and the user
 re-sending the same 94 chars by hand 26 s later — which then arrived **doubled**,
-the leftover first line of the box glued onto the resend (the `clear_draft`
-Ctrl+U/Ctrl+K kills one line, and the taken-back message had two).
+the leftover first line of the box glued onto the resend (at the time the
+`clear_draft` Ctrl+U/Ctrl+K killed one line and the taken-back message had two;
+since 2026-07-29 the clear is per-line — see *clear_draft* above).
 
 So the loop takes a second, authoritative stop condition, checked before every
 re-press: **`transcript.queue_drained(path, since)`** over the growth past the

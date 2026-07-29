@@ -1411,6 +1411,32 @@ def test_post_message_clear_draft_kills_then_pastes(dash, monkeypatch):
     assert fe.pasted == [("71", "plain")] and fe.sent == []
 
 
+def test_post_message_clear_draft_kills_every_line_of_a_multiline_draft(
+        dash, monkeypatch):
+    # Session 8b9f870b (2026-07-29): the take-back restored a THREE-line draft
+    # and the single ctrl+u/ctrl+k killed only the line under the cursor — the
+    # resend pasted after the two surviving lines and delivered them glued.
+    # The stash knows the text, so the clear kills one line per newline, a
+    # backspace between kills consuming the newline to hop up a line.
+    fe = _FakeFE()
+    _inject_fe(monkeypatch, fe)
+    monkeypatch.setattr(DS.post_typing, "DRAFT_CLEAR_GAP_S", 0)
+    monkeypatch.setenv("KITTY_WINDOW_ID", "72")
+    A.session_start({"session_id": "cd2", "cwd": "/w", "transcript_path": ""})
+    S.kv_set(P.mirror_log("cd2"), "seed", 1)   # the stash never creates the DB
+    assert DS.launch.set_tui_draft(
+        "cd2", "adapters deploy run --cloud\n\nwould also work?")
+    code, body = _post(dash + "/api/session/cd2/message", {"text": "edited"})
+    assert code == 200 and json.loads(body)["ok"] is True
+    kill = [("72", ("ctrl+u",)), ("72", ("ctrl+k",))]
+    hop = [("72", ("backspace",))]
+    assert fe.keyed == kill + hop + kill + hop + kill    # 3 lines, 2 joins
+    assert fe.pasted == [("72", "edited")]
+    row = _last_state_file("cd2", "web-send")
+    assert row["clear_draft"] is True and row["draft_lines"] == 3
+    assert DS.launch.tui_draft("cd2") == ""              # consumed
+
+
 def test_post_interrupt_refuses_stale_or_missing_window(dash, monkeypatch):
     # same live-tag discipline as stop/message: an Escape into a reused
     # window id would interrupt an unrelated session

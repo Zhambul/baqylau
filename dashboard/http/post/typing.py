@@ -24,6 +24,9 @@ DRAFT_CLEAR_GAP_S = 0.15           # settle between killing the restored draft
 #                                    Read only here, so it lives with its reader
 #                                    rather than in the shared knob registry —
 #                                    see the note in http/post/interrupt.py.
+DRAFT_CLEAR_LINES_MAX = 50         # ceiling on the per-line kill loop below —
+#                                    a corrupt/huge stash must not turn into an
+#                                    unbounded keystroke storm at the terminal.
 
 
 class _TypingMixin:
@@ -43,8 +46,10 @@ class _TypingMixin:
 
         `clear_draft` (bool): the TUI input already holds text the web put
         there — an interrupt that took the last message back, or a rewind that
-        restored one — so the send first kills the line (Ctrl+U to start +
-        Ctrl+K to end, so the cursor position doesn't matter) and then delivers
+        restored one — so the send first kills that draft (Ctrl+U to start +
+        Ctrl+K to end per line, a backspace between lines — the stash's line
+        count drives the loop, so a multi-line take-back dies whole; the
+        cursor position within a line doesn't matter) and then delivers
         the text as a BRACKETED PASTE (paste_text): a raw send into the
         just-cleared input drops leading bytes (measured — the mangle), an
         atomic paste doesn't. This is what lets you edit AND resend from the
@@ -112,10 +117,22 @@ class _TypingMixin:
         # would itself read as motion.
         live = self._turn_live(fe, win) if tab in QUEUE_TABS else None
         queued = tab in QUEUE_TABS and live is not False
+        draft_lines = 0
         if clear_draft:
-            # kill the restored draft (both directions), settle, then paste
-            fe.send_key(win, "ctrl+u")
-            fe.send_key(win, "ctrl+k")
+            # kill the restored draft, settle, then paste. Ctrl+U/Ctrl+K clear
+            # ONE line, and a take-back can hold a MULTI-LINE draft (session
+            # 8b9f870b, 2026-07-29: a 3-line message came back, only its last
+            # line died, and the resend glued onto the two survivors) — the
+            # stash knows the exact text, so kill one line per newline, a
+            # backspace between kills consuming the newline to hop up a line.
+            # The cursor sits on the LAST line after a restore; a body-flag-only
+            # clear (no stash) keeps the historical single-line kill.
+            draft_lines = pending_draft.count("\n") + 1 if pending_draft else 1
+            for i in range(min(draft_lines, DRAFT_CLEAR_LINES_MAX)):
+                if i:
+                    fe.send_key(win, "backspace")
+                fe.send_key(win, "ctrl+u")
+                fe.send_key(win, "ctrl+k")
             time.sleep(DRAFT_CLEAR_GAP_S)
         # ALWAYS a bracketed paste, not a raw send: a raw send is delivered as
         # fast individual keystrokes and the TUI drops some depending on its
@@ -134,6 +151,7 @@ class _TypingMixin:
         A.state_file(log, sdb, "web-send",
                      {"win": win, "chars": len(text), "ok": ok, "tab": tab,
                       "clear_draft": clear_draft, "tui_draft": bool(pending_draft),
+                      "draft_lines": draft_lines,
                       "attachments": len(attachments),
                       "clip": clip, "live": live, "queued": queued})
         if not ok:
